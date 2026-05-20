@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "rust_runtime",
+    "rust_hotpath",
+    "rust_mkfs",
+    "rust_fuse",
+]
+resolver = "2"
+
+[workspace.package]
+version = "3.0.4"
+
+[profile.release-lto]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

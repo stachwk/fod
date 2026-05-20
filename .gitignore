@@ -1,0 +1,25 @@
+*.py[cod]
+__pycache__/
+.vscode/
+.fod/
+AGENTS.md
+tests/integration/__pycache__/
+.codex
+*.patch
+*.orgin
+old*
+tools/
+*backup/
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json
+fod_version.py
+
+rust_fuse/target/
+rust_hotpath/target/
+rust_mkfs/target/
+rust_runtime/target/
+rust_*/*/*bak*
+*.bak
+target/

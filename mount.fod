@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FOD_BOOTSTRAP_CMD=()
+
+ROLE="${FOD_ROLE:-auto}"
+READONLY="${FOD_RUST_FUSE_READONLY:-}"
+PROFILE="${FOD_PROFILE:-}"
+SELINUX="${FOD_SELINUX:-off}"
+ACL="${FOD_ACL:-off}"
+ATIME_POLICY="${FOD_ATIME_POLICY:-default}"
+DEFAULT_PERMISSIONS="${FOD_DEFAULT_PERMISSIONS:-1}"
+ALLOW_OTHER="${FOD_ALLOW_OTHER:-0}"
+LOG_LEVEL="${FOD_LOG_LEVEL:-}"
+DEBUG="${FOD_DEBUG:-0}"
+CONFIG_FILE="${FOD_CONFIG:-}"
+POSITIONAL=()
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mount.fod [source] <mountpoint> [mount-options]
+
+FOD-specific options can be passed via -o, for example:
+  mount.fod /mnt/fod -o role=auto,selinux=off,acl=off,default_permissions
+
+If you want to override the config file, use:
+  FOD_CONFIG=/path/to/fod_config.ini mount.fod /mnt/fod
+
+Unrecognized FOD-like options print a warning to stderr instead of failing
+silently. System passthrough options such as _netdev, nofail, and x-systemd.*
+are still ignored.
+EOF
+}
+
+ensure_mountpoint_dir() {
+  if [[ -e "${MOUNTPOINT}" ]]; then
+    if [[ ! -d "${MOUNTPOINT}" ]]; then
+      echo "mount.fod: mountpoint ${MOUNTPOINT} exists but is not a directory" >&2
+      exit 2
+    fi
+    return 0
+  fi
+
+  mkdir -p "${MOUNTPOINT}"
+}
+
+translate_option() {
+  local opt="$1"
+  case "${opt}" in
+    role=*)
+      ROLE="${opt#role=}"
+      ;;
+    profile=*)
+      PROFILE="${opt#profile=}"
+      ;;
+    selinux=*)
+      SELINUX="${opt#selinux=}"
+      ;;
+    acl=*)
+      ACL="${opt#acl=}"
+      ;;
+    atime-policy=*)
+      ATIME_POLICY="${opt#atime-policy=}"
+      ;;
+    default_permissions|default-permissions)
+      DEFAULT_PERMISSIONS=1
+      ;;
+    no_default_permissions|no-default-permissions)
+      DEFAULT_PERMISSIONS=0
+      ;;
+    allow_other|allow-other)
+      ALLOW_OTHER=1
+      ;;
+    no_allow_other|no-allow-other)
+      ALLOW_OTHER=0
+      ;;
+    debug)
+      DEBUG=1
+      ;;
+    log-level=*)
+      LOG_LEVEL="${opt#log-level=}"
+      ;;
+    config=*)
+      CONFIG_FILE="${opt#config=}"
+      ;;
+    fod_config=*)
+      CONFIG_FILE="${opt#fod_config=}"
+      ;;
+    ro)
+      READONLY="1"
+      ;;
+    rw)
+      READONLY="0"
+      ;;
+    *)
+      warn_unknown_option "${opt}"
+      ;;
+  esac
+}
+
+warn_unknown_option() {
+  local opt="$1"
+  case "${opt}" in
+    _netdev|nofail|fail|defaults|ro|rw|user|users|owner|group|exec|noexec|suid|nosuid|dev|nodev|sync|async|relatime|noatime|nodiratime|strictatime|lazytime|dirsync|acl|noacl|user_xattr|nouser_xattr|x-systemd.*|x-mount.*|comment=*|context=*|fscontext=*|defcontext=*|rootcontext=*|uid=*|gid=*|umask=*|dmask=*|fmask=*|subtype=*|size=*|mode=*|shortname=*|iocharset=*|utf8|codepage=*|blocksize=*|loop|bind|rbind|move|remount)
+      return
+      ;;
+  esac
+  echo "mount.fod: ignoring unrecognized option '${opt}'; FOD options include role=..., selinux=..., acl=..., atime-policy=..., config=..., fod_config=..." >&2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -o)
+      shift
+      if [[ $# -eq 0 ]]; then
+        echo "mount.fod: missing argument after -o" >&2
+        exit 2
+      fi
+      IFS=',' read -r -a OPTS <<< "$1"
+      for opt in "${OPTS[@]}"; do
+        [[ -n "$opt" ]] && translate_option "$opt"
+      done
+      ;;
+    --)
+      shift
+      POSITIONAL+=("$@")
+      break
+      ;;
+    -*)
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      ;;
+  esac
+  shift
+done
+
+if [[ ${#POSITIONAL[@]} -lt 1 ]]; then
+  usage >&2
+  exit 2
+fi
+
+MOUNTPOINT="${POSITIONAL[-1]}"
+
+export FOD_ROLE="${ROLE}"
+if [[ -n "${READONLY}" ]]; then
+  export FOD_RUST_FUSE_READONLY="${READONLY}"
+fi
+if [[ -n "${PROFILE}" ]]; then
+  export FOD_PROFILE="${PROFILE}"
+fi
+export FOD_USE_FUSE_CONTEXT="1"
+export FOD_SELINUX="${SELINUX}"
+export FOD_ACL="${ACL}"
+export FOD_ATIME_POLICY="${ATIME_POLICY}"
+export FOD_DEFAULT_PERMISSIONS="${DEFAULT_PERMISSIONS}"
+export FOD_ALLOW_OTHER="${ALLOW_OTHER}"
+if [[ -n "${LOG_LEVEL}" ]]; then
+  export FOD_LOG_LEVEL="${LOG_LEVEL}"
+fi
+if [[ -n "${CONFIG_FILE}" ]]; then
+  export FOD_CONFIG="${CONFIG_FILE}"
+elif [[ -z "${FOD_CONFIG:-}" && -f "${PWD}/fod_config.ini" ]]; then
+  export FOD_CONFIG="${PWD}/fod_config.ini"
+fi
+if [[ "${DEBUG}" != "0" ]]; then
+  export FOD_DEBUG="1"
+fi
+
+# Jawny override ma zawsze pierwszenstwo.
+if [[ -n "${FOD_BOOTSTRAP_BIN:-}" && -x "${FOD_BOOTSTRAP_BIN}" ]]; then
+  FOD_BOOTSTRAP_CMD=("${FOD_BOOTSTRAP_BIN}")
+
+# If FOD_DEBUG=1 or -o debug is enabled, intentionally choose the debug binary.
+elif [[ "${DEBUG}" != "0" && -x "${ROOT}/rust_mkfs/target/debug/fod-bootstrap" ]]; then
+  FOD_BOOTSTRAP_CMD=("${ROOT}/rust_mkfs/target/debug/fod-bootstrap")
+
+# Normalnie preferujemy release, zeby mount nie tracil wydajnosci.
+elif [[ -x "${ROOT}/rust_mkfs/target/release/fod-bootstrap" ]]; then
+  FOD_BOOTSTRAP_CMD=("${ROOT}/rust_mkfs/target/release/fod-bootstrap")
+
+# If a system-wide binary is installed, use the PATH version.
+elif command -v fod-bootstrap >/dev/null 2>&1; then
+  FOD_BOOTSTRAP_CMD=("$(command -v fod-bootstrap)")
+
+# Fall back to debug only when the release or system-wide binary is unavailable.
+elif [[ -x "${ROOT}/rust_mkfs/target/debug/fod-bootstrap" ]]; then
+  FOD_BOOTSTRAP_CMD=("${ROOT}/rust_mkfs/target/debug/fod-bootstrap")
+
+elif [[ -x "/usr/local/bin/fod-bootstrap" ]]; then
+  FOD_BOOTSTRAP_CMD=("/usr/local/bin/fod-bootstrap")
+else
+  echo "mount.fod: fod-bootstrap not found in the project tree, PATH, or /usr/local/bin. Build rust_mkfs/target/release/fod-bootstrap first." >&2
+  exit 2
+fi
+
+
+ensure_mountpoint_dir
+
+FOD_ARGS=("-f" "${MOUNTPOINT}")
+if [[ -n "${PROFILE}" ]]; then
+  FOD_ARGS+=("--profile" "${PROFILE}")
+fi
+
+exec "${FOD_BOOTSTRAP_CMD[@]}" "${FOD_ARGS[@]}"

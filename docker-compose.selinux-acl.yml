@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ${CONTAINER_POSTGRES_SELINUX_ACL_NAME:-fod-postgres-selinux-acl}
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-foddbname}
+      POSTGRES_USER: ${POSTGRES_USER:-foduser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cichosza}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - fod_pgdata_selinux_acl:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  fod-selinux-acl:
+    build:
+      context: .
+      dockerfile: docker/selinux-acl/Dockerfile
+    container_name: ${CONTAINER_FOD_SELINUX_ACL_NAME:-fod-selinux-acl}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    privileged: true
+    devices:
+      - /dev/fuse:/dev/fuse
+    security_opt:
+      - apparmor=unconfined
+      - label=disable
+    environment:
+      FOD_CONFIG: /workspace/fod/fod_config.ini
+      FOD_DSN_CONNINFO: host=postgres port=5432 dbname=${POSTGRES_DB:-foddbname} user=${POSTGRES_USER:-foduser} password=${POSTGRES_PASSWORD:-cichosza}
+      FOD_ROLE: ${FOD_ROLE:-auto}
+      FOD_PROFILE: ${FOD_PROFILE:-bulk_write}
+      FOD_SELINUX: ${FOD_SELINUX:-on}
+      FOD_ACL: ${FOD_ACL:-on}
+      FOD_USE_FUSE_CONTEXT: "1"
+      FOD_ALLOW_OTHER: ${FOD_ALLOW_OTHER:-1}
+      FOD_LOG_LEVEL: ${FOD_LOG_LEVEL:-DEBUG}
+    working_dir: /workspace/fod
+    volumes:
+      - .:/workspace/fod:rw
+      - ./docker/selinux-acl/fod_config.ini:/workspace/fod/fod_config.ini:ro
+      - fod_cargo_selinux_acl:/usr/local/cargo
+      - fod_target_selinux_acl:/workspace/fod/target
+    command: ["sleep", "infinity"]
+
+volumes:
+  fod_pgdata_selinux_acl:
+  fod_cargo_selinux_acl:
+  fod_target_selinux_acl:

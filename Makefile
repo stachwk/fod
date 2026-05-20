@@ -1,0 +1,914 @@
+PYTHON ?= python3
+RUST_CARGO ?= cargo
+
+# If the root Cargo.toml exists, use the workspace.
+# If it does not, keep the legacy split-manifest mode.
+CARGO_ROOT_MANIFEST ?= Cargo.toml
+
+# Keep these package names aligned with Cargo.toml and CI.
+# Legacy RUST_* overrides still work by feeding the canonical FOD_* names.
+FOD_MKFS_PACKAGE ?= $(or $(RUST_MKFS_PACKAGE),fod-rust-mkfs)
+FOD_FUSE_PACKAGE ?= $(or $(RUST_FUSE_PACKAGE),fod-rust-fuse)
+FOD_HOTPATH_PACKAGE ?= $(or $(RUST_HOTPATH_PACKAGE),fod-rust-hotpath)
+FOD_BOOTSTRAP_BIN ?= fod-bootstrap
+FOD_MKFS_BIN ?= fod-rust-mkfs
+FOD_CONFIG_BIN ?= fod-config
+FOD_CHANGE_BIN ?= fod-change
+FOD_FUSE_BIN ?= fod-rust-fuse
+FOD_VERSION_FILE ?= fod_version.txt
+FOD_VERSION := $(shell cat $(FOD_VERSION_FILE))
+FOD_CARGO_PROFILE ?= release
+FOD_RELEASE_FLAG := --profile $(FOD_CARGO_PROFILE)
+
+ifeq ($(wildcard $(CARGO_ROOT_MANIFEST)),)
+CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path rust_mkfs/Cargo.toml
+CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path rust_fuse/Cargo.toml
+CARGO_BUILD_HOTPATH := $(RUST_CARGO) build --manifest-path rust_hotpath/Cargo.toml
+
+CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path rust_mkfs/Cargo.toml
+
+CARGO_TEST_MKFS := $(RUST_CARGO) test --manifest-path rust_mkfs/Cargo.toml
+CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path rust_fuse/Cargo.toml
+CARGO_TEST_HOTPATH := $(RUST_CARGO) test --manifest-path rust_hotpath/Cargo.toml
+
+RUST_MKFS_TARGET_DIR := rust_mkfs/target
+RUST_FUSE_TARGET_DIR := rust_fuse/target
+RUST_HOTPATH_TARGET_DIR := rust_hotpath/target
+else
+CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
+CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_FUSE_PACKAGE)
+CARGO_BUILD_HOTPATH := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_HOTPATH_PACKAGE)
+CARGO_BUILD_INSTALL_ROOT := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_RELEASE_FLAG) -p $(FOD_MKFS_PACKAGE) --bins -p $(FOD_FUSE_PACKAGE) --bin $(FOD_FUSE_BIN)
+
+CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
+
+CARGO_TEST_MKFS := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
+CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_FUSE_PACKAGE)
+CARGO_TEST_HOTPATH := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_HOTPATH_PACKAGE)
+
+RUST_MKFS_TARGET_DIR := target
+RUST_FUSE_TARGET_DIR := target
+RUST_HOTPATH_TARGET_DIR := target
+endif
+
+FOD_BOOTSTRAP_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-bootstrap
+FOD_MKFS_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-rust-mkfs
+FOD_CONFIG_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-config
+FOD_FUSE_DEBUG_BIN := $(RUST_FUSE_TARGET_DIR)/debug/fod-rust-fuse
+
+FOD_BOOTSTRAP_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-bootstrap
+FOD_MKFS_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-rust-mkfs
+FOD_FUSE_PROFILE_BIN := $(RUST_FUSE_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-rust-fuse
+FOD_CHANGE_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-change
+FOD_HOTPATH_PROFILE_LIB := $(RUST_HOTPATH_TARGET_DIR)/$(FOD_CARGO_PROFILE)/libfod_rust_hotpath.so
+
+ifeq ($(wildcard $(CARGO_ROOT_MANIFEST)),)
+CARGO_BUILD_INSTALL_ROOT := $(CARGO_BUILD_MKFS) $(FOD_RELEASE_FLAG) --bins && $(CARGO_BUILD_FUSE) $(FOD_RELEASE_FLAG) --bin $(FOD_FUSE_BIN)
+endif
+
+# Benchmark targets are run sequentially because they share the same local
+# Docker/PostgreSQL state and often rebuild the same binaries.
+BENCHMARK_TARGETS := \
+	test-copy-dedupe-benchmark \
+	test-atime-benchmark \
+	test-read-cache-benchmark \
+	test-throughput \
+	test-throughput-sync \
+	test-flush-release-profile \
+	test-truncate-release-profile \
+	test-large-copy-benchmark \
+	test-large-file-multiblock-benchmark \
+	test-remount-durability-benchmark \
+	test-tree-scale \
+	test-fio-sequential-io \
+	test-fio-mixed-io \
+	test-fio-random-mixed-io \
+	test-rust-hotpath-copy-dedupe-benchmark \
+	test-rust-hotpath-extent-poc-benchmark
+
+VENV_DIR ?= .venv
+VENV_PYTHON := $(VENV_DIR)/bin/python
+VENV_PIP := $(VENV_DIR)/bin/pip
+SYSTEM_SITE_PACKAGES := $(shell $(PYTHON) -c 'import site; print(":".join(site.getsitepackages()))')
+COMPOSE ?= docker compose
+COMPOSE_FILE ?= docker-compose.yml
+SELINUX_ACL_COMPOSE_FILE ?= docker-compose.selinux-acl.yml
+FOD_CONFIG_SOURCE ?= fod_config.ini
+FOD_CONFIG_DEST ?= /etc/fod/fod_config.ini
+CONTAINER_POSTGRES_NAME ?= fod-postgres
+CONTAINER_POSTGRES_SELINUX_ACL_NAME ?= fod-postgres-selinux-acl
+CONTAINER_FOD_SELINUX_ACL_NAME ?= fod-selinux-acl
+POSTGRES_DB ?= foddbname
+POSTGRES_USER ?= foduser
+POSTGRES_PASSWORD ?= cichosza
+POSTGRES_PORT ?= 5432
+MOUNTPOINT ?= /tmp/fod-mount
+FOD_SELINUX ?= auto
+FOD_DEFAULT_PERMISSIONS ?= 1
+FOD_ATIME_POLICY ?= default
+FOD_ROLE ?= auto
+FOD_PROFILE ?=
+FOD_CHANGE_CONFIG_PATH ?= $(FOD_CONFIG_SOURCE)
+FOD_SCHEMA_ADMIN_PASSWORD_FILE ?= .fod/schema-admin-password
+FOD_CHANGE_KEY ?=
+FOD_CHANGE_VALUE ?=
+FOD_CHANGE_PASSWORD ?=
+FOD_LOG_LEVEL ?= INFO
+FOD_ACL ?= off
+ifndef FOD_SCHEMA_ADMIN_PASSWORD
+FOD_SCHEMA_ADMIN_PASSWORD := $(shell $(PYTHON) -c 'import secrets; print("fod-" + secrets.token_urlsafe(24))')
+endif
+export FOD_SCHEMA_ADMIN_PASSWORD
+FOD_SELINUX_CONTEXT ?=
+FOD_SELINUX_FSCONTEXT ?=
+FOD_SELINUX_DEFCONTEXT ?=
+FOD_SELINUX_ROOTCONTEXT ?=
+FOD_LAZYTIME ?= 0
+FOD_SYNC ?= 0
+FOD_DIRSYNC ?= 0
+export CONTAINER_POSTGRES_NAME
+export CONTAINER_POSTGRES_SELINUX_ACL_NAME
+export CONTAINER_FOD_SELINUX_ACL_NAME
+MOUNT_HELPER_DEST ?= /usr/local/sbin/mount.fod
+STRIP ?= strip
+STRIP_FLAGS ?= --strip-unneeded
+UBUNTU_BUILD_DEPS := cargo rustc build-essential pkg-config libpq-dev libfuse3-dev python3 openssl
+UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
+REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
+REDHAT_LEGACY_PYTHON_DEPS := python3-pip
+
+.PHONY: help benchmark benchmarks venv deps deps-ubuntu deps-redhat up down restart logs wait init reset smoke enable-pg-stat-statements mount mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
+
+help:
+	@printf '%s\n' \
+		'Targets:' \
+		'  make cargo-profile-show - print the active Cargo build profile used by Makefile install targets' \
+		'  make change-runtime-list - show the effective live reloadable snapshot via fod.change' \
+		'  make change-runtime-get - print one live reloadable key via fod.change (set FOD_CHANGE_KEY=...)' \
+		'  make reload-runtime - apply reloadable FOD_* values from the current config via fod.change (no remount needed)' \
+		'  make change-runtime-set - persist one live reloadable key via fod.change (set FOD_CHANGE_KEY, FOD_CHANGE_VALUE, and FOD_CHANGE_PASSWORD)' \
+		'  make venv       - create .venv for legacy Python integration tests' \
+		'  make deps       - refresh the legacy Python test dependencies in .venv' \
+		'  make deps-ubuntu - print the Ubuntu/Debian packages needed to build FOD' \
+		'  make deps-redhat - print the Fedora/RHEL packages needed to build FOD' \
+		'  make up         - start local PostgreSQL in Docker' \
+		'  make docker-selinux-acl-up - start the SELinux/ACL test lab in Docker' \
+		'  make docker-selinux-acl-wait - wait until the SELinux/ACL lab PostgreSQL is ready' \
+		'  make down       - stop local PostgreSQL' \
+		'  make docker-selinux-acl-down - stop the SELinux/ACL test lab' \
+	'  make restart    - restart local PostgreSQL' \
+		'  make logs       - show local PostgreSQL logs' \
+		'  make wait       - wait until PostgreSQL is ready' \
+		'  make init       - create the FOD schema in local PostgreSQL with --schema-admin-password' \
+		'  make reset      - down -v / up / wait / init for a clean start' \
+		'  make enable-pg-stat-statements - create pg_stat_statements in the local PostgreSQL database for diagnostics' \
+		'  make install-config - install fod_config.ini to /etc/fod/fod_config.ini (warns if password is still cichosza)' \
+		'  make install-config-user - install fod_config.ini to $$HOME/.config/fod/fod_config.ini without sudo (warns if password is still cichosza)' \
+		'  make test-config-warning - verify the install-config password warning behavior' \
+		'  make install-mount-helper - install mount.fod to $(MOUNT_HELPER_DEST)' \
+	'  make install-root-scripts - install fod-bootstrap, mkfs.fod, fod-change/fod.change, and fod-rust-fuse Rust binaries to /usr/local/bin (use FOD_CARGO_PROFILE=release-lto for final builds)' \
+	'  make install-rust-hotpath - build and install the Rust hot-path shared library (respects FOD_CARGO_PROFILE)' \
+		'  make install-on-root - install system config, Rust binaries, mount helper, and Rust hot-path artifacts' \
+		'  make install-on-root-venv - create .venv for legacy tests, then run the full root-style install' \
+		'  make pip-build - removed; Rust binaries are built directly' \
+		'  make pip-install - removed; Rust binaries are built directly' \
+		'  make pip-install-editable - legacy Python test helper install' \
+		'  make config-show - show which file FOD uses for configuration' \
+		'  make smoke      - quick database connectivity test' \
+		'  make benchmarks - run the benchmark suite sequentially' \
+		'  make benchmark  - alias for make benchmarks' \
+		'  make mount      - mount FOD at $(MOUNTPOINT)' \
+	'  make mount-user - prefer $$HOME/.config/fod/fod_config.ini and fall back to local ./fod_config.ini' \
+	'  make demo       - up/init and then mount FOD at $(MOUNTPOINT)' \
+	'  make docker-selinux-acl-shell - enter the SELinux/ACL Docker lab container' \
+	'  make docker-selinux-acl-smoke - run the SELinux/ACL lab smoke checks inside the Docker container' \
+		'  make unmount    - unmount FOD from $(MOUNTPOINT)' \
+		'  make test-integration - run mkdir/create/write/read tests against local PostgreSQL' \
+		'  make test-role-autodetect - verify runtime role and lock autodetection logic' \
+		'  make test-postgresql-requirements - alias for autocommit=off PostgreSQL requirements smoke' \
+		'  make test-postgresql-requirements-autocommit-off - verify PostgreSQL version, time zone, connection budget, and autocommit=off' \
+		'  make test-postgresql-requirements-autocommit-on - verify PostgreSQL version, time zone, connection budget, and autocommit=on' \
+		'  make test-xattr - run xattr/SELinux backend tests' \
+		'  make test-df   - verify df -Ph and df -Phi on a mounted FOD' \
+		'  make test-locking - verify FOD lock backends and replica behavior' \
+		'  make test-pg-lock-manager - verify PostgreSQL-backed flock and range leases in Rust' \
+		'  make test-permissions - verify sticky bit and chown permission semantics' \
+		'  make test-journal - verify journal entries for mutating operations' \
+		'  make test-destroy - verify the destroy cleanup hook' \
+		'  make test-dirhooks - verify opendir/releasedir/fsyncdir on a directory' \
+		'  make test-hardlink - verify hardlinks through the FOD backend' \
+		'  make test-fallocate - verify fallocate through the FOD backend' \
+		'  make test-copy-file-range - verify copy_file_range through the FOD backend' \
+		'  make test-copy-dedupe-benchmark - benchmark repeated copy dedupe in Rust hotpath' \
+		'  make test-copy-block-crc-table - verify CRC cache population for unchanged-block dedupe' \
+		'  make test-worker-thresholds-block-size - verify worker thresholds against block-sized transfers' \
+		'  make test-ioctl - verify ioctl/FIONREAD through the FOD backend' \
+		'  make test-mknod - verify FIFO mknod through the FOD backend' \
+		'  make test-lseek - verify backend lseek through the FOD backend' \
+		'  make test-poll - verify backend poll through the FOD backend' \
+		'  make test-utimens-noop - verify utimens same-timestamp no-op behavior' \
+		'  make test-write-noop - verify zero-length write no-op behavior' \
+		'  make test-unlink-after-write - verify unlink after a flushed write' \
+		'  make test-local-vs-fod-permissions - compare local filesystem and FOD permission behavior' \
+		'  make test-root-owned-permissions - compare root-owned file handling on ext4 and FOD' \
+		'  make test-allow-other-visibility - verify allow_other visibility between users (host-dependent skip if not exposed)' \
+		'  make test-multi-open-unique-handles - verify independent fh values for concurrent opens' \
+		'  make test-version - verify the published FOD version string from Rust' \
+		'  make test-access-groups - verify access() for owner, primary group, and supplementary groups' \
+		'  make test-inode-model - verify a stable inode model after FS restart' \
+		'  make test-ownership-inheritance - verify gid inheritance after parent chmod/chown' \
+		'  make test-rename-root-conflict - verify rename replace semantics and edge cases' \
+		'  make test-statfs-use-ino - verify statfs and use_ino behavior on a mount' \
+		'  make test-atime-noatime - smoke test for FOD atime behavior (noatime)' \
+		'  make test-atime-relatime - smoke test for FOD atime behavior (relatime)' \
+		'  make test-atime-benchmark - benchmark FOD atime behavior (file and directory reads)' \
+		'  make test-timestamp-touch-once - relatime-style one-touch-at-a-time timestamp regression' \
+		'  make test-read-ahead-sequence - regression for sequential read-ahead cache behavior' \
+		'  make test-read-cache-benchmark - benchmark FOD block cache size under sequential reads' \
+		'  make test-workers-read-parallel - verify workers_read only parallelize disjoint read gaps' \
+		'  make test-workers-write-parallel-copy - verify small copy stays sequential and large copy threads' \
+		'  make test-runtime-config - verify fod_config.ini runtime tuning values in Rust' \
+		'  make test-runtime-validation - verify runtime config rejects invalid values in Rust' \
+		'  make test-runtime-profile - verify named runtime profiles against fod_config.ini' \
+		'  make test-runtime-profile-extents - verify named runtime profiles with the extents preset' \
+		'  make change-runtime - alias for make change-runtime-set' \
+		'  make change-runtime-sync - alias for make reload-runtime' \
+		'  make test-mkfs-pg-tls - verify PostgreSQL TLS path resolution and generated client pair handling' \
+		'  make test-schema-upgrade - verify schema version reporting for upgrade flow' \
+		'  make test-files - files: create/write/truncate/rename/unlink' \
+		'  make test-block-read - range reads, block cache, and read-ahead' \
+		'  make test-truncate-shrink-block-boundary - verify truncate shrink/extend boundaries stay zero-filled' \
+		'  make test-directories - directories: mkdir/rmdir/rename/stat/ls' \
+		'  make test-metadata - metadata: stat/chmod/chown/access' \
+		'  make test-mount-workflow - mount + dd + stat + ls + rename + chown + chmod + access' \
+		'  make test-mount-root-permissions - fresh mount + directory chmod/chown/write smoke' \
+		'  make test-mount-wrapper-options - verify mount.fod wrapper option parsing and PATH/ro handling' \
+		'  make test-fuse-context-identity - verify FUSE uid/gid context handling' \
+		'  make test-symlink - mount + ln -s + readlink + rename symlink + orphaned symlink ls on the symlink path' \
+		'  make test-throughput - benchmark FOD writes with dd if=/dev/zero' \
+		'  make test-throughput-sync - benchmark FOD writes with conv=fsync' \
+		'  make test-rust-hotpath-helper-parity - run the shared Rust hot-path helper parity test suite once' \
+		'  make test-rust-hotpath-copy-plan - Rust helper parity tests for copy planner and related helpers' \
+		'  make test-rust-hotpath-copy-dedupe - Rust helper parity tests for changed-copy dedupe' \
+		'  make test-rust-hotpath-copy-dedupe-benchmark - benchmark repeated copy dedupe in Rust hotpath' \
+		'  make test-rust-hotpath-extent-poc-benchmark - benchmark the sequential-only extent PoC planner' \
+		'  make test-rust-hotpath-copy-pack - Rust helper parity tests for changed-run packing' \
+		'  make test-rust-hotpath-persist-pad - Rust helper parity tests for block padding' \
+		'  make test-rust-hotpath-read-assemble - Rust helper parity tests for read assembly' \
+		'  make test-rust-pg-query - verify PostgreSQL query paths and metadata helpers through Rust' \
+		'  make test-rust-hotpath-runtime-size-limits - verify config size parsing and PG-visible fs cap in Rust' \
+		'  make test-rust-hotpath-read-ahead - Rust helper parity tests for read-ahead formulas' \
+		'  make test-rust-hotpath-read-sequence - Rust helper parity tests for read-sequence helpers' \
+		'  make test-rust-hotpath-read-fetch-bounds - Rust helper parity tests for read fetch planning' \
+		'  make test-rust-hotpath-read-slice-plan - Rust helper parity tests for read slice planning' \
+		'  make test-rust-hotpath-read-missing-range-worker-count - Rust helper parity tests for missing-range parallelism' \
+		'  make test-rust-hotpath-block-count - Rust helper parity tests for block counting' \
+		'  make test-rust-hotpath-dirty-block-size - Rust helper parity tests for dirty block sizing' \
+		'  make test-rust-hotpath-logical-resize-plan - Rust helper parity tests for logical resize planning' \
+		'  make test-rust-hotpath-persist-layout-plan - Rust helper parity tests for persist layout planning' \
+		'  make test-rust-hotpath-persist-block-plan - Rust helper parity tests for persist block planning' \
+		'  make test-rust-hotpath-persist-block-crc-plan - Rust helper parity tests for persist block CRC planning' \
+		'  make test-rust-hotpath-write-copy-worker-count - Rust helper parity tests for write copy worker counting' \
+		'  make test-rust-hotpath-block-transfer-plan - Rust helper parity tests for block transfer planning' \
+		'  make test-rust-hotpath-write-copy-plan - Rust helper parity tests for write copy planning' \
+		'  make test-rust-hotpath-parallel-worker-count - Rust helper parity tests for shared worker counting' \
+		'  make test-rust-hotpath-missing-ranges - Rust helper parity tests for missing-range handling' \
+		'  make test-large-copy-benchmark - benchmark large copy_file_range transfers' \
+		'  make test-large-file-multiblock-benchmark - benchmark large multi-block file writes' \
+		'  make test-remount-durability-benchmark - benchmark data survival across remounts' \
+		'  make test-tree-scale - benchmark getattr/readdir on a larger tree' \
+		'  make test-flush-release-profile - verify clean flush/release and dirty flush regression handling' \
+		'  make test-truncate-release-profile - benchmark truncate-only flush/release on large files' \
+		'  make test-write-flush-threshold - verify automatic flush when the write buffer threshold is exceeded' \
+		'  make test-all-full - full integration suite + atime checks' \
+		'  make test-pool-connections - verify ThreadedConnectionPool configuration' \
+		'  make test-metadata-cache - verify short-TTL metadata and statfs cache behavior' \
+		'  make test-mount-suite - shared Python mount smoke runner' \
+		'  make test-fio-sequential-io - fio sequential read/write smoke for block and extent paths' \
+		'  make test-fio-sequential-io-strace - fio sequential smoke with strace syscall tables for block and extent paths' \
+		'  make test-fio-mixed-io - fio mixed sequential rw smoke for block and extent paths' \
+		'  make test-fio-random-mixed-io - fio random mixed rw negative control for block and extent paths' \
+		'  make test-all   - smoke + current integration suite' \
+		'  make db-shell   - open psql on local PostgreSQL' \
+		'  make clean      - remove .venv'
+
+$(VENV_PYTHON):
+	$(PYTHON) -m venv $(VENV_DIR)
+
+venv: $(VENV_PYTHON)
+	$(VENV_PYTHON) -m ensurepip --upgrade
+	$(VENV_PIP) install fusepy psycopg2-binary
+
+deps: $(VENV_PYTHON)
+	$(VENV_PYTHON) -m ensurepip --upgrade
+	$(VENV_PIP) install fusepy psycopg2-binary
+
+deps-ubuntu:
+	@printf '%s\n' \
+		'Ubuntu/Debian build prerequisites for FOD:' \
+		'  sudo apt-get update' \
+		"  sudo apt-get install -y $(UBUNTU_BUILD_DEPS)" \
+		"  Optional legacy Python helpers/tests: sudo apt-get install -y $(UBUNTU_LEGACY_PYTHON_DEPS)"
+
+deps-redhat:
+	@printf '%s\n' \
+		'Fedora/RHEL build prerequisites for FOD:' \
+		"  sudo dnf install -y $(REDHAT_BUILD_DEPS)" \
+		"  Optional legacy Python helpers/tests: sudo dnf install -y $(REDHAT_LEGACY_PYTHON_DEPS)"
+
+up:
+	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE) -f $(COMPOSE_FILE) up -d postgres
+	@$(MAKE) wait
+
+docker-selinux-acl-up:
+	COMPOSE_PROJECT_NAME=fod-selinux-acl POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) FOD_ROLE=auto FOD_PROFILE=bulk_write FOD_SELINUX=on FOD_ACL=on FOD_LOG_LEVEL=DEBUG FOD_ALLOW_OTHER=1 \
+	$(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) up -d postgres fod-selinux-acl
+	@$(MAKE) docker-selinux-acl-wait
+
+down:
+	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE) -f $(COMPOSE_FILE) down
+
+docker-selinux-acl-down:
+	COMPOSE_PROJECT_NAME=fod-selinux-acl POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) down -v
+
+docker-selinux-acl-wait:
+	@set -eu; \
+	echo "Waiting for PostgreSQL in the SELinux/ACL Docker lab..."; \
+	for i in $$(seq 1 60); do \
+		if COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T postgres pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB) >/dev/null 2>&1; then \
+			echo "SELinux/ACL lab PostgreSQL ready."; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "SELinux/ACL lab PostgreSQL did not start within the expected time."; \
+	exit 1
+
+docker-selinux-acl-shell:
+	COMPOSE_PROJECT_NAME=fod-selinux-acl \
+	$(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) exec fod-selinux-acl bash
+
+docker-selinux-acl-smoke: docker-selinux-acl-up
+	COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T fod-selinux-acl bash -lc 'set -euo pipefail; $(CARGO_BUILD_MKFS) --bin fod-bootstrap --bin fod-rust-mkfs; $(CARGO_BUILD_FUSE) --bin fod-rust-fuse; ./.venv/bin/python tests/integration/test_fuse_context_identity.py; ./.venv/bin/python tests/integration/test_xattr.py; $(CARGO_TEST_FUSE) --test root_permissions_smoke -- --nocapture'
+
+restart: down up
+
+logs:
+	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE) -f $(COMPOSE_FILE) logs -f postgres
+
+wait:
+	@set -eu; \
+	echo "Waiting for PostgreSQL in Docker and on 127.0.0.1:$(POSTGRES_PORT)..."; \
+	for i in $$(seq 1 60); do \
+		if COMPOSE_PROJECT_NAME=fod $(COMPOSE) -f $(COMPOSE_FILE) exec -T postgres pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB) >/dev/null 2>&1; then \
+			echo "PostgreSQL ready."; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "PostgreSQL did not start within the expected time."; \
+	exit 1
+
+
+init: up
+	@set -eu; \
+	status_output="$$($(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- status 2>/dev/null || true)"; \
+	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
+		echo 'FOD schema already initialized; skipping init.'; \
+	else \
+		POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
+		mkdir -p .fod; \
+		printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"; \
+	fi
+
+
+reset:
+	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE) -f $(COMPOSE_FILE) down -v
+	$(MAKE) up
+	sleep 2
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"
+	mkdir -p .fod
+	printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"
+
+warn-config-secret:
+	@set -eu; \
+	if [ -f "$(FOD_CONFIG_SOURCE)" ] && grep -Eq '^[[:space:]]*password[[:space:]]*=[[:space:]]*cichosza([[:space:]]*([#;].*)?)?$$' "$(FOD_CONFIG_SOURCE)"; then \
+		printf '%s\n' "Warning: $(FOD_CONFIG_SOURCE) still contains password = cichosza."; \
+		printf '%s\n' "Warning: use fod_config.example.ini for shared installs and keep fod_config.ini local."; \
+	fi
+
+install-config:
+	$(MAKE) warn-config-secret
+	@printf '%s\n' "Installing $(FOD_CONFIG_SOURCE) -> $(FOD_CONFIG_DEST)"
+	sudo install -D -m 0644 $(FOD_CONFIG_SOURCE) $(FOD_CONFIG_DEST)
+
+install-config-user:
+	$(MAKE) warn-config-secret
+	@printf '%s\n' "Installing $(FOD_CONFIG_SOURCE) -> $$HOME/.config/fod/fod_config.ini"
+	install -D -m 0644 $(FOD_CONFIG_SOURCE) $$HOME/.config/fod/fod_config.ini
+
+test-config-warning:
+	tests/integration/test_config_warning.sh
+
+install-mount-helper:
+	@printf '%s\n' "Installing mount.fod -> $(MOUNT_HELPER_DEST)"
+	sudo install -D -m 0755 mount.fod $(MOUNT_HELPER_DEST)
+
+
+install-root-scripts:
+	@printf '%s\n' "Installing FOD $(FOD_VERSION): fod-bootstrap, mkfs.fod, fod-change/fod.change, and fod-rust-fuse -> /usr/local/bin"
+	$(CARGO_BUILD_INSTALL_ROOT)
+	sudo install -D -m 0755 "$(FOD_BOOTSTRAP_PROFILE_BIN)" /usr/local/bin/fod-bootstrap
+	sudo install -D -m 0755 "$(FOD_MKFS_PROFILE_BIN)" /usr/local/bin/mkfs.fod
+	sudo install -D -m 0755 "$(FOD_CHANGE_PROFILE_BIN)" /usr/local/bin/fod-change
+	sudo ln -sf fod-change /usr/local/bin/fod.change
+	sudo install -D -m 0755 "$(FOD_FUSE_PROFILE_BIN)" /usr/local/bin/fod-rust-fuse
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-bootstrap
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/mkfs.fod
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-change
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-rust-fuse
+
+
+install-rust-hotpath:
+	@printf '%s\n' "Building Rust hot-path artifacts"
+	@$(CARGO_BUILD_HOTPATH) $(FOD_RELEASE_FLAG) --lib
+	@printf '%s\n' "Installing Rust hot-path shared library -> /usr/local/lib"
+	@sudo install -D -m 0755 "$(FOD_HOTPATH_PROFILE_LIB)" /usr/local/lib/libfod-2.so
+	@sudo $(STRIP) $(STRIP_FLAGS) /usr/local/lib/libfod-2.so
+
+install-on-root: install-config install-root-scripts install-rust-hotpath install-mount-helper
+	@printf '%s\n' "FOD installed for root-style use: config, Rust binaries, mount helper, and Rust hot-path library"
+
+install-on-root-venv: venv install-on-root
+	@printf '%s\n' "FOD root-style install ready in $(VENV_DIR): config, legacy test venv, Rust binaries, mount helper, and Rust hot-path library"
+
+pip-build:
+	@printf '%s\n' "Python packaging has been removed; build the Rust binaries directly." >&2
+	@exit 1
+
+pip-install:
+	@printf '%s\n' "Python packaging has been removed; use the Rust binaries directly." >&2
+	@exit 1
+
+pip-install-editable:
+	@printf '%s\n' "Python packaging has been removed; use the Rust binaries directly." >&2
+	@exit 1
+
+
+config-show:
+	$(CARGO_RUN_MKFS) --quiet --bin fod-config -- --config-path . resolve-path
+
+cargo-profile-show:
+	@printf '%s\n' "FOD_VERSION=$(FOD_VERSION)"
+	@printf '%s\n' "FOD_CARGO_PROFILE=$(FOD_CARGO_PROFILE)"
+	@printf '%s\n' "FOD_RELEASE_FLAG=$(FOD_RELEASE_FLAG)"
+	@printf '%s\n' "install-root-scripts outputs: $(FOD_BOOTSTRAP_PROFILE_BIN), $(FOD_MKFS_PROFILE_BIN), $(FOD_CHANGE_PROFILE_BIN), $(FOD_FUSE_PROFILE_BIN)"
+
+smoke: up
+	@set -eu; \
+	for attempt in 1 2 3 4 5; do \
+		if PGPASSWORD=$(POSTGRES_PASSWORD) psql -h 127.0.0.1 -p $(POSTGRES_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DB) -tAc 'SELECT 1' | grep -qx 1; then \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	exit 1
+
+enable-pg-stat-statements: up
+	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE) -f $(COMPOSE_FILE) exec -T postgres sh -lc 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"'
+
+mount: up
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	mkdir -p $(MOUNTPOINT)
+	@printf '%s\n' "Using FOD config file: /etc/fod/fod_config.ini (fallback: ./fod_config.ini)"
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_DEBUG_BIN) --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
+
+mount-user: up
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	mkdir -p $(MOUNTPOINT)
+	@set -eu; \
+	config_path="$$HOME/.config/fod/fod_config.ini"; \
+	if [ -f "$$config_path" ]; then \
+		export FOD_CONFIG="$$config_path"; \
+		echo "Using FOD config file: $$config_path"; \
+	else \
+		unset FOD_CONFIG; \
+		echo "Using local ./fod_config.ini if present (user config $$config_path not found)"; \
+	fi; \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_DEBUG_BIN) --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
+
+demo: init
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	mkdir -p $(MOUNTPOINT)
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_DEBUG_BIN) --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
+
+unmount:
+	@set -eu; \
+	if command -v fusermount3 >/dev/null 2>&1; then \
+		fusermount3 -u $(MOUNTPOINT); \
+	elif command -v fusermount >/dev/null 2>&1; then \
+		fusermount -u $(MOUNTPOINT); \
+	else \
+		umount $(MOUNTPOINT); \
+	fi
+
+test-integration: venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-runtime-validation test-schema-upgrade test-block-read test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary
+test-integration: test-rust-hotpath-persist-block-plan
+test-integration: test-rust-hotpath-persist-block-crc-plan
+test-integration: test-config-warning
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_mkdir_create_write_read.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test mount_smoke mkdir_parent_missing --offline
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test mount_smoke truncate_rename --offline
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_chmod_rmdir.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_rename_root_conflict.sh
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_destroy.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_dirhooks.sh
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_hardlink.sh
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ioctl.py
+	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_mknod.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test mount_smoke --offline -- --nocapture --test-threads=1
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_lseek.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_poll.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_access_groups.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_inode_model.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ownership_inheritance.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_permissions.py
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_xattr.py
+
+test-role-autodetect:
+	cargo test --manifest-path rust_runtime/Cargo.toml --lib resolves_auto_and_replica_lock_roles --offline
+
+test-xattr: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_xattr.py
+
+test-locking: init
+	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test lock_backend_smoke -- --nocapture
+
+test-pg-lock-manager: init
+	$(CARGO_TEST_HOTPATH) --test lock_manager
+
+test-permissions: up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_permissions.py
+
+test-journal: up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_journal.py
+
+test-destroy: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_destroy.py
+
+test-dirhooks: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_dirhooks.sh
+
+test-hardlink: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_hardlink.sh
+
+test-fallocate: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate.py
+
+test-copy-file-range: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range.py
+
+
+test-copy-dedupe-benchmark: test-rust-hotpath-copy-dedupe-benchmark
+	@:
+test-copy-block-crc-table: init
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke copy_block_crc_table --offline
+
+test-worker-thresholds-block-size: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity write_worker_thresholds_block_size_plan_matches_expected_values
+
+test-ioctl: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ioctl.py
+
+test-mknod: init
+	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mknod.py
+
+
+test-lseek: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_lseek.py
+
+test-poll: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_poll.py
+
+test-access-groups: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_access_groups.py
+
+test-inode-model: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_inode_model.py
+
+test-ownership-inheritance: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ownership_inheritance.py
+
+test-rename-root-conflict: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_rename_root_conflict.sh
+
+test-statfs-use-ino: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_statfs_use_ino.sh
+
+test-atime-noatime: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=noatime FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_atime_policy.sh
+
+test-atime-relatime: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=relatime FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_atime_policy.sh
+
+test-atime-benchmark: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) ATIME_BENCH_KIND=file bash tests/integration/test_atime_benchmark.sh
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) ATIME_BENCH_KIND=dir bash tests/integration/test_atime_benchmark.sh
+
+test-timestamp-touch-once: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=relatime FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) bash tests/integration/test_timestamp_touch_once.sh
+
+test-read-ahead-sequence: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity read_ahead_sequence_plan_matches_expected_values
+
+test-read-cache-benchmark: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity read_cache_benchmark_plan_matches_expected_values
+
+test-workers-read-parallel: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity read_workers_parallel_plan_matches_expected_values
+
+test-workers-write-parallel-copy: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity write_workers_parallel_copy_plan_matches_expected_values
+
+
+test-mkfs-config-suite:
+	$(CARGO_TEST_MKFS) --test fod_config
+
+test-runtime-config: init test-mkfs-config-suite
+	@:
+
+test-rust-mkfs-suite:
+	$(CARGO_TEST_MKFS)
+
+test-runtime-validation: test-rust-mkfs-suite
+	@:
+
+test-rust-hotpath-runtime-size-limits: test-rust-mkfs-suite
+	@:
+test-schema-upgrade: up
+	$(CARGO_TEST_MKFS) --test schema_upgrade schema_upgrade_non_destructive_password_protected --offline
+
+test-schema-status: up
+	$(CARGO_TEST_MKFS) --test schema_upgrade schema_status_reports_version_secret_and_pending_migrations --offline
+
+test-df: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_df.sh
+
+test-mount-workflow: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_mount_workflow.sh
+
+test-mount-root-permissions: reset
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_mount_root_permissions.sh
+
+test-mount-wrapper-options:
+	bash tests/integration/test_mount_wrapper_options.sh
+	bash tests/integration/test_mount_wrapper_path_and_ro.sh
+
+test-fuse-context-identity: venv
+	$(VENV_PYTHON) tests/integration/test_fuse_context_identity.py
+
+test-files: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_files.sh
+
+test-block-read: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test mount_smoke block_read_range --offline
+
+test-directories: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_directories.sh
+
+test-metadata: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_metadata.sh
+
+test-metadata-cache: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) $(VENV_PYTHON) tests/integration/test_metadata_cache.py
+
+test-truncate-shrink-block-boundary: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) $(VENV_PYTHON) tests/integration/test_truncate_shrink_block_boundary.py
+
+test-symlink: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_symlink.sh
+
+test-throughput: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) THROUGHPUT_BLOCK_SIZE=$(THROUGHPUT_BLOCK_SIZE) THROUGHPUT_COUNT=$(THROUGHPUT_COUNT) THROUGHPUT_SYNC=$(THROUGHPUT_SYNC) bash tests/integration/test_throughput.sh
+
+test-throughput-sync: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) THROUGHPUT_BLOCK_SIZE=$(THROUGHPUT_BLOCK_SIZE) THROUGHPUT_COUNT=$(THROUGHPUT_COUNT) THROUGHPUT_SYNC=1 bash tests/integration/test_throughput.sh
+
+test-fio-sequential-io: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) bash tests/integration/test_fio_sequential_io.sh
+
+test-fio-sequential-io-strace: init
+	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FOD_STRACE=1 FIO_FILE_SIZE=$(FIO_FILE_SIZE) bash tests/integration/test_fio_sequential_io.sh
+
+test-fio-mixed-io: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) bash tests/integration/test_fio_mixed_io.sh
+
+test-fio-random-mixed-io: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FIO_RW_MODE=randrw FIO_RWMIXREAD=50 bash tests/integration/test_fio_mixed_io.sh
+
+
+test-rust-hotpath-helper-parity:
+	$(CARGO_TEST_HOTPATH) --test helper_parity
+
+test-rust-hotpath-copy-plan \
+test-rust-hotpath-crc32 \
+test-rust-hotpath-read-ahead \
+test-rust-hotpath-read-sequence \
+test-rust-hotpath-read-fetch-bounds \
+test-rust-hotpath-read-slice-plan \
+test-rust-hotpath-read-missing-range-worker-count \
+test-rust-hotpath-block-count \
+test-rust-hotpath-dirty-block-size \
+test-rust-hotpath-logical-resize-plan \
+test-rust-hotpath-persist-layout-plan \
+test-rust-hotpath-persist-block-plan \
+test-rust-hotpath-persist-block-crc-plan \
+test-rust-hotpath-write-copy-worker-count \
+test-rust-hotpath-block-transfer-plan \
+test-rust-hotpath-write-copy-plan \
+test-rust-hotpath-parallel-worker-count \
+test-rust-hotpath-missing-ranges \
+test-rust-hotpath-copy-dedupe \
+test-rust-hotpath-copy-pack \
+test-rust-hotpath-persist-pad \
+test-rust-hotpath-read-assemble: test-rust-hotpath-helper-parity
+	@:
+
+test-rust-hotpath-copy-dedupe-benchmark:
+	$(CARGO_TEST_HOTPATH) --test copy_dedupe_benchmark -- --nocapture
+
+test-rust-hotpath-extent-poc-benchmark:
+	$(CARGO_TEST_HOTPATH) --test extent_poc_benchmark -- --nocapture
+
+test-rust-pg-query: init
+	$(CARGO_TEST_HOTPATH) --test pg_query
+
+test-large-copy-benchmark: init
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
+
+test-large-file-multiblock-benchmark: init
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test large_file_multiblock_benchmark --offline -- --nocapture
+
+test-remount-durability-benchmark: init
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test remount_durability_benchmark --offline -- --nocapture
+
+test-tree-scale: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) TREE_SCALE_DIRS=$(TREE_SCALE_DIRS) TREE_SCALE_FILES=$(TREE_SCALE_FILES) bash tests/integration/test_tree_scale.sh
+
+test-flush-release-profile: reset
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke flush_release_profile --offline
+
+test-truncate-release-profile: reset
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke truncate_release_profile --offline
+
+test-persist-buffer-chunking: init
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke persist_buffer_chunking --offline
+
+test-write-flush-threshold: init
+	$(CARGO_TEST_FUSE) --test profile_smoke write_flush_threshold --offline -- --nocapture
+
+test-utimens-noop: init
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke utimens_noop --offline
+
+test-write-noop: init
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test mount_smoke write_noop
+
+test-unlink-after-write: init
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test mount_smoke unlink_after_write
+
+test-local-vs-fod-permissions: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_local_vs_fod_permissions.py
+
+test-ext4-vs-fod-permissions: test-local-vs-fod-permissions
+
+test-root-owned-permissions: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test root_permissions_smoke -- --nocapture
+
+test-allow-other-visibility: init
+	bash tests/integration/test_allow_other_visibility.sh
+
+test-multi-open-unique-handles: init
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test mount_smoke multi_open_unique_handles
+
+
+test-version: test-mkfs-config-suite
+	@:
+test-connection-recovery: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_HOTPATH) --test connection_recovery --offline
+
+test-pool-connections: venv
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_pool_connections.py
+
+test-postgresql-requirements-autocommit-off: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=off $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
+
+test-postgresql-requirements-autocommit-on: venv up
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=on $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
+
+test-postgresql-requirements: test-postgresql-requirements-autocommit-off
+	@:
+
+test-runtime-profile: venv up
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_profile.py
+
+test-runtime-profile-extents: venv up
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PROFILE=extents FOD_ENABLE_EXTENTS=1 $(VENV_PYTHON) tests/integration/test_runtime_profile.py
+
+.PHONY: test-runtime-profile-extents
+
+change-runtime-list: up wait
+	$(CARGO_RUN_MKFS) --bin $(FOD_CHANGE_BIN) -- --config-path $(FOD_CHANGE_CONFIG_PATH) --list
+
+change-runtime-get: up wait
+	@set -eu; \
+	if [ -z "$(strip $(FOD_CHANGE_KEY))" ]; then \
+		echo 'Set FOD_CHANGE_KEY=...'; \
+		exit 1; \
+	fi; \
+	$(CARGO_RUN_MKFS) --bin $(FOD_CHANGE_BIN) -- --config-path $(FOD_CHANGE_CONFIG_PATH) --get $(FOD_CHANGE_KEY)
+
+change-runtime-set: up wait
+	@set -eu; \
+	if [ -z "$(strip $(FOD_CHANGE_KEY))" ]; then \
+		echo 'Set FOD_CHANGE_KEY=...'; \
+		exit 1; \
+	fi; \
+	if [ -z "$(strip $(FOD_CHANGE_VALUE))" ]; then \
+		echo 'Set FOD_CHANGE_VALUE=...'; \
+		exit 1; \
+	fi; \
+	if [ -z "$(strip $(FOD_CHANGE_PASSWORD))" ]; then \
+		echo 'Set FOD_CHANGE_PASSWORD=...'; \
+		exit 1; \
+	fi; \
+	$(CARGO_RUN_MKFS) --bin $(FOD_CHANGE_BIN) -- --config-path $(FOD_CHANGE_CONFIG_PATH) --password $(FOD_CHANGE_PASSWORD) --set $(FOD_CHANGE_KEY)=$(FOD_CHANGE_VALUE)
+
+change-runtime: change-runtime-set
+	@:
+
+change-runtime-sync: reload-runtime
+
+reload-runtime: up wait
+	@set -eu; \
+	$(CARGO_RUN_MKFS) --bin $(FOD_CHANGE_BIN) -- --config-path $(FOD_CHANGE_CONFIG_PATH) --sync-config
+
+.PHONY: reload-runtime change-runtime change-runtime-sync change-runtime-list change-runtime-get change-runtime-set
+
+test-mkfs-pg-tls: test-mkfs-config-suite
+	@:
+
+test-mount-suite: venv
+	$(MAKE) reset
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mount_suite.py
+
+test-all: smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
+test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-relatime
+test-integration: test-runtime-profile-extents
+
+benchmark: benchmarks
+
+benchmarks:
+	@set -eu; \
+	for target in $(BENCHMARK_TARGETS); do \
+		$(MAKE) --no-print-directory $$target; \
+	done
+
+db-shell:
+	$(COMPOSE) -f $(COMPOSE_FILE) exec postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
+
+clean:
+	rm -rf $(VENV_DIR)
