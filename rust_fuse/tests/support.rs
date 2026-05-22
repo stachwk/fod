@@ -191,11 +191,13 @@ pub fn bootstrap_binary() -> PathBuf {
     binary_from_env_or_candidates(
         "FOD_BOOTSTRAP_BIN",
         &[
+            root.join("target/debug/fod-bootstrap"),
+            root.join("target/release/fod-bootstrap"),
             root.join("rust_mkfs/target/debug/fod-bootstrap"),
             root.join("rust_mkfs/target/release/fod-bootstrap"),
             PathBuf::from("/usr/local/bin/fod-bootstrap"),
         ],
-        "fod-bootstrap binary not found; build rust_mkfs first",
+        "fod-bootstrap binary not found; build the workspace first",
     )
 }
 
@@ -204,11 +206,13 @@ pub fn mkfs_binary() -> PathBuf {
     binary_from_env_or_candidates(
         "FOD_MKFS_BIN",
         &[
+            root.join("target/debug/fod-rust-mkfs"),
+            root.join("target/release/fod-rust-mkfs"),
             root.join("rust_mkfs/target/debug/fod-rust-mkfs"),
             root.join("rust_mkfs/target/release/fod-rust-mkfs"),
             PathBuf::from("/usr/local/bin/fod-rust-mkfs"),
         ],
-        "fod-rust-mkfs binary not found; build rust_mkfs first",
+        "fod-rust-mkfs binary not found; build the workspace first",
     )
 }
 

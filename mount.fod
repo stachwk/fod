@@ -46,6 +46,51 @@ ensure_mountpoint_dir() {
   mkdir -p "${MOUNTPOINT}"
 }
 
+resolve_bootstrap_bin() {
+  local debug_mode="$1"
+  local -a candidates=()
+
+  if [[ -n "${FOD_BOOTSTRAP_BIN:-}" && -x "${FOD_BOOTSTRAP_BIN}" ]]; then
+    echo "${FOD_BOOTSTRAP_BIN}"
+    return 0
+  fi
+
+  if [[ "${debug_mode}" != "0" ]]; then
+    candidates=(
+      "${ROOT}/target/debug/fod-bootstrap"
+      "${ROOT}/target/release/fod-bootstrap"
+      "${ROOT}/rust_mkfs/target/debug/fod-bootstrap"
+      "${ROOT}/rust_mkfs/target/release/fod-bootstrap"
+    )
+  else
+    candidates=(
+      "${ROOT}/target/release/fod-bootstrap"
+      "${ROOT}/target/debug/fod-bootstrap"
+      "${ROOT}/rust_mkfs/target/release/fod-bootstrap"
+      "${ROOT}/rust_mkfs/target/debug/fod-bootstrap"
+    )
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "${candidate}" ]]; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+
+  if command -v fod-bootstrap >/dev/null 2>&1; then
+    echo "$(command -v fod-bootstrap)"
+    return 0
+  fi
+
+  if [[ -x "/usr/local/bin/fod-bootstrap" ]]; then
+    echo "/usr/local/bin/fod-bootstrap"
+    return 0
+  fi
+
+  return 1
+}
+
 translate_option() {
   local opt="$1"
   case "${opt}" in
@@ -173,32 +218,11 @@ if [[ "${DEBUG}" != "0" ]]; then
   export FOD_DEBUG="1"
 fi
 
-# Jawny override ma zawsze pierwszenstwo.
-if [[ -n "${FOD_BOOTSTRAP_BIN:-}" && -x "${FOD_BOOTSTRAP_BIN}" ]]; then
-  FOD_BOOTSTRAP_CMD=("${FOD_BOOTSTRAP_BIN}")
-
-# If FOD_DEBUG=1 or -o debug is enabled, intentionally choose the debug binary.
-elif [[ "${DEBUG}" != "0" && -x "${ROOT}/rust_mkfs/target/debug/fod-bootstrap" ]]; then
-  FOD_BOOTSTRAP_CMD=("${ROOT}/rust_mkfs/target/debug/fod-bootstrap")
-
-# Normalnie preferujemy release, zeby mount nie tracil wydajnosci.
-elif [[ -x "${ROOT}/rust_mkfs/target/release/fod-bootstrap" ]]; then
-  FOD_BOOTSTRAP_CMD=("${ROOT}/rust_mkfs/target/release/fod-bootstrap")
-
-# If a system-wide binary is installed, use the PATH version.
-elif command -v fod-bootstrap >/dev/null 2>&1; then
-  FOD_BOOTSTRAP_CMD=("$(command -v fod-bootstrap)")
-
-# Fall back to debug only when the release or system-wide binary is unavailable.
-elif [[ -x "${ROOT}/rust_mkfs/target/debug/fod-bootstrap" ]]; then
-  FOD_BOOTSTRAP_CMD=("${ROOT}/rust_mkfs/target/debug/fod-bootstrap")
-
-elif [[ -x "/usr/local/bin/fod-bootstrap" ]]; then
-  FOD_BOOTSTRAP_CMD=("/usr/local/bin/fod-bootstrap")
-else
-  echo "mount.fod: fod-bootstrap not found in the project tree, PATH, or /usr/local/bin. Build rust_mkfs/target/release/fod-bootstrap first." >&2
+resolved_bootstrap="$(resolve_bootstrap_bin "${DEBUG}")" || {
+  echo "mount.fod: fod-bootstrap not found in the project tree, PATH, or /usr/local/bin. Build target/{debug,release}/fod-bootstrap first." >&2
   exit 2
-fi
+}
+FOD_BOOTSTRAP_CMD=("${resolved_bootstrap}")
 
 
 ensure_mountpoint_dir

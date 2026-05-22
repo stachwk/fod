@@ -79,3 +79,7 @@ Use this file to record concise conclusions that matter for future work.
 ## 2026-05-20
 
 - The Docker compose stack now takes container names from `CONTAINER_*` environment variables with the current `fod-postgres` and `fod-selinux-acl` values preserved as fallbacks. That keeps the repo compatible with the shared port/name registry in `/home/wojtek/git/config` without forcing a behavior change on the existing smoke targets.
+
+## 2026-05-22
+
+- `mount.fod` and `rust_fuse/tests/support.rs` now prefer workspace `target/debug` and `target/release` before the legacy `rust_mkfs/target/...` paths, so fresh workspace builds are no longer shadowed by an older `/usr/local/bin/fod-bootstrap`.

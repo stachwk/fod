@@ -8,12 +8,24 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmpdir="$(mktemp -d /tmp/fod-mount-wrapper-path.XXXXXX)"
 trap 'rm -rf "${tmpdir}"' EXIT
 
+mkdir -p "${tmpdir}/target/debug"
 mkdir -p "${tmpdir}/bin"
 cp "${ROOT}/mount.fod" "${tmpdir}/mount.fod"
 chmod +x "${tmpdir}/mount.fod"
 
+cat >"${tmpdir}/target/debug/fod-bootstrap" <<'EOF'
+#!/usr/bin/env bash
+printf 'BOOTSTRAP_SOURCE=%s\n' "target"
+printf 'FOD_ROLE=%s\n' "${FOD_ROLE:-unset}"
+printf 'FOD_RUST_FUSE_READONLY=%s\n' "${FOD_RUST_FUSE_READONLY:-unset}"
+printf 'FOD_CONFIG=%s\n' "${FOD_CONFIG:-unset}"
+printf 'ARGS=%s\n' "$*"
+EOF
+chmod +x "${tmpdir}/target/debug/fod-bootstrap"
+
 cat >"${tmpdir}/bin/fod-bootstrap" <<'EOF'
 #!/usr/bin/env bash
+printf 'BOOTSTRAP_SOURCE=%s\n' "path"
 printf 'FOD_ROLE=%s\n' "${FOD_ROLE:-unset}"
 printf 'FOD_RUST_FUSE_READONLY=%s\n' "${FOD_RUST_FUSE_READONLY:-unset}"
 printf 'FOD_CONFIG=%s\n' "${FOD_CONFIG:-unset}"
@@ -29,6 +41,12 @@ printf '[database]\n' >"${tmpdir}/fod_config.ini"
 ) >"${tmpdir}/output.txt"
 
 [[ -d "${tmpdir}/mnt" ]]
+grep -Fq "BOOTSTRAP_SOURCE=target" "${tmpdir}/output.txt"
+if grep -Fq "BOOTSTRAP_SOURCE=path" "${tmpdir}/output.txt"; then
+  cat "${tmpdir}/output.txt"
+  echo "mount.fod used PATH bootstrap instead of local target bootstrap"
+  exit 1
+fi
 grep -Fq "FOD_ROLE=auto" "${tmpdir}/output.txt"
 grep -Fq "FOD_RUST_FUSE_READONLY=1" "${tmpdir}/output.txt"
 grep -Fq "FOD_CONFIG=${tmpdir}/fod_config.ini" "${tmpdir}/output.txt"
