@@ -83,3 +83,5 @@ Use this file to record concise conclusions that matter for future work.
 ## 2026-05-22
 
 - `mount.fod` and `rust_fuse/tests/support.rs` now prefer workspace `target/debug` and `target/release` before the legacy `rust_mkfs/target/...` paths, so fresh workspace builds are no longer shadowed by an older `/usr/local/bin/fod-bootstrap`.
+- The installed `mount.fod` wrapper also needs to discover the checkout root by walking up from `PWD` first and then from `SCRIPT_DIR`; otherwise a copy installed under `/usr/local/sbin` can miss the workspace `target/...` tree and fall back to `PATH` even when the local build is present.
+- The installed sequential smoke passed with both `FOD_PROFILE_IO=1` and `FOD_STRACE=1` against `/usr/local/bin/fod-bootstrap` and `/usr/local/bin/mkfs.fod`. On this host the hot syscalls stayed in the expected FUSE/PostgreSQL shape (`wait4`, `futex`, `restart_syscall`, `sendto`, `poll`, `recvfrom`), and the measured block/extents timings did not expose a wrapper-specific regression.

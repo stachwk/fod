@@ -12,6 +12,8 @@ mkdir -p "${tmpdir}/target/debug"
 mkdir -p "${tmpdir}/bin"
 cp "${ROOT}/mount.fod" "${tmpdir}/mount.fod"
 chmod +x "${tmpdir}/mount.fod"
+printf '[package]\n' >"${tmpdir}/Cargo.toml"
+printf '3.0.4\n' >"${tmpdir}/fod_version.txt"
 
 cat >"${tmpdir}/target/debug/fod-bootstrap" <<'EOF'
 #!/usr/bin/env bash

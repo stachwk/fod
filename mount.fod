@@ -46,8 +46,28 @@ ensure_mountpoint_dir() {
   mkdir -p "${MOUNTPOINT}"
 }
 
+find_checkout_root() {
+  local start_dir="$1"
+  local dir
+
+  dir="$(cd "${start_dir}" && pwd)"
+  while [[ -n "${dir}" ]]; do
+    if [[ -f "${dir}/Cargo.toml" && -f "${dir}/fod_version.txt" && -f "${dir}/mount.fod" ]]; then
+      echo "${dir}"
+      return 0
+    fi
+    if [[ "${dir}" == "/" ]]; then
+      break
+    fi
+    dir="$(dirname "${dir}")"
+  done
+
+  return 1
+}
+
 resolve_bootstrap_bin() {
   local debug_mode="$1"
+  local project_root="$2"
   local -a candidates=()
 
   if [[ -n "${FOD_BOOTSTRAP_BIN:-}" && -x "${FOD_BOOTSTRAP_BIN}" ]]; then
@@ -55,20 +75,22 @@ resolve_bootstrap_bin() {
     return 0
   fi
 
-  if [[ "${debug_mode}" != "0" ]]; then
-    candidates=(
-      "${ROOT}/target/debug/fod-bootstrap"
-      "${ROOT}/target/release/fod-bootstrap"
-      "${ROOT}/rust_mkfs/target/debug/fod-bootstrap"
-      "${ROOT}/rust_mkfs/target/release/fod-bootstrap"
-    )
-  else
-    candidates=(
-      "${ROOT}/target/release/fod-bootstrap"
-      "${ROOT}/target/debug/fod-bootstrap"
-      "${ROOT}/rust_mkfs/target/release/fod-bootstrap"
-      "${ROOT}/rust_mkfs/target/debug/fod-bootstrap"
-    )
+  if [[ -n "${project_root}" ]]; then
+    if [[ "${debug_mode}" != "0" ]]; then
+      candidates=(
+        "${project_root}/target/debug/fod-bootstrap"
+        "${project_root}/target/release/fod-bootstrap"
+        "${project_root}/rust_mkfs/target/debug/fod-bootstrap"
+        "${project_root}/rust_mkfs/target/release/fod-bootstrap"
+      )
+    else
+      candidates=(
+        "${project_root}/target/release/fod-bootstrap"
+        "${project_root}/target/debug/fod-bootstrap"
+        "${project_root}/rust_mkfs/target/release/fod-bootstrap"
+        "${project_root}/rust_mkfs/target/debug/fod-bootstrap"
+      )
+    fi
   fi
 
   for candidate in "${candidates[@]}"; do
@@ -218,7 +240,16 @@ if [[ "${DEBUG}" != "0" ]]; then
   export FOD_DEBUG="1"
 fi
 
-resolved_bootstrap="$(resolve_bootstrap_bin "${DEBUG}")" || {
+PROJECT_ROOT=""
+if PROJECT_ROOT="$(find_checkout_root "${PWD}" 2>/dev/null)"; then
+  :
+elif PROJECT_ROOT="$(find_checkout_root "${SCRIPT_DIR}" 2>/dev/null)"; then
+  :
+else
+  PROJECT_ROOT=""
+fi
+
+resolved_bootstrap="$(resolve_bootstrap_bin "${DEBUG}" "${PROJECT_ROOT}")" || {
   echo "mount.fod: fod-bootstrap not found in the project tree, PATH, or /usr/local/bin. Build target/{debug,release}/fod-bootstrap first." >&2
   exit 2
 }
