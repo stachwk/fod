@@ -101,3 +101,4 @@ FOD checklist for the common FUSE/FS bottlenecks:
 ## 2026-06-13
 
 - The optional `test-admpanch-trace` Makefile helper needs both an exported `ADMP_INI` and an explicit `ADMP_TRACE_ENV` passthrough for targets that run through `sudo env`; otherwise the tracer config disappears before the test process starts. The local `admpanch_trace.fod.local.ini` profile is the safe default, while the DB-backed profile stays opt-in.
+- `tests/integration/test_root_owned_permissions.sh` also needed its own `sudo -n env` line to accept `ADMP_TRACE_ENV`, otherwise the root-mounted FOD process would not see the tracer config even when the caller exported it. That script is now trace-friendly without changing the actual root-owned permission checks.

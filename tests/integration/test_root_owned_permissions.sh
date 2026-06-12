@@ -28,7 +28,7 @@ rmdir "${local_dir}"
 MOUNTPOINT="${tmpdir}/fod-root-owned"
 mkdir -p "${MOUNTPOINT}"
 POSTGRES_DB="${POSTGRES_DB}" POSTGRES_USER="${POSTGRES_USER}" POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
-  sudo -n env FOD_USE_FUSE_CONTEXT=1 /usr/local/sbin/mount.fod "${MOUNTPOINT}" \
+  sudo -n env ${ADMP_TRACE_ENV:-} FOD_USE_FUSE_CONTEXT=1 /usr/local/sbin/mount.fod "${MOUNTPOINT}" \
   -o role=auto,selinux=off,acl=off,default_permissions,allow_other,profile=default \
   >/tmp/fod-root-owned.mount.log 2>&1 &
 FOD_PID=$!
