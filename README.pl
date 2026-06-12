@@ -140,6 +140,8 @@ Workflow GitHub Actions uruchamia krótki job kompilacyjny oraz wybrany matrix t
 | `test-block-read` | Sprawdza odczyt zakresowy bloków zamiast pełnego pliku. |
 | `test-flush-release-profile` | Sprawdza zachowanie profilowania `flush/release`. |
 
+Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasady_sprawdzen.md).
+
 ## Znane Ograniczenia
 
 - Pełna polityka mount-label SELinux jest celowo poza zakresem; FOD trzyma SELinux jako metadane w xattr plus runtime gating.

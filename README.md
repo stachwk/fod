@@ -138,6 +138,8 @@ The GitHub Actions workflow runs a small compile job plus a curated test matrix:
 | `test-block-read` | Verifies block-range reads instead of whole-file reads. |
 | `test-flush-release-profile` | Verifies flush/release profiling behavior. |
 
+For step-by-step local verification profiles, see [zasady_sprawdzen.md](zasady_sprawdzen.md).
+
 ## Known Limits
 
 - Full SELinux mount-label policy is intentionally out of scope; FOD keeps SELinux as xattr-backed metadata plus runtime gating.
