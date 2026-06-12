@@ -97,3 +97,7 @@ FOD checklist for the common FUSE/FS bottlenecks:
 | Metadata and locking | Syscall bursts around create/unlink/readdir plus heavy `futex`/wait activity | High `read_block_map_us`, `write_state_lock_us`, `read_cache_lock_us`, and `repo_persist_blocks_us` | Poor scaling with threads; small-file and directory-heavy workloads degrade first |
 | Cache / writeback / passthrough tradeoffs | Fewer daemon round-trips on the fast path, but extra `READ` on writes or more `fsync` / `close` pressure when cache semantics are involved | Write totals improve, but hidden read or sync costs can reappear when cache assumptions are violated | Cached writes may look much faster, while correctness-sensitive or direct-I/O cases can regress sharply |
 | Workload sensitivity | Different syscall shapes across sequential, mixed, random, and threaded runs | Compare the same counters across workloads, not just one run | A win in one benchmark class can hide a regression in another, so keep separate sequential, mixed, random, and contention tests |
+
+## 2026-06-13
+
+- The optional `test-admpanch-trace` Makefile helper needs both an exported `ADMP_INI` and an explicit `ADMP_TRACE_ENV` passthrough for targets that run through `sudo env`; otherwise the tracer config disappears before the test process starts. The local `admpanch_trace.fod.local.ini` profile is the safe default, while the DB-backed profile stays opt-in.

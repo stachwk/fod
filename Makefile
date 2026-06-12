@@ -108,6 +108,10 @@ FOD_DEFAULT_PERMISSIONS ?= 1
 FOD_ATIME_POLICY ?= default
 FOD_ROLE ?= auto
 FOD_PROFILE ?=
+ADMP_TRACE_INI ?= admpanch_trace.fod.local.ini
+ADMP_TRACE_TARGET ?= test-fio-sequential-io-strace
+ADMP_TRACE_INI_ABS := $(abspath $(ADMP_TRACE_INI))
+ADMP_TRACE_ENV ?=
 FOD_CHANGE_CONFIG_PATH ?= $(FOD_CONFIG_SOURCE)
 FOD_SCHEMA_ADMIN_PASSWORD_FILE ?= .fod/schema-admin-password
 FOD_CHANGE_KEY ?=
@@ -137,7 +141,7 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks venv deps deps-ubuntu deps-redhat up down restart logs wait init reset smoke enable-pg-stat-statements mount mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
+.PHONY: help benchmark benchmarks venv deps deps-ubuntu deps-redhat up down restart logs wait init reset smoke enable-pg-stat-statements mount mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
 
 help:
 	@printf '%s\n' \
@@ -286,6 +290,7 @@ help:
 		'  make test-mount-suite - shared Python mount smoke runner' \
 		'  make test-fio-sequential-io - fio sequential read/write smoke for block and extent paths' \
 		'  make test-fio-sequential-io-strace - fio sequential smoke with strace syscall tables for block and extent paths' \
+		'  make test-admpanch-trace - run ADMP_TRACE_TARGET with ADMP_INI=$(ADMP_TRACE_INI_ABS) (override ADMP_TRACE_TARGET=...)' \
 		'  make test-fio-mixed-io - fio mixed sequential rw smoke for block and extent paths' \
 		'  make test-fio-random-mixed-io - fio random mixed rw negative control for block and extent paths' \
 		'  make test-all   - smoke + current integration suite' \
@@ -553,7 +558,7 @@ test-xattr: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_xattr.py
 
 test-locking: init
-	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test lock_backend_smoke -- --nocapture
+	sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test lock_backend_smoke -- --nocapture
 
 test-pg-lock-manager: init
 	$(CARGO_TEST_HOTPATH) --test lock_manager
@@ -594,7 +599,7 @@ test-ioctl: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ioctl.py
 
 test-mknod: init
-	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mknod.py
+	sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mknod.py
 
 
 test-lseek: init
@@ -711,7 +716,11 @@ test-fio-sequential-io: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) bash tests/integration/test_fio_sequential_io.sh
 
 test-fio-sequential-io-strace: init
-	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FOD_STRACE=1 FIO_FILE_SIZE=$(FIO_FILE_SIZE) bash tests/integration/test_fio_sequential_io.sh
+	sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FOD_STRACE=1 FIO_FILE_SIZE=$(FIO_FILE_SIZE) bash tests/integration/test_fio_sequential_io.sh
+
+test-admpanch-trace:
+	@printf '%s\n' "Running $(ADMP_TRACE_TARGET) with ADMP_INI=$(ADMP_TRACE_INI_ABS)"
+	ADMP_INI="$(ADMP_TRACE_INI_ABS)" ADMP_TRACE_ENV="ADMP_INI=$(ADMP_TRACE_INI_ABS)" $(MAKE) $(ADMP_TRACE_TARGET)
 
 test-fio-mixed-io: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) bash tests/integration/test_fio_mixed_io.sh
@@ -841,12 +850,12 @@ test-postgresql-requirements: test-postgresql-requirements-autocommit-off
 test-runtime-profile: venv up
 	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_profile.py
+	sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_profile.py
 
 test-runtime-profile-extents: venv up
 	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	sudo env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PROFILE=extents FOD_ENABLE_EXTENTS=1 $(VENV_PYTHON) tests/integration/test_runtime_profile.py
+	sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PROFILE=extents FOD_ENABLE_EXTENTS=1 $(VENV_PYTHON) tests/integration/test_runtime_profile.py
 
 .PHONY: test-runtime-profile-extents
 
