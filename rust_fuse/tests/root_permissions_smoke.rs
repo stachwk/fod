@@ -10,8 +10,8 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use support::{
-    bootstrap_binary, conninfo_from_config, create_workspace, mountpoint_ready, repo_root,
-    tail_log, try_unmount, unique_suffix,
+    admp_trace_env_pairs, bootstrap_binary, conninfo_from_config, create_workspace,
+    mountpoint_ready, repo_root, tail_log, try_unmount, unique_suffix,
 };
 
 struct MountedRootFs {
@@ -55,6 +55,7 @@ fn start_root_mount(name: &str) -> Result<MountedRootFs, String> {
     let bootstrap = bootstrap_binary();
     let conninfo = conninfo_from_config()?;
     let config = support::config_path();
+    let trace_env = admp_trace_env_pairs()?;
     let current_uid = unsafe { libc::geteuid() };
     let mut command = if current_uid == 0 {
         let mut command = Command::new(&bootstrap);
@@ -71,13 +72,20 @@ fn start_root_mount(name: &str) -> Result<MountedRootFs, String> {
             .env("FOD_DEFAULT_PERMISSIONS", "1")
             .env("FOD_SELINUX", "off")
             .env("FOD_ACL", "off");
+        for (key, value) in &trace_env {
+            command.env(key, value);
+        }
         command
     } else {
         let mut command = Command::new("sudo");
         command
             .current_dir(repo_root())
             .arg("-n")
-            .arg("env")
+            .arg("env");
+        for (key, value) in &trace_env {
+            command.arg(format!("{key}={value}"));
+        }
+        command
             .arg(format!("FOD_CONFIG={}", config.display()))
             .arg(format!("FOD_DSN_CONNINFO={}", conninfo))
             .arg("FOD_ALLOW_OTHER=1")

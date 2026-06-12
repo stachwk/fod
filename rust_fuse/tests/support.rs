@@ -105,6 +105,25 @@ pub fn db_repo() -> Result<DbRepo, String> {
     DbRepo::new(&conninfo_from_config()?)
 }
 
+pub fn admp_trace_env_pairs() -> Result<Vec<(String, String)>, String> {
+    let raw = match env::var("ADMP_TRACE_ENV") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => return Ok(Vec::new()),
+    };
+
+    let mut pairs = Vec::new();
+    for entry in raw.split_whitespace() {
+        let (key, value) = entry
+            .split_once('=')
+            .ok_or_else(|| format!("invalid ADMP_TRACE_ENV entry: {entry}"))?;
+        if key.is_empty() {
+            return Err("invalid ADMP_TRACE_ENV entry: empty key".to_string());
+        }
+        pairs.push((key.to_string(), value.to_string()));
+    }
+    Ok(pairs)
+}
+
 pub fn block_size_from_config() -> Result<usize, String> {
     let repo = db_repo()?;
     let snapshot = repo.startup_snapshot()?;
@@ -129,7 +148,8 @@ pub fn ensure_schema_initialized() -> Result<(), String> {
         .unwrap_or_else(|| format!("fod-{}", unique_suffix().replace('-', "")));
     let mkfs = mkfs_binary();
 
-    let output = Command::new(&mkfs)
+    let mut command = Command::new(&mkfs);
+    command
         .current_dir(&root)
         .arg("init")
         .arg("--schema-admin-password")
@@ -146,7 +166,9 @@ pub fn ensure_schema_initialized() -> Result<(), String> {
         .env(
             "POSTGRES_PASSWORD",
             env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "cichosza".to_string()),
-        )
+        );
+    apply_admp_trace_env(&mut command)?;
+    let output = command
         .output()
         .map_err(|err| format!("failed to initialize schema: {err}"))?;
 
@@ -159,6 +181,13 @@ pub fn ensure_schema_initialized() -> Result<(), String> {
             String::from_utf8_lossy(&output.stderr)
         ))
     }
+}
+
+fn apply_admp_trace_env(command: &mut Command) -> Result<(), String> {
+    for (key, value) in admp_trace_env_pairs()? {
+        command.env(key, value);
+    }
+    Ok(())
 }
 
 fn logical_mount_path(mountpoint: &Path, path: &Path) -> Result<String, String> {
@@ -301,7 +330,9 @@ impl MountedFs {
             .env("FOD_SELINUX", "off")
             .env("FOD_ACL", "off")
             .env("FOD_DEFAULT_PERMISSIONS", "1")
-            .env("FOD_ATIME_POLICY", "default")
+            .env("FOD_ATIME_POLICY", "default");
+        apply_admp_trace_env(&mut command)?;
+        command
             .stdout(Stdio::from(
                 log_file.try_clone().map_err(|err| err.to_string())?,
             ))

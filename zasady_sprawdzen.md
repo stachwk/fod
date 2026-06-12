@@ -12,6 +12,7 @@ Ten plik opisuje profile sprawdzeń dla FOD. Profil oznacza tu uporządkowaną, 
 - Domyślny lokalny profil trace to `admpanch_trace.fod.local.ini`.
 - Profil `admpanch_trace.fod.db.ini` używaj tylko wtedy, gdy chcesz zapisywać trace do PostgreSQL.
 - Jeśli polecenie idzie przez `sudo env`, a ma widzieć `ADMP_INI`, przekaż też `ADMP_TRACE_ENV="ADMP_INI=..."`.
+- Jeśli helper testowy sam uruchamia `mkfs` albo `mount.fod`, niech też czyta `ADMP_TRACE_ENV`, żeby trace nie urywał się na poziomie wspólnych helperów.
 - `strace` i `perf` są traktowane jako narzędzia diagnostyczne, więc nie powinny trafiać do trace jako monitorowane programy.
 - Nie zmieniaj `.gitignore` w ramach profili sprawdzeń.
 
@@ -88,26 +89,38 @@ Cel: sprawdzić podstawowe zachowanie mounta, locków i uprawnień.
 make test-mount-suite
 ```
 
-2. Sprawdź locki produkcyjne i backend PostgreSQL.
+2. Sprawdź osobny smoke root-permissions dla mounta.
+
+```bash
+make test-mount-root-permissions
+```
+
+3. Sprawdź locki produkcyjne i backend PostgreSQL.
 
 ```bash
 make test-locking
 make test-pg-lock-manager
 ```
 
-3. Sprawdź opcje wrappera mounta.
+4. Sprawdź opcje wrappera mounta.
 
 ```bash
 make test-mount-wrapper-options
 ```
 
-4. Sprawdź zachowanie plików z właścicielem `root`.
+5. Sprawdź tworzenie inode typu `mknod`.
+
+```bash
+make test-mknod
+```
+
+6. Sprawdź zachowanie plików z właścicielem `root`.
 
 ```bash
 make test-root-owned-permissions
 ```
 
-5. Jeśli host wspiera `allow_other`, możesz dołożyć kontrolę widoczności.
+7. Jeśli host wspiera `allow_other`, możesz dołożyć kontrolę widoczności.
 
 ```bash
 make test-allow-other-visibility
@@ -170,6 +183,8 @@ ADMP_INI="$PWD/admpanch_trace.fod.local.ini" make test-admpanch-trace
 ```bash
 ADMP_INI="$PWD/admpanch_trace.fod.local.ini" make test-admpanch-trace ADMP_TRACE_TARGET=test-runtime-profile
 ADMP_INI="$PWD/admpanch_trace.fod.local.ini" make test-admpanch-trace ADMP_TRACE_TARGET=test-locking
+ADMP_INI="$PWD/admpanch_trace.fod.local.ini" make test-admpanch-trace ADMP_TRACE_TARGET=test-mount-root-permissions
+ADMP_INI="$PWD/admpanch_trace.fod.local.ini" make test-admpanch-trace ADMP_TRACE_TARGET=test-mknod
 ADMP_INI="$PWD/admpanch_trace.fod.local.ini" make test-admpanch-trace ADMP_TRACE_TARGET=test-root-owned-permissions
 ```
 
