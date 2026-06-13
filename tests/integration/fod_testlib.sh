@@ -126,17 +126,28 @@ fod_test_cleanup() {
   FOD_STRACE_LABEL=""
 }
 
+fod_trace_env_prefix() {
+  local -n prefix_ref="$1"
+  prefix_ref=()
+  if [[ -n "${ADMP_TRACE_ENV:-}" ]]; then
+    read -r -a prefix_ref <<<"${ADMP_TRACE_ENV}"
+    prefix_ref=(env "${prefix_ref[@]}")
+  fi
+}
+
 fod_test_init_schema() {
+  local -a trace_prefix=()
+  fod_trace_env_prefix trace_prefix
   local status_output
   status_output="$(
     POSTGRES_DB="${POSTGRES_DB}" POSTGRES_USER="${POSTGRES_USER}" POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
-      FOD_CONFIG="${FOD_CONFIG}" ${ADMP_TRACE_ENV:-} "${FOD_MKFS_BIN}" status 2>/dev/null || true
+      FOD_CONFIG="${FOD_CONFIG}" "${trace_prefix[@]}" "${FOD_MKFS_BIN}" status 2>/dev/null || true
   )"
   if grep -Fq "FOD ready: yes" <<<"${status_output}"; then
     return 0
   fi
   POSTGRES_DB="${POSTGRES_DB}" POSTGRES_USER="${POSTGRES_USER}" POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
-    FOD_CONFIG="${FOD_CONFIG}" ${ADMP_TRACE_ENV:-} "${FOD_MKFS_BIN}" init --schema-admin-password "${FOD_SCHEMA_ADMIN_PASSWORD}"
+    FOD_CONFIG="${FOD_CONFIG}" "${trace_prefix[@]}" "${FOD_MKFS_BIN}" init --schema-admin-password "${FOD_SCHEMA_ADMIN_PASSWORD}"
 }
 
 fod_test_build_args() {
@@ -158,6 +169,8 @@ fod_test_start_mount() {
   fod_test_build_args
   mkdir -p "${mountpoint}"
   local start_cmd=("${FOD_BOOTSTRAP_BIN}" "${FOD_ARGS[@]}" -f "${mountpoint}")
+  local -a trace_prefix=()
+  fod_trace_env_prefix trace_prefix
   if [[ -n "${FOD_STRACE_SUMMARY_FILE:-}" ]]; then
     mkdir -p "$(dirname "${FOD_STRACE_SUMMARY_FILE}")"
     start_cmd=(strace -f -c -o "${FOD_STRACE_SUMMARY_FILE}" "${start_cmd[@]}")
@@ -167,7 +180,7 @@ fod_test_start_mount() {
     FOD_USE_FUSE_CONTEXT=1 FOD_ALLOW_OTHER="${FOD_ALLOW_OTHER}" \
     FOD_SELINUX_CONTEXT="${FOD_SELINUX_CONTEXT}" FOD_SELINUX_FSCONTEXT="${FOD_SELINUX_FSCONTEXT}" \
     FOD_SELINUX_DEFCONTEXT="${FOD_SELINUX_DEFCONTEXT}" FOD_SELINUX_ROOTCONTEXT="${FOD_SELINUX_ROOTCONTEXT}" \
-    ${ADMP_TRACE_ENV:-} "${start_cmd[@]}" >"${LOG_FILE}" 2>&1 &
+    "${trace_prefix[@]}" "${start_cmd[@]}" >"${LOG_FILE}" 2>&1 &
   FOD_PID=$!
 
   for _ in $(seq 1 60); do
