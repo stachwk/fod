@@ -42,7 +42,8 @@ This document records the small set of open follow-ups plus completed work, clos
 - [ ] Plan implementacji ioctl:
   - [x] Najpierw `FIGETBSZ`. Zaimplementowane w `rust_fuse/src/fs.rs` jako odpowiedź oparta o bieżący `blksize`.
   - [x] Potem `FS_IOC_GETFLAGS`. Na razie zwracane jest neutralne `0`, bo flags nie są jeszcze trwale przechowywane.
-  - [ ] `FS_IOC_SETFLAGS` dopiero po decyzji o polityce flag.
+  - [x] `FS_IOC_SETFLAGS` przyjmuje teraz tylko `0` jako bezpieczny no-op; inne flagi dostają `EOPNOTSUPP` do czasu decyzji o trwałej polityce.
+  - [x] `FS_IOC_FSGETXATTR` zwraca teraz wyzerowany `fsxattr`, a `FS_IOC_FSSETXATTR` przyjmuje tylko zero/no-op do czasu decyzji o trwałej polityce xflags.
   - [ ] `FICLONE` zostaje na razie eksperymentalny, bo obecny stack FUSE nie potwierdził przepuszczania tego requestu do daemonu.
 - [ ] Zaprojektować pełną politykę mount-label SELinux.
 

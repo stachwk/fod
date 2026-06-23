@@ -144,7 +144,7 @@ For step-by-step local verification profiles, see [zasady_sprawdzen.md](zasady_s
 ## Known Limits
 
 - Full SELinux mount-label policy is intentionally out of scope; FOD keeps SELinux as xattr-backed metadata plus runtime gating.
-- `ioctl` support currently covers `FIONREAD`, `FIGETBSZ`, and `FS_IOC_GETFLAGS`; `FS_IOC_SETFLAGS` still waits on a flag-policy decision.
+- `ioctl` support currently covers `FIONREAD`, `FIGETBSZ`, `FS_IOC_GETFLAGS`, and `FS_IOC_FSGETXATTR`; `FS_IOC_SETFLAGS` and `FS_IOC_FSSETXATTR` accept only zero/no-op requests until a real flag policy is defined.
 - Special device node metadata is stored, but direct special-node execution semantics are still not a general-purpose focus.
 - FOD is still early-stage, so APIs, benchmarks, and performance defaults may still evolve.
 - `make test-all` is the main regression target; mount-heavy workflows are covered, but CI is still focused on a curated subset that is stable in automation.

@@ -42,6 +42,10 @@ const CLIENT_WRITE_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
 const ATIME_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
 // Linux FIGETBSZ is _IO(0x00, 2) and reports the filesystem block size.
 const IOCTL_FIGETBSZ: u32 = 2;
+// linux/fs.h also exposes the generic XFS-style fsxattr ioctls.
+const IOCTL_FS_IOC_FSGETXATTR: u32 = libc::_IOR::<[u8; IOCTL_FSXATTR_BYTES]>('X' as u32, 31) as u32;
+const IOCTL_FS_IOC_FSSETXATTR: u32 = libc::_IOW::<[u8; IOCTL_FSXATTR_BYTES]>('X' as u32, 32) as u32;
+const IOCTL_FSXATTR_BYTES: usize = 28;
 
 // FOPEN_DIRECT_IO = 1 << 0.
 // Uzywamy lokalnej stalej, zeby nie zalezec od eksportu tej stalej przez wersje fuser.
@@ -2156,6 +2160,24 @@ impl FodFuse {
         })
     }
 
+    fn ioctl_flags_value(in_data: &[u8]) -> Result<u32, libc::c_int> {
+        match in_data.len() {
+            4 => {
+                let flags_bytes: [u8; 4] = in_data.try_into().map_err(|_| libc::EINVAL)?;
+                Ok(u32::from_ne_bytes(flags_bytes))
+            }
+            8 => {
+                let flags_bytes: [u8; 8] = in_data.try_into().map_err(|_| libc::EINVAL)?;
+                let raw_flags = u64::from_ne_bytes(flags_bytes);
+                if raw_flags > u32::MAX as u64 {
+                    return Err(libc::EINVAL);
+                }
+                Ok(raw_flags as u32)
+            }
+            _ => Err(libc::EINVAL),
+        }
+    }
+
     fn ioctl_clone_source_path(req: &Request<'_>, src_fd: i64) -> Result<String, libc::c_int> {
         if src_fd < 0 {
             return Err(libc::EINVAL);
@@ -2509,6 +2531,18 @@ impl FodFuse {
                 Err(err)
             }
         }
+    }
+
+    fn ioctl_fsxattr_values(in_data: &[u8]) -> Result<(u32, u32, u32, u32, u32), libc::c_int> {
+        if in_data.len() != IOCTL_FSXATTR_BYTES {
+            return Err(libc::EINVAL);
+        }
+        let xflags = u32::from_ne_bytes(in_data[0..4].try_into().map_err(|_| libc::EINVAL)?);
+        let extsize = u32::from_ne_bytes(in_data[4..8].try_into().map_err(|_| libc::EINVAL)?);
+        let nextents = u32::from_ne_bytes(in_data[8..12].try_into().map_err(|_| libc::EINVAL)?);
+        let projid = u32::from_ne_bytes(in_data[12..16].try_into().map_err(|_| libc::EINVAL)?);
+        let cowextsize = u32::from_ne_bytes(in_data[16..20].try_into().map_err(|_| libc::EINVAL)?);
+        Ok((xflags, extsize, nextents, projid, cowextsize))
     }
 
     fn entry_path_for_ino(&self, ino: u64) -> Result<String, libc::c_int> {
@@ -3472,7 +3506,10 @@ impl Filesystem for FodFuse {
                 );
                 reply.ioctl(0, &block_size.to_ne_bytes());
             }
-            value if value == libc::FS_IOC_GETFLAGS as u32 => {
+            value
+                if value == libc::FS_IOC_GETFLAGS as u32
+                    || value == libc::FS_IOC32_GETFLAGS as u32 =>
+            {
                 // FOD does not persist inode flags yet, so return the default zero bitset.
                 let flags: u32 = 0;
                 debug!(
@@ -3480,6 +3517,68 @@ impl Filesystem for FodFuse {
                     path, fh, cmd, out_size, flags
                 );
                 reply.ioctl(0, &flags.to_ne_bytes());
+            }
+            value
+                if value == libc::FS_IOC_SETFLAGS as u32
+                    || value == libc::FS_IOC32_SETFLAGS as u32 =>
+            {
+                let requested_flags = match Self::ioctl_flags_value(in_data) {
+                    Ok(value) => value,
+                    Err(errno) => {
+                        reply.error(errno);
+                        return;
+                    }
+                };
+                debug!(
+                    "FOD ioctl path={} fh={} cmd={} out_size={} requested_flags={:#x}",
+                    path, fh, cmd, out_size, requested_flags
+                );
+                if requested_flags != 0 {
+                    warn!(
+                        "FOD FS_IOC_SETFLAGS rejected path={} requested_flags={:#x}: inode flags are not persisted yet",
+                        path, requested_flags
+                    );
+                    reply.error(libc::EOPNOTSUPP);
+                    return;
+                }
+                reply.ioctl(0, &[]);
+            }
+            value if value == IOCTL_FS_IOC_FSGETXATTR => {
+                let fsxattr = [0u8; IOCTL_FSXATTR_BYTES];
+                debug!(
+                    "FOD ioctl path={} fh={} cmd={} out_size={} fsxattr=zeroed",
+                    path, fh, cmd, out_size
+                );
+                reply.ioctl(0, &fsxattr);
+            }
+            value if value == IOCTL_FS_IOC_FSSETXATTR => {
+                let (xflags, extsize, nextents, projid, cowextsize) =
+                    match Self::ioctl_fsxattr_values(in_data) {
+                        Ok(values) => values,
+                        Err(errno) => {
+                            reply.error(errno);
+                            return;
+                        }
+                    };
+                debug!(
+                    "FOD ioctl path={} fh={} cmd={} out_size={} xflags={:#x} extsize={} nextents={} projid={} cowextsize={}",
+                    path, fh, cmd, out_size, xflags, extsize, nextents, projid, cowextsize
+                );
+                if xflags != 0
+                    || extsize != 0
+                    || nextents != 0
+                    || projid != 0
+                    || cowextsize != 0
+                    || in_data[20..].iter().any(|byte| *byte != 0)
+                {
+                    warn!(
+                        "FOD FS_IOC_FSSETXATTR rejected path={} xflags={:#x} extsize={} nextents={} projid={} cowextsize={}: fsxattr is not persisted yet",
+                        path, xflags, extsize, nextents, projid, cowextsize
+                    );
+                    reply.error(libc::EOPNOTSUPP);
+                    return;
+                }
+                reply.ioctl(0, &[]);
             }
             value if value == libc::FIONREAD as u32 => {
                 let size = match self.write_state_for_handle(fh) {

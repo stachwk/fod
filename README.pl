@@ -146,7 +146,7 @@ Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasa
 ## Znane Ograniczenia
 
 - Pełna polityka mount-label SELinux jest celowo poza zakresem; FOD trzyma SELinux jako metadane w xattr plus runtime gating.
-- Obsługa `ioctl` obejmuje już `FIONREAD`, `FIGETBSZ` i `FS_IOC_GETFLAGS`; `FS_IOC_SETFLAGS` nadal czeka na decyzję o polityce flag.
+- Obsługa `ioctl` obejmuje już `FIONREAD`, `FIGETBSZ`, `FS_IOC_GETFLAGS` i `FS_IOC_FSGETXATTR`; `FS_IOC_SETFLAGS` oraz `FS_IOC_FSSETXATTR` przyjmują tylko żądanie z `0` jako bezpieczny no-op do czasu ustalenia realnej polityki flag.
 - Metadane specjalnych urządzeń są zapisywane, ale pełna semantyka uruchamiania takich node'ów nie jest głównym celem projektu.
 - FOD jest nadal na wczesnym etapie, więc API, benchmarki i domyślne ustawienia wydajności mogą się jeszcze zmieniać.
 - `make test-all` jest głównym targetem regresji; workflow mounta są pokryte, ale CI skupia się na wybranym zestawie stabilnym w automatyzacji.
