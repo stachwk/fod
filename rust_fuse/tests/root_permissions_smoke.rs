@@ -78,10 +78,7 @@ fn start_root_mount(name: &str) -> Result<MountedRootFs, String> {
         command
     } else {
         let mut command = Command::new("sudo");
-        command
-            .current_dir(repo_root())
-            .arg("-n")
-            .arg("env");
+        command.current_dir(repo_root()).arg("-n").arg("env");
         for (key, value) in &trace_env {
             command.arg(format!("{key}={value}"));
         }
