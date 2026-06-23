@@ -57,8 +57,14 @@ pub(crate) fn load_duplicate_sets(repo: &DbRepo) -> Result<Vec<DuplicateSet>, St
         .collect::<Result<Vec<_>, _>>()
 }
 
-pub(crate) fn load_plannable_files(repo: &DbRepo) -> Result<Vec<PlannableFile>, String> {
-    let rows = repo.query_rows_text(
+pub(crate) fn load_plannable_files(
+    repo: &DbRepo,
+    source_filter: Option<&str>,
+) -> Result<Vec<PlannableFile>, String> {
+    let source_clause = source_filter
+        .map(|source| format!(" AND s.name = {}", sql_quote_literal(source)))
+        .unwrap_or_default();
+    let rows = repo.query_rows_text(&format!(
         "
         SELECT
             f.id_file,
@@ -86,9 +92,10 @@ pub(crate) fn load_plannable_files(repo: &DbRepo) -> Result<Vec<PlannableFile>, 
         JOIN index_sources s ON s.id_index_source = f.id_index_source
         LEFT JOIN index_file_hashes h ON h.id_file = f.id_file
         WHERE f.scan_status = 'ok' AND f.file_kind = 'regular'
+        {source_clause}
         ORDER BY f.id_index_source, length(f.path), f.path
         ",
-    )?;
+    ))?;
 
     rows.iter()
         .map(|row| PlannableFile::from_row(row))
@@ -315,7 +322,10 @@ pub fn report_duplicate_sets(repo: &DbRepo, limit: usize) -> Result<(), String> 
     Ok(())
 }
 
-pub fn dry_run_import_plan(repo: &DbRepo) -> Result<ImportPlanSummary, String> {
+pub fn dry_run_import_plan(
+    repo: &DbRepo,
+    source_filter: Option<&str>,
+) -> Result<ImportPlanSummary, String> {
     hash::rebuild_duplicate_sets(repo)?;
     let duplicate_sets = load_duplicate_sets(repo)?;
     let duplicate_set_map: HashMap<(String, String, u64), DuplicateSet> = duplicate_sets
@@ -333,9 +343,12 @@ pub fn dry_run_import_plan(repo: &DbRepo) -> Result<ImportPlanSummary, String> {
         })
         .collect();
 
-    let files = load_plannable_files(repo)?;
-    let plan_id = insert_import_plan(repo, "dry_run_running", true, None)?;
-    let mut summary = ImportPlanSummary::default();
+    let files = load_plannable_files(repo, source_filter)?;
+    let plan_id = insert_import_plan(repo, "dry_run_running", true, source_filter)?;
+    let mut summary = ImportPlanSummary {
+        source_filter: source_filter.map(|value| value.to_string()),
+        ..ImportPlanSummary::default()
+    };
     summary.scanned_files = files.len() as u64;
     summary.total_source_bytes = files.iter().map(|file| file.file.size).sum();
 

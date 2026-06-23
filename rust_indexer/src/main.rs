@@ -53,11 +53,27 @@ fn run() -> Result<(), String> {
                 Ok(())
             }
         },
-        Commands::PlanImport { dry_run } => {
+        Commands::PlanImport {
+            source,
+            all_sources,
+            dry_run,
+        } => {
             if !dry_run {
                 return Err("Only --dry-run is supported for now.".to_string());
             }
-            let summary = plan::dry_run_import_plan(&repo)?;
+            let source_filter = match (source.as_deref(), all_sources) {
+                (Some(_), true) => {
+                    return Err("Use either --source <name> or --all-sources, not both.".to_string())
+                }
+                (Some(source), false) => Some(source),
+                (None, true) => None,
+                (None, false) => {
+                    return Err(
+                        "Specify --source <name> or --all-sources for plan-import.".to_string()
+                    )
+                }
+            };
+            let summary = plan::dry_run_import_plan(&repo, source_filter)?;
             println!("{}", summary.human_readable());
             Ok(())
         }

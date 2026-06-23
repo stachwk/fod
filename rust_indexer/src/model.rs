@@ -104,6 +104,7 @@ impl HashSummary {
 
 #[derive(Debug, Clone, Default)]
 pub struct ImportPlanSummary {
+    pub source_filter: Option<String>,
     pub scanned_files: u64,
     pub candidate_duplicate_groups: u64,
     pub confirmed_duplicate_groups: u64,
@@ -115,8 +116,13 @@ pub struct ImportPlanSummary {
 
 impl ImportPlanSummary {
     pub fn human_readable(&self) -> String {
+        let source_line = match self.source_filter.as_deref() {
+            Some(source) => format!("source: {}\n", source),
+            None => "source: all sources\n".to_string(),
+        };
         format!(
-            "FOD indexer dry-run import plan\nscanned files: {}\ncandidate duplicate groups: {}\nconfirmed duplicate groups: {}\nunique payloads: {}\nsource bytes: {}\nestimated import bytes: {}\nestimated saved bytes: {}",
+            "FOD indexer dry-run import plan\n{}scanned files: {}\ncandidate duplicate groups: {}\nconfirmed duplicate groups: {}\nunique payloads: {}\nsource bytes: {}\nestimated import bytes: {}\nestimated saved bytes: {}",
+            source_line,
             self.scanned_files,
             self.candidate_duplicate_groups,
             self.confirmed_duplicate_groups,
@@ -146,6 +152,7 @@ pub struct MaterializeSummary {
 impl MaterializeSummary {
     pub fn as_import_plan_summary(&self) -> ImportPlanSummary {
         ImportPlanSummary {
+            source_filter: None,
             scanned_files: self.validated_files,
             candidate_duplicate_groups: self.duplicate_groups,
             confirmed_duplicate_groups: self.duplicate_groups,

@@ -186,6 +186,7 @@ help:
 		'  make indexer - run fod-indexer with INDEXER_ARGS="..."' \
 		'  make indexer-import - materialize a source into FOD (set INDEXER_SOURCE=...)' \
 		'  make test-fod-indexer-materialize - smoke the fod-indexer materialize pipeline' \
+		'  make test-fod-indexer-plan-import-scope - smoke the fod-indexer plan-import source scoping' \
 		'  make smoke      - quick database connectivity test' \
 		'  make benchmarks - run the benchmark suite sequentially' \
 		'  make benchmark  - alias for make benchmarks' \
@@ -498,6 +499,11 @@ test-fod-indexer-materialize: venv init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_materialize.py
 
 .PHONY: test-fod-indexer-materialize
+
+test-fod-indexer-plan-import-scope: venv init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_plan_import_scope.py
+
+.PHONY: test-fod-indexer-plan-import-scope
 
 cargo-profile-show:
 	@printf '%s\n' "FOD_VERSION=$(FOD_VERSION)"
@@ -936,7 +942,7 @@ test-mount-suite: venv
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mount_suite.py
 
 test-all: smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
-test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-relatime test-fod-indexer-materialize
+test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-relatime test-fod-indexer-materialize test-fod-indexer-plan-import-scope
 test-integration: test-runtime-profile-extents
 
 benchmark: benchmarks

@@ -343,14 +343,10 @@ pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<Materializ
     scan::scan_source(repo, source_name)?;
     hash::hash_source(repo, source_name, false)?;
 
-    let all_files = plan::load_plannable_files(repo)?;
-    let mut candidates = Vec::new();
-    for file in all_files
+    let candidates = plan::load_plannable_files(repo, Some(source.name.as_str()))?
         .into_iter()
-        .filter(|file| file.file.source_name == source.name)
-    {
-        candidates.push(validate_candidate(file)?);
-    }
+        .map(validate_candidate)
+        .collect::<Result<Vec<_>, _>>()?;
 
     let duplicate_sets = plan::load_duplicate_sets(repo)?;
     let duplicate_set_map: HashMap<(String, String, u64), u64> = duplicate_sets

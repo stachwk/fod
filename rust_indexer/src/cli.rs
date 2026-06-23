@@ -35,6 +35,10 @@ pub enum Commands {
         command: ReportCommands,
     },
     PlanImport {
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long, default_value_t = false)]
+        all_sources: bool,
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
