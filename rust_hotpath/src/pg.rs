@@ -1152,6 +1152,8 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
         || sql.starts_with("UPDATE client_sessions")
         || sql.starts_with("UPDATE lock_leases")
         || sql.starts_with("UPDATE lock_range_leases")
+        || sql.starts_with("INSERT INTO client_session_owner_keys ")
+        || sql.starts_with("INSERT INTO lock_range_leases ")
         || sql.starts_with("UPDATE files SET modification_date = NOW(), change_date = NOW() WHERE id_file = $1")
         || sql.starts_with("UPDATE directories SET modification_date = NOW(), change_date = NOW() WHERE id_directory = $1")
         || sql.starts_with("UPDATE symlinks SET modification_date = NOW(), change_date = NOW() WHERE id_symlink = $1")
@@ -1232,7 +1234,11 @@ unsafe fn exec_command(conn: *mut PGconn, sql: &CString) -> Result<(), String> {
     } else {
         let error = result_error(res);
         PQclear(res);
-        Err(error)
+        if sql_is_replayable_command(sql) && is_retryable_connection_error(conn, &error) {
+            Err(replayable_sql_error_once(error))
+        } else {
+            Err(error)
+        }
     }
 }
 
@@ -7532,6 +7538,14 @@ mod tests {
         .unwrap();
         let delete_sql =
             std::ffi::CString::new("DELETE FROM xattrs WHERE owner_kind = $1").unwrap();
+        let owner_key_insert_sql = std::ffi::CString::new(
+            "INSERT INTO client_session_owner_keys (session_id, owner_key, first_seen_at, last_seen_at, updated_at) VALUES ($1, $2, NOW(), NOW(), NOW()) ON CONFLICT (session_id, owner_key) DO UPDATE SET last_seen_at = NOW(), updated_at = NOW()",
+        )
+        .unwrap();
+        let range_state_insert_sql = std::ffi::CString::new(
+            "INSERT INTO lock_range_leases (resource_kind, resource_id, session_id, owner_key, lock_type, range_start, range_end, lease_expires_at, heartbeat_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), NOW(), NOW())",
+        )
+        .unwrap();
         let xattr_insert_sql = std::ffi::CString::new(
             "INSERT INTO xattrs (owner_kind, owner_id, name, value) VALUES ($1, $2, $3, $4)",
         )
@@ -7543,6 +7557,8 @@ mod tests {
 
         assert!(sql_is_replayable_command(&heartbeat_sql));
         assert!(sql_is_replayable_command(&delete_sql));
+        assert!(sql_is_replayable_command(&owner_key_insert_sql));
+        assert!(sql_is_replayable_command(&range_state_insert_sql));
         assert!(sql_is_replayable_command(&xattr_insert_sql));
         assert!(!sql_is_replayable_command(&journal_sql));
     }
