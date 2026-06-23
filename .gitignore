@@ -23,3 +23,12 @@ rust_runtime/target/
 rust_*/*/*bak*
 *.bak
 target/
+
+# Duze lokalne katalogi pomijane przez MemPalace
+.git/
+.idea/
+.vscode/
+.agents/
+node_modules/
+.venv/
+target/

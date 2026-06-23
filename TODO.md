@@ -482,3 +482,12 @@ Notes:
 - [x] Add mount startup logging for these values.
 - [x] Add a regression test proving env/config overrides are visible in the mounted Rust runtime.
 - [x] Benchmark sequential read and metadata-heavy tree walk before and after the change. Covered by the read-cache benchmark and tree-scale / metadata-heavy entries in `BENCHMARKS.md`.
+
+
+### Performance / Correctness Follow-ups
+
+- [ ] Make partial-block writes fail safely when the existing block cannot be loaded from PostgreSQL; do not replace a failed block read with zero-filled data.
+- [ ] Make `update_write_buffer()` treat zero-length writes as a no-op before changing the in-memory file size.
+- [ ] Add a deterministic eviction policy for `recent_write_blocks`.
+- [ ] Compare FIFO vs LRU behavior for `ReadBlockCache` on sequential, mixed, and random fio workloads.
+- [ ] Keep extents opt-in until end-to-end mixed/random benchmarks show a stable win over the default block path.
