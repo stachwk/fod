@@ -4,8 +4,9 @@ Use this file to record concise conclusions that matter for future work.
 
 ## 2026-06-23
 
+- Read-only SQL paths in `rust_hotpath/src/pg.rs` now participate in the bounded replay path too. The classifier treats `SELECT` and recursive `WITH` queries as replayable, so helper reads such as `query_config_value()`, xattr lookups, directory listings, and prepared lookup statements retry once on a fresh connection when the first socket dies mid-flight.
 - Transactional SQL paths in `rust_hotpath/src/pg.rs` now retry once after a replayable disconnect. The new path tags only begin/body failures from `transactional(...)` as replayable, then `with_connection(...)` reconnects and reruns the closure once. Plain SQL errors still surface without retry, so full arbitrary in-flight SQL replay remains open.
-- The replay helper is covered by unit tests that verify the replayable marker is stripped, a replayable closure runs twice and then succeeds, and a normal error is not retried.
+- The replay helper is covered by unit tests that verify the replayable marker is stripped, the read-only classifier recognizes `SELECT` and recursive `WITH` queries, a replayable closure runs twice and then succeeds, and a normal error is not retried.
 - `fod-indexer cleanup-failed --plan <id>` is now available for failed materialization cleanup. The new smoke test covers duplicate payload reuse, unique payloads, and a zero-length file, and it verified that a failed import root can be removed cleanly while the source tree stays unchanged.
 - `fod-indexer cleanup-failed` now preserves shared data objects by reassigning their storage rows to a surviving outside file, and the cleanup smoke verifies that a shared top-level file still reads correctly after failed-import cleanup.
 - The root Cargo workspace version now matches `fod_version.txt`, so `cargo metadata` and the runtime version label no longer advertise different FOD release numbers.

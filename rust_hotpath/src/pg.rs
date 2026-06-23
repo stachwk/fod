@@ -584,6 +584,40 @@ impl PreparedStatement {
         }
     }
 
+    fn is_read_only(self) -> bool {
+        // All currently defined prepared statements are lookup queries.
+        // Keep this explicit so adding a write statement requires an audit.
+        match self {
+            PreparedStatement::FileDataObjectId
+            | PreparedStatement::FileDataObjectInfo
+            | PreparedStatement::DataObjectReferenceCount
+            | PreparedStatement::GetDirId
+            | PreparedStatement::GetFileIdRoot
+            | PreparedStatement::GetFileIdNested
+            | PreparedStatement::GetFileModeRoot
+            | PreparedStatement::GetFileModeNested
+            | PreparedStatement::GetHardlinkIdRoot
+            | PreparedStatement::GetHardlinkIdNested
+            | PreparedStatement::GetHardlinkFileId
+            | PreparedStatement::ChoosePrimaryHardlink
+            | PreparedStatement::LoadBlock
+            | PreparedStatement::FetchBlockRange
+            | PreparedStatement::LoadExtentBlock
+            | PreparedStatement::FetchExtentRange
+            | PreparedStatement::ResolvePathRoot
+            | PreparedStatement::ResolvePathNested
+            | PreparedStatement::FetchPathAttrsBlobFile
+            | PreparedStatement::FetchPathAttrsBlobDir
+            | PreparedStatement::FetchPathAttrsBlobSymlink
+            | PreparedStatement::FetchPathAttrsBlobHardlink
+            | PreparedStatement::StatfsSnapshot
+            | PreparedStatement::LoadSymlinkTarget
+            | PreparedStatement::GetSpecialFileMetadata
+            | PreparedStatement::GetSymlinkIdRoot
+            | PreparedStatement::GetSymlinkIdNested => true,
+        }
+    }
+
     fn param_count(self) -> c_int {
         match self {
             PreparedStatement::FileDataObjectId
@@ -702,7 +736,18 @@ unsafe fn exec_prepared_params_with_result_format(
         result_format,
     );
     if res.is_null() {
-        Err(conn_error(conn))
+        let err = conn_error(conn);
+        Err(maybe_replayable_prepared_error(conn, statement, err))
+    } else if statement.is_read_only() {
+        let status = PQresultStatus(res);
+        if status != PGRES_TUPLES_OK {
+            let error = result_error(res);
+            if is_retryable_connection_error(conn, &error) {
+                PQclear(res);
+                return Err(replayable_sql_error(error));
+            }
+        }
+        Ok(res)
     } else {
         Ok(res)
     }
@@ -795,7 +840,17 @@ fn connect(conninfo: &str, tuning: &ConnectionTuning) -> Result<*mut PGconn, Str
 unsafe fn query_scalar_text_on_conn(conn: *mut PGconn, sql: &CString) -> Result<String, String> {
     let res = PQexec(conn, sql.as_ptr());
     if res.is_null() {
-        return Err(conn_error(conn));
+        let err = conn_error(conn);
+        return Err(maybe_replayable_sql_error(conn, sql, err));
+    }
+    let status = PQresultStatus(res);
+    if status != PGRES_TUPLES_OK {
+        let err = result_error(res);
+        PQclear(res);
+        if sql_is_read_only(sql) && is_retryable_connection_error(conn, &err) {
+            return Err(replayable_sql_error(err));
+        }
+        return Err(err);
     }
     fetch_single_text(res)
 }
@@ -1068,6 +1123,39 @@ fn join_nul_text(values: &[String]) -> Vec<u8> {
     out
 }
 
+fn sql_is_read_only(sql: &CString) -> bool {
+    let raw = sql.to_string_lossy();
+    let token = raw
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    matches!(
+        token.as_str(),
+        "SELECT" | "WITH" | "SHOW" | "VALUES" | "EXPLAIN"
+    )
+}
+
+unsafe fn maybe_replayable_sql_error(conn: *const PGconn, sql: &CString, err: String) -> String {
+    if sql_is_read_only(sql) && is_retryable_connection_error(conn, &err) {
+        replayable_sql_error(err)
+    } else {
+        err
+    }
+}
+
+unsafe fn maybe_replayable_prepared_error(
+    conn: *const PGconn,
+    statement: PreparedStatement,
+    err: String,
+) -> String {
+    if statement.is_read_only() && is_retryable_connection_error(conn, &err) {
+        replayable_sql_error(err)
+    } else {
+        err
+    }
+}
+
 unsafe fn exec_command(conn: *mut PGconn, sql: &CString) -> Result<(), String> {
     let started = Instant::now();
     let res = PQexec(conn, sql.as_ptr());
@@ -1146,7 +1234,18 @@ unsafe fn exec_params(
     );
 
     if res.is_null() {
-        Err(conn_error(conn))
+        let err = conn_error(conn);
+        Err(maybe_replayable_sql_error(conn, sql, err))
+    } else if sql_is_read_only(sql) {
+        let status = PQresultStatus(res);
+        if status != PGRES_TUPLES_OK {
+            let error = result_error(res);
+            if is_retryable_connection_error(conn, &error) {
+                PQclear(res);
+                return Err(replayable_sql_error(error));
+            }
+        }
+        Ok(res)
     } else {
         Ok(res)
     }
@@ -2733,48 +2832,22 @@ impl DbRepo {
         let key = CString::new(key).map_err(|_| "config key contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            let result = {
-                let param_values = [key.as_ptr()];
-                let param_lengths = [key.as_bytes().len() as c_int];
-                let param_formats = [0 as c_int];
-                let res = PQexecParams(
-                    conn,
-                    sql.as_ptr(),
-                    1,
-                    std::ptr::null(),
-                    param_values.as_ptr(),
-                    param_lengths.as_ptr(),
-                    param_formats.as_ptr(),
-                    0,
-                );
-                if res.is_null() {
-                    Err(conn_error(conn))
+            let params = [&key];
+            let res = exec_params(conn, &sql, &params)?;
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            let value = if rows < 1 || cols < 1 {
+                None
+            } else {
+                let value_ptr = PQgetvalue(res, 0, 0);
+                if value_ptr.is_null() {
+                    None
                 } else {
-                    match PQresultStatus(res) {
-                        PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
-                                None
-                            } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    None
-                                } else {
-                                    Some(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
-                                }
-                            };
-                            PQclear(res);
-                            Ok(value)
-                        }
-                        _ => {
-                            PQclear(res);
-                            Err(conn_error(conn))
-                        }
-                    }
+                    Some(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
                 }
             };
-            result
+            PQclear(res);
+            Ok(value)
         })
     }
 
@@ -6300,52 +6373,26 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            let result = {
-                let param_values = [file_id.as_ptr()];
-                let param_lengths = [file_id.as_bytes().len() as c_int];
-                let param_formats = [0 as c_int];
-                let res = PQexecParams(
-                    conn,
-                    sql.as_ptr(),
-                    1,
-                    std::ptr::null(),
-                    param_values.as_ptr(),
-                    param_lengths.as_ptr(),
-                    param_formats.as_ptr(),
-                    0,
-                );
-                if res.is_null() {
-                    Err(conn_error(conn))
+            let params = [&file_id];
+            let res = exec_params(conn, &sql, &params)?;
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            let value = if rows < 1 || cols < 1 {
+                0
+            } else {
+                let value_ptr = PQgetvalue(res, 0, 0);
+                if value_ptr.is_null() {
+                    0
                 } else {
-                    match PQresultStatus(res) {
-                        PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
-                                0
-                            } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    0
-                                } else {
-                                    CStr::from_ptr(value_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .unwrap_or(0)
-                                }
-                            };
-                            PQclear(res);
-                            Ok(value)
-                        }
-                        _ => {
-                            PQclear(res);
-                            Err(conn_error(conn))
-                        }
-                    }
+                    CStr::from_ptr(value_ptr)
+                        .to_string_lossy()
+                        .trim()
+                        .parse::<u64>()
+                        .unwrap_or(0)
                 }
             };
-            result
+            PQclear(res);
+            Ok(value)
         })
     }
 
@@ -6372,85 +6419,32 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            let extent_result = {
-                let param_values = [file_id.as_ptr()];
-                let param_lengths = [file_id.as_bytes().len() as c_int];
-                let param_formats = [0 as c_int];
-                let res = PQexecParams(
-                    conn,
-                    sql_extent.as_ptr(),
-                    1,
-                    std::ptr::null(),
-                    param_values.as_ptr(),
-                    param_lengths.as_ptr(),
-                    param_formats.as_ptr(),
-                    0,
-                );
-                if res.is_null() {
-                    Err(conn_error(conn))
-                } else {
-                    match PQresultStatus(res) {
-                        PGRES_TUPLES_OK => {
-                            let value = fetch_single_text(res)?.trim().parse::<u64>().unwrap_or(0);
-                            Ok(value)
-                        }
-                        _ => {
-                            PQclear(res);
-                            Err(conn_error(conn))
-                        }
-                    }
-                }
-            }?;
+            let params = [&file_id];
+            let res = exec_params(conn, &sql_extent, &params)?;
+            let extent_result = fetch_single_text(res)?.trim().parse::<u64>().unwrap_or(0);
             if extent_result > 0 {
                 return Ok(extent_result);
             }
 
-            let result = {
-                let param_values = [file_id.as_ptr()];
-                let param_lengths = [file_id.as_bytes().len() as c_int];
-                let param_formats = [0 as c_int];
-                let res = PQexecParams(
-                    conn,
-                    sql_blocks.as_ptr(),
-                    1,
-                    std::ptr::null(),
-                    param_values.as_ptr(),
-                    param_lengths.as_ptr(),
-                    param_formats.as_ptr(),
-                    0,
-                );
-                if res.is_null() {
-                    Err(conn_error(conn))
+            let res = exec_params(conn, &sql_blocks, &params)?;
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            let value = if rows < 1 || cols < 1 {
+                0
+            } else {
+                let value_ptr = PQgetvalue(res, 0, 0);
+                if value_ptr.is_null() {
+                    0
                 } else {
-                    match PQresultStatus(res) {
-                        PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
-                                0
-                            } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    0
-                                } else {
-                                    CStr::from_ptr(value_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .unwrap_or(0)
-                                }
-                            };
-                            PQclear(res);
-                            Ok(value)
-                        }
-                        _ => {
-                            PQclear(res);
-                            Err(conn_error(conn))
-                        }
-                    }
+                    CStr::from_ptr(value_ptr)
+                        .to_string_lossy()
+                        .trim()
+                        .parse::<u64>()
+                        .unwrap_or(0)
                 }
             };
-            result
+            PQclear(res);
+            Ok(value)
         })
     }
 
@@ -6480,39 +6474,13 @@ impl DbRepo {
             .map_err(|_| "directory id contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            let result = {
-                let param_values = [directory_id.as_ptr()];
-                let param_lengths = [directory_id.as_bytes().len() as c_int];
-                let param_formats = [0 as c_int];
-                let res = PQexecParams(
-                    conn,
-                    sql.as_ptr(),
-                    1,
-                    std::ptr::null(),
-                    param_values.as_ptr(),
-                    param_lengths.as_ptr(),
-                    param_formats.as_ptr(),
-                    0,
-                );
-                if res.is_null() {
-                    Err(conn_error(conn))
-                } else {
-                    match PQresultStatus(res) {
-                        PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = rows >= 1 && cols >= 1;
-                            PQclear(res);
-                            Ok(value)
-                        }
-                        _ => {
-                            PQclear(res);
-                            Err(conn_error(conn))
-                        }
-                    }
-                }
-            };
-            result
+            let params = [&directory_id];
+            let res = exec_params(conn, &sql, &params)?;
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            let value = rows >= 1 && cols >= 1;
+            PQclear(res);
+            Ok(value)
         })
     }
 
@@ -6898,61 +6866,31 @@ impl DbRepo {
         let name = CString::new(name).map_err(|_| "xattr name contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            let result = {
-                let param_values = [owner_kind.as_ptr(), owner_id.as_ptr(), name.as_ptr()];
-                let param_lengths = [
-                    owner_kind.as_bytes().len() as c_int,
-                    owner_id.as_bytes().len() as c_int,
-                    name.as_bytes().len() as c_int,
-                ];
-                let param_formats = [0 as c_int; 3];
-                let res = PQexecParams(
-                    conn,
-                    sql.as_ptr(),
-                    3,
-                    std::ptr::null(),
-                    param_values.as_ptr(),
-                    param_lengths.as_ptr(),
-                    param_formats.as_ptr(),
-                    0,
-                );
-                if res.is_null() {
-                    Err(conn_error(conn))
+            let params = [&owner_kind, &owner_id, &name];
+            let res = exec_params(conn, &sql, &params)?;
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            let encoded = if rows < 1 || cols < 1 {
+                None
+            } else {
+                let value_ptr = PQgetvalue(res, 0, 0);
+                if value_ptr.is_null() {
+                    None
                 } else {
-                    match PQresultStatus(res) {
-                        PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let encoded = if rows < 1 || cols < 1 {
-                                None
-                            } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    None
-                                } else {
-                                    Some(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
-                                }
-                            };
-                            PQclear(res);
-                            let value = match encoded {
-                                None => None,
-                                Some(encoded) => {
-                                    let decoded = BASE64_STANDARD
-                                        .decode(encoded.trim())
-                                        .map_err(|err| format!("invalid xattr payload returned by PostgreSQL: {err}"))?;
-                                    Some(decoded)
-                                }
-                            };
-                            Ok(value)
-                        }
-                        _ => {
-                            PQclear(res);
-                            Err(conn_error(conn))
-                        }
-                    }
+                    Some(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
                 }
             };
-            result
+            PQclear(res);
+            let value = match encoded {
+                None => None,
+                Some(encoded) => {
+                    let decoded = BASE64_STANDARD.decode(encoded.trim()).map_err(|err| {
+                        format!("invalid xattr payload returned by PostgreSQL: {err}")
+                    })?;
+                    Some(decoded)
+                }
+            };
+            Ok(value)
         })
     }
 
@@ -6988,44 +6926,21 @@ impl DbRepo {
             .map_err(|_| "owner id contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            let param_values = [owner_kind.as_ptr(), owner_id.as_ptr()];
-            let param_lengths = [
-                owner_kind.as_bytes().len() as c_int,
-                owner_id.as_bytes().len() as c_int,
-            ];
-            let param_formats = [0 as c_int, 0 as c_int];
-            let res = PQexecParams(
-                conn,
-                sql.as_ptr(),
-                2,
-                std::ptr::null(),
-                param_values.as_ptr(),
-                param_lengths.as_ptr(),
-                param_formats.as_ptr(),
-                0,
-            );
-            if res.is_null() {
-                return Err(conn_error(conn));
-            }
-            let result = match PQresultStatus(res) {
-                PGRES_TUPLES_OK => {
-                    let rows = PQntuples(res);
-                    let cols = PQnfields(res);
-                    let mut names = Vec::with_capacity(rows.max(0) as usize);
-                    if rows >= 1 && cols >= 1 {
-                        for row in 0..rows {
-                            let value_ptr = PQgetvalue(res, row, 0);
-                            if !value_ptr.is_null() {
-                                names.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
-                            }
-                        }
+            let params = [&owner_kind, &owner_id];
+            let res = exec_params(conn, &sql, &params)?;
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            let mut names = Vec::with_capacity(rows.max(0) as usize);
+            if rows >= 1 && cols >= 1 {
+                for row in 0..rows {
+                    let value_ptr = PQgetvalue(res, row, 0);
+                    if !value_ptr.is_null() {
+                        names.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
                     }
-                    Ok(Some(names))
                 }
-                _ => Err(conn_error(conn)),
-            };
+            }
             PQclear(res);
-            result
+            Ok(Some(names))
         })
     }
 
@@ -7137,42 +7052,10 @@ impl DbRepo {
         };
 
         self.with_cached_connection(|conn| unsafe {
-            let res = {
-                let param_values = params
-                    .iter()
-                    .map(|value| value.as_ptr())
-                    .collect::<Vec<_>>();
-                let param_lengths = params
-                    .iter()
-                    .map(|value| value.as_bytes().len() as c_int)
-                    .collect::<Vec<_>>();
-                let param_formats = vec![0 as c_int; params.len()];
-                let res = PQexecParams(
-                    conn,
-                    sql.as_ptr(),
-                    params.len() as c_int,
-                    std::ptr::null(),
-                    param_values.as_ptr(),
-                    param_lengths.as_ptr(),
-                    param_formats.as_ptr(),
-                    0,
-                );
-                if res.is_null() {
-                    Err(conn_error(conn))
-                } else {
-                    match PQresultStatus(res) {
-                        PGRES_TUPLES_OK => {
-                            let names = fetch_first_column_texts(res)?;
-                            Ok(Some(join_nul_text(&names)))
-                        }
-                        _ => {
-                            PQclear(res);
-                            Err(conn_error(conn))
-                        }
-                    }
-                }
-            };
-            res
+            let param_refs = params.iter().collect::<Vec<_>>();
+            let res = exec_params(conn, &sql, &param_refs)?;
+            let names = fetch_first_column_texts(res)?;
+            Ok(Some(join_nul_text(&names)))
         })
     }
 
@@ -7497,44 +7380,21 @@ impl DbRepo {
             .map_err(|_| "owner id contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            let param_values = [owner_kind.as_ptr(), owner_id.as_ptr()];
-            let param_lengths = [
-                owner_kind.as_bytes().len() as c_int,
-                owner_id.as_bytes().len() as c_int,
-            ];
-            let param_formats = [0 as c_int, 0 as c_int];
-            let res = PQexecParams(
-                conn,
-                sql.as_ptr(),
-                2,
-                std::ptr::null(),
-                param_values.as_ptr(),
-                param_lengths.as_ptr(),
-                param_formats.as_ptr(),
-                0,
-            );
-            if res.is_null() {
-                return Err(conn_error(conn));
-            }
-            let result = match PQresultStatus(res) {
-                PGRES_TUPLES_OK => {
-                    let rows = PQntuples(res);
-                    let cols = PQnfields(res);
-                    let mut names = Vec::with_capacity(rows.max(0) as usize);
-                    if rows >= 1 && cols >= 1 {
-                        for row in 0..rows {
-                            let value_ptr = PQgetvalue(res, row, 0);
-                            if !value_ptr.is_null() {
-                                names.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
-                            }
-                        }
+            let params = [&owner_kind, &owner_id];
+            let res = exec_params(conn, &sql, &params)?;
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            let mut names = Vec::with_capacity(rows.max(0) as usize);
+            if rows >= 1 && cols >= 1 {
+                for row in 0..rows {
+                    let value_ptr = PQgetvalue(res, row, 0);
+                    if !value_ptr.is_null() {
+                        names.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
                     }
-                    Ok(names)
                 }
-                _ => Err(conn_error(conn)),
-            };
+            }
             PQclear(res);
-            result
+            Ok(names)
         })
     }
 }
@@ -7586,6 +7446,18 @@ mod tests {
         let tuning = ConnectionTuning::default();
         let tuned = apply_connection_tuning("host=localhost dbname=fod", &tuning).unwrap();
         assert_eq!(tuned, "host=localhost dbname=fod");
+    }
+
+    #[test]
+    fn recognizes_read_only_sql_for_replay() {
+        let select_sql = std::ffi::CString::new("SELECT 1").unwrap();
+        let recursive_sql =
+            std::ffi::CString::new("WITH RECURSIVE parts AS (SELECT 1) SELECT 1").unwrap();
+        let insert_sql = std::ffi::CString::new("INSERT INTO foo VALUES (1)").unwrap();
+
+        assert!(sql_is_read_only(&select_sql));
+        assert!(sql_is_read_only(&recursive_sql));
+        assert!(!sql_is_read_only(&insert_sql));
     }
 
     #[test]
