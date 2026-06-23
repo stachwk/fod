@@ -311,7 +311,7 @@ make install-config-user
 make mount-user
 ```
 
-`make install-on-root` łączy `install-config`, `install-root-scripts`, `install-rust-hotpath` i `install-mount-helper` w jeden krok dla instalacji typu root-style. To instaluje config, Rustowe binarki, współdzieloną bibliotekę hot-path oraz helper mounta.
+`make install-on-root` łączy `install-config`, `install-root-scripts`, `install-rust-hotpath` i `install-mount-helper` w jeden krok dla instalacji typu root-style. To instaluje config, Rustowe binarki w tym `fod-indexer`, współdzieloną bibliotekę hot-path oraz helper mounta.
 
 Jeśli chcesz finalny, bardziej zoptymalizowany build z ThinLTO i stripem symboli, użyj `make install-on-root FOD_CARGO_PROFILE=release-lto`.
 
@@ -323,7 +323,7 @@ Oba targety instalacyjne ostrzegają, jeśli config źródłowy nadal używa dom
 
 1. Skonfiguruj `/etc/fod/fod_config.ini` albo lokalny `fod_config.ini`.
 1. Opcjonalnie uruchom `make install-config`, żeby skopiować wybrany plik konfiguracyjny do `/etc/fod/fod_config.ini`.
-1. Dla instalacji typu root-style uruchom `make install-on-root`, żeby zainstalować config, Rustowe binarki, współdzieloną bibliotekę hot-path i helper mounta jednym krokiem.
+1. Dla instalacji typu root-style uruchom `make install-on-root`, żeby zainstalować config, Rustowe binarki w tym `fod-indexer`, współdzieloną bibliotekę hot-path i helper mounta jednym krokiem.
 1. Dla lokalnego developmentu możesz uruchomić `make install-config-user`, żeby zainstalować wybrany plik konfiguracyjny do `~/.config/fod/fod_config.ini` bez `sudo`.
 1. `make config-show` pokazuje, którego pliku konfiguracyjnego FOD użyje, a `make mount-user` preferuje user-level `~/.config/fod/fod_config.ini` i wraca do lokalnego `fod_config.ini`, jeśli plik użytkownika nie istnieje.
 1. Zainicjalizuj schemat:

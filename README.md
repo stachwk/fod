@@ -306,7 +306,7 @@ make mount-user
 
 Both install targets warn if the source config still uses the default development password `cichosza`.
 
-`make install-on-root` combines `install-config`, `install-root-scripts`, `install-rust-hotpath`, and `install-mount-helper` for a root-style setup in one step. That installs the config, the Rust binaries, the shared hot-path library, and the mount helper.
+`make install-on-root` combines `install-config`, `install-root-scripts`, `install-rust-hotpath`, and `install-mount-helper` for a root-style setup in one step. That installs the config, the Rust binaries including `fod-indexer`, the shared hot-path library, and the mount helper.
 
 Use `make install-on-root FOD_CARGO_PROFILE=release-lto` when you want a final optimized build with ThinLTO and symbol stripping.
 
@@ -316,7 +316,7 @@ Use `make install-on-root FOD_CARGO_PROFILE=release-lto` when you want a final o
 
 1. Configure `/etc/fod/fod_config.ini` or local `fod_config.ini`.
 1. Optionally run `make install-config` to copy your chosen config file to `/etc/fod/fod_config.ini`.
-1. For a root-style setup, run `make install-on-root` to install the config, Rust binaries, shared hot-path library, and mount helper together.
+1. For a root-style setup, run `make install-on-root` to install the config, Rust binaries including `fod-indexer`, shared hot-path library, and mount helper together.
 1. For local development you can run `make install-config-user` to install your chosen config file to `~/.config/fod/fod_config.ini` without `sudo`.
 1. Use `make config-show` to see which config file is resolved and `make mount-user` to prefer `~/.config/fod/fod_config.ini`, falling back to local `fod_config.ini` if the user file does not exist.
 1. Initialize the schema:

@@ -26,6 +26,7 @@ ifeq ($(wildcard $(CARGO_ROOT_MANIFEST)),)
 CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path rust_mkfs/Cargo.toml
 CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path rust_fuse/Cargo.toml
 CARGO_BUILD_HOTPATH := $(RUST_CARGO) build --manifest-path rust_hotpath/Cargo.toml
+CARGO_BUILD_INDEXER := $(RUST_CARGO) build --manifest-path rust_indexer/Cargo.toml
 
 CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path rust_mkfs/Cargo.toml
 CARGO_RUN_INDEXER := $(RUST_CARGO) run --manifest-path rust_indexer/Cargo.toml
@@ -37,11 +38,13 @@ CARGO_TEST_HOTPATH := $(RUST_CARGO) test --manifest-path rust_hotpath/Cargo.toml
 RUST_MKFS_TARGET_DIR := rust_mkfs/target
 RUST_FUSE_TARGET_DIR := rust_fuse/target
 RUST_HOTPATH_TARGET_DIR := rust_hotpath/target
+RUST_INDEXER_TARGET_DIR := rust_indexer/target
 else
 CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
 CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_FUSE_PACKAGE)
 CARGO_BUILD_HOTPATH := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_HOTPATH_PACKAGE)
-CARGO_BUILD_INSTALL_ROOT := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_RELEASE_FLAG) -p $(FOD_MKFS_PACKAGE) --bins -p $(FOD_FUSE_PACKAGE) --bin $(FOD_FUSE_BIN)
+CARGO_BUILD_INDEXER := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_INDEXER_PACKAGE)
+CARGO_BUILD_INSTALL_ROOT := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_RELEASE_FLAG) -p $(FOD_MKFS_PACKAGE) --bins -p $(FOD_FUSE_PACKAGE) --bin $(FOD_FUSE_BIN) -p $(FOD_INDEXER_PACKAGE) --bin $(FOD_INDEXER_BIN)
 
 CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
 CARGO_RUN_INDEXER := $(RUST_CARGO) run --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_INDEXER_PACKAGE)
@@ -53,6 +56,7 @@ CARGO_TEST_HOTPATH := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) 
 RUST_MKFS_TARGET_DIR := target
 RUST_FUSE_TARGET_DIR := target
 RUST_HOTPATH_TARGET_DIR := target
+RUST_INDEXER_TARGET_DIR := target
 endif
 
 FOD_BOOTSTRAP_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-bootstrap
@@ -64,6 +68,7 @@ FOD_BOOTSTRAP_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-bo
 FOD_MKFS_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-rust-mkfs
 FOD_FUSE_PROFILE_BIN := $(RUST_FUSE_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-rust-fuse
 FOD_CHANGE_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-change
+FOD_INDEXER_PROFILE_BIN := $(RUST_INDEXER_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-indexer
 FOD_HOTPATH_PROFILE_LIB := $(RUST_HOTPATH_TARGET_DIR)/$(FOD_CARGO_PROFILE)/libfod_rust_hotpath.so
 
 ifeq ($(wildcard $(CARGO_ROOT_MANIFEST)),)
@@ -438,16 +443,18 @@ install-mount-helper:
 
 
 install-root-scripts:
-	@printf '%s\n' "Installing FOD $(FOD_VERSION): fod-bootstrap, mkfs.fod, fod-change/fod.change, and fod-rust-fuse -> /usr/local/bin"
+	@printf '%s\n' "Installing FOD $(FOD_VERSION): fod-bootstrap, mkfs.fod, fod-change/fod.change, fod-indexer, and fod-rust-fuse -> /usr/local/bin"
 	$(CARGO_BUILD_INSTALL_ROOT)
 	sudo install -D -m 0755 "$(FOD_BOOTSTRAP_PROFILE_BIN)" /usr/local/bin/fod-bootstrap
 	sudo install -D -m 0755 "$(FOD_MKFS_PROFILE_BIN)" /usr/local/bin/mkfs.fod
 	sudo install -D -m 0755 "$(FOD_CHANGE_PROFILE_BIN)" /usr/local/bin/fod-change
 	sudo ln -sf fod-change /usr/local/bin/fod.change
+	sudo install -D -m 0755 "$(FOD_INDEXER_PROFILE_BIN)" /usr/local/bin/fod-indexer
 	sudo install -D -m 0755 "$(FOD_FUSE_PROFILE_BIN)" /usr/local/bin/fod-rust-fuse
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-bootstrap
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/mkfs.fod
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-change
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-indexer
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-rust-fuse
 
 
@@ -459,7 +466,7 @@ install-rust-hotpath:
 	@sudo $(STRIP) $(STRIP_FLAGS) /usr/local/lib/libfod-2.so
 
 install-on-root: install-config install-root-scripts install-rust-hotpath install-mount-helper
-	@printf '%s\n' "FOD installed for root-style use: config, Rust binaries, mount helper, and Rust hot-path library"
+	@printf '%s\n' "FOD installed for root-style use: config, Rust binaries including fod-indexer, mount helper, and Rust hot-path library"
 
 install-on-root-venv: venv install-on-root
 	@printf '%s\n' "FOD root-style install ready in $(VENV_DIR): config, legacy test venv, Rust binaries, mount helper, and Rust hot-path library"
@@ -521,7 +528,7 @@ cargo-profile-show:
 	@printf '%s\n' "FOD_VERSION=$(FOD_VERSION)"
 	@printf '%s\n' "FOD_CARGO_PROFILE=$(FOD_CARGO_PROFILE)"
 	@printf '%s\n' "FOD_RELEASE_FLAG=$(FOD_RELEASE_FLAG)"
-	@printf '%s\n' "install-root-scripts outputs: $(FOD_BOOTSTRAP_PROFILE_BIN), $(FOD_MKFS_PROFILE_BIN), $(FOD_CHANGE_PROFILE_BIN), $(FOD_FUSE_PROFILE_BIN)"
+	@printf '%s\n' "install-root-scripts outputs: $(FOD_BOOTSTRAP_PROFILE_BIN), $(FOD_MKFS_PROFILE_BIN), $(FOD_CHANGE_PROFILE_BIN), $(FOD_INDEXER_PROFILE_BIN), $(FOD_FUSE_PROFILE_BIN)"
 
 smoke: up
 	@set -eu; \
