@@ -749,7 +749,7 @@ impl FodFuse {
     pub fn new(repo: DbRepo, settings: FodFuseSettings, runtime: &RuntimeConfig) -> Self {
         let FodFuseSettings {
             storage,
-            cache: _cache,
+            cache,
             workers: _workers,
             locks,
             security,
@@ -784,7 +784,9 @@ impl FodFuse {
             path_to_inode: RwLock::new(path_to_inode),
             fh_table: Mutex::new(HashMap::new()),
             write_states: Mutex::new(HashMap::new()),
-            read_block_cache: Mutex::new(ReadBlockCache::default()),
+            read_block_cache: Mutex::new(ReadBlockCache::new(
+                cache.read_cache_eviction_policy.as_str(),
+            )),
             recent_write_blocks: Mutex::new(HashMap::new()),
             recent_write_blocks_len: AtomicU64::new(0),
             read_sequence_state: Mutex::new(HashMap::new()),

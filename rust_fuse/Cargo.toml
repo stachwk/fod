@@ -11,5 +11,6 @@ fuser = { version = "0.14", features = ["abi-7-11", "abi-7-17"] }
 libc = "0.2"
 env_logger = "0.11"
 log = "0.4"
+linked-hash-map = "0.5"
 rust_hotpath = { package = "fod-rust-hotpath", path = "../rust_hotpath" }
 fod_rust_runtime = { package = "fod-rust-runtime", path = "../rust_runtime" }

@@ -299,6 +299,7 @@ pub struct RuntimeConfig {
     pub use_rust_fuse: bool,
     pub pool_max_connections: u64,
     pub read_cache_blocks: u64,
+    pub read_cache_eviction_policy: String,
     pub read_ahead_blocks: u64,
     pub sequential_read_ahead_blocks: u64,
     pub small_file_read_threshold_blocks: u64,
@@ -380,6 +381,7 @@ pub struct RuntimeCacheSettings {
     pub metadata_cache_ttl: Duration,
     pub statfs_cache_ttl: Duration,
     pub read_cache_blocks: u64,
+    pub read_cache_eviction_policy: String,
     pub read_ahead_blocks: u64,
     pub sequential_read_ahead_blocks: u64,
     pub small_file_read_threshold_blocks: u64,
@@ -880,6 +882,10 @@ const RUNTIME_VALUE_SPECS: &[RuntimeValueSpec] = &[
         RuntimeValueKind::U64 { allow_zero: true },
     ),
     RuntimeValueSpec::tuning_and_runtime_env(
+        "read_cache_eviction_policy",
+        RuntimeValueKind::Choice(&["fifo", "lru"]),
+    ),
+    RuntimeValueSpec::tuning_and_runtime_env(
         "read_ahead_blocks",
         RuntimeValueKind::U64 { allow_zero: true },
     ),
@@ -1008,6 +1014,8 @@ impl RuntimeConfig {
         let use_rust_fuse = lookup_bool(&lookup, "use_rust_fuse", true);
         let pool_max_connections = lookup_u64(&lookup, "pool_max_connections", 10);
         let read_cache_blocks = lookup_u64(&lookup, "read_cache_blocks", 1024);
+        let read_cache_eviction_policy =
+            lookup_string(&lookup, "read_cache_eviction_policy", "fifo");
         let read_ahead_blocks = lookup_u64(&lookup, "read_ahead_blocks", 4);
         let sequential_read_ahead_blocks = lookup_u64(&lookup, "sequential_read_ahead_blocks", 8);
         let small_file_read_threshold_blocks =
@@ -1081,6 +1089,7 @@ impl RuntimeConfig {
             use_rust_fuse,
             pool_max_connections,
             read_cache_blocks,
+            read_cache_eviction_policy,
             read_ahead_blocks,
             sequential_read_ahead_blocks,
             small_file_read_threshold_blocks,
@@ -1185,6 +1194,7 @@ impl RuntimeConfig {
             metadata_cache_ttl: self.metadata_cache_ttl,
             statfs_cache_ttl: self.statfs_cache_ttl,
             read_cache_blocks: self.read_cache_blocks,
+            read_cache_eviction_policy: self.read_cache_eviction_policy.clone(),
             read_ahead_blocks: self.read_ahead_blocks,
             sequential_read_ahead_blocks: self.sequential_read_ahead_blocks,
             small_file_read_threshold_blocks: self.small_file_read_threshold_blocks,
@@ -1337,6 +1347,11 @@ impl RuntimeConfig {
             env_var_with_legacy_alias("FOD_READ_CACHE_BLOCKS"),
             self.read_cache_blocks,
         );
+        self.read_cache_eviction_policy =
+            env_var_with_legacy_alias("FOD_READ_CACHE_EVICTION_POLICY")
+                .map(|value| value.trim().to_ascii_lowercase())
+                .filter(|value| matches!(value.as_str(), "fifo" | "lru"))
+                .unwrap_or_else(|| self.read_cache_eviction_policy.clone());
         self.read_ahead_blocks = parse_u64(
             env_var_with_legacy_alias("FOD_READ_AHEAD_BLOCKS"),
             self.read_ahead_blocks,
@@ -1489,6 +1504,10 @@ impl RuntimeConfig {
         set_bool("FOD_USE_RUST_FUSE", self.use_rust_fuse);
         set_u64("FOD_POOL_MAX_CONNECTIONS", self.pool_max_connections);
         set_u64("FOD_READ_CACHE_BLOCKS", self.read_cache_blocks);
+        set_string(
+            "FOD_READ_CACHE_EVICTION_POLICY",
+            Some(self.read_cache_eviction_policy.as_str()),
+        );
         set_u64("FOD_READ_AHEAD_BLOCKS", self.read_ahead_blocks);
         set_u64(
             "FOD_SEQUENTIAL_READ_AHEAD_BLOCKS",
@@ -1578,6 +1597,11 @@ impl RuntimeConfig {
             self.pool_max_connections,
         );
         set_map_u64(&mut runtime, "read_cache_blocks", self.read_cache_blocks);
+        set_map_string(
+            &mut runtime,
+            "read_cache_eviction_policy",
+            Some(self.read_cache_eviction_policy.as_str()),
+        );
         set_map_u64(&mut runtime, "read_ahead_blocks", self.read_ahead_blocks);
         set_map_u64(
             &mut runtime,

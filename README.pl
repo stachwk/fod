@@ -621,7 +621,7 @@ Przy starcie FOD loguje efektywny profil runtime, wersję schematu, ustawienia T
 `FOD_ATIME_POLICY` jest wewnętrznym przełącznikiem FOD, a nie surową opcją mounta FUSE. Steruje tym, kiedy FOD aktualizuje `atime` w swoim własnym read path; `noatime`, `nodiratime`, `relatime` i `strictatime` są obsługiwane wewnętrznie i nie są przekazywane do frontendu mounta.
 Dla jednego uchwytu FOD zapisuje `access_date` tylko raz, aby nie przepisywać ciągle tego samego rekordu podczas pojedynczej sekwencji open/read lub open/readdir. Kolejne dotknięcia są pomijane aż do zwolnienia uchwytu.
 Ten sam model dotyczy też zapisu `mtime`/`ctime`: wiele zapisów na tym samym otwartym pliku aktualizuje te znaczniki dopiero przy persystencji dirty bufora, a nie przy każdym pośrednim wywołaniu `write()`.
-Cache odczytu domyślnie ma większy blokowy LRU, a sekwencyjne odczyty automatycznie zwiększają read-ahead, dzięki czemu sąsiednie odczyty częściej trafiają w prefetche zamiast ponownie walić w PostgreSQL.
+Cache odczytu można ustawić przez `FOD_READ_CACHE_EVICTION_POLICY`; obecny domyślny wariant to FIFO, a sekwencyjne odczyty automatycznie zwiększają read-ahead, dzięki czemu sąsiednie odczyty częściej trafiają w prefetche zamiast ponownie walić w PostgreSQL.
 
 ### Dockerowy lab SELinux/ACL
 

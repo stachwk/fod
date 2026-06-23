@@ -612,7 +612,7 @@ At mount start FOD logs the effective runtime profile, FOD version, FOD schema n
 `FOD_ATIME_POLICY` is an internal FOD behavior selector, not a raw FUSE mount option. It controls when FOD updates `atime` in its own read path; `noatime`, `nodiratime`, `relatime`, and `strictatime` are handled inside FOD instead of being forwarded to the mount frontend.
 To avoid continuously rewriting the same timestamp row during a single open/read or open/readdir sequence, FOD touches `access_date` only once per handle and then suppresses duplicate touches until the handle is released.
 The same principle applies to write-side timestamp persistence: repeated writes on the same open file update `mtime`/`ctime` only when the dirty buffer is persisted, not on every intermediate write call.
-Read path caching now defaults to a larger block LRU, and sequential reads increase read-ahead automatically so adjacent reads can reuse prefetched blocks instead of repeatedly hitting PostgreSQL.
+Read path caching is configurable via `FOD_READ_CACHE_EVICTION_POLICY`; the current default is FIFO, and sequential reads increase read-ahead automatically so adjacent reads can reuse prefetched blocks instead of repeatedly hitting PostgreSQL.
 
 ### SELinux/ACL Docker Lab
 

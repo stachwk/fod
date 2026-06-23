@@ -3,6 +3,7 @@
 
 use crate::fs::{FodFuse, FodFuseProfileCounters};
 use libc::EIO;
+use linked_hash_map::LinkedHashMap;
 use log::warn;
 use rust_hotpath::pg::DbRepo;
 use rust_hotpath::read_missing_range_worker_count;
@@ -18,41 +19,127 @@ pub(crate) struct ReadSequenceState {
     pub(crate) streak: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadCacheEvictionPolicy {
+    Fifo,
+    Lru,
+}
+
+impl ReadCacheEvictionPolicy {
+    fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "fifo" => Self::Fifo,
+            "lru" => Self::Lru,
+            other => {
+                warn!(
+                    "unknown read cache eviction policy '{}' - falling back to fifo",
+                    other
+                );
+                Self::Fifo
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ReadCacheStore {
+    Fifo {
+        entries: HashMap<(u64, u64), Arc<[u8]>>,
+        order: VecDeque<(u64, u64)>,
+    },
+    Lru {
+        entries: LinkedHashMap<(u64, u64), Arc<[u8]>>,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ReadBlockCache {
-    entries: HashMap<(u64, u64), Arc<[u8]>>,
-    order: VecDeque<(u64, u64)>,
+    store: ReadCacheStore,
+}
+
+impl Default for ReadBlockCache {
+    fn default() -> Self {
+        Self::new("fifo")
+    }
 }
 
 impl ReadBlockCache {
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
+    pub(crate) fn new(policy: impl AsRef<str>) -> Self {
+        let policy = ReadCacheEvictionPolicy::parse(policy.as_ref());
+        let store = match policy {
+            ReadCacheEvictionPolicy::Fifo => ReadCacheStore::Fifo {
+                entries: HashMap::new(),
+                order: VecDeque::new(),
+            },
+            ReadCacheEvictionPolicy::Lru => ReadCacheStore::Lru {
+                entries: LinkedHashMap::new(),
+            },
+        };
+        Self { store }
     }
 
-    fn get(&self, file_id: u64, block_index: u64) -> Option<Arc<[u8]>> {
-        self.entries.get(&(file_id, block_index)).cloned()
+    pub(crate) fn len(&self) -> usize {
+        match &self.store {
+            ReadCacheStore::Fifo { entries, .. } => entries.len(),
+            ReadCacheStore::Lru { entries } => entries.len(),
+        }
+    }
+
+    fn get(&mut self, file_id: u64, block_index: u64) -> Option<Arc<[u8]>> {
+        let key = (file_id, block_index);
+        match &mut self.store {
+            ReadCacheStore::Fifo { entries, .. } => entries.get(&key).cloned(),
+            ReadCacheStore::Lru { entries } => entries.get_refresh(&key).cloned(),
+        }
     }
 
     fn insert(&mut self, file_id: u64, block_index: u64, data: Arc<[u8]>, limit_blocks: usize) {
         let key = (file_id, block_index);
-        if !self.entries.contains_key(&key) {
-            self.order.push_back(key);
-        }
-        self.entries.insert(key, data);
-        while self.entries.len() > limit_blocks {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
-            } else {
-                break;
+        match &mut self.store {
+            ReadCacheStore::Fifo { entries, order } => {
+                if !entries.contains_key(&key) {
+                    order.push_back(key);
+                }
+                entries.insert(key, data);
+                while entries.len() > limit_blocks {
+                    if let Some(oldest) = order.pop_front() {
+                        entries.remove(&oldest);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            ReadCacheStore::Lru { entries } => {
+                let existed = entries.contains_key(&key);
+                entries.insert(key, data);
+                if existed {
+                    let _ = entries.get_refresh(&key);
+                }
+                while entries.len() > limit_blocks {
+                    if entries.pop_front().is_none() {
+                        break;
+                    }
+                }
             }
         }
     }
 
     fn clear_file(&mut self, file_id: u64) {
-        self.entries
-            .retain(|(cached_file_id, _), _| *cached_file_id != file_id);
-        self.order
-            .retain(|(cached_file_id, _)| *cached_file_id != file_id);
+        match &mut self.store {
+            ReadCacheStore::Fifo { entries, order } => {
+                entries.retain(|(cached_file_id, _), _| *cached_file_id != file_id);
+                order.retain(|(cached_file_id, _)| *cached_file_id != file_id);
+            }
+            ReadCacheStore::Lru { entries } => {
+                let mut filtered = LinkedHashMap::new();
+                for (key, value) in entries.iter() {
+                    if key.0 != file_id {
+                        filtered.insert(*key, Arc::clone(value));
+                    }
+                }
+                *entries = filtered;
+            }
+        }
     }
 }
 
@@ -149,7 +236,7 @@ impl FodFuse {
         self.record_read_block_cache_lock_elapsed(lock_started.elapsed());
         let block = result
             .ok()
-            .and_then(|guard| guard.get(file_id, block_index));
+            .and_then(|mut guard| guard.get(file_id, block_index));
         self.record_cached_read_block_elapsed(started.elapsed());
         block
     }
@@ -420,5 +507,39 @@ impl FodFuse {
         cached = Self::merge_sorted_blocks(cached, fetched);
         self.record_read_block_map_elapsed(started.elapsed());
         Ok(cached)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReadBlockCache;
+    use std::sync::Arc;
+
+    fn block(value: u8) -> Arc<[u8]> {
+        Arc::from(vec![value])
+    }
+
+    #[test]
+    fn fifo_cache_evicts_in_insertion_order() {
+        let mut cache = ReadBlockCache::new("fifo");
+        cache.insert(1, 1, block(1), 2);
+        cache.insert(1, 2, block(2), 2);
+        assert!(cache.get(1, 1).is_some());
+        cache.insert(1, 3, block(3), 2);
+        assert!(cache.get(1, 1).is_none());
+        assert!(cache.get(1, 2).is_some());
+        assert!(cache.get(1, 3).is_some());
+    }
+
+    #[test]
+    fn lru_cache_refreshes_recent_hits() {
+        let mut cache = ReadBlockCache::new("lru");
+        cache.insert(1, 1, block(1), 2);
+        cache.insert(1, 2, block(2), 2);
+        assert!(cache.get(1, 1).is_some());
+        cache.insert(1, 3, block(3), 2);
+        assert!(cache.get(1, 1).is_some());
+        assert!(cache.get(1, 2).is_none());
+        assert!(cache.get(1, 3).is_some());
     }
 }
