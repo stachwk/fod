@@ -3552,7 +3552,19 @@ impl Filesystem for FodFuse {
             }
         };
         if let Some(mut state) = self.write_state_for_handle(fh) {
-            let data = self.read_from_write_state(&mut state, offset, size);
+            let data = match self.read_from_write_state(&mut state, offset, size) {
+                Ok(data) => data,
+                Err(errno) => {
+                    self.log_request_error(
+                        req_id,
+                        "read",
+                        errno,
+                        format!("fh={} read_from_write_state", fh),
+                    );
+                    reply.error(errno);
+                    return;
+                }
+            };
             if let Some((path, attrs)) = current_attrs.as_ref() {
                 self.touch_access_time(path, attrs);
             }
@@ -4864,7 +4876,11 @@ impl Filesystem for FodFuse {
         for (_, sibling_state) in sibling_states.iter().cloned() {
             Self::merge_write_state_into(&mut state, sibling_state, self.block_size);
         }
-        self.update_write_buffer(&mut state, offset, data);
+        if let Err(errno) = self.update_write_buffer(&mut state, offset, data) {
+            self.log_request_error(req_id, "write", errno, format!("fh={} update", fh));
+            reply.error(errno);
+            return;
+        }
         state.buffered_bytes = state.buffered_bytes.saturating_add(data.len() as u64);
 
         let shared_open_handles = self.open_handle_count_for_file(file_id);
@@ -5110,7 +5126,19 @@ impl Filesystem for FodFuse {
         }
 
         let data = if let Some(mut state) = src_state.clone() {
-            self.read_from_write_state(&mut state, src_offset, copy_len)
+            match self.read_from_write_state(&mut state, src_offset, copy_len) {
+                Ok(data) => data,
+                Err(errno) => {
+                    self.log_request_error(
+                        req_id,
+                        "copy_file_range",
+                        errno,
+                        format!("src_file_id={} load_write_state", src_file_id),
+                    );
+                    reply.error(errno);
+                    return;
+                }
+            }
         } else {
             match self.repo.assemble_file_slice(
                 src_file_id,
@@ -5215,7 +5243,16 @@ impl Filesystem for FodFuse {
                 state.file_size = target_end;
             }
             for (run_start, run_payload) in runs {
-                self.update_write_buffer(&mut state, run_start, &run_payload);
+                if let Err(errno) = self.update_write_buffer(&mut state, run_start, &run_payload) {
+                    self.log_request_error(
+                        req_id,
+                        "copy_file_range",
+                        errno,
+                        format!("fh_out={} update_write_buffer", fh_out),
+                    );
+                    reply.error(errno);
+                    return;
+                }
                 state.buffered_bytes = state
                     .buffered_bytes
                     .saturating_add(run_payload.len() as u64);
@@ -5239,7 +5276,16 @@ impl Filesystem for FodFuse {
             return;
         }
 
-        self.update_write_buffer(&mut state, dst_offset, &data);
+        if let Err(errno) = self.update_write_buffer(&mut state, dst_offset, &data) {
+            self.log_request_error(
+                req_id,
+                "copy_file_range",
+                errno,
+                format!("fh_out={} update_write_buffer", fh_out),
+            );
+            reply.error(errno);
+            return;
+        }
         state.buffered_bytes = state.buffered_bytes.saturating_add(data.len() as u64);
         if let Err(errno) = self.flush_write_state(&mut state) {
             self.log_request_error(
@@ -5595,6 +5641,7 @@ mod tests {
             file_size: 128,
             truncate_pending: false,
             buffered_bytes: 0,
+            load_error: false,
             blocks: BTreeMap::new(),
         };
         let buffered = WriteState {

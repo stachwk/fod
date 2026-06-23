@@ -38,42 +38,61 @@ impl FodFuse {
         }
     }
 
-    fn load_write_block(&self, state: &mut WriteState, block_index: u64) -> Vec<u8> {
+    fn load_write_block(
+        &self,
+        state: &mut WriteState,
+        block_index: u64,
+    ) -> Result<Vec<u8>, libc::c_int> {
         if let Some(block) = state.blocks.get(&block_index) {
-            return block.clone();
+            return Ok(block.clone());
         }
         if let Some(block) = self.recent_write_block(state.file_id, block_index) {
-            return block.as_ref().to_vec();
+            return Ok(block.as_ref().to_vec());
         }
-        match self.load_block_profiled(state.file_id, block_index, self.block_size) {
-            Ok(Some(block)) => block,
-            Ok(None) => vec![0u8; self.block_size as usize],
+        Self::load_write_block_from_repo(
+            state.file_id,
+            block_index,
+            self.block_size as usize,
+            self.load_block_profiled(state.file_id, block_index, self.block_size),
+        )
+    }
+
+    fn load_write_block_from_repo(
+        file_id: u64,
+        block_index: u64,
+        block_size: usize,
+        load_result: Result<Option<Vec<u8>>, String>,
+    ) -> Result<Vec<u8>, libc::c_int> {
+        match load_result {
+            Ok(Some(block)) => Ok(block),
+            Ok(None) => Ok(vec![0u8; block_size]),
             Err(err) => {
-                // Nie traktujemy bledu DB jak pustego bloku.
-                // Blok zerowy jest tylko tymczasowym wypelnieniem bufora,
-                // a flush_write_state() zwroci EIO i nie utrwali takiego stanu.
-                state.load_error = true;
                 warn!(
                     "FOD load_write_block failed file_id={} block_index={} err={}",
-                    state.file_id, block_index, err
+                    file_id, block_index, err
                 );
-                vec![0u8; self.block_size as usize]
+                Err(EIO)
             }
         }
     }
 
-    pub(crate) fn update_write_buffer(&self, state: &mut WriteState, offset: u64, data: &[u8]) {
+    pub(crate) fn update_write_buffer(
+        &self,
+        state: &mut WriteState,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<(), libc::c_int> {
         let started = Instant::now();
         let block_size = self.block_size.max(1);
         let block_size_usize = block_size as usize;
 
         if data.is_empty() {
             self.record_update_write_buffer_elapsed(started.elapsed());
-            return;
+            return Ok(());
         }
 
-        // Rozmiar pliku sprzed tego zapisu.
-        // Bloki zaczynajace sie za starym EOF sa nowe i nie trzeba ich czytac z DB.
+        // File size before this write.
+        // Blocks starting past the previous EOF are new and do not need a DB read.
         let original_file_size = state.file_size;
 
         let end = offset.saturating_add(data.len() as u64);
@@ -81,63 +100,69 @@ impl FodFuse {
             state.file_size = end;
         }
 
-        let first_block = offset / block_size;
-        let last_block = (end.saturating_sub(1)) / block_size;
-        let mut src_cursor = 0usize;
+        let result = (|| -> Result<(), libc::c_int> {
+            let first_block = offset / block_size;
+            let last_block = (end.saturating_sub(1)) / block_size;
+            let mut src_cursor = 0usize;
 
-        for block_index in first_block..=last_block {
-            let block_start = block_index * block_size;
-            let block_end = block_start.saturating_add(block_size);
-            let write_start = offset.max(block_start);
-            let write_end = end.min(block_end);
+            for block_index in first_block..=last_block {
+                let block_start = block_index * block_size;
+                let block_end = block_start.saturating_add(block_size);
+                let write_start = offset.max(block_start);
+                let write_end = end.min(block_end);
 
-            if write_end <= write_start {
-                continue;
+                if write_end <= write_start {
+                    continue;
+                }
+
+                let block_slice_start = (write_start - block_start) as usize;
+                let block_slice_end = (write_end - block_start) as usize;
+                let src_len = block_slice_end.saturating_sub(block_slice_start);
+                let src_end = src_cursor.saturating_add(src_len);
+
+                if src_end > data.len() {
+                    break;
+                }
+
+                let full_block_write =
+                    block_slice_start == 0 && block_slice_end == block_size_usize;
+                let brand_new_block = block_start >= original_file_size;
+
+                let mut block = if full_block_write {
+                    // Full overwrites do not need to clone the previous block.
+                    data[src_cursor..src_end].to_vec()
+                } else if let Some(existing_block) = state.blocks.get(&block_index) {
+                    // Already buffered data has priority.
+                    existing_block.clone()
+                } else if brand_new_block && block_slice_start == 0 {
+                    // A brand-new block written from the start does not need a DB read.
+                    vec![0u8; block_size_usize]
+                } else {
+                    // Partial writes to existing blocks must load the current DB state.
+                    self.load_write_block(state, block_index)?
+                };
+
+                if block.len() < block_size_usize {
+                    block.resize(block_size_usize, 0);
+                }
+
+                // Copy the user data into the prepared block buffer.
+                // This preserves the expected partial-write semantics.
+                block[block_slice_start..block_slice_end]
+                    .copy_from_slice(&data[src_cursor..src_end]);
+
+                state.blocks.insert(block_index, block);
+                src_cursor = src_end;
             }
 
-            let block_slice_start = (write_start - block_start) as usize;
-            let block_slice_end = (write_end - block_start) as usize;
-            let src_len = block_slice_end.saturating_sub(block_slice_start);
-            let src_end = src_cursor.saturating_add(src_len);
+            Ok(())
+        })();
 
-            if src_end > data.len() {
-                break;
-            }
-
-            let full_block_write = block_slice_start == 0 && block_slice_end == block_size_usize;
-            let brand_new_block = block_start >= original_file_size;
-
-            let mut block = if full_block_write {
-                // Pelny overwrite nie musi klonowac starego bloku.
-                data[src_cursor..src_end].to_vec()
-            } else if let Some(existing_block) = state.blocks.get(&block_index) {
-                // Jesli blok jest juz w buforze, to ten stan ma pierwszenstwo.
-                existing_block.clone()
-            } else if brand_new_block && block_slice_start == 0 {
-                // Pelny overwrite albo nowy blok pisany od poczatku nie wymaga odczytu z DB.
-                // Przy zapisie od srodka bloku trzeba jednak sprobowac wczytac blok,
-                // bo inny fh mogl go przed chwila sflushowac do repo.
-                vec![0u8; block_size_usize]
-            } else {
-                // Czesciowy zapis w bloku zawsze probuje wczytac stan z DB.
-                // Brak bloku oznacza zera, ale blad DB ustawia load_error i blokuje flush.
-                self.load_write_block(state, block_index)
-            };
-
-            if block.len() < block_size_usize {
-                block.resize(block_size_usize, 0);
-            }
-
-            // Zawsze kopiujemy dane wejsciowe do bloku.
-            // To utrzymuje poprawna semantyke rowniez dla auto-flush i czesciowych zapisow.
-            block[block_slice_start..block_slice_end].copy_from_slice(&data[src_cursor..src_end]);
-
-            state.blocks.insert(block_index, block);
-            src_cursor = src_end;
+        if result.is_ok() {
+            self.clear_read_cache_for_file(state.file_id);
         }
-
-        self.clear_read_cache_for_file(state.file_id);
         self.record_update_write_buffer_elapsed(started.elapsed());
+        result
     }
 
     pub(crate) fn flush_write_state(&self, state: &mut WriteState) -> Result<(), libc::c_int> {
@@ -308,10 +333,10 @@ impl FodFuse {
         state: &mut WriteState,
         offset: u64,
         size: u64,
-    ) -> Vec<u8> {
+    ) -> Result<Vec<u8>, libc::c_int> {
         let block_size = self.block_size.max(1);
         if offset >= state.file_size {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let end_offset = offset.saturating_add(size).min(state.file_size);
         let mut output = vec![0u8; (end_offset - offset) as usize];
@@ -325,14 +350,14 @@ impl FodFuse {
             if read_end <= read_start {
                 continue;
             }
-            let block = self.load_write_block(state, block_index);
+            let block = self.load_write_block(state, block_index)?;
             let block_slice_start = (read_start - block_start) as usize;
             let block_slice_end = (read_end - block_start) as usize;
             let out_start = (read_start - offset) as usize;
             let out_end = out_start + block_slice_end - block_slice_start;
             output[out_start..out_end].copy_from_slice(&block[block_slice_start..block_slice_end]);
         }
-        output
+        Ok(output)
     }
 
     pub(crate) fn read_copy_destination_slice(
@@ -350,7 +375,7 @@ impl FodFuse {
         }
 
         let mut current = match state {
-            Some(state) => self.read_from_write_state(state, dst_offset, size),
+            Some(state) => self.read_from_write_state(state, dst_offset, size)?,
             None if dst_offset >= current_size => Vec::new(),
             None => {
                 let end_offset = dst_offset.saturating_add(size).min(current_size);
@@ -391,7 +416,10 @@ impl FodFuse {
     }
 
     pub(crate) fn write_state_has_pending_changes(state: &WriteState) -> bool {
-        state.truncate_pending || state.buffered_bytes > 0 || state.load_error || !state.blocks.is_empty()
+        state.truncate_pending
+            || state.buffered_bytes > 0
+            || state.load_error
+            || !state.blocks.is_empty()
     }
 
     pub(crate) fn write_flush_threshold_reached(&self, buffered_bytes: u64) -> bool {
@@ -521,5 +549,24 @@ impl FodFuse {
         if let Ok(mut guard) = result {
             guard.remove(&fh);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_write_block_from_repo_returns_zero_block_for_missing_row() {
+        let block = FodFuse::load_write_block_from_repo(7, 2, 4, Ok(None))
+            .expect("missing row should produce a zero block");
+        assert_eq!(block, vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn load_write_block_from_repo_returns_eio_on_db_error() {
+        let err = FodFuse::load_write_block_from_repo(7, 2, 4, Err("boom".to_string()))
+            .expect_err("database error should not be masked as zeroes");
+        assert_eq!(err, EIO);
     }
 }
