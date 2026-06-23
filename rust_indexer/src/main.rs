@@ -1,6 +1,7 @@
 mod cli;
 mod db;
 mod hash;
+mod materialize;
 mod model;
 mod plan;
 mod scan;
@@ -57,6 +58,11 @@ fn run() -> Result<(), String> {
                 return Err("Only --dry-run is supported for now.".to_string());
             }
             let summary = plan::dry_run_import_plan(&repo)?;
+            println!("{}", summary.human_readable());
+            Ok(())
+        }
+        Commands::Materialize { source } => {
+            let summary = materialize::materialize_source(&repo, &source)?;
             println!("{}", summary.human_readable());
             Ok(())
         }

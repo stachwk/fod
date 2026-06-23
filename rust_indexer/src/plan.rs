@@ -5,15 +5,15 @@ use fod_rust_hotpath::pg::DbRepo;
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone)]
-struct PlannableFile {
-    file: IndexedFile,
-    hash_algorithm: Option<String>,
-    full_hash_hex: Option<String>,
-    hash_status: Option<String>,
+pub(crate) struct PlannableFile {
+    pub(crate) file: IndexedFile,
+    pub(crate) hash_algorithm: Option<String>,
+    pub(crate) full_hash_hex: Option<String>,
+    pub(crate) hash_status: Option<String>,
 }
 
 impl PlannableFile {
-    fn from_row(row: &[String]) -> Result<Self, String> {
+    pub(crate) fn from_row(row: &[String]) -> Result<Self, String> {
         if row.len() < 21 {
             return Err("plannable file row is too short".to_string());
         }
@@ -32,13 +32,13 @@ impl PlannableFile {
         })
     }
 
-    fn needs_revalidation(&self) -> bool {
+    pub(crate) fn needs_revalidation(&self) -> bool {
         self.file.source_changed
             || matches!(self.hash_status.as_deref(), Some("changed_retry_needed"))
     }
 }
 
-fn load_duplicate_sets(repo: &DbRepo) -> Result<Vec<DuplicateSet>, String> {
+pub(crate) fn load_duplicate_sets(repo: &DbRepo) -> Result<Vec<DuplicateSet>, String> {
     let rows = repo.query_rows_text(
         "
         SELECT
@@ -57,7 +57,7 @@ fn load_duplicate_sets(repo: &DbRepo) -> Result<Vec<DuplicateSet>, String> {
         .collect::<Result<Vec<_>, _>>()
 }
 
-fn load_plannable_files(repo: &DbRepo) -> Result<Vec<PlannableFile>, String> {
+pub(crate) fn load_plannable_files(repo: &DbRepo) -> Result<Vec<PlannableFile>, String> {
     let rows = repo.query_rows_text(
         "
         SELECT
@@ -95,19 +95,27 @@ fn load_plannable_files(repo: &DbRepo) -> Result<Vec<PlannableFile>, String> {
         .collect::<Result<Vec<_>, _>>()
 }
 
-fn canonical_sort_key(file: &IndexedFile) -> (u64, usize, String) {
+pub(crate) fn canonical_sort_key(file: &IndexedFile) -> (u64, usize, String) {
     (file.source_id, file.path.len(), file.path.clone())
 }
 
-fn insert_import_plan(repo: &DbRepo, status: &str, dry_run: bool) -> Result<u64, String> {
+pub(crate) fn insert_import_plan(
+    repo: &DbRepo,
+    status: &str,
+    dry_run: bool,
+    source_filter: Option<&str>,
+) -> Result<u64, String> {
     let sql = format!(
         "
-        INSERT INTO index_import_plans (created_at, updated_at, status, dry_run)
-        VALUES (NOW(), NOW(), {status}, {dry_run})
+        INSERT INTO index_import_plans (created_at, updated_at, status, dry_run, source_filter)
+        VALUES (NOW(), NOW(), {status}, {dry_run}, {source_filter})
         RETURNING id_import_plan
         ",
         status = sql_quote_literal(status),
         dry_run = if dry_run { "TRUE" } else { "FALSE" },
+        source_filter = source_filter
+            .map(sql_quote_literal)
+            .unwrap_or_else(|| "NULL".to_string()),
     );
     let rows = repo.query_rows_text(&sql)?;
     let row = rows
@@ -120,17 +128,18 @@ fn insert_import_plan(repo: &DbRepo, status: &str, dry_run: bool) -> Result<u64,
         .map_err(|err| format!("invalid import plan id: {err}"))
 }
 
-fn update_import_plan(
+pub(crate) fn update_import_plan(
     repo: &DbRepo,
     plan_id: u64,
     status: &str,
+    dry_run: bool,
     summary: &ImportPlanSummary,
 ) -> Result<(), String> {
     let sql = format!(
         "
         UPDATE index_import_plans
         SET status = {status},
-            dry_run = TRUE,
+            dry_run = {dry_run},
             scanned_file_count = {scanned_file_count},
             candidate_group_count = {candidate_group_count},
             confirmed_group_count = {confirmed_group_count},
@@ -142,6 +151,7 @@ fn update_import_plan(
         WHERE id_import_plan = {plan_id}
         ",
         status = sql_quote_literal(status),
+        dry_run = if dry_run { "TRUE" } else { "FALSE" },
         scanned_file_count = summary.scanned_files,
         candidate_group_count = summary.candidate_duplicate_groups,
         confirmed_group_count = summary.confirmed_duplicate_groups,
@@ -154,7 +164,7 @@ fn update_import_plan(
     repo.exec(&sql)
 }
 
-fn insert_import_plan_entry(
+pub(crate) fn insert_import_plan_entry(
     repo: &DbRepo,
     plan_id: u64,
     file: &IndexedFile,
@@ -324,7 +334,7 @@ pub fn dry_run_import_plan(repo: &DbRepo) -> Result<ImportPlanSummary, String> {
         .collect();
 
     let files = load_plannable_files(repo)?;
-    let plan_id = insert_import_plan(repo, "dry_run_running", true)?;
+    let plan_id = insert_import_plan(repo, "dry_run_running", true, None)?;
     let mut summary = ImportPlanSummary::default();
     summary.scanned_files = files.len() as u64;
     summary.total_source_bytes = files.iter().map(|file| file.file.size).sum();
@@ -424,6 +434,6 @@ pub fn dry_run_import_plan(repo: &DbRepo) -> Result<ImportPlanSummary, String> {
     summary.saved_bytes = summary
         .total_source_bytes
         .saturating_sub(summary.estimated_import_bytes);
-    update_import_plan(repo, plan_id, "dry_run_completed", &summary)?;
+    update_import_plan(repo, plan_id, "dry_run_completed", true, &summary)?;
     Ok(summary)
 }

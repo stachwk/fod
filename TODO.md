@@ -48,7 +48,12 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Implement local filesystem scan.
 - [x] Implement staged duplicate detection.
 - [x] Implement dry-run import plan.
-- [x] Document future import/materialization phase.
+- [x] Document import/materialization phase.
+
+## FOD 3.0.9 — fod-indexer follow-up
+
+- [x] Add materialization/import outside dry-run.
+- [x] Wire `fod-indexer` into `Makefile`.
 
 ### Storage Hot-Path Prep
 

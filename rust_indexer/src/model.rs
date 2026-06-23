@@ -128,6 +128,52 @@ impl ImportPlanSummary {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct MaterializeSummary {
+    pub source_name: String,
+    pub import_root: String,
+    pub scanned_files: u64,
+    pub validated_files: u64,
+    pub duplicate_groups: u64,
+    pub canonical_files: u64,
+    pub reference_files: u64,
+    pub created_directories: u64,
+    pub source_bytes: u64,
+    pub imported_bytes: u64,
+    pub saved_bytes: u64,
+}
+
+impl MaterializeSummary {
+    pub fn as_import_plan_summary(&self) -> ImportPlanSummary {
+        ImportPlanSummary {
+            scanned_files: self.validated_files,
+            candidate_duplicate_groups: self.duplicate_groups,
+            confirmed_duplicate_groups: self.duplicate_groups,
+            unique_payload_count: self.canonical_files,
+            total_source_bytes: self.source_bytes,
+            estimated_import_bytes: self.imported_bytes,
+            saved_bytes: self.saved_bytes,
+        }
+    }
+
+    pub fn human_readable(&self) -> String {
+        format!(
+            "FOD indexer materialize\nsource: {}\nimport root: {}\nscanned files: {}\nvalidated files: {}\nduplicate groups: {}\ncanonical files: {}\nreference files: {}\ncreated directories: {}\nsource bytes: {}\nimported bytes: {}\nsaved bytes: {}",
+            self.source_name,
+            self.import_root,
+            self.scanned_files,
+            self.validated_files,
+            self.duplicate_groups,
+            self.canonical_files,
+            self.reference_files,
+            self.created_directories,
+            self.source_bytes,
+            self.imported_bytes,
+            self.saved_bytes
+        )
+    }
+}
+
 fn parse_u64(value: &str) -> Result<u64, String> {
     value
         .trim()

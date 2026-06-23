@@ -77,9 +77,9 @@ The dry run should report:
 - canonical source file for each duplicate set,
 - logical references for the remaining paths.
 
-## Future materialization
+## Materialization
 
-The later import phase must revalidate:
+`materialize --source <name>` revalidates the current source view before creating FOD entries. The import phase checks:
 
 - size,
 - modification time when available,
@@ -87,7 +87,7 @@ The later import phase must revalidate:
 - source path,
 - optional inode and device ids when available.
 
-That import phase is out of scope for the first MVP.
+Materialization writes into a per-run root directory inside FOD named `index-source-<source id>-import-<plan id>`, keeps the source tree untouched, writes each canonical payload once, and reuses the canonical data object for duplicate references when the payload is non-empty. Zero-length duplicates remain harmless independent zero-sized entries.
 
 ## Architecture note
 

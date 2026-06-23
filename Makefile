@@ -10,11 +10,13 @@ CARGO_ROOT_MANIFEST ?= Cargo.toml
 FOD_MKFS_PACKAGE ?= $(or $(RUST_MKFS_PACKAGE),fod-rust-mkfs)
 FOD_FUSE_PACKAGE ?= $(or $(RUST_FUSE_PACKAGE),fod-rust-fuse)
 FOD_HOTPATH_PACKAGE ?= $(or $(RUST_HOTPATH_PACKAGE),fod-rust-hotpath)
+FOD_INDEXER_PACKAGE ?= $(or $(RUST_INDEXER_PACKAGE),fod-rust-indexer)
 FOD_BOOTSTRAP_BIN ?= fod-bootstrap
 FOD_MKFS_BIN ?= fod-rust-mkfs
 FOD_CONFIG_BIN ?= fod-config
 FOD_CHANGE_BIN ?= fod-change
 FOD_FUSE_BIN ?= fod-rust-fuse
+FOD_INDEXER_BIN ?= fod-indexer
 FOD_VERSION_FILE ?= fod_version.txt
 FOD_VERSION := $(shell cat $(FOD_VERSION_FILE))
 FOD_CARGO_PROFILE ?= release
@@ -26,6 +28,7 @@ CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path rust_fuse/Cargo.toml
 CARGO_BUILD_HOTPATH := $(RUST_CARGO) build --manifest-path rust_hotpath/Cargo.toml
 
 CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path rust_mkfs/Cargo.toml
+CARGO_RUN_INDEXER := $(RUST_CARGO) run --manifest-path rust_indexer/Cargo.toml
 
 CARGO_TEST_MKFS := $(RUST_CARGO) test --manifest-path rust_mkfs/Cargo.toml
 CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path rust_fuse/Cargo.toml
@@ -41,6 +44,7 @@ CARGO_BUILD_HOTPATH := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST
 CARGO_BUILD_INSTALL_ROOT := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_RELEASE_FLAG) -p $(FOD_MKFS_PACKAGE) --bins -p $(FOD_FUSE_PACKAGE) --bin $(FOD_FUSE_BIN)
 
 CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
+CARGO_RUN_INDEXER := $(RUST_CARGO) run --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_INDEXER_PACKAGE)
 
 CARGO_TEST_MKFS := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
 CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_FUSE_PACKAGE)
@@ -179,6 +183,8 @@ help:
 		'  make pip-install - removed; Rust binaries are built directly' \
 		'  make pip-install-editable - legacy Python test helper install' \
 		'  make config-show - show which file FOD uses for configuration' \
+		'  make indexer - run fod-indexer with INDEXER_ARGS="..."' \
+		'  make indexer-import - materialize a source into FOD (set INDEXER_SOURCE=...)' \
 		'  make smoke      - quick database connectivity test' \
 		'  make benchmarks - run the benchmark suite sequentially' \
 		'  make benchmark  - alias for make benchmarks' \
@@ -468,6 +474,24 @@ pip-install-editable:
 
 config-show:
 	$(CARGO_RUN_MKFS) --quiet --bin fod-config -- --config-path . resolve-path
+
+indexer:
+	@set -eu; \
+	if [ -z "$(strip $(INDEXER_ARGS))" ]; then \
+		echo 'Set INDEXER_ARGS=...'; \
+		exit 1; \
+	fi; \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_RUN_INDEXER) -- $(INDEXER_ARGS)
+
+indexer-import: init
+	@set -eu; \
+	if [ -z "$(strip $(INDEXER_SOURCE))" ]; then \
+		echo 'Set INDEXER_SOURCE=...'; \
+		exit 1; \
+	fi; \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_RUN_INDEXER) -- materialize --source "$(INDEXER_SOURCE)"
+
+.PHONY: indexer indexer-import
 
 cargo-profile-show:
 	@printf '%s\n' "FOD_VERSION=$(FOD_VERSION)"

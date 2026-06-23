@@ -38,6 +38,10 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    Materialize {
+        #[arg(long)]
+        source: String,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
