@@ -63,18 +63,14 @@ fn source_path(candidate: &PlannableFile) -> PathBuf {
     candidate.file.root_path.join(&candidate.file.path)
 }
 
-fn validate_candidate(candidate: &PlannableFile) -> Result<(), String> {
-    let path = source_path(candidate);
-    let expected_hash = candidate
-        .full_hash_hex
-        .as_deref()
-        .ok_or_else(|| format!("missing full hash for {}", candidate.file.path))?;
-    if candidate.hash_status.as_deref() != Some("full") {
-        return Err(format!(
-            "candidate {} is not fully hashed and cannot be materialized",
-            candidate.file.path
-        ));
-    }
+#[derive(Debug, Clone)]
+struct ValidatedCandidate {
+    file: PlannableFile,
+    full_hash_hex: String,
+}
+
+fn validate_candidate(candidate: PlannableFile) -> Result<ValidatedCandidate, String> {
+    let path = source_path(&candidate);
 
     let metadata_before = fs::metadata(&path)
         .map_err(|err| format!("unable to read metadata for {}: {err}", path.display()))?;
@@ -103,14 +99,19 @@ fn validate_candidate(candidate: &PlannableFile) -> Result<(), String> {
         ));
     }
 
-    if actual_hash != expected_hash {
-        return Err(format!(
-            "full hash changed before import for {}",
-            path.display()
-        ));
+    if let Some(expected_hash) = candidate.full_hash_hex.as_deref() {
+        if actual_hash != expected_hash {
+            return Err(format!(
+                "full hash changed before import for {}",
+                path.display()
+            ));
+        }
     }
 
-    Ok(())
+    Ok(ValidatedCandidate {
+        file: candidate,
+        full_hash_hex: actual_hash,
+    })
 }
 
 fn load_block_size(repo: &DbRepo) -> Result<u64, String> {
@@ -220,6 +221,7 @@ fn materialize_canonical_file(
     root_name: &str,
     root_id: u64,
     candidate: &PlannableFile,
+    expected_hash: &str,
     block_size: u64,
 ) -> Result<(u64, u64), String> {
     let path = source_path(candidate);
@@ -259,10 +261,6 @@ fn materialize_canonical_file(
         usize::try_from(block_size)
             .map_err(|_| format!("block size is too large for this platform: {block_size}"))?,
     )?;
-    let expected_hash = candidate
-        .full_hash_hex
-        .as_deref()
-        .ok_or_else(|| format!("missing full hash for {}", candidate.file.path))?;
     if actual_hash != expected_hash {
         return Err(format!(
             "full hash changed while importing {}",
@@ -351,8 +349,7 @@ pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<Materializ
         .into_iter()
         .filter(|file| file.file.source_name == source.name)
     {
-        validate_candidate(&file)?;
-        candidates.push(file);
+        candidates.push(validate_candidate(file)?);
     }
 
     let duplicate_sets = plan::load_duplicate_sets(repo)?;
@@ -384,29 +381,28 @@ pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<Materializ
         import_root: format!("/{}", root_name),
         scanned_files: candidates.len() as u64,
         validated_files: candidates.len() as u64,
-        source_bytes: candidates.iter().map(|file| file.file.size).sum(),
+        source_bytes: candidates.iter().map(|file| file.file.file.size).sum(),
         created_directories: root_created,
         ..MaterializeSummary::default()
     };
 
     let result = (|| -> Result<(), String> {
-        let mut groups: BTreeMap<(String, String, u64), Vec<PlannableFile>> = BTreeMap::new();
+        let mut groups: BTreeMap<(String, String, u64), Vec<ValidatedCandidate>> = BTreeMap::new();
         for file in candidates {
             let key = (
-                file.hash_algorithm
+                file.file
+                    .hash_algorithm
                     .clone()
-                    .ok_or_else(|| format!("missing hash algorithm for {}", file.file.path))?,
-                file.full_hash_hex
-                    .clone()
-                    .ok_or_else(|| format!("missing full hash for {}", file.file.path))?,
-                file.file.size,
+                    .unwrap_or_else(|| "sha256".to_string()),
+                file.full_hash_hex.clone(),
+                file.file.file.size,
             );
             groups.entry(key).or_default().push(file);
         }
 
         for ((algorithm, full_hash_hex, file_size), mut members) in groups {
             members.sort_by(|left, right| {
-                canonical_sort_key(&left.file).cmp(&canonical_sort_key(&right.file))
+                canonical_sort_key(&left.file.file).cmp(&canonical_sort_key(&right.file.file))
             });
             let duplicate_set_id = duplicate_set_map
                 .get(&(algorithm.clone(), full_hash_hex.clone(), file_size))
@@ -420,22 +416,30 @@ pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<Materializ
                 .first()
                 .expect("group must contain at least one file");
             let (canonical_file_id, created_dirs) = materialize_canonical_file(
-                repo, &source, &root_name, root_id, canonical, block_size,
+                repo,
+                &source,
+                &root_name,
+                root_id,
+                &canonical.file,
+                &canonical.full_hash_hex,
+                block_size,
             )?;
             summary.created_directories = summary.created_directories.saturating_add(created_dirs);
             summary.canonical_files = summary.canonical_files.saturating_add(1);
-            summary.imported_bytes = summary.imported_bytes.saturating_add(canonical.file.size);
+            summary.imported_bytes = summary
+                .imported_bytes
+                .saturating_add(canonical.file.file.size);
             plan::insert_import_plan_entry(
                 repo,
                 plan_id,
-                &canonical.file,
+                &canonical.file.file,
                 duplicate_set_id,
                 if is_duplicate_group {
                     "materialized_canonical"
                 } else {
                     "materialized_unique"
                 },
-                Some(canonical.file.id_file),
+                Some(canonical.file.file.id_file),
             )?;
 
             for reference in members.iter().skip(1) {
@@ -444,7 +448,7 @@ pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<Materializ
                     &source,
                     &root_name,
                     root_id,
-                    reference,
+                    &reference.file,
                     canonical_file_id,
                 )?;
                 summary.created_directories =
@@ -453,10 +457,10 @@ pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<Materializ
                 plan::insert_import_plan_entry(
                     repo,
                     plan_id,
-                    &reference.file,
+                    &reference.file.file,
                     duplicate_set_id,
                     "materialized_reference",
-                    Some(canonical.file.id_file),
+                    Some(canonical.file.file.id_file),
                 )?;
             }
         }
