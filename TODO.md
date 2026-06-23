@@ -54,6 +54,7 @@ This document records the small set of open follow-ups plus completed work, clos
 
 - [x] Add materialization/import outside dry-run.
 - [x] Wire `fod-indexer` into `Makefile`.
+- [x] Add a smoke test for `fod-indexer materialize` that covers duplicate payload reuse, unique payloads, and zero-size imports.
 
 ### Storage Hot-Path Prep
 
