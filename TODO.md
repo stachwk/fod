@@ -385,7 +385,7 @@ Status: intentionally closed as a non-goal for this repo.
 
 ### Full FUSE / Linux Compatibility
 
-Based on the `libfuse` documentation and Linux VFS behavior, this section records the current `ioctl` compatibility state:
+Based on verified `libfuse3` behavior and Linux VFS behavior, `libfuse3` stays the strategic baseline when compatibility, standardness, and easier upstream-aligned debugging matter most. This section records the current `ioctl` compatibility state:
 
 #### Plan
 
