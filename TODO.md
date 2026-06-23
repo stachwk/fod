@@ -39,7 +39,9 @@ This document records the small set of open follow-ups plus completed work, clos
 ### Obszary do rozwoju
 
 - [ ] Dodać pełniejszy replay in-flight SQL po błędach.
-- [ ] Rozszerzyć ioctl poza `FIONREAD`, jeśli pojawi się realny use case.
+- [ ] Rozszerzyć ioctl poza `FIONREAD` o `FICLONE` / `FICLONERANGE` jako pierwszy realny use case; na tym stacku FUSE request nadal wraca `EOPNOTSUPP` zanim trafi do handlera.
+- [ ] Rozszerzyć ioctl o `FS_IOC_GETFLAGS` / `FS_IOC_SETFLAGS`, jeśli pojawi się realny use case.
+- [ ] Rozszerzyć ioctl o `FIGETBSZ`, jeśli pojawi się realny use case.
 - [ ] Zaprojektować pełną politykę mount-label SELinux.
 
 ### Direct I/O Microscope
