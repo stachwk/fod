@@ -59,6 +59,16 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Scope `fod-indexer plan-import` by source with explicit `--source` and `--all-sources` flags, and cover both modes in smoke tests.
 - [x] Add cleanup for failed indexer materialization via `fod-indexer cleanup-failed --plan <id>`, with smoke coverage for duplicate payload reuse and zero-size files.
 
+## FOD 3.0.9 — Cleanup and recovery safety
+
+- [x] Guard `fod-indexer cleanup-failed` against deleting shared data objects.
+- [x] Report preserved shared data objects in the cleanup summary.
+- [x] Extend cleanup smoke coverage for shared-object safety.
+- [x] Document that recovery after errors is currently limited to one retry and does not yet replay in-flight SQL.
+- [x] Document that ioctl support is currently limited to `FIONREAD`.
+- [x] Document that full SELinux mount-label policy remains out of scope.
+- [x] Document that FOD is still early-stage and APIs, benchmarks, and performance defaults may still evolve.
+
 ### Storage Hot-Path Prep
 
 - [x] Split storage hot-path planning from SQL execution now that `fs.rs` has been broken up.

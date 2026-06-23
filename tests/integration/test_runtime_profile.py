@@ -256,10 +256,10 @@ def main() -> None:
             log_text = _wait_for_log_contains(launcher.config.log_file, "FOD storage block_size=")
             assert f'profile=Some("{mount_profile}")' in log_text, log_text
             expected_cache_line = (
-                "FOD cache metadata_cache_ttl=7s statfs_cache_ttl=11s read_cache_blocks=2048 read_ahead_blocks=4 "
+                "FOD cache metadata_cache_ttl=7s statfs_cache_ttl=11s read_cache_blocks=2048 read_cache_eviction_policy=fifo read_ahead_blocks=4 "
                 "sequential_read_ahead_blocks=8 small_file_read_threshold_blocks=16"
                 if mount_profile == "metadata_heavy"
-                else "FOD cache metadata_cache_ttl=7s statfs_cache_ttl=11s read_cache_blocks=4096 read_ahead_blocks=4 "
+                else "FOD cache metadata_cache_ttl=7s statfs_cache_ttl=11s read_cache_blocks=4096 read_cache_eviction_policy=fifo read_ahead_blocks=4 "
                 "sequential_read_ahead_blocks=8 small_file_read_threshold_blocks=8"
             )
             expected_storage_line = (

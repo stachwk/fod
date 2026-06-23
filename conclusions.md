@@ -5,8 +5,11 @@ Use this file to record concise conclusions that matter for future work.
 ## 2026-06-23
 
 - `fod-indexer cleanup-failed --plan <id>` is now available for failed materialization cleanup. The new smoke test covers duplicate payload reuse, unique payloads, and a zero-length file, and it verified that a failed import root can be removed cleanly while the source tree stays unchanged.
+- `fod-indexer cleanup-failed` now preserves shared data objects by reassigning their storage rows to a surviving outside file, and the cleanup smoke verifies that a shared top-level file still reads correctly after failed-import cleanup.
 - The root Cargo workspace version now matches `fod_version.txt`, so `cargo metadata` and the runtime version label no longer advertise different FOD release numbers.
 - `make test-fod-indexer-smoke` is now the preferred Makefile entrypoint for the materialize end-to-end smoke, and it reuses the existing comprehensive Python integration test.
+- `make test-all-full` now gets past the runtime-profile cache-line expectation after the `read_cache_eviction_policy=fifo` adjustment, but it still stalls later in the recovery standby smoke on this host because `pg_basebackup` hits `FATAL: no pg_hba.conf entry for replication connection ... no encryption`. That blocker looks environment-specific and is unrelated to the cleanup guard.
+- The targeted cleanup and indexer smokes passed after the shared-object fix: `cargo fmt --all`, `cargo check --workspace`, `cargo test -p fod-rust-indexer`, `make test-fod-indexer-smoke`, and `make test-fod-indexer-cleanup-failed`.
 
 ## 2026-05-06
 

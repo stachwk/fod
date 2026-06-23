@@ -141,7 +141,8 @@ pub struct CleanupFailedSummary {
     pub import_root: String,
     pub removed_files: u64,
     pub removed_directories: u64,
-    pub removed_data_objects: u64,
+    pub exclusive_data_objects_removed: u64,
+    pub shared_data_objects_preserved: u64,
     pub plan_status_before: String,
     pub plan_status_after: String,
 }
@@ -149,13 +150,14 @@ pub struct CleanupFailedSummary {
 impl CleanupFailedSummary {
     pub fn human_readable(&self) -> String {
         format!(
-            "FOD indexer cleanup failed materialization\nplan id: {}\nsource: {}\nimport root: {}\nremoved files: {}\nremoved directories: {}\nremoved data objects: {}\nplan status: {} -> {}",
+            "FOD indexer cleanup failed materialization\nplan id: {}\nsource: {}\nimport root: {}\nfiles removed: {}\ndirectories removed: {}\nexclusive data objects removed: {}\nshared data objects preserved: {}\nplan status: {} -> {}",
             self.plan_id,
             self.source_name,
             self.import_root,
             self.removed_files,
             self.removed_directories,
-            self.removed_data_objects,
+            self.exclusive_data_objects_removed,
+            self.shared_data_objects_preserved,
             self.plan_status_before,
             self.plan_status_after
         )

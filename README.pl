@@ -147,10 +147,11 @@ Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasa
 - Pełna polityka mount-label SELinux jest celowo poza zakresem; FOD trzyma SELinux jako metadane w xattr plus runtime gating.
 - Obsługa `ioctl` jest celowo ograniczona na razie do `FIONREAD`.
 - Metadane specjalnych urządzeń są zapisywane, ale pełna semantyka uruchamiania takich node'ów nie jest głównym celem projektu.
+- FOD jest nadal na wczesnym etapie, więc API, benchmarki i domyślne ustawienia wydajności mogą się jeszcze zmieniać.
 - `make test-all` jest głównym targetem regresji; workflow mounta są pokryte, ale CI skupia się na wybranym zestawie stabilnym w automatyzacji.
 - Upgrade schematu jest na razie zachowawczy: `init` stosuje base schema dla świeżej instalacji, `upgrade` naprawia brakujący stan schematu i przywraca bieżącą wersję, a repo nadal trzyma numerowane pliki migracji dla starszych baz.
 - FOD normalizuje timestampy przez sesję PostgreSQL ustawioną na UTC oraz konwersje w Rustowym runtime, więc lokalne różnice stref czasowych nie przesuwają metadanych. Ustawienie UTC jest inicjalizowane raz na fizyczne połączenie z puli, a nie przy każdej operacji filesystemu, i nie opiera się na domyślnych ustawieniach tworzenia bazy.
-- Recovery jest ograniczone do ponawiania przejściowych disconnectów w gorącej ścieżce odczytu/zapisu; FOD trzyma stan dirty i cache w pamięci procesu, ale nie robi jeszcze pełnego replay dowolnych trwających operacji SQL.
+- Recovery jest ograniczone do ponawiania przejściowych disconnectów w gorącej ścieżce odczytu/zapisu; FOD trzyma stan dirty i cache w pamięci procesu, ale nie robi jeszcze pełnego replay dowolnych trwających operacji SQL i tylko ponawia ograniczoną ścieżkę reconnectu.
 
 ## Wymagania
 

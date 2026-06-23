@@ -145,10 +145,11 @@ For step-by-step local verification profiles, see [zasady_sprawdzen.md](zasady_s
 - Full SELinux mount-label policy is intentionally out of scope; FOD keeps SELinux as xattr-backed metadata plus runtime gating.
 - `ioctl` support is intentionally limited to `FIONREAD` for now.
 - Special device node metadata is stored, but direct special-node execution semantics are still not a general-purpose focus.
+- FOD is still early-stage, so APIs, benchmarks, and performance defaults may still evolve.
 - `make test-all` is the main regression target; mount-heavy workflows are covered, but CI is still focused on a curated subset that is stable in automation.
 - Schema upgrades are currently conservative: `init` applies the fresh-install base schema, `upgrade` repairs missing schema state and restores the current version, and the repo keeps the numbered migration files for older databases.
 - FOD normalizes timestamps through a UTC PostgreSQL session and UTC-aware conversions in the Rust runtime so local timezone differences do not shift metadata. The UTC session setup is initialized once per physical pooled connection, not on every filesystem operation, and the database creation defaults are not relied on.
-- Recovery is limited to retrying transient disconnects on the read/write hot path; FOD keeps in-memory dirty state and caches across reconnects, but it does not yet implement full replay of arbitrary in-flight SQL work.
+- Recovery is limited to retrying transient disconnects on the read/write hot path; FOD keeps in-memory dirty state and caches across reconnects, but it does not yet implement full replay of arbitrary in-flight SQL work and it only retries the bounded reconnect path.
 
 ## Requirements
 

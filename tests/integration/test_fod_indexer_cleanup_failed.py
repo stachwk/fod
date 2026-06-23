@@ -51,6 +51,27 @@ def wait_for_path_missing(path: Path, timeout_s: float = 10.0) -> None:
     raise AssertionError(f"timed out waiting for {path} to disappear; last_exists={last_state}")
 
 
+def wait_for_path_present(path: Path, timeout_s: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    last_state = False
+    while time.monotonic() < deadline:
+        last_state = path.exists()
+        if last_state:
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"timed out waiting for {path} to appear; last_exists={last_state}")
+
+
+def cleanup_shared_reference(dsn: dict[str, str], file_id: int, data_object_id: int) -> None:
+    with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
+        cur.execute("SET search_path TO fod, public")
+        cur.execute("DELETE FROM data_blocks WHERE data_object_id = %s", (data_object_id,))
+        cur.execute("DELETE FROM data_extents WHERE data_object_id = %s", (data_object_id,))
+        cur.execute("DELETE FROM copy_block_crc WHERE data_object_id = %s", (data_object_id,))
+        cur.execute("DELETE FROM files WHERE id_file = %s", (file_id,))
+        cur.execute("DELETE FROM data_objects WHERE id_data_object = %s", (data_object_id,))
+
+
 def main() -> None:
     dsn, _ = load_dsn_from_config(ROOT)
     apply_database_env(ROOT, dsn)
@@ -59,6 +80,9 @@ def main() -> None:
 
     source_snapshot = None
     root_name = None
+    shared_file_id = None
+    shared_data_object_id = None
+    shared_file_name = None
     try:
         write_tree(SOURCE_ROOT, SOURCE_FILES)
         source_snapshot = snapshot_tree(SOURCE_ROOT)
@@ -128,6 +152,85 @@ def main() -> None:
                     if not mount_root.is_dir():
                         raise AssertionError(f"missing materialize root on mount: {mount_root}")
 
+                    canonical_file_row = fetch_one(
+                        conn,
+                        """
+                        SELECT id_file, data_object_id, size, mode, uid, gid
+                        FROM files
+                        WHERE name = %s
+                          AND id_directory = (
+                              SELECT id_directory
+                              FROM directories
+                              WHERE id_parent IS NULL AND name = %s
+                          )
+                        """,
+                        ("a.txt", root_name),
+                    )
+                    if not isinstance(canonical_file_row, tuple) or len(canonical_file_row) < 6:
+                        raise AssertionError(f"unexpected canonical file row: {canonical_file_row}")
+
+                    canonical_file_id = int(canonical_file_row[0])
+                    canonical_data_object_id = int(canonical_file_row[1])
+                    shared_file_name = f"shared-outside-{plan_id}"
+                    shared_path = mount.config.mountpoint / shared_file_name  # type: ignore[union-attr]
+                    shared_path.write_bytes(SOURCE_FILES["a.txt"])
+                    wait_for_path_present(shared_path)
+                    if not shared_path.is_file():
+                        raise AssertionError(f"missing shared file on mount: {shared_path}")
+                    if shared_path.read_bytes() != SOURCE_FILES["a.txt"]:
+                        raise AssertionError("shared file does not expose the canonical payload")
+
+                    shared_file_row = fetch_one(
+                        conn,
+                        """
+                        SELECT id_file, data_object_id
+                        FROM files
+                        WHERE name = %s AND id_directory IS NULL
+                        """,
+                        (shared_file_name,),
+                    )
+                    if not isinstance(shared_file_row, tuple) or len(shared_file_row) < 2:
+                        raise AssertionError(f"unexpected shared file row: {shared_file_row}")
+                    shared_file_id = int(shared_file_row[0])
+                    shared_data_object_id = int(shared_file_row[1])
+
+                    if shared_data_object_id != canonical_data_object_id:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                UPDATE files
+                                SET data_object_id = %s
+                                WHERE id_file = %s
+                                """,
+                                (canonical_data_object_id, shared_file_id),
+                            )
+                            cur.execute(
+                                """
+                                UPDATE data_objects
+                                SET reference_count = reference_count + 1,
+                                    modification_date = NOW()
+                                WHERE id_data_object = %s
+                                """,
+                                (canonical_data_object_id,),
+                            )
+                            cur.execute(
+                                "DELETE FROM data_blocks WHERE data_object_id = %s",
+                                (shared_data_object_id,),
+                            )
+                            cur.execute(
+                                "DELETE FROM data_extents WHERE data_object_id = %s",
+                                (shared_data_object_id,),
+                            )
+                            cur.execute(
+                                "DELETE FROM copy_block_crc WHERE data_object_id = %s",
+                                (shared_data_object_id,),
+                            )
+                            cur.execute(
+                                "DELETE FROM data_objects WHERE id_data_object = %s",
+                                (shared_data_object_id,),
+                            )
+                        shared_data_object_id = canonical_data_object_id
+
                     with conn.cursor() as cur:
                         cur.execute(
                             "UPDATE index_import_plans SET status = %s, updated_at = NOW() WHERE id_import_plan = %s",
@@ -139,12 +242,20 @@ def main() -> None:
                 assert_contains(cleanup_output, f"plan id: {plan_id}", "cleanup")
                 assert_contains(cleanup_output, f"source: smoke", "cleanup")
                 assert_contains(cleanup_output, f"import root: /{root_name}", "cleanup")
-                assert_contains(cleanup_output, "removed files: 4", "cleanup")
-                assert_contains(cleanup_output, "removed directories: 1", "cleanup")
-                assert_contains(cleanup_output, "removed data objects: 3", "cleanup")
+                assert_contains(cleanup_output, "files removed: 4", "cleanup")
+                assert_contains(cleanup_output, "directories removed: 1", "cleanup")
+                assert_contains(cleanup_output, "exclusive data objects removed: 2", "cleanup")
+                assert_contains(cleanup_output, "shared data objects preserved: 1", "cleanup")
+                assert_contains(cleanup_output, "skipping shared data object during failed import cleanup", "cleanup")
                 assert_contains(cleanup_output, "plan status: materialize_failed -> materialize_cleaned", "cleanup")
 
                 wait_for_path_missing(mount_root)
+                shared_path = mount.config.mountpoint / shared_file_name  # type: ignore[union-attr]
+                wait_for_path_present(shared_path)
+                if not shared_path.is_file():
+                    raise AssertionError(f"missing shared file after cleanup: {shared_path}")
+                if shared_path.read_bytes() != SOURCE_FILES["a.txt"]:
+                    raise AssertionError("shared file changed during cleanup")
                 if snapshot_tree(SOURCE_ROOT) != source_snapshot:
                     raise AssertionError("source tree changed during cleanup")
 
@@ -164,6 +275,19 @@ def main() -> None:
                         )
                         if cur.fetchone()[0] != 0:
                             raise AssertionError("cleanup root still exists in directories")
+                        cur.execute(
+                            "SELECT reference_count FROM data_objects WHERE id_data_object = %s",
+                            (shared_data_object_id,),
+                        )
+                        row = cur.fetchone()
+                        if row is None or int(row[0]) != 1:
+                            raise AssertionError(f"shared data object was not preserved correctly: {row}")
+                        cur.execute(
+                            "SELECT COUNT(*) FROM files WHERE id_file = %s",
+                            (shared_file_id,),
+                        )
+                        if cur.fetchone()[0] != 1:
+                            raise AssertionError("shared file disappeared during cleanup")
                         cur.execute(
                             """
                             WITH RECURSIVE subtree AS (
@@ -186,6 +310,11 @@ def main() -> None:
 
                 print(f"OK fod-indexer cleanup-failed plan={plan_id} root={root_name}")
     finally:
+        if shared_file_id is not None and shared_data_object_id is not None:
+            try:
+                cleanup_shared_reference(dsn, shared_file_id, shared_data_object_id)
+            except Exception:
+                pass
         try:
             cleanup_materialized_roots(dsn)
         except Exception:
