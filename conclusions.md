@@ -16,6 +16,7 @@ Use this file to record concise conclusions that matter for future work.
 - `make test-all-full` now gets past the runtime-profile cache-line expectation after the `read_cache_eviction_policy=fifo` adjustment, but it still stalls later in the recovery standby smoke on this host because `pg_basebackup` hits `FATAL: no pg_hba.conf entry for replication connection ... no encryption`. That blocker looks environment-specific and is unrelated to the cleanup guard.
 - The targeted cleanup and indexer smokes passed after the shared-object fix: `cargo fmt --all`, `cargo check --workspace`, `cargo test -p fod-rust-indexer`, `make test-fod-indexer-smoke`, and `make test-fod-indexer-cleanup-failed`.
 - `make test-runtime-reload` now covers the live config control plane end to end: it resets the database to a known schema-admin secret, accepts `read_ahead_blocks` as a live reload, rejects mount-only keys such as `fopen_direct_io`, and restores the original runtime snapshot before exit.
+- `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER`, and `FOD_PG_PASSWORD` now override the PostgreSQL endpoint from the `[database]` config section, so the same checkout can mount against a remote server such as the QNAP preset at `192.168.1.11:5432` without editing `fod_config.ini`. The new `make init-qnap` and `make mount-qnap` helpers prefill that remote profile for local smoke runs.
 
 ## 2026-05-06
 

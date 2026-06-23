@@ -520,30 +520,42 @@ fn map_value_or_default(map: &HashMap<String, String>, key: &str, default: &str)
     map.get(key).cloned().unwrap_or_else(|| default.to_string())
 }
 
+fn env_or_config_value(
+    env_name: &str,
+    map: &HashMap<String, String>,
+    key: &str,
+    default: &str,
+) -> String {
+    env_var_with_legacy_alias(env_name)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| map_value_or_default(map, key, default))
+}
+
 pub fn resolve_pg_connection_params(
     db_config: &HashMap<String, String>,
     config_dir: &Path,
 ) -> HashMap<String, String> {
     let mut params = HashMap::new();
+    // Allow remote PostgreSQL endpoints to be overridden without editing the config file.
     params.insert(
         "host".to_string(),
-        map_value_or_default(db_config, "host", "127.0.0.1"),
+        env_or_config_value("FOD_PG_HOST", db_config, "host", "127.0.0.1"),
     );
     params.insert(
         "port".to_string(),
-        map_value_or_default(db_config, "port", "5432"),
+        env_or_config_value("FOD_PG_PORT", db_config, "port", "5432"),
     );
     params.insert(
         "dbname".to_string(),
-        map_value_or_default(db_config, "dbname", "foddbname"),
+        env_or_config_value("FOD_PG_DBNAME", db_config, "dbname", "foddbname"),
     );
     params.insert(
         "user".to_string(),
-        map_value_or_default(db_config, "user", "foduser"),
+        env_or_config_value("FOD_PG_USER", db_config, "user", "foduser"),
     );
     params.insert(
         "password".to_string(),
-        map_value_or_default(db_config, "password", ""),
+        env_or_config_value("FOD_PG_PASSWORD", db_config, "password", ""),
     );
 
     let sslmode = env_var_with_legacy_alias("FOD_PG_SSLMODE")

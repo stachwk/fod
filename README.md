@@ -379,6 +379,7 @@ FOD is controlled by a mix of CLI flags, environment variables, and config file 
 | `FOD_SYNCHRONOUS_COMMIT` | Environment | `on` | Controls PostgreSQL `synchronous_commit` per connection. |
 | `FOD_PG_VISIBLE_PATH` | Environment | unset | Overrides the path FOD uses to measure PostgreSQL-visible filesystem capacity for `statfs()`. |
 | `FOD_PERSIST_BUFFER_CHUNK_BLOCKS` | Environment | `128` | Controls how many dirty blocks FOD batches per `persist_buffer()` SQL call. |
+| `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER`, `FOD_PG_PASSWORD` | Environment | unset | Override the PostgreSQL endpoint and credentials from `[database]` without editing the config file. |
 | `FOD_PG_SSLMODE`, `FOD_PG_SSLROOTCERT`, `FOD_PG_SSLCERT`, `FOD_PG_SSLKEY` | Environment | unset | Overrides PostgreSQL TLS connection parameters. |
 
 ### Configuration File
@@ -393,6 +394,8 @@ FOD is controlled by a mix of CLI flags, environment variables, and config file 
 - `sslmode` for encrypted PostgreSQL connections, for example `require` or `verify-full`
 - `sslrootcert` for the CA certificate used to verify the server
 - `sslcert` and `sslkey` for optional client certificate authentication
+
+For a remote PostgreSQL server, you can keep the local config file and override the connection at runtime with `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER`, and `FOD_PG_PASSWORD`. The `make init-qnap` and `make mount-qnap` targets prefill those variables for the bundled QNAP preset.
 
 It may also include a `[fod]` section with:
 

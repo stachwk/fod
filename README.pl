@@ -385,6 +385,7 @@ FOD jest sterowany przez flagi CLI, zmienne środowiskowe oraz wartości z pliku
 | `FOD_NEGATIVE_TIMEOUT_SECONDS` | Zmienna środowiskowa | `0` | Steruje TTL cache negatywnych wpisów w FUSE. |
 | `FOD_SYNCHRONOUS_COMMIT` | Zmienna środowiskowa | `on` | Steruje `synchronous_commit` PostgreSQL dla każdego połączenia. |
 | `FOD_PG_VISIBLE_PATH` | Zmienna środowiskowa | nieustawione | Nadpisuje ścieżkę używaną do pomiaru widocznej dla PostgreSQL pojemności filesystemu dla `statfs()`. |
+| `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER`, `FOD_PG_PASSWORD` | Zmienna środowiskowa | nieustawione | Nadpisuje endpoint i dane logowania PostgreSQL z sekcji `[database]` bez edytowania pliku konfiguracyjnego. |
 | `FOD_PERSIST_BUFFER_CHUNK_BLOCKS` | Zmienna środowiskowa | `128` | Steruje liczbą dirty bloków pakowanych do jednego zapytania `persist_buffer()`. |
 | `FOD_PG_SSLMODE`, `FOD_PG_SSLROOTCERT`, `FOD_PG_SSLCERT`, `FOD_PG_SSLKEY` | Zmienna środowiskowa | nieustawione | Nadpisuje parametry TLS połączenia do PostgreSQL. |
 
@@ -426,6 +427,8 @@ Może też zawierać sekcję `[fod]` z:
 - `lock_heartbeat_interval_seconds`
 - `lock_poll_interval_seconds`
 - `synchronous_commit`
+
+Dla zdalnego PostgreSQL można zostawić lokalny plik konfiguracyjny i nadpisać połączenie w czasie uruchomienia przez `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER` i `FOD_PG_PASSWORD`. Targety `make init-qnap` i `make mount-qnap` ustawiają te zmienne dla domyślnego presetu QNAP.
 
 Kanoniczne reguły zakresów dla wartości runtime są w [`rust_runtime/src/lib.rs`](/media/wojtek/virtdata/home/wojtek/git/fod/rust_runtime/src/lib.rs); ta lista jest tylko skrótem dla czytelnika. `pool_max_connections` musi być większe od zera, bo ustawia limit połączeń w puli PostgreSQL.
 

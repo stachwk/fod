@@ -111,6 +111,12 @@ POSTGRES_DB ?= foddbname
 POSTGRES_USER ?= foduser
 POSTGRES_PASSWORD ?= cichosza
 POSTGRES_PORT ?= 5432
+FOD_REMOTE_PG_HOST ?= 192.168.1.11
+FOD_REMOTE_PG_PORT ?= 5432
+FOD_REMOTE_PG_DBNAME ?= $(POSTGRES_DB)
+FOD_REMOTE_PG_USER ?= postgresql
+FOD_REMOTE_PG_PASSWORD ?= postgresqlfod
+FOD_REMOTE_PG_ENV := FOD_PG_HOST=$(FOD_REMOTE_PG_HOST) FOD_PG_PORT=$(FOD_REMOTE_PG_PORT) FOD_PG_DBNAME=$(FOD_REMOTE_PG_DBNAME) FOD_PG_USER=$(FOD_REMOTE_PG_USER) FOD_PG_PASSWORD=$(FOD_REMOTE_PG_PASSWORD)
 MOUNTPOINT ?= /tmp/fod-mount
 FOD_SELINUX ?= auto
 FOD_DEFAULT_PERMISSIONS ?= 1
@@ -151,7 +157,7 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks venv deps deps-ubuntu deps-redhat up down restart logs wait init reset smoke enable-pg-stat-statements mount mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
+.PHONY: help benchmark benchmarks venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
 
 help:
 	@printf '%s\n' \
@@ -174,6 +180,7 @@ help:
 		'  make logs       - show local PostgreSQL logs' \
 		'  make wait       - wait until PostgreSQL is ready' \
 		'  make init       - create the FOD schema in local PostgreSQL with --schema-admin-password' \
+		'  make init-qnap  - create the FOD schema using the remote QNAP PostgreSQL preset' \
 		'  make reset      - down -v / up / wait / init for a clean start' \
 		'  make enable-pg-stat-statements - create pg_stat_statements in the local PostgreSQL database for diagnostics' \
 		'  make install-config - install fod_config.ini to /etc/fod/fod_config.ini (warns if password is still cichosza)' \
@@ -198,8 +205,9 @@ help:
 		'  make benchmarks - run the benchmark suite sequentially' \
 		'  make benchmark  - alias for make benchmarks' \
 		'  make mount      - mount FOD at $(MOUNTPOINT)' \
+		'  make mount-qnap - mount using the remote QNAP PostgreSQL preset (no local Docker)' \
 	'  make mount-user - prefer $$HOME/.config/fod/fod_config.ini and fall back to local ./fod_config.ini' \
-	'  make demo       - up/init and then mount FOD at $(MOUNTPOINT)' \
+		'  make demo       - up/init and then mount FOD at $(MOUNTPOINT)' \
 	'  make docker-selinux-acl-shell - enter the SELinux/ACL Docker lab container' \
 	'  make docker-selinux-acl-smoke - run the SELinux/ACL lab smoke checks inside the Docker container' \
 		'  make unmount    - unmount FOD from $(MOUNTPOINT)' \
@@ -407,6 +415,17 @@ init: up
 		printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"; \
 	fi
 
+init-qnap:
+	@set -eu; \
+	status_output="$$($(FOD_REMOTE_PG_ENV) $(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- status 2>/dev/null || true)"; \
+	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
+		echo 'FOD schema already initialized; skipping qnap init.'; \
+	else \
+		$(FOD_REMOTE_PG_ENV) $(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
+		mkdir -p .fod; \
+		printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"; \
+	fi
+
 
 reset:
 	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
@@ -550,6 +569,13 @@ mount: up
 	mkdir -p $(MOUNTPOINT)
 	@printf '%s\n' "Using FOD config file: /etc/fod/fod_config.ini (fallback: ./fod_config.ini)"
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_DEBUG_BIN) --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
+
+mount-qnap:
+	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
+	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+	mkdir -p $(MOUNTPOINT)
+	@printf '%s\n' "Using remote PostgreSQL at $(FOD_REMOTE_PG_HOST):$(FOD_REMOTE_PG_PORT) (db=$(FOD_REMOTE_PG_DBNAME), user=$(FOD_REMOTE_PG_USER))"
+	$(FOD_REMOTE_PG_ENV) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_DEBUG_BIN) --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
 
 mount-user: up
 	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
