@@ -106,6 +106,7 @@ FOD to oprogramowanie source-available licencjonowane na warunkach Business Sour
 - Widoczność `allow_other` zależy od hosta: dedykowany test robi skip, jeśli host nie wystawia mounta dla `nobody`, więc jest to test diagnostyczny, a nie uniwersalna gwarancja pass/fail.
 - Runtime jest teraz w całości oparty o Rust: frontend mounta żyje w `rust_fuse`, a bootstrap/schemat/mkfs w `rust_mkfs`.
 - Lookup, CRUD namespace, metadane, permissions, xattr, locking, storage i journal handling żyją już w Rust zamiast w Pythonowych helperach.
+- Przy wyborze backendu FUSE `libfuse3` jest strategicznym baseline'em, jeśli najważniejsze są kompatybilność, standardowość i łatwiejsze debugowanie zgodne z upstream; inne stacki zostają do porównań, prototypów i diagnostyki.
 - SELinux działa jako xattr z runtime gating; pełna polityka mount-label jest celowo poza zakresem.
 - PostgreSQL TLS jest opcjonalny i konfigurowalny; FOD może też wygenerować lokalną parę certyfikat/klucz na żądanie.
 - Przejściowe zerwania połączenia PostgreSQL w gorącej ścieżce odczytu/zapisu są ponawiane raz, z zachowaniem stanu po stronie procesu klienta, więc aktywny dirty write state i cache odczytu mogą przetrwać próbę reconnect.

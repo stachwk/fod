@@ -103,6 +103,7 @@ FOD is source-available software licensed under Business Source License 1.1 (BSL
 - `allow_other` visibility is host-dependent: the dedicated test skips when the host does not expose the mount to `nobody`, so it is a diagnostic coverage check rather than a universal pass/fail guarantee.
 - The runtime is Rust-backed end to end: the mount frontend lives in `rust_fuse`, schema/bootstrap live in `rust_mkfs`, and the old Python runtime modules have been removed.
 - Lookup, namespace CRUD, metadata, permissions, xattrs, locking, storage, and journal handling now live in Rust instead of in Python helper modules.
+- For FUSE backend selection, `libfuse3` is the strategic baseline when compatibility, standardness, and easier upstream-aligned debugging matter most; other stacks are kept for comparisons, prototypes, and diagnostics.
 - Metadata caching is now explicitly split between attribute cache and directory-entry cache instead of using one shared payload shape for both.
 - SELinux is xattr-backed with runtime gating; full mount-label policy is intentionally out of scope.
 - PostgreSQL TLS is optional and config-driven; FOD can also generate a local client cert/key pair when requested.
