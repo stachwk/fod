@@ -3,7 +3,7 @@
 
 use crate::fs::FodFuse;
 use libc::EIO;
-use log::debug;
+use log::{debug, warn};
 use rust_hotpath::pg::{PersistBlockRow, PersistExtentRow};
 use rust_hotpath::{
     choose_persist_execution_plan, dirty_block_size, PersistBlockPlanEntry, PersistExecutionPlan,
@@ -18,6 +18,7 @@ pub(crate) struct WriteState {
     pub(crate) file_size: u64,
     pub(crate) truncate_pending: bool,
     pub(crate) buffered_bytes: u64,
+    pub(crate) load_error: bool,
     pub(crate) blocks: BTreeMap<u64, Vec<u8>>,
 }
 
@@ -32,6 +33,7 @@ impl FodFuse {
             file_size,
             truncate_pending,
             buffered_bytes: 0,
+            load_error: false,
             blocks: BTreeMap::new(),
         }
     }
@@ -45,7 +47,18 @@ impl FodFuse {
         }
         match self.load_block_profiled(state.file_id, block_index, self.block_size) {
             Ok(Some(block)) => block,
-            _ => vec![0u8; self.block_size as usize],
+            Ok(None) => vec![0u8; self.block_size as usize],
+            Err(err) => {
+                // Nie traktujemy bledu DB jak pustego bloku.
+                // Blok zerowy jest tylko tymczasowym wypelnieniem bufora,
+                // a flush_write_state() zwroci EIO i nie utrwali takiego stanu.
+                state.load_error = true;
+                warn!(
+                    "FOD load_write_block failed file_id={} block_index={} err={}",
+                    state.file_id, block_index, err
+                );
+                vec![0u8; self.block_size as usize]
+            }
         }
     }
 
@@ -54,6 +67,11 @@ impl FodFuse {
         let block_size = self.block_size.max(1);
         let block_size_usize = block_size as usize;
 
+        if data.is_empty() {
+            self.record_update_write_buffer_elapsed(started.elapsed());
+            return;
+        }
+
         // Rozmiar pliku sprzed tego zapisu.
         // Bloki zaczynajace sie za starym EOF sa nowe i nie trzeba ich czytac z DB.
         let original_file_size = state.file_size;
@@ -61,11 +79,6 @@ impl FodFuse {
         let end = offset.saturating_add(data.len() as u64);
         if end > state.file_size {
             state.file_size = end;
-        }
-
-        if data.is_empty() {
-            self.record_update_write_buffer_elapsed(started.elapsed());
-            return;
         }
 
         let first_block = offset / block_size;
@@ -107,7 +120,7 @@ impl FodFuse {
                 vec![0u8; block_size_usize]
             } else {
                 // Czesciowy zapis w bloku zawsze probuje wczytac stan z DB.
-                // Jesli blok faktycznie nie istnieje, load_write_block i tak zwroci zera.
+                // Brak bloku oznacza zera, ale blad DB ustawia load_error i blokuje flush.
                 self.load_write_block(state, block_index)
             };
 
@@ -129,6 +142,10 @@ impl FodFuse {
 
     pub(crate) fn flush_write_state(&self, state: &mut WriteState) -> Result<(), libc::c_int> {
         let started = Instant::now();
+        if state.load_error {
+            self.record_flush_write_state_elapsed(started.elapsed());
+            return Err(EIO);
+        }
         let block_size = self.block_size.max(1);
         let dirty_blocks = state.blocks.keys().copied().collect::<Vec<_>>();
         let persist_plan = choose_persist_execution_plan(PersistPlanInput {
@@ -154,6 +171,7 @@ impl FodFuse {
         self.invalidate_statfs_cache();
         state.truncate_pending = false;
         state.buffered_bytes = 0;
+        state.load_error = false;
         self.record_flush_write_state_elapsed(started.elapsed());
         Ok(())
     }
@@ -373,7 +391,7 @@ impl FodFuse {
     }
 
     pub(crate) fn write_state_has_pending_changes(state: &WriteState) -> bool {
-        state.truncate_pending || state.buffered_bytes > 0 || !state.blocks.is_empty()
+        state.truncate_pending || state.buffered_bytes > 0 || state.load_error || !state.blocks.is_empty()
     }
 
     pub(crate) fn write_flush_threshold_reached(&self, buffered_bytes: u64) -> bool {
@@ -489,6 +507,7 @@ impl FodFuse {
         }
 
         target.buffered_bytes = target.buffered_bytes.saturating_add(source.buffered_bytes);
+        target.load_error |= source.load_error;
 
         for (block_index, block) in source.blocks {
             target.blocks.insert(block_index, block);
