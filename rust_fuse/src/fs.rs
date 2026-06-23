@@ -40,6 +40,8 @@ const REQUEST_PID_GROUPS_CACHE_TTL: Duration = Duration::from_millis(500);
 const CLIENT_WRITE_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
 // Default atime updates are throttled so repeated reads do not hammer PostgreSQL.
 const ATIME_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
+// Linux FIGETBSZ is _IO(0x00, 2) and reports the filesystem block size.
+const IOCTL_FIGETBSZ: u32 = 2;
 
 // FOPEN_DIRECT_IO = 1 << 0.
 // Uzywamy lokalnej stalej, zeby nie zalezec od eksportu tej stalej przez wersje fuser.
@@ -3462,6 +3464,14 @@ impl Filesystem for FodFuse {
             }
         };
         match cmd {
+            value if value == IOCTL_FIGETBSZ => {
+                let block_size = attrs.file_attr.blksize;
+                debug!(
+                    "FOD ioctl path={} fh={} cmd={} blksize={}",
+                    path, fh, cmd, block_size
+                );
+                reply.ioctl(0, &block_size.to_ne_bytes());
+            }
             value if value == libc::FIONREAD as u32 => {
                 let size = match self.write_state_for_handle(fh) {
                     Some(state) => state.file_size,
