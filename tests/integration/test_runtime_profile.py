@@ -22,34 +22,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fod_backend import load_dsn_from_config, load_fod_runtime_config
+from tests.integration.fod_runtime_testlib import (
+    require_root,
+    restore_env,
+    set_env,
+    wait_for_log_contains,
+)
 from tests.integration.fod_mount import FODMount
-
-
-def _set_env(overrides: dict[str, str]) -> dict[str, str | None]:
-    original = {name: os.environ.get(name) for name in overrides}
-    for name, value in overrides.items():
-        os.environ[name] = value
-    return original
-
-
-def _restore_env(original: dict[str, str | None]) -> None:
-    for name, value in original.items():
-        if value is None:
-            os.environ.pop(name, None)
-        else:
-            os.environ[name] = value
-
-
-def _wait_for_log_contains(log_file: Path, needle: str, timeout_s: float = 15.0) -> str:
-    deadline = time.monotonic() + timeout_s
-    last_text = ""
-    while time.monotonic() < deadline:
-        if log_file.exists():
-            last_text = log_file.read_text(encoding="utf-8")
-            if needle in last_text:
-                return last_text
-        time.sleep(0.1)
-    raise AssertionError(f"timed out waiting for {needle!r} in {log_file}:\n{last_text}")
 
 
 def _docker(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -132,13 +111,8 @@ def _wait_for_recovery_database(dsn: dict[str, str], container_name: str) -> Non
     )
 
 
-def _require_root() -> None:
-    if os.geteuid() != 0:
-        raise SystemExit("tests/integration/test_runtime_profile.py must be run via sudo")
-
-
 def main() -> None:
-    _require_root()
+    require_root("tests/integration/test_runtime_profile.py")
     dsn, _ = load_dsn_from_config(ROOT)
     config_path = ROOT / "fod_config.ini"
     original_profile = os.environ.get("FOD_PROFILE")
@@ -245,7 +219,7 @@ def main() -> None:
             "FOD_WORKERS_WRITE": "5",
             "FOD_PG_VISIBLE_PATH": visible_dir.name,
         }
-        original_mount_env = _set_env(mount_overrides)
+        original_mount_env = set_env(mount_overrides)
         launcher = None
         temp_dir = None
         try:
@@ -253,7 +227,7 @@ def main() -> None:
             launcher.init_schema()
             temp_dir = tempfile.TemporaryDirectory(prefix="/tmp/fod-runtime-profile.")
             launcher.start(temp_dir.name)
-            log_text = _wait_for_log_contains(launcher.config.log_file, "FOD storage block_size=")
+            log_text = wait_for_log_contains(launcher.config.log_file, "FOD storage block_size=")
             assert f'profile=Some("{mount_profile}")' in log_text, log_text
             expected_cache_line = (
                 "FOD cache metadata_cache_ttl=7s statfs_cache_ttl=11s read_cache_blocks=2048 read_cache_eviction_policy=fifo read_ahead_blocks=4 "
@@ -288,13 +262,13 @@ def main() -> None:
             if temp_dir is not None:
                 temp_dir.cleanup()
             visible_dir.cleanup()
-            _restore_env(original_mount_env)
+            restore_env(original_mount_env)
 
         sync_commit_overrides = {
             "FOD_PROFILE": mount_profile,
             "FOD_SYNCHRONOUS_COMMIT": "off",
         }
-        original_sync_commit_mount_env = _set_env(sync_commit_overrides)
+        original_sync_commit_mount_env = set_env(sync_commit_overrides)
         sync_launcher = None
         sync_temp_dir = None
         try:
@@ -302,7 +276,7 @@ def main() -> None:
             sync_launcher.init_schema()
             sync_temp_dir = tempfile.TemporaryDirectory(prefix="/tmp/fod-runtime-sync-commit.")
             sync_launcher.start(sync_temp_dir.name)
-            sync_log_text = _wait_for_log_contains(sync_launcher.config.log_file, "FOD storage block_size=")
+            sync_log_text = wait_for_log_contains(sync_launcher.config.log_file, "FOD storage block_size=")
             assert "synchronous_commit=off" in sync_log_text, sync_log_text
             print("OK runtime-profile-sync-commit")
         finally:
@@ -310,13 +284,13 @@ def main() -> None:
                 sync_launcher.stop()
             if sync_temp_dir is not None:
                 sync_temp_dir.cleanup()
-            _restore_env(original_sync_commit_mount_env)
+            restore_env(original_sync_commit_mount_env)
 
         read_only_overrides = {
             "FOD_PROFILE": mount_profile,
             "FOD_RUST_FUSE_READONLY": "1",
         }
-        original_read_only_mount_env = _set_env(read_only_overrides)
+        original_read_only_mount_env = set_env(read_only_overrides)
         read_only_launcher = None
         read_only_temp_dir = None
         try:
@@ -324,7 +298,7 @@ def main() -> None:
             read_only_launcher.init_schema()
             read_only_temp_dir = tempfile.TemporaryDirectory(prefix="/tmp/fod-runtime-read-only.")
             read_only_launcher.start(read_only_temp_dir.name)
-            read_only_log_text = _wait_for_log_contains(
+            read_only_log_text = wait_for_log_contains(
                 read_only_launcher.config.log_file,
                 "FOD mount read_only=true",
             )
@@ -339,7 +313,7 @@ def main() -> None:
                 read_only_launcher.stop()
             if read_only_temp_dir is not None:
                 read_only_temp_dir.cleanup()
-            _restore_env(original_read_only_mount_env)
+            restore_env(original_read_only_mount_env)
 
         selinux_mount_overrides = {
             "FOD_PROFILE": mount_profile,
@@ -349,7 +323,7 @@ def main() -> None:
             "FOD_SELINUX_DEFCONTEXT": "system_u:object_r:fusefs_t:s0",
             "FOD_SELINUX_ROOTCONTEXT": "system_u:object_r:fusefs_t:s0",
         }
-        original_selinux_mount_env = _set_env(selinux_mount_overrides)
+        original_selinux_mount_env = set_env(selinux_mount_overrides)
         selinux_launcher = None
         selinux_temp_dir = None
         try:
@@ -367,7 +341,7 @@ def main() -> None:
                 else:
                     raise
             else:
-                selinux_log_text = _wait_for_log_contains(
+                selinux_log_text = wait_for_log_contains(
                     selinux_launcher.config.log_file,
                     "FOD security selinux_enabled=false",
                 )
@@ -386,7 +360,7 @@ def main() -> None:
                 selinux_launcher.stop()
             if selinux_temp_dir is not None:
                 selinux_temp_dir.cleanup()
-            _restore_env(original_selinux_mount_env)
+            restore_env(original_selinux_mount_env)
 
         # Create a temporary standby so role=auto sees a real recovery database.
         recovery_launcher = None
@@ -462,7 +436,7 @@ def main() -> None:
             recovery_dsn, _ = load_dsn_from_config(recovery_config_path)
             _wait_for_recovery_database(recovery_dsn, standby_container_name)
 
-            original_recovery_mount_env = _set_env(
+            original_recovery_mount_env = set_env(
                 {
                     "FOD_CONFIG": str(recovery_config_path),
                     "FOD_PROFILE": mount_profile,
@@ -472,7 +446,7 @@ def main() -> None:
                 recovery_launcher = FODMount(str(ROOT))
                 recovery_temp_dir = tempfile.TemporaryDirectory(prefix="/tmp/fod-runtime-recovery.")
                 recovery_launcher.start(recovery_temp_dir.name)
-                recovery_log_text = _wait_for_log_contains(
+                recovery_log_text = wait_for_log_contains(
                     recovery_launcher.config.log_file,
                     "FOD recovery_mode=true",
                 )
@@ -488,7 +462,7 @@ def main() -> None:
                     recovery_launcher.stop()
                 if recovery_temp_dir is not None:
                     recovery_temp_dir.cleanup()
-                _restore_env(original_recovery_mount_env)
+                restore_env(original_recovery_mount_env)
         finally:
             _docker(["rm", "-f", standby_container_name], check=False)
             _docker(["exec", "-u", "postgres", "fod-postgres", "rm", "-rf", standby_backup_path], check=False)

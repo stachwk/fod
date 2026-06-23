@@ -34,7 +34,13 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Decide the command surface and auth for `fod.change --password`, and persist the canonical reloadable snapshot for the next runtime stage. The command surface now also includes `--get KEY` and `--list` inspection helpers over the effective reloadable snapshot.
 - [x] Teach the running FUSE process to consume the stored reloadable snapshot without remount.
 - [x] Apply live config updates without remount for the safe subset and reject unsafe keys with a clear error.
-- [ ] Add end-to-end tests once the reload transport exists, covering both accepted live updates and rejected mount-only changes.
+- [x] Add end-to-end tests once the reload transport exists, covering both accepted live updates and rejected mount-only changes. Covered by `tests/integration/test_runtime_reload.py` and `make test-runtime-reload`.
+
+### Obszary do rozwoju
+
+- [x] Recovery po błędach ograniczone do jednego retry - brak pełnego replay in-flight SQL.
+- [x] ioctl tylko `FIONREAD`.
+- [x] Pełna polityka mount-label SELinux poza zakresem.
 
 ### Direct I/O Microscope
 
