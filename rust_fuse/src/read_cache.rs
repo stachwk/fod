@@ -195,13 +195,15 @@ impl FodFuse {
                 guard.insert((file_id, block_index), Arc::from(block));
             }
         }
-        // Limit bez dodatkowej kolejki: awaryjny bezpiecznik pamieci.
+        // Evict in deterministic key order so cache behavior is reproducible.
         let keep_limit = self.recent_write_blocks_limit(total_blocks);
-        while guard.len() > keep_limit {
-            let Some(key) = guard.keys().next().copied() else {
-                break;
-            };
-            guard.remove(&key);
+        let over_limit = guard.len().saturating_sub(keep_limit);
+        if over_limit > 0 {
+            let mut keys = guard.keys().copied().collect::<Vec<_>>();
+            keys.sort_unstable();
+            for key in keys.into_iter().take(over_limit) {
+                guard.remove(&key);
+            }
         }
         self.recent_write_blocks_len
             .store(guard.len() as u64, Ordering::Relaxed);
