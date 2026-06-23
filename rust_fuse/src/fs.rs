@@ -416,6 +416,7 @@ pub(crate) struct FodFuseProfileCounters {
     recent_write_blocks_lock_us: AtomicU64,
     recent_write_block_us: AtomicU64,
     write_state_lock_us: AtomicU64,
+    write_state_clone_us: AtomicU64,
     update_write_buffer_us: AtomicU64,
     flush_write_state_us: AtomicU64,
     prepare_persist_rows_from_block_plan_us: AtomicU64,
@@ -521,6 +522,10 @@ impl FodFuseProfileCounters {
         Self::add(&self.write_state_lock_us, elapsed);
     }
 
+    pub(crate) fn record_write_state_clone_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_state_clone_us, elapsed);
+    }
+
     pub(crate) fn record_update_write_buffer_elapsed(&self, elapsed: Duration) {
         Self::add(&self.update_write_buffer_us, elapsed);
     }
@@ -576,6 +581,7 @@ impl FodFuseProfileCounters {
             || self.recent_write_blocks_lock_us.load(Ordering::Relaxed) > 0
             || self.recent_write_block_us.load(Ordering::Relaxed) > 0
             || self.write_state_lock_us.load(Ordering::Relaxed) > 0
+            || self.write_state_clone_us.load(Ordering::Relaxed) > 0
             || self.update_write_buffer_us.load(Ordering::Relaxed) > 0
             || self.flush_write_state_us.load(Ordering::Relaxed) > 0
             || self
@@ -657,6 +663,10 @@ impl FodFuseProfileCounters {
             format!(
                 "write_state_lock_us={}",
                 self.write_state_lock_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_state_clone_us={}",
+                self.write_state_clone_us.load(Ordering::Relaxed)
             ),
             format!(
                 "update_write_buffer_us={}",
@@ -856,6 +866,17 @@ impl FodFuse {
 
     pub(crate) fn record_write_state_lock_elapsed(&self, elapsed: Duration) {
         self.profile.record_write_state_lock_elapsed(elapsed);
+    }
+
+    pub(crate) fn record_write_state_clone_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_state_clone_elapsed(elapsed);
+    }
+
+    pub(crate) fn clone_write_state_profiled(&self, state: &WriteState) -> WriteState {
+        let started = Instant::now();
+        let cloned = state.clone();
+        self.record_write_state_clone_elapsed(started.elapsed());
+        cloned
     }
 
     pub(crate) fn record_update_write_buffer_elapsed(&self, elapsed: Duration) {
@@ -4873,7 +4894,8 @@ impl Filesystem for FodFuse {
         let mut state =
             existing_state.unwrap_or_else(|| Self::new_write_state(file_id, existing_size, false));
         state.file_id = file_id;
-        for (_, sibling_state) in sibling_states.iter().cloned() {
+        for (_sibling_fh, sibling_state) in sibling_states.iter() {
+            let sibling_state = self.clone_write_state_profiled(sibling_state);
             Self::merge_write_state_into(&mut state, sibling_state, self.block_size);
         }
         if let Err(errno) = self.update_write_buffer(&mut state, offset, data) {
@@ -5097,7 +5119,8 @@ impl Filesystem for FodFuse {
         {
             match self.repo.adopt_source_data_object(src_file_id, dst_file_id) {
                 Ok(true) => {
-                    if let Some(mut state) = dst_state.clone() {
+                    if let Some(state) = dst_state.as_ref() {
+                        let mut state = self.clone_write_state_profiled(state);
                         state.file_size = src_size;
                         self.update_write_state(fh_out, state);
                     }
@@ -5125,7 +5148,8 @@ impl Filesystem for FodFuse {
             }
         }
 
-        let data = if let Some(mut state) = src_state.clone() {
+        let data = if let Some(state) = src_state.as_ref() {
+            let mut state = self.clone_write_state_profiled(state);
             match self.read_from_write_state(&mut state, src_offset, copy_len) {
                 Ok(data) => data,
                 Err(errno) => {
@@ -5174,7 +5198,7 @@ impl Filesystem for FodFuse {
 
         if dedupe_enabled && dst_offset < current_size {
             let current = if had_dst_state {
-                let mut compare_state = state.clone();
+                let mut compare_state = self.clone_write_state_profiled(&state);
                 if target_end > compare_state.file_size {
                     compare_state.file_size = target_end;
                 }

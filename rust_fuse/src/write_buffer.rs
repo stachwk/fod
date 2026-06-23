@@ -402,7 +402,11 @@ impl FodFuse {
         let started = Instant::now();
         let result = self.write_states.lock();
         self.record_write_state_lock_elapsed(started.elapsed());
-        result.ok().and_then(|guard| guard.get(&fh).cloned())
+        result.ok().and_then(|guard| {
+            guard
+                .get(&fh)
+                .map(|state| self.clone_write_state_profiled(state))
+        })
     }
 
     pub(crate) fn take_write_state_for_handle(&self, fh: u64) -> Option<WriteState> {
@@ -467,7 +471,7 @@ impl FodFuse {
                         && state.file_id == file_id
                         && Self::write_state_has_pending_changes(state)
                 })
-                .map(|(fh, state)| (*fh, state.clone()))
+                .map(|(fh, state)| (*fh, self.clone_write_state_profiled(state)))
                 .collect::<Vec<_>>()
         };
 

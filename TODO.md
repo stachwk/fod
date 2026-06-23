@@ -38,7 +38,7 @@ This document records the small set of open follow-ups plus completed work, clos
 
 ### Direct I/O Microscope
 
-- [ ] Add fine-grained hot-path profiling around `read_block_map()`, `fetch_block_range_chunk()`, `fetch_block_range_parallel()`, `assemble_read_slice()`, `update_write_buffer()`, `flush_write_state()`, `prepare_persist_rows_from_block_plan()`, `prepare_persist_extent_rows_from_extent_ranges()`, `clear_read_cache_for_file()`, and the cache / write-state clone paths so `FOD_FOPEN_DIRECT_IO=1` can be used as a stress microscope instead of a production mode.
+- [x] Add fine-grained hot-path profiling around `read_block_map()`, `fetch_block_range_chunk()`, `fetch_block_range_parallel()`, `assemble_read_slice()`, `update_write_buffer()`, `flush_write_state()`, `prepare_persist_rows_from_block_plan()`, `prepare_persist_extent_rows_from_extent_ranges()`, `clear_read_cache_for_file()`, and the cache / write-state clone paths so `FOD_FOPEN_DIRECT_IO=1` can be used as a stress microscope instead of a production mode.
 
 ### Storage Hot-Path Prep
 
