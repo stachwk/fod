@@ -26,7 +26,7 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 
 ## FOD 3.0.9 Read Cache Eviction Policy Comparison
 
-Observed on the current host with the mounted PostgreSQL-backed runtime, `FOD_READ_CACHE_EVICTION_POLICY=fifo` versus `lru`, `FIO_BLOCK_SIZE=4k`, and `FIO_FILE_SIZE=1M` for the sequential workload. The mixed workloads used the default `FIO_FILE_SIZE=4M`, and the random mixed workload used `FIO_RW_MODE=randrw` with `FIO_RWMIXREAD=50`. The `fio` scripts also exercised the extent control run, but the table below only uses the block-storage results that are relevant to `ReadBlockCache`.
+Initial single-run snapshot observed on the current host with the mounted PostgreSQL-backed runtime, `FOD_READ_CACHE_EVICTION_POLICY=fifo` versus `lru`, `FIO_BLOCK_SIZE=4k`, and `FIO_FILE_SIZE=1M` for the sequential workload. The mixed workloads used the default `FIO_FILE_SIZE=4M`, and the random mixed workload used `FIO_RW_MODE=randrw` with `FIO_RWMIXREAD=50`. The `fio` scripts also exercised the extent control run, but the table below only uses the block-storage results that are relevant to `ReadBlockCache`.
 
 | Workload | FIFO read | FIFO write | LRU read | LRU write |
 | --- | --- | --- | --- | --- |
@@ -34,7 +34,7 @@ Observed on the current host with the mounted PostgreSQL-backed runtime, `FOD_RE
 | Mixed rw 4 MiB | `1.52 MiB/s` | `1.62 MiB/s` | `1.49 MiB/s` | `1.59 MiB/s` |
 | Random mixed rw 4 MiB | `1.07 MiB/s` | `1.12 MiB/s` | `0.97 MiB/s` | `1.00 MiB/s` |
 
-FIFO was faster on all three tested block workloads on this host, with the largest gap on sequential reads. LRU remains available as an opt-in comparison mode through `FOD_READ_CACHE_EVICTION_POLICY`, but the default cache policy should stay FIFO unless a different host/workload mix shows a clear win for LRU.
+A follow-up repeat series with six runs per policy/workload changed the picture: sequential reads favored LRU, mixed workloads still favored FIFO, and random mixed was effectively tied. Treat the single-run table above as a preliminary snapshot; the repeat series is the more reliable signal for this host.
 
 ### Persist Block Transport Comparison
 

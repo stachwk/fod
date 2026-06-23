@@ -504,5 +504,5 @@ Notes:
 - [x] Make partial-block writes fail safely when the existing block cannot be loaded from PostgreSQL; do not replace a failed block read with zero-filled data.
 - [x] Make `update_write_buffer()` treat zero-length writes as a no-op before changing the in-memory file size.
 - [x] Add a deterministic eviction policy for `recent_write_blocks`.
-- [x] Compare FIFO vs LRU behavior for `ReadBlockCache` on sequential, mixed, and random fio workloads. FIFO won on the current host across sequential, mixed, and random mixed fio runs, so it remains the default cache eviction policy.
+- [x] Compare FIFO vs LRU behavior for `ReadBlockCache` on sequential, mixed, and random fio workloads. A six-run repeat series showed a mixed picture on the current host: sequential reads favored LRU, mixed workloads favored FIFO, and random mixed was effectively tied, so the cache policy choice is workload-dependent.
 - [ ] Keep extents opt-in until end-to-end mixed/random benchmarks show a stable win over the default block path.
