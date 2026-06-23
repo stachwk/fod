@@ -135,6 +135,34 @@ impl ImportPlanSummary {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct CleanupFailedSummary {
+    pub plan_id: u64,
+    pub source_name: String,
+    pub import_root: String,
+    pub removed_files: u64,
+    pub removed_directories: u64,
+    pub removed_data_objects: u64,
+    pub plan_status_before: String,
+    pub plan_status_after: String,
+}
+
+impl CleanupFailedSummary {
+    pub fn human_readable(&self) -> String {
+        format!(
+            "FOD indexer cleanup failed materialization\nplan id: {}\nsource: {}\nimport root: {}\nremoved files: {}\nremoved directories: {}\nremoved data objects: {}\nplan status: {} -> {}",
+            self.plan_id,
+            self.source_name,
+            self.import_root,
+            self.removed_files,
+            self.removed_directories,
+            self.removed_data_objects,
+            self.plan_status_before,
+            self.plan_status_after
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct MaterializeSummary {
     pub source_name: String,
     pub import_root: String,

@@ -42,6 +42,10 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    CleanupFailed {
+        #[arg(long)]
+        plan: u64,
+    },
     Materialize {
         #[arg(long)]
         source: String,

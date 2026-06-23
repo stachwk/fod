@@ -56,6 +56,7 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Wire `fod-indexer` into `Makefile`.
 - [x] Add a smoke test for `fod-indexer materialize` that covers duplicate payload reuse, unique payloads, and zero-size imports.
 - [x] Scope `fod-indexer plan-import` by source with explicit `--source` and `--all-sources` flags, and cover both modes in smoke tests.
+- [x] Add cleanup for failed indexer materialization via `fod-indexer cleanup-failed --plan <id>`, with smoke coverage for duplicate payload reuse and zero-size files.
 
 ### Storage Hot-Path Prep
 

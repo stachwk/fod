@@ -1,3 +1,4 @@
+mod cleanup;
 mod cli;
 mod db;
 mod hash;
@@ -74,6 +75,11 @@ fn run() -> Result<(), String> {
                 }
             };
             let summary = plan::dry_run_import_plan(&repo, source_filter)?;
+            println!("{}", summary.human_readable());
+            Ok(())
+        }
+        Commands::CleanupFailed { plan } => {
+            let summary = cleanup::cleanup_failed_materialization(&repo, plan)?;
             println!("{}", summary.human_readable());
             Ok(())
         }

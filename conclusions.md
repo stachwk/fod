@@ -2,6 +2,10 @@
 
 Use this file to record concise conclusions that matter for future work.
 
+## 2026-06-23
+
+- `fod-indexer cleanup-failed --plan <id>` is now available for failed materialization cleanup. The new smoke test covers duplicate payload reuse, unique payloads, and a zero-length file, and it verified that a failed import root can be removed cleanly while the source tree stays unchanged.
+
 ## 2026-05-06
 
 - `test_runtime_profile` and `test_runtime_profile_extents` need `sudo` on a host that exposes `/dev/fuse`; the sandbox can hide that device even when the host has it.

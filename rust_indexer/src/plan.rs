@@ -106,6 +106,10 @@ pub(crate) fn canonical_sort_key(file: &IndexedFile) -> (u64, usize, String) {
     (file.source_id, file.path.len(), file.path.clone())
 }
 
+pub(crate) fn import_root_name(source_id: u64, plan_id: u64) -> String {
+    format!("index-source-{}-import-{}", source_id, plan_id)
+}
+
 pub(crate) fn insert_import_plan(
     repo: &DbRepo,
     status: &str,

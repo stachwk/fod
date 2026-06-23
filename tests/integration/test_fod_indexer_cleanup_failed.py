@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 Wojciech Stach
+# Licensed under BSL 1.1
+
+
+from __future__ import annotations
+
+import shutil
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import psycopg2
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fod_backend import load_dsn_from_config
+from tests.integration.fod_indexer_testlib import (
+    apply_database_env,
+    assert_contains,
+    cleanup_indexer_state,
+    cleanup_materialized_roots,
+    fetch_one,
+    run_indexer,
+    snapshot_tree,
+    wait_for_mount_children,
+    write_tree,
+)
+from tests.integration.fod_mount import FODMount
+
+SOURCE_ROOT = Path("/tmp/fod-indexer-cleanup-src")
+SOURCE_FILES: dict[str, bytes] = {
+    "a.txt": b"same",
+    "b.txt": b"same",
+    "c.txt": b"unique",
+    "empty.txt": b"",
+}
+
+
+def wait_for_path_missing(path: Path, timeout_s: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    last_state = True
+    while time.monotonic() < deadline:
+        last_state = path.exists()
+        if not last_state:
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"timed out waiting for {path} to disappear; last_exists={last_state}")
+
+
+def main() -> None:
+    dsn, _ = load_dsn_from_config(ROOT)
+    apply_database_env(ROOT, dsn)
+    cleanup_indexer_state(dsn)
+    cleanup_materialized_roots(dsn)
+
+    source_snapshot = None
+    root_name = None
+    try:
+        write_tree(SOURCE_ROOT, SOURCE_FILES)
+        source_snapshot = snapshot_tree(SOURCE_ROOT)
+
+        with tempfile.TemporaryDirectory(prefix="fod-indexer-cleanup-") as mount_dir:
+            with FODMount(str(ROOT)) as mount:
+                mount.init_schema()
+                cleanup_indexer_state(dsn)
+                mount.start(mount_dir)
+                cleanup_materialized_roots(dsn)
+
+                source_add_output = run_indexer(
+                    ROOT,
+                    [
+                        "source",
+                        "add",
+                        "--name",
+                        "smoke",
+                        "--path",
+                        str(SOURCE_ROOT),
+                        "--kind",
+                        "local",
+                    ],
+                )
+                assert_contains(source_add_output, "Registered source smoke as local", "source add")
+                assert_contains(source_add_output, str(SOURCE_ROOT), "source add")
+
+                scan_output = run_indexer(ROOT, ["scan", "--source", "smoke"])
+                assert_contains(scan_output, "scanned files: 4", "scan")
+                assert_contains(scan_output, "ok files: 4", "scan")
+
+                hash_output = run_indexer(ROOT, ["hash", "--source", "smoke", "--candidates-only"])
+                assert_contains(hash_output, "duplicate sets: 1", "hash")
+
+                materialize_output = run_indexer(ROOT, ["materialize", "--source", "smoke"])
+                assert_contains(materialize_output, "FOD indexer materialize", "materialize")
+
+                if snapshot_tree(SOURCE_ROOT) != source_snapshot:
+                    raise AssertionError("source tree changed during materialize")
+
+                with psycopg2.connect(**dsn) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SET search_path TO fod, public")
+                    source_id = int(
+                        fetch_one(
+                            conn,
+                            "SELECT id_index_source FROM index_sources WHERE name = %s",
+                            ("smoke",),
+                        )
+                    )
+                    plan_id = int(
+                        fetch_one(
+                            conn,
+                            """
+                            SELECT id_import_plan
+                            FROM index_import_plans
+                            WHERE source_filter = %s
+                            ORDER BY id_import_plan DESC
+                            LIMIT 1
+                            """,
+                            ("smoke",),
+                        )
+                    )
+                    root_name = f"index-source-{source_id}-import-{plan_id}"
+                    mount_root = mount.config.mountpoint / root_name  # type: ignore[union-attr]
+                    wait_for_mount_children(mount_root, sorted(SOURCE_FILES))
+                    if not mount_root.is_dir():
+                        raise AssertionError(f"missing materialize root on mount: {mount_root}")
+
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE index_import_plans SET status = %s, updated_at = NOW() WHERE id_import_plan = %s",
+                            ("materialize_failed", plan_id),
+                        )
+
+                cleanup_output = run_indexer(ROOT, ["cleanup-failed", "--plan", str(plan_id)])
+                assert_contains(cleanup_output, "FOD indexer cleanup failed materialization", "cleanup")
+                assert_contains(cleanup_output, f"plan id: {plan_id}", "cleanup")
+                assert_contains(cleanup_output, f"source: smoke", "cleanup")
+                assert_contains(cleanup_output, f"import root: /{root_name}", "cleanup")
+                assert_contains(cleanup_output, "removed files: 4", "cleanup")
+                assert_contains(cleanup_output, "removed directories: 1", "cleanup")
+                assert_contains(cleanup_output, "removed data objects: 3", "cleanup")
+                assert_contains(cleanup_output, "plan status: materialize_failed -> materialize_cleaned", "cleanup")
+
+                wait_for_path_missing(mount_root)
+                if snapshot_tree(SOURCE_ROOT) != source_snapshot:
+                    raise AssertionError("source tree changed during cleanup")
+
+                with psycopg2.connect(**dsn) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SET search_path TO fod, public")
+                        cur.execute(
+                            "SELECT status FROM index_import_plans WHERE id_import_plan = %s",
+                            (plan_id,),
+                        )
+                        row = cur.fetchone()
+                        if row is None or row[0] != "materialize_cleaned":
+                            raise AssertionError(f"unexpected cleanup status: {row}")
+                        cur.execute(
+                            "SELECT COUNT(*) FROM directories WHERE id_parent IS NULL AND name = %s",
+                            (root_name,),
+                        )
+                        if cur.fetchone()[0] != 0:
+                            raise AssertionError("cleanup root still exists in directories")
+                        cur.execute(
+                            """
+                            WITH RECURSIVE subtree AS (
+                                SELECT id_directory
+                                FROM directories
+                                WHERE id_parent IS NULL AND name = %s
+                                UNION ALL
+                                SELECT d.id_directory
+                                FROM directories d
+                                JOIN subtree s ON d.id_parent = s.id_directory
+                            )
+                            SELECT COUNT(*)
+                            FROM files
+                            WHERE id_directory IN (SELECT id_directory FROM subtree)
+                            """,
+                            (root_name,),
+                        )
+                        if cur.fetchone()[0] != 0:
+                            raise AssertionError("cleanup root still has files")
+
+                print(f"OK fod-indexer cleanup-failed plan={plan_id} root={root_name}")
+    finally:
+        try:
+            cleanup_materialized_roots(dsn)
+        except Exception:
+            pass
+        shutil.rmtree(SOURCE_ROOT, ignore_errors=True)
+        try:
+            cleanup_indexer_state(dsn)
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    main()

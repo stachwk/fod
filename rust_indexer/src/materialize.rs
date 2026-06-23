@@ -128,10 +128,6 @@ fn load_block_size(repo: &DbRepo) -> Result<u64, String> {
     Ok(block_size)
 }
 
-fn import_root_name(source: &IndexSource, plan_id: u64) -> String {
-    format!("index-source-{}-import-{}", source.id_source, plan_id)
-}
-
 fn ensure_root_directory(
     repo: &DbRepo,
     source: &IndexSource,
@@ -369,7 +365,7 @@ pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<Materializ
         false,
         Some(source.name.as_str()),
     )?;
-    let root_name = import_root_name(&source, plan_id);
+    let root_name = plan::import_root_name(source.id_source, plan_id);
     let (root_id, root_created) = ensure_root_directory(repo, &source, &root_name)?;
     let block_size = load_block_size(repo)?;
     let mut summary = MaterializeSummary {
