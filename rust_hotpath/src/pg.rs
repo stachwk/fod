@@ -265,6 +265,14 @@ fn replayable_sql_error(err: String) -> String {
     format!("{REPLAYABLE_SQL_ERROR_PREFIX}{err}")
 }
 
+fn replayable_sql_error_once(err: String) -> String {
+    if err.starts_with(REPLAYABLE_SQL_ERROR_PREFIX) {
+        err
+    } else {
+        replayable_sql_error(err)
+    }
+}
+
 fn strip_replayable_sql_error(err: String) -> String {
     err.strip_prefix(REPLAYABLE_SQL_ERROR_PREFIX)
         .unwrap_or(&err)
@@ -1136,8 +1144,44 @@ fn sql_is_read_only(sql: &CString) -> bool {
     )
 }
 
+fn sql_is_replayable_command(sql: &CString) -> bool {
+    let sql = sql.to_string_lossy();
+    let sql = sql.trim_start();
+
+    sql.starts_with("DELETE FROM ")
+        || sql.starts_with("UPDATE client_sessions")
+        || sql.starts_with("UPDATE lock_leases")
+        || sql.starts_with("UPDATE lock_range_leases")
+        || sql.starts_with("UPDATE files SET modification_date = NOW(), change_date = NOW() WHERE id_file = $1")
+        || sql.starts_with("UPDATE directories SET modification_date = NOW(), change_date = NOW() WHERE id_directory = $1")
+        || sql.starts_with("UPDATE symlinks SET modification_date = NOW(), change_date = NOW() WHERE id_symlink = $1")
+        || sql.starts_with("UPDATE files SET name = $1, id_directory = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
+        || sql.starts_with("UPDATE files SET name = $1, id_directory = NULL, change_date = NOW(), modification_date = NOW() WHERE id_file = $2")
+        || sql.starts_with("UPDATE hardlinks SET name = $1, id_directory = $2, modification_date = NOW() WHERE id_hardlink = $3")
+        || sql.starts_with("UPDATE hardlinks SET name = $1, id_directory = NULL, modification_date = NOW() WHERE id_hardlink = $2")
+        || sql.starts_with("UPDATE symlinks SET name = $1, id_parent = $2, modification_date = NOW() WHERE id_symlink = $3")
+        || sql.starts_with("UPDATE symlinks SET name = $1, id_parent = NULL, modification_date = NOW() WHERE id_symlink = $2")
+        || sql.starts_with("UPDATE directories SET name = $1, id_parent = $2, modification_date = NOW(), change_date = NOW() WHERE id_directory = $3")
+        || sql.starts_with("UPDATE directories SET name = $1, id_parent = NULL, modification_date = NOW(), change_date = NOW() WHERE id_directory = $2")
+        || sql.starts_with("UPDATE files SET mode = $1, change_date = NOW(), modification_date = NOW() WHERE id_file = $2")
+        || sql.starts_with("UPDATE directories SET mode = $1, change_date = NOW(), modification_date = NOW() WHERE id_directory = $2")
+        || sql.starts_with("UPDATE files SET uid = $1, gid = $2, mode = $3, change_date = NOW(), modification_date = NOW() WHERE id_file = $4")
+        || sql.starts_with("UPDATE directories SET uid = $1, gid = $2, mode = $3, change_date = NOW(), modification_date = NOW() WHERE id_directory = $4")
+        || sql.starts_with("UPDATE symlinks SET uid = $1, gid = $2, change_date = NOW(), modification_date = NOW() WHERE id_symlink = $3")
+        || sql.starts_with("UPDATE symlinks SET access_date = $1 WHERE id_symlink = $2")
+        || sql.starts_with("UPDATE files SET access_date = $1, modification_date = $2, change_date = NOW() WHERE id_file = $3")
+        || sql.starts_with("UPDATE directories SET access_date = $1, modification_date = $2, change_date = NOW() WHERE id_directory = $3")
+        || sql.starts_with("UPDATE files SET access_date = $1 WHERE id_file = $2")
+        || sql.starts_with("UPDATE directories SET access_date = $1 WHERE id_directory = $2")
+        || sql.starts_with("INSERT INTO xattrs ")
+}
+
+fn sql_is_replayable_after_disconnect(sql: &CString) -> bool {
+    sql_is_read_only(sql) || sql_is_replayable_command(sql)
+}
+
 unsafe fn maybe_replayable_sql_error(conn: *const PGconn, sql: &CString, err: String) -> String {
-    if sql_is_read_only(sql) && is_retryable_connection_error(conn, &err) {
+    if sql_is_replayable_after_disconnect(sql) && is_retryable_connection_error(conn, &err) {
         replayable_sql_error(err)
     } else {
         err
@@ -1257,7 +1301,15 @@ unsafe fn exec_command_params(
     params: &[&CString],
 ) -> Result<(), String> {
     let started = Instant::now();
-    let res = exec_params(conn, sql, params)?;
+    let res = match exec_params(conn, sql, params) {
+        Ok(res) => res,
+        Err(err) => {
+            if sql_is_replayable_command(sql) && is_retryable_connection_error(conn, &err) {
+                return Err(replayable_sql_error_once(err));
+            }
+            return Err(err);
+        }
+    };
     let elapsed = started.elapsed();
     let status = PQresultStatus(res);
     let sql_label = fod_sql_label(sql);
@@ -1276,7 +1328,11 @@ unsafe fn exec_command_params(
     } else {
         let error = result_error(res);
         PQclear(res);
-        Err(error)
+        if sql_is_replayable_command(sql) && is_retryable_connection_error(conn, &error) {
+            Err(replayable_sql_error_once(error))
+        } else {
+            Err(error)
+        }
     }
 }
 
@@ -4103,7 +4159,7 @@ impl DbRepo {
                 &lease_ttl_seconds,
                 &lease_kind,
             ];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -4170,7 +4226,7 @@ impl DbRepo {
                     &range_end,
                     &lease_ttl_seconds,
                 ];
-                exec_params(conn, &sql, &params).map(|_| ())
+                exec_command_params(conn, &sql, &params)
             } else {
                 let params = [
                     &resource_kind,
@@ -4180,7 +4236,7 @@ impl DbRepo {
                     &range_start,
                     &lease_ttl_seconds,
                 ];
-                exec_params(conn, &sql, &params).map(|_| ())
+                exec_command_params(conn, &sql, &params)
             }
         })
     }
@@ -5012,7 +5068,7 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&file_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -5023,7 +5079,7 @@ impl DbRepo {
             .map_err(|_| "directory id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&directory_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -5034,7 +5090,7 @@ impl DbRepo {
             .map_err(|_| "symlink id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&symlink_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -5066,7 +5122,7 @@ impl DbRepo {
         };
         self.with_cached_connection(|conn| unsafe {
             let param_refs: Vec<&CString> = params.iter().collect();
-            exec_params(conn, &sql, &param_refs).map(|_| ())
+            exec_command_params(conn, &sql, &param_refs)
         })
     }
 
@@ -5098,7 +5154,7 @@ impl DbRepo {
         };
         self.with_cached_connection(|conn| unsafe {
             let param_refs: Vec<&CString> = params.iter().collect();
-            exec_params(conn, &sql, &param_refs).map(|_| ())
+            exec_command_params(conn, &sql, &param_refs)
         })
     }
 
@@ -5130,7 +5186,7 @@ impl DbRepo {
         };
         self.with_cached_connection(|conn| unsafe {
             let param_refs: Vec<&CString> = params.iter().collect();
-            exec_params(conn, &sql, &param_refs).map(|_| ())
+            exec_command_params(conn, &sql, &param_refs)
         })
     }
 
@@ -5162,7 +5218,7 @@ impl DbRepo {
         };
         self.with_cached_connection(|conn| unsafe {
             let param_refs: Vec<&CString> = params.iter().collect();
-            exec_params(conn, &sql, &param_refs).map(|_| ())
+            exec_command_params(conn, &sql, &param_refs)
         })
     }
 
@@ -5173,7 +5229,7 @@ impl DbRepo {
             .map_err(|_| "hardlink id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&hardlink_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -5184,7 +5240,7 @@ impl DbRepo {
             .map_err(|_| "symlink id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&symlink_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -5195,7 +5251,7 @@ impl DbRepo {
             .map_err(|_| "directory id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&directory_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -6970,7 +7026,7 @@ impl DbRepo {
 
         self.with_cached_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id, &name, &value_b64];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -6984,7 +7040,7 @@ impl DbRepo {
 
         self.with_cached_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -6995,7 +7051,7 @@ impl DbRepo {
         name: &str,
     ) -> Result<u64, String> {
         let sql = CString::new(
-            "DELETE FROM xattrs WHERE owner_kind = $1 AND owner_id = $2 AND name = $3",
+            "DELETE FROM xattrs WHERE owner_kind = $1 AND owner_id = $2 AND name = $3 RETURNING 1",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let owner_kind =
@@ -7007,6 +7063,14 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id, &name];
             let res = exec_params(conn, &sql, &params)?;
+            if PQresultStatus(res) != PGRES_TUPLES_OK {
+                let error = result_error(res);
+                PQclear(res);
+                if sql_is_replayable_command(&sql) && is_retryable_connection_error(conn, &error) {
+                    return Err(replayable_sql_error(error));
+                }
+                return Err(error);
+            }
             let rows = PQntuples(res);
             PQclear(res);
             Ok(rows as u64)
@@ -7146,7 +7210,7 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&mode, &file_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7160,7 +7224,7 @@ impl DbRepo {
             .map_err(|_| "directory id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&mode, &directory_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7182,7 +7246,7 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&uid, &gid, &mode, &file_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7204,7 +7268,7 @@ impl DbRepo {
             .map_err(|_| "directory id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&uid, &gid, &mode, &directory_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7219,7 +7283,7 @@ impl DbRepo {
             .map_err(|_| "symlink id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&uid, &gid, &symlink_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7231,7 +7295,7 @@ impl DbRepo {
             .map_err(|_| "symlink id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&atime, &symlink_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7246,7 +7310,7 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&atime, &mtime, &file_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7266,7 +7330,7 @@ impl DbRepo {
             .map_err(|_| "directory id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&atime, &mtime, &directory_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7278,7 +7342,7 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&atime, &file_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7294,7 +7358,7 @@ impl DbRepo {
             .map_err(|_| "directory id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
             let params = [&atime, &directory_id];
-            exec_params(conn, &sql, &params).map(|_| ())
+            exec_command_params(conn, &sql, &params)
         })
     }
 
@@ -7458,6 +7522,29 @@ mod tests {
         assert!(sql_is_read_only(&select_sql));
         assert!(sql_is_read_only(&recursive_sql));
         assert!(!sql_is_read_only(&insert_sql));
+    }
+
+    #[test]
+    fn recognizes_replayable_command_sql_for_disconnect_retry() {
+        let heartbeat_sql = std::ffi::CString::new(
+            "UPDATE lock_leases SET lease_expires_at = NOW() WHERE resource_kind = $1",
+        )
+        .unwrap();
+        let delete_sql =
+            std::ffi::CString::new("DELETE FROM xattrs WHERE owner_kind = $1").unwrap();
+        let xattr_insert_sql = std::ffi::CString::new(
+            "INSERT INTO xattrs (owner_kind, owner_id, name, value) VALUES ($1, $2, $3, $4)",
+        )
+        .unwrap();
+        let journal_sql = std::ffi::CString::new(
+            "INSERT INTO journal (id_user, id_directory, id_file, action, date_time) VALUES ($1, $2, $3, $4, NOW())",
+        )
+        .unwrap();
+
+        assert!(sql_is_replayable_command(&heartbeat_sql));
+        assert!(sql_is_replayable_command(&delete_sql));
+        assert!(sql_is_replayable_command(&xattr_insert_sql));
+        assert!(!sql_is_replayable_command(&journal_sql));
     }
 
     #[test]
