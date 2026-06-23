@@ -54,6 +54,55 @@ fn write_noop() -> Result<(), String> {
 }
 
 #[test]
+fn zero_length_write_is_noop() -> Result<(), String> {
+    let mounted = MountedFs::start("zero-length-write")?;
+    let suffix = unique_suffix();
+    let dir_path = mounted
+        .mountpoint
+        .join(format!("zero_length_write_{suffix}"));
+    let file_path = dir_path.join("payload.bin");
+    let payload = b"payload";
+
+    fs::create_dir(&dir_path).map_err(|err| err.to_string())?;
+    fs::write(&file_path, payload).map_err(|err| err.to_string())?;
+
+    let before_len = fs::metadata(&file_path)
+        .map_err(|err| err.to_string())?
+        .len();
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&file_path)
+        .map_err(|err| err.to_string())?;
+    let fd = file.as_raw_fd();
+    let offset = (before_len + 4096) as libc::off_t;
+    let rc = unsafe { libc::pwrite(fd, payload.as_ptr() as *const libc::c_void, 0, offset) };
+    if rc != 0 {
+        return Err(format!("zero-length pwrite returned {rc}"));
+    }
+    drop(file);
+
+    let after_len = fs::metadata(&file_path)
+        .map_err(|err| err.to_string())?
+        .len();
+    if after_len != before_len {
+        return Err(format!(
+            "zero-length write changed file size: before={before_len} after={after_len}"
+        ));
+    }
+
+    let read_back = fs::read(&file_path).map_err(|err| err.to_string())?;
+    if read_back != payload {
+        return Err(format!(
+            "zero-length write changed file contents: {:?}",
+            read_back
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn unlink_after_write() -> Result<(), String> {
     let mounted = MountedFs::start("unlink-after-write")?;
     let suffix = unique_suffix();

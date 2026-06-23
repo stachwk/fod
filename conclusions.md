@@ -110,3 +110,4 @@ FOD checklist for the common FUSE/FS bottlenecks:
 
 - Partial-block writes now fail closed when PostgreSQL cannot load the existing block. `load_write_block_from_repo()` maps repo errors to `EIO` instead of returning zero-filled data, and both `write()` and `copy_file_range()` propagate the failure without publishing the mutated write state.
 - The new regression coverage is intentionally small: one unit test checks the helper's error mapping, and `cargo test -p fod-rust-fuse multi_open_unique_handles -- --nocapture` still passes to confirm the normal partial-write path remains intact on a live mount.
+- Zero-length writes are already treated as a no-op before `update_write_buffer()` mutates `file_size`; `rust_fuse/tests/mount_smoke.rs::zero_length_write_is_noop` now pins that contract, and `cargo test -p fod-rust-fuse zero_length_write_is_noop -- --nocapture` plus `cargo test -p fod-rust-fuse write_noop -- --nocapture` both pass.
