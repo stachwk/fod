@@ -5,6 +5,7 @@ Use this file to record concise conclusions that matter for future work.
 ## 2026-06-23
 
 - `fod-indexer cleanup-failed --plan <id>` is now available for failed materialization cleanup. The new smoke test covers duplicate payload reuse, unique payloads, and a zero-length file, and it verified that a failed import root can be removed cleanly while the source tree stays unchanged.
+- The root Cargo workspace version now matches `fod_version.txt`, so `cargo metadata` and the runtime version label no longer advertise different FOD release numbers.
 
 ## 2026-05-06
 
