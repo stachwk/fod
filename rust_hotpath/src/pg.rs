@@ -1144,16 +1144,30 @@ fn sql_is_read_only(sql: &CString) -> bool {
     )
 }
 
+fn sql_is_replayable_data_blocks_upsert(sql: &str) -> bool {
+    sql.starts_with("INSERT INTO data_blocks ")
+        && sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data")
+}
+
+fn sql_is_replayable_copy_block_crc_upsert(sql: &str) -> bool {
+    sql.starts_with("INSERT INTO copy_block_crc ")
+        && sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, crc32 = EXCLUDED.crc32, updated_at = NOW()")
+}
+
 fn sql_is_replayable_command(sql: &CString) -> bool {
     let sql = sql.to_string_lossy();
     let sql = sql.trim_start();
 
     sql.starts_with("DELETE FROM ")
+        || sql_is_replayable_data_blocks_upsert(sql)
+        || sql_is_replayable_copy_block_crc_upsert(sql)
         || sql.starts_with("UPDATE client_sessions")
         || sql.starts_with("UPDATE lock_leases")
         || sql.starts_with("UPDATE lock_range_leases")
         || sql.starts_with("INSERT INTO client_session_owner_keys ")
         || sql.starts_with("INSERT INTO lock_range_leases ")
+        || sql.starts_with("UPDATE data_objects SET file_size = ")
+        || sql.starts_with("UPDATE files SET size = ")
         || sql.starts_with("UPDATE files SET modification_date = NOW(), change_date = NOW() WHERE id_file = $1")
         || sql.starts_with("UPDATE directories SET modification_date = NOW(), change_date = NOW() WHERE id_directory = $1")
         || sql.starts_with("UPDATE symlinks SET modification_date = NOW(), change_date = NOW() WHERE id_symlink = $1")
@@ -1406,7 +1420,8 @@ unsafe fn exec_params_with_formats(
     );
 
     if res.is_null() {
-        Err(conn_error(conn))
+        let err = conn_error(conn);
+        Err(maybe_replayable_sql_error(conn, sql, err))
     } else {
         Ok(res)
     }
@@ -1437,7 +1452,11 @@ unsafe fn exec_command_params_with_formats(
     } else {
         let error = result_error(res);
         PQclear(res);
-        Err(error)
+        if sql_is_replayable_command(sql) && is_retryable_connection_error(conn, &error) {
+            Err(replayable_sql_error_once(error))
+        } else {
+            Err(error)
+        }
     }
 }
 
@@ -7542,8 +7561,32 @@ mod tests {
             "INSERT INTO client_session_owner_keys (session_id, owner_key, first_seen_at, last_seen_at, updated_at) VALUES ($1, $2, NOW(), NOW(), NOW()) ON CONFLICT (session_id, owner_key) DO UPDATE SET last_seen_at = NOW(), updated_at = NOW()",
         )
         .unwrap();
+        let data_blocks_upsert_sql = std::ffi::CString::new(
+            "INSERT INTO data_blocks (id_file, data_object_id, _order, data) VALUES ($1, $2, $3, $4) ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data",
+        )
+        .unwrap();
+        let data_blocks_copy_sql = std::ffi::CString::new(
+            "INSERT INTO data_blocks (id_file, data_object_id, _order, data) SELECT $3, $2, _order, data FROM data_blocks WHERE data_object_id = $1",
+        )
+        .unwrap();
+        let copy_block_crc_upsert_sql = std::ffi::CString::new(
+            "INSERT INTO copy_block_crc (id_file, data_object_id, _order, crc32) SELECT id_file, data_object_id, _order, crc32 FROM staging_blocks ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, crc32 = EXCLUDED.crc32, updated_at = NOW()",
+        )
+        .unwrap();
+        let copy_block_crc_copy_sql = std::ffi::CString::new(
+            "INSERT INTO copy_block_crc (id_file, data_object_id, _order, crc32) SELECT $3, $2, _order, crc32 FROM copy_block_crc WHERE data_object_id = $1",
+        )
+        .unwrap();
         let range_state_insert_sql = std::ffi::CString::new(
             "INSERT INTO lock_range_leases (resource_kind, resource_id, session_id, owner_key, lock_type, range_start, range_end, lease_expires_at, heartbeat_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), NOW(), NOW())",
+        )
+        .unwrap();
+        let file_size_update_sql = std::ffi::CString::new(
+            "UPDATE files SET size = $1, modification_date = NOW(), change_date = NOW() WHERE id_file = $2",
+        )
+        .unwrap();
+        let data_object_size_update_sql = std::ffi::CString::new(
+            "UPDATE data_objects SET file_size = $1, modification_date = NOW() WHERE id_data_object = $2",
         )
         .unwrap();
         let xattr_insert_sql = std::ffi::CString::new(
@@ -7558,7 +7601,13 @@ mod tests {
         assert!(sql_is_replayable_command(&heartbeat_sql));
         assert!(sql_is_replayable_command(&delete_sql));
         assert!(sql_is_replayable_command(&owner_key_insert_sql));
+        assert!(sql_is_replayable_command(&data_blocks_upsert_sql));
+        assert!(!sql_is_replayable_command(&data_blocks_copy_sql));
+        assert!(sql_is_replayable_command(&copy_block_crc_upsert_sql));
+        assert!(!sql_is_replayable_command(&copy_block_crc_copy_sql));
         assert!(sql_is_replayable_command(&range_state_insert_sql));
+        assert!(sql_is_replayable_command(&file_size_update_sql));
+        assert!(sql_is_replayable_command(&data_object_size_update_sql));
         assert!(sql_is_replayable_command(&xattr_insert_sql));
         assert!(!sql_is_replayable_command(&journal_sql));
     }
