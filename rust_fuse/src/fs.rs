@@ -3453,7 +3453,7 @@ impl Filesystem for FodFuse {
         _flags: u32,
         cmd: u32,
         in_data: &[u8],
-        _out_size: u32,
+        out_size: u32,
         reply: ReplyIoctl,
     ) {
         let (path, attrs) = match self.entry_attrs_for_ino(ino) {
@@ -3467,10 +3467,19 @@ impl Filesystem for FodFuse {
             value if value == IOCTL_FIGETBSZ => {
                 let block_size = attrs.file_attr.blksize;
                 debug!(
-                    "FOD ioctl path={} fh={} cmd={} blksize={}",
-                    path, fh, cmd, block_size
+                    "FOD ioctl path={} fh={} cmd={} out_size={} blksize={}",
+                    path, fh, cmd, out_size, block_size
                 );
                 reply.ioctl(0, &block_size.to_ne_bytes());
+            }
+            value if value == libc::FS_IOC_GETFLAGS as u32 => {
+                // FOD does not persist inode flags yet, so return the default zero bitset.
+                let flags: u32 = 0;
+                debug!(
+                    "FOD ioctl path={} fh={} cmd={} out_size={} flags={:#x}",
+                    path, fh, cmd, out_size, flags
+                );
+                reply.ioctl(0, &flags.to_ne_bytes());
             }
             value if value == libc::FIONREAD as u32 => {
                 let size = match self.write_state_for_handle(fh) {

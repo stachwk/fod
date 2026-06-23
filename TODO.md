@@ -41,7 +41,7 @@ This document records the small set of open follow-ups plus completed work, clos
 - [ ] Dodać pełniejszy replay in-flight SQL po błędach.
 - [ ] Plan implementacji ioctl:
   - [x] Najpierw `FIGETBSZ`. Zaimplementowane w `rust_fuse/src/fs.rs` jako odpowiedź oparta o bieżący `blksize`.
-  - [ ] Potem `FS_IOC_GETFLAGS`.
+  - [x] Potem `FS_IOC_GETFLAGS`. Na razie zwracane jest neutralne `0`, bo flags nie są jeszcze trwale przechowywane.
   - [ ] `FS_IOC_SETFLAGS` dopiero po decyzji o polityce flag.
   - [ ] `FICLONE` zostaje na razie eksperymentalny, bo obecny stack FUSE nie potwierdził przepuszczania tego requestu do daemonu.
 - [ ] Zaprojektować pełną politykę mount-label SELinux.
