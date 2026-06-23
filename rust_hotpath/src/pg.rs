@@ -1260,6 +1260,11 @@ fn append_copy_binary_i64_field(out: &mut Vec<u8>, value: i64) {
     append_copy_binary_i64(out, value);
 }
 
+fn append_copy_binary_i32_field(out: &mut Vec<u8>, value: i32) {
+    append_copy_binary_i32(out, 4);
+    append_copy_binary_i32(out, value);
+}
+
 fn append_copy_binary_null_field(out: &mut Vec<u8>) {
     append_copy_binary_i32(out, -1);
 }
@@ -1352,6 +1357,10 @@ fn append_persist_extent_copy_binary_row(
     data_object_id: i64,
     extent: &PersistExtentRow,
 ) -> Result<(), String> {
+    let file_id = i32::try_from(file_id)
+        .map_err(|_| "file id out of range for extent copy staging".to_string())?;
+    let data_object_id = i32::try_from(data_object_id)
+        .map_err(|_| "data object id out of range for extent copy staging".to_string())?;
     let start_block = i64::try_from(extent.start_block)
         .map_err(|_| "extent start block out of range for copy staging".to_string())?;
     let block_count = i64::try_from(extent.block_count)
@@ -1360,8 +1369,8 @@ fn append_persist_extent_copy_binary_row(
         .map_err(|_| "extent used bytes out of range for copy staging".to_string())?;
 
     append_copy_binary_i16(out, 6);
-    append_copy_binary_i64_field(out, file_id);
-    append_copy_binary_i64_field(out, data_object_id);
+    append_copy_binary_i32_field(out, file_id);
+    append_copy_binary_i32_field(out, data_object_id);
     append_copy_binary_i64_field(out, start_block);
     append_copy_binary_i64_field(out, block_count);
     append_copy_binary_i64_field(out, used_bytes);
