@@ -38,9 +38,9 @@ This document records the small set of open follow-ups plus completed work, clos
 
 ### Obszary do rozwoju
 
-- [x] Recovery po błędach ograniczone do jednego retry - brak pełnego replay in-flight SQL.
-- [x] ioctl tylko `FIONREAD`.
-- [x] Pełna polityka mount-label SELinux poza zakresem.
+- [ ] Dodać pełniejszy replay in-flight SQL po błędach.
+- [ ] Rozszerzyć ioctl poza `FIONREAD`, jeśli pojawi się realny use case.
+- [ ] Zaprojektować pełną politykę mount-label SELinux.
 
 ### Direct I/O Microscope
 
