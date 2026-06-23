@@ -32,6 +32,7 @@ const PGRES_COMMAND_OK: c_int = 1;
 const PGRES_COPY_IN: c_int = 4;
 const COPY_BINARY_SIGNATURE: &[u8] = b"PGCOPY\n\xff\r\n\0";
 const PERSIST_BLOCK_STAGE_TABLE: &str = "fod_persist_block_stage";
+const REPLAYABLE_SQL_ERROR_PREFIX: &str = "__FOD_REPLAYABLE_SQL_ERROR__: ";
 
 static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 
@@ -258,6 +259,32 @@ fn result_error(res: *const PGresult) -> String {
         }
         CStr::from_ptr(error).to_string_lossy().trim().to_string()
     }
+}
+
+fn replayable_sql_error(err: String) -> String {
+    format!("{REPLAYABLE_SQL_ERROR_PREFIX}{err}")
+}
+
+fn strip_replayable_sql_error(err: String) -> String {
+    err.strip_prefix(REPLAYABLE_SQL_ERROR_PREFIX)
+        .unwrap_or(&err)
+        .to_string()
+}
+
+unsafe fn is_retryable_connection_error(conn: *const PGconn, err: &str) -> bool {
+    if PQstatus(conn) != CONNECTION_OK {
+        return true;
+    }
+
+    let lower = err.to_ascii_lowercase();
+    lower.contains("server closed the connection unexpectedly")
+        || lower.contains("connection to server was lost")
+        || lower.contains("could not receive data from server")
+        || lower.contains("could not send data to server")
+        || lower.contains("broken pipe")
+        || lower.contains("connection reset by peer")
+        || lower.contains("ssl connection has been closed unexpectedly")
+        || lower.contains("terminating connection due to administrator command")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1573,7 +1600,17 @@ where
     let commit = CString::new("COMMIT").map_err(|_| "SQL contains NUL byte".to_string())?;
     let rollback = CString::new("ROLLBACK").map_err(|_| "SQL contains NUL byte".to_string())?;
 
-    exec_command(conn, &begin)?;
+    match exec_command(conn, &begin) {
+        Ok(()) => {}
+        Err(err) => {
+            return if is_retryable_connection_error(conn, &err) {
+                Err(replayable_sql_error(err))
+            } else {
+                Err(err)
+            };
+        }
+    }
+
     match f(conn) {
         Ok(value) => {
             if let Err(err) = exec_command(conn, &commit) {
@@ -1585,7 +1622,11 @@ where
         }
         Err(err) => {
             let _ = exec_command(conn, &rollback);
-            Err(err)
+            if is_retryable_connection_error(conn, &err) {
+                Err(replayable_sql_error(err))
+            } else {
+                Err(err)
+            }
         }
     }
 }
@@ -1892,56 +1933,66 @@ impl DbRepo {
         })
     }
 
-    fn with_connection<T, F>(&self, lane: ConnectionLane, f: F) -> Result<T, String>
+    fn with_connection<T, F>(&self, lane: ConnectionLane, mut f: F) -> Result<T, String>
     where
-        F: FnOnce(*mut PGconn) -> Result<T, String>,
+        F: FnMut(*mut PGconn) -> Result<T, String>,
     {
-        let acquisition = self.pool.acquire(lane)?;
-        let conn = match acquisition {
-            ConnectionAcquisition::Cached(conn) => conn,
-            ConnectionAcquisition::ReservedSlot => {
-                match connect(&self.conninfo, &self.connection_tuning) {
-                    Ok(conn) => conn,
-                    Err(err) => {
-                        let _ = self.pool.release_slot();
-                        return Err(err);
+        let mut replayed = false;
+
+        loop {
+            let acquisition = self.pool.acquire(lane)?;
+            let conn = match acquisition {
+                ConnectionAcquisition::Cached(conn) => conn,
+                ConnectionAcquisition::ReservedSlot => {
+                    match connect(&self.conninfo, &self.connection_tuning) {
+                        Ok(conn) => conn,
+                        Err(err) => {
+                            let _ = self.pool.release_slot();
+                            return Err(err);
+                        }
                     }
                 }
-            }
-        };
+            };
 
-        let result = f(conn);
-        match result {
-            Ok(value) => {
-                if let Err(err) = self.pool.return_cached(lane, conn) {
+            let result = f(conn);
+            match result {
+                Ok(value) => {
+                    if let Err(err) = self.pool.return_cached(lane, conn) {
+                        let _ = self.pool.release_slot();
+                        unsafe {
+                            PQfinish(conn);
+                        }
+                        return Err(err);
+                    }
+                    return Ok(value);
+                }
+                Err(err) => {
+                    let replayable = err.starts_with(REPLAYABLE_SQL_ERROR_PREFIX);
+                    let err = strip_replayable_sql_error(err);
                     let _ = self.pool.release_slot();
                     unsafe {
                         PQfinish(conn);
                     }
+                    if replayable && !replayed {
+                        replayed = true;
+                        continue;
+                    }
                     return Err(err);
                 }
-                Ok(value)
-            }
-            Err(err) => {
-                let _ = self.pool.release_slot();
-                unsafe {
-                    PQfinish(conn);
-                }
-                Err(err)
             }
         }
     }
 
     fn with_cached_connection<T, F>(&self, f: F) -> Result<T, String>
     where
-        F: FnOnce(*mut PGconn) -> Result<T, String>,
+        F: FnMut(*mut PGconn) -> Result<T, String>,
     {
         self.with_connection(ConnectionLane::Write, f)
     }
 
     fn with_control_connection<T, F>(&self, f: F) -> Result<T, String>
     where
-        F: FnOnce(*mut PGconn) -> Result<T, String>,
+        F: FnMut(*mut PGconn) -> Result<T, String>,
     {
         self.with_connection(ConnectionLane::Control, f)
     }
@@ -7492,6 +7543,19 @@ impl DbRepo {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::atomic::AtomicUsize;
+
+    fn conninfo() -> String {
+        let dbname = std::env::var("POSTGRES_DB").unwrap_or_else(|_| "foddbname".to_string());
+        let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "foduser".to_string());
+        let password =
+            std::env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "cichosza".to_string());
+        let host = std::env::var("POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+        format!(
+            "host={host} port={port} dbname={dbname} user={user} password={password} connect_timeout=5"
+        )
+    }
 
     #[test]
     fn tunes_connection_string_from_runtime_config() {
@@ -7522,6 +7586,49 @@ mod tests {
         let tuning = ConnectionTuning::default();
         let tuned = apply_connection_tuning("host=localhost dbname=fod", &tuning).unwrap();
         assert_eq!(tuned, "host=localhost dbname=fod");
+    }
+
+    #[test]
+    fn replayable_sql_error_prefix_is_stripped() {
+        let err = replayable_sql_error("synthetic failure".to_string());
+        assert!(err.starts_with(REPLAYABLE_SQL_ERROR_PREFIX));
+        assert_eq!(strip_replayable_sql_error(err), "synthetic failure");
+    }
+
+    #[test]
+    fn replayable_connection_error_retries_once() {
+        let repo = DbRepo::new(&conninfo()).expect("failed to connect to PostgreSQL");
+        let attempts = AtomicUsize::new(0);
+
+        let value = repo
+            .with_cached_connection(|_conn| {
+                let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if attempt == 0 {
+                    Err(replayable_sql_error("synthetic replay".to_string()))
+                } else {
+                    Ok("replayed")
+                }
+            })
+            .expect("replayable closure should succeed after retry");
+
+        assert_eq!(value, "replayed");
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn non_replayable_error_is_not_retried() {
+        let repo = DbRepo::new(&conninfo()).expect("failed to connect to PostgreSQL");
+        let attempts = AtomicUsize::new(0);
+
+        let err: String = repo
+            .with_cached_connection(|_conn| {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err::<&str, String>("plain failure".to_string())
+            })
+            .expect_err("plain failure should be returned directly");
+
+        assert_eq!(err, "plain failure");
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
