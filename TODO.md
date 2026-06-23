@@ -40,6 +40,16 @@ This document records the small set of open follow-ups plus completed work, clos
 
 - [x] Add fine-grained hot-path profiling around `read_block_map()`, `fetch_block_range_chunk()`, `fetch_block_range_parallel()`, `assemble_read_slice()`, `update_write_buffer()`, `flush_write_state()`, `prepare_persist_rows_from_block_plan()`, `prepare_persist_extent_rows_from_extent_ranges()`, `clear_read_cache_for_file()`, and the cache / write-state clone paths so `FOD_FOPEN_DIRECT_IO=1` can be used as a stress microscope instead of a production mode.
 
+## FOD 3.0.9 — fod-indexer MVP
+
+- [x] Add `fod-indexer` crate/binary.
+- [x] Add indexer metadata schema.
+- [x] Implement local source registration.
+- [x] Implement local filesystem scan.
+- [x] Implement staged duplicate detection.
+- [x] Implement dry-run import plan.
+- [x] Document future import/materialization phase.
+
 ### Storage Hot-Path Prep
 
 - [x] Split storage hot-path planning from SQL execution now that `fs.rs` has been broken up.

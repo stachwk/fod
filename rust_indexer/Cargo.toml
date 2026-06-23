@@ -1,0 +1,15 @@
+[package]
+name = "fod-rust-indexer"
+version.workspace = true
+edition = "2021"
+
+[[bin]]
+name = "fod-indexer"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+walkdir = "2"
+fod_rust_hotpath = { package = "fod-rust-hotpath", path = "../rust_hotpath" }
+fod_rust_runtime = { package = "fod-rust-runtime", path = "../rust_runtime" }

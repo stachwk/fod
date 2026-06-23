@@ -837,6 +837,36 @@ unsafe fn fetch_first_row_texts(res: *mut PGresult) -> Result<Vec<String>, Strin
     result
 }
 
+unsafe fn fetch_rows_text(res: *mut PGresult) -> Result<Vec<Vec<String>>, String> {
+    let result = match PQresultStatus(res) {
+        PGRES_TUPLES_OK => {
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            if rows < 1 || cols < 1 {
+                Ok(Vec::new())
+            } else {
+                let mut values = Vec::with_capacity(rows as usize);
+                for row in 0..rows {
+                    let mut current = Vec::with_capacity(cols as usize);
+                    for col in 0..cols {
+                        let value_ptr = PQgetvalue(res, row, col);
+                        if value_ptr.is_null() {
+                            current.push(String::new());
+                        } else {
+                            current.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
+                        }
+                    }
+                    values.push(current);
+                }
+                Ok(values)
+            }
+        }
+        _ => Err("unexpected PostgreSQL result status".to_string()),
+    };
+    PQclear(res);
+    result
+}
+
 unsafe fn fetch_first_column_texts(res: *mut PGresult) -> Result<Vec<String>, String> {
     let result = match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
@@ -2601,6 +2631,24 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe { query_scalar_text_on_conn(conn, &sql) })
     }
 
+    pub fn query_rows_text(&self, sql: &str) -> Result<Vec<Vec<String>>, String> {
+        let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_cached_connection(|conn| unsafe {
+            let res = PQexec(conn, sql.as_ptr());
+            if res.is_null() {
+                return Err(conn_error(conn));
+            }
+            let status = PQresultStatus(res);
+            if status == PGRES_TUPLES_OK {
+                fetch_rows_text(res)
+            } else {
+                let error = result_error(res);
+                PQclear(res);
+                Err(error)
+            }
+        })
+    }
+
     pub fn exec(&self, sql: &str) -> Result<(), String> {
         let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
@@ -2618,6 +2666,14 @@ impl DbRepo {
                 Err(error)
             }
         })
+    }
+
+    pub fn quote_identifier(ident: &str) -> String {
+        format!("\"{}\"", ident.replace('\"', "\"\""))
+    }
+
+    pub fn quote_literal(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "''"))
     }
 
     pub fn query_config_value(&self, key: &str) -> Result<Option<String>, String> {
