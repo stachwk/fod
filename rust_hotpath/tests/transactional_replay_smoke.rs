@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use fod_rust_hotpath::pg::DbRepo;
+use fod_rust_hotpath::pg::{DbRepo, PersistBlockRow};
 use std::env;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -456,4 +456,62 @@ fn transactional_commit_disconnect_is_replayed_for_lock_lease_prune() {
 
     assert_eq!(proxy.drop_hits(), 1);
     assert_eq!(proxy.match_hits(), 2);
+}
+
+#[test]
+fn transactional_commit_disconnect_is_replayed_for_copy_block_crc_persist() {
+    let _guard = test_guard();
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    let parent_name = unique_name("transactional_crc_parent");
+    let parent_seed = unique_name("transactional_crc_parent_seed");
+    let parent_id = direct_repo
+        .create_directory(None, &parent_name, 0o755, 1000, 1000, &parent_seed)
+        .expect("create parent directory");
+
+    let file_name = unique_name("transactional_crc_file");
+    let file_seed = unique_name("transactional_crc_file_seed");
+    let file_id = direct_repo
+        .create_file(Some(parent_id), &file_name, 0o644, 1000, 1000, &file_seed)
+        .expect("create target file");
+    let file_data_object_id = direct_repo
+        .file_data_object_id(file_id)
+        .expect("lookup file data object id")
+        .expect("file should have a data object");
+
+    let block_size = 4usize;
+    let block0 = vec![b'A'; block_size];
+    let block1 = vec![b'B'; block_size];
+    let blocks = vec![
+        PersistBlockRow {
+            block_index: 0,
+            data: &block0,
+            used_len: block_size as u64,
+        },
+        PersistBlockRow {
+            block_index: 1,
+            data: &block1,
+            used_len: block_size as u64,
+        },
+    ];
+
+    let proxy = QueryDropProxy::start("COMMIT", Duration::from_millis(50)).expect("start proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+    repo.persist_copy_block_crc_rows(file_id, block_size as u64, &blocks)
+        .expect("persist copy block crc rows with replay");
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert_eq!(proxy.match_hits(), 2);
+    let crc_rows = direct_repo
+        .query_scalar_text(&format!(
+            "SELECT COUNT(*) FROM copy_block_crc WHERE data_object_id = {file_data_object_id}"
+        ))
+        .expect("count copy_block_crc rows");
+    assert_eq!(crc_rows.trim(), "2");
+
+    direct_repo
+        .purge_primary_file(file_id)
+        .expect("cleanup file");
+    direct_repo
+        .delete_directory_entry(parent_id)
+        .expect("cleanup parent directory");
 }

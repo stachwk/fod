@@ -5893,7 +5893,7 @@ impl DbRepo {
         blocks: &[PersistBlockRow<'a>],
     ) -> Result<(), String> {
         self.with_cached_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 self.persist_copy_block_crc_rows_on_conn(conn, file_id, block_size, blocks)
             })
         })
