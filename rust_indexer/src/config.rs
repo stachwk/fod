@@ -1,6 +1,7 @@
 use fod_rust_runtime::ini_config::{load_config_parser, resolve_config_path_optional, IniConfig};
 use fod_rust_runtime::parse_bool;
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::OnceLock;
 
 const INDEXER_SECTION: &str = "fod-indexer";
@@ -12,6 +13,7 @@ pub struct IndexerSettings {
     pub skip_hidden: bool,
     pub skip_components: BTreeSet<String>,
     pub skip_prefixes: Vec<String>,
+    pub allow_extensions: Option<BTreeSet<String>>,
 }
 
 impl Default for IndexerSettings {
@@ -20,6 +22,7 @@ impl Default for IndexerSettings {
             skip_hidden: true,
             skip_components: BTreeSet::new(),
             skip_prefixes: Vec::new(),
+            allow_extensions: None,
         }
     }
 }
@@ -62,9 +65,24 @@ impl IndexerSettings {
             }
         }
 
+        if let Some(value) = section.get("allow_extensions") {
+            settings.allow_extensions = parse_allow_extensions(value);
+        }
+
         settings.skip_prefixes.sort();
         settings.skip_prefixes.dedup();
         Ok(settings)
+    }
+
+    pub fn allows_extension(&self, path: &Path) -> bool {
+        match self.allow_extensions.as_ref() {
+            None => true,
+            Some(allowlist) => path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(normalize_extension)
+                .map_or(false, |extension| allowlist.contains(&extension)),
+        }
     }
 }
 
@@ -103,6 +121,19 @@ fn parse_skip_prefixes(value: &str) -> Vec<String> {
     prefixes
 }
 
+fn parse_allow_extensions(value: &str) -> Option<BTreeSet<String>> {
+    let extensions = parse_list(value)
+        .into_iter()
+        .map(|item| normalize_extension(&item))
+        .filter(|item| !item.is_empty())
+        .collect::<BTreeSet<_>>();
+    if extensions.is_empty() {
+        None
+    } else {
+        Some(extensions)
+    }
+}
+
 fn parse_path_rules(value: &str) -> Vec<String> {
     parse_list(value)
 }
@@ -126,4 +157,8 @@ fn normalize_prefix(value: &str) -> String {
         .replace('\\', "/")
         .trim_matches('/')
         .to_string()
+}
+
+fn normalize_extension(value: &str) -> String {
+    value.trim().trim_start_matches('.').to_ascii_lowercase()
 }

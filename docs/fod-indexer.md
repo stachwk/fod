@@ -60,6 +60,7 @@ Supported keys:
 - `skip_components = name1,name2,...`
 - `skip_prefixes = path/prefix1,path/prefix2,...`
 - `skip_paths = convenience alias that accepts either component names or nested prefixes`
+- `allow_extensions = txt,pdf,jpg,png,doc,xls,...`
 
 Examples:
 
@@ -68,9 +69,11 @@ Examples:
 skip_hidden = true
 skip_components = cache,caches,build,dist,node_modules,target,tmp,temp,out,__pycache__
 skip_prefixes = work/cache,Android/data/com.example/cache
+# Optional allowlist of file extensions to keep in the index.
+# allow_extensions = txt,pdf,jpg,jpeg,png,gif,webp,heic,doc,docx,xls,xlsx,ppt,pptx,csv,odt,ods,odp,gdoc,gsheet,gslides
 ```
 
-Plain names in `skip_paths` are treated as component matches, while values containing `/` or `\` are treated as relative path prefixes. Hidden dotfiles are skipped by default unless `skip_hidden = false` is set. Common Android game cache directories such as `DownloadCacheManager`, `PlatformRequestCache`, `ServerRequestCache`, and `UnityCache` are also skipped by default so phone scans stay focused on user files instead of large cache blobs.
+Plain names in `skip_paths` are treated as component matches, while values containing `/` or `\` are treated as relative path prefixes. Hidden dotfiles are skipped by default unless `skip_hidden = false` is set. Common Android game cache directories such as `DownloadCacheManager`, `PlatformRequestCache`, `ServerRequestCache`, and `UnityCache` are also skipped by default so phone scans stay focused on user files instead of large cache blobs. When `allow_extensions` is set, files without one of the listed extensions are skipped in scan, hash, plan, materialization previews, and cleanup tree rebuilding.
 
 ## Hashing strategy
 

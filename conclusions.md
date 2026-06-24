@@ -4,6 +4,8 @@ Use this file to record concise conclusions that matter for future work.
 
 ## 2026-06-24
 
+- `fod-indexer` now supports an optional `allow_extensions` filter in `[fod-indexer]`. When enabled, scan and the later indexer stages keep only files with listed extensions, which is a better fit for phone indexing focused on documents, images, and office exports.
+- A phone smoke run with a temporary `allow_extensions` list kept 488 of 579 files and reported 91 filtered entries, so the allowlist behaves as expected on the connected Android source.
 - Phone scans now skip common Android game cache trees by default, including `DownloadCacheManager`, `PlatformRequestCache`, `ServerRequestCache`, and `UnityCache`, so scan output stays focused on user files such as documents, images, and office exports instead of large game blobs.
 - `fod-indexer scan --source <name>` now emits periodic progress lines on stderr while walking the tree, so long scans show scanned counts, status counts, current path, and elapsed time instead of staying silent until the final summary.
 - On this host, the connected Android phone is now discovered through `adb shell` first: `fod-indexer source list --kind adb` probes `EXTERNAL_STORAGE` and `SECONDARY_STORAGE`, then maps the chosen shell root to the matching `gvfs` MTP mount so `source add --path` still gets a local filesystem path. The browse output now shows the adb serial and the shell-detected root alongside the local path, and the generated `source add` commands are shell-quoted so paths with spaces can be copied directly.

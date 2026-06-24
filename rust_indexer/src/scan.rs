@@ -376,6 +376,12 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
                 continue;
             }
 
+            if source::is_ignored_index_path(&source.root_path, &relative_path) {
+                summary.filtered_files = summary.filtered_files.saturating_add(1);
+                progress.maybe_report(&summary, &entry_path, "filtered");
+                continue;
+            }
+
             let metadata = match fs::metadata(&entry_path) {
                 Ok(metadata) => metadata,
                 Err(err) => {
@@ -512,7 +518,7 @@ impl ScanProgressReporter {
     ) {
         let elapsed = self.started_at.elapsed().as_secs_f64();
         let mut line = format!(
-            "FOD indexer scan progress: phase={} source={} path={} scanned={} ok={} unreadable={} stat_failed={} unsupported={} bytes={} elapsed={:.1}s",
+            "FOD indexer scan progress: phase={} source={} path={} scanned={} ok={} unreadable={} stat_failed={} unsupported={} filtered={} bytes={} elapsed={:.1}s",
             phase,
             self.source_name,
             self.source_path,
@@ -521,6 +527,7 @@ impl ScanProgressReporter {
             summary.unreadable_files,
             summary.stat_failed_files,
             summary.unsupported_files,
+            summary.filtered_files,
             summary.total_bytes,
             elapsed,
         );

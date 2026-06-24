@@ -63,12 +63,12 @@ pub fn resolve_source_name(
 
 pub fn is_ignored_indexed_file(file: &IndexedFile) -> bool {
     ensure_indexer_settings_loaded();
-    is_ignored_relative_path(Path::new(&file.path))
+    is_ignored_file_relative_path(Path::new(&file.path))
 }
 
 pub fn is_ignored_index_path(_root_path: &Path, relative_path: &str) -> bool {
     ensure_indexer_settings_loaded();
-    is_ignored_relative_path(Path::new(relative_path))
+    is_ignored_file_relative_path(Path::new(relative_path))
 }
 
 pub fn is_ignored_source_path(root_path: &Path, entry_path: &Path) -> bool {
@@ -77,7 +77,7 @@ pub fn is_ignored_source_path(root_path: &Path, entry_path: &Path) -> bool {
         return false;
     }
     match entry_path.strip_prefix(root_path) {
-        Ok(relative_path) => is_ignored_relative_path(relative_path),
+        Ok(relative_path) => is_ignored_directory_relative_path(relative_path),
         Err(_) => false,
     }
 }
@@ -113,7 +113,7 @@ fn suggested_source_name(kind: SourceKind, root_path: &Path) -> Option<String> {
     }
 }
 
-fn is_ignored_relative_path(relative_path: &Path) -> bool {
+fn is_ignored_directory_relative_path(relative_path: &Path) -> bool {
     let settings = config::indexer_settings();
     let normalized = normalize_path(relative_path);
     if settings
@@ -128,6 +128,14 @@ fn is_ignored_relative_path(relative_path: &Path) -> bool {
         Component::Normal(value) => is_ignored_component(&value.to_string_lossy(), settings),
         _ => false,
     })
+}
+
+fn is_ignored_file_relative_path(relative_path: &Path) -> bool {
+    let settings = config::indexer_settings();
+    if is_ignored_directory_relative_path(relative_path) {
+        return true;
+    }
+    !settings.allows_extension(relative_path)
 }
 
 fn is_ignored_component(component: &str, settings: &config::IndexerSettings) -> bool {

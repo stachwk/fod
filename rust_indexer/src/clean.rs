@@ -49,7 +49,11 @@ fn current_source_tree(root_path: &Path) -> Result<SourceTreeState, String> {
                 if entry.depth() == 0 || entry.file_type().is_dir() {
                     continue;
                 }
-                visible_paths.insert(scan::relative_source_path(root_path, entry.path()));
+                let relative_path = scan::relative_source_path(root_path, entry.path());
+                if source::is_ignored_index_path(root_path, &relative_path) {
+                    continue;
+                }
+                visible_paths.insert(relative_path);
             }
             Err(err) => {
                 if let Some(path) = err.path() {

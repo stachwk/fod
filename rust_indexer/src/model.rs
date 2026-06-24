@@ -63,13 +63,14 @@ pub struct ScanSummary {
     pub unreadable_files: u64,
     pub stat_failed_files: u64,
     pub unsupported_files: u64,
+    pub filtered_files: u64,
     pub total_bytes: u64,
 }
 
 impl ScanSummary {
     pub fn human_readable(&self) -> String {
         format!(
-            "FOD indexer scan\nsource: {}\npath: {}\nscanned files: {}\nok files: {}\nunreadable files: {}\nstat failed: {}\nunsupported files: {}\ntotal bytes: {}",
+            "FOD indexer scan\nsource: {}\npath: {}\nscanned files: {}\nok files: {}\nunreadable files: {}\nstat failed: {}\nunsupported files: {}\nfiltered files: {}\ntotal bytes: {}",
             self.source_name,
             self.source_path,
             self.scanned_files,
@@ -77,6 +78,7 @@ impl ScanSummary {
             self.unreadable_files,
             self.stat_failed_files,
             self.unsupported_files,
+            self.filtered_files,
             self.total_bytes
         )
     }
