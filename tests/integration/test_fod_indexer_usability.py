@@ -13,6 +13,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import psycopg2
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -23,6 +25,7 @@ from tests.integration.fod_indexer_testlib import (
     assert_contains,
     cleanup_indexer_state,
     cleanup_materialized_roots,
+    fetch_one,
     run_indexer,
     snapshot_tree,
 )
@@ -32,6 +35,12 @@ USABILITY_PARENT = Path("/tmp/fod-indexer-usability")
 USABILITY_INDEXED_ROOT = USABILITY_PARENT / "indexed"
 USABILITY_BROWSE_ONLY_ROOT = USABILITY_PARENT / "browse-only"
 USABILITY_ADB_RUNTIME = "fod-indexer-adb-runtime"
+USABILITY_CLEAN_ROOT = Path("/tmp/fod-indexer-clean-usability")
+USABILITY_CLEAN_FILES: dict[str, bytes] = {
+    "a.txt": b"same",
+    "b.txt": b"same",
+    "c.txt": b"unique",
+}
 
 USABILITY_FILES: dict[str, bytes] = {
     "a.txt": b"same",
@@ -46,6 +55,13 @@ def write_usability_tree() -> None:
     USABILITY_BROWSE_ONLY_ROOT.mkdir(parents=True, exist_ok=True)
     for rel_path, content in USABILITY_FILES.items():
         (USABILITY_INDEXED_ROOT / rel_path).write_bytes(content)
+
+
+def write_clean_tree() -> None:
+    shutil.rmtree(USABILITY_CLEAN_ROOT, ignore_errors=True)
+    USABILITY_CLEAN_ROOT.mkdir(parents=True, exist_ok=True)
+    for rel_path, content in USABILITY_CLEAN_FILES.items():
+        (USABILITY_CLEAN_ROOT / rel_path).write_bytes(content)
 
 
 def run_indexer_result(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -167,6 +183,11 @@ def test_help_and_usage_read_like_a_short_user_guide() -> None:
     )
     assert_contains(
         help_output,
+        "fod-indexer clean --source lt7300_Documents --dry-run",
+        "top-level help",
+    )
+    assert_contains(
+        help_output,
         "fod-indexer cleanup-failed --plan 42",
         "top-level help",
     )
@@ -203,6 +224,18 @@ def test_help_and_usage_read_like_a_short_user_guide() -> None:
     assert_contains(materialize_help, "Use --dry-run to preview", "materialize help")
     assert_contains(materialize_help, "partial tree back automatically", "materialize help")
     assert_contains(materialize_help, "cleanup-failed", "materialize help")
+
+    clean_help = run_indexer(ROOT, ["clean", "--help"])
+    assert_contains(
+        clean_help,
+        "Use --dry-run to preview which rows would be removed without touching PostgreSQL.",
+        "clean help",
+    )
+    assert_contains(
+        clean_help,
+        "remove file entries that no longer exist or should now be ignored",
+        "clean help",
+    )
 
     scan_usage = run_indexer_result(["scan"])
     scan_usage_output = scan_usage.stdout + scan_usage.stderr
@@ -396,10 +429,143 @@ def test_adb_source_list_surfaces_device_and_browse_root() -> None:
                 )
 
 
+def test_clean_user_journey_prunes_stale_rows_without_touching_source_tree() -> None:
+    dsn: dict[str, str] | None = None
+    dsn, _ = load_dsn_from_config(ROOT)
+    apply_database_env(ROOT, dsn)
+    cleanup_indexer_state(dsn)
+    cleanup_materialized_roots(dsn)
+
+    post_delete_snapshot = None
+    try:
+        write_clean_tree()
+
+        with tempfile.TemporaryDirectory(prefix="fod-indexer-clean-usability-") as mount_dir:
+            with FODMount(str(ROOT)) as mount:
+                mount.init_schema()
+                cleanup_indexer_state(dsn)
+                mount.start(mount_dir)
+                cleanup_materialized_roots(dsn)
+
+                source_add_output = run_indexer(
+                    ROOT,
+                    [
+                        "source",
+                        "add",
+                        "--name",
+                        "clean-smoke",
+                        "--path",
+                        str(USABILITY_CLEAN_ROOT),
+                        "--kind",
+                        "local",
+                    ],
+                )
+                assert_contains(source_add_output, "Registered source clean-smoke as local", "clean source add")
+                assert_contains(source_add_output, "policy: path-backed", "clean source add")
+
+                scan_output = run_indexer(ROOT, ["scan", "--source", "clean-smoke"])
+                assert_contains(scan_output, "scanned files: 3", "clean scan")
+                assert_contains(scan_output, "ok files: 3", "clean scan")
+
+                hash_output = run_indexer(ROOT, ["hash", "--source", "clean-smoke", "--candidates-only"])
+                assert_contains(hash_output, "candidate files: 2", "clean hash")
+                assert_contains(hash_output, "duplicate sets: 1", "clean hash")
+
+                plan_output = run_indexer(ROOT, ["plan-import", "--source", "clean-smoke", "--dry-run"])
+                assert_contains(plan_output, "FOD indexer dry-run import plan", "clean plan")
+                assert_contains(plan_output, "source: clean-smoke", "clean plan")
+                assert_contains(plan_output, "unique payloads: 2", "clean plan")
+                assert_contains(plan_output, "estimated saved bytes: 4", "clean plan")
+
+                with psycopg2.connect(**dsn) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SET search_path TO fod, public")
+                    plan_id = int(
+                        fetch_one(
+                            conn,
+                            """
+                            SELECT id_import_plan
+                            FROM index_import_plans
+                            WHERE source_filter = %s
+                            ORDER BY id_import_plan DESC
+                            LIMIT 1
+                            """,
+                            ("clean-smoke",),
+                        )
+                    )
+
+                (USABILITY_CLEAN_ROOT / "b.txt").unlink()
+                post_delete_snapshot = snapshot_tree(USABILITY_CLEAN_ROOT)
+
+                clean_preview_output = run_indexer(ROOT, ["clean", "--source", "clean-smoke", "--dry-run"])
+                assert_contains(clean_preview_output, "FOD indexer clean", "clean dry-run")
+                assert_contains(clean_preview_output, "mode: dry-run", "clean dry-run")
+                assert_contains(clean_preview_output, "source: clean-smoke", "clean dry-run")
+                assert_contains(clean_preview_output, "source root: present", "clean dry-run")
+                assert_contains(clean_preview_output, "indexed files: 3", "clean dry-run")
+                assert_contains(clean_preview_output, "present files: 2", "clean dry-run")
+                assert_contains(clean_preview_output, "stale files: 1", "clean dry-run")
+                assert_contains(clean_preview_output, "skipped files: 0", "clean dry-run")
+                assert_contains(clean_preview_output, "plan entries removed: 1", "clean dry-run")
+                assert_contains(clean_preview_output, "duplicate sets refreshed: 0", "clean dry-run")
+
+                clean_output = run_indexer(ROOT, ["clean", "--source", "clean-smoke"])
+                assert_contains(clean_output, "FOD indexer clean", "clean")
+                assert_contains(clean_output, "mode: clean", "clean")
+                assert_contains(clean_output, "source: clean-smoke", "clean")
+                assert_contains(clean_output, "source root: present", "clean")
+                assert_contains(clean_output, "indexed files: 3", "clean")
+                assert_contains(clean_output, "present files: 2", "clean")
+                assert_contains(clean_output, "stale files: 1", "clean")
+                assert_contains(clean_output, "skipped files: 0", "clean")
+                assert_contains(clean_output, "plan entries removed: 1", "clean")
+                assert_contains(clean_output, "duplicate sets refreshed: 0", "clean")
+
+                if snapshot_tree(USABILITY_CLEAN_ROOT) != post_delete_snapshot:
+                    raise AssertionError("clean source tree changed during cleanup")
+
+                with psycopg2.connect(**dsn) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SET search_path TO fod, public")
+                        cur.execute(
+                            """
+                            SELECT COUNT(*)
+                            FROM index_files f
+                            JOIN index_sources s ON s.id_index_source = f.id_index_source
+                            WHERE s.name = %s
+                            """,
+                            ("clean-smoke",),
+                        )
+                        file_count_row = cur.fetchone()
+                        if file_count_row is None or int(file_count_row[0]) != 2:
+                            raise AssertionError(f"unexpected indexed file count after clean: {file_count_row}")
+                        cur.execute(
+                            "SELECT COUNT(*) FROM index_import_plan_entries WHERE id_import_plan = %s",
+                            (plan_id,),
+                        )
+                        entry_count_row = cur.fetchone()
+                        if entry_count_row is None or int(entry_count_row[0]) != 2:
+                            raise AssertionError(f"unexpected plan entry count after clean: {entry_count_row}")
+
+                print(f"OK fod-indexer clean usability source={USABILITY_CLEAN_ROOT} plan={plan_id}")
+    finally:
+        shutil.rmtree(USABILITY_CLEAN_ROOT, ignore_errors=True)
+        if dsn is not None:
+            try:
+                cleanup_materialized_roots(dsn)
+            except Exception:
+                pass
+            try:
+                cleanup_indexer_state(dsn)
+            except Exception:
+                pass
+
+
 def main() -> None:
     test_help_and_usage_read_like_a_short_user_guide()
     test_user_journey_surfaces_progress_and_browse_hints()
     test_adb_source_list_surfaces_device_and_browse_root()
+    test_clean_user_journey_prunes_stale_rows_without_touching_source_tree()
 
 
 if __name__ == "__main__":

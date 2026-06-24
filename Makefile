@@ -200,7 +200,7 @@ help:
 		'  make test-fod-indexer-smoke - smoke the fod-indexer materialize pipeline' \
 		'  make test-fod-indexer-materialize - alias for make test-fod-indexer-smoke' \
 		'  make test-fod-indexer-materialize-rollback - smoke automatic rollback for failed materialize' \
-		'  make test-fod-indexer-usability - smoke help, browse, progress, and dry-run UX' \
+		'  make test-fod-indexer-usability - smoke help, browse, progress, dry-run, and clean UX' \
 		'  make test-fod-indexer-plan-import-scope - smoke the fod-indexer plan-import source scoping' \
 		'  make test-fod-indexer-cleanup-failed - smoke cleanup for failed fod-indexer materialization' \
 		'  make smoke      - quick database connectivity test' \
