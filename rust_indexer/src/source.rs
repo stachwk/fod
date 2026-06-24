@@ -71,6 +71,23 @@ pub fn is_ignored_source_path(root_path: &Path, entry_path: &Path) -> bool {
     }
 }
 
+pub fn adb_browse_root() -> Result<PathBuf, String> {
+    let root = runtime_user_dir()?.join("adb");
+    let metadata = fs::metadata(&root).map_err(|err| {
+        format!(
+            "ADB browse root {} is not accessible: {err}",
+            root.display()
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "ADB browse root {} is not a directory",
+            root.display()
+        ));
+    }
+    Ok(root)
+}
+
 fn suggested_source_name(kind: SourceKind, root_path: &Path) -> Option<String> {
     match kind {
         SourceKind::Local => current_hostname().ok(),
@@ -163,6 +180,24 @@ fn suggested_adb_name() -> Option<String> {
         }
     }
     None
+}
+
+fn runtime_user_dir() -> Result<PathBuf, String> {
+    if let Ok(value) = env::var("XDG_RUNTIME_DIR") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+
+    let status = fs::read_to_string("/proc/self/status")
+        .map_err(|err| format!("unable to read /proc/self/status for runtime dir lookup: {err}"))?;
+    let uid = status
+        .lines()
+        .find(|line| line.starts_with("Uid:"))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .ok_or_else(|| "unable to determine effective uid for runtime dir lookup".to_string())?;
+    Ok(PathBuf::from(format!("/run/user/{uid}")))
 }
 
 fn suggested_github_name(root_path: &Path) -> Option<String> {

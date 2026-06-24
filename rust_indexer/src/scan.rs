@@ -102,12 +102,13 @@ pub fn remove_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
     IndexSource::from_row(row)
 }
 
-pub fn list_source_directories(
+pub fn list_source_directories<P: AsRef<Path>>(
     repo: &DbRepo,
-    path: &str,
+    path: P,
 ) -> Result<(PathBuf, Vec<SourceBrowseEntry>), String> {
+    let path = path.as_ref();
     let root_path = fs::canonicalize(path)
-        .map_err(|err| format!("source path {path} is not accessible: {err}"))?;
+        .map_err(|err| format!("source path {} is not accessible: {err}", path.display()))?;
     let metadata = fs::metadata(&root_path)
         .map_err(|err| format!("source path {} is not readable: {err}", root_path.display()))?;
     if !metadata.is_dir() {

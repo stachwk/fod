@@ -12,7 +12,7 @@ mod scan;
 mod source;
 
 use crate::model::IndexSource;
-use cli::{Cli, Commands, ReportCommands, SourceCommands};
+use cli::{Cli, Commands, ReportCommands, SourceCommands, SourceKind};
 
 fn main() {
     if let Err(err) = run() {
@@ -79,21 +79,48 @@ fn run() -> Result<(), String> {
                     Ok(())
                 }
                 None => {
-                    let kind_filter = kind.as_ref().map(|kind| kind.as_str());
-                    let sources = scan::list_sources(&repo, kind_filter)?;
-                    println!("FOD indexer source list");
-                    println!("kind filter: {}", kind_filter.unwrap_or("all"));
-                    println!("registered sources: {}", sources.len());
-                    for source in sources {
-                        println!(
-                            "- id={} name={} kind={} path={}",
-                            source.id_source,
-                            source.name,
-                            source.kind,
-                            source.root_path.display()
-                        );
+                    if matches!(kind, Some(SourceKind::Adb)) {
+                        let root_path = crate::source::adb_browse_root()?;
+                        let (root_path, entries) =
+                            scan::list_source_directories(&repo, &root_path)?;
+                        println!("FOD indexer source list");
+                        println!("mode: browse");
+                        println!("root: {}", root_path.display());
+                        println!("kind hint: adb");
+                        println!("directories: {}", entries.len());
+                        for entry in entries {
+                            if entry.added_sources.is_empty() {
+                                println!(
+                                    "- available path={} add=fod-indexer source add --kind adb --path {}",
+                                    entry.path.display(),
+                                    entry.path.display()
+                                );
+                            } else {
+                                println!(
+                                    "- added path={} sources={}",
+                                    entry.path.display(),
+                                    format_registered_sources(&entry.added_sources)
+                                );
+                            }
+                        }
+                        Ok(())
+                    } else {
+                        let kind_filter = kind.as_ref().map(|kind| kind.as_str());
+                        let sources = scan::list_sources(&repo, kind_filter)?;
+                        println!("FOD indexer source list");
+                        println!("kind filter: {}", kind_filter.unwrap_or("all"));
+                        println!("registered sources: {}", sources.len());
+                        for source in sources {
+                            println!(
+                                "- id={} name={} kind={} path={}",
+                                source.id_source,
+                                source.name,
+                                source.kind,
+                                source.root_path.display()
+                            );
+                        }
+                        Ok(())
                     }
-                    Ok(())
                 }
             },
             SourceCommands::Remove { name } => {
