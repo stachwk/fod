@@ -58,6 +58,60 @@ These are the first places worth rechecking once the project starts:
 - metadata touch paths
 - indexer plan and materialization transactions
 
+## Transactional Call-Site Inventory
+
+The inventory below covers the explicit `transactional(conn, ...)` wrappers in `rust_hotpath/src/pg.rs`.
+It intentionally leaves out single-statement helpers that already sit inside the bounded replay classifier,
+because this project is about commit-bound transactional replay rather than the existing safe command retry path.
+
+### Replay-Safe Today
+
+These wrappers are already close enough to idempotent replay to stay in the current bounded envelope:
+
+| Function | Shape | Why it is safe today |
+| --- | --- | --- |
+| `ensure_lock_schema_ready()` | DDL bootstrap | `CREATE IF NOT EXISTS`, safe `ALTER`, and trigger/index setup can be repeated. |
+| `ensure_client_session_schema()` | DDL bootstrap | Same idempotent bootstrap pattern as the lock schema path. |
+| `prune_lock_leases()` | cleanup delete | Deletes expired rows only. |
+| `prune_lock_range_leases()` | cleanup delete | Deletes expired rows only. |
+| `prune_expired_client_sessions()` | cleanup delete | Removes expired sessions and stale zero-session leases deterministically. |
+| `persist_lock_range_state_blob()` | delete + reinsert | Replaces the range-lease blob for the current scope. |
+| `replace_lock_range_state_blob_for_owner()` | delete + reinsert | Same as above, but scoped to one owner key. |
+| `acquire_flock_lease()` | advisory lock + upsert | The lease row is keyed and the upsert path is already bounded-replay safe. |
+| `persist_copy_block_crc_rows()` | delete + upsert | CRC rows are rewritten deterministically for the file/block set. |
+| `set_file_size()` | single-row update | The write is keyed by `id_file` and only sets the current size. |
+
+### Replayable Only With Extra Confirmation
+
+These wrappers mostly do the right thing, but the transaction as a whole still needs an idempotency key,
+request token, or commit-outcome proof before automatic replay can be trusted:
+
+| Function | Why it still needs more design |
+| --- | --- |
+| `create_data_object()` | It bumps `reference_count`, so repeating it after a reconnect can change counts. |
+| `adopt_source_data_object()` | It rewires the destination file and adjusts shared-object counts. |
+| `purge_primary_file()` | Safe row reassignment exists, but the survivor choice and count decrement still make the whole transaction ambiguous. |
+| `persist_file_blocks_with_crc_flag()` | The direct branch is close, but the detach step and the COPY staging branch still need stronger replay identity. |
+| `persist_file_extents_with_crc_flag()` | COPY-based extent materialization needs a different replay contract before blind retry is safe. |
+
+### Keep Out Of Automatic Replay
+
+These wrappers create or promote user-visible filesystem objects and should stay out of blind automatic replay until
+they get an explicit request token plus commit outcome confirmation:
+
+| Function | Why it stays out for now |
+| --- | --- |
+| `create_hardlink()` | Creates a new filesystem entry and touches the parent directory. |
+| `create_symlink()` | Creates a new filesystem entry and touches the parent directory. |
+| `create_directory()` | Creates a new directory entry and touches the parent directory. |
+| `create_file()` | Creates a new file entry and allocates a backing data object. |
+| `create_special_file()` | Creates a new special-file entry and allocates a backing data object. |
+| `promote_hardlink_to_primary()` | The chosen survivor and row promotion are not stable enough for blind replay. |
+
+The bounded replay classifier already covers single-statement helpers such as `touch_data_object()`, `touch_file_entry()`,
+`touch_directory_entry()`, `touch_symlink_entry()`, and the `rename_*()` / `delete_*()` helpers. They stay outside this
+project because they do not cross an explicit transaction boundary.
+
 ## Current Baseline
 
 The current bounded replay stays in place as the default behavior.

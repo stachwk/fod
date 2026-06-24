@@ -39,8 +39,9 @@ This document records the small set of open follow-ups plus completed work, clos
 ### Obszary do rozwoju
 
 - [ ] Dodać pełniejszy replay in-flight SQL po błędach.
-  - Progress: `DbRepo::query_rows_text()` now retries read-only SQL once after a transient disconnect, and `DbRepo::exec()` now retries the idempotent replayable command set once too; `acquire_flock_lease()`'s `lock_leases` upsert, `touch_data_object()`'s pure metadata touch, `adopt_source_data_object()`'s destination file rewrite, and `purge_primary_file()` row reassignment updates for `data_blocks`, `data_extents`, and `copy_block_crc` are also replay-safe now. `index_import_plan_entries` inserts are replay-safe via `DELETE + INSERT`, and `index_scan_runs` plus `index_import_plans` now carry explicit `request_token` columns so retry can return the same running row, but broader transactional replay still needs a separate design because commit outcome after a disconnect remains ambiguous.
+  - Progress: `DbRepo::query_rows_text()` now retries read-only SQL once after a transient disconnect, and `DbRepo::exec()` now retries the idempotent replayable command set once too; `acquire_flock_lease()`'s `lock_leases` upsert, `touch_data_object()`'s pure metadata touch, the destination-file rewrite step inside `adopt_source_data_object()`, and the row reassignment updates inside `purge_primary_file()` for `data_blocks`, `data_extents`, and `copy_block_crc` are also replay-safe now. `index_import_plan_entries` inserts are replay-safe via `DELETE + INSERT`, and `index_scan_runs` plus `index_import_plans` now carry explicit `request_token` columns so retry can return the same running row, but broader transactional replay still needs a separate design because commit outcome after a disconnect remains ambiguous.
   - Progress: the lock and client-session schema bootstrap path now also retries its idempotent DDL (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, `DROP TRIGGER IF EXISTS`, and the safe `ALTER TABLE IF EXISTS` variants used there) after a transient disconnect, so an interrupted schema init can resume without leaving the mount in a half-created state.
+  - Progress: the transactional-call-site inventory is now documented in [docs/transactional-replay-project.md](docs/transactional-replay-project.md), with the current wrappers split into replay-safe, confirmation-bound, and out-of-envelope groups.
   - Project split: see [docs/transactional-replay-project.md](docs/transactional-replay-project.md) for the dedicated project plan, scope, and milestones.
 - [x] Review `fod-indexer` CLI ergonomics after manual use; keep the explicit `--source` contract if that remains the intended API, but consider clearer examples or a positional alias if users keep trying the old style. Added positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while preserving `--source`.
 - [x] Usprawnić automatyczne sugerowanie nazw źródłom w `fod-indexer source add`, bez usuwania `--name`.
@@ -102,7 +103,7 @@ This document records the small set of open follow-ups plus completed work, clos
 
 ## Transactional Replay Project
 
-- [ ] Inventory transactional SQL call sites and split them into idempotent, replayable, and non-replayable groups.
+- [x] Inventory transactional SQL call sites and split them into idempotent, replayable, and non-replayable groups.
 - [ ] Define the replay envelope and outcome confirmation for lost commit acknowledgements.
 - [ ] Add disconnect smoke tests for body failure, commit failure, and reconnect recovery.
 - [ ] Keep the current bounded replay envelope unchanged until the project proves a safe expansion.
