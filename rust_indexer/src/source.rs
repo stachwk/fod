@@ -20,6 +20,10 @@ const DEFAULT_IGNORED_COMPONENTS: &[&str] = &[
     "temp",
     "out",
     "__pycache__",
+    "downloadcachemanager",
+    "platformrequestcache",
+    "serverrequestcache",
+    "unitycache",
 ];
 
 static INDEXER_SETTINGS_READY: OnceLock<()> = OnceLock::new();

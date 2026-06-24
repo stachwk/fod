@@ -70,7 +70,7 @@ skip_components = cache,caches,build,dist,node_modules,target,tmp,temp,out,__pyc
 skip_prefixes = work/cache,Android/data/com.example/cache
 ```
 
-Plain names in `skip_paths` are treated as component matches, while values containing `/` or `\` are treated as relative path prefixes. Hidden dotfiles are skipped by default unless `skip_hidden = false` is set.
+Plain names in `skip_paths` are treated as component matches, while values containing `/` or `\` are treated as relative path prefixes. Hidden dotfiles are skipped by default unless `skip_hidden = false` is set. Common Android game cache directories such as `DownloadCacheManager`, `PlatformRequestCache`, `ServerRequestCache`, and `UnityCache` are also skipped by default so phone scans stay focused on user files instead of large cache blobs.
 
 ## Hashing strategy
 
