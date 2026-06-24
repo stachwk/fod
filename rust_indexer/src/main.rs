@@ -40,6 +40,7 @@ fn run() -> Result<(), String> {
                     source.root_path.display(),
                     source.id_source
                 );
+                println!("policy: {}", kind.capabilities().policy());
                 println!("capabilities: {}", kind.capabilities());
                 Ok(())
             }
@@ -54,6 +55,7 @@ fn run() -> Result<(), String> {
                         kind.as_ref().map(|kind| kind.as_str()).unwrap_or("none")
                     );
                     if let Some(kind) = kind.as_ref() {
+                        println!("policy: {}", kind.capabilities().policy());
                         println!("capabilities: {}", kind.capabilities());
                     }
                     println!("directories: {}", entries.len());
@@ -85,6 +87,7 @@ fn run() -> Result<(), String> {
                         println!("adb root: {}", adb_root.remote_root);
                         println!("root: {}", root_path.display());
                         println!("kind hint: adb");
+                        println!("policy: {}", SourceKind::Adb.capabilities().policy());
                         println!("capabilities: {}", SourceKind::Adb.capabilities());
                         println!("directories: {}", entries.len());
                         for entry in entries {
@@ -111,10 +114,11 @@ fn run() -> Result<(), String> {
                         println!("registered sources: {}", sources.len());
                         for source in sources {
                             println!(
-                                "- id={} name={} kind={} capabilities={} path={}",
+                                "- id={} name={} kind={} policy={} capabilities={} path={}",
                                 source.id_source,
                                 source.name,
                                 source.kind,
+                                source_kind_policy(&source.kind),
                                 source_kind_capabilities(&source.kind),
                                 source.root_path.display()
                             );
@@ -232,9 +236,10 @@ fn format_registered_sources(sources: &[IndexSource]) -> String {
         .iter()
         .map(|source| {
             format!(
-                "{} (kind={}, capabilities={}, id={}, path={})",
+                "{} (kind={}, policy={}, capabilities={}, id={}, path={})",
                 source.name,
                 source.kind,
+                source_kind_policy(&source.kind),
                 source_kind_capabilities(&source.kind),
                 source.id_source,
                 source.root_path.display()
@@ -247,5 +252,11 @@ fn format_registered_sources(sources: &[IndexSource]) -> String {
 fn source_kind_capabilities(kind: &str) -> String {
     SourceKind::from_db_str(kind)
         .map(|kind| kind.capabilities().to_string())
+        .unwrap_or_else(|| "unavailable".to_string())
+}
+
+fn source_kind_policy(kind: &str) -> String {
+    SourceKind::from_db_str(kind)
+        .map(|kind| kind.capabilities().policy().to_string())
         .unwrap_or_else(|| "unavailable".to_string())
 }

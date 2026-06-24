@@ -23,11 +23,17 @@ Duplicate detection must be content-based. A matching filename is never enough.
 
 ## MVP scope
 
-The current implementation supports filesystem-backed source adapters. The adapter kind now carries an explicit capability profile so the shared path-backed flow stays separate from future direct crawlers. The indexed root is still a local filesystem path today.
+The current implementation supports filesystem-backed source adapters. The adapter kind now carries an explicit policy and capability profile so the shared path-backed flow stays separate from future direct crawlers. The indexed root is still a local filesystem path today.
 
 ## Source capabilities
 
 The current supported kinds all still index a local path, but the CLI surfaces their intended storage model explicitly:
+
+- `local`: policy `path-backed`
+- `smb` / `qnap`: policy `mirrored`
+- `adb` / `github`: policy `export-backed`
+
+The underlying capability flags stay visible too:
 
 - `local`: path-backed, read-only from the indexer's point of view, no mirror required, no export required, no direct crawler yet
 - `smb` / `qnap`: path-backed, read-only, mirror-backed, direct crawler possible later

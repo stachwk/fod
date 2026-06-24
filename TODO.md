@@ -84,7 +84,8 @@ This document records the small set of open follow-ups plus completed work, clos
   - Progress: source kinds now carry explicit capability metadata and the CLI surfaces it, but the actual adapter split is still pending.
 - [x] Wydziel model zdolnosci zrodla i trzymaj go osobno od samego skanu. Dla kazdego `source kind` doprecyzuj metadane takie jak `path_backed`, `readonly`, `mirror_required`, `needs_export` i `direct_crawler_possible`, zeby sposob pobrania danych byl deklaratywny.
   - Progress: implemented in `rust_indexer/src/capabilities.rs` and surfaced through `SourceKind::capabilities()`, with `source add` / `source list` now printing the profile.
-- [ ] Ustal polityke dla `local`, `qnap`, `smb`, `adb` i `github`. Domyslnie maja byc path-backed albo mirrored, a direct crawler tylko wtedy, gdy naprawde nie da sie tego sensownie sprowadzic do katalogu.
+- [x] Ustal polityke dla `local`, `qnap`, `smb`, `adb` i `github`. Domyslnie maja byc path-backed albo mirrored, a direct crawler tylko wtedy, gdy naprawde nie da sie tego sensownie sprowadzic do katalogu.
+  - Progress: `local` is path-backed; `smb` / `qnap` are mirrored; `adb` / `github` are export-backed. The CLI now prints the policy alongside the capability profile.
 - [x] Dopnij nazewnictwo i rejestracje zrodel do modelu capabilities. Heurystyki nazw maja pozostac pomocnicze, ale `--name` musi zostac jawna nadpiska; nazwa nie moze ukrywac, czy zrodlo jest mounted, mirrored, czy tylko importowane do katalogu roboczego.
   - Progress: `--name` remains the explicit override, and the capability profile is now shown alongside source registration and listing so the kind stays visible.
 - [ ] Rozszerz testy integracyjne o scenariusze miedzyzrodlowe i adapterowe. Sprawdzaj osobno lokalny mount, mirror/backed source, cleanup po zniknieciu zrodla, ignorowanie hidden/cache paths oraz stabilnosc import/materialize przy kilku `source kind`ach.

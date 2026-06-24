@@ -1,6 +1,23 @@
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum SourcePolicy {
+    PathBacked,
+    Mirrored,
+    ExportBacked,
+}
+
+impl fmt::Display for SourcePolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SourcePolicy::PathBacked => f.write_str("path-backed"),
+            SourcePolicy::Mirrored => f.write_str("mirrored"),
+            SourcePolicy::ExportBacked => f.write_str("export-backed"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct SourceCapabilities {
     pub path_backed: bool,
     pub readonly: bool,
@@ -23,6 +40,16 @@ impl SourceCapabilities {
             mirror_required,
             needs_export,
             direct_crawler_possible,
+        }
+    }
+
+    pub const fn policy(self) -> SourcePolicy {
+        if self.needs_export {
+            SourcePolicy::ExportBacked
+        } else if self.mirror_required {
+            SourcePolicy::Mirrored
+        } else {
+            SourcePolicy::PathBacked
         }
     }
 }

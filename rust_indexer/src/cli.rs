@@ -28,7 +28,7 @@ impl Cli {
 pub enum Commands {
     #[command(
         about = "Manage sources.",
-        long_about = "Register, browse, list, or remove source adapters so fod-indexer can inspect roots before scan and materialize steps.\n\nThe current implementation keeps all supported source kinds on the shared path-backed flow and exposes their capability profile explicitly, so future direct crawlers can be added without changing the basic registration contract. If --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion. Registered sources are stored with their kind, capability profile, and canonical root path in PostgreSQL."
+        long_about = "Register, browse, list, or remove source adapters so fod-indexer can inspect roots before scan and materialize steps.\n\nThe current implementation keeps all supported source kinds on the shared path-backed flow and exposes their policy and capability profile explicitly, so future direct crawlers can be added without changing the basic registration contract. If --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion. Registered sources are stored with their kind, policy, capability profile, and canonical root path in PostgreSQL."
     )]
     Source {
         #[command(subcommand)]
@@ -106,7 +106,7 @@ pub enum Commands {
 pub enum SourceCommands {
     #[command(
         about = "Add a source.",
-        long_about = "Register a source adapter under a source name so scan, hash, plan-import, and materialize can use it later.\n\nChoose the adapter kind with --kind. Supported kinds are local, smb, qnap, adb, and github. The current implementation still reads a path-backed source root for all supported kinds, but the capability profile already distinguishes path-backed, mirrored, and future direct-crawler cases.\n\nIf --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion.",
+        long_about = "Register a source adapter under a source name so scan, hash, plan-import, and materialize can use it later.\n\nChoose the adapter kind with --kind. Supported kinds are local, smb, qnap, adb, and github. The current implementation still reads a path-backed source root for all supported kinds, but the policy already distinguishes path-backed, mirrored, and export-backed flows so the direct-crawler decision stays explicit.\n\nIf --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion.",
         override_usage = "fod-indexer source add --path <PATH> [--name <NAME>] [--kind <KIND>]"
     )]
     Add {
@@ -130,7 +130,7 @@ pub enum SourceCommands {
     },
     #[command(
         about = "List registered sources or browse a filesystem root.",
-        long_about = "Show registered source adapters and their canonical root paths, or browse a filesystem root and list its child directories.\n\nThe listing surfaces the explicit capability profile for each source kind so path-backed and future crawler cases stay visible in the CLI. Use --kind adb without --path to probe the device through `adb shell`, discover its browsable storage root, and translate that root to a local gvfs mount when available so the printed add paths stay usable with --path. Use --path <PATH> to browse any explicit root and print child directories, with already registered entries marked as added. For other kinds with no --path, the command keeps listing registered sources.",
+        long_about = "Show registered source adapters and their canonical root paths, or browse a filesystem root and list its child directories.\n\nThe listing surfaces the explicit policy and capability profile for each source kind so path-backed and future crawler cases stay visible in the CLI. Use --kind adb without --path to probe the device through `adb shell`, discover its browsable storage root, and translate that root to a local gvfs mount when available so the printed add paths stay usable with --path. Use --path <PATH> to browse any explicit root and print child directories, with already registered entries marked as added. For other kinds with no --path, the command keeps listing registered sources.",
         override_usage = "fod-indexer source list [--kind <KIND>] [--path <PATH>]"
     )]
     List {
