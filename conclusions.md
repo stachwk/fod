@@ -10,6 +10,7 @@ Use this file to record concise conclusions that matter for future work.
 - `index_scan_runs` and `index_import_plans` now store explicit `request_token` values and use `ON CONFLICT` on that token, so a transient disconnect can retry the same scan or plan creation without minting a duplicate running row.
 - The indexer replay change required schema version 14, which adds the new request-token columns and the missing `updated_at` field for `index_scan_runs`.
 - The replay classifier in `rust_hotpath/src/pg.rs` now normalizes SQL whitespace before matching replayable command patterns, so multi-line Rust-built SQL statements can still qualify for bounded retry.
+- `fod-indexer` help now includes per-command descriptions and concrete usage examples, and `materialize` still fails closed during validation if a source file has disappeared, so it does not create imported data after a missing-file error.
 - `fod-indexer` now accepts positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while keeping the explicit `--source` form. That makes the CLI friendlier for interactive use without changing the documented contract.
 
 ## 2026-06-23

@@ -6,7 +6,9 @@ use std::ffi::OsString;
 #[command(
     name = "fod-indexer",
     version = FOD_VERSION_LABEL,
-    about = "Index external files before importing them into FOD."
+    about = "Index external files before importing them into FOD.",
+    long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to register a local source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
+    after_long_help = "Examples:\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -23,24 +25,44 @@ impl Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Commands {
+    #[command(
+        about = "Register a source directory.",
+        long_about = "Register a local directory so fod-indexer can scan and materialize it later.\n\nThis command stores the source name, kind, and canonical root path in PostgreSQL."
+    )]
     Source {
         #[command(subcommand)]
         command: SourceCommands,
     },
+    #[command(
+        about = "Scan a source directory.",
+        long_about = "Walk the registered source directory and store file metadata in index_files.\n\nThe scan records regular, unreadable, and unsupported entries before hashing."
+    )]
     Scan {
         #[arg(long)]
         source: String,
     },
+    #[command(
+        about = "Hash scanned files.",
+        long_about = "Compute partial and full hashes for candidate files in a registered source.\n\nUse --candidates-only to skip files that are not plausible duplicate candidates by size."
+    )]
     Hash {
         #[arg(long)]
         source: String,
         #[arg(long, default_value_t = false)]
         candidates_only: bool,
     },
+    #[command(
+        about = "Report duplicate groups.",
+        long_about = "Show the duplicate groups discovered from the current hash state.\n\nThe report is built from the deduplicated hash tables and focuses on confirmed duplicate sets."
+    )]
     Report {
         #[command(subcommand)]
         command: ReportCommands,
     },
+    #[command(
+        about = "Create a dry-run import plan.",
+        long_about = "Build a dry-run import plan for one source or for all sources.\n\nUse --source <name> for a single registered source or --all-sources for the global view."
+    )]
     PlanImport {
         #[arg(long)]
         source: Option<String>,
@@ -49,10 +71,18 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    #[command(
+        about = "Clean up a failed materialization.",
+        long_about = "Remove a failed materialization root and preserve shared data objects that are still referenced outside the failed tree.\n\nPass the plan id from the failed materialization run with --plan."
+    )]
     CleanupFailed {
         #[arg(long)]
         plan: u64,
     },
+    #[command(
+        about = "Materialize a source into FOD.",
+        long_about = "Validate a registered source and materialize its files into FOD.\n\nThe command revalidates file metadata and hashes before importing; if a source file has disappeared or changed, the run stops before creating imported data."
+    )]
     Materialize {
         #[arg(long)]
         source: String,
@@ -61,6 +91,10 @@ pub enum Commands {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum SourceCommands {
+    #[command(
+        about = "Add a local source.",
+        long_about = "Register a local directory under a source name so scan, hash, plan-import, and materialize can use it later."
+    )]
     Add {
         #[arg(long)]
         name: String,
@@ -73,6 +107,10 @@ pub enum SourceCommands {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ReportCommands {
+    #[command(
+        about = "Show duplicate files.",
+        long_about = "Print the duplicate groups currently known to the indexer."
+    )]
     Duplicates {
         #[arg(long, default_value_t = 100)]
         limit: usize,
