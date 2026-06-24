@@ -31,6 +31,7 @@ from tests.integration.fod_mount import FODMount
 USABILITY_PARENT = Path("/tmp/fod-indexer-usability")
 USABILITY_INDEXED_ROOT = USABILITY_PARENT / "indexed"
 USABILITY_BROWSE_ONLY_ROOT = USABILITY_PARENT / "browse-only"
+USABILITY_ADB_RUNTIME = "fod-indexer-adb-runtime"
 
 USABILITY_FILES: dict[str, bytes] = {
     "a.txt": b"same",
@@ -48,9 +49,16 @@ def write_usability_tree() -> None:
 
 
 def run_indexer_result(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return run_indexer_result_with_env(args, {})
+
+
+def run_indexer_result_with_env(
+    args: list[str], extra_env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.pop("DATABASE_URL", None)
     env.pop("FOD_INDEXER_CONNINFO", None)
+    env.update(extra_env)
     env["INDEXER_ARGS"] = shlex.join(args)
     return subprocess.run(
         ["make", "--no-print-directory", "indexer"],
@@ -60,6 +68,79 @@ def run_indexer_result(args: list[str]) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def adb_target_serial() -> str:
+    result = subprocess.run(
+        ["adb", "devices"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"unable to run adb devices:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+
+    for line in result.stdout.splitlines()[1:]:
+        line = line.strip()
+        if not line:
+            continue
+        fields = line.split()
+        serial = fields[0] if fields else ""
+        status = fields[1] if len(fields) > 1 else ""
+        if status == "device" and serial:
+            return serial
+
+    raise AssertionError(f"no authorized adb device found:\n{result.stdout}")
+
+
+def adb_shell_output(serial: str, args: list[str]) -> str:
+    result = subprocess.run(
+        ["adb", "-s", serial, "shell", *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"adb shell failed for {serial} with args {args}:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return result.stdout.strip()
+
+
+def adb_storage_root(serial: str) -> str:
+    candidates: list[str] = []
+
+    def add_candidate(candidate: str) -> None:
+        candidate = candidate.strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    for value in [adb_shell_output(serial, ["echo", "$EXTERNAL_STORAGE"]), adb_shell_output(serial, ["echo", "$SECONDARY_STORAGE"])]:
+        for candidate in value.split(":"):
+            add_candidate(candidate)
+
+    for candidate in ["/sdcard", "/storage/emulated/0", "/storage/self/primary"]:
+        add_candidate(candidate)
+
+    for candidate in candidates:
+        probe = subprocess.run(
+            ["adb", "-s", serial, "shell", "ls", "-d", candidate],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            return candidate
+
+    raise AssertionError(f"unable to detect a browsable Android storage root for device {serial}")
+
+
+def assert_not_contains(text: str, needle: str, label: str) -> None:
+    if needle in text:
+        raise AssertionError(f"unexpected {needle!r} in {label} output:\n{text}")
 
 
 def test_help_and_usage_read_like_a_short_user_guide() -> None:
@@ -239,9 +320,86 @@ def test_user_journey_surfaces_progress_and_browse_hints() -> None:
                 pass
 
 
+def test_adb_source_list_surfaces_device_and_browse_root() -> None:
+    serial = adb_target_serial()
+    remote_root = adb_storage_root(serial)
+
+    dsn: dict[str, str] | None = None
+    dsn, _ = load_dsn_from_config(ROOT)
+    apply_database_env(ROOT, dsn)
+    cleanup_indexer_state(dsn)
+    cleanup_materialized_roots(dsn)
+
+    with tempfile.TemporaryDirectory(prefix=f"{USABILITY_ADB_RUNTIME}-") as runtime_dir:
+        runtime_root = Path(runtime_dir)
+        mount_root = runtime_root / "gvfs" / f"mtp:host={serial}" / "Internal storage"
+        visible_one = mount_root / "Documents"
+        visible_two = mount_root / "Pictures"
+        hidden_one = mount_root / ".hidden"
+        ignored_one = mount_root / "cache"
+        for path in [visible_one, visible_two, hidden_one, ignored_one]:
+            path.mkdir(parents=True, exist_ok=True)
+        adb_snapshot = snapshot_tree(mount_root)
+
+        with tempfile.TemporaryDirectory(prefix="fod-indexer-adb-smoke-") as mount_dir:
+            with FODMount(str(ROOT)) as mount:
+                mount.init_schema()
+                cleanup_indexer_state(dsn)
+                mount.start(mount_dir)
+                cleanup_materialized_roots(dsn)
+
+                registered_output = run_indexer(
+                    ROOT,
+                    [
+                        "source",
+                        "add",
+                        "--name",
+                        "adb-documents",
+                        "--path",
+                        str(visible_one),
+                        "--kind",
+                        "adb",
+                    ],
+                )
+                assert_contains(registered_output, "Registered source adb-documents as adb", "adb source add")
+                assert_contains(registered_output, "policy: export-backed", "adb source add")
+
+                browse_output = run_indexer_result_with_env(
+                    ["source", "list", "--kind", "adb"],
+                    {
+                        "XDG_RUNTIME_DIR": str(runtime_root),
+                        "ANDROID_SERIAL": serial,
+                    },
+                )
+                browse_text = browse_output.stdout + browse_output.stderr
+                assert_contains(browse_text, "FOD indexer source list", "adb source list")
+                assert_contains(browse_text, "mode: adb-shell", "adb source list")
+                assert_contains(browse_text, f"device: {serial}", "adb source list")
+                assert_contains(browse_text, f"adb root: {remote_root}", "adb source list")
+                assert_contains(browse_text, "kind hint: adb", "adb source list")
+                assert_contains(browse_text, "policy: export-backed", "adb source list")
+                assert_contains(browse_text, "directories: 2", "adb source list")
+                assert_contains(browse_text, "Documents", "adb source list")
+                assert_contains(browse_text, "Pictures", "adb source list")
+                assert_contains(browse_text, "added path=", "adb source list")
+                assert_contains(browse_text, "adb-documents", "adb source list")
+                assert_contains(browse_text, "fod-indexer source add --kind adb --path", "adb source list")
+                assert_contains(browse_text, "available path=", "adb source list")
+                assert_not_contains(browse_text, ".hidden", "adb source list")
+                assert_not_contains(browse_text, "cache", "adb source list")
+
+                if snapshot_tree(mount_root) != adb_snapshot:
+                    raise AssertionError("adb browse tree changed unexpectedly")
+
+                print(
+                    f"OK fod-indexer adb browse serial={serial} remote_root={remote_root} runtime={runtime_root}"
+                )
+
+
 def main() -> None:
     test_help_and_usage_read_like_a_short_user_guide()
     test_user_journey_surfaces_progress_and_browse_hints()
+    test_adb_source_list_surfaces_device_and_browse_root()
 
 
 if __name__ == "__main__":
