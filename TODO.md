@@ -106,7 +106,7 @@ This document records the small set of open follow-ups plus completed work, clos
 
 - [x] Inventory transactional SQL call sites and split them into idempotent, replayable, and non-replayable groups.
 - [x] Define the replay envelope and outcome confirmation for lost commit acknowledgements.
-- [ ] Add disconnect smoke tests for body failure, commit failure, and reconnect recovery.
+- [x] Add disconnect smoke tests for body failure, commit failure, and reconnect recovery.
 - [ ] Keep the current bounded replay envelope unchanged until the project proves a safe expansion.
 
 ## FOD 3.0.9 — Cleanup and recovery safety

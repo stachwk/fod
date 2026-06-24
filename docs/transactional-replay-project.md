@@ -131,6 +131,13 @@ For the current codebase, the practical marker is `request_token` on rows such a
 That makes the confirmation step a row-level probe instead of a separate transaction journal.
 Any future transaction that cannot expose a durable marker with the same properties should remain outside the automatic replay envelope.
 
+## Smoke Coverage
+
+The first two smoke checks now live in `rust_hotpath/tests/transactional_replay_smoke.rs`:
+
+- body disconnects are replayed once and confirmed by the resulting filesystem row
+- commit disconnects are confirmed by probing the durable `request_token` row after reconnect
+
 ## Current Baseline
 
 The current bounded replay stays in place as the default behavior.
