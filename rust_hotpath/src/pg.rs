@@ -1180,6 +1180,15 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
     let sql = sql.trim_start();
 
     sql.starts_with("DELETE FROM ")
+        || sql.starts_with("INSERT INTO index_files ")
+            && sql.contains("ON CONFLICT (id_index_source, path) DO UPDATE SET id_scan_run = EXCLUDED.id_scan_run, size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns, inode = EXCLUDED.inode, device = EXCLUDED.device, file_kind = EXCLUDED.file_kind, scan_status = EXCLUDED.scan_status, source_changed = EXCLUDED.source_changed, updated_at = NOW()")
+        || sql.starts_with("INSERT INTO index_file_hashes ")
+            && sql.contains("ON CONFLICT (id_file) DO UPDATE SET hash_algorithm = EXCLUDED.hash_algorithm, partial_hash = EXCLUDED.partial_hash, full_hash = EXCLUDED.full_hash, hash_status = EXCLUDED.hash_status, observed_size = EXCLUDED.observed_size, observed_mtime_ns = EXCLUDED.observed_mtime_ns, observed_inode = EXCLUDED.observed_inode, observed_device = EXCLUDED.observed_device, updated_at = NOW()")
+        || sql.starts_with("INSERT INTO index_duplicate_sets ")
+            && sql.contains("ON CONFLICT (hash_algorithm, full_hash, file_size) DO UPDATE SET file_count = EXCLUDED.file_count, total_bytes = EXCLUDED.total_bytes, updated_at = NOW()")
+        || sql.starts_with("UPDATE index_scan_runs SET finished_at = NOW(), status = ")
+        || sql.starts_with("UPDATE index_import_plans SET status = ")
+        || sql.starts_with("UPDATE index_files SET source_changed = TRUE, updated_at = NOW() WHERE id_file = ")
         || sql_is_replayable_data_blocks_upsert(sql)
         || sql_is_replayable_copy_block_crc_upsert(sql)
         || sql.starts_with("UPDATE client_sessions")
@@ -1251,7 +1260,11 @@ unsafe fn exec_command(conn: *mut PGconn, sql: &CString) -> Result<(), String> {
             0,
             format!("sql=\"{}\"", sql_label),
         );
-        return Err(conn_error(conn));
+        let err = conn_error(conn);
+        if sql_is_replayable_command(sql) && is_retryable_connection_error(conn, &err) {
+            return Err(replayable_sql_error_once(err));
+        }
+        return Err(err);
     }
 
     let status = PQresultStatus(res);
@@ -2893,7 +2906,8 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe {
             let res = PQexec(conn, sql.as_ptr());
             if res.is_null() {
-                return Err(conn_error(conn));
+                let err = conn_error(conn);
+                return Err(maybe_replayable_sql_error(conn, &sql, err));
             }
             let status = PQresultStatus(res);
             if status == PGRES_COMMAND_OK {
@@ -2902,7 +2916,7 @@ impl DbRepo {
             } else {
                 let error = result_error(res);
                 PQclear(res);
-                Err(error)
+                Err(maybe_replayable_sql_error(conn, &sql, error))
             }
         })
     }
