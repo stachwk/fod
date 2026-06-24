@@ -215,7 +215,7 @@ fn upsert_index_file(
     repo.exec(&sql)
 }
 
-fn relative_source_path(root_path: &Path, entry_path: &Path) -> String {
+pub(crate) fn relative_source_path(root_path: &Path, entry_path: &Path) -> String {
     entry_path
         .strip_prefix(root_path)
         .unwrap_or(entry_path)

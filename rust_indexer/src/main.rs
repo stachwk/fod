@@ -1,3 +1,4 @@
+mod clean;
 mod cleanup;
 mod cli;
 mod db;
@@ -80,6 +81,11 @@ fn run() -> Result<(), String> {
         }
         Commands::CleanupFailed { plan } => {
             let summary = cleanup::cleanup_failed_materialization(&repo, plan)?;
+            println!("{}", summary.human_readable());
+            Ok(())
+        }
+        Commands::Clean { source, dry_run } => {
+            let summary = clean::clean_source(&repo, &source, dry_run)?;
             println!("{}", summary.human_readable());
             Ok(())
         }

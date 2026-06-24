@@ -32,6 +32,7 @@ Supported actions:
 - `fod-indexer hash --source <name> --candidates-only`
 - `fod-indexer report duplicates`
 - `fod-indexer plan-import --dry-run`
+- `fod-indexer clean --source <name> --dry-run`
 - `fod-indexer materialize --source <name>`
 
 If `--name` is omitted for a local source, `fod-indexer` uses the current hostname as the default source name. Explicit `--name` stays available when you want to override the suggestion or register a source that does not fit the default heuristic.
@@ -90,6 +91,12 @@ The dry run should report:
 - optional inode and device ids when available.
 
 Materialization writes into a per-run root directory inside FOD named `index-source-<source id>-import-<plan id>`, keeps the source tree untouched, writes each canonical payload once, and reuses the canonical data object for duplicate references when the payload is non-empty. Zero-length duplicates remain harmless independent zero-sized entries.
+
+## Cleanup
+
+`clean --source <name>` compares the current local source tree with the indexed rows for that source and removes stale file entries that no longer exist. The command also removes dependent import-plan entries that reference those stale files and refreshes duplicate-set metadata after a real cleanup.
+
+Use `--dry-run` first if you want to preview which rows would be removed without touching PostgreSQL. If the source root itself is gone, the cleanup treats the source as fully orphaned and removes the indexed rows for that source.
 
 ## Architecture note
 

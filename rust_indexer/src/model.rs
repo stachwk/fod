@@ -165,6 +165,44 @@ impl CleanupFailedSummary {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct CleanSourceSummary {
+    pub source_name: String,
+    pub source_path: String,
+    pub dry_run: bool,
+    pub source_root_missing: bool,
+    pub indexed_files: u64,
+    pub present_files: u64,
+    pub stale_files: u64,
+    pub skipped_files: u64,
+    pub plan_entries_removed: u64,
+    pub duplicate_sets_refreshed: u64,
+}
+
+impl CleanSourceSummary {
+    pub fn human_readable(&self) -> String {
+        let mode = if self.dry_run { "dry-run" } else { "clean" };
+        let root_state = if self.source_root_missing {
+            "missing"
+        } else {
+            "present"
+        };
+        format!(
+            "FOD indexer clean\nmode: {}\nsource: {}\npath: {}\nsource root: {}\nindexed files: {}\npresent files: {}\nstale files: {}\nskipped files: {}\nplan entries removed: {}\nduplicate sets refreshed: {}",
+            mode,
+            self.source_name,
+            self.source_path,
+            root_state,
+            self.indexed_files,
+            self.present_files,
+            self.stale_files,
+            self.skipped_files,
+            self.plan_entries_removed,
+            self.duplicate_sets_refreshed
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct MaterializeSummary {
     pub source_name: String,
     pub import_root: String,

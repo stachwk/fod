@@ -16,6 +16,7 @@ Use this file to record concise conclusions that matter for future work.
 - `fod-indexer materialize --dry-run` is now a read-only preview: it validates the current indexed state and source files, but it does not refresh scan/hash rows, create an import plan, or write any materialized files.
 - `fod-indexer` now accepts positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while keeping the explicit `--source` form. That makes the CLI friendlier for interactive use without changing the documented contract.
 - `fod-indexer source add` now defaults the source name to the current hostname when `--name` is omitted, but explicit `--name` remains available as an override for unsupported sources or forced naming.
+- `fod-indexer clean --source <name> --dry-run` now previews stale-index pruning for local sources, and a real cleanup removes missing file rows plus dependent plan entries before refreshing duplicate metadata.
 
 ## 2026-06-23
 
