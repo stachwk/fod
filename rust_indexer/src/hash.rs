@@ -3,6 +3,7 @@ use crate::model::{HashSummary, IndexedFile};
 use crate::progress::ThrottledProgress;
 use crate::scan;
 use crate::source;
+use crate::source_registry;
 use fod_rust_hotpath::pg::DbRepo;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -548,7 +549,7 @@ pub fn hash_source(
     source_name: &str,
     candidates_only: bool,
 ) -> Result<HashSummary, String> {
-    let source = scan::load_source(repo, source_name)?;
+    let source = source_registry::load_source(repo, source_name)?;
     let files = scan::load_indexed_files(repo, Some(source_name))?;
     let files = files
         .into_iter()

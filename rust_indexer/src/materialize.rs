@@ -1,6 +1,7 @@
 use crate::db::{ensure_indexer_request_token_schema, hex_encode};
 use crate::model::{IndexSource, MaterializeSummary};
 use crate::plan::{self, canonical_sort_key, PlannableFile};
+use crate::source_registry;
 use crate::{hash, scan, source};
 use fod_rust_hotpath::block_count_for_length;
 use fod_rust_hotpath::pg::{DbRepo, PersistBlockRow};
@@ -397,7 +398,7 @@ pub fn materialize_source(
     source_name: &str,
     dry_run: bool,
 ) -> Result<MaterializeSummary, String> {
-    let source = scan::load_source(repo, source_name)?;
+    let source = source_registry::load_source(repo, source_name)?;
 
     if !dry_run {
         ensure_indexer_request_token_schema(repo, "fod-indexer materialize")?;

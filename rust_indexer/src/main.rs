@@ -12,6 +12,7 @@ mod progress;
 mod replay;
 mod scan;
 mod source;
+mod source_registry;
 
 use crate::model::IndexSource;
 use cli::{Cli, Commands, ReportCommands, SourceCommands, SourceKind};
@@ -32,7 +33,7 @@ fn run() -> Result<(), String> {
     match cli.command {
         Commands::Source { command } => match command {
             SourceCommands::Add { name, path, kind } => {
-                let source = scan::register_source(&repo, name.as_deref(), &path, kind)?;
+                let source = source_registry::register_source(&repo, name.as_deref(), &path, kind)?;
                 println!(
                     "Registered source {} as {} at {} (id={})",
                     source.name,
@@ -46,7 +47,8 @@ fn run() -> Result<(), String> {
             }
             SourceCommands::List { kind, path } => match path {
                 Some(path) => {
-                    let (root_path, entries) = scan::list_source_directories(&repo, &path)?;
+                    let (root_path, entries) =
+                        source_registry::list_source_directories(&repo, &path)?;
                     println!("FOD indexer source list");
                     println!("mode: browse");
                     println!("root: {}", root_path.display());
@@ -80,7 +82,7 @@ fn run() -> Result<(), String> {
                     if matches!(kind, Some(SourceKind::Adb)) {
                         let adb_root = crate::source::adb_browse_root()?;
                         let (root_path, entries) =
-                            scan::list_source_directories(&repo, &adb_root.local_root)?;
+                            source_registry::list_source_directories(&repo, &adb_root.local_root)?;
                         println!("FOD indexer source list");
                         println!("mode: adb-shell");
                         println!("device: {}", adb_root.serial);
@@ -108,7 +110,7 @@ fn run() -> Result<(), String> {
                         Ok(())
                     } else {
                         let kind_filter = kind.as_ref().map(|kind| kind.as_str());
-                        let sources = scan::list_sources(&repo, kind_filter)?;
+                        let sources = source_registry::list_sources(&repo, kind_filter)?;
                         println!("FOD indexer source list");
                         println!("kind filter: {}", kind_filter.unwrap_or("all"));
                         println!("registered sources: {}", sources.len());
@@ -128,7 +130,7 @@ fn run() -> Result<(), String> {
                 }
             },
             SourceCommands::Remove { name } => {
-                let source = scan::remove_source(&repo, &name)?;
+                let source = source_registry::remove_source(&repo, &name)?;
                 println!(
                     "Removed source {} as {} at {} (id={})",
                     source.name,

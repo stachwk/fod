@@ -1,5 +1,5 @@
 use crate::model::{CleanSourceSummary, IndexSource, IndexedFile};
-use crate::{hash, scan, source};
+use crate::{hash, scan, source, source_registry};
 use fod_rust_hotpath::pg::DbRepo;
 use std::collections::BTreeSet;
 use std::fs;
@@ -188,7 +188,7 @@ pub fn clean_source(
     source_name: &str,
     dry_run: bool,
 ) -> Result<CleanSourceSummary, String> {
-    let source = scan::load_source(repo, source_name)?;
+    let source = source_registry::load_source(repo, source_name)?;
 
     let indexed_files = scan::load_indexed_files(repo, Some(source.name.as_str()))?;
     let tree_state = current_source_tree(&source.root_path)?;

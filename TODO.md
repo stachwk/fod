@@ -80,8 +80,8 @@ This document records the small set of open follow-ups plus completed work, clos
 
 ## FOD indexer: dalszy plan dla Codex
 
-- [ ] Utrwal granice miedzy core engine a adapterami zrodel. `fod-indexer` ma zostac wspolnym silnikiem indeksowania, a nie zbiorem osobnych crawlerow; wszystko, co da sie przedstawic jako lokalny katalog, mount albo mirror, powinno przechodzic przez jeden path-backed flow.
-  - Progress: source kinds now carry explicit capability metadata and the CLI surfaces it, but the actual adapter split is still pending.
+- [x] Utrwal granice miedzy core engine a adapterami zrodel. `fod-indexer` ma zostac wspolnym silnikiem indeksowania, a nie zbiorem osobnych crawlerow; wszystko, co da sie przedstawic jako lokalny katalog, mount albo mirror, powinno przechodzic przez jeden path-backed flow.
+  - Progress: source registration, browsing, list/remove, and source discovery now live in `rust_indexer/src/source_registry.rs`, while `rust_indexer/src/scan.rs` keeps the scan path focused on walking and persisting indexed files.
 - [x] Wydziel model zdolnosci zrodla i trzymaj go osobno od samego skanu. Dla kazdego `source kind` doprecyzuj metadane takie jak `path_backed`, `readonly`, `mirror_required`, `needs_export` i `direct_crawler_possible`, zeby sposob pobrania danych byl deklaratywny.
   - Progress: implemented in `rust_indexer/src/capabilities.rs` and surfaced through `SourceKind::capabilities()`, with `source add` / `source list` now printing the profile.
 - [x] Ustal polityke dla `local`, `qnap`, `smb`, `adb` i `github`. Domyslnie maja byc path-backed albo mirrored, a direct crawler tylko wtedy, gdy naprawde nie da sie tego sensownie sprowadzic do katalogu.
