@@ -54,7 +54,7 @@ This document records the small set of open follow-ups plus completed work, clos
   - [x] `FS_IOC_FSGETXATTR` zwraca teraz wyzerowany `fsxattr`, a `FS_IOC_FSSETXATTR` przyjmuje tylko zero/no-op do czasu decyzji o trwałej polityce xflags.
   - [x] `FICLONE` zostaje na razie eksperymentalny, bo na tym hoście obecny kernel/FUSE stack ucina ten request przed userspace; FOD nie ma jeszcze end-to-end potwierdzenia dla tego pathu.
     - Progress: `tests/integration/test_ioctl.py` now covers `FICLONE` alongside `FIONREAD`, accepting the current unsupported path while still verifying that a successful clone would preserve payload contents. The host-side conclusion remains that the request is blocked before userspace on this stack.
-- [ ] Zaprojektować pełną politykę mount-label SELinux.
+- [x] Zaprojektować pełną politykę mount-label SELinux. Celowo zamknięte jako non-goal: FOD trzyma SELinux jako xattr-backed metadata plus runtime gating, bez pełnej polityki mount-label.
 
 ### Direct I/O Microscope
 
