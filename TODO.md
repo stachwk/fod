@@ -78,6 +78,18 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Add cleanup for failed indexer materialization via `fod-indexer cleanup-failed --plan <id>`, with smoke coverage for duplicate payload reuse and zero-size files.
 - [ ] Align the remaining `fod-indexer` integration smokes with the zero-length skip contract so stale `empty.txt` assertions do not keep documenting the old pipeline shape.
 
+## FOD indexer: dalszy plan dla Codex
+
+- [ ] Utrwal granice miedzy core engine a adapterami zrodel. `fod-indexer` ma zostac wspolnym silnikiem indeksowania, a nie zbiorem osobnych crawlerow; wszystko, co da sie przedstawic jako lokalny katalog, mount albo mirror, powinno przechodzic przez jeden path-backed flow.
+- [ ] Wydziel model zdolnosci zrodla i trzymaj go osobno od samego skanu. Dla kazdego `source kind` doprecyzuj metadane takie jak `path_backed`, `readonly`, `mirror_required`, `needs_export` i `direct_crawler_possible`, zeby sposob pobrania danych byl deklaratywny.
+- [ ] Ustal polityke dla `local`, `qnap`, `smb`, `adb` i `github`. Domyslnie maja byc path-backed albo mirrored, a direct crawler tylko wtedy, gdy naprawde nie da sie tego sensownie sprowadzic do katalogu.
+- [ ] Dopnij nazewnictwo i rejestracje zrodel do modelu capabilities. Heurystyki nazw maja pozostac pomocnicze, ale `--name` musi zostac jawna nadpiska; nazwa nie moze ukrywac, czy zrodlo jest mounted, mirrored, czy tylko importowane do katalogu roboczego.
+- [ ] Rozszerz testy integracyjne o scenariusze miedzyzrodlowe i adapterowe. Sprawdzaj osobno lokalny mount, mirror/backed source, cleanup po zniknieciu zrodla, ignorowanie hidden/cache paths oraz stabilnosc import/materialize przy kilku `source kind`ach.
+- [ ] Doprecyzuj dokumentacje FOD jako wspolnego silnika indeksowania. Wprost zapisz, ze `fod-indexer` ma byc wspolnym core dla `scan/hash/dedupe/plan/materialize/cleanup`, a `msfind` ma korzystac z tego rdzenia zamiast implementowac drugi, podobny pipeline.
+- [ ] Zostaw w backlogu tylko to, czego realnie brakuje: decyzje, ktore `source kind`y beda kiedys potrzebowaly direct crawlerow, oraz czy maja byc mirror-only czy native API adapters. Nie rozszerzaj core o protokoly, jesli nie ma konkretnego, nieobslugiwnego jeszcze przypadku.
+- [ ] Uporzadkuj safety i retry tylko tam, gdzie sa jeszcze luki. Read-only i idempotentne operacje maja zostac bounded-retry friendly, ale nie dokladaj pelnego replay nieidempotentnych transakcji bez osobnego projektu.
+- [ ] Nie wracaj do implementacji podstawowego pipeline jako nowego zadania. `scan`, `hash`, `duplicate detection`, `plan-import`, `materialize` i `cleanup` traktuj jako juz dostarczone; dalsza praca ma byc wokol granic, adapterow i hardeningu.
+
 ## FOD 3.0.9 — Cleanup and recovery safety
 
 - [x] Guard `fod-indexer cleanup-failed` against deleting shared data objects.
