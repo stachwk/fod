@@ -39,7 +39,7 @@ This document records the small set of open follow-ups plus completed work, clos
 ### Obszary do rozwoju
 
 - [ ] Dodać pełniejszy replay in-flight SQL po błędach.
-  - Progress: `DbRepo::query_rows_text()` now retries read-only SQL once after a transient disconnect, and `DbRepo::exec()` now retries the idempotent replayable command set once too; `index_import_plan_entries` inserts are replay-safe via `DELETE + INSERT`, and `index_scan_runs` plus `index_import_plans` now carry explicit `request_token` columns so retry can return the same running row, but broader transactional replay still needs a separate design.
+  - Progress: `DbRepo::query_rows_text()` now retries read-only SQL once after a transient disconnect, and `DbRepo::exec()` now retries the idempotent replayable command set once too; `transactional()` also treats commit-phase disconnects as replayable now, so the bounded replay path can rerun a transactional closure once when commit feedback is lost. `index_import_plan_entries` inserts are replay-safe via `DELETE + INSERT`, and `index_scan_runs` plus `index_import_plans` now carry explicit `request_token` columns so retry can return the same running row, but broader transactional replay still needs a separate design.
   - Progress: the lock and client-session schema bootstrap path now also retries its idempotent DDL (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, `DROP TRIGGER IF EXISTS`, and the safe `ALTER TABLE IF EXISTS` variants used there) after a transient disconnect, so an interrupted schema init can resume without leaving the mount in a half-created state.
 - [x] Review `fod-indexer` CLI ergonomics after manual use; keep the explicit `--source` contract if that remains the intended API, but consider clearer examples or a positional alias if users keep trying the old style. Added positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while preserving `--source`.
 - [x] Usprawnić automatyczne sugerowanie nazw źródłom w `fod-indexer source add`, bez usuwania `--name`.
@@ -47,7 +47,7 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Rozdzielić adaptery path-backed od przyszłych crawlerów SMB/QNAP/ADB/GitHub.
   - Progress: the source kinds and naming heuristics are in place, scan/hash/plan/materialize still operate on mounted or mirrored filesystem roots, and the adapter boundary is now explicit in `docs/fod-indexer.md`.
   - Decision: current kinds stay path-backed/mirrored/export-backed through filesystem roots; none of them gets a direct remote crawler in the shared core. Future non-path-backed kinds should arrive as separate adapter projects.
-- [ ] Plan implementacji ioctl:
+- [x] Plan implementacji ioctl:
   - [x] Najpierw `FIGETBSZ`. Zaimplementowane w `rust_fuse/src/fs.rs` jako odpowiedź oparta o bieżący `blksize`.
   - [x] Potem `FS_IOC_GETFLAGS`. Na razie zwracane jest neutralne `0`, bo flags nie są jeszcze trwale przechowywane.
   - [x] `FS_IOC_SETFLAGS` przyjmuje teraz tylko `0` jako bezpieczny no-op; inne flagi dostają `EOPNOTSUPP` do czasu decyzji o trwałej polityce.
