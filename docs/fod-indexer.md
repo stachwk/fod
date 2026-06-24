@@ -25,6 +25,14 @@ Duplicate detection must be content-based. A matching filename is never enough.
 
 The current implementation supports filesystem-backed source adapters. The adapter kind now carries an explicit policy and capability profile so the shared path-backed flow stays separate from future direct crawlers. The indexed root is still a local filesystem path today.
 
+## Shared Core
+
+`fod-indexer` is the shared indexing core for FOD. It owns source registration, scanning, hashing, duplicate detection, import planning, materialization, and cleanup for external sources.
+
+`msfind` should reuse this same core instead of growing a separate indexing pipeline. If `msfind` needs new indexing behavior, that behavior should land in `fod-indexer` first and then be exposed through the existing source and capability model.
+
+Keep source-specific logic at the adapter boundary. The core should stay responsible for the common scan/hash/plan/materialize/cleanup flow, while kinds such as `local`, `smb`, `qnap`, `adb`, and `github` only describe how a source is reached or mirrored.
+
 ## Source capabilities
 
 The current supported kinds all still index a local path, but the CLI surfaces their intended storage model explicitly:
@@ -168,4 +176,4 @@ scan sources -> index metadata -> hash candidates -> build duplicate sets -> cre
 
 Long-term, the indexer should support richer source types, but the default archival model should remain self-contained inside FOD. Optional external link replacement must stay opt-in and separate from the normal import path.
 
-The indexer schema should remain separate from the runtime FOD storage layer, and all safety decisions should be based on revalidation rather than metadata alone.
+The indexer schema should remain separate from the runtime FOD storage layer, and all safety decisions should be based on revalidation rather than metadata alone. `msfind` should keep using this shared core rather than duplicating the pipeline inside its own codebase.

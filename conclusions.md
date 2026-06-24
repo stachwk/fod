@@ -35,6 +35,7 @@ Use this file to record concise conclusions that matter for future work.
 - `fod-indexer source add` now defaults the source name to the current hostname when `--name` is omitted, but explicit `--name` remains available as an override for unsupported sources or forced naming.
 - `fod-indexer clean --source <name> --dry-run` now previews stale-index pruning for registered sources, and a real cleanup removes missing or now-ignored file rows plus dependent plan entries before refreshing duplicate metadata.
 - `tests/integration/test_fod_indexer_source_kinds.py` now covers the source-kind matrix end to end for local, smb, and github roots. It verifies hidden/cache pruning in browse mode, source-scoped scan/hash/materialize flows, and cleanup after a source root disappears. One practical lesson from the smoke: `hash --source` keeps source-scanned counts local, but duplicate-set totals and cleanup plan-entry counts reflect broader database state, so future source-scoped tests should avoid exact assertions on those global totals.
+- `docs/fod-indexer.md` now spells out `fod-indexer` as the shared indexing core for FOD, and `docs/msfind-fod-indexer-requests.md` now frames future `msfind` work as requests against that core instead of a separate indexing pipeline.
 
 ## 2026-06-23
 
