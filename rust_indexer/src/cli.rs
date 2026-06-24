@@ -43,7 +43,7 @@ pub enum Commands {
     },
     #[command(
         about = "Hash scanned files.",
-        long_about = "Compute partial and full hashes for candidate files in a registered source.\n\nUse --candidates-only to skip files that are not plausible duplicate candidates by size."
+        long_about = "Compute partial and full hashes for candidate files in a registered source.\n\nUse --candidates-only to skip files that are not plausible duplicate candidates by size. The command also emits periodic progress lines on stderr while it hashes files and rebuilds duplicate sets."
     )]
     Hash {
         #[arg(long)]

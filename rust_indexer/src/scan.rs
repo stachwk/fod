@@ -4,6 +4,7 @@ use crate::db::{
     sql_quote_literal,
 };
 use crate::model::{IndexSource, IndexedFile, ScanSummary, SourceBrowseEntry};
+use crate::progress::ThrottledProgress;
 use crate::replay;
 use crate::source;
 use fod_rust_hotpath::pg::DbRepo;
@@ -13,7 +14,7 @@ use std::fs::{File, FileType};
 use std::io::{self, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use walkdir::WalkDir;
 
 const SCAN_PROGRESS_FILE_STEP: u64 = 50;
@@ -470,30 +471,28 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
 struct ScanProgressReporter {
     source_name: String,
     source_path: String,
-    started_at: Instant,
-    last_report_at: Instant,
+    progress: ThrottledProgress,
 }
 
 impl ScanProgressReporter {
     fn new(source_name: &str, source_path: &Path) -> Self {
-        let now = Instant::now();
         let reporter = Self {
             source_name: source_name.to_string(),
             source_path: source_path.display().to_string(),
-            started_at: now,
-            last_report_at: now,
+            progress: ThrottledProgress::new(),
         };
         reporter.emit("started", &ScanSummary::default(), None);
         reporter
     }
 
     fn maybe_report(&mut self, summary: &ScanSummary, current_path: &Path, status: &str) {
-        let should_report = summary.scanned_files == 1
-            || summary.scanned_files % SCAN_PROGRESS_FILE_STEP == 0
-            || self.last_report_at.elapsed() >= SCAN_PROGRESS_TIME_STEP;
-        if should_report {
+        if self.progress.should_report(
+            summary.scanned_files,
+            SCAN_PROGRESS_FILE_STEP,
+            SCAN_PROGRESS_TIME_STEP,
+        ) {
             self.emit("running", summary, Some((current_path, status)));
-            self.last_report_at = Instant::now();
+            self.progress.mark_reported();
         }
     }
 
@@ -516,7 +515,7 @@ impl ScanProgressReporter {
         error: &str,
         current: Option<(&Path, &str)>,
     ) {
-        let elapsed = self.started_at.elapsed().as_secs_f64();
+        let elapsed = self.progress.elapsed_secs();
         let mut line = format!(
             "FOD indexer scan progress: phase={} source={} path={} scanned={} ok={} unreadable={} stat_failed={} unsupported={} filtered={} bytes={} elapsed={:.1}s",
             phase,

@@ -1,18 +1,22 @@
 use crate::db::{hex_encode, sql_bytea_hex, sql_nullable_i64, sql_nullable_u64, sql_quote_literal};
 use crate::model::{HashSummary, IndexedFile};
+use crate::progress::ThrottledProgress;
 use crate::scan;
 use crate::source;
 use fod_rust_hotpath::pg::DbRepo;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::time::Duration;
 
 const HASH_ALGORITHM: &str = "sha256";
 const PARTIAL_SAMPLE_BYTES: usize = 64 * 1024;
 const FULL_READ_BUFFER_BYTES: usize = 128 * 1024;
+const HASH_PROGRESS_FILE_STEP: u64 = 50;
+const HASH_PROGRESS_TIME_STEP: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileSnapshot {
@@ -46,6 +50,98 @@ struct PartialHashResult {
     file: IndexedFile,
     snapshot: FileSnapshot,
     partial_hash: Vec<u8>,
+}
+
+struct HashProgressReporter {
+    source_name: String,
+    source_path: String,
+    mode: &'static str,
+    progress: ThrottledProgress,
+}
+
+impl HashProgressReporter {
+    fn new(
+        source_name: &str,
+        source_path: &Path,
+        candidates_only: bool,
+        summary: &HashSummary,
+    ) -> Self {
+        let reporter = Self {
+            source_name: source_name.to_string(),
+            source_path: source_path.display().to_string(),
+            mode: if candidates_only {
+                "candidates-only"
+            } else {
+                "all"
+            },
+            progress: ThrottledProgress::new(),
+        };
+        reporter.emit("started", summary, None);
+        reporter
+    }
+
+    fn maybe_report(
+        &mut self,
+        summary: &HashSummary,
+        processed_files: u64,
+        phase: &str,
+        current: Option<(&Path, &str)>,
+    ) {
+        if self.progress.should_report(
+            processed_files,
+            HASH_PROGRESS_FILE_STEP,
+            HASH_PROGRESS_TIME_STEP,
+        ) {
+            self.emit(phase, summary, current);
+            self.progress.mark_reported();
+        }
+    }
+
+    fn emit(&self, phase: &str, summary: &HashSummary, current: Option<(&Path, &str)>) {
+        self.emit_with_error(phase, summary, "", current);
+    }
+
+    fn finish(&self, summary: &HashSummary) {
+        self.emit("done", summary, None);
+    }
+
+    fn fail(&self, summary: &HashSummary, error: &str) {
+        self.emit_with_error("failed", summary, error, None);
+    }
+
+    fn emit_with_error(
+        &self,
+        phase: &str,
+        summary: &HashSummary,
+        error: &str,
+        current: Option<(&Path, &str)>,
+    ) {
+        let elapsed = self.progress.elapsed_secs();
+        let mut line = format!(
+            "FOD indexer hash progress: phase={} mode={} source={} path={} scanned={} candidate={} partial={} full={} changed_retry={} duplicate_sets={} elapsed={:.1}s",
+            phase,
+            self.mode,
+            self.source_name,
+            self.source_path,
+            summary.scanned_files,
+            summary.candidate_files,
+            summary.partial_hashed_files,
+            summary.full_hashed_files,
+            summary.changed_retry_files,
+            summary.duplicate_sets,
+            elapsed,
+        );
+        if let Some((path, status)) = current {
+            line.push_str(&format!(" current={} status={}", path.display(), status));
+        }
+        if !error.is_empty() {
+            line.push_str(&format!(" error={error}"));
+        }
+
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(stderr, "{line}");
+        let _ = stderr.flush();
+    }
 }
 
 fn mark_file_changed(repo: &DbRepo, file_id: u64) {
@@ -314,9 +410,13 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
 fn partial_results_for_group(
     repo: &DbRepo,
     group: &[IndexedFile],
+    summary: &mut HashSummary,
+    progress: &mut HashProgressReporter,
+    processed_files: &mut u64,
 ) -> Result<Vec<PartialHashResult>, String> {
     let mut results = Vec::with_capacity(group.len());
     for file in group {
+        *processed_files = processed_files.saturating_add(1);
         let path = file.root_path.join(&file.path);
         let snapshot = FileSnapshot::from_path(&path)?;
         let expected_snapshot = FileSnapshot {
@@ -326,18 +426,39 @@ fn partial_results_for_group(
             device: file.device,
         };
         if snapshot != expected_snapshot {
+            summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, file.id_file);
             upsert_file_hash(repo, file, &snapshot, None, None, "changed_retry_needed")?;
+            progress.maybe_report(
+                summary,
+                *processed_files,
+                "partial",
+                Some((path.as_path(), "changed_retry_needed")),
+            );
             continue;
         }
         let partial_hash = compute_partial_hash(&path, &snapshot)?;
         let after = FileSnapshot::from_path(&path)?;
         if after != snapshot {
+            summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, file.id_file);
             upsert_file_hash(repo, file, &snapshot, None, None, "changed_retry_needed")?;
+            progress.maybe_report(
+                summary,
+                *processed_files,
+                "partial",
+                Some((path.as_path(), "changed_retry_needed")),
+            );
             continue;
         }
         upsert_file_hash(repo, file, &snapshot, Some(&partial_hash), None, "partial")?;
+        summary.partial_hashed_files = summary.partial_hashed_files.saturating_add(1);
+        progress.maybe_report(
+            summary,
+            *processed_files,
+            "partial",
+            Some((path.as_path(), "partial")),
+        );
         results.push(PartialHashResult {
             file: file.clone(),
             snapshot,
@@ -350,12 +471,17 @@ fn partial_results_for_group(
 fn full_hash_group(
     repo: &DbRepo,
     group: &[PartialHashResult],
+    summary: &mut HashSummary,
+    progress: &mut HashProgressReporter,
+    processed_files: &mut u64,
 ) -> Result<Vec<(IndexedFile, FileSnapshot, Vec<u8>)>, String> {
     let mut results = Vec::with_capacity(group.len());
     for item in group {
+        *processed_files = processed_files.saturating_add(1);
         let path = item.file.root_path.join(&item.file.path);
         let before = FileSnapshot::from_path(&path)?;
         if before != item.snapshot {
+            summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, item.file.id_file);
             upsert_file_hash(
                 repo,
@@ -365,11 +491,18 @@ fn full_hash_group(
                 None,
                 "changed_retry_needed",
             )?;
+            progress.maybe_report(
+                summary,
+                *processed_files,
+                "full",
+                Some((path.as_path(), "changed_retry_needed")),
+            );
             continue;
         }
         let full_hash = compute_full_hash(&path)?;
         let after = FileSnapshot::from_path(&path)?;
         if after != before {
+            summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, item.file.id_file);
             upsert_file_hash(
                 repo,
@@ -379,6 +512,12 @@ fn full_hash_group(
                 None,
                 "changed_retry_needed",
             )?;
+            progress.maybe_report(
+                summary,
+                *processed_files,
+                "full",
+                Some((path.as_path(), "changed_retry_needed")),
+            );
             continue;
         }
         upsert_file_hash(
@@ -389,6 +528,13 @@ fn full_hash_group(
             Some(&full_hash),
             "full",
         )?;
+        summary.full_hashed_files = summary.full_hashed_files.saturating_add(1);
+        progress.maybe_report(
+            summary,
+            *processed_files,
+            "full",
+            Some((path.as_path(), "full")),
+        );
         results.push((item.file.clone(), before, full_hash));
     }
     Ok(results)
@@ -411,41 +557,64 @@ pub fn hash_source(
         scanned_files: files.len() as u64,
         ..HashSummary::default()
     };
+    let mut progress =
+        HashProgressReporter::new(&source.name, &source.root_path, candidates_only, &summary);
+    let mut processed_files = 0u64;
 
-    let mut groups: BTreeMap<u64, Vec<IndexedFile>> = BTreeMap::new();
-    for file in files {
-        groups.entry(file.size).or_default().push(file);
-    }
-
-    let mut partial_groups: HashMap<(u64, String), Vec<PartialHashResult>> = HashMap::new();
-    for (size, group) in groups {
-        if candidates_only && group.len() <= 1 {
-            continue;
+    let hash_result = (|| -> Result<(), String> {
+        let mut groups: BTreeMap<u64, Vec<IndexedFile>> = BTreeMap::new();
+        for file in files {
+            groups.entry(file.size).or_default().push(file);
         }
-        summary.candidate_files = summary.candidate_files.saturating_add(group.len() as u64);
-        let partials = partial_results_for_group(repo, &group)?;
-        summary.partial_hashed_files = summary
-            .partial_hashed_files
-            .saturating_add(partials.len() as u64);
-        for item in partials {
-            partial_groups
-                .entry((size, hex_encode(&item.partial_hash)))
-                .or_default()
-                .push(item);
+
+        let mut partial_groups: HashMap<(u64, String), Vec<PartialHashResult>> = HashMap::new();
+        for (size, group) in groups {
+            if candidates_only && group.len() <= 1 {
+                continue;
+            }
+            summary.candidate_files = summary.candidate_files.saturating_add(group.len() as u64);
+            let partials = partial_results_for_group(
+                repo,
+                &group,
+                &mut summary,
+                &mut progress,
+                &mut processed_files,
+            )?;
+            for item in partials {
+                partial_groups
+                    .entry((size, hex_encode(&item.partial_hash)))
+                    .or_default()
+                    .push(item);
+            }
+        }
+
+        progress.emit("rebuilding", &summary, None);
+        for group in partial_groups.into_values() {
+            if group.len() <= 1 {
+                continue;
+            }
+            let _full_results = full_hash_group(
+                repo,
+                &group,
+                &mut summary,
+                &mut progress,
+                &mut processed_files,
+            )?;
+        }
+
+        let duplicate_sets = rebuild_duplicate_sets(repo)?;
+        summary.duplicate_sets = duplicate_sets;
+        Ok(())
+    })();
+
+    match hash_result {
+        Ok(()) => {
+            progress.finish(&summary);
+            Ok(summary)
+        }
+        Err(err) => {
+            progress.fail(&summary, &err);
+            Err(err)
         }
     }
-
-    for group in partial_groups.into_values() {
-        if group.len() <= 1 {
-            continue;
-        }
-        let full_results = full_hash_group(repo, &group)?;
-        summary.full_hashed_files = summary
-            .full_hashed_files
-            .saturating_add(full_results.len() as u64);
-    }
-
-    let duplicate_sets = rebuild_duplicate_sets(repo)?;
-    summary.duplicate_sets = duplicate_sets;
-    Ok(summary)
 }

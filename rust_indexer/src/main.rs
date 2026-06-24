@@ -7,6 +7,7 @@ mod hash;
 mod materialize;
 mod model;
 mod plan;
+mod progress;
 mod replay;
 mod scan;
 mod source;

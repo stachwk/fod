@@ -98,6 +98,7 @@ Scanner status values are explicit:
 
 Unreadable files should be recorded and the scan should continue. A database write failure is the only case that should abort the scan.
 While a scan runs, `fod-indexer scan --source <name>` prints periodic progress lines to stderr with the scanned-file counts, current file path, and elapsed time.
+While `fod-indexer hash --source <name>` runs, it prints periodic progress lines to stderr with candidate, partial, full, and retry-needed counts, plus the current file path and elapsed time.
 
 ## Import planning
 
