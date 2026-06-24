@@ -1,3 +1,4 @@
+use crate::cleanup;
 use crate::db::{ensure_indexer_request_token_schema, hex_encode};
 use crate::model::{IndexSource, MaterializeSummary};
 use crate::plan::{self, canonical_sort_key, PlannableFile};
@@ -547,7 +548,14 @@ pub fn materialize_source(
             let plan_summary = summary.as_import_plan_summary();
             let _ =
                 plan::update_import_plan(repo, plan_id, "materialize_failed", false, &plan_summary);
-            Err(err)
+            match cleanup::cleanup_failed_materialization(repo, plan_id) {
+                Ok(_) => Err(format!(
+                    "{err}; partial materialization was rolled back automatically for plan {plan_id}"
+                )),
+                Err(cleanup_err) => Err(format!(
+                    "{err}; automatic rollback failed for plan {plan_id}: {cleanup_err}"
+                )),
+            }
         }
     }
 }

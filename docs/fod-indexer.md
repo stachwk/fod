@@ -163,12 +163,14 @@ The dry run should report:
 - optional inode and device ids when available.
 
 Materialization writes into a per-run root directory inside FOD named `index-source-<source id>-import-<plan id>`, keeps the source tree untouched, and writes each canonical payload once while reusing the canonical data object for duplicate references.
+If a non-dry-run materialize fails after the import root has been created, the command now attempts a best-effort rollback automatically. `fod-indexer cleanup-failed --plan <id>` remains the manual fallback if that rollback cannot finish.
 
 ## Cleanup
 
 `clean --source <name>` compares the current source tree with the indexed rows for that source and removes stale file entries that no longer exist. The command also removes dependent import-plan entries that reference those stale files and refreshes duplicate-set metadata after a real cleanup.
 
 Use `--dry-run` first if you want to preview which rows would be removed without touching PostgreSQL. If the source root itself is gone, the cleanup treats the source as fully orphaned and removes the indexed rows for that source.
+Use `cleanup-failed --plan <id>` when a failed materialization still needs manual cleanup or when you want to re-run the rollback after an interrupted automatic attempt.
 
 Hidden dotfiles, zero-length files, and common cache/build directories are skipped during scan, hash, plan, materialize, and cleanup view rebuilding. That keeps paths such as `.bashrc`, `.venv`, `.git`, `node_modules`, `target`, `build`, and similar cache trees out of the index.
 

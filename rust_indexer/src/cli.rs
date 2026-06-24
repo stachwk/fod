@@ -74,7 +74,7 @@ pub enum Commands {
     },
     #[command(
         about = "Clean up a failed materialization.",
-        long_about = "Remove a failed materialization root and preserve shared data objects that are still referenced outside the failed tree.\n\nPass the plan id from the failed materialization run with --plan."
+        long_about = "Remove a failed materialization root and preserve shared data objects that are still referenced outside the failed tree.\n\nPass the plan id from the failed materialization run with --plan. Use this when materialize's automatic rollback could not finish or when you want to re-run the cleanup manually."
     )]
     CleanupFailed {
         #[arg(long)]
@@ -92,7 +92,7 @@ pub enum Commands {
     },
     #[command(
         about = "Materialize a source into FOD.",
-        long_about = "Validate a registered source and materialize its files into FOD.\n\nUse --dry-run to preview the current indexed state without writing PostgreSQL rows or creating import data.\n\nWarning: the non-dry-run command revalidates file metadata and hashes before importing. If a source file has disappeared, changed, or cannot be read during validation, the run aborts before any imported data is created. The non-dry-run command also requires the request-token schema migration because it creates replay-safe scan runs and import plans."
+        long_about = "Validate a registered source and materialize its files into FOD.\n\nUse --dry-run to preview the current indexed state without writing PostgreSQL rows or creating import data.\n\nWarning: the non-dry-run command revalidates file metadata and hashes before importing. If a source file has disappeared, changed, or cannot be read during validation, the run aborts before any imported data is created. If a later import step fails after the import root has been created, the command now attempts to roll the partial tree back automatically and leaves cleanup-failed as the manual fallback. The non-dry-run command also requires the request-token schema migration because it creates replay-safe scan runs and import plans."
     )]
     Materialize {
         #[arg(long)]
