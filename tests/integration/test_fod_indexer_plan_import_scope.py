@@ -35,7 +35,6 @@ SMOKE_FILES: dict[str, bytes] = {
     "a.txt": b"same",
     "b.txt": b"same",
     "c.txt": b"unique",
-    "empty.txt": b"",
 }
 
 OTHER_FILES: dict[str, bytes] = {
@@ -136,8 +135,8 @@ def main() -> None:
             assert_contains(other_add_output, str(OTHER_ROOT), "source add other")
 
             smoke_scan_output = run_indexer(ROOT, ["scan", "--source", "smoke"])
-            assert_contains(smoke_scan_output, "scanned files: 4", "scan smoke")
-            assert_contains(smoke_scan_output, "ok files: 4", "scan smoke")
+            assert_contains(smoke_scan_output, "scanned files: 3", "scan smoke")
+            assert_contains(smoke_scan_output, "ok files: 3", "scan smoke")
             assert_contains(smoke_scan_output, "total bytes: 14", "scan smoke")
 
             other_scan_output = run_indexer(ROOT, ["scan", "--source", "other"])
@@ -155,10 +154,10 @@ def main() -> None:
             smoke_dry_run_output = run_indexer(ROOT, ["plan-import", "--source", "smoke", "--dry-run"])
             assert_contains(smoke_dry_run_output, "FOD indexer dry-run import plan", "dry-run smoke")
             assert_contains(smoke_dry_run_output, "source: smoke", "dry-run smoke")
-            assert_contains(smoke_dry_run_output, "scanned files: 4", "dry-run smoke")
+            assert_contains(smoke_dry_run_output, "scanned files: 3", "dry-run smoke")
             assert_contains(smoke_dry_run_output, "candidate duplicate groups: 1", "dry-run smoke")
             assert_contains(smoke_dry_run_output, "confirmed duplicate groups: 1", "dry-run smoke")
-            assert_contains(smoke_dry_run_output, "unique payloads: 3", "dry-run smoke")
+            assert_contains(smoke_dry_run_output, "unique payloads: 2", "dry-run smoke")
             assert_contains(smoke_dry_run_output, "source bytes: 14", "dry-run smoke")
             assert_contains(smoke_dry_run_output, "estimated import bytes: 10", "dry-run smoke")
             assert_contains(smoke_dry_run_output, "estimated saved bytes: 4", "dry-run smoke")
@@ -166,10 +165,10 @@ def main() -> None:
             all_dry_run_output = run_indexer(ROOT, ["plan-import", "--all-sources", "--dry-run"])
             assert_contains(all_dry_run_output, "FOD indexer dry-run import plan", "dry-run all")
             assert_contains(all_dry_run_output, "source: all sources", "dry-run all")
-            assert_contains(all_dry_run_output, "scanned files: 6", "dry-run all")
+            assert_contains(all_dry_run_output, "scanned files: 5", "dry-run all")
             assert_contains(all_dry_run_output, "candidate duplicate groups: 1", "dry-run all")
             assert_contains(all_dry_run_output, "confirmed duplicate groups: 1", "dry-run all")
-            assert_contains(all_dry_run_output, "unique payloads: 5", "dry-run all")
+            assert_contains(all_dry_run_output, "unique payloads: 4", "dry-run all")
             assert_contains(all_dry_run_output, "source bytes: 17", "dry-run all")
             assert_contains(all_dry_run_output, "estimated import bytes: 13", "dry-run all")
             assert_contains(all_dry_run_output, "estimated saved bytes: 4", "dry-run all")
@@ -217,7 +216,6 @@ def main() -> None:
                         ("smoke", "a.txt", "canonical"),
                         ("smoke", "b.txt", "reference"),
                         ("smoke", "c.txt", "unique"),
-                        ("smoke", "empty.txt", "unique"),
                     ],
                 )
                 assert_plan_scope(
@@ -230,7 +228,6 @@ def main() -> None:
                         ("smoke", "a.txt", "canonical"),
                         ("smoke", "b.txt", "reference"),
                         ("smoke", "c.txt", "unique"),
-                        ("smoke", "empty.txt", "unique"),
                     ],
                 )
 

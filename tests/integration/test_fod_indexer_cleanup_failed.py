@@ -36,7 +36,6 @@ SOURCE_FILES: dict[str, bytes] = {
     "a.txt": b"same",
     "b.txt": b"same",
     "c.txt": b"unique",
-    "empty.txt": b"",
 }
 
 
@@ -111,8 +110,8 @@ def main() -> None:
                 assert_contains(source_add_output, str(SOURCE_ROOT), "source add")
 
                 scan_output = run_indexer(ROOT, ["scan", "--source", "smoke"])
-                assert_contains(scan_output, "scanned files: 4", "scan")
-                assert_contains(scan_output, "ok files: 4", "scan")
+                assert_contains(scan_output, "scanned files: 3", "scan")
+                assert_contains(scan_output, "ok files: 3", "scan")
 
                 hash_output = run_indexer(ROOT, ["hash", "--source", "smoke", "--candidates-only"])
                 assert_contains(hash_output, "duplicate sets: 1", "hash")
@@ -242,9 +241,9 @@ def main() -> None:
                 assert_contains(cleanup_output, f"plan id: {plan_id}", "cleanup")
                 assert_contains(cleanup_output, f"source: smoke", "cleanup")
                 assert_contains(cleanup_output, f"import root: /{root_name}", "cleanup")
-                assert_contains(cleanup_output, "files removed: 4", "cleanup")
+                assert_contains(cleanup_output, "files removed: 3", "cleanup")
                 assert_contains(cleanup_output, "directories removed: 1", "cleanup")
-                assert_contains(cleanup_output, "exclusive data objects removed: 2", "cleanup")
+                assert_contains(cleanup_output, "exclusive data objects removed: 1", "cleanup")
                 assert_contains(cleanup_output, "shared data objects preserved: 1", "cleanup")
                 assert_contains(cleanup_output, "skipping shared data object during failed import cleanup", "cleanup")
                 assert_contains(cleanup_output, "plan status: materialize_failed -> materialize_cleaned", "cleanup")

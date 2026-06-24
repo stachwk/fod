@@ -34,7 +34,6 @@ SOURCE_FILES: dict[str, bytes] = {
     "a.txt": b"same",
     "b.txt": b"same",
     "c.txt": b"unique",
-    "empty.txt": b"",
 }
 
 
@@ -75,8 +74,8 @@ def main() -> None:
 
                 scan_output = run_indexer(ROOT, ["scan", "--source", "smoke"])
                 assert_contains(scan_output, "FOD indexer scan", "scan")
-                assert_contains(scan_output, "scanned files: 4", "scan")
-                assert_contains(scan_output, "ok files: 4", "scan")
+                assert_contains(scan_output, "scanned files: 3", "scan")
+                assert_contains(scan_output, "ok files: 3", "scan")
                 assert_contains(scan_output, "total bytes: 14", "scan")
 
                 hash_output = run_indexer(ROOT, ["hash", "--source", "smoke", "--candidates-only"])
@@ -93,18 +92,18 @@ def main() -> None:
                 dry_run_output = run_indexer(ROOT, ["plan-import", "--source", "smoke", "--dry-run"])
                 assert_contains(dry_run_output, "FOD indexer dry-run import plan", "dry-run import plan")
                 assert_contains(dry_run_output, "source: smoke", "dry-run import plan")
-                assert_contains(dry_run_output, "scanned files: 4", "dry-run import plan")
+                assert_contains(dry_run_output, "scanned files: 3", "dry-run import plan")
                 assert_contains(dry_run_output, "candidate duplicate groups: 1", "dry-run import plan")
                 assert_contains(dry_run_output, "confirmed duplicate groups: 1", "dry-run import plan")
-                assert_contains(dry_run_output, "unique payloads: 3", "dry-run import plan")
+                assert_contains(dry_run_output, "unique payloads: 2", "dry-run import plan")
                 assert_contains(dry_run_output, "saved bytes: 4", "dry-run import plan")
 
                 materialize_output = run_indexer(ROOT, ["materialize", "--source", "smoke"])
                 assert_contains(materialize_output, "FOD indexer materialize", "materialize")
-                assert_contains(materialize_output, "scanned files: 4", "materialize")
-                assert_contains(materialize_output, "validated files: 4", "materialize")
+                assert_contains(materialize_output, "scanned files: 3", "materialize")
+                assert_contains(materialize_output, "validated files: 3", "materialize")
                 assert_contains(materialize_output, "duplicate groups: 1", "materialize")
-                assert_contains(materialize_output, "canonical files: 3", "materialize")
+                assert_contains(materialize_output, "canonical files: 2", "materialize")
                 assert_contains(materialize_output, "reference files: 1", "materialize")
                 assert_contains(materialize_output, "source bytes: 14", "materialize")
                 assert_contains(materialize_output, "imported bytes: 10", "materialize")
@@ -189,8 +188,6 @@ def main() -> None:
                         raise AssertionError("duplicate materialized sizes are wrong")
                     if rows_by_name["c.txt"]["size"] != 6:
                         raise AssertionError("unique materialized size is wrong")
-                    if rows_by_name["empty.txt"]["size"] != 0:
-                        raise AssertionError("zero-length file size is wrong")
                     if rows_by_name["a.txt"]["data_object_id"] != rows_by_name["b.txt"]["data_object_id"]:
                         raise AssertionError("duplicate files do not share a data object")
                     if rows_by_name["a.txt"]["reference_count"] != 2:
@@ -199,8 +196,6 @@ def main() -> None:
                         raise AssertionError("unique file unexpectedly reused duplicate data object")
                     if rows_by_name["c.txt"]["reference_count"] != 1:
                         raise AssertionError("unique file reference_count should be 1")
-                    if rows_by_name["empty.txt"]["reference_count"] != 1:
-                        raise AssertionError("zero-length file reference_count should be 1")
 
                     plan_rows = fetch_all(
                         conn,
@@ -221,7 +216,6 @@ def main() -> None:
                         "a.txt": "materialized_canonical",
                         "b.txt": "materialized_reference",
                         "c.txt": "materialized_unique",
-                        "empty.txt": "materialized_unique",
                     }
                     if set(plan_rows_by_path) != set(expected_actions):
                         raise AssertionError(

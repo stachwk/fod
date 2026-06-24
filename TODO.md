@@ -76,7 +76,7 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Add `make test-fod-indexer-smoke` as the canonical Makefile entrypoint for the materialize smoke.
 - [x] Scope `fod-indexer plan-import` by source with explicit `--source` and `--all-sources` flags, and cover both modes in smoke tests.
 - [x] Add cleanup for failed indexer materialization via `fod-indexer cleanup-failed --plan <id>`, with smoke coverage for duplicate payload reuse and zero-size files.
-- [ ] Align the remaining `fod-indexer` integration smokes with the zero-length skip contract so stale `empty.txt` assertions do not keep documenting the old pipeline shape.
+- [x] Align the remaining `fod-indexer` integration smokes with the zero-length skip contract so stale `empty.txt` assertions do not keep documenting the old pipeline shape.
 
 ## FOD indexer: dalszy plan dla Codex
 
