@@ -11,6 +11,7 @@ Use this file to record concise conclusions that matter for future work.
 - The indexer replay change required schema version 14, which adds the new request-token columns and the missing `updated_at` field for `index_scan_runs`.
 - The replay classifier in `rust_hotpath/src/pg.rs` now normalizes SQL whitespace before matching replayable command patterns, so multi-line Rust-built SQL statements can still qualify for bounded retry.
 - `fod-indexer` help now includes per-command descriptions and concrete usage examples, and `materialize` still fails closed during validation if a source file has disappeared, so it does not create imported data after a missing-file error.
+- `materialize` now says explicitly in both help text and runtime validation errors that missing or changed files abort before any imported data is created, which makes the fail-closed behavior visible without changing the import contract.
 - `fod-indexer` now accepts positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while keeping the explicit `--source` form. That makes the CLI friendlier for interactive use without changing the documented contract.
 
 ## 2026-06-23

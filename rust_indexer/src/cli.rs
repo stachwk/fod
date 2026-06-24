@@ -81,7 +81,7 @@ pub enum Commands {
     },
     #[command(
         about = "Materialize a source into FOD.",
-        long_about = "Validate a registered source and materialize its files into FOD.\n\nThe command revalidates file metadata and hashes before importing; if a source file has disappeared or changed, the run stops before creating imported data."
+        long_about = "Validate a registered source and materialize its files into FOD.\n\nWarning: the command revalidates file metadata and hashes before importing. If a source file has disappeared, changed, or cannot be read during validation, the run aborts before any imported data is created."
     )]
     Materialize {
         #[arg(long)]

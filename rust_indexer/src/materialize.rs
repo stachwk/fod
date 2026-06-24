@@ -73,28 +73,38 @@ fn validate_candidate(candidate: PlannableFile) -> Result<ValidatedCandidate, St
     let path = source_path(&candidate);
 
     let metadata_before = fs::metadata(&path)
-        .map_err(|err| format!("unable to read metadata for {}: {err}", path.display()))?;
+        .map_err(|err| {
+            format!(
+                "unable to read metadata for {}: {err}; validation aborts before any imported data is created",
+                path.display()
+            )
+        })?;
     if metadata_before.len() != candidate.file.size
         || candidate.file.mtime_ns != Some(mtime_ns(&metadata_before))
         || candidate.file.inode != Some(metadata_before.ino())
         || candidate.file.device != Some(metadata_before.dev())
     {
         return Err(format!(
-            "source file changed before import: {}",
+            "source file changed before import: {}; validation aborts before any imported data is created",
             path.display()
         ));
     }
 
     let actual_hash = collect_full_hash(&path)?;
     let metadata_after = fs::metadata(&path)
-        .map_err(|err| format!("unable to reread metadata for {}: {err}", path.display()))?;
+        .map_err(|err| {
+            format!(
+                "unable to reread metadata for {}: {err}; validation aborts before any imported data is created",
+                path.display()
+            )
+        })?;
     if metadata_after.len() != metadata_before.len()
         || mtime_ns(&metadata_after) != mtime_ns(&metadata_before)
         || metadata_after.ino() != metadata_before.ino()
         || metadata_after.dev() != metadata_before.dev()
     {
         return Err(format!(
-            "source file changed while validating import candidate: {}",
+            "source file changed while validating import candidate: {}; validation aborts before any imported data is created",
             path.display()
         ));
     }
@@ -102,7 +112,7 @@ fn validate_candidate(candidate: PlannableFile) -> Result<ValidatedCandidate, St
     if let Some(expected_hash) = candidate.full_hash_hex.as_deref() {
         if actual_hash != expected_hash {
             return Err(format!(
-                "full hash changed before import for {}",
+                "full hash changed before import for {}; validation aborts before any imported data is created",
                 path.display()
             ));
         }
