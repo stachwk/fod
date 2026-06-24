@@ -1175,6 +1175,26 @@ fn sql_is_replayable_copy_block_crc_upsert(sql: &str) -> bool {
         && sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, crc32 = EXCLUDED.crc32, updated_at = NOW()")
 }
 
+fn sql_is_replayable_schema_ddl(sql: &str) -> bool {
+    sql.starts_with("CREATE TABLE IF NOT EXISTS ")
+        || sql.starts_with("CREATE INDEX IF NOT EXISTS ")
+        || sql.starts_with("CREATE UNIQUE INDEX IF NOT EXISTS ")
+        || sql.starts_with("CREATE OR REPLACE FUNCTION ")
+        || sql.starts_with("DROP TRIGGER IF EXISTS ")
+        || sql.starts_with("CREATE TRIGGER fod_client_sessions_prune_lock_leases ")
+        || (sql.starts_with("ALTER TABLE IF EXISTS ")
+            && (sql.contains(" ADD COLUMN IF NOT EXISTS ")
+                || sql.contains(" ALTER COLUMN session_id SET DEFAULT 0")
+                || sql.contains(" ALTER COLUMN session_id SET NOT NULL")
+                || sql.contains(
+                    " DROP CONSTRAINT IF EXISTS lock_leases_resource_kind_resource_id_owner_key_lease_kind_key",
+                )
+                || sql.contains(
+                    " ALTER COLUMN owner_key TYPE NUMERIC(20,0) USING owner_key::numeric",
+                )
+                || sql.contains(" ALTER COLUMN session_id DROP DEFAULT")))
+}
+
 fn sql_compact(sql: &CString) -> String {
     sql.to_string_lossy()
         .split_whitespace()
@@ -1201,6 +1221,7 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
         || sql.starts_with("UPDATE index_files SET source_changed = TRUE, updated_at = NOW() WHERE id_file = ")
         || sql_is_replayable_data_blocks_upsert(&sql)
         || sql_is_replayable_copy_block_crc_upsert(&sql)
+        || sql_is_replayable_schema_ddl(&sql)
         || sql.starts_with("UPDATE client_sessions")
         || sql.starts_with("UPDATE lock_leases")
         || sql.starts_with("UPDATE lock_range_leases")
@@ -7652,6 +7673,83 @@ mod tests {
         assert!(sql_is_replayable_command(&data_object_size_update_sql));
         assert!(sql_is_replayable_command(&xattr_insert_sql));
         assert!(!sql_is_replayable_command(&journal_sql));
+    }
+
+    #[test]
+    fn recognizes_replayable_schema_ddl_sql_for_disconnect_retry() {
+        let lock_table_sql = std::ffi::CString::new(
+            "
+            CREATE TABLE IF NOT EXISTS lock_leases (
+                id_lock SERIAL PRIMARY KEY
+            )
+            ",
+        )
+        .unwrap();
+        let lock_index_sql = std::ffi::CString::new(
+            "
+            CREATE INDEX IF NOT EXISTS idx_lock_leases_expires
+            ON lock_leases (lease_expires_at)
+            ",
+        )
+        .unwrap();
+        let lock_alter_sql = std::ffi::CString::new(
+            "
+            ALTER TABLE IF EXISTS lock_leases
+            ALTER COLUMN session_id SET NOT NULL
+            ",
+        )
+        .unwrap();
+        let client_table_sql = std::ffi::CString::new(
+            "
+            CREATE TABLE IF NOT EXISTS client_sessions (
+                session_id BIGSERIAL PRIMARY KEY
+            )
+            ",
+        )
+        .unwrap();
+        let function_sql = std::ffi::CString::new(
+            "
+            CREATE OR REPLACE FUNCTION fod_prune_client_session_lock_leases()
+            RETURNS trigger AS $$
+            BEGIN
+                RETURN OLD;
+            END;
+            $$ LANGUAGE plpgsql
+            ",
+        )
+        .unwrap();
+        let trigger_drop_sql = std::ffi::CString::new(
+            "
+            DROP TRIGGER IF EXISTS fod_client_sessions_prune_lock_leases
+            ON client_sessions
+            ",
+        )
+        .unwrap();
+        let trigger_create_sql = std::ffi::CString::new(
+            "
+            CREATE TRIGGER fod_client_sessions_prune_lock_leases
+            BEFORE DELETE ON client_sessions
+            FOR EACH ROW
+            EXECUTE FUNCTION fod_prune_client_session_lock_leases()
+            ",
+        )
+        .unwrap();
+        let negative_sql = std::ffi::CString::new(
+            "
+            ALTER TABLE lock_leases
+            DROP COLUMN session_id
+            ",
+        )
+        .unwrap();
+
+        assert!(sql_is_replayable_command(&lock_table_sql));
+        assert!(sql_is_replayable_command(&lock_index_sql));
+        assert!(sql_is_replayable_command(&lock_alter_sql));
+        assert!(sql_is_replayable_command(&client_table_sql));
+        assert!(sql_is_replayable_command(&function_sql));
+        assert!(sql_is_replayable_command(&trigger_drop_sql));
+        assert!(sql_is_replayable_command(&trigger_create_sql));
+        assert!(!sql_is_replayable_command(&negative_sql));
     }
 
     #[test]
