@@ -2,6 +2,10 @@
 
 Use this file to record concise conclusions that matter for future work.
 
+## 2026-06-24
+
+- `DbRepo::query_rows_text()` now participates in the bounded replay path for read-only SQL, so the indexer's plan/report/cleanup row-fetching paths can retry once after a transient PostgreSQL disconnect. The broader write-side replay follow-up remains open.
+
 ## 2026-06-23
 
 - Read-only SQL paths in `rust_hotpath/src/pg.rs` now participate in the bounded replay path too. The classifier treats `SELECT` and recursive `WITH` queries as replayable, so helper reads such as `query_config_value()`, xattr lookups, directory listings, and prepared lookup statements retry once on a fresh connection when the first socket dies mid-flight.

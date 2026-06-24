@@ -863,6 +863,27 @@ unsafe fn query_scalar_text_on_conn(conn: *mut PGconn, sql: &CString) -> Result<
     fetch_single_text(res)
 }
 
+unsafe fn query_rows_text_on_conn(
+    conn: *mut PGconn,
+    sql: &CString,
+) -> Result<Vec<Vec<String>>, String> {
+    let res = PQexec(conn, sql.as_ptr());
+    if res.is_null() {
+        let err = conn_error(conn);
+        return Err(maybe_replayable_sql_error(conn, sql, err));
+    }
+    let status = PQresultStatus(res);
+    if status != PGRES_TUPLES_OK {
+        let err = result_error(res);
+        PQclear(res);
+        if sql_is_read_only(sql) && is_retryable_connection_error(conn, &err) {
+            return Err(replayable_sql_error(err));
+        }
+        return Err(err);
+    }
+    fetch_rows_text(res)
+}
+
 unsafe fn schema_is_initialized_on_conn(conn: *mut PGconn) -> Result<bool, String> {
     let sql = CString::new(format!(
         "SELECT \
@@ -2864,20 +2885,7 @@ impl DbRepo {
 
     pub fn query_rows_text(&self, sql: &str) -> Result<Vec<Vec<String>>, String> {
         let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
-        self.with_cached_connection(|conn| unsafe {
-            let res = PQexec(conn, sql.as_ptr());
-            if res.is_null() {
-                return Err(conn_error(conn));
-            }
-            let status = PQresultStatus(res);
-            if status == PGRES_TUPLES_OK {
-                fetch_rows_text(res)
-            } else {
-                let error = result_error(res);
-                PQclear(res);
-                Err(error)
-            }
-        })
+        self.with_cached_connection(|conn| unsafe { query_rows_text_on_conn(conn, &sql) })
     }
 
     pub fn exec(&self, sql: &str) -> Result<(), String> {

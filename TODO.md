@@ -39,6 +39,7 @@ This document records the small set of open follow-ups plus completed work, clos
 ### Obszary do rozwoju
 
 - [ ] Dodać pełniejszy replay in-flight SQL po błędach.
+  - Progress: `DbRepo::query_rows_text()` now retries read-only SQL once after a transient disconnect; broader write-side replay still needs a separate design.
 - [ ] Plan implementacji ioctl:
   - [x] Najpierw `FIGETBSZ`. Zaimplementowane w `rust_fuse/src/fs.rs` jako odpowiedź oparta o bieżący `blksize`.
   - [x] Potem `FS_IOC_GETFLAGS`. Na razie zwracane jest neutralne `0`, bo flags nie są jeszcze trwale przechowywane.
