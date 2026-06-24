@@ -41,6 +41,7 @@ This document records the small set of open follow-ups plus completed work, clos
 - [ ] Dodać pełniejszy replay in-flight SQL po błędach.
   - Progress: `DbRepo::query_rows_text()` now retries read-only SQL once after a transient disconnect, and `DbRepo::exec()` now retries the idempotent replayable command set once too; `acquire_flock_lease()`'s `lock_leases` upsert, `touch_data_object()`'s pure metadata touch, `adopt_source_data_object()`'s destination file rewrite, and `purge_primary_file()` row reassignment updates for `data_blocks`, `data_extents`, and `copy_block_crc` are also replay-safe now. `index_import_plan_entries` inserts are replay-safe via `DELETE + INSERT`, and `index_scan_runs` plus `index_import_plans` now carry explicit `request_token` columns so retry can return the same running row, but broader transactional replay still needs a separate design because commit outcome after a disconnect remains ambiguous.
   - Progress: the lock and client-session schema bootstrap path now also retries its idempotent DDL (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, `DROP TRIGGER IF EXISTS`, and the safe `ALTER TABLE IF EXISTS` variants used there) after a transient disconnect, so an interrupted schema init can resume without leaving the mount in a half-created state.
+  - Project split: see [docs/transactional-replay-project.md](docs/transactional-replay-project.md) for the dedicated project plan, scope, and milestones.
 - [x] Review `fod-indexer` CLI ergonomics after manual use; keep the explicit `--source` contract if that remains the intended API, but consider clearer examples or a positional alias if users keep trying the old style. Added positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while preserving `--source`.
 - [x] Usprawnić automatyczne sugerowanie nazw źródłom w `fod-indexer source add`, bez usuwania `--name`.
   - Progress: local sources default to the current hostname; SMB/QNAP try to infer the remote host or IP from the mounted share; ADB prefers the device serial from `ANDROID_SERIAL`, `ADB_SERIAL`, `ADB_DEVICE_SERIAL`, or `adb devices`; GitHub sources try the git remote slug or repository name. Explicit `--name` still overrides the suggestion.
@@ -98,6 +99,13 @@ This document records the small set of open follow-ups plus completed work, clos
   - Progress: the current kinds now have an explicit boundary in `docs/fod-indexer.md`, and none of them gets a direct remote crawler in the shared core. Future non-path-backed sources should come in as separate adapter projects.
 - [ ] Uporzadkuj safety i retry tylko tam, gdzie sa jeszcze luki. Read-only i idempotentne operacje maja zostac bounded-retry friendly, ale nie dokladaj pelnego replay nieidempotentnych transakcji bez osobnego projektu.
 - [ ] Nie wracaj do implementacji podstawowego pipeline jako nowego zadania. `scan`, `hash`, `duplicate detection`, `plan-import`, `materialize` i `cleanup` traktuj jako juz dostarczone; dalsza praca ma byc wokol granic, adapterow i hardeningu.
+
+## Transactional Replay Project
+
+- [ ] Inventory transactional SQL call sites and split them into idempotent, replayable, and non-replayable groups.
+- [ ] Define the replay envelope and outcome confirmation for lost commit acknowledgements.
+- [ ] Add disconnect smoke tests for body failure, commit failure, and reconnect recovery.
+- [ ] Keep the current bounded replay envelope unchanged until the project proves a safe expansion.
 
 ## FOD 3.0.9 — Cleanup and recovery safety
 
