@@ -1,6 +1,7 @@
 mod clean;
 mod cleanup;
 mod cli;
+mod config;
 mod db;
 mod hash;
 mod materialize;
@@ -21,6 +22,7 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let cli = Cli::parse_with_source_aliases();
+    config::initialize_indexer_settings()?;
     let repo = db::open_repo(cli.conninfo.as_deref())?;
 
     match cli.command {

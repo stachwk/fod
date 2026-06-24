@@ -1,12 +1,14 @@
 use crate::cli::SourceKind;
+use crate::config;
 use crate::model::IndexedFile;
 use fod_rust_runtime::current_hostname;
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
-const IGNORED_COMPONENTS: &[&str] = &[
+const DEFAULT_IGNORED_COMPONENTS: &[&str] = &[
     "cache",
     "caches",
     "build",
@@ -18,20 +20,9 @@ const IGNORED_COMPONENTS: &[&str] = &[
     "temp",
     "out",
     "__pycache__",
-    ".git",
-    ".svn",
-    ".hg",
-    ".bzr",
-    ".cache",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".tox",
-    ".nox",
-    ".gradle",
-    ".idea",
-    ".venv",
 ];
+
+static INDEXER_SETTINGS_READY: OnceLock<()> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 struct MountInfo {
@@ -60,14 +51,17 @@ pub fn resolve_source_name(
 }
 
 pub fn is_ignored_indexed_file(file: &IndexedFile) -> bool {
+    ensure_indexer_settings_loaded();
     is_ignored_relative_path(Path::new(&file.path))
 }
 
 pub fn is_ignored_index_path(_root_path: &Path, relative_path: &str) -> bool {
+    ensure_indexer_settings_loaded();
     is_ignored_relative_path(Path::new(relative_path))
 }
 
 pub fn is_ignored_source_path(root_path: &Path, entry_path: &Path) -> bool {
+    ensure_indexer_settings_loaded();
     if entry_path == root_path {
         return false;
     }
@@ -89,24 +83,35 @@ fn suggested_source_name(kind: SourceKind, root_path: &Path) -> Option<String> {
 }
 
 fn is_ignored_relative_path(relative_path: &Path) -> bool {
+    let settings = config::indexer_settings();
+    let normalized = normalize_path(relative_path);
+    if settings
+        .skip_prefixes
+        .iter()
+        .any(|prefix| normalized == *prefix || normalized.starts_with(&format!("{prefix}/")))
+    {
+        return true;
+    }
+
     relative_path.components().any(|component| match component {
-        Component::Normal(value) => is_ignored_component(&value.to_string_lossy()),
+        Component::Normal(value) => is_ignored_component(&value.to_string_lossy(), settings),
         _ => false,
     })
 }
 
-fn is_ignored_component(component: &str) -> bool {
+fn is_ignored_component(component: &str, settings: &config::IndexerSettings) -> bool {
     if component.is_empty() || component == "." || component == ".." {
         return false;
     }
-    if component.starts_with('.') {
+    if component.starts_with('.') && settings.skip_hidden {
         return true;
     }
 
     let lowered = component.to_ascii_lowercase();
-    IGNORED_COMPONENTS
+    DEFAULT_IGNORED_COMPONENTS
         .iter()
         .any(|candidate| lowered == *candidate)
+        || settings.skip_components.contains(&lowered)
 }
 
 fn suggested_mount_name(root_path: &Path) -> Option<String> {
@@ -314,4 +319,21 @@ fn sanitize_label(value: &str) -> Option<String> {
     } else {
         Some(sanitized)
     }
+}
+
+fn normalize_path(relative_path: &Path) -> String {
+    relative_path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn ensure_indexer_settings_loaded() {
+    INDEXER_SETTINGS_READY.get_or_init(|| {
+        let _ = config::initialize_indexer_settings();
+    });
 }

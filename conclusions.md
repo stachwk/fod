@@ -4,6 +4,7 @@ Use this file to record concise conclusions that matter for future work.
 
 ## 2026-06-24
 
+- `fod-indexer` now reads an optional `[fod-indexer]` section from `fod_config.ini` for skip filters. `skip_hidden`, `skip_components`, `skip_prefixes`, and `skip_paths` now control which source paths are omitted, and the INI parser itself is shared through `rust_runtime` instead of being duplicated in multiple crates.
 - `fod-indexer source add` now accepts path-backed source kinds for `local`, `smb`, `qnap`, `adb`, and `github`, with kind-aware name suggestions for mounts, ADB serials, and git remotes. The current adapter layer still walks filesystem roots, so the new kinds are metadata and naming hooks rather than direct remote crawlers.
 - Hidden dotfiles and common cache/build directories are now skipped during scan, hash, plan-import, materialize planning, duplicate-report rebuilds, and cleanup-tree walks. That keeps paths such as `.bashrc`, `.venv`, `.git`, `node_modules`, `target`, and `build` out of the index and out of the duplicate-set view.
 - `DbRepo::query_rows_text()` now participates in the bounded replay path for read-only SQL, so the indexer's plan/report/cleanup row-fetching paths can retry once after a transient PostgreSQL disconnect. The broader write-side replay follow-up remains open.

@@ -6,6 +6,12 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub mod ini_config;
+
+pub use ini_config::{
+    load_config_parser, resolve_config_path, resolve_config_path_optional, IniConfig,
+};
+
 pub const DEFAULT_METADATA_TTL: Duration = Duration::from_secs(1);
 pub const DEFAULT_STATFS_TTL: Duration = Duration::from_secs(2);
 pub const DEFAULT_LOCK_LEASE_TTL: Duration = Duration::from_secs(30);

@@ -44,6 +44,28 @@ If `--name` is omitted, `fod-indexer` uses a kind-aware naming heuristic with th
 
 Explicit `--name` stays available when you want to override the suggestion or register a source that does not fit the default heuristic.
 
+## Indexer Filters
+
+`fod-indexer` reads an optional `[fod-indexer]` section from `fod_config.ini` and uses it as a skip list for scan, hash, planning, materialization previews, duplicate-report rebuilds, and cleanup walks.
+
+Supported keys:
+
+- `skip_hidden = true|false`
+- `skip_components = name1,name2,...`
+- `skip_prefixes = path/prefix1,path/prefix2,...`
+- `skip_paths = convenience alias that accepts either component names or nested prefixes`
+
+Examples:
+
+```ini
+[fod-indexer]
+skip_hidden = true
+skip_components = cache,caches,build,dist,node_modules,target,tmp,temp,out,__pycache__
+skip_prefixes = work/cache,Android/data/com.example/cache
+```
+
+Plain names in `skip_paths` are treated as component matches, while values containing `/` or `\` are treated as relative path prefixes. Hidden dotfiles are skipped by default unless `skip_hidden = false` is set.
+
 ## Hashing strategy
 
 The staged dedupe flow is:
