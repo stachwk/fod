@@ -10,9 +10,14 @@ use fod_rust_hotpath::pg::DbRepo;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::{File, FileType};
+use std::io::{self, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
+
+const SCAN_PROGRESS_FILE_STEP: u64 = 50;
+const SCAN_PROGRESS_TIME_STEP: Duration = Duration::from_secs(1);
 
 pub fn register_source(
     repo: &DbRepo,
@@ -327,51 +332,33 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
         source_path: source.root_path.display().to_string(),
         ..ScanSummary::default()
     };
+    let mut progress = ScanProgressReporter::new(&source.name, &source.root_path);
 
-    let walker = WalkDir::new(&source.root_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| !source::is_ignored_source_path(&source.root_path, entry.path()));
-    for item in walker {
-        let entry = match item {
-            Ok(entry) => entry,
-            Err(err) => {
-                eprintln!("FOD indexer scan warning: {err}");
+    let scan_result = (|| -> Result<(), String> {
+        let walker = WalkDir::new(&source.root_path)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| !source::is_ignored_source_path(&source.root_path, entry.path()));
+        for item in walker {
+            let entry = match item {
+                Ok(entry) => entry,
+                Err(err) => {
+                    eprintln!("FOD indexer scan warning: {err}");
+                    continue;
+                }
+            };
+
+            if entry.depth() == 0 || entry.file_type().is_dir() {
                 continue;
             }
-        };
 
-        if entry.depth() == 0 || entry.file_type().is_dir() {
-            continue;
-        }
+            summary.scanned_files = summary.scanned_files.saturating_add(1);
+            let entry_path = entry.path().to_path_buf();
+            let relative_path = relative_source_path(&source.root_path, &entry_path);
+            let file_kind = file_kind_label(&entry.file_type());
 
-        summary.scanned_files = summary.scanned_files.saturating_add(1);
-        let entry_path = entry.path().to_path_buf();
-        let relative_path = relative_source_path(&source.root_path, &entry_path);
-        let file_kind = file_kind_label(&entry.file_type());
-
-        if file_kind != "regular" {
-            summary.unsupported_files = summary.unsupported_files.saturating_add(1);
-            upsert_index_file(
-                repo,
-                source.id_source,
-                scan_run_id,
-                &relative_path,
-                0,
-                None,
-                None,
-                None,
-                file_kind,
-                "unsupported_type",
-                false,
-            )?;
-            continue;
-        }
-
-        let metadata = match fs::metadata(&entry_path) {
-            Ok(metadata) => metadata,
-            Err(err) => {
-                summary.stat_failed_files = summary.stat_failed_files.saturating_add(1);
+            if file_kind != "regular" {
+                summary.unsupported_files = summary.unsupported_files.saturating_add(1);
                 upsert_index_file(
                     repo,
                     source.id_source,
@@ -381,62 +368,173 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
                     None,
                     None,
                     None,
-                    "regular",
-                    "stat_failed",
+                    file_kind,
+                    "unsupported_type",
                     false,
                 )?;
-                eprintln!(
-                    "FOD indexer scan warning: file={} stat failed: {}",
-                    entry_path.display(),
-                    err
-                );
+                progress.maybe_report(&summary, &entry_path, "unsupported_type");
                 continue;
             }
-        };
 
-        let size = metadata.len();
-        let mtime_ns = Some(
-            metadata
-                .mtime()
-                .saturating_mul(1_000_000_000)
-                .saturating_add(metadata.mtime_nsec()),
-        );
-        let inode = Some(metadata.ino());
-        let device = Some(metadata.dev());
-        let scan_status = match File::open(&entry_path) {
-            Ok(_) => {
-                summary.ok_files = summary.ok_files.saturating_add(1);
-                summary.total_bytes = summary.total_bytes.saturating_add(size);
-                "ok"
-            }
-            Err(err) => {
-                summary.unreadable_files = summary.unreadable_files.saturating_add(1);
-                eprintln!(
-                    "FOD indexer scan warning: file={} open failed: {}",
-                    entry_path.display(),
-                    err
-                );
-                "unreadable"
-            }
-        };
+            let metadata = match fs::metadata(&entry_path) {
+                Ok(metadata) => metadata,
+                Err(err) => {
+                    summary.stat_failed_files = summary.stat_failed_files.saturating_add(1);
+                    upsert_index_file(
+                        repo,
+                        source.id_source,
+                        scan_run_id,
+                        &relative_path,
+                        0,
+                        None,
+                        None,
+                        None,
+                        "regular",
+                        "stat_failed",
+                        false,
+                    )?;
+                    eprintln!(
+                        "FOD indexer scan warning: file={} stat failed: {}",
+                        entry_path.display(),
+                        err
+                    );
+                    progress.maybe_report(&summary, &entry_path, "stat_failed");
+                    continue;
+                }
+            };
 
-        upsert_index_file(
-            repo,
-            source.id_source,
-            scan_run_id,
-            &relative_path,
-            size,
-            mtime_ns,
-            inode,
-            device,
-            "regular",
-            scan_status,
-            false,
-        )?;
+            let size = metadata.len();
+            let mtime_ns = Some(
+                metadata
+                    .mtime()
+                    .saturating_mul(1_000_000_000)
+                    .saturating_add(metadata.mtime_nsec()),
+            );
+            let inode = Some(metadata.ino());
+            let device = Some(metadata.dev());
+            let scan_status = match File::open(&entry_path) {
+                Ok(_) => {
+                    summary.ok_files = summary.ok_files.saturating_add(1);
+                    summary.total_bytes = summary.total_bytes.saturating_add(size);
+                    "ok"
+                }
+                Err(err) => {
+                    summary.unreadable_files = summary.unreadable_files.saturating_add(1);
+                    eprintln!(
+                        "FOD indexer scan warning: file={} open failed: {}",
+                        entry_path.display(),
+                        err
+                    );
+                    "unreadable"
+                }
+            };
+
+            upsert_index_file(
+                repo,
+                source.id_source,
+                scan_run_id,
+                &relative_path,
+                size,
+                mtime_ns,
+                inode,
+                device,
+                "regular",
+                scan_status,
+                false,
+            )?;
+            progress.maybe_report(&summary, &entry_path, scan_status);
+        }
+        Ok(())
+    })();
+
+    match scan_result {
+        Ok(()) => {
+            progress.finish(&summary);
+            finish_scan_run(repo, scan_run_id, "completed", None);
+            Ok(summary)
+        }
+        Err(err) => {
+            progress.fail(&summary, &err);
+            finish_scan_run(repo, scan_run_id, "failed", Some(&err));
+            Err(err)
+        }
+    }
+}
+
+struct ScanProgressReporter {
+    source_name: String,
+    source_path: String,
+    started_at: Instant,
+    last_report_at: Instant,
+}
+
+impl ScanProgressReporter {
+    fn new(source_name: &str, source_path: &Path) -> Self {
+        let now = Instant::now();
+        let reporter = Self {
+            source_name: source_name.to_string(),
+            source_path: source_path.display().to_string(),
+            started_at: now,
+            last_report_at: now,
+        };
+        reporter.emit("started", &ScanSummary::default(), None);
+        reporter
     }
 
-    finish_scan_run(repo, scan_run_id, "completed", None);
-    Ok(summary)
+    fn maybe_report(&mut self, summary: &ScanSummary, current_path: &Path, status: &str) {
+        let should_report = summary.scanned_files == 1
+            || summary.scanned_files % SCAN_PROGRESS_FILE_STEP == 0
+            || self.last_report_at.elapsed() >= SCAN_PROGRESS_TIME_STEP;
+        if should_report {
+            self.emit("running", summary, Some((current_path, status)));
+            self.last_report_at = Instant::now();
+        }
+    }
+
+    fn finish(&mut self, summary: &ScanSummary) {
+        self.emit("done", summary, None);
+    }
+
+    fn fail(&mut self, summary: &ScanSummary, error: &str) {
+        self.emit_with_error("failed", summary, error, None);
+    }
+
+    fn emit(&self, phase: &str, summary: &ScanSummary, current: Option<(&Path, &str)>) {
+        self.emit_with_error(phase, summary, "", current);
+    }
+
+    fn emit_with_error(
+        &self,
+        phase: &str,
+        summary: &ScanSummary,
+        error: &str,
+        current: Option<(&Path, &str)>,
+    ) {
+        let elapsed = self.started_at.elapsed().as_secs_f64();
+        let mut line = format!(
+            "FOD indexer scan progress: phase={} source={} path={} scanned={} ok={} unreadable={} stat_failed={} unsupported={} bytes={} elapsed={:.1}s",
+            phase,
+            self.source_name,
+            self.source_path,
+            summary.scanned_files,
+            summary.ok_files,
+            summary.unreadable_files,
+            summary.stat_failed_files,
+            summary.unsupported_files,
+            summary.total_bytes,
+            elapsed,
+        );
+        if let Some((path, status)) = current {
+            line.push_str(&format!(" current={} status={}", path.display(), status));
+        }
+        if !error.is_empty() {
+            line.push_str(&format!(" error={error}"));
+        }
+
+        let mut stderr = io::stderr().lock();
+        let _ = writeln!(stderr, "{line}");
+        let _ = stderr.flush();
+    }
 }
 
 pub fn load_indexed_files(

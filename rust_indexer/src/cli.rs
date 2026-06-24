@@ -35,7 +35,7 @@ pub enum Commands {
     },
     #[command(
         about = "Scan a source directory.",
-        long_about = "Walk the registered source directory and store file metadata in index_files.\n\nThe scan records regular, unreadable, and unsupported entries before hashing. It also needs the request-token schema migration because it creates replay-safe scan runs."
+        long_about = "Walk the registered source directory and store file metadata in index_files.\n\nThe scan records regular, unreadable, and unsupported entries before hashing. It also emits periodic progress lines on stderr while it walks the tree. The command needs the request-token schema migration because it creates replay-safe scan runs."
     )]
     Scan {
         #[arg(long)]
