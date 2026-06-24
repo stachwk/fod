@@ -185,6 +185,9 @@ pub(crate) fn insert_import_plan_entry(
 ) -> Result<(), String> {
     let sql = format!(
         "
+        DELETE FROM index_import_plan_entries
+        WHERE id_import_plan = {plan_id}
+          AND id_file = {file_id};
         INSERT INTO index_import_plan_entries (
             id_import_plan,
             id_file,
