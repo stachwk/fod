@@ -1,3 +1,4 @@
+mod capabilities;
 mod clean;
 mod cleanup;
 mod cli;
@@ -39,6 +40,7 @@ fn run() -> Result<(), String> {
                     source.root_path.display(),
                     source.id_source
                 );
+                println!("capabilities: {}", kind.capabilities());
                 Ok(())
             }
             SourceCommands::List { kind, path } => match path {
@@ -51,6 +53,9 @@ fn run() -> Result<(), String> {
                         "kind hint: {}",
                         kind.as_ref().map(|kind| kind.as_str()).unwrap_or("none")
                     );
+                    if let Some(kind) = kind.as_ref() {
+                        println!("capabilities: {}", kind.capabilities());
+                    }
                     println!("directories: {}", entries.len());
                     for entry in entries {
                         if entry.added_sources.is_empty() {
@@ -80,6 +85,7 @@ fn run() -> Result<(), String> {
                         println!("adb root: {}", adb_root.remote_root);
                         println!("root: {}", root_path.display());
                         println!("kind hint: adb");
+                        println!("capabilities: {}", SourceKind::Adb.capabilities());
                         println!("directories: {}", entries.len());
                         for entry in entries {
                             if entry.added_sources.is_empty() {
@@ -105,10 +111,11 @@ fn run() -> Result<(), String> {
                         println!("registered sources: {}", sources.len());
                         for source in sources {
                             println!(
-                                "- id={} name={} kind={} path={}",
+                                "- id={} name={} kind={} capabilities={} path={}",
                                 source.id_source,
                                 source.name,
                                 source.kind,
+                                source_kind_capabilities(&source.kind),
                                 source.root_path.display()
                             );
                         }
@@ -225,13 +232,20 @@ fn format_registered_sources(sources: &[IndexSource]) -> String {
         .iter()
         .map(|source| {
             format!(
-                "{} (kind={}, id={}, path={})",
+                "{} (kind={}, capabilities={}, id={}, path={})",
                 source.name,
                 source.kind,
+                source_kind_capabilities(&source.kind),
                 source.id_source,
                 source.root_path.display()
             )
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn source_kind_capabilities(kind: &str) -> String {
+    SourceKind::from_db_str(kind)
+        .map(|kind| kind.capabilities().to_string())
+        .unwrap_or_else(|| "unavailable".to_string())
 }
