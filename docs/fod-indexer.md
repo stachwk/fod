@@ -23,11 +23,11 @@ Duplicate detection must be content-based. A matching filename is never enough.
 
 ## MVP scope
 
-The first implementation supports local filesystem sources only.
+The current implementation supports filesystem-backed source adapters. The adapter kind affects naming heuristics and future policy hooks, but the indexed root is still a local filesystem path today.
 
 Supported actions:
 
-- `fod-indexer source add [--name <name>] --path <path> --kind local`
+- `fod-indexer source add [--name <name>] --path <path> --kind local|smb|qnap|adb|github`
 - `fod-indexer scan --source <name>`
 - `fod-indexer hash --source <name> --candidates-only`
 - `fod-indexer report duplicates`
@@ -35,7 +35,14 @@ Supported actions:
 - `fod-indexer clean --source <name> --dry-run`
 - `fod-indexer materialize --source <name>`
 
-If `--name` is omitted for a local source, `fod-indexer` uses the current hostname as the default source name. Explicit `--name` stays available when you want to override the suggestion or register a source that does not fit the default heuristic.
+If `--name` is omitted, `fod-indexer` uses a kind-aware naming heuristic with the current hostname as the final fallback. Examples:
+
+- `local`: current hostname,
+- `smb` / `qnap`: remote host or IP from the mounted share when it can be inferred,
+- `adb`: device serial from `ANDROID_SERIAL`, `ADB_SERIAL`, `ADB_DEVICE_SERIAL`, or `adb devices`,
+- `github`: git remote slug or repository name when the source path is a checkout.
+
+Explicit `--name` stays available when you want to override the suggestion or register a source that does not fit the default heuristic.
 
 ## Hashing strategy
 
@@ -94,9 +101,11 @@ Materialization writes into a per-run root directory inside FOD named `index-sou
 
 ## Cleanup
 
-`clean --source <name>` compares the current local source tree with the indexed rows for that source and removes stale file entries that no longer exist. The command also removes dependent import-plan entries that reference those stale files and refreshes duplicate-set metadata after a real cleanup.
+`clean --source <name>` compares the current source tree with the indexed rows for that source and removes stale file entries that no longer exist. The command also removes dependent import-plan entries that reference those stale files and refreshes duplicate-set metadata after a real cleanup.
 
 Use `--dry-run` first if you want to preview which rows would be removed without touching PostgreSQL. If the source root itself is gone, the cleanup treats the source as fully orphaned and removes the indexed rows for that source.
+
+Hidden dotfiles and common cache/build directories are skipped during scan, hash, plan, materialize, and cleanup view rebuilding. That keeps paths such as `.bashrc`, `.venv`, `.git`, `node_modules`, `target`, `build`, and similar cache trees out of the index.
 
 ## Architecture note
 

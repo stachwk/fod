@@ -2,8 +2,10 @@ use crate::db::{ensure_indexer_request_token_schema, sql_nullable_u64, sql_quote
 use crate::hash;
 use crate::model::{DuplicateSet, ImportPlanSummary, IndexedFile};
 use crate::replay;
+use crate::source;
 use fod_rust_hotpath::pg::DbRepo;
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PlannableFile {
@@ -98,9 +100,13 @@ pub(crate) fn load_plannable_files(
         ",
     ))?;
 
-    rows.iter()
+    Ok(rows
+        .iter()
         .map(|row| PlannableFile::from_row(row))
-        .collect::<Result<Vec<_>, _>>()
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|file| !source::is_ignored_indexed_file(&file.file))
+        .collect::<Vec<_>>())
 }
 
 pub(crate) fn canonical_sort_key(file: &IndexedFile) -> (u64, usize, String) {
@@ -286,6 +292,9 @@ pub fn report_duplicate_sets(repo: &DbRepo, limit: usize) -> Result<(), String> 
     let mut sets: BTreeMap<u64, (DuplicateSet, Vec<PlannableFile>)> = BTreeMap::new();
     for row in rows {
         if row.len() < 11 {
+            continue;
+        }
+        if source::is_ignored_index_path(Path::new(&row[9]), &row[10]) {
             continue;
         }
         let set_id = row[0]

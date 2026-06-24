@@ -1,6 +1,7 @@
 use crate::db::{hex_encode, sql_bytea_hex, sql_nullable_i64, sql_nullable_u64, sql_quote_literal};
 use crate::model::{HashSummary, IndexedFile};
 use crate::scan;
+use crate::source;
 use fod_rust_hotpath::pg::DbRepo;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -206,10 +207,14 @@ pub fn rebuild_duplicate_sets(repo: &DbRepo) -> Result<u64, String> {
         "
         SELECT
             h.id_file,
+            s.root_path,
+            f.path,
             h.hash_algorithm,
             COALESCE(encode(h.full_hash, 'hex'), ''),
             h.observed_size
         FROM index_file_hashes h
+        JOIN index_files f ON f.id_file = h.id_file
+        JOIN index_sources s ON s.id_index_source = f.id_index_source
         WHERE h.hash_status = 'full' AND h.full_hash IS NOT NULL
         ORDER BY h.hash_algorithm, h.observed_size, h.full_hash, h.id_file
         ",
@@ -217,16 +222,19 @@ pub fn rebuild_duplicate_sets(repo: &DbRepo) -> Result<u64, String> {
 
     let mut groups: BTreeMap<(String, String, u64), Vec<u64>> = BTreeMap::new();
     for row in rows {
-        if row.len() < 4 {
+        if row.len() < 6 {
             continue;
         }
         let file_id = row[0]
             .trim()
             .parse::<u64>()
             .map_err(|err| format!("invalid file id in hash rows: {err}"))?;
-        let algorithm = row[1].clone();
-        let full_hash_hex = row[2].clone();
-        let observed_size = row[3]
+        if source::is_ignored_index_path(Path::new(&row[1]), &row[2]) {
+            continue;
+        }
+        let algorithm = row[3].clone();
+        let full_hash_hex = row[4].clone();
+        let observed_size = row[5]
             .trim()
             .parse::<u64>()
             .map_err(|err| format!("invalid file size in hash rows: {err}"))?;
@@ -393,20 +401,19 @@ pub fn hash_source(
 ) -> Result<HashSummary, String> {
     let source = scan::load_source(repo, source_name)?;
     let files = scan::load_indexed_files(repo, Some(source_name))?;
+    let files = files
+        .into_iter()
+        .filter(|file| file.scan_status == "ok" && file.file_kind == "regular")
+        .filter(|file| !source::is_ignored_indexed_file(file))
+        .collect::<Vec<_>>();
     let mut summary = HashSummary {
         source_name: source.name.clone(),
-        scanned_files: files
-            .iter()
-            .filter(|file| file.scan_status == "ok" && file.file_kind == "regular")
-            .count() as u64,
+        scanned_files: files.len() as u64,
         ..HashSummary::default()
     };
 
     let mut groups: BTreeMap<u64, Vec<IndexedFile>> = BTreeMap::new();
-    for file in files
-        .into_iter()
-        .filter(|file| file.scan_status == "ok" && file.file_kind == "regular")
-    {
+    for file in files {
         groups.entry(file.size).or_default().push(file);
     }
 

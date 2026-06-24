@@ -1,11 +1,12 @@
+use crate::cli::SourceKind;
 use crate::db::{
     ensure_indexer_request_token_schema, sql_nullable_i64, sql_nullable_string, sql_nullable_u64,
     sql_quote_literal,
 };
 use crate::model::{IndexSource, IndexedFile, ScanSummary};
 use crate::replay;
+use crate::source;
 use fod_rust_hotpath::pg::DbRepo;
-use fod_rust_runtime::current_hostname;
 use std::fs;
 use std::fs::{File, FileType};
 use std::os::unix::fs::MetadataExt;
@@ -16,15 +17,11 @@ pub fn register_source(
     repo: &DbRepo,
     name: Option<&str>,
     path: &str,
-    kind: &str,
+    kind: SourceKind,
 ) -> Result<IndexSource, String> {
-    if kind != "local" {
-        return Err(format!("unsupported source kind: {kind}"));
-    }
-
-    let name = resolve_source_name(name)?;
     let root_path = fs::canonicalize(path)
         .map_err(|err| format!("source path {path} is not accessible: {err}"))?;
+    let name = source::resolve_source_name(name, kind, &root_path)?;
     let metadata = fs::metadata(&root_path)
         .map_err(|err| format!("source path {} is not readable: {err}", root_path.display()))?;
     if !metadata.is_dir() {
@@ -45,7 +42,7 @@ pub fn register_source(
         RETURNING id_index_source, name, kind, root_path
         ",
         name = sql_quote_literal(&name),
-        kind = sql_quote_literal(kind),
+        kind = sql_quote_literal(kind.as_str()),
         root_path = sql_quote_literal(&root_path.to_string_lossy()),
     );
     let rows = repo.query_rows_text(&sql)?;
@@ -53,21 +50,6 @@ pub fn register_source(
         .first()
         .ok_or_else(|| "source registration did not return a row".to_string())?;
     IndexSource::from_row(row)
-}
-
-fn resolve_source_name(explicit_name: Option<&str>) -> Result<String, String> {
-    match explicit_name {
-        Some(name) => {
-            let trimmed = name.trim();
-            if trimmed.is_empty() {
-                Err("source name cannot be empty".to_string())
-            } else {
-                Ok(trimmed.to_string())
-            }
-        }
-        None => current_hostname()
-            .map_err(|err| format!("unable to determine a default source name: {err}")),
-    }
 }
 
 pub fn load_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
@@ -226,12 +208,6 @@ pub(crate) fn relative_source_path(root_path: &Path, entry_path: &Path) -> Strin
 pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
     ensure_indexer_request_token_schema(repo, "fod-indexer scan")?;
     let source = load_source(repo, name)?;
-    if source.kind != "local" {
-        return Err(format!(
-            "source {name} is registered as kind {} and cannot be scanned by the local indexer",
-            source.kind
-        ));
-    }
 
     let scan_run_id = create_scan_run(repo, source.id_source)?;
     let mut summary = ScanSummary {
@@ -240,7 +216,10 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
         ..ScanSummary::default()
     };
 
-    let walker = WalkDir::new(&source.root_path).follow_links(false);
+    let walker = WalkDir::new(&source.root_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !source::is_ignored_source_path(&source.root_path, entry.path()));
     for item in walker {
         let entry = match item {
             Ok(entry) => entry,

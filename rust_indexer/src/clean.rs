@@ -1,5 +1,5 @@
 use crate::model::{CleanSourceSummary, IndexSource, IndexedFile};
-use crate::{hash, scan};
+use crate::{hash, scan, source};
 use fod_rust_hotpath::pg::DbRepo;
 use std::collections::BTreeSet;
 use std::fs;
@@ -39,7 +39,11 @@ fn current_source_tree(root_path: &Path) -> Result<SourceTreeState, String> {
 
     let mut visible_paths = BTreeSet::new();
     let mut blocked_prefixes = Vec::new();
-    for item in WalkDir::new(root_path).follow_links(false) {
+    for item in WalkDir::new(root_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !source::is_ignored_source_path(root_path, entry.path()))
+    {
         match item {
             Ok(entry) => {
                 if entry.depth() == 0 || entry.file_type().is_dir() {
@@ -168,12 +172,6 @@ pub fn clean_source(
     dry_run: bool,
 ) -> Result<CleanSourceSummary, String> {
     let source = scan::load_source(repo, source_name)?;
-    if source.kind != "local" {
-        return Err(format!(
-            "source {source_name} is registered as kind {} and cannot be cleaned by the local indexer",
-            source.kind
-        ));
-    }
 
     let indexed_files = scan::load_indexed_files(repo, Some(source.name.as_str()))?;
     let tree_state = current_source_tree(&source.root_path)?;

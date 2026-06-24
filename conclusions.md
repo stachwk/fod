@@ -4,6 +4,8 @@ Use this file to record concise conclusions that matter for future work.
 
 ## 2026-06-24
 
+- `fod-indexer source add` now accepts path-backed source kinds for `local`, `smb`, `qnap`, `adb`, and `github`, with kind-aware name suggestions for mounts, ADB serials, and git remotes. The current adapter layer still walks filesystem roots, so the new kinds are metadata and naming hooks rather than direct remote crawlers.
+- Hidden dotfiles and common cache/build directories are now skipped during scan, hash, plan-import, materialize planning, duplicate-report rebuilds, and cleanup-tree walks. That keeps paths such as `.bashrc`, `.venv`, `.git`, `node_modules`, `target`, and `build` out of the index and out of the duplicate-set view.
 - `DbRepo::query_rows_text()` now participates in the bounded replay path for read-only SQL, so the indexer's plan/report/cleanup row-fetching paths can retry once after a transient PostgreSQL disconnect. The broader write-side replay follow-up remains open.
 - `DbRepo::exec()` now participates in the same bounded replay path for the idempotent replayable command set, so safe indexer writes such as status updates and idempotent upserts can retry once after a transient disconnect. Non-idempotent transactional replay is still open.
 - `index_import_plan_entries` now inserts through a replay-safe `DELETE + INSERT` sequence, so a transient disconnect during `fod-indexer plan-import` or `materialize` no longer leaves duplicate plan-entry rows behind on retry.
@@ -16,7 +18,7 @@ Use this file to record concise conclusions that matter for future work.
 - `fod-indexer materialize --dry-run` is now a read-only preview: it validates the current indexed state and source files, but it does not refresh scan/hash rows, create an import plan, or write any materialized files.
 - `fod-indexer` now accepts positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while keeping the explicit `--source` form. That makes the CLI friendlier for interactive use without changing the documented contract.
 - `fod-indexer source add` now defaults the source name to the current hostname when `--name` is omitted, but explicit `--name` remains available as an override for unsupported sources or forced naming.
-- `fod-indexer clean --source <name> --dry-run` now previews stale-index pruning for local sources, and a real cleanup removes missing file rows plus dependent plan entries before refreshing duplicate metadata.
+- `fod-indexer clean --source <name> --dry-run` now previews stale-index pruning for registered sources, and a real cleanup removes missing or now-ignored file rows plus dependent plan entries before refreshing duplicate metadata.
 
 ## 2026-06-23
 

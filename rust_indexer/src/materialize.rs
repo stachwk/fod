@@ -395,12 +395,6 @@ pub fn materialize_source(
     dry_run: bool,
 ) -> Result<MaterializeSummary, String> {
     let source = scan::load_source(repo, source_name)?;
-    if source.kind != "local" {
-        return Err(format!(
-            "source {source_name} is registered as kind {} and cannot be materialized by the local indexer",
-            source.kind
-        ));
-    }
 
     if !dry_run {
         ensure_indexer_request_token_schema(repo, "fod-indexer materialize")?;

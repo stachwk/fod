@@ -7,8 +7,8 @@ use std::ffi::OsString;
     name = "fod-indexer",
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
-    long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to register a local source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
+    long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
+    after_long_help = "Examples:\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -26,8 +26,8 @@ impl Cli {
 #[derive(Debug, Clone, Subcommand)]
 pub enum Commands {
     #[command(
-        about = "Register a source directory.",
-        long_about = "Register a local directory so fod-indexer can scan and materialize it later.\n\nIf --name is omitted, fod-indexer uses the current hostname as the default local source name. Use --name to override that suggestion. This command stores the source name, kind, and canonical root path in PostgreSQL."
+        about = "Register a source.",
+        long_about = "Register a filesystem-backed source so fod-indexer can scan and materialize it later.\n\nIf --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion. This command stores the source name, kind, and canonical root path in PostgreSQL."
     )]
     Source {
         #[command(subcommand)]
@@ -81,7 +81,7 @@ pub enum Commands {
     },
     #[command(
         about = "Clean stale index entries for a source.",
-        long_about = "Compare the current source tree with the indexed rows for a local source and remove file entries that no longer exist.\n\nUse --dry-run to preview which rows would be removed without touching PostgreSQL. A real cleanup also refreshes duplicate-set metadata after pruning stale rows."
+        long_about = "Compare the current source tree with the indexed rows for a source and remove file entries that no longer exist or should now be ignored.\n\nUse --dry-run to preview which rows would be removed without touching PostgreSQL. A real cleanup also refreshes duplicate-set metadata after pruning stale rows."
     )]
     Clean {
         #[arg(long)]
@@ -104,8 +104,8 @@ pub enum Commands {
 #[derive(Debug, Clone, Subcommand)]
 pub enum SourceCommands {
     #[command(
-        about = "Add a local source.",
-        long_about = "Register a local directory under a source name so scan, hash, plan-import, and materialize can use it later.\n\nIf --name is omitted, fod-indexer uses the current hostname as the default local source name. Use --name to override that suggestion."
+        about = "Add a source.",
+        long_about = "Register a filesystem-backed source under a source name so scan, hash, plan-import, and materialize can use it later.\n\nSupported kinds are local, smb, qnap, adb, and github. If --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion."
     )]
     Add {
         #[arg(long)]
@@ -132,12 +132,20 @@ pub enum ReportCommands {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
 pub enum SourceKind {
     Local,
+    Smb,
+    Qnap,
+    Adb,
+    Github,
 }
 
 impl SourceKind {
     pub fn as_str(self) -> &'static str {
         match self {
             SourceKind::Local => "local",
+            SourceKind::Smb => "smb",
+            SourceKind::Qnap => "qnap",
+            SourceKind::Adb => "adb",
+            SourceKind::Github => "github",
         }
     }
 }

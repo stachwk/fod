@@ -8,6 +8,7 @@ mod model;
 mod plan;
 mod replay;
 mod scan;
+mod source;
 
 use cli::{Cli, Commands, ReportCommands, SourceCommands};
 
@@ -25,7 +26,7 @@ fn run() -> Result<(), String> {
     match cli.command {
         Commands::Source { command } => match command {
             SourceCommands::Add { name, path, kind } => {
-                let source = scan::register_source(&repo, name.as_deref(), &path, kind.as_str())?;
+                let source = scan::register_source(&repo, name.as_deref(), &path, kind)?;
                 println!(
                     "Registered source {} as {} at {} (id={})",
                     source.name,
