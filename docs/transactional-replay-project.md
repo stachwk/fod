@@ -39,10 +39,8 @@ The project should focus on:
    - replayable only with extra confirmation
    - non-replayable
 3. Define how a transaction is identified across a reconnect.
-4. Decide whether outcome confirmation comes from:
-   - a transaction journal
-   - request tokens plus state verification
-   - a different server-side marker
+4. Use request tokens plus state verification as the default confirmation path.
+   Keep a transaction journal only as a future fallback if a durable row marker is not available.
 5. Add smoke tests for:
    - disconnect during transaction body
    - disconnect during commit
@@ -111,6 +109,27 @@ they get an explicit request token plus commit outcome confirmation:
 The bounded replay classifier already covers single-statement helpers such as `touch_data_object()`, `touch_file_entry()`,
 `touch_directory_entry()`, `touch_symlink_entry()`, and the `rename_*()` / `delete_*()` helpers. They stay outside this
 project because they do not cross an explicit transaction boundary.
+
+## Replay Envelope and Outcome Confirmation
+
+The first replay envelope should stay narrow and proof-driven:
+
+- the transaction must carry a stable request identity that survives reconnects
+- the final state must be observable from durable storage after reconnect
+- repeating the body must not create a second visible outcome if the first commit already landed
+- if any of those conditions is false, the transaction stays out of automatic replay
+
+The preferred confirmation path is simple:
+
+1. Reconnect on a fresh PostgreSQL connection.
+2. Probe the durable row or rows keyed by the request identity.
+3. If the probe shows a terminal committed state, return success and do not replay.
+4. If the probe shows no committed state and the transaction is inside the envelope, replay once with the same request identity.
+5. If the probe cannot distinguish committed from rolled back, fail closed.
+
+For the current codebase, the practical marker is `request_token` on rows such as `index_scan_runs` and `index_import_plans`.
+That makes the confirmation step a row-level probe instead of a separate transaction journal.
+Any future transaction that cannot expose a durable marker with the same properties should remain outside the automatic replay envelope.
 
 ## Current Baseline
 
