@@ -6143,7 +6143,7 @@ impl DbRepo {
         maintain_copy_crc_table: bool,
     ) -> Result<(), String> {
         self.with_cached_connection(|conn| unsafe {
-            transactional(conn, |conn| match self.persist_block_transport {
+            transactional_replayable(conn, |conn| match self.persist_block_transport {
                 PersistBlockTransport::CopyBinaryStaging => self
                     .persist_file_blocks_copy_binary_staging_on_conn(
                         conn,
@@ -6186,7 +6186,7 @@ impl DbRepo {
         }
 
         self.with_cached_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 let data_object_id = match self.detach_shared_data_object_on_conn(
                     conn,
                     file_id,
