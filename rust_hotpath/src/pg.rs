@@ -1844,7 +1844,11 @@ impl Drop for CopyInSession {
     }
 }
 
-unsafe fn transactional<T, F>(conn: *mut PGconn, mut f: F) -> Result<T, String>
+unsafe fn transactional_impl<T, F>(
+    conn: *mut PGconn,
+    mut f: F,
+    replay_commit_disconnect: bool,
+) -> Result<T, String>
 where
     F: FnMut(*mut PGconn) -> Result<T, String>,
 {
@@ -1867,7 +1871,11 @@ where
         Ok(value) => {
             if let Err(err) = exec_command(conn, &commit) {
                 let _ = exec_command(conn, &rollback);
-                Err(err)
+                if replay_commit_disconnect && is_retryable_connection_error(conn, &err) {
+                    Err(replayable_sql_error_once(err))
+                } else {
+                    Err(err)
+                }
             } else {
                 Ok(value)
             }
@@ -1881,6 +1889,20 @@ where
             }
         }
     }
+}
+
+unsafe fn transactional<T, F>(conn: *mut PGconn, f: F) -> Result<T, String>
+where
+    F: FnMut(*mut PGconn) -> Result<T, String>,
+{
+    transactional_impl(conn, f, false)
+}
+
+unsafe fn transactional_replayable<T, F>(conn: *mut PGconn, f: F) -> Result<T, String>
+where
+    F: FnMut(*mut PGconn) -> Result<T, String>,
+{
+    transactional_impl(conn, f, true)
 }
 
 /// DbRepo keeps separate cached connections for write-heavy work and control-plane
@@ -3175,7 +3197,7 @@ impl DbRepo {
             }
 
             self.with_control_connection(|conn| unsafe {
-                transactional(conn, |conn| {
+                transactional_replayable(conn, |conn| {
                     let statements = [
                         CString::new(
                             "
@@ -3410,7 +3432,7 @@ impl DbRepo {
 
             self.ensure_lock_schema_ready()?;
             self.with_control_connection(|conn| unsafe {
-                transactional(conn, |conn| {
+                transactional_replayable(conn, |conn| {
                     let statements = [
                         CString::new(
                             "
@@ -3599,7 +3621,7 @@ impl DbRepo {
     ) -> Result<(), String> {
         self.ensure_lock_schema_ready()?;
         self.with_control_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 match (resource_kind, resource_id) {
                     (None, None) => {
                         let sql =
@@ -3686,7 +3708,7 @@ impl DbRepo {
     ) -> Result<(), String> {
         self.ensure_lock_schema_ready()?;
         self.with_control_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 match (resource_kind, resource_id) {
                     (None, None) => {
                         let sql = CString::new(
@@ -3928,7 +3950,7 @@ impl DbRepo {
         owner_key: u64,
     ) -> Result<(), String> {
         self.with_control_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 let insert_sql = CString::new(
                     "
                     INSERT INTO client_session_owner_keys (
@@ -4023,7 +4045,7 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         self.with_control_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 let empty_params: [&CString; 0] = [];
                 let res = exec_params(conn, &delete_sql, &empty_params)?;
                 let expired = match PQresultStatus(res) {

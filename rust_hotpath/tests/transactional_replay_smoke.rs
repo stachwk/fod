@@ -437,3 +437,23 @@ fn transactional_commit_disconnect_is_confirmed_by_request_token_probe() {
 
     let _ = direct_repo.exec(&format!("DROP TABLE IF EXISTS {smoke_table}"));
 }
+
+#[test]
+fn transactional_commit_disconnect_is_replayed_for_lock_lease_prune() {
+    let _guard = test_guard();
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    direct_repo
+        .ensure_lock_schema()
+        .expect("ensure lock schema");
+
+    let proxy = QueryDropProxy::start("COMMIT", Duration::from_millis(50)).expect("start proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+    let resource_kind = unique_name("transactional_prune_kind");
+    let resource_id = 424242_u64;
+
+    repo.prune_lock_leases(Some(&resource_kind), Some(resource_id))
+        .expect("prune lock leases with replay");
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert_eq!(proxy.match_hits(), 2);
+}
