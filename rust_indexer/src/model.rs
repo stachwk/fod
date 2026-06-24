@@ -169,6 +169,7 @@ pub struct MaterializeSummary {
     pub source_name: String,
     pub import_root: String,
     pub dry_run: bool,
+    pub explicit_keep_local: bool,
     pub scanned_files: u64,
     pub validated_files: u64,
     pub duplicate_groups: u64,
@@ -200,11 +201,17 @@ impl MaterializeSummary {
         } else {
             "materialize"
         };
+        let keep_local = if self.explicit_keep_local {
+            "yes"
+        } else {
+            "no"
+        };
         format!(
-            "FOD indexer materialize\nmode: {}\nsource: {}\nimport root: {}\nscanned files: {}\nvalidated files: {}\nduplicate groups: {}\ncanonical files: {}\nreference files: {}\ncreated directories: {}\nsource bytes: {}\nimported bytes: {}\nsaved bytes: {}",
+            "FOD indexer materialize\nmode: {}\nsource: {}\nimport root: {}\nlocal deletions: disabled\nkeep-local flag: {}\nscanned files: {}\nvalidated files: {}\nduplicate groups: {}\ncanonical files: {}\nreference files: {}\ncreated directories: {}\nsource bytes: {}\nimported bytes: {}\nsaved bytes: {}",
             mode,
             self.source_name,
             self.import_root,
+            keep_local,
             self.scanned_files,
             self.validated_files,
             self.duplicate_groups,
