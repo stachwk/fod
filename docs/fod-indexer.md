@@ -49,6 +49,12 @@ The underlying capability flags stay visible too:
 
 That keeps the registration contract simple while making the adapter boundary visible to users and future code.
 
+## Adapter boundary
+
+Current source kinds stay on the shared filesystem-root flow. `local` remains path-backed, `smb` and `qnap` remain mirrored, and `adb` and `github` remain export-backed. None of those current kinds gets a direct remote crawler in the core.
+
+If a future source kind cannot be represented as a local path, mount, or export root, it should be introduced as a separate adapter project with its own boundary instead of widening the existing path-backed flow.
+
 Supported actions:
 
 - `fod-indexer source add [--name <name>] --path <path> --kind local|smb|qnap|adb|github`

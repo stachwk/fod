@@ -43,9 +43,9 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Review `fod-indexer` CLI ergonomics after manual use; keep the explicit `--source` contract if that remains the intended API, but consider clearer examples or a positional alias if users keep trying the old style. Added positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while preserving `--source`.
 - [x] Usprawnić automatyczne sugerowanie nazw źródłom w `fod-indexer source add`, bez usuwania `--name`.
   - Progress: local sources default to the current hostname; SMB/QNAP try to infer the remote host or IP from the mounted share; ADB prefers the device serial from `ANDROID_SERIAL`, `ADB_SERIAL`, `ADB_DEVICE_SERIAL`, or `adb devices`; GitHub sources try the git remote slug or repository name. Explicit `--name` still overrides the suggestion.
-- [ ] Rozdzielić adaptery path-backed od przyszłych crawlerów SMB/QNAP/ADB/GitHub.
-  - Progress: the source kinds and naming heuristics are in place, but scan/hash/plan/materialize still operate on mounted or mirrored filesystem roots.
-  - Next: decide which adapters should grow direct remote crawlers versus staying path-backed indefinitely.
+- [x] Rozdzielić adaptery path-backed od przyszłych crawlerów SMB/QNAP/ADB/GitHub.
+  - Progress: the source kinds and naming heuristics are in place, scan/hash/plan/materialize still operate on mounted or mirrored filesystem roots, and the adapter boundary is now explicit in `docs/fod-indexer.md`.
+  - Decision: current kinds stay path-backed/mirrored/export-backed through filesystem roots; none of them gets a direct remote crawler in the shared core. Future non-path-backed kinds should arrive as separate adapter projects.
 - [ ] Plan implementacji ioctl:
   - [x] Najpierw `FIGETBSZ`. Zaimplementowane w `rust_fuse/src/fs.rs` jako odpowiedź oparta o bieżący `blksize`.
   - [x] Potem `FS_IOC_GETFLAGS`. Na razie zwracane jest neutralne `0`, bo flags nie są jeszcze trwale przechowywane.
@@ -92,7 +92,8 @@ This document records the small set of open follow-ups plus completed work, clos
   - Progress: `tests/integration/test_fod_indexer_source_kinds.py` now covers local, smb, and github roots, browse filtering for hidden/cache trees, source-scoped scan/hash/materialize flows, and cleanup after a source root disappears.
 - [x] Doprecyzuj dokumentacje FOD jako wspolnego silnika indeksowania. Wprost zapisz, ze `fod-indexer` ma byc wspolnym core dla `scan/hash/dedupe/plan/materialize/cleanup`, a `msfind` ma korzystac z tego rdzenia zamiast implementowac drugi, podobny pipeline.
   - Progress: `docs/fod-indexer.md` now states that `fod-indexer` is the shared indexing core for registration, scan, hash, duplicate detection, planning, materialization, and cleanup, and `docs/msfind-fod-indexer-requests.md` now frames requests as gaps against that shared core instead of a parallel pipeline.
-- [ ] Zostaw w backlogu tylko to, czego realnie brakuje: decyzje, ktore `source kind`y beda kiedys potrzebowaly direct crawlerow, oraz czy maja byc mirror-only czy native API adapters. Nie rozszerzaj core o protokoly, jesli nie ma konkretnego, nieobslugiwnego jeszcze przypadku.
+- [x] Zostaw w backlogu tylko to, czego realnie brakuje: decyzje, ktore `source kind`y beda kiedys potrzebowaly direct crawlerow, oraz czy maja byc mirror-only czy native API adapters. Nie rozszerzaj core o protokoly, jesli nie ma konkretnego, nieobslugiwnego jeszcze przypadku.
+  - Progress: the current kinds now have an explicit boundary in `docs/fod-indexer.md`, and none of them gets a direct remote crawler in the shared core. Future non-path-backed sources should come in as separate adapter projects.
 - [ ] Uporzadkuj safety i retry tylko tam, gdzie sa jeszcze luki. Read-only i idempotentne operacje maja zostac bounded-retry friendly, ale nie dokladaj pelnego replay nieidempotentnych transakcji bez osobnego projektu.
 - [ ] Nie wracaj do implementacji podstawowego pipeline jako nowego zadania. `scan`, `hash`, `duplicate detection`, `plan-import`, `materialize` i `cleanup` traktuj jako juz dostarczone; dalsza praca ma byc wokol granic, adapterow i hardeningu.
 
