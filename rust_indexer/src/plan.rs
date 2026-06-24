@@ -4,7 +4,7 @@ use crate::model::{DuplicateSet, ImportPlanSummary, IndexedFile};
 use crate::replay;
 use crate::source;
 use fod_rust_hotpath::pg::DbRepo;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -290,7 +290,6 @@ pub fn report_duplicate_sets(repo: &DbRepo, limit: usize) -> Result<(), String> 
     )?;
 
     let mut sets: BTreeMap<u64, (DuplicateSet, Vec<PlannableFile>)> = BTreeMap::new();
-    let mut hidden_zero_size_sets: HashSet<u64> = HashSet::new();
     for row in rows {
         if row.len() < 11 {
             continue;
@@ -304,7 +303,6 @@ pub fn report_duplicate_sets(repo: &DbRepo, limit: usize) -> Result<(), String> 
             .map_err(|err| format!("invalid duplicate set id: {err}"))?;
         let duplicate_set = DuplicateSet::from_row(&row[0..6])?;
         if duplicate_set.file_size == 0 {
-            hidden_zero_size_sets.insert(set_id);
             continue;
         }
         let file = IndexedFile::from_row(&[
@@ -334,12 +332,6 @@ pub fn report_duplicate_sets(repo: &DbRepo, limit: usize) -> Result<(), String> 
 
     println!("FOD indexer duplicate report");
     println!("confirmed duplicate sets: {}", sets.len());
-    if !hidden_zero_size_sets.is_empty() {
-        println!(
-            "hidden zero-size duplicate sets: {}",
-            hidden_zero_size_sets.len()
-        );
-    }
     for (idx, (_set_id, (duplicate_set, mut members))) in sets.into_iter().enumerate() {
         if idx >= limit {
             println!("... truncated after {limit} sets");
