@@ -1,6 +1,7 @@
 use crate::db::{sql_nullable_u64, sql_quote_literal};
 use crate::hash;
 use crate::model::{DuplicateSet, ImportPlanSummary, IndexedFile};
+use crate::replay;
 use fod_rust_hotpath::pg::DbRepo;
 use std::collections::{BTreeMap, HashMap};
 
@@ -116,13 +117,34 @@ pub(crate) fn insert_import_plan(
     dry_run: bool,
     source_filter: Option<&str>,
 ) -> Result<u64, String> {
+    let running_status = if status.ends_with("_running") {
+        format!("{status}:{}", replay::request_token("plan"))
+    } else {
+        status.to_string()
+    };
     let sql = format!(
         "
-        INSERT INTO index_import_plans (created_at, updated_at, status, dry_run, source_filter)
-        VALUES (NOW(), NOW(), {status}, {dry_run}, {source_filter})
-        RETURNING id_import_plan
+        WITH existing AS (
+            SELECT id_import_plan
+            FROM index_import_plans
+            WHERE status = {running_status}
+              AND dry_run = {dry_run}
+              AND source_filter IS NOT DISTINCT FROM {source_filter}
+            ORDER BY id_import_plan DESC
+            LIMIT 1
+        ),
+        inserted AS (
+            INSERT INTO index_import_plans (created_at, updated_at, status, dry_run, source_filter)
+            SELECT NOW(), NOW(), {running_status}, {dry_run}, {source_filter}
+            WHERE NOT EXISTS (SELECT 1 FROM existing)
+            RETURNING id_import_plan
+        )
+        SELECT id_import_plan FROM inserted
+        UNION ALL
+        SELECT id_import_plan FROM existing
+        LIMIT 1
         ",
-        status = sql_quote_literal(status),
+        running_status = sql_quote_literal(&running_status),
         dry_run = if dry_run { "TRUE" } else { "FALSE" },
         source_filter = source_filter
             .map(sql_quote_literal)

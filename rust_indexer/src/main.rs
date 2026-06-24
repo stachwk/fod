@@ -5,6 +5,7 @@ mod hash;
 mod materialize;
 mod model;
 mod plan;
+mod replay;
 mod scan;
 
 use cli::{Cli, Commands, ReportCommands, SourceCommands};
