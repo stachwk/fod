@@ -1860,11 +1860,7 @@ where
         Ok(value) => {
             if let Err(err) = exec_command(conn, &commit) {
                 let _ = exec_command(conn, &rollback);
-                if is_retryable_connection_error(conn, &err) {
-                    Err(replayable_sql_error(err))
-                } else {
-                    Err(err)
-                }
+                Err(err)
             } else {
                 Ok(value)
             }
