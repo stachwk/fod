@@ -51,7 +51,8 @@ This document records the small set of open follow-ups plus completed work, clos
   - [x] Potem `FS_IOC_GETFLAGS`. Na razie zwracane jest neutralne `0`, bo flags nie są jeszcze trwale przechowywane.
   - [x] `FS_IOC_SETFLAGS` przyjmuje teraz tylko `0` jako bezpieczny no-op; inne flagi dostają `EOPNOTSUPP` do czasu decyzji o trwałej polityce.
   - [x] `FS_IOC_FSGETXATTR` zwraca teraz wyzerowany `fsxattr`, a `FS_IOC_FSSETXATTR` przyjmuje tylko zero/no-op do czasu decyzji o trwałej polityce xflags.
-  - [ ] `FICLONE` zostaje na razie eksperymentalny, bo na tym hoście obecny kernel/FUSE stack ucina ten request przed userspace; FOD nie ma jeszcze end-to-end potwierdzenia dla tego pathu.
+  - [x] `FICLONE` zostaje na razie eksperymentalny, bo na tym hoście obecny kernel/FUSE stack ucina ten request przed userspace; FOD nie ma jeszcze end-to-end potwierdzenia dla tego pathu.
+    - Progress: `tests/integration/test_ioctl.py` now covers `FICLONE` alongside `FIONREAD`, accepting the current unsupported path while still verifying that a successful clone would preserve payload contents. The host-side conclusion remains that the request is blocked before userspace on this stack.
 - [ ] Zaprojektować pełną politykę mount-label SELinux.
 
 ### Direct I/O Microscope
