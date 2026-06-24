@@ -168,6 +168,7 @@ impl CleanupFailedSummary {
 pub struct MaterializeSummary {
     pub source_name: String,
     pub import_root: String,
+    pub dry_run: bool,
     pub scanned_files: u64,
     pub validated_files: u64,
     pub duplicate_groups: u64,
@@ -194,8 +195,14 @@ impl MaterializeSummary {
     }
 
     pub fn human_readable(&self) -> String {
+        let mode = if self.dry_run {
+            "dry-run"
+        } else {
+            "materialize"
+        };
         format!(
-            "FOD indexer materialize\nsource: {}\nimport root: {}\nscanned files: {}\nvalidated files: {}\nduplicate groups: {}\ncanonical files: {}\nreference files: {}\ncreated directories: {}\nsource bytes: {}\nimported bytes: {}\nsaved bytes: {}",
+            "FOD indexer materialize\nmode: {}\nsource: {}\nimport root: {}\nscanned files: {}\nvalidated files: {}\nduplicate groups: {}\ncanonical files: {}\nreference files: {}\ncreated directories: {}\nsource bytes: {}\nimported bytes: {}\nsaved bytes: {}",
+            mode,
             self.source_name,
             self.import_root,
             self.scanned_files,

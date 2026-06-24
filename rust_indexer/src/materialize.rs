@@ -13,6 +13,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_BLOCK_SIZE: u64 = 4096;
+type MaterializeGroups = BTreeMap<(String, String, u64), Vec<ValidatedCandidate>>;
 
 fn mtime_ns(metadata: &fs::Metadata) -> i64 {
     metadata
@@ -122,6 +123,58 @@ fn validate_candidate(candidate: PlannableFile) -> Result<ValidatedCandidate, St
         file: candidate,
         full_hash_hex: actual_hash,
     })
+}
+
+fn group_validated_candidates(candidates: Vec<ValidatedCandidate>) -> MaterializeGroups {
+    let mut groups: MaterializeGroups = BTreeMap::new();
+    for file in candidates {
+        let key = (
+            file.file
+                .hash_algorithm
+                .clone()
+                .unwrap_or_else(|| "sha256".to_string()),
+            file.full_hash_hex.clone(),
+            file.file.file.size,
+        );
+        groups.entry(key).or_default().push(file);
+    }
+    groups
+}
+
+fn summarize_materialize_preview(
+    source_name: &str,
+    groups: &MaterializeGroups,
+    import_root: &str,
+) -> MaterializeSummary {
+    let mut summary = MaterializeSummary {
+        source_name: source_name.to_string(),
+        import_root: import_root.to_string(),
+        dry_run: true,
+        ..MaterializeSummary::default()
+    };
+
+    for members in groups.values() {
+        let member_count = members.len() as u64;
+        if member_count > 1 {
+            summary.duplicate_groups = summary.duplicate_groups.saturating_add(1);
+        }
+        summary.canonical_files = summary.canonical_files.saturating_add(1);
+        summary.reference_files = summary
+            .reference_files
+            .saturating_add(member_count.saturating_sub(1));
+        summary.scanned_files = summary.scanned_files.saturating_add(member_count);
+        summary.validated_files = summary.validated_files.saturating_add(member_count);
+        let group_source_bytes: u64 = members.iter().map(|member| member.file.file.size).sum();
+        summary.source_bytes = summary.source_bytes.saturating_add(group_source_bytes);
+        if let Some(canonical) = members.first() {
+            summary.imported_bytes = summary
+                .imported_bytes
+                .saturating_add(canonical.file.file.size);
+        }
+    }
+
+    summary.saved_bytes = summary.source_bytes.saturating_sub(summary.imported_bytes);
+    summary
 }
 
 fn load_block_size(repo: &DbRepo) -> Result<u64, String> {
@@ -336,8 +389,11 @@ fn materialize_reference_file(
     Ok(created_dirs)
 }
 
-pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<MaterializeSummary, String> {
-    ensure_indexer_request_token_schema(repo, "fod-indexer materialize")?;
+pub fn materialize_source(
+    repo: &DbRepo,
+    source_name: &str,
+    dry_run: bool,
+) -> Result<MaterializeSummary, String> {
     let source = scan::load_source(repo, source_name)?;
     if source.kind != "local" {
         return Err(format!(
@@ -346,14 +402,27 @@ pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<Materializ
         ));
     }
 
-    // Refresh the source first so the materialization stage works from a fresh scan and hash view.
-    scan::scan_source(repo, source_name)?;
-    hash::hash_source(repo, source_name, false)?;
+    if !dry_run {
+        ensure_indexer_request_token_schema(repo, "fod-indexer materialize")?;
+
+        // Refresh the source first so the materialization stage works from a fresh scan and hash view.
+        scan::scan_source(repo, source_name)?;
+        hash::hash_source(repo, source_name, false)?;
+    }
 
     let candidates = plan::load_plannable_files(repo, Some(source.name.as_str()))?
         .into_iter()
         .map(validate_candidate)
         .collect::<Result<Vec<_>, _>>()?;
+    let groups = group_validated_candidates(candidates);
+
+    if dry_run {
+        return Ok(summarize_materialize_preview(
+            &source.name,
+            &groups,
+            "<dry-run>",
+        ));
+    }
 
     let duplicate_sets = plan::load_duplicate_sets(repo)?;
     let duplicate_set_map: HashMap<(String, String, u64), u64> = duplicate_sets
@@ -379,30 +448,28 @@ pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<Materializ
     let root_name = plan::import_root_name(source.id_source, plan_id);
     let (root_id, root_created) = ensure_root_directory(repo, &source, &root_name)?;
     let block_size = load_block_size(repo)?;
+    let scanned_files = groups.values().map(|members| members.len() as u64).sum();
+    let source_bytes = groups
+        .values()
+        .map(|members| {
+            members
+                .iter()
+                .map(|member| member.file.file.size)
+                .sum::<u64>()
+        })
+        .sum();
     let mut summary = MaterializeSummary {
         source_name: source.name.clone(),
         import_root: format!("/{}", root_name),
-        scanned_files: candidates.len() as u64,
-        validated_files: candidates.len() as u64,
-        source_bytes: candidates.iter().map(|file| file.file.file.size).sum(),
+        dry_run: false,
+        scanned_files,
+        validated_files: scanned_files,
+        source_bytes,
         created_directories: root_created,
         ..MaterializeSummary::default()
     };
 
     let result = (|| -> Result<(), String> {
-        let mut groups: BTreeMap<(String, String, u64), Vec<ValidatedCandidate>> = BTreeMap::new();
-        for file in candidates {
-            let key = (
-                file.file
-                    .hash_algorithm
-                    .clone()
-                    .unwrap_or_else(|| "sha256".to_string()),
-                file.full_hash_hex.clone(),
-                file.file.file.size,
-            );
-            groups.entry(key).or_default().push(file);
-        }
-
         for ((algorithm, full_hash_hex, file_size), mut members) in groups {
             members.sort_by(|left, right| {
                 canonical_sort_key(&left.file.file).cmp(&canonical_sort_key(&right.file.file))

@@ -83,8 +83,8 @@ fn run() -> Result<(), String> {
             println!("{}", summary.human_readable());
             Ok(())
         }
-        Commands::Materialize { source } => {
-            let summary = materialize::materialize_source(&repo, &source)?;
+        Commands::Materialize { source, dry_run } => {
+            let summary = materialize::materialize_source(&repo, &source, dry_run)?;
             println!("{}", summary.human_readable());
             Ok(())
         }

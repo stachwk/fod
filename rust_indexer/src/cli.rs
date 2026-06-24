@@ -8,7 +8,7 @@ use std::ffi::OsString;
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
     long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to register a local source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
+    after_long_help = "Examples:\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -81,11 +81,13 @@ pub enum Commands {
     },
     #[command(
         about = "Materialize a source into FOD.",
-        long_about = "Validate a registered source and materialize its files into FOD.\n\nWarning: the command revalidates file metadata and hashes before importing. If a source file has disappeared, changed, or cannot be read during validation, the run aborts before any imported data is created. This command also requires the request-token schema migration because it creates replay-safe scan runs and import plans."
+        long_about = "Validate a registered source and materialize its files into FOD.\n\nUse --dry-run to preview the current indexed state without writing PostgreSQL rows or creating import data.\n\nWarning: the non-dry-run command revalidates file metadata and hashes before importing. If a source file has disappeared, changed, or cannot be read during validation, the run aborts before any imported data is created. The non-dry-run command also requires the request-token schema migration because it creates replay-safe scan runs and import plans."
     )]
     Materialize {
         #[arg(long)]
         source: String,
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
     },
 }
 
