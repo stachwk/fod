@@ -1,4 +1,7 @@
-use crate::db::{sql_nullable_i64, sql_nullable_string, sql_nullable_u64, sql_quote_literal};
+use crate::db::{
+    ensure_indexer_request_token_schema, sql_nullable_i64, sql_nullable_string, sql_nullable_u64,
+    sql_quote_literal,
+};
 use crate::model::{IndexSource, IndexedFile, ScanSummary};
 use crate::replay;
 use fod_rust_hotpath::pg::DbRepo;
@@ -204,6 +207,7 @@ fn relative_source_path(root_path: &Path, entry_path: &Path) -> String {
 }
 
 pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
+    ensure_indexer_request_token_schema(repo, "fod-indexer scan")?;
     let source = load_source(repo, name)?;
     if source.kind != "local" {
         return Err(format!(

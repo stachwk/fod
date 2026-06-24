@@ -12,6 +12,7 @@ Use this file to record concise conclusions that matter for future work.
 - The replay classifier in `rust_hotpath/src/pg.rs` now normalizes SQL whitespace before matching replayable command patterns, so multi-line Rust-built SQL statements can still qualify for bounded retry.
 - `fod-indexer` help now includes per-command descriptions and concrete usage examples, and `materialize` still fails closed during validation if a source file has disappeared, so it does not create imported data after a missing-file error.
 - `materialize` now says explicitly in both help text and runtime validation errors that missing or changed files abort before any imported data is created, which makes the fail-closed behavior visible without changing the import contract.
+- `fod-indexer scan`, `fod-indexer plan-import`, and `fod-indexer materialize` now preflight the indexer schema and refuse to start on databases that are still missing the `request_token` migration, so the user gets a direct upgrade hint instead of a raw PostgreSQL missing-column error.
 - `fod-indexer` now accepts positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while keeping the explicit `--source` form. That makes the CLI friendlier for interactive use without changing the documented contract.
 
 ## 2026-06-23

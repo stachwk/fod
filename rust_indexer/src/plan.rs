@@ -1,4 +1,4 @@
-use crate::db::{sql_nullable_u64, sql_quote_literal};
+use crate::db::{ensure_indexer_request_token_schema, sql_nullable_u64, sql_quote_literal};
 use crate::hash;
 use crate::model::{DuplicateSet, ImportPlanSummary, IndexedFile};
 use crate::replay;
@@ -355,6 +355,7 @@ pub fn dry_run_import_plan(
     repo: &DbRepo,
     source_filter: Option<&str>,
 ) -> Result<ImportPlanSummary, String> {
+    ensure_indexer_request_token_schema(repo, "fod-indexer plan-import")?;
     hash::rebuild_duplicate_sets(repo)?;
     let duplicate_sets = load_duplicate_sets(repo)?;
     let duplicate_set_map: HashMap<(String, String, u64), DuplicateSet> = duplicate_sets

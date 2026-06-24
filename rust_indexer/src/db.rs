@@ -1,5 +1,11 @@
 use fod_rust_hotpath::pg::DbRepo;
+use fod_rust_runtime::FOD_SCHEMA_NAME;
 use std::env;
+
+const INDEXER_SCHEMA_REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
+    ("index_scan_runs", &["request_token", "updated_at"]),
+    ("index_import_plans", &["request_token"]),
+];
 
 pub fn open_repo(conninfo: Option<&str>) -> Result<DbRepo, String> {
     let conninfo = resolve_conninfo(conninfo);
@@ -35,6 +41,43 @@ pub fn resolve_conninfo(conninfo: Option<&str>) -> String {
 
 pub fn sql_quote_literal(value: &str) -> String {
     DbRepo::quote_literal(value)
+}
+
+fn column_exists(repo: &DbRepo, table_name: &str, column_name: &str) -> Result<bool, String> {
+    let sql = format!(
+        "
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = {}
+          AND table_name = {}
+          AND column_name = {}
+        LIMIT 1
+        ",
+        sql_quote_literal(FOD_SCHEMA_NAME),
+        sql_quote_literal(table_name),
+        sql_quote_literal(column_name),
+    );
+    Ok(!repo.query_rows_text(&sql)?.is_empty())
+}
+
+pub fn ensure_indexer_request_token_schema(repo: &DbRepo, operation: &str) -> Result<(), String> {
+    let mut missing = Vec::new();
+    for &(table_name, columns) in INDEXER_SCHEMA_REQUIRED_COLUMNS {
+        for &column_name in columns {
+            if !column_exists(repo, table_name, column_name)? {
+                missing.push(format!("{table_name}.{column_name}"));
+            }
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "{operation} requires the FOD schema columns {}. Run `mkfs.fod upgrade` so migration 0014_indexer_request_tokens.sql is applied, then retry.",
+        missing.join(", ")
+    ))
 }
 
 pub fn sql_bytea_hex(bytes: &[u8]) -> String {

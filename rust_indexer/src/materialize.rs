@@ -1,4 +1,4 @@
-use crate::db::hex_encode;
+use crate::db::{ensure_indexer_request_token_schema, hex_encode};
 use crate::model::{IndexSource, MaterializeSummary};
 use crate::plan::{self, canonical_sort_key, PlannableFile};
 use crate::{hash, scan};
@@ -337,6 +337,7 @@ fn materialize_reference_file(
 }
 
 pub fn materialize_source(repo: &DbRepo, source_name: &str) -> Result<MaterializeSummary, String> {
+    ensure_indexer_request_token_schema(repo, "fod-indexer materialize")?;
     let source = scan::load_source(repo, source_name)?;
     if source.kind != "local" {
         return Err(format!(

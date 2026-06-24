@@ -35,7 +35,7 @@ pub enum Commands {
     },
     #[command(
         about = "Scan a source directory.",
-        long_about = "Walk the registered source directory and store file metadata in index_files.\n\nThe scan records regular, unreadable, and unsupported entries before hashing."
+        long_about = "Walk the registered source directory and store file metadata in index_files.\n\nThe scan records regular, unreadable, and unsupported entries before hashing. It also needs the request-token schema migration because it creates replay-safe scan runs."
     )]
     Scan {
         #[arg(long)]
@@ -61,7 +61,7 @@ pub enum Commands {
     },
     #[command(
         about = "Create a dry-run import plan.",
-        long_about = "Build a dry-run import plan for one source or for all sources.\n\nUse --source <name> for a single registered source or --all-sources for the global view."
+        long_about = "Build a dry-run import plan for one source or for all sources.\n\nUse --source <name> for a single registered source or --all-sources for the global view. This command requires the request-token schema migration because it creates replay-safe import plans."
     )]
     PlanImport {
         #[arg(long)]
@@ -81,7 +81,7 @@ pub enum Commands {
     },
     #[command(
         about = "Materialize a source into FOD.",
-        long_about = "Validate a registered source and materialize its files into FOD.\n\nWarning: the command revalidates file metadata and hashes before importing. If a source file has disappeared, changed, or cannot be read during validation, the run aborts before any imported data is created."
+        long_about = "Validate a registered source and materialize its files into FOD.\n\nWarning: the command revalidates file metadata and hashes before importing. If a source file has disappeared, changed, or cannot be read during validation, the run aborts before any imported data is created. This command also requires the request-token schema migration because it creates replay-safe scan runs and import plans."
     )]
     Materialize {
         #[arg(long)]
