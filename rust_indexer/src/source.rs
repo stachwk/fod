@@ -30,6 +30,13 @@ struct MountInfo {
     source: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct AdbBrowseRoot {
+    pub serial: String,
+    pub remote_root: String,
+    pub local_root: PathBuf,
+}
+
 pub fn resolve_source_name(
     explicit_name: Option<&str>,
     kind: SourceKind,
@@ -71,22 +78,24 @@ pub fn is_ignored_source_path(root_path: &Path, entry_path: &Path) -> bool {
     }
 }
 
-pub fn adb_browse_root() -> Result<PathBuf, String> {
+pub fn adb_browse_root() -> Result<AdbBrowseRoot, String> {
+    let serial = adb_target_serial()?;
+    let remote_root = adb_shell_storage_root(&serial)?;
     let runtime_root = runtime_user_dir()?;
-    let adb_root = runtime_root.join("adb");
-    if let Ok(metadata) = fs::metadata(&adb_root) {
-        if metadata.is_dir() {
-            return Ok(adb_root);
-        }
-    }
-    if let Some(root) = find_android_mtp_browse_root(&runtime_root)? {
-        return Ok(root);
-    }
-    Err(format!(
-        "ADB browse root {} is not accessible and no Android MTP mount was found under {}",
-        adb_root.display(),
-        runtime_root.join("gvfs").display()
-    ))
+    let local_root = find_android_mtp_browse_root(&runtime_root, Some(&serial))?
+        .or_else(|| find_android_mtp_browse_root(&runtime_root, None).ok().flatten())
+        .ok_or_else(|| {
+            format!(
+                "adb shell detected device {serial} with storage root {remote_root}, but no local gvfs MTP mount was found under {}",
+                runtime_root.join("gvfs").display()
+            )
+        })?;
+
+    Ok(AdbBrowseRoot {
+        serial,
+        remote_root,
+        local_root,
+    })
 }
 
 fn suggested_source_name(kind: SourceKind, root_path: &Path) -> Option<String> {
@@ -181,6 +190,111 @@ fn suggested_adb_name() -> Option<String> {
         }
     }
     None
+}
+
+fn adb_target_serial() -> Result<String, String> {
+    for key in ["ANDROID_SERIAL", "ADB_SERIAL", "ADB_DEVICE_SERIAL"] {
+        if let Ok(value) = env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
+        }
+    }
+
+    let output = Command::new("adb")
+        .arg("devices")
+        .output()
+        .map_err(|err| format!("unable to run `adb devices`: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`adb devices` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|err| format!("`adb devices` returned non-utf8 output: {err}"))?;
+    for line in stdout.lines().skip(1) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let serial = fields.next().unwrap_or("");
+        let status = fields.next().unwrap_or("");
+        if status == "device" && !serial.is_empty() {
+            return Ok(serial.to_string());
+        }
+    }
+
+    Err("no authorized adb device found".to_string())
+}
+
+fn adb_shell_output(serial: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("adb")
+        .arg("-s")
+        .arg(serial)
+        .arg("shell")
+        .args(args)
+        .output()
+        .map_err(|err| format!("unable to run adb shell for {serial}: {err}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "adb shell for device {serial} failed: {}",
+            stderr.trim()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map(|value| value.trim().to_string())
+        .map_err(|err| format!("adb shell for device {serial} returned non-utf8 output: {err}"))
+}
+
+fn adb_shell_path_exists(serial: &str, path: &str) -> Result<bool, String> {
+    let output = Command::new("adb")
+        .arg("-s")
+        .arg(serial)
+        .arg("shell")
+        .arg("ls")
+        .arg("-d")
+        .arg(path)
+        .output()
+        .map_err(|err| format!("unable to probe adb path {path} on device {serial}: {err}"))?;
+    Ok(output.status.success())
+}
+
+fn adb_shell_storage_root(serial: &str) -> Result<String, String> {
+    let mut candidates = Vec::new();
+    let mut add_candidate = |candidate: &str| {
+        let trimmed = candidate.trim();
+        if !trimmed.is_empty() && !candidates.iter().any(|existing| existing == trimmed) {
+            candidates.push(trimmed.to_string());
+        }
+    };
+
+    for candidate in [
+        adb_shell_output(serial, &["echo", "$EXTERNAL_STORAGE"])?,
+        adb_shell_output(serial, &["echo", "$SECONDARY_STORAGE"])?,
+    ] {
+        for value in candidate.split(':') {
+            add_candidate(value);
+        }
+    }
+
+    for candidate in ["/sdcard", "/storage/emulated/0", "/storage/self/primary"] {
+        add_candidate(candidate);
+    }
+
+    for candidate in candidates {
+        if adb_shell_path_exists(serial, &candidate)? {
+            return Ok(candidate);
+        }
+    }
+
+    Err(format!(
+        "unable to detect a browsable Android storage root for device {serial}"
+    ))
 }
 
 fn runtime_user_dir() -> Result<PathBuf, String> {
@@ -374,7 +488,10 @@ fn ensure_indexer_settings_loaded() {
     });
 }
 
-fn find_android_mtp_browse_root(runtime_root: &Path) -> Result<Option<PathBuf>, String> {
+fn find_android_mtp_browse_root(
+    runtime_root: &Path,
+    serial_hint: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
     let gvfs_root = runtime_root.join("gvfs");
     let metadata = match fs::metadata(&gvfs_root) {
         Ok(metadata) => metadata,
@@ -385,6 +502,7 @@ fn find_android_mtp_browse_root(runtime_root: &Path) -> Result<Option<PathBuf>, 
     }
 
     let mut mounts = Vec::new();
+    let serial_hint = serial_hint.map(|value| value.to_ascii_lowercase());
     let read_dir = fs::read_dir(&gvfs_root).map_err(|err| {
         format!(
             "Android MTP browse root {} is not readable: {err}",
@@ -406,6 +524,11 @@ fn find_android_mtp_browse_root(runtime_root: &Path) -> Result<Option<PathBuf>, 
         let name = entry.file_name().to_string_lossy().to_string();
         if !name.starts_with("mtp:host=") {
             continue;
+        }
+        if let Some(serial_hint) = serial_hint.as_deref() {
+            if !name.to_ascii_lowercase().contains(serial_hint) {
+                continue;
+            }
         }
         match entry.file_type() {
             Ok(file_type) if file_type.is_dir() => mounts.push(path),

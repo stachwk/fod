@@ -80,11 +80,13 @@ fn run() -> Result<(), String> {
                 }
                 None => {
                     if matches!(kind, Some(SourceKind::Adb)) {
-                        let root_path = crate::source::adb_browse_root()?;
+                        let adb_root = crate::source::adb_browse_root()?;
                         let (root_path, entries) =
-                            scan::list_source_directories(&repo, &root_path)?;
+                            scan::list_source_directories(&repo, &adb_root.local_root)?;
                         println!("FOD indexer source list");
-                        println!("mode: browse");
+                        println!("mode: adb-shell");
+                        println!("device: {}", adb_root.serial);
+                        println!("adb root: {}", adb_root.remote_root);
                         println!("root: {}", root_path.display());
                         println!("kind hint: adb");
                         println!("directories: {}", entries.len());
