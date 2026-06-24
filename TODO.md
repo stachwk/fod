@@ -42,6 +42,7 @@ This document records the small set of open follow-ups plus completed work, clos
   - Progress: `DbRepo::query_rows_text()` now retries read-only SQL once after a transient disconnect, and `DbRepo::exec()` now retries the idempotent replayable command set once too; `index_import_plan_entries` inserts are replay-safe via `DELETE + INSERT`, and `index_scan_runs` plus `index_import_plans` now carry explicit `request_token` columns so retry can return the same running row, but broader transactional replay still needs a separate design.
 - [x] Review `fod-indexer` CLI ergonomics after manual use; keep the explicit `--source` contract if that remains the intended API, but consider clearer examples or a positional alias if users keep trying the old style. Added positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while preserving `--source`.
 - [ ] Usprawnić automatyczne sugerowanie nazw źródłom w `fod-indexer source add`, bez usuwania `--name`.
+  - Progress: local sources now default to the current hostname when `--name` is omitted; explicit `--name` still overrides the suggestion.
   - Plan prac:
     - lokalny katalog: wykrywać `hostname` i proponować go jako domyślne `--name`,
     - Android po ADB: używać numeru seryjnego urządzenia z `adb devices` jako stabilnego identyfikatora,

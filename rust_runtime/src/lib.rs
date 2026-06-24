@@ -77,6 +77,42 @@ pub fn duration_to_micros(elapsed: Duration) -> u64 {
     elapsed.as_micros().min(u128::from(u64::MAX)) as u64
 }
 
+#[cfg(unix)]
+pub fn current_hostname() -> Result<String, String> {
+    let mut buffer = [0u8; 256];
+    let rc = unsafe {
+        libc::gethostname(
+            buffer.as_mut_ptr() as *mut libc::c_char,
+            buffer.len() as libc::size_t,
+        )
+    };
+    if rc != 0 {
+        return Err(format!(
+            "failed to read hostname: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let len = buffer
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(buffer.len());
+    let hostname = String::from_utf8(buffer[..len].to_vec())
+        .map_err(|err| format!("hostname is not valid UTF-8: {err}"))?
+        .trim()
+        .to_string();
+    if hostname.is_empty() {
+        Err("hostname is empty".to_string())
+    } else {
+        Ok(hostname)
+    }
+}
+
+#[cfg(not(unix))]
+pub fn current_hostname() -> Result<String, String> {
+    Err("hostname lookup is unavailable on this platform".to_string())
+}
+
 pub fn reloadable_snapshot_from_json(payload: &str) -> Result<HashMap<String, String>, String> {
     serde_json::from_str(payload)
         .map_err(|err| format!("runtime_overrides payload is malformed: {err}"))

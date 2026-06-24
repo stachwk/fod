@@ -27,12 +27,14 @@ The first implementation supports local filesystem sources only.
 
 Supported actions:
 
-- `fod-indexer source add --name <name> --path <path> --kind local`
+- `fod-indexer source add [--name <name>] --path <path> --kind local`
 - `fod-indexer scan --source <name>`
 - `fod-indexer hash --source <name> --candidates-only`
 - `fod-indexer report duplicates`
 - `fod-indexer plan-import --dry-run`
 - `fod-indexer materialize --source <name>`
+
+If `--name` is omitted for a local source, `fod-indexer` uses the current hostname as the default source name. Explicit `--name` stays available when you want to override the suggestion or register a source that does not fit the default heuristic.
 
 ## Hashing strategy
 

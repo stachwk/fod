@@ -15,6 +15,7 @@ Use this file to record concise conclusions that matter for future work.
 - `fod-indexer scan`, `fod-indexer plan-import`, and `fod-indexer materialize` now preflight the indexer schema and refuse to start on databases that are still missing the `request_token` migration, so the user gets a direct upgrade hint instead of a raw PostgreSQL missing-column error.
 - `fod-indexer materialize --dry-run` is now a read-only preview: it validates the current indexed state and source files, but it does not refresh scan/hash rows, create an import plan, or write any materialized files.
 - `fod-indexer` now accepts positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while keeping the explicit `--source` form. That makes the CLI friendlier for interactive use without changing the documented contract.
+- `fod-indexer source add` now defaults the source name to the current hostname when `--name` is omitted, but explicit `--name` remains available as an override for unsupported sources or forced naming.
 
 ## 2026-06-23
 

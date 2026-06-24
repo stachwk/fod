@@ -5,6 +5,7 @@ use crate::db::{
 use crate::model::{IndexSource, IndexedFile, ScanSummary};
 use crate::replay;
 use fod_rust_hotpath::pg::DbRepo;
+use fod_rust_runtime::current_hostname;
 use std::fs;
 use std::fs::{File, FileType};
 use std::os::unix::fs::MetadataExt;
@@ -13,7 +14,7 @@ use walkdir::WalkDir;
 
 pub fn register_source(
     repo: &DbRepo,
-    name: &str,
+    name: Option<&str>,
     path: &str,
     kind: &str,
 ) -> Result<IndexSource, String> {
@@ -21,6 +22,7 @@ pub fn register_source(
         return Err(format!("unsupported source kind: {kind}"));
     }
 
+    let name = resolve_source_name(name)?;
     let root_path = fs::canonicalize(path)
         .map_err(|err| format!("source path {path} is not accessible: {err}"))?;
     let metadata = fs::metadata(&root_path)
@@ -42,7 +44,7 @@ pub fn register_source(
             updated_at = NOW()
         RETURNING id_index_source, name, kind, root_path
         ",
-        name = sql_quote_literal(name),
+        name = sql_quote_literal(&name),
         kind = sql_quote_literal(kind),
         root_path = sql_quote_literal(&root_path.to_string_lossy()),
     );
@@ -51,6 +53,21 @@ pub fn register_source(
         .first()
         .ok_or_else(|| "source registration did not return a row".to_string())?;
     IndexSource::from_row(row)
+}
+
+fn resolve_source_name(explicit_name: Option<&str>) -> Result<String, String> {
+    match explicit_name {
+        Some(name) => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                Err("source name cannot be empty".to_string())
+            } else {
+                Ok(trimmed.to_string())
+            }
+        }
+        None => current_hostname()
+            .map_err(|err| format!("unable to determine a default source name: {err}")),
+    }
 }
 
 pub fn load_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {

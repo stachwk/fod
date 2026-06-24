@@ -8,7 +8,7 @@ use std::ffi::OsString;
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
     long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to register a local source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
+    after_long_help = "Examples:\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -27,7 +27,7 @@ impl Cli {
 pub enum Commands {
     #[command(
         about = "Register a source directory.",
-        long_about = "Register a local directory so fod-indexer can scan and materialize it later.\n\nThis command stores the source name, kind, and canonical root path in PostgreSQL."
+        long_about = "Register a local directory so fod-indexer can scan and materialize it later.\n\nIf --name is omitted, fod-indexer uses the current hostname as the default local source name. Use --name to override that suggestion. This command stores the source name, kind, and canonical root path in PostgreSQL."
     )]
     Source {
         #[command(subcommand)]
@@ -99,7 +99,7 @@ pub enum SourceCommands {
     )]
     Add {
         #[arg(long)]
-        name: String,
+        name: Option<String>,
         #[arg(long)]
         path: String,
         #[arg(long, value_enum, default_value_t = SourceKind::Local)]
