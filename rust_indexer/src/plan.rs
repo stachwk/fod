@@ -117,34 +117,34 @@ pub(crate) fn insert_import_plan(
     dry_run: bool,
     source_filter: Option<&str>,
 ) -> Result<u64, String> {
-    let running_status = if status.ends_with("_running") {
-        format!("{status}:{}", replay::request_token("plan"))
-    } else {
-        status.to_string()
-    };
+    let request_token = replay::request_token("plan");
     let sql = format!(
         "
-        WITH existing AS (
-            SELECT id_import_plan
-            FROM index_import_plans
-            WHERE status = {running_status}
-              AND dry_run = {dry_run}
-              AND source_filter IS NOT DISTINCT FROM {source_filter}
-            ORDER BY id_import_plan DESC
-            LIMIT 1
-        ),
-        inserted AS (
-            INSERT INTO index_import_plans (created_at, updated_at, status, dry_run, source_filter)
-            SELECT NOW(), NOW(), {running_status}, {dry_run}, {source_filter}
-            WHERE NOT EXISTS (SELECT 1 FROM existing)
-            RETURNING id_import_plan
+        INSERT INTO index_import_plans (
+            created_at,
+            updated_at,
+            status,
+            request_token,
+            dry_run,
+            source_filter
         )
-        SELECT id_import_plan FROM inserted
-        UNION ALL
-        SELECT id_import_plan FROM existing
-        LIMIT 1
+        VALUES (
+            NOW(),
+            NOW(),
+            {status},
+            {request_token},
+            {dry_run},
+            {source_filter}
+        )
+        ON CONFLICT (request_token) DO UPDATE SET
+            status = EXCLUDED.status,
+            dry_run = EXCLUDED.dry_run,
+            source_filter = EXCLUDED.source_filter,
+            updated_at = NOW()
+        RETURNING id_import_plan
         ",
-        running_status = sql_quote_literal(&running_status),
+        status = sql_quote_literal(status),
+        request_token = sql_quote_literal(&request_token),
         dry_run = if dry_run { "TRUE" } else { "FALSE" },
         source_filter = source_filter
             .map(sql_quote_literal)

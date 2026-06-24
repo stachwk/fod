@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 13;
-const MIGRATION_FILES: [&str; 13] = [
+const SCHEMA_VERSION: u64 = 14;
+const MIGRATION_FILES: [&str; 14] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -39,9 +39,10 @@ const MIGRATION_FILES: [&str; 13] = [
     "0011_rename_fod_schema.sql",
     "0012_data_extents.sql",
     "0013_indexer.sql",
+    "0014_indexer_request_tokens.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 13] = [
+const MIGRATION_DESCRIPTIONS: [&str; 14] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -55,6 +56,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 13] = [
     "Rename legacy FOD schema to fod",
     "Introduce native extent storage",
     "Add fod-indexer metadata tables",
+    "Make indexer run creation replay-safe",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -176,6 +178,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0013_indexer.sql"
         )),
+        14 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0014_indexer_request_tokens.sql"
+        )),
         _ => "",
     }
 }
@@ -195,6 +201,7 @@ fn migration_description(version: u64) -> &'static str {
         11 => MIGRATION_DESCRIPTIONS[10],
         12 => MIGRATION_DESCRIPTIONS[11],
         13 => MIGRATION_DESCRIPTIONS[12],
+        14 => MIGRATION_DESCRIPTIONS[13],
         _ => "Migration",
     }
 }
@@ -214,6 +221,7 @@ fn migration_filename(version: u64) -> &'static str {
         11 => MIGRATION_FILES[10],
         12 => MIGRATION_FILES[11],
         13 => MIGRATION_FILES[12],
+        14 => MIGRATION_FILES[13],
         _ => "unknown.sql",
     }
 }

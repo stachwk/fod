@@ -1175,22 +1175,32 @@ fn sql_is_replayable_copy_block_crc_upsert(sql: &str) -> bool {
         && sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, crc32 = EXCLUDED.crc32, updated_at = NOW()")
 }
 
+fn sql_compact(sql: &CString) -> String {
+    sql.to_string_lossy()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn sql_is_replayable_command(sql: &CString) -> bool {
-    let sql = sql.to_string_lossy();
-    let sql = sql.trim_start();
+    let sql = sql_compact(sql);
 
     sql.starts_with("DELETE FROM ")
         || sql.starts_with("INSERT INTO index_files ")
             && sql.contains("ON CONFLICT (id_index_source, path) DO UPDATE SET id_scan_run = EXCLUDED.id_scan_run, size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns, inode = EXCLUDED.inode, device = EXCLUDED.device, file_kind = EXCLUDED.file_kind, scan_status = EXCLUDED.scan_status, source_changed = EXCLUDED.source_changed, updated_at = NOW()")
+        || sql.starts_with("INSERT INTO index_scan_runs ")
+            && sql.contains("ON CONFLICT (request_token) DO UPDATE SET id_index_source = EXCLUDED.id_index_source, status = EXCLUDED.status, updated_at = NOW()")
         || sql.starts_with("INSERT INTO index_file_hashes ")
             && sql.contains("ON CONFLICT (id_file) DO UPDATE SET hash_algorithm = EXCLUDED.hash_algorithm, partial_hash = EXCLUDED.partial_hash, full_hash = EXCLUDED.full_hash, hash_status = EXCLUDED.hash_status, observed_size = EXCLUDED.observed_size, observed_mtime_ns = EXCLUDED.observed_mtime_ns, observed_inode = EXCLUDED.observed_inode, observed_device = EXCLUDED.observed_device, updated_at = NOW()")
         || sql.starts_with("INSERT INTO index_duplicate_sets ")
             && sql.contains("ON CONFLICT (hash_algorithm, full_hash, file_size) DO UPDATE SET file_count = EXCLUDED.file_count, total_bytes = EXCLUDED.total_bytes, updated_at = NOW()")
+        || sql.starts_with("INSERT INTO index_import_plans ")
+            && sql.contains("ON CONFLICT (request_token) DO UPDATE SET status = EXCLUDED.status, dry_run = EXCLUDED.dry_run, source_filter = EXCLUDED.source_filter, updated_at = NOW()")
         || sql.starts_with("UPDATE index_scan_runs SET finished_at = NOW(), status = ")
         || sql.starts_with("UPDATE index_import_plans SET status = ")
         || sql.starts_with("UPDATE index_files SET source_changed = TRUE, updated_at = NOW() WHERE id_file = ")
-        || sql_is_replayable_data_blocks_upsert(sql)
-        || sql_is_replayable_copy_block_crc_upsert(sql)
+        || sql_is_replayable_data_blocks_upsert(&sql)
+        || sql_is_replayable_copy_block_crc_upsert(&sql)
         || sql.starts_with("UPDATE client_sessions")
         || sql.starts_with("UPDATE lock_leases")
         || sql.starts_with("UPDATE lock_range_leases")
@@ -7587,6 +7597,14 @@ mod tests {
             "INSERT INTO data_blocks (id_file, data_object_id, _order, data) VALUES ($1, $2, $3, $4) ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data",
         )
         .unwrap();
+        let scan_run_insert_sql = std::ffi::CString::new(
+            "INSERT INTO index_scan_runs (id_index_source, started_at, status, request_token) VALUES (1, NOW(), 'running', 'scan:1:2:3') ON CONFLICT (request_token) DO UPDATE SET id_index_source = EXCLUDED.id_index_source, status = EXCLUDED.status, updated_at = NOW() RETURNING id_scan_run",
+        )
+        .unwrap();
+        let import_plan_insert_sql = std::ffi::CString::new(
+            "INSERT INTO index_import_plans (created_at, updated_at, status, request_token, dry_run, source_filter) VALUES (NOW(), NOW(), 'dry_run_running', 'plan:1:2:3', TRUE, NULL) ON CONFLICT (request_token) DO UPDATE SET status = EXCLUDED.status, dry_run = EXCLUDED.dry_run, source_filter = EXCLUDED.source_filter, updated_at = NOW() RETURNING id_import_plan",
+        )
+        .unwrap();
         let data_blocks_copy_sql = std::ffi::CString::new(
             "INSERT INTO data_blocks (id_file, data_object_id, _order, data) SELECT $3, $2, _order, data FROM data_blocks WHERE data_object_id = $1",
         )
@@ -7624,6 +7642,8 @@ mod tests {
         assert!(sql_is_replayable_command(&delete_sql));
         assert!(sql_is_replayable_command(&owner_key_insert_sql));
         assert!(sql_is_replayable_command(&data_blocks_upsert_sql));
+        assert!(sql_is_replayable_command(&scan_run_insert_sql));
+        assert!(sql_is_replayable_command(&import_plan_insert_sql));
         assert!(!sql_is_replayable_command(&data_blocks_copy_sql));
         assert!(sql_is_replayable_command(&copy_block_crc_upsert_sql));
         assert!(!sql_is_replayable_command(&copy_block_crc_copy_sql));

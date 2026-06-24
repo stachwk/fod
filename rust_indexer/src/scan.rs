@@ -68,29 +68,28 @@ pub fn load_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
 }
 
 fn create_scan_run(repo: &DbRepo, source_id: u64) -> Result<u64, String> {
-    let running_status = format!("running:{}", replay::request_token("scan"));
+    let request_token = replay::request_token("scan");
     let sql = format!(
         "
-        WITH existing AS (
-            SELECT id_scan_run
-            FROM index_scan_runs
-            WHERE id_index_source = {source_id}
-              AND status = {running_status}
-            ORDER BY started_at DESC, id_scan_run DESC
-            LIMIT 1
-        ),
-        inserted AS (
-            INSERT INTO index_scan_runs (id_index_source, started_at, status)
-            SELECT {source_id}, NOW(), {running_status}
-            WHERE NOT EXISTS (SELECT 1 FROM existing)
-            RETURNING id_scan_run
+        INSERT INTO index_scan_runs (
+            id_index_source,
+            started_at,
+            status,
+            request_token
         )
-        SELECT id_scan_run FROM inserted
-        UNION ALL
-        SELECT id_scan_run FROM existing
-        LIMIT 1
+        VALUES (
+            {source_id},
+            NOW(),
+            'running',
+            {request_token}
+        )
+        ON CONFLICT (request_token) DO UPDATE SET
+            id_index_source = EXCLUDED.id_index_source,
+            status = EXCLUDED.status,
+            updated_at = NOW()
+        RETURNING id_scan_run
         ",
-        running_status = sql_quote_literal(&running_status),
+        request_token = sql_quote_literal(&request_token),
     );
     let rows = repo.query_rows_text(&sql)?;
     let row = rows

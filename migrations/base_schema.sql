@@ -254,6 +254,8 @@ CREATE TABLE IF NOT EXISTS index_scan_runs (
     started_at TIMESTAMP NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMP,
     status TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    request_token TEXT NOT NULL UNIQUE,
     error_message TEXT
 );
 
@@ -305,6 +307,7 @@ CREATE TABLE IF NOT EXISTS index_import_plans (
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
     status TEXT NOT NULL,
+    request_token TEXT NOT NULL UNIQUE,
     dry_run BOOLEAN NOT NULL DEFAULT TRUE,
     source_filter TEXT,
     scanned_file_count INTEGER NOT NULL DEFAULT 0,

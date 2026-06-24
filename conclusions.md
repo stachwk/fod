@@ -7,7 +7,9 @@ Use this file to record concise conclusions that matter for future work.
 - `DbRepo::query_rows_text()` now participates in the bounded replay path for read-only SQL, so the indexer's plan/report/cleanup row-fetching paths can retry once after a transient PostgreSQL disconnect. The broader write-side replay follow-up remains open.
 - `DbRepo::exec()` now participates in the same bounded replay path for the idempotent replayable command set, so safe indexer writes such as status updates and idempotent upserts can retry once after a transient disconnect. Non-idempotent transactional replay is still open.
 - `index_import_plan_entries` now inserts through a replay-safe `DELETE + INSERT` sequence, so a transient disconnect during `fod-indexer plan-import` or `materialize` no longer leaves duplicate plan-entry rows behind on retry.
-- `index_scan_runs` and `index_import_plans` now create their running rows through a tokenized `WITH ... INSERT ... SELECT existing` pattern, so a transient disconnect can retry the same scan or plan creation without minting a duplicate running row.
+- `index_scan_runs` and `index_import_plans` now store explicit `request_token` values and use `ON CONFLICT` on that token, so a transient disconnect can retry the same scan or plan creation without minting a duplicate running row.
+- The indexer replay change required schema version 14, which adds the new request-token columns and the missing `updated_at` field for `index_scan_runs`.
+- The replay classifier in `rust_hotpath/src/pg.rs` now normalizes SQL whitespace before matching replayable command patterns, so multi-line Rust-built SQL statements can still qualify for bounded retry.
 - `fod-indexer` now accepts positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while keeping the explicit `--source` form. That makes the CLI friendlier for interactive use without changing the documented contract.
 
 ## 2026-06-23
