@@ -9,6 +9,12 @@ pub struct IndexSource {
 }
 
 #[derive(Debug, Clone)]
+pub struct SourceBrowseEntry {
+    pub path: PathBuf,
+    pub added_sources: Vec<IndexSource>,
+}
+
+#[derive(Debug, Clone)]
 pub struct IndexedFile {
     pub id_file: u64,
     pub source_id: u64,

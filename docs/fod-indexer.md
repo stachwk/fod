@@ -29,6 +29,8 @@ Supported actions:
 
 - `fod-indexer source add [--name <name>] --path <path> --kind local|smb|qnap|adb|github`
 - `fod-indexer source list [--kind <kind>]`
+- `fod-indexer source list --path <path> [--kind <kind>]`
+- `fod-indexer source remove --name <name>`
 - `fod-indexer scan --source <name>`
 - `fod-indexer hash --source <name> --candidates-only`
 - `fod-indexer report duplicates`
@@ -46,6 +48,8 @@ If `--name` is omitted, `fod-indexer` uses a kind-aware naming heuristic with th
 Explicit `--name` stays available when you want to override the suggestion or register a source that does not fit the default heuristic.
 
 Use `fod-indexer source list --kind adb` when you want to inspect the registered ADB-backed roots before scanning them.
+Use `fod-indexer source list --path /run/user/1000/adb/<serial> --kind adb` when you want to browse child directories under an already mounted source root and copy the path into `source add`.
+Use `fod-indexer source remove --name <name>` to unregister an added source once you no longer want it indexed.
 
 ## Indexer Filters
 

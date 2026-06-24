@@ -3,14 +3,15 @@ use crate::db::{
     ensure_indexer_request_token_schema, sql_nullable_i64, sql_nullable_string, sql_nullable_u64,
     sql_quote_literal,
 };
-use crate::model::{IndexSource, IndexedFile, ScanSummary};
+use crate::model::{IndexSource, IndexedFile, ScanSummary, SourceBrowseEntry};
 use crate::replay;
 use crate::source;
 use fod_rust_hotpath::pg::DbRepo;
+use std::collections::HashMap;
 use std::fs;
 use std::fs::{File, FileType};
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 pub fn register_source(
@@ -83,6 +84,100 @@ pub fn list_sources(repo: &DbRepo, kind_filter: Option<&str>) -> Result<Vec<Inde
     );
     let rows = repo.query_rows_text(&sql)?;
     rows.iter().map(|row| IndexSource::from_row(row)).collect()
+}
+
+pub fn remove_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
+    let sql = format!(
+        "
+        DELETE FROM index_sources
+        WHERE name = {}
+        RETURNING id_index_source, name, kind, root_path
+        ",
+        sql_quote_literal(name)
+    );
+    let rows = repo.query_rows_text(&sql)?;
+    let row = rows
+        .first()
+        .ok_or_else(|| format!("unknown source: {name}"))?;
+    IndexSource::from_row(row)
+}
+
+pub fn list_source_directories(
+    repo: &DbRepo,
+    path: &str,
+) -> Result<(PathBuf, Vec<SourceBrowseEntry>), String> {
+    let root_path = fs::canonicalize(path)
+        .map_err(|err| format!("source path {path} is not accessible: {err}"))?;
+    let metadata = fs::metadata(&root_path)
+        .map_err(|err| format!("source path {} is not readable: {err}", root_path.display()))?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "source path {} is not a directory",
+            root_path.display()
+        ));
+    }
+
+    let registered_sources = list_sources(repo, None)?;
+    let mut registered_by_root: HashMap<PathBuf, Vec<IndexSource>> = HashMap::new();
+    for source in registered_sources {
+        registered_by_root
+            .entry(source.root_path.clone())
+            .or_default()
+            .push(source);
+    }
+
+    let mut entries = Vec::new();
+    let read_dir = fs::read_dir(&root_path)
+        .map_err(|err| format!("source path {} is not readable: {err}", root_path.display()))?;
+    for item in read_dir {
+        let entry = match item {
+            Ok(entry) => entry,
+            Err(err) => {
+                eprintln!("FOD indexer source list warning: {err}");
+                continue;
+            }
+        };
+
+        let entry_path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                eprintln!(
+                    "FOD indexer source list warning for {}: {err}",
+                    entry_path.display()
+                );
+                continue;
+            }
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        if source::is_ignored_source_path(&root_path, &entry_path) {
+            continue;
+        }
+
+        let canonical_path = match fs::canonicalize(&entry_path) {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!(
+                    "FOD indexer source list warning for {}: {err}",
+                    entry_path.display()
+                );
+                continue;
+            }
+        };
+        let added_sources = registered_by_root
+            .get(&canonical_path)
+            .cloned()
+            .unwrap_or_default();
+        entries.push(SourceBrowseEntry {
+            path: canonical_path,
+            added_sources,
+        });
+    }
+
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok((root_path, entries))
 }
 
 fn create_scan_run(repo: &DbRepo, source_id: u64) -> Result<u64, String> {

@@ -8,7 +8,7 @@ use std::ffi::OsString;
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
     long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
+    after_long_help = "Examples:\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -27,7 +27,7 @@ impl Cli {
 pub enum Commands {
     #[command(
         about = "Manage sources.",
-        long_about = "Register or list source adapters so fod-indexer can inspect roots before scan and materialize steps.\n\nIf --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion. Registered sources are stored with their kind and canonical root path in PostgreSQL."
+        long_about = "Register, browse, list, or remove source adapters so fod-indexer can inspect roots before scan and materialize steps.\n\nIf --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion. Registered sources are stored with their kind and canonical root path in PostgreSQL."
     )]
     Source {
         #[command(subcommand)]
@@ -128,17 +128,33 @@ pub enum SourceCommands {
         kind: SourceKind,
     },
     #[command(
-        about = "List registered sources.",
-        long_about = "Show the registered source adapters and their canonical root paths.\n\nUse --kind <KIND> to filter the listing before scanning or materialization. This is useful when you want to inspect adb, smb, qnap, github, or local roots before running scan.",
-        override_usage = "fod-indexer source list [--kind <KIND>]"
+        about = "List registered sources or browse a filesystem root.",
+        long_about = "Show registered source adapters and their canonical root paths, or browse a filesystem root and list its child directories.\n\nUse --kind <KIND> to filter the registered-source table before scanning or materialization. Use --path <PATH> to browse a root and print child directories, with already registered entries marked as added.",
+        override_usage = "fod-indexer source list [--kind <KIND>] [--path <PATH>]"
     )]
     List {
         #[arg(
             long,
             value_enum,
-            help = "Filter the listing to a single adapter kind before scanning."
+            help = "Filter the registered-source listing to a single adapter kind, or use it as the suggested kind when browsing with --path."
         )]
         kind: Option<SourceKind>,
+        #[arg(
+            long,
+            help = "Browse this filesystem root instead of listing registered sources."
+        )]
+        path: Option<String>,
+    },
+    #[command(
+        about = "Remove a registered source.",
+        long_about = "Remove a source registration from PostgreSQL. The indexed rows for that source are removed through foreign-key cascade."
+    )]
+    Remove {
+        #[arg(
+            long,
+            help = "Remove the source by its registered name. The name is unique in the source table."
+        )]
+        name: String,
     },
 }
 
