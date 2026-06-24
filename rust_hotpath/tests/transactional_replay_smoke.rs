@@ -165,6 +165,7 @@ fn handle_proxy_connection(
 
     let mut client_reader = client;
     let mut backend_writer = backend;
+    let mut drop_on_next_execute = false;
     loop {
         let mut type_buf = [0u8; 1];
         match client_reader.read_exact(&mut type_buf) {
@@ -201,16 +202,33 @@ fn handle_proxy_connection(
         if let Some(query) = query_text {
             if query.contains(&marker) {
                 match_hits.fetch_add(1, Ordering::SeqCst);
-                if !triggered.swap(true, Ordering::SeqCst) {
-                    drop_hits.fetch_add(1, Ordering::SeqCst);
-                    stop_forwarding.store(true, Ordering::SeqCst);
-                    if !drop_delay.is_zero() {
-                        thread::sleep(drop_delay);
+                if type_buf[0] == b'Q' {
+                    if !triggered.swap(true, Ordering::SeqCst) {
+                        drop_hits.fetch_add(1, Ordering::SeqCst);
+                        stop_forwarding.store(true, Ordering::SeqCst);
+                        if !drop_delay.is_zero() {
+                            thread::sleep(drop_delay);
+                        }
+                        let _ = client_reader.shutdown(Shutdown::Both);
+                        let _ = backend_writer.shutdown(Shutdown::Both);
+                        break;
                     }
-                    let _ = client_reader.shutdown(Shutdown::Both);
-                    let _ = backend_writer.shutdown(Shutdown::Both);
-                    break;
+                } else if type_buf[0] == b'P' {
+                    drop_on_next_execute = true;
                 }
+            }
+        }
+
+        if type_buf[0] == b'E' && drop_on_next_execute {
+            if !triggered.swap(true, Ordering::SeqCst) {
+                drop_hits.fetch_add(1, Ordering::SeqCst);
+                stop_forwarding.store(true, Ordering::SeqCst);
+                if !drop_delay.is_zero() {
+                    thread::sleep(drop_delay);
+                }
+                let _ = client_reader.shutdown(Shutdown::Both);
+                let _ = backend_writer.shutdown(Shutdown::Both);
+                break;
             }
         }
     }
@@ -340,6 +358,43 @@ fn transactional_body_disconnect_is_replayed_once() {
     );
     repo.delete_directory_entry(directory_id)
         .expect("cleanup created directory");
+}
+
+#[test]
+fn transactional_multistatement_disconnect_is_replayed_once() {
+    let _guard = test_guard();
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    let parent_name = unique_name("transactional_multi_parent");
+    let parent_seed = unique_name("transactional_multi_parent_seed");
+    let parent_id = direct_repo
+        .create_directory(None, &parent_name, 0o755, 1000, 1000, &parent_seed)
+        .expect("create parent directory");
+
+    let proxy =
+        QueryDropProxy::start("INSERT INTO files", Duration::from_millis(0)).expect("start proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+
+    let file_name = unique_name("transactional_multi_file");
+    let file_seed = unique_name("transactional_multi_seed");
+    let file_id = repo
+        .create_file(Some(parent_id), &file_name, 0o644, 1000, 1000, &file_seed)
+        .expect("create file with replay");
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert_eq!(proxy.match_hits(), 2);
+    assert_eq!(
+        direct_repo
+            .get_file_id(&format!("/{parent_name}/{file_name}"))
+            .expect("lookup created file"),
+        Some(file_id)
+    );
+
+    direct_repo
+        .purge_primary_file(file_id)
+        .expect("cleanup created file");
+    direct_repo
+        .delete_directory_entry(parent_id)
+        .expect("cleanup parent directory");
 }
 
 #[test]

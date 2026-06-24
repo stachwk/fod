@@ -133,9 +133,10 @@ Any future transaction that cannot expose a durable marker with the same propert
 
 ## Smoke Coverage
 
-The first two smoke checks now live in `rust_hotpath/tests/transactional_replay_smoke.rs`:
+The first three smoke checks now live in `rust_hotpath/tests/transactional_replay_smoke.rs`:
 
 - body disconnects are replayed once and confirmed by the resulting filesystem row
+- multi-statement file creation replays once after the file insert is interrupted in-flight
 - commit disconnects are confirmed by probing the durable `request_token` row after reconnect
 
 ## Current Baseline
