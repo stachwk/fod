@@ -7,7 +7,6 @@ mod model;
 mod plan;
 mod scan;
 
-use clap::Parser;
 use cli::{Cli, Commands, ReportCommands, SourceCommands};
 
 fn main() {
@@ -18,7 +17,7 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let cli = Cli::parse();
+    let cli = Cli::parse_with_source_aliases();
     let repo = db::open_repo(cli.conninfo.as_deref())?;
 
     match cli.command {

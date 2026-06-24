@@ -6,6 +6,7 @@ Use this file to record concise conclusions that matter for future work.
 
 - `DbRepo::query_rows_text()` now participates in the bounded replay path for read-only SQL, so the indexer's plan/report/cleanup row-fetching paths can retry once after a transient PostgreSQL disconnect. The broader write-side replay follow-up remains open.
 - `DbRepo::exec()` now participates in the same bounded replay path for the idempotent replayable command set, so safe indexer writes such as status updates and idempotent upserts can retry once after a transient disconnect. Non-idempotent transactional replay is still open.
+- `fod-indexer` now accepts positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while keeping the explicit `--source` form. That makes the CLI friendlier for interactive use without changing the documented contract.
 
 ## 2026-06-23
 
