@@ -41,6 +41,13 @@ This document records the small set of open follow-ups plus completed work, clos
 - [ ] Dodać pełniejszy replay in-flight SQL po błędach.
   - Progress: `DbRepo::query_rows_text()` now retries read-only SQL once after a transient disconnect, and `DbRepo::exec()` now retries the idempotent replayable command set once too; `index_import_plan_entries` inserts are replay-safe via `DELETE + INSERT`, and `index_scan_runs` plus `index_import_plans` now carry explicit `request_token` columns so retry can return the same running row, but broader transactional replay still needs a separate design.
 - [x] Review `fod-indexer` CLI ergonomics after manual use; keep the explicit `--source` contract if that remains the intended API, but consider clearer examples or a positional alias if users keep trying the old style. Added positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while preserving `--source`.
+- [ ] Usprawnić automatyczne nadawanie nazw źródłom w `fod-indexer source add`.
+  - Plan prac:
+    - lokalny katalog: wykrywać `hostname` i proponować go jako domyślne `--name`,
+    - Android po ADB: używać numeru seryjnego urządzenia z `adb devices` jako stabilnego identyfikatora,
+    - SMB/QNAP po IP: traktować host/IP jako sensowną domyślną nazwę źródła,
+    - inne backendy: dodać analogiczne heurystyki, jeśli da się pobrać stabilne metadane.
+  - Uwaga: jawne `--name` powinno pozostać nadpisaniem, ale domyślną wartość warto wyprowadzać z wykrytej informacji, żeby ograniczyć ręczne wpisywanie i ułatwić onboardowanie nowych źródeł.
 - [ ] Plan implementacji ioctl:
   - [x] Najpierw `FIGETBSZ`. Zaimplementowane w `rust_fuse/src/fs.rs` jako odpowiedź oparta o bieżący `blksize`.
   - [x] Potem `FS_IOC_GETFLAGS`. Na razie zwracane jest neutralne `0`, bo flags nie są jeszcze trwale przechowywane.
