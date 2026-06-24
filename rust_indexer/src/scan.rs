@@ -411,6 +411,11 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
             };
 
             let size = metadata.len();
+            if source::is_zero_length_file(size) {
+                summary.filtered_files = summary.filtered_files.saturating_add(1);
+                progress.maybe_report(&summary, &entry_path, "filtered");
+                continue;
+            }
             let mtime_ns = Some(
                 metadata
                     .mtime()

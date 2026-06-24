@@ -334,6 +334,9 @@ pub fn rebuild_duplicate_sets(repo: &DbRepo) -> Result<u64, String> {
             .trim()
             .parse::<u64>()
             .map_err(|err| format!("invalid file size in hash rows: {err}"))?;
+        if source::is_zero_length_file(observed_size) {
+            continue;
+        }
         groups
             .entry((algorithm, full_hash_hex, observed_size))
             .or_default()

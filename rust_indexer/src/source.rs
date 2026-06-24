@@ -63,12 +63,16 @@ pub fn resolve_source_name(
 
 pub fn is_ignored_indexed_file(file: &IndexedFile) -> bool {
     ensure_indexer_settings_loaded();
-    is_ignored_file_relative_path(Path::new(&file.path))
+    file.size == 0 || is_ignored_file_relative_path(Path::new(&file.path))
 }
 
 pub fn is_ignored_index_path(_root_path: &Path, relative_path: &str) -> bool {
     ensure_indexer_settings_loaded();
     is_ignored_file_relative_path(Path::new(relative_path))
+}
+
+pub fn is_zero_length_file(size: u64) -> bool {
+    size == 0
 }
 
 pub fn is_ignored_source_path(root_path: &Path, entry_path: &Path) -> bool {

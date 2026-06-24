@@ -1,7 +1,7 @@
 use crate::db::{ensure_indexer_request_token_schema, hex_encode};
 use crate::model::{IndexSource, MaterializeSummary};
 use crate::plan::{self, canonical_sort_key, PlannableFile};
-use crate::{hash, scan};
+use crate::{hash, scan, source};
 use fod_rust_hotpath::block_count_for_length;
 use fod_rust_hotpath::pg::{DbRepo, PersistBlockRow};
 use sha2::{Digest, Sha256};
@@ -311,8 +311,11 @@ fn materialize_canonical_file(
     )?;
 
     let size = metadata.len();
-    if size == 0 {
-        return Ok((file_id, created_dirs));
+    if source::is_zero_length_file(size) {
+        return Err(format!(
+            "zero-length files are skipped before materialization: {}",
+            path.display()
+        ));
     }
 
     let (blocks, actual_hash) = collect_file_blocks(

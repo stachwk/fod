@@ -94,7 +94,7 @@ pub(crate) fn load_plannable_files(
         FROM index_files f
         JOIN index_sources s ON s.id_index_source = f.id_index_source
         LEFT JOIN index_file_hashes h ON h.id_file = f.id_file
-        WHERE f.scan_status = 'ok' AND f.file_kind = 'regular'
+        WHERE f.scan_status = 'ok' AND f.file_kind = 'regular' AND f.size > 0
         {source_clause}
         ORDER BY f.id_index_source, length(f.path), f.path
         ",

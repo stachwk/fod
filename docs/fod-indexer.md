@@ -53,6 +53,7 @@ Use `fod-indexer source remove --name <name>` to unregister an added source once
 ## Indexer Filters
 
 `fod-indexer` reads an optional `[fod-indexer]` section from `fod_config.ini` and uses it as a skip list for scan, hash, planning, materialization previews, duplicate-report rebuilds, and cleanup walks.
+Zero-length files are skipped during scan before they enter the index, so they do not reach hashing, planning, duplicate-report rebuilding, or materialization.
 
 Supported keys:
 
@@ -99,7 +100,7 @@ Scanner status values are explicit:
 Unreadable files should be recorded and the scan should continue. A database write failure is the only case that should abort the scan.
 While a scan runs, `fod-indexer scan --source <name>` prints periodic progress lines to stderr with the scanned-file counts, current file path, and elapsed time.
 While `fod-indexer hash --source <name>` runs, it prints periodic progress lines to stderr with candidate, partial, full, and retry-needed counts, plus the current file path and elapsed time.
-`fod-indexer report duplicates` skips zero-size duplicate groups so cache and lock files do not dominate the report. Those groups stay present in the hash tables and import planning.
+`fod-indexer report duplicates` skips zero-size duplicate groups so cache and lock files do not dominate the report. In the current pipeline those groups should not appear because scan skips zero-length files before indexing.
 
 ## Import planning
 
@@ -131,7 +132,7 @@ The dry run should report:
 - source path,
 - optional inode and device ids when available.
 
-Materialization writes into a per-run root directory inside FOD named `index-source-<source id>-import-<plan id>`, keeps the source tree untouched, writes each canonical payload once, and reuses the canonical data object for duplicate references when the payload is non-empty. Zero-length duplicates remain harmless independent zero-sized entries.
+Materialization writes into a per-run root directory inside FOD named `index-source-<source id>-import-<plan id>`, keeps the source tree untouched, and writes each canonical payload once while reusing the canonical data object for duplicate references.
 
 ## Cleanup
 
@@ -139,7 +140,7 @@ Materialization writes into a per-run root directory inside FOD named `index-sou
 
 Use `--dry-run` first if you want to preview which rows would be removed without touching PostgreSQL. If the source root itself is gone, the cleanup treats the source as fully orphaned and removes the indexed rows for that source.
 
-Hidden dotfiles and common cache/build directories are skipped during scan, hash, plan, materialize, and cleanup view rebuilding. That keeps paths such as `.bashrc`, `.venv`, `.git`, `node_modules`, `target`, `build`, and similar cache trees out of the index.
+Hidden dotfiles, zero-length files, and common cache/build directories are skipped during scan, hash, plan, materialize, and cleanup view rebuilding. That keeps paths such as `.bashrc`, `.venv`, `.git`, `node_modules`, `target`, `build`, and similar cache trees out of the index.
 
 ## Architecture note
 
