@@ -164,6 +164,7 @@ The dry run should report:
 
 Materialization writes into a per-run root directory inside FOD named `index-source-<source id>-import-<plan id>`, keeps the source tree untouched, and writes each canonical payload once while reusing the canonical data object for duplicate references.
 If a non-dry-run materialize fails after the import root has been created, the command now attempts a best-effort rollback automatically. `fod-indexer cleanup-failed --plan <id>` remains the manual fallback if that rollback cannot finish.
+The rollback contract is pinned by a failure-path smoke that forces a partial materialize failure and verifies that the import root disappears again.
 
 ## Cleanup
 
