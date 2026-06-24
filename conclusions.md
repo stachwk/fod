@@ -4,6 +4,7 @@ Use this file to record concise conclusions that matter for future work.
 
 ## 2026-06-24
 
+- `fod-indexer source add` now shows an explicit usage line with `--path <PATH> [--name <NAME>] [--kind <KIND>]`, so the help makes the adapter choice visible instead of hiding it behind a generic `[OPTIONS]` placeholder. The `adb` and `github` kinds are documented as adapter kinds on top of a path-backed root, not as direct remote crawlers yet.
 - `fod-indexer` now reads an optional `[fod-indexer]` section from `fod_config.ini` for skip filters. `skip_hidden`, `skip_components`, `skip_prefixes`, and `skip_paths` now control which source paths are omitted, and the INI parser itself is shared through `rust_runtime` instead of being duplicated in multiple crates.
 - `fod-indexer source add` now accepts path-backed source kinds for `local`, `smb`, `qnap`, `adb`, and `github`, with kind-aware name suggestions for mounts, ADB serials, and git remotes. The current adapter layer still walks filesystem roots, so the new kinds are metadata and naming hooks rather than direct remote crawlers.
 - Hidden dotfiles and common cache/build directories are now skipped during scan, hash, plan-import, materialize planning, duplicate-report rebuilds, and cleanup-tree walks. That keeps paths such as `.bashrc`, `.venv`, `.git`, `node_modules`, `target`, and `build` out of the index and out of the duplicate-set view.

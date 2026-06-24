@@ -105,14 +105,26 @@ pub enum Commands {
 pub enum SourceCommands {
     #[command(
         about = "Add a source.",
-        long_about = "Register a filesystem-backed source under a source name so scan, hash, plan-import, and materialize can use it later.\n\nSupported kinds are local, smb, qnap, adb, and github. If --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion."
+        long_about = "Register a source adapter under a source name so scan, hash, plan-import, and materialize can use it later.\n\nChoose the adapter kind with --kind. Supported kinds are local, smb, qnap, adb, and github. The current implementation still reads a path-backed source root, so adb and github are adapter kinds and naming policies, not direct remote crawlers yet.\n\nIf --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion.",
+        override_usage = "fod-indexer source add --path <PATH> [--name <NAME>] [--kind <KIND>]"
     )]
     Add {
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Optional explicit source name. If omitted, fod-indexer picks a kind-aware default."
+        )]
         name: Option<String>,
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Filesystem path for the source root. For adb or github kinds, this is still a local path-backed root for now."
+        )]
         path: String,
-        #[arg(long, value_enum, default_value_t = SourceKind::Local)]
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = SourceKind::Local,
+            help = "Select the adapter kind: local, smb, qnap, adb, or github."
+        )]
         kind: SourceKind,
     },
 }
