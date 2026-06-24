@@ -195,8 +195,7 @@ pub fn cleanup_failed_materialization(
 ) -> Result<CleanupFailedSummary, String> {
     let plan = load_cleanup_plan(repo, plan_id)?;
     match plan.status.as_str() {
-        status if status == "materialize_running" || status.starts_with("materialize_running:") => {
-        }
+        "materialize_running" => {}
         "materialize_failed" | "materialize_cleaned" => {}
         "materialize_completed" => {
             return Err(format!(
