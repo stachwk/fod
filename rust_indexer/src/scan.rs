@@ -69,6 +69,22 @@ pub fn load_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
     IndexSource::from_row(row)
 }
 
+pub fn list_sources(repo: &DbRepo, kind_filter: Option<&str>) -> Result<Vec<IndexSource>, String> {
+    let where_clause = kind_filter
+        .map(|kind| format!("WHERE kind = {}", sql_quote_literal(kind)))
+        .unwrap_or_default();
+    let sql = format!(
+        "
+        SELECT id_index_source, name, kind, root_path
+        FROM index_sources
+        {where_clause}
+        ORDER BY kind, name, id_index_source
+        ",
+    );
+    let rows = repo.query_rows_text(&sql)?;
+    rows.iter().map(|row| IndexSource::from_row(row)).collect()
+}
+
 fn create_scan_run(repo: &DbRepo, source_id: u64) -> Result<u64, String> {
     let request_token = replay::request_token("scan");
     let sql = format!(

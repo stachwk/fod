@@ -28,6 +28,7 @@ The current implementation supports filesystem-backed source adapters. The adapt
 Supported actions:
 
 - `fod-indexer source add [--name <name>] --path <path> --kind local|smb|qnap|adb|github`
+- `fod-indexer source list [--kind <kind>]`
 - `fod-indexer scan --source <name>`
 - `fod-indexer hash --source <name> --candidates-only`
 - `fod-indexer report duplicates`
@@ -43,6 +44,8 @@ If `--name` is omitted, `fod-indexer` uses a kind-aware naming heuristic with th
 - `github`: git remote slug or repository name when the source path is a checkout.
 
 Explicit `--name` stays available when you want to override the suggestion or register a source that does not fit the default heuristic.
+
+Use `fod-indexer source list --kind adb` when you want to inspect the registered ADB-backed roots before scanning them.
 
 ## Indexer Filters
 

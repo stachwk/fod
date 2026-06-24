@@ -38,6 +38,23 @@ fn run() -> Result<(), String> {
                 );
                 Ok(())
             }
+            SourceCommands::List { kind } => {
+                let kind_filter = kind.as_ref().map(|kind| kind.as_str());
+                let sources = scan::list_sources(&repo, kind_filter)?;
+                println!("FOD indexer source list");
+                println!("kind filter: {}", kind_filter.unwrap_or("all"));
+                println!("registered sources: {}", sources.len());
+                for source in sources {
+                    println!(
+                        "- id={} name={} kind={} path={}",
+                        source.id_source,
+                        source.name,
+                        source.kind,
+                        source.root_path.display()
+                    );
+                }
+                Ok(())
+            }
         },
         Commands::Scan { source } => {
             let summary = scan::scan_source(&repo, &source)?;
