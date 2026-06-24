@@ -53,7 +53,7 @@ pub enum Commands {
     },
     #[command(
         about = "Report duplicate groups.",
-        long_about = "Show the duplicate groups discovered from the current hash state.\n\nThe report is built from the deduplicated hash tables and focuses on confirmed duplicate sets."
+        long_about = "Show the duplicate groups discovered from the current hash state.\n\nThe report is built from the deduplicated hash tables and focuses on confirmed duplicate sets. Zero-size duplicate groups are hidden by default to keep cache and lock noise out of the report; they remain in the hash tables and import planning."
     )]
     Report {
         #[command(subcommand)]
