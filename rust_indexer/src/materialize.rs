@@ -145,13 +145,11 @@ fn summarize_materialize_preview(
     source_name: &str,
     groups: &MaterializeGroups,
     import_root: &str,
-    explicit_keep_local: bool,
 ) -> MaterializeSummary {
     let mut summary = MaterializeSummary {
         source_name: source_name.to_string(),
         import_root: import_root.to_string(),
         dry_run: true,
-        explicit_keep_local,
         ..MaterializeSummary::default()
     };
 
@@ -395,7 +393,6 @@ pub fn materialize_source(
     repo: &DbRepo,
     source_name: &str,
     dry_run: bool,
-    keep_local: bool,
 ) -> Result<MaterializeSummary, String> {
     let source = scan::load_source(repo, source_name)?;
     if source.kind != "local" {
@@ -424,7 +421,6 @@ pub fn materialize_source(
             &source.name,
             &groups,
             "<dry-run>",
-            keep_local,
         ));
     }
 
@@ -466,7 +462,6 @@ pub fn materialize_source(
         source_name: source.name.clone(),
         import_root: format!("/{}", root_name),
         dry_run: false,
-        explicit_keep_local: keep_local,
         scanned_files,
         validated_files: scanned_files,
         source_bytes,
