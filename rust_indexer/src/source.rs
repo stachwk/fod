@@ -72,20 +72,21 @@ pub fn is_ignored_source_path(root_path: &Path, entry_path: &Path) -> bool {
 }
 
 pub fn adb_browse_root() -> Result<PathBuf, String> {
-    let root = runtime_user_dir()?.join("adb");
-    let metadata = fs::metadata(&root).map_err(|err| {
-        format!(
-            "ADB browse root {} is not accessible: {err}",
-            root.display()
-        )
-    })?;
-    if !metadata.is_dir() {
-        return Err(format!(
-            "ADB browse root {} is not a directory",
-            root.display()
-        ));
+    let runtime_root = runtime_user_dir()?;
+    let adb_root = runtime_root.join("adb");
+    if let Ok(metadata) = fs::metadata(&adb_root) {
+        if metadata.is_dir() {
+            return Ok(adb_root);
+        }
     }
-    Ok(root)
+    if let Some(root) = find_android_mtp_browse_root(&runtime_root)? {
+        return Ok(root);
+    }
+    Err(format!(
+        "ADB browse root {} is not accessible and no Android MTP mount was found under {}",
+        adb_root.display(),
+        runtime_root.join("gvfs").display()
+    ))
 }
 
 fn suggested_source_name(kind: SourceKind, root_path: &Path) -> Option<String> {
@@ -371,4 +372,124 @@ fn ensure_indexer_settings_loaded() {
     INDEXER_SETTINGS_READY.get_or_init(|| {
         let _ = config::initialize_indexer_settings();
     });
+}
+
+fn find_android_mtp_browse_root(runtime_root: &Path) -> Result<Option<PathBuf>, String> {
+    let gvfs_root = runtime_root.join("gvfs");
+    let metadata = match fs::metadata(&gvfs_root) {
+        Ok(metadata) => metadata,
+        Err(_) => return Ok(None),
+    };
+    if !metadata.is_dir() {
+        return Ok(None);
+    }
+
+    let mut mounts = Vec::new();
+    let read_dir = fs::read_dir(&gvfs_root).map_err(|err| {
+        format!(
+            "Android MTP browse root {} is not readable: {err}",
+            gvfs_root.display()
+        )
+    })?;
+    for item in read_dir {
+        let entry = match item {
+            Ok(entry) => entry,
+            Err(err) => {
+                eprintln!(
+                    "FOD indexer source list warning for {}: {err}",
+                    gvfs_root.display()
+                );
+                continue;
+            }
+        };
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("mtp:host=") {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => mounts.push(path),
+            Ok(_) => continue,
+            Err(err) => {
+                eprintln!(
+                    "FOD indexer source list warning for {}: {err}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    mounts.sort();
+    for mount in mounts {
+        if let Some(root) = choose_android_storage_root(&mount)? {
+            return Ok(Some(root));
+        }
+    }
+
+    Ok(None)
+}
+
+fn choose_android_storage_root(mount_root: &Path) -> Result<Option<PathBuf>, String> {
+    let read_dir = match fs::read_dir(mount_root) {
+        Ok(read_dir) => read_dir,
+        Err(err) => {
+            return Err(format!(
+                "Android MTP mount {} is not readable: {err}",
+                mount_root.display()
+            ))
+        }
+    };
+
+    let mut directories = Vec::new();
+    for item in read_dir {
+        let entry = match item {
+            Ok(entry) => entry,
+            Err(err) => {
+                eprintln!(
+                    "FOD indexer source list warning for {}: {err}",
+                    mount_root.display()
+                );
+                continue;
+            }
+        };
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => directories.push(path),
+            Ok(_) => continue,
+            Err(err) => {
+                eprintln!(
+                    "FOD indexer source list warning for {}: {err}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    directories.sort();
+    if directories.is_empty() {
+        return Ok(Some(mount_root.to_path_buf()));
+    }
+
+    let preferred = directories.iter().find(|path| {
+        let name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        name.contains("pamięć")
+            || name.contains("wewn")
+            || name.contains("internal")
+            || name.contains("shared")
+            || name.contains("phone")
+            || name.contains("storage")
+    });
+
+    if let Some(path) = preferred {
+        return Ok(Some(path.clone()));
+    }
+
+    if directories.len() == 1 {
+        return Ok(Some(directories[0].clone()));
+    }
+
+    Ok(Some(mount_root.to_path_buf()))
 }

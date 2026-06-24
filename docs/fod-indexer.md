@@ -47,7 +47,7 @@ If `--name` is omitted, `fod-indexer` uses a kind-aware naming heuristic with th
 
 Explicit `--name` stays available when you want to override the suggestion or register a source that does not fit the default heuristic.
 
-Use `fod-indexer source list --kind adb` when you want to browse the detected ADB runtime root before scanning it. The command looks under `XDG_RUNTIME_DIR/adb` and falls back to `/run/user/<uid>/adb` when needed. Use `fod-indexer source list --path /run/user/1000/adb/<serial> --kind adb` when you want to override the detected root and inspect one specific mounted device or copy a child directory path into `source add`.
+Use `fod-indexer source list --kind adb` when you want to browse the detected ADB runtime root before scanning it. The command looks under `XDG_RUNTIME_DIR/adb`, falls back to `/run/user/<uid>/adb` when needed, and on this host can also browse the Android MTP mount exposed through `gvfs`. Use `fod-indexer source list --path /run/user/1000/adb/<serial> --kind adb` when you want to override the detected root and inspect one specific mounted device or copy a child directory path into `source add`.
 Use `fod-indexer source remove --name <name>` to unregister an added source once you no longer want it indexed.
 
 ## Indexer Filters

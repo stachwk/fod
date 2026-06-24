@@ -129,7 +129,7 @@ pub enum SourceCommands {
     },
     #[command(
         about = "List registered sources or browse a filesystem root.",
-        long_about = "Show registered source adapters and their canonical root paths, or browse a filesystem root and list its child directories.\n\nUse --kind adb without --path to browse the detected ADB runtime root under XDG_RUNTIME_DIR/adb or /run/user/<uid>/adb. Use --path <PATH> to browse any explicit root and print child directories, with already registered entries marked as added. For other kinds with no --path, the command keeps listing registered sources.",
+        long_about = "Show registered source adapters and their canonical root paths, or browse a filesystem root and list its child directories.\n\nUse --kind adb without --path to browse the detected ADB runtime root under XDG_RUNTIME_DIR/adb or /run/user/<uid>/adb, and fall back to an Android MTP mount under gvfs when that is what the host exposes. Use --path <PATH> to browse any explicit root and print child directories, with already registered entries marked as added. For other kinds with no --path, the command keeps listing registered sources.",
         override_usage = "fod-indexer source list [--kind <KIND>] [--path <PATH>]"
     )]
     List {
