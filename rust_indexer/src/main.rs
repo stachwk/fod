@@ -13,6 +13,7 @@ mod source;
 
 use crate::model::IndexSource;
 use cli::{Cli, Commands, ReportCommands, SourceCommands, SourceKind};
+use std::path::Path;
 
 fn main() {
     if let Err(err) = run() {
@@ -52,21 +53,10 @@ fn run() -> Result<(), String> {
                     println!("directories: {}", entries.len());
                     for entry in entries {
                         if entry.added_sources.is_empty() {
-                            let add_command = match kind.as_ref() {
-                                Some(kind) => format!(
-                                    "fod-indexer source add --kind {} --path {}",
-                                    kind.as_str(),
-                                    entry.path.display()
-                                ),
-                                None => format!(
-                                    "fod-indexer source add --path {}",
-                                    entry.path.display()
-                                ),
-                            };
+                            println!("- available path={}", entry.path.display());
                             println!(
-                                "- available path={} add={}",
-                                entry.path.display(),
-                                add_command
+                                "  {}",
+                                render_source_add_command(kind.as_ref(), &entry.path)
                             );
                         } else {
                             println!(
@@ -92,10 +82,10 @@ fn run() -> Result<(), String> {
                         println!("directories: {}", entries.len());
                         for entry in entries {
                             if entry.added_sources.is_empty() {
+                                println!("- available path={}", entry.path.display());
                                 println!(
-                                    "- available path={} add=fod-indexer source add --kind adb --path {}",
-                                    entry.path.display(),
-                                    entry.path.display()
+                                    "  {}",
+                                    render_source_add_command(Some(&SourceKind::Adb), &entry.path)
                                 );
                             } else {
                                 println!(
@@ -196,6 +186,37 @@ fn run() -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+fn render_source_add_command(kind: Option<&SourceKind>, path: &Path) -> String {
+    let path_text = path.display().to_string();
+    let quoted_path = shell_quote(&path_text);
+    match kind {
+        Some(kind) => format!(
+            "fod-indexer source add --kind {} --path {}",
+            kind.as_str(),
+            quoted_path
+        ),
+        None => format!("fod-indexer source add --path {}", quoted_path),
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 fn format_registered_sources(sources: &[IndexSource]) -> String {
