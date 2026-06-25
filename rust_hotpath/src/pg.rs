@@ -30,9 +30,11 @@ const CONNECTION_OK: c_int = 0;
 const PGRES_TUPLES_OK: c_int = 2;
 const PGRES_COMMAND_OK: c_int = 1;
 const PGRES_COPY_IN: c_int = 4;
+const PG_DIAG_SQLSTATE: c_int = 67;
 const COPY_BINARY_SIGNATURE: &[u8] = b"PGCOPY\n\xff\r\n\0";
 const PERSIST_BLOCK_STAGE_TABLE: &str = "fod_persist_block_stage";
 const REPLAYABLE_SQL_ERROR_PREFIX: &str = "__FOD_REPLAYABLE_SQL_ERROR__: ";
+const UNIQUE_VIOLATION_ERROR_PREFIX: &str = "SQLSTATE 23505:";
 
 static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 
@@ -227,6 +229,7 @@ unsafe extern "C" {
     fn PQgetResult(conn: *mut PGconn) -> *mut PGresult;
     fn PQresultStatus(res: *const PGresult) -> c_int;
     fn PQresultErrorMessage(res: *const PGresult) -> *const c_char;
+    fn PQresultErrorField(res: *const PGresult, fieldcode: c_int) -> *const c_char;
     fn PQntuples(res: *const PGresult) -> c_int;
     fn PQnfields(res: *const PGresult) -> c_int;
     fn PQgetvalue(res: *const PGresult, row_number: c_int, field_number: c_int) -> *const c_char;
@@ -257,8 +260,26 @@ fn result_error(res: *const PGresult) -> String {
         if error.is_null() {
             return "postgres result error".to_string();
         }
-        CStr::from_ptr(error).to_string_lossy().trim().to_string()
+        let message = CStr::from_ptr(error).to_string_lossy().trim().to_string();
+        let sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+        if sqlstate.is_null() {
+            message
+        } else {
+            let sqlstate = CStr::from_ptr(sqlstate)
+                .to_string_lossy()
+                .trim()
+                .to_string();
+            if sqlstate.is_empty() {
+                message
+            } else {
+                format!("SQLSTATE {}: {}", sqlstate, message)
+            }
+        }
     }
+}
+
+fn error_is_unique_violation(err: &str) -> bool {
+    err.starts_with(UNIQUE_VIOLATION_ERROR_PREFIX)
 }
 
 fn replayable_sql_error(err: String) -> String {
@@ -2278,6 +2299,212 @@ impl DbRepo {
         F: FnMut(*mut PGconn) -> Result<T, String>,
     {
         self.with_connection(ConnectionLane::Control, f)
+    }
+
+    fn confirm_unique_violation<T, F>(&self, err: String, confirm: F) -> Result<T, String>
+    where
+        F: FnOnce(&Self) -> Result<Option<T>, String>,
+    {
+        if !error_is_unique_violation(&err) {
+            return Err(err);
+        }
+
+        match confirm(self)? {
+            Some(value) => Ok(value),
+            None => Err(err),
+        }
+    }
+
+    fn confirm_created_hardlink(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        source_file_id: u64,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Option<u64>, String> {
+        let parent_clause = match target_parent_id {
+            Some(parent_id) => format!("id_directory = {parent_id}"),
+            None => "id_directory IS NULL".to_string(),
+        };
+        let sql = format!(
+            "SELECT id_hardlink, id_file, uid, gid FROM hardlinks WHERE {parent_clause} AND name = {} LIMIT 1",
+            Self::quote_literal(target_name)
+        );
+        let rows = self.query_rows_text(&sql)?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        if row.len() < 4 {
+            return Ok(None);
+        }
+        let hardlink_id = row[0].trim().parse::<u64>().ok();
+        let id_file = row[1].trim().parse::<u64>().ok();
+        let matches = hardlink_id.is_some()
+            && id_file == Some(source_file_id)
+            && row[2].trim() == uid.to_string()
+            && row[3].trim() == gid.to_string();
+        if matches {
+            Ok(hardlink_id)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn confirm_created_symlink(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        target: &str,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+    ) -> Result<Option<u64>, String> {
+        let parent_clause = match target_parent_id {
+            Some(parent_id) => format!("id_parent = {parent_id}"),
+            None => "id_parent IS NULL".to_string(),
+        };
+        let sql = format!(
+            "SELECT id_symlink, target, uid, gid, inode_seed FROM symlinks WHERE {parent_clause} AND name = {} LIMIT 1",
+            Self::quote_literal(target_name)
+        );
+        let rows = self.query_rows_text(&sql)?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        if row.len() < 5 {
+            return Ok(None);
+        }
+        let symlink_id = row[0].trim().parse::<u64>().ok();
+        let matches = symlink_id.is_some()
+            && row[1].trim() == target
+            && row[2].trim() == uid.to_string()
+            && row[3].trim() == gid.to_string()
+            && row[4].trim() == inode_seed;
+        if matches {
+            Ok(symlink_id)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn confirm_created_directory(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        mode: &str,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+    ) -> Result<Option<u64>, String> {
+        let parent_clause = match target_parent_id {
+            Some(parent_id) => format!("id_parent = {parent_id}"),
+            None => "id_parent IS NULL".to_string(),
+        };
+        let sql = format!(
+            "SELECT id_directory, mode, uid, gid, inode_seed FROM directories WHERE {parent_clause} AND name = {} LIMIT 1",
+            Self::quote_literal(target_name)
+        );
+        let rows = self.query_rows_text(&sql)?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        if row.len() < 5 {
+            return Ok(None);
+        }
+        let directory_id = row[0].trim().parse::<u64>().ok();
+        let matches = directory_id.is_some()
+            && row[1].trim() == mode
+            && row[2].trim() == uid.to_string()
+            && row[3].trim() == gid.to_string()
+            && row[4].trim() == inode_seed;
+        if matches {
+            Ok(directory_id)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn confirm_created_file(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        mode: &str,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+    ) -> Result<Option<u64>, String> {
+        let parent_clause = match target_parent_id {
+            Some(parent_id) => format!("id_directory = {parent_id}"),
+            None => "id_directory IS NULL".to_string(),
+        };
+        let sql = format!(
+            "SELECT id_file, size, mode, uid, gid, inode_seed FROM files WHERE {parent_clause} AND name = {} LIMIT 1",
+            Self::quote_literal(target_name)
+        );
+        let rows = self.query_rows_text(&sql)?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        if row.len() < 6 {
+            return Ok(None);
+        }
+        let file_id = row[0].trim().parse::<u64>().ok();
+        let matches = file_id.is_some()
+            && row[1].trim() == "0"
+            && row[2].trim() == mode
+            && row[3].trim() == uid.to_string()
+            && row[4].trim() == gid.to_string()
+            && row[5].trim() == inode_seed;
+        if matches {
+            Ok(file_id)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn confirm_created_special_file(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        mode: &str,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+        file_kind: &str,
+        rdev_major: u32,
+        rdev_minor: u32,
+    ) -> Result<Option<u64>, String> {
+        let parent_clause = match target_parent_id {
+            Some(parent_id) => format!("files.id_directory = {parent_id}"),
+            None => "files.id_directory IS NULL".to_string(),
+        };
+        let sql = format!(
+            "SELECT files.id_file, files.size, files.mode, files.uid, files.gid, files.inode_seed, special_files.file_type, special_files.rdev_major, special_files.rdev_minor FROM files JOIN special_files ON special_files.id_file = files.id_file WHERE {parent_clause} AND files.name = {} LIMIT 1",
+            Self::quote_literal(target_name)
+        );
+        let rows = self.query_rows_text(&sql)?;
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        if row.len() < 9 {
+            return Ok(None);
+        }
+        let file_id = row[0].trim().parse::<u64>().ok();
+        let matches = file_id.is_some()
+            && row[1].trim() == "0"
+            && row[2].trim() == mode
+            && row[3].trim() == uid.to_string()
+            && row[4].trim() == gid.to_string()
+            && row[5].trim() == inode_seed
+            && row[6].trim() == file_kind
+            && row[7].trim() == rdev_major.to_string()
+            && row[8].trim() == rdev_minor.to_string();
+        if matches {
+            Ok(file_id)
+        } else {
+            Ok(None)
+        }
     }
 
     fn current_lock_session_id(&self) -> Result<i64, String> {
@@ -5379,6 +5606,10 @@ impl DbRepo {
         uid: u32,
         gid: u32,
     ) -> Result<u64, String> {
+        let target_name_text = target_name.to_string();
+        let source_file_id_value = source_file_id;
+        let uid_value = uid;
+        let gid_value = gid;
         let target_name =
             CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
         let source_file_id = CString::new(source_file_id.to_string())
@@ -5406,56 +5637,65 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
-            let result = {
-                transactional(conn, |conn| {
-                    let res = if let Some(parent_id) = target_parent_id {
-                        let parent_id = CString::new(parent_id.to_string())
-                            .map_err(|_| "parent id contains NUL byte".to_string())?;
-                        let params = [&source_file_id, &target_name, &uid, &gid, &parent_id];
-                        exec_params(conn, &sql_parent, &params)?
-                    } else {
-                        let params = [&source_file_id, &target_name, &uid, &gid];
-                        exec_params(conn, &sql_null_parent, &params)?
-                    };
-                    let value = match PQresultStatus(res) {
-                        PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
+        let result = self.with_cached_connection(|conn| unsafe {
+            transactional(conn, |conn| {
+                let res = if let Some(parent_id) = target_parent_id {
+                    let parent_id = CString::new(parent_id.to_string())
+                        .map_err(|_| "parent id contains NUL byte".to_string())?;
+                    let params = [&source_file_id, &target_name, &uid, &gid, &parent_id];
+                    exec_params(conn, &sql_parent, &params)?
+                } else {
+                    let params = [&source_file_id, &target_name, &uid, &gid];
+                    exec_params(conn, &sql_null_parent, &params)?
+                };
+                let value = match PQresultStatus(res) {
+                    PGRES_TUPLES_OK => {
+                        let rows = PQntuples(res);
+                        let cols = PQnfields(res);
+                        let value = if rows < 1 || cols < 1 {
+                            None
+                        } else {
+                            let value_ptr = PQgetvalue(res, 0, 0);
+                            if value_ptr.is_null() {
                                 None
                             } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    None
-                                } else {
-                                    CStr::from_ptr(value_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .ok()
-                                }
-                            };
-                            PQclear(res);
-                            value.ok_or_else(|| "failed to create hardlink".to_string())
-                        }
-                        _ => {
-                            PQclear(res);
-                            Err(conn_error(conn))
-                        }
-                    }?;
-                    if let Some(parent_id) = target_parent_id {
-                        let parent_id = CString::new(parent_id.to_string())
-                            .map_err(|_| "parent id contains NUL byte".to_string())?;
-                        let params = [&parent_id];
-                        let res = exec_params(conn, &sql_touch_parent, &params)?;
+                                CStr::from_ptr(value_ptr)
+                                    .to_string_lossy()
+                                    .trim()
+                                    .parse::<u64>()
+                                    .ok()
+                            }
+                        };
                         PQclear(res);
+                        value.ok_or_else(|| "failed to create hardlink".to_string())
                     }
-                    Ok(value)
-                })
-            };
-            result
-        })
+                    _ => {
+                        PQclear(res);
+                        Err(conn_error(conn))
+                    }
+                }?;
+                if let Some(parent_id) = target_parent_id {
+                    let parent_id = CString::new(parent_id.to_string())
+                        .map_err(|_| "parent id contains NUL byte".to_string())?;
+                    let params = [&parent_id];
+                    let res = exec_params(conn, &sql_touch_parent, &params)?;
+                    PQclear(res);
+                }
+                Ok(value)
+            })
+        });
+        match result {
+            Ok(value) => Ok(value),
+            Err(err) => self.confirm_unique_violation(err, |repo| {
+                repo.confirm_created_hardlink(
+                    target_parent_id,
+                    &target_name_text,
+                    source_file_id_value,
+                    uid_value,
+                    gid_value,
+                )
+            }),
+        }
     }
 
     pub fn create_symlink(
@@ -5467,6 +5707,11 @@ impl DbRepo {
         gid: u32,
         inode_seed: &str,
     ) -> Result<u64, String> {
+        let target_name_text = target_name.to_string();
+        let target_text = target.to_string();
+        let inode_seed_text = inode_seed.to_string();
+        let uid_value = uid;
+        let gid_value = gid;
         let target_name =
             CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
         let target =
@@ -5496,8 +5741,8 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
-            let result = transactional(conn, |conn| {
+        let result = self.with_cached_connection(|conn| unsafe {
+            transactional(conn, |conn| {
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -5541,9 +5786,21 @@ impl DbRepo {
                     PQclear(res);
                 }
                 Ok(value)
-            });
-            result
-        })
+            })
+        });
+        match result {
+            Ok(value) => Ok(value),
+            Err(err) => self.confirm_unique_violation(err, |repo| {
+                repo.confirm_created_symlink(
+                    target_parent_id,
+                    &target_name_text,
+                    &target_text,
+                    uid_value,
+                    gid_value,
+                    &inode_seed_text,
+                )
+            }),
+        }
     }
 
     pub fn create_directory(
@@ -5555,6 +5812,11 @@ impl DbRepo {
         gid: u32,
         inode_seed: &str,
     ) -> Result<u64, String> {
+        let target_name_text = target_name.to_string();
+        let inode_seed_text = inode_seed.to_string();
+        let mode_text = format!("{:o}", mode);
+        let uid_value = uid;
+        let gid_value = gid;
         let target_name =
             CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
         let uid = CString::new(uid.to_string()).map_err(|_| "uid contains NUL byte".to_string())?;
@@ -5584,7 +5846,7 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional(conn, |conn| {
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
@@ -5631,7 +5893,20 @@ impl DbRepo {
                 Ok(value)
             });
             result
-        })
+        });
+        match result {
+            Ok(value) => Ok(value),
+            Err(err) => self.confirm_unique_violation(err, |repo| {
+                repo.confirm_created_directory(
+                    target_parent_id,
+                    &target_name_text,
+                    &mode_text,
+                    uid_value,
+                    gid_value,
+                    &inode_seed_text,
+                )
+            }),
+        }
     }
 
     pub fn create_file(
@@ -5643,6 +5918,11 @@ impl DbRepo {
         gid: u32,
         inode_seed: &str,
     ) -> Result<u64, String> {
+        let target_name_text = target_name.to_string();
+        let inode_seed_text = inode_seed.to_string();
+        let mode_text = format!("{:o}", mode);
+        let uid_value = uid;
+        let gid_value = gid;
         let target_name =
             CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
         let uid = CString::new(uid.to_string()).map_err(|_| "uid contains NUL byte".to_string())?;
@@ -5677,7 +5957,7 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional(conn, |conn| {
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
                 let data_object_id = fetch_single_text(data_object_res)?
@@ -5746,7 +6026,20 @@ impl DbRepo {
                 Ok(value)
             });
             result
-        })
+        });
+        match result {
+            Ok(value) => Ok(value),
+            Err(err) => self.confirm_unique_violation(err, |repo| {
+                repo.confirm_created_file(
+                    target_parent_id,
+                    &target_name_text,
+                    &mode_text,
+                    uid_value,
+                    gid_value,
+                    &inode_seed_text,
+                )
+            }),
+        }
     }
 
     pub fn create_special_file(
@@ -5761,6 +6054,14 @@ impl DbRepo {
         rdev_major: u32,
         rdev_minor: u32,
     ) -> Result<u64, String> {
+        let target_name_text = target_name.to_string();
+        let inode_seed_text = inode_seed.to_string();
+        let file_kind_text = file_kind.to_string();
+        let mode_text = format!("{:o}", mode);
+        let uid_value = uid;
+        let gid_value = gid;
+        let rdev_major_value = rdev_major;
+        let rdev_minor_value = rdev_minor;
         let target_name =
             CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
         let uid = CString::new(uid.to_string()).map_err(|_| "uid contains NUL byte".to_string())?;
@@ -5808,7 +6109,7 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional(conn, |conn| {
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
                 let data_object_id = fetch_single_text(data_object_res)?
@@ -5892,7 +6193,23 @@ impl DbRepo {
                 Ok(id_file)
             });
             result
-        })
+        });
+        match result {
+            Ok(value) => Ok(value),
+            Err(err) => self.confirm_unique_violation(err, |repo| {
+                repo.confirm_created_special_file(
+                    target_parent_id,
+                    &target_name_text,
+                    &mode_text,
+                    uid_value,
+                    gid_value,
+                    &inode_seed_text,
+                    &file_kind_text,
+                    rdev_major_value,
+                    rdev_minor_value,
+                )
+            }),
+        }
     }
 
     pub fn persist_copy_block_crc_rows<'a>(
