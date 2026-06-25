@@ -397,6 +397,8 @@ FOD is controlled by a mix of CLI flags, environment variables, and config file 
 
 For a remote PostgreSQL server, you can keep the local config file and override the connection at runtime with `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER`, and `FOD_PG_PASSWORD`. The `make init-qnap` and `make mount-qnap` targets prefill those variables for the bundled QNAP preset.
 
+For a QNAP-hosted Docker daemon, set `QNAP=1` on the Compose-backed Makefile targets or use the `qnap-*` wrappers. That routes `docker compose` to `tcp://192.168.1.11:2376` with TLS verification and switches the PostgreSQL host and credentials to the QNAP preset. Override `QNAP_DOCKER_HOST`, `QNAP_DOCKER_TLS_VERIFY`, `QNAP_DOCKER_CERT_PATH`, `QNAP_PG_HOST`, `QNAP_PG_PORT`, `QNAP_PG_DBNAME`, `QNAP_PG_USER`, and `QNAP_PG_PASSWORD` when you need a different QNAP installation.
+
 It may also include a `[fod]` section with:
 
 - `pool_max_connections`
@@ -449,12 +451,20 @@ The canonical runtime value-range rules live in [`rust_runtime/src/lib.rs`](/med
 For a local PostgreSQL backend:
 
 ```bash
+# local Docker:
 make up
 make init
 make smoke
 make mount
 # in another shell:
 make unmount
+
+# QNAP Docker daemon:
+make qnap-config-show
+make qnap-up
+make qnap-init
+make qnap-smoke
+make qnap-mount
 
 # one-shot demo:
 make demo

@@ -430,6 +430,8 @@ Może też zawierać sekcję `[fod]` z:
 
 Dla zdalnego PostgreSQL można zostawić lokalny plik konfiguracyjny i nadpisać połączenie w czasie uruchomienia przez `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER` i `FOD_PG_PASSWORD`. Targety `make init-qnap` i `make mount-qnap` ustawiają te zmienne dla domyślnego presetu QNAP.
 
+Jeśli Docker działa na QNAP-ie przez zdalny daemon, ustaw `QNAP=1` dla targetow Compose albo użyj wrapperów `qnap-*`. To kieruje `docker compose` na `tcp://192.168.1.11:2376` z TLS i przełącza host oraz dane PostgreSQL na preset QNAP. W razie potrzeby nadpisz `QNAP_DOCKER_HOST`, `QNAP_DOCKER_TLS_VERIFY`, `QNAP_DOCKER_CERT_PATH`, `QNAP_PG_HOST`, `QNAP_PG_PORT`, `QNAP_PG_DBNAME`, `QNAP_PG_USER` i `QNAP_PG_PASSWORD`.
+
 Kanoniczne reguły zakresów dla wartości runtime są w [`rust_runtime/src/lib.rs`](/media/wojtek/virtdata/home/wojtek/git/fod/rust_runtime/src/lib.rs); ta lista jest tylko skrótem dla czytelnika. `pool_max_connections` musi być większe od zera, bo ustawia limit połączeń w puli PostgreSQL.
 
 ### Narzędzie do tworzenia schematu
@@ -455,12 +457,20 @@ Kanoniczne reguły zakresów dla wartości runtime są w [`rust_runtime/src/lib.
 Dla lokalnego backendu PostgreSQL:
 
 ```bash
+# lokalny Docker:
 make up
 make init
 make smoke
 make mount
 # w drugim terminalu:
 make unmount
+
+# Docker na QNAP:
+make qnap-config-show
+make qnap-up
+make qnap-init
+make qnap-smoke
+make qnap-mount
 
 # demo w jednym kroku:
 make demo

@@ -4,6 +4,7 @@ Use this file to record concise conclusions that matter for future work.
 
 ## 2026-06-25
 
+- The Makefile now has a QNAP transport preset for Compose-backed targets. `QNAP=1` or the `qnap-*` wrappers route `docker compose` to `tcp://192.168.1.11:2376` with TLS certs from `~/.docker`, and the same preset switches the PostgreSQL host/user/password values to the QNAP profile. `make qnap-config-show` prints the resolved transport and database values.
 - For `msfind`, the current `fod-indexer` stage already covers the shared indexing pipeline; the remaining gap is a stable machine-readable integration surface, not a second engine.
 - Added [docs/msfind-fod-indexer-requests.md](docs/msfind-fod-indexer-requests.md) as the place to collect `msfind`-specific requests against the shared indexer core.
 - On commit `94d9695` (`FOD 3.1.1: confirm create replay after unique conflict`), the transactional replay smoke still passed, and the create-path replay confirmation now resolves replayed `SQLSTATE 23505` conflicts against the existing natural key instead of failing closed on duplicate inserts. The fresh fio snapshot on this host stayed in the same general band as the previous one: sequential `421 KiB/s` read / `552 KiB/s` write on the block path versus `762 KiB/s` / `1333 KiB/s` on the extent path, mixed `1210 KiB/s` / `1289 KiB/s` versus `236 KiB/s` / `251 KiB/s`, random mixed `830 KiB/s` / `884 KiB/s` versus `181 KiB/s` / `193 KiB/s`, and throughput `11.40 MiB/s` / `10.03 MiB/s`. No regression showed up on the replay-focused change.

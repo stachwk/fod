@@ -107,16 +107,41 @@ FOD_CONFIG_DEST ?= /etc/fod/fod_config.ini
 CONTAINER_POSTGRES_NAME ?= fod-postgres
 CONTAINER_POSTGRES_SELINUX_ACL_NAME ?= fod-postgres-selinux-acl
 CONTAINER_FOD_SELINUX_ACL_NAME ?= fod-selinux-acl
-POSTGRES_DB ?= foddbname
-POSTGRES_USER ?= foduser
-POSTGRES_PASSWORD ?= cichosza
-POSTGRES_PORT ?= 5432
-FOD_REMOTE_PG_HOST ?= 192.168.1.11
-FOD_REMOTE_PG_PORT ?= 5432
-FOD_REMOTE_PG_DBNAME ?= $(POSTGRES_DB)
-FOD_REMOTE_PG_USER ?= postgresql
-FOD_REMOTE_PG_PASSWORD ?= postgresqlfod
+POSTGRES_DB_BASE ?= foddbname
+POSTGRES_USER_BASE ?= foduser
+POSTGRES_PASSWORD_BASE ?= cichosza
+POSTGRES_PORT_BASE ?= 5432
+QNAP ?= 0
+QNAP_ENABLED := $(filter 1 true yes on,$(QNAP))
+QNAP_DOCKER_HOST ?= tcp://192.168.1.11:2376
+QNAP_DOCKER_TLS_VERIFY ?= 1
+QNAP_DOCKER_CERT_PATH ?= $(HOME)/.docker
+QNAP_PG_HOST ?= 192.168.1.11
+QNAP_PG_PORT ?= 5432
+QNAP_PG_DBNAME ?= $(POSTGRES_DB_BASE)
+QNAP_PG_USER ?= postgresql
+QNAP_PG_PASSWORD ?= postgresqlfod
+COMPOSE_RUN := $(if $(QNAP_ENABLED),DOCKER_HOST=$(QNAP_DOCKER_HOST) DOCKER_TLS_VERIFY=$(QNAP_DOCKER_TLS_VERIFY) DOCKER_CERT_PATH=$(QNAP_DOCKER_CERT_PATH),) $(COMPOSE)
+FOD_REMOTE_PG_HOST ?= $(QNAP_PG_HOST)
+FOD_REMOTE_PG_PORT ?= $(QNAP_PG_PORT)
+FOD_REMOTE_PG_DBNAME ?= $(QNAP_PG_DBNAME)
+FOD_REMOTE_PG_USER ?= $(QNAP_PG_USER)
+FOD_REMOTE_PG_PASSWORD ?= $(QNAP_PG_PASSWORD)
 FOD_REMOTE_PG_ENV := FOD_PG_HOST=$(FOD_REMOTE_PG_HOST) FOD_PG_PORT=$(FOD_REMOTE_PG_PORT) FOD_PG_DBNAME=$(FOD_REMOTE_PG_DBNAME) FOD_PG_USER=$(FOD_REMOTE_PG_USER) FOD_PG_PASSWORD=$(FOD_REMOTE_PG_PASSWORD)
+FOD_PG_HOST ?= $(if $(QNAP_ENABLED),$(QNAP_PG_HOST),127.0.0.1)
+FOD_PG_PORT ?= $(if $(QNAP_ENABLED),$(QNAP_PG_PORT),$(POSTGRES_PORT))
+FOD_PG_DBNAME ?= $(if $(QNAP_ENABLED),$(QNAP_PG_DBNAME),$(POSTGRES_DB))
+FOD_PG_USER ?= $(if $(QNAP_ENABLED),$(QNAP_PG_USER),$(POSTGRES_USER))
+FOD_PG_PASSWORD ?= $(if $(QNAP_ENABLED),$(QNAP_PG_PASSWORD),$(POSTGRES_PASSWORD))
+POSTGRES_DB := $(if $(QNAP_ENABLED),$(QNAP_PG_DBNAME),$(POSTGRES_DB_BASE))
+POSTGRES_USER := $(if $(QNAP_ENABLED),$(QNAP_PG_USER),$(POSTGRES_USER_BASE))
+POSTGRES_PASSWORD := $(if $(QNAP_ENABLED),$(QNAP_PG_PASSWORD),$(POSTGRES_PASSWORD_BASE))
+POSTGRES_PORT := $(if $(QNAP_ENABLED),$(QNAP_PG_PORT),$(POSTGRES_PORT_BASE))
+export FOD_PG_HOST
+export FOD_PG_PORT
+export FOD_PG_DBNAME
+export FOD_PG_USER
+export FOD_PG_PASSWORD
 MOUNTPOINT ?= /tmp/fod-mount
 FOD_SELINUX ?= auto
 FOD_DEFAULT_PERMISSIONS ?= 1
@@ -157,12 +182,13 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
+.PHONY: help benchmark benchmarks venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
-		'  make cargo-profile-show - print the active Cargo build profile used by Makefile install targets' \
+	'  make cargo-profile-show - print the active Cargo build profile used by Makefile install targets' \
+		'  make qnap-config-show - print the resolved QNAP Docker and PostgreSQL preset' \
 		'  make change-runtime-list - show the effective live reloadable snapshot via fod.change' \
 		'  make change-runtime-get - print one live reloadable key via fod.change (set FOD_CHANGE_KEY=...)' \
 		'  make reload-runtime - apply reloadable FOD_* values from the current config via fod.change (no remount needed)' \
@@ -172,16 +198,24 @@ help:
 		'  make deps-ubuntu - print the Ubuntu/Debian packages needed to build FOD' \
 		'  make deps-redhat - print the Fedora/RHEL packages needed to build FOD' \
 		'  make up         - start local PostgreSQL in Docker' \
+		'  make qnap-up    - start PostgreSQL in Docker using QNAP=1' \
 		'  make docker-selinux-acl-up - start the SELinux/ACL test lab in Docker' \
 		'  make docker-selinux-acl-wait - wait until the SELinux/ACL lab PostgreSQL is ready' \
 		'  make down       - stop local PostgreSQL' \
+		'  make qnap-down  - stop PostgreSQL using QNAP=1' \
 		'  make docker-selinux-acl-down - stop the SELinux/ACL test lab' \
 	'  make restart    - restart local PostgreSQL' \
+		'  make qnap-restart - restart PostgreSQL using QNAP=1' \
 		'  make logs       - show local PostgreSQL logs' \
+		'  make qnap-logs  - show PostgreSQL logs using QNAP=1' \
 		'  make wait       - wait until PostgreSQL is ready' \
+		'  make qnap-wait  - wait until PostgreSQL is ready using QNAP=1' \
 		'  make init       - create the FOD schema in local PostgreSQL with --schema-admin-password' \
+		'  make qnap-init  - create the FOD schema using the QNAP transport preset' \
 		'  make init-qnap  - create the FOD schema using the remote QNAP PostgreSQL preset' \
+		'  make qnap-smoke - run the PostgreSQL smoke check using QNAP=1' \
 		'  make reset      - down -v / up / wait / init for a clean start' \
+		'  make qnap-reset - run reset using QNAP=1' \
 		'  make enable-pg-stat-statements - create pg_stat_statements in the local PostgreSQL database for diagnostics' \
 		'  make install-config - install fod_config.ini to /etc/fod/fod_config.ini (warns if password is still cichosza)' \
 		'  make install-config-user - install fod_config.ini to $$HOME/.config/fod/fod_config.ini without sudo (warns if password is still cichosza)' \
@@ -207,6 +241,7 @@ help:
 		'  make benchmarks - run the benchmark suite sequentially' \
 		'  make benchmark  - alias for make benchmarks' \
 		'  make mount      - mount FOD at $(MOUNTPOINT)' \
+		'  make qnap-mount - mount FOD at $(MOUNTPOINT) using QNAP=1' \
 		'  make mount-qnap - mount using the remote QNAP PostgreSQL preset (no local Docker)' \
 	'  make mount-user - prefer $$HOME/.config/fod/fod_config.ini and fall back to local ./fod_config.ini' \
 		'  make demo       - up/init and then mount FOD at $(MOUNTPOINT)' \
@@ -350,27 +385,27 @@ deps-redhat:
 
 up:
 	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
-	$(COMPOSE) -f $(COMPOSE_FILE) up -d postgres
-	@$(MAKE) wait
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) up -d postgres
+	@$(MAKE) wait QNAP=$(QNAP)
 
 docker-selinux-acl-up:
 	COMPOSE_PROJECT_NAME=fod-selinux-acl POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) FOD_ROLE=auto FOD_PROFILE=bulk_write FOD_SELINUX=on FOD_ACL=on FOD_LOG_LEVEL=DEBUG FOD_ALLOW_OTHER=1 \
-	$(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) up -d postgres fod-selinux-acl
+	$(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) up -d postgres fod-selinux-acl
 	@$(MAKE) docker-selinux-acl-wait
 
 down:
 	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
-	$(COMPOSE) -f $(COMPOSE_FILE) down
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) down
 
 docker-selinux-acl-down:
 	COMPOSE_PROJECT_NAME=fod-selinux-acl POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
-	$(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) down -v
+	$(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) down -v
 
 docker-selinux-acl-wait:
 	@set -eu; \
 	echo "Waiting for PostgreSQL in the SELinux/ACL Docker lab..."; \
 	for i in $$(seq 1 60); do \
-		if COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T postgres pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB) >/dev/null 2>&1; then \
+		if COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T postgres pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB) >/dev/null 2>&1; then \
 			echo "SELinux/ACL lab PostgreSQL ready."; \
 			exit 0; \
 		fi; \
@@ -381,22 +416,22 @@ docker-selinux-acl-wait:
 
 docker-selinux-acl-shell:
 	COMPOSE_PROJECT_NAME=fod-selinux-acl \
-	$(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) exec fod-selinux-acl bash
+	$(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec fod-selinux-acl bash
 
 docker-selinux-acl-smoke: docker-selinux-acl-up
-	COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T fod-selinux-acl bash -lc 'set -euo pipefail; $(CARGO_BUILD_MKFS) --bin fod-bootstrap --bin fod-rust-mkfs; $(CARGO_BUILD_FUSE) --bin fod-rust-fuse; ./.venv/bin/python tests/integration/test_fuse_context_identity.py; ./.venv/bin/python tests/integration/test_xattr.py; $(CARGO_TEST_FUSE) --test root_permissions_smoke -- --nocapture'
+	COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T fod-selinux-acl bash -lc 'set -euo pipefail; $(CARGO_BUILD_MKFS) --bin fod-bootstrap --bin fod-rust-mkfs; $(CARGO_BUILD_FUSE) --bin fod-rust-fuse; ./.venv/bin/python tests/integration/test_fuse_context_identity.py; ./.venv/bin/python tests/integration/test_xattr.py; $(CARGO_TEST_FUSE) --test root_permissions_smoke -- --nocapture'
 
 restart: down up
 
 logs:
 	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
-	$(COMPOSE) -f $(COMPOSE_FILE) logs -f postgres
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) logs -f postgres
 
 wait:
 	@set -eu; \
-	echo "Waiting for PostgreSQL in Docker and on 127.0.0.1:$(POSTGRES_PORT)..."; \
+	echo "Waiting for PostgreSQL in Docker..."; \
 	for i in $$(seq 1 60); do \
-		if COMPOSE_PROJECT_NAME=fod $(COMPOSE) -f $(COMPOSE_FILE) exec -T postgres pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB) >/dev/null 2>&1; then \
+		if COMPOSE_PROJECT_NAME=fod $(COMPOSE_RUN) -f $(COMPOSE_FILE) exec -T postgres pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB) >/dev/null 2>&1; then \
 			echo "PostgreSQL ready."; \
 			exit 0; \
 		fi; \
@@ -431,8 +466,8 @@ init-qnap:
 
 reset:
 	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
-	$(COMPOSE) -f $(COMPOSE_FILE) down -v
-	$(MAKE) up
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) down -v
+	$(MAKE) up QNAP=$(QNAP)
 	sleep 2
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"
 	mkdir -p .fod
@@ -564,7 +599,7 @@ cargo-profile-show:
 smoke: up
 	@set -eu; \
 	for attempt in 1 2 3 4 5; do \
-		if PGPASSWORD=$(POSTGRES_PASSWORD) psql -h 127.0.0.1 -p $(POSTGRES_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DB) -tAc 'SELECT 1' | grep -qx 1; then \
+		if PGPASSWORD=$(POSTGRES_PASSWORD) psql -h $(FOD_PG_HOST) -p $(FOD_PG_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DB) -tAc 'SELECT 1' | grep -qx 1; then \
 			exit 0; \
 		fi; \
 		sleep 1; \
@@ -573,7 +608,7 @@ smoke: up
 
 enable-pg-stat-statements: up
 	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
-	$(COMPOSE) -f $(COMPOSE_FILE) exec -T postgres sh -lc 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"'
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) exec -T postgres sh -lc 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"'
 
 mount: up
 	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
@@ -1017,7 +1052,50 @@ benchmarks:
 	done
 
 db-shell:
-	$(COMPOSE) -f $(COMPOSE_FILE) exec postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) exec postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
+
+qnap-config-show:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) qnap-config-show-inner
+
+qnap-config-show-inner:
+	@printf '%s\n' \
+		'QNAP transport preset:' \
+		"  QNAP=$(if $(QNAP_ENABLED),1,0)" \
+		"  DOCKER_HOST=$(if $(QNAP_ENABLED),$(QNAP_DOCKER_HOST),<local docker>)" \
+		"  DOCKER_TLS_VERIFY=$(if $(QNAP_ENABLED),$(QNAP_DOCKER_TLS_VERIFY),<default>)" \
+		"  DOCKER_CERT_PATH=$(if $(QNAP_ENABLED),$(QNAP_DOCKER_CERT_PATH),<default>)" \
+		"  FOD_PG_HOST=$(FOD_PG_HOST)" \
+		"  FOD_PG_PORT=$(FOD_PG_PORT)" \
+		"  FOD_PG_DBNAME=$(FOD_PG_DBNAME)" \
+		"  FOD_PG_USER=$(FOD_PG_USER)" \
+		"  FOD_PG_PASSWORD=$(FOD_PG_PASSWORD)"
+
+qnap-up:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) up
+
+qnap-down:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) down
+
+qnap-restart:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) restart
+
+qnap-logs:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) logs
+
+qnap-wait:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) wait
+
+qnap-init:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) init
+
+qnap-smoke:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) smoke
+
+qnap-reset:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) reset
+
+qnap-mount:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) mount
 
 clean:
 	rm -rf $(VENV_DIR)
