@@ -439,6 +439,113 @@ fn transactional_commit_disconnect_is_confirmed_by_request_token_probe() {
 }
 
 #[test]
+fn transactional_commit_disconnect_is_replayed_for_set_file_size() {
+    let _guard = test_guard();
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    let parent_name = unique_name("transactional_size_parent");
+    let parent_seed = unique_name("transactional_size_parent_seed");
+    let parent_id = direct_repo
+        .create_directory(None, &parent_name, 0o755, 1000, 1000, &parent_seed)
+        .expect("create parent directory");
+
+    let file_name = unique_name("transactional_size_file");
+    let file_seed = unique_name("transactional_size_file_seed");
+    let file_id = direct_repo
+        .create_file(Some(parent_id), &file_name, 0o644, 1000, 1000, &file_seed)
+        .expect("create target file");
+
+    let proxy = QueryDropProxy::start("COMMIT", Duration::from_millis(50)).expect("start proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+    repo.set_file_size(file_id, 12_345)
+        .expect("set file size with replay");
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert_eq!(proxy.match_hits(), 2);
+    assert_eq!(
+        direct_repo.file_size(file_id).expect("file size after set"),
+        Some(12_345)
+    );
+
+    direct_repo
+        .purge_primary_file(file_id)
+        .expect("cleanup file");
+    direct_repo
+        .delete_directory_entry(parent_id)
+        .expect("cleanup parent directory");
+}
+
+#[test]
+fn transactional_commit_disconnect_is_replayed_for_lock_range_state_blob() {
+    let _guard = test_guard();
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    direct_repo
+        .ensure_lock_schema()
+        .expect("ensure lock schema");
+
+    let resource_kind = "tx_lock_range".to_string();
+    let resource_id = 424_242_u64;
+    let payload = "1001\t1\t0\t5\n1002\t2\t5\t";
+
+    let proxy = QueryDropProxy::start("COMMIT", Duration::from_millis(50)).expect("start proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+    repo.persist_lock_range_state_blob(&resource_kind, resource_id, 2, payload)
+        .expect("persist lock range state with replay");
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert_eq!(proxy.match_hits(), 2);
+    let loaded = direct_repo
+        .load_lock_range_state_blob(&resource_kind, resource_id)
+        .expect("load lock range state");
+    assert_eq!(loaded, payload.as_bytes());
+
+    direct_repo
+        .exec(&format!(
+            "DELETE FROM lock_range_leases WHERE resource_kind = '{}' AND resource_id = {}",
+            resource_kind, resource_id
+        ))
+        .expect("cleanup range leases");
+}
+
+#[test]
+fn transactional_commit_disconnect_is_replayed_for_replace_lock_range_state_blob_for_owner() {
+    let _guard = test_guard();
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    direct_repo
+        .ensure_lock_schema()
+        .expect("ensure lock schema");
+
+    let resource_kind = "tx_lock_owner".to_string();
+    let resource_id = 434_343_u64;
+    let owner_key = 1001_u64;
+    let payload = "1001\t1\t0\t5\n1001\t2\t5\t10";
+
+    let proxy = QueryDropProxy::start("COMMIT", Duration::from_millis(50)).expect("start proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+    repo.replace_lock_range_state_blob_for_owner(
+        &resource_kind,
+        resource_id,
+        owner_key,
+        2,
+        payload,
+    )
+    .expect("replace lock range state with replay");
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert_eq!(proxy.match_hits(), 2);
+    let loaded = direct_repo
+        .load_lock_range_state_blob(&resource_kind, resource_id)
+        .expect("load replaced lock range state");
+    assert_eq!(loaded, payload.as_bytes());
+
+    direct_repo
+        .exec(&format!(
+            "DELETE FROM lock_range_leases WHERE resource_kind = '{}' AND resource_id = {}",
+            resource_kind, resource_id
+        ))
+        .expect("cleanup range leases");
+}
+
+#[test]
 fn transactional_commit_disconnect_is_replayed_for_lock_lease_prune() {
     let _guard = test_guard();
     let direct_repo = repo_from_conninfo(&direct_conninfo());

@@ -6,6 +6,7 @@ Use this file to record concise conclusions that matter for future work.
 
 - On commit `1ba00b8` (`FOD 3.1.1: organize bounded replay follow-up`), the mounted fio smoke suite still passed for sequential, mixed sequential rw, and random mixed rw workloads. The sequential strace smoke stayed in the same block-vs-extent shape as before, with extent mode still showing more PostgreSQL pressure than the block path on this host.
 - The same commit also produced two short throughput references: `make test-throughput` reported `1048576 bytes in 0.185s (5.41 MiB/s)`, and `make test-throughput-sync` reported `1048576 bytes in 0.099s (10.08 MiB/s)`. These are good host-local comparison points, but they are still only single-block smokes.
+- The wrapper inventory follow-up now has a first real code pass: `set_file_size()`, `persist_lock_range_state_blob()`, and `replace_lock_range_state_blob_for_owner()` all use `transactional_replayable()`, and the replay smoke suite now covers commit-disconnect replay for all three.
 
 ## 2026-06-24
 

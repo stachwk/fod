@@ -4437,7 +4437,7 @@ impl DbRepo {
         self.ensure_lock_schema_ready()?;
         let session_id = self.current_lock_session_id_text()?;
         self.with_control_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 let delete_sql = CString::new(
                     "
                     DELETE FROM lock_range_leases
@@ -4598,7 +4598,7 @@ impl DbRepo {
     ) -> Result<(), String> {
         self.ensure_lock_schema_ready()?;
         self.with_control_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 let delete_sql = CString::new(
                     "
                     DELETE FROM lock_range_leases
@@ -6430,7 +6430,7 @@ impl DbRepo {
             .map_err(|_| "file size contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 let params = [&file_size, &file_id];
                 exec_command_params(conn, &sql_update_file, &params)?;
                 Ok(())
