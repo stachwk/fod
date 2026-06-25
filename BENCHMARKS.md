@@ -56,6 +56,38 @@ Notes:
 
 - These are short single-block write smokes, so they are useful for relative host comparisons but not for long-run saturation claims.
 
+## 2026-06-25 QNAP `synchronous_commit` Comparison
+
+Collected from commit `1ce18c4` (`FOD 3.1.1: note stock qnap postgres tuning`).
+
+### Throughput Smoke
+
+Observed on the QNAP Docker backend with the mounted PostgreSQL-backed runtime and a larger `32 MiB` write smoke (`THROUGHPUT_BLOCK_SIZE=1M`, `THROUGHPUT_COUNT=32`). The baseline run used `FOD_SYNCHRONOUS_COMMIT=on`; the comparison run used `FOD_SYNCHRONOUS_COMMIT=off`.
+
+| Profile | `make test-throughput-sync` |
+| --- | --- |
+| `on` | `33554432 bytes in 1.169s (27.38 MiB/s)` |
+| `off` | `33554432 bytes in 1.244s (25.73 MiB/s)` |
+
+Notes:
+
+- The smaller `1 MiB` smoke was noisy across repeated runs, so the longer `32 MiB` run is the better comparison point here.
+- On this sample, `synchronous_commit=off` did not produce a throughput win on the QNAP Docker backend.
+
+### Sequential Fio Smoke
+
+Observed on the same backend with `make test-fio-sequential-io-strace`.
+
+| Profile | Block read | Block write | Extent read | Extent write |
+| --- | --- | --- | --- | --- |
+| `on` | `1391 KiB/s` | `1164 KiB/s` | `1422 KiB/s` | `1255 KiB/s` |
+| `off` | `1561 KiB/s` | `1085 KiB/s` | `1561 KiB/s` | `1185 KiB/s` |
+
+Notes:
+
+- The read-side numbers bounced around more than the write-side numbers, which is consistent with a small smoke on a live backend.
+- The write-side results still did not show a clean win for `off`, so the default `on` setting remains the safer baseline for this QNAP sample.
+
 ## 2026-06-25 Replay Confirmation Snapshot
 
 Collected from commit `94d9695` (`FOD 3.1.1: confirm create replay after unique conflict`).
