@@ -24,6 +24,38 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
 
+## 2026-06-25 Benchmark Snapshot
+
+Collected from commit `1ba00b8` (`FOD 3.1.1: organize bounded replay follow-up`).
+
+### Mounted Fio Smoke
+
+Observed on the current host with the mounted PostgreSQL-backed runtime. The sequential run used `make test-fio-sequential-io-strace`, and the mixed / random mixed runs used `make test-fio-mixed-io` and `make test-fio-random-mixed-io`.
+
+| Workload | Block read | Block write | Extent read | Extent write |
+| --- | --- | --- | --- | --- |
+| Sequential 64 KiB smoke | `481 KiB/s` | `388 KiB/s` | `790 KiB/s` | `615 KiB/s` |
+| Mixed sequential rw 4 MiB | `550 KiB/s` | `585 KiB/s` | `84.8 KiB/s` | `90.3 KiB/s` |
+| Random mixed rw 4 MiB | `281 KiB/s` | `299 KiB/s` | `61.2 KiB/s` | `65.2 KiB/s` |
+
+Notes:
+
+- The sequential smoke also confirmed the current internal timing shape: block mode reported `fuse_read_total_us=118035`, `fuse_write_total_us=186219`, and extent mode reported `fuse_read_total_us=71296`, `fuse_write_total_us=106128`.
+- Mixed and random mixed still strongly favor the block path on this host, which keeps the extent path clearly opt-in.
+
+### Throughput Smoke
+
+Observed on the current host with the default local FOD profile.
+
+| Benchmark | Result |
+| --- | --- |
+| `make test-throughput` | `1048576 bytes in 0.185s (5.41 MiB/s)` |
+| `make test-throughput-sync` | `1048576 bytes in 0.099s (10.08 MiB/s)` |
+
+Notes:
+
+- These are short single-block write smokes, so they are useful for relative host comparisons but not for long-run saturation claims.
+
 ## FOD 3.0.9 Read Cache Eviction Policy Comparison
 
 Initial single-run snapshot observed on the current host with the mounted PostgreSQL-backed runtime, `FOD_READ_CACHE_EVICTION_POLICY=fifo` versus `lru`, `FIO_BLOCK_SIZE=4k`, and `FIO_FILE_SIZE=1M` for the sequential workload. The mixed workloads used the default `FIO_FILE_SIZE=4M`, and the random mixed workload used `FIO_RW_MODE=randrw` with `FIO_RWMIXREAD=50`. The `fio` scripts also exercised the extent control run, but the table below only uses the block-storage results that are relevant to `ReadBlockCache`.
