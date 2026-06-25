@@ -4,6 +4,8 @@ Use this file to record concise conclusions that matter for future work.
 
 ## 2026-06-25
 
+- The QNAP Docker backend is usable as a real FOD benchmark target. `make qnap-reset` succeeded against `tcp://192.168.1.11:2376`, the schema initialized cleanly on `192.168.1.11:5432`, and the benchmark run completed with no fresh PostgreSQL ERROR/FATAL/PANIC entries in the QNAP logs during the measured window.
+- On commit `4f3fe83` (`FOD 3.1.1: add qnap compose transport preset`), the QNAP-backed throughput smoke reported `1.98 MiB/s` for `make test-throughput` and `1.50 MiB/s` for `make test-throughput-sync`. The sequential fio smoke reported `1561/1280 KiB/s` on block mode and `1600/1306 KiB/s` on extent mode, while mixed and random mixed stayed clearly slower on extent mode than on block mode.
 - The Makefile now has a QNAP transport preset for Compose-backed targets. `QNAP=1` or the `qnap-*` wrappers route `docker compose` to `tcp://192.168.1.11:2376` with TLS certs from `~/.docker`, and the same preset switches the PostgreSQL host/user/password values to the QNAP profile. `make qnap-config-show` prints the resolved transport and database values.
 - For `msfind`, the current `fod-indexer` stage already covers the shared indexing pipeline; the remaining gap is a stable machine-readable integration surface, not a second engine.
 - Added [docs/msfind-fod-indexer-requests.md](docs/msfind-fod-indexer-requests.md) as the place to collect `msfind`-specific requests against the shared indexer core.

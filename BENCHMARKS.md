@@ -24,6 +24,38 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
 
+## 2026-06-25 QNAP Benchmark Snapshot
+
+Collected from commit `4f3fe83` (`FOD 3.1.1: add qnap compose transport preset`).
+
+### Mounted Fio Smoke
+
+Observed on the QNAP Docker backend with the mounted PostgreSQL-backed runtime. The sequential run used `make test-fio-sequential-io-strace`, and the mixed / random mixed runs used `make test-fio-mixed-io` and `make test-fio-random-mixed-io`.
+
+| Workload | Block read | Block write | Extent read | Extent write |
+| --- | --- | --- | --- | --- |
+| Sequential 64 KiB smoke | `1561 KiB/s` | `1280 KiB/s` | `1600 KiB/s` | `1306 KiB/s` |
+| Mixed sequential rw 4 MiB | `106 KiB/s` | `113 KiB/s` | `7922 B/s` | `8433 B/s` |
+| Random mixed rw 4 MiB | `65.7 KiB/s` | `69.9 KiB/s` | `6772 B/s` | `7209 B/s` |
+
+Notes:
+
+- The sequential smoke also confirmed the current internal timing shape: block mode reported `fuse_read_total_us=34960`, `fuse_write_total_us=51333`, and extent mode reported `fuse_read_total_us=33935`, `fuse_write_total_us=50548`.
+- The extent path stayed much slower than block mode on the mixed and random mixed workloads, which keeps the extent path clearly opt-in.
+
+### Throughput Smoke
+
+Observed on the QNAP Docker backend with the default local FOD profile.
+
+| Benchmark | Result |
+| --- | --- |
+| `make test-throughput` | `1048576 bytes in 0.505s (1.98 MiB/s)` |
+| `make test-throughput-sync` | `1048576 bytes in 0.665s (1.50 MiB/s)` |
+
+Notes:
+
+- These are short single-block write smokes, so they are useful for relative host comparisons but not for long-run saturation claims.
+
 ## 2026-06-25 Replay Confirmation Snapshot
 
 Collected from commit `94d9695` (`FOD 3.1.1: confirm create replay after unique conflict`).
