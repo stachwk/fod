@@ -91,19 +91,19 @@ request token, or commit-outcome proof before automatic replay can be trusted:
 | `purge_primary_file()` | Safe row reassignment exists, but the survivor choice and count decrement still make the whole transaction ambiguous. |
 | `persist_file_blocks_with_crc_flag()` | The direct branch is close, but the detach step and the COPY staging branch still need stronger replay identity. |
 | `persist_file_extents_with_crc_flag()` | COPY-based extent materialization needs a different replay contract before blind retry is safe. |
+| `create_hardlink()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
+| `create_symlink()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
+| `create_directory()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
+| `create_file()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
+| `create_special_file()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
 
 ### Keep Out Of Automatic Replay
 
-These wrappers create or promote user-visible filesystem objects and should stay out of blind automatic replay until
-they get an explicit request token plus commit outcome confirmation:
+These wrappers still create or promote user-visible filesystem objects and should stay out of blind automatic replay
+until they get a stronger commit-outcome proof:
 
 | Function | Why it stays out for now |
 | --- | --- |
-| `create_hardlink()` | Creates a new filesystem entry and touches the parent directory. |
-| `create_symlink()` | Creates a new filesystem entry and touches the parent directory. |
-| `create_directory()` | Creates a new directory entry and touches the parent directory. |
-| `create_file()` | Creates a new file entry and allocates a backing data object. |
-| `create_special_file()` | Creates a new special-file entry and allocates a backing data object. |
 | `promote_hardlink_to_primary()` | The chosen survivor and row promotion are not stable enough for blind replay. |
 
 The bounded replay classifier already covers single-statement helpers such as `touch_data_object()`, `touch_file_entry()`,
@@ -129,6 +129,9 @@ The preferred confirmation path is simple:
 
 For the current codebase, the practical marker is `request_token` on rows such as `index_scan_runs` and `index_import_plans`.
 That makes the confirmation step a row-level probe instead of a separate transaction journal.
+For filesystem object creation paths, the practical confirmation key is the natural unique key itself
+(`parent + name`, plus the expected metadata fields); those wrappers now probe the existing row on a replayed
+`SQLSTATE 23505` before they give up.
 Any future transaction that cannot expose a durable marker with the same properties should remain outside the automatic replay envelope.
 
 ## Smoke Coverage
