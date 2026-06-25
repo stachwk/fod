@@ -643,7 +643,7 @@ fn transactional_commit_disconnect_is_replayed_for_extent_persist() {
         2,
         false,
         &extents,
-        false,
+        true,
     )
     .expect("persist file extents with replay");
 
@@ -661,6 +661,12 @@ fn transactional_commit_disconnect_is_replayed_for_extent_persist() {
             .expect("fetch persisted extents"),
         vec![(0, extent_block0.clone()), (1, extent_block1.clone())]
     );
+    let crc_rows = direct_repo
+        .query_scalar_text(&format!(
+            "SELECT COUNT(*) FROM copy_block_crc WHERE data_object_id = (SELECT data_object_id FROM files WHERE id_file = {file_id})"
+        ))
+        .expect("count copy_block_crc rows after extent persist");
+    assert_eq!(crc_rows.trim(), "2");
     let extent_rows = direct_repo
         .query_scalar_text(&format!(
             "SELECT COUNT(*) FROM data_extents WHERE data_object_id = (SELECT data_object_id FROM files WHERE id_file = {file_id})"

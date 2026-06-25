@@ -101,8 +101,8 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Zostaw w backlogu tylko to, czego realnie brakuje: decyzje, ktore `source kind`y beda kiedys potrzebowaly direct crawlerow, oraz czy maja byc mirror-only czy native API adapters. Nie rozszerzaj core o protokoly, jesli nie ma konkretnego, nieobslugiwnego jeszcze przypadku.
   - Progress: the current kinds now have an explicit boundary in `docs/fod-indexer.md`, and none of them gets a direct remote crawler in the shared core. Future non-path-backed sources should come in as separate adapter projects.
 - [ ] Uporzadkuj safety i retry tylko tam, gdzie sa jeszcze luki. Read-only i idempotentne operacje maja zostac bounded-retry friendly, ale nie dokladaj pelnego replay nieidempotentnych transakcji bez osobnego projektu.
-- [ ] Dopięcie `persist_file_extents_native(..., maintain_copy_crc_table = true)` do poprawnego binary COPY dla `copy_block_crc`.
-  - Progress: extents replay smoke currently runs with `maintain_copy_crc_table = false`, because the CRC-copy branch hits `incorrect binary data format` on `copy_block_crc.id_file`. The binary COPY column widths need a separate fix before that branch can be enabled safely in the smoke.
+- [x] Dopięcie `persist_file_extents_native(..., maintain_copy_crc_table = true)` do poprawnego binary COPY dla `copy_block_crc`.
+  - Progress: `copy_block_crc` extent persistence now encodes `id_file`, `data_object_id`, and `_order` as `INTEGER` fields in PostgreSQL binary COPY, matching the table schema. The extent replay smoke now runs with `maintain_copy_crc_table = true` and passes.
 - [ ] Nie wracaj do implementacji podstawowego pipeline jako nowego zadania. `scan`, `hash`, `duplicate detection`, `plan-import`, `materialize` i `cleanup` traktuj jako juz dostarczone; dalsza praca ma byc wokol granic, adapterow i hardeningu.
 
 ## Transactional Replay Project

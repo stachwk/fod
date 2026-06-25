@@ -1648,16 +1648,25 @@ fn append_persist_copy_block_crc_copy_binary_row(
     data_object_id: i64,
     block_index: i64,
     crc32: Option<i64>,
-) {
+) -> Result<(), String> {
+    let file_id = i32::try_from(file_id)
+        .map_err(|_| "file id out of range for copy crc staging".to_string())?;
+    let data_object_id = i32::try_from(data_object_id)
+        .map_err(|_| "data object id out of range for copy crc staging".to_string())?;
+    let block_index = i32::try_from(block_index)
+        .map_err(|_| "block index out of range for copy crc staging".to_string())?;
+
     append_copy_binary_i16(out, 4);
-    append_copy_binary_i64_field(out, file_id);
-    append_copy_binary_i64_field(out, data_object_id);
-    append_copy_binary_i64_field(out, block_index);
+    append_copy_binary_i32_field(out, file_id);
+    append_copy_binary_i32_field(out, data_object_id);
+    append_copy_binary_i32_field(out, block_index);
     if let Some(crc32) = crc32 {
         append_copy_binary_i64_field(out, crc32);
     } else {
         append_copy_binary_null_field(out);
     }
+
+    Ok(())
 }
 
 fn append_persist_extent_copy_binary_row(
@@ -2501,7 +2510,7 @@ impl DbRepo {
                     data_object_id_i64,
                     block_index_i64,
                     Some(crc32),
-                );
+                )?;
             }
         }
         copy.send(&copy_buffer)?;
@@ -7879,5 +7888,54 @@ mod tests {
 
         let crc_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
         assert_eq!(crc_len, -1);
+    }
+
+    #[test]
+    fn encodes_copy_block_crc_binary_rows_with_integer_fields() {
+        let mut out = Vec::new();
+        append_copy_binary_header(&mut out);
+        append_persist_copy_block_crc_copy_binary_row(&mut out, 7, 11, 3, Some(99)).unwrap();
+
+        let signature = &out[..COPY_BINARY_SIGNATURE.len()];
+        assert_eq!(signature, COPY_BINARY_SIGNATURE);
+
+        let mut cursor = COPY_BINARY_SIGNATURE.len();
+        let flags = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
+        cursor += 4;
+        let header_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
+        cursor += 4;
+        assert_eq!(flags, 0);
+        assert_eq!(header_len, 0);
+
+        let field_count = i16::from_be_bytes(out[cursor..cursor + 2].try_into().unwrap());
+        cursor += 2;
+        assert_eq!(field_count, 4);
+
+        let file_id_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
+        cursor += 4;
+        assert_eq!(file_id_len, 4);
+        let file_id = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
+        cursor += 4;
+        assert_eq!(file_id, 7);
+
+        let data_object_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
+        cursor += 4;
+        assert_eq!(data_object_len, 4);
+        let data_object_id = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
+        cursor += 4;
+        assert_eq!(data_object_id, 11);
+
+        let block_index_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
+        cursor += 4;
+        assert_eq!(block_index_len, 4);
+        let block_index = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
+        cursor += 4;
+        assert_eq!(block_index, 3);
+
+        let crc_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
+        cursor += 4;
+        assert_eq!(crc_len, 8);
+        let crc32 = i64::from_be_bytes(out[cursor..cursor + 8].try_into().unwrap());
+        assert_eq!(crc32, 99);
     }
 }
