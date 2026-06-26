@@ -6793,7 +6793,9 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            // A committed purge is observable because the file row disappears,
+            // so a lost COMMIT can be confirmed by the empty lookup on retry.
+            transactional_replayable(conn, |conn| {
                 let data_object_id = match {
                     let params = [&file_id];
                     let res = exec_params(conn, &sql_lookup, &params)?;

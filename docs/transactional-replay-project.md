@@ -78,6 +78,7 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 | `acquire_flock_lease()` | advisory lock + upsert | The lease row is keyed and the upsert path is already bounded-replay safe. |
 | `persist_copy_block_crc_rows()` | delete + upsert | CRC rows are rewritten deterministically for the file/block set. |
 | `set_file_size()` | single-row update | The write is keyed by `id_file` and only sets the current size. |
+| `purge_primary_file()` | delete + row reassignment | A committed purge is observable because the file row disappears after reconnect. |
 
 ### Replayable Only With Extra Confirmation
 
@@ -88,7 +89,6 @@ request token, or commit-outcome proof before automatic replay can be trusted:
 | --- | --- |
 | `create_data_object()` | It bumps `reference_count`, so repeating it after a reconnect can change counts. |
 | `adopt_source_data_object()` | It rewires the destination file and adjusts shared-object counts. |
-| `purge_primary_file()` | Safe row reassignment exists, but the survivor choice and count decrement still make the whole transaction ambiguous. |
 | `persist_file_blocks_with_crc_flag()` | The direct branch is close, but the detach step and the COPY staging branch still need stronger replay identity. |
 | `persist_file_extents_with_crc_flag()` | COPY-based extent materialization needs a different replay contract before blind retry is safe. |
 | `create_hardlink()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
