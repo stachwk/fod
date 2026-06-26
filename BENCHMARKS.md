@@ -88,6 +88,41 @@ Notes:
 - The read-side numbers bounced around more than the write-side numbers, which is consistent with a small smoke on a live backend.
 - The write-side results still did not show a clean win for `off`, so the default `on` setting remains the safer baseline for this QNAP sample.
 
+## 2026-06-25 QNAP PostgreSQL Optimization Profiles
+
+Collected from commit `5abf053` (`FOD 3.1.1: add PostgreSQL optimization benchmarks`).
+
+### WAL Pressure Benchmark
+
+Observed on the QNAP Docker backend with `make test-postgresql-wal-pressure`.
+
+| Profile | Files | Block size | Sync | Elapsed | Throughput |
+| --- | --- | --- | --- | --- | --- |
+| default | `64` | `512k` | `1` | `25.628s` | `1.25 MiB/s` |
+
+Stats delta:
+
+- `pg_stat_wal`: `wal_records=51831`, `wal_fpi=72`, `wal_bytes=4753249`, `wal_write=336`, `wal_sync=335`
+- `pg_stat_bgwriter`: no checkpoint activity showed up in this short run, but `buffers_alloc=257` moved
+
+Notes:
+
+- This run is useful as a WAL volume and fsync-pressure smoke, but it did not push checkpoint counters on this backend.
+- A larger or checkpoint-forcing variant would be needed if we want a direct checkpoint-tuning signal.
+
+### Connection Churn Benchmark
+
+Observed on the QNAP Docker backend with `make test-postgresql-connection-churn`.
+
+| Profile | Connections | Elapsed | Connect avg | Connect p95 | Query avg | Query p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| default | `100` | `6.430s` | `54.439 ms` | `154.968 ms` | `9.783 ms` | `16.254 ms` |
+
+Notes:
+
+- The connection setup cost dominates the simple `SELECT 1` loop, which makes this a good smoke for pool sizing and session churn.
+- This is a direct PostgreSQL-side benchmark, not a FUSE throughput benchmark.
+
 ## 2026-06-25 Replay Confirmation Snapshot
 
 Collected from commit `94d9695` (`FOD 3.1.1: confirm create replay after unique conflict`).

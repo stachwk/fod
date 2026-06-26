@@ -589,6 +589,8 @@ What the tests cover:
 - `make test-mount-suite` is the main Python launcher-backed mount smoke suite; it covers files, directories, metadata, access modes, symlinks, `ioctl/FIONREAD`, file `read`-driven `atime`, feature-off runtime checks for ACL/SELinux, SELinux-on coverage when enabled, `df`, and replica read-only behavior in one run.
 - `make test-throughput` runs a small `dd if=/dev/zero` benchmark on a mounted FOD instance and prints elapsed time plus MiB/s.
 - `make test-throughput-sync` is the ready-made fsync variant.
+- `make test-postgresql-wal-pressure` measures WAL and background-writer pressure during a mounted write burst and prints the resulting `pg_stat_wal` / `pg_stat_bgwriter` deltas.
+- `make test-postgresql-connection-churn` measures repeated short-lived PostgreSQL connections against the configured backend and prints average and p95 latency.
 - `make test-large-copy-benchmark` measures a large `copy_file_range()` transfer through the backend and prints elapsed time plus MiB/s.
 - `make test-large-file-multiblock-benchmark` measures a large multi-block file write and prints write/persist/flush split times.
 - `make test-remount-durability-benchmark` checks that data survives a stop/remount/reopen cycle and prints the round-trip time.
