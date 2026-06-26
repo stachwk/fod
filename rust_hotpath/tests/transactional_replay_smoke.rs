@@ -520,6 +520,81 @@ fn transactional_commit_disconnect_is_replayed_for_create_data_object() {
 }
 
 #[test]
+fn transactional_commit_disconnect_is_replayed_for_promote_hardlink_to_primary() {
+    let _guard = test_guard();
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    let parent_name = unique_name("transactional_promote_parent");
+    let parent_seed = unique_name("transactional_promote_parent_seed");
+    let parent_id = direct_repo
+        .create_directory(None, &parent_name, 0o755, 1000, 1000, &parent_seed)
+        .expect("create parent directory");
+
+    let file_name = unique_name("transactional_promote_file");
+    let file_seed = unique_name("transactional_promote_file_seed");
+    let file_id = direct_repo
+        .create_file(Some(parent_id), &file_name, 0o644, 1000, 1000, &file_seed)
+        .expect("create primary file");
+    let hardlink_name = unique_name("transactional_promote_hardlink");
+    let hardlink_id = direct_repo
+        .create_hardlink(file_id, Some(parent_id), &hardlink_name, 1000, 1000)
+        .expect("create hardlink");
+
+    let proxy = QueryDropProxy::start("COMMIT", Duration::from_millis(50)).expect("start proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+    assert!(
+        repo.promote_hardlink_to_primary(file_id)
+            .expect("promote hardlink with replay"),
+        "promotion should succeed"
+    );
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert!(proxy.match_hits() >= 2);
+    assert_eq!(
+        direct_repo
+            .get_file_id(&format!("/{parent_name}/{hardlink_name}"))
+            .expect("lookup promoted file"),
+        Some(file_id)
+    );
+    assert_eq!(
+        direct_repo
+            .get_hardlink_id(&format!("/{parent_name}/{hardlink_name}"))
+            .expect("lookup promoted hardlink"),
+        None
+    );
+    assert_eq!(
+        direct_repo
+            .get_file_id(&format!("/{parent_name}/{file_name}"))
+            .expect("lookup original path"),
+        None
+    );
+    assert_eq!(
+        direct_repo
+            .get_hardlink_file_id(hardlink_id)
+            .expect("lookup promoted hardlink row"),
+        None
+    );
+    assert_eq!(
+        direct_repo
+            .count_file_links(file_id)
+            .expect("count links after promotion"),
+        1
+    );
+    let request_tokens = direct_repo
+        .query_scalar_text(&format!(
+            "SELECT COUNT(*) FROM hardlink_promotion_request_tokens WHERE id_file = {file_id}"
+        ))
+        .expect("count hardlink promotion request tokens");
+    assert_eq!(request_tokens.trim(), "1");
+
+    direct_repo
+        .purge_primary_file(file_id)
+        .expect("cleanup promoted file");
+    direct_repo
+        .delete_directory_entry(parent_id)
+        .expect("cleanup parent directory");
+}
+
+#[test]
 fn transactional_commit_disconnect_is_replayed_for_lock_range_state_blob() {
     let _guard = test_guard();
     let direct_repo = repo_from_conninfo(&direct_conninfo());

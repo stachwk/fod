@@ -145,6 +145,7 @@ The transactional replay smoke suite now lives in `rust_hotpath/tests/transactio
 - commit-disconnect replay for `persist_copy_block_crc_rows()`
 - commit-disconnect replay for `persist_file_blocks_with_crc_flag()`
 - commit-disconnect replay for `persist_file_extents_with_crc_flag()`
+- commit-disconnect replay for `promote_hardlink_to_primary()`
 - commit-disconnect replay for lock-lease pruning and lock-range blob replacement
 
 ## Current Baseline
