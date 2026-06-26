@@ -75,6 +75,8 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 | `prune_expired_client_sessions()` | cleanup delete | Removes expired sessions and stale zero-session leases deterministically. |
 | `persist_lock_range_state_blob()` | delete + reinsert | Replaces the range-lease blob for the current scope. |
 | `replace_lock_range_state_blob_for_owner()` | delete + reinsert | Same as above, but scoped to one owner key. |
+| `persist_file_blocks_with_crc_flag()` | delete + upsert / COPY staging | The block persist path rewrites deterministic rows and now has commit-disconnect smoke coverage. |
+| `persist_file_extents_with_crc_flag()` | COPY-based extent materialization | The extent persist path rewrites deterministic rows and now has commit-disconnect smoke coverage. |
 | `acquire_flock_lease()` | advisory lock + upsert | The lease row is keyed and the upsert path is already bounded-replay safe. |
 | `persist_copy_block_crc_rows()` | delete + upsert | CRC rows are rewritten deterministically for the file/block set. |
 | `set_file_size()` | single-row update | The write is keyed by `id_file` and only sets the current size. |
@@ -87,14 +89,12 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 These wrappers mostly do the right thing, but the transaction as a whole still needs an idempotency key,
 request token, or commit-outcome proof before automatic replay can be trusted:
 
-The create-entry family, `adopt_source_data_object()`, and `create_data_object()` now also use `transactional_replayable()`, so a lost `COMMIT`
-is retried once before the existing natural-key, source/destination row, or request-token probe confirms the already-committed state.
+The create-entry family now also uses `transactional_replayable()`, so a lost `COMMIT`
+is retried once before the existing natural-key probe confirms the already-committed state.
 
 
 | Function | Why it still needs more design |
 | --- | --- |
-| `persist_file_blocks_with_crc_flag()` | The direct branch is close, but the detach step and the COPY staging branch still need stronger replay identity. |
-| `persist_file_extents_with_crc_flag()` | COPY-based extent materialization needs a different replay contract before blind retry is safe. |
 | `create_hardlink()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
 | `create_symlink()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
 | `create_directory()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
@@ -140,11 +140,16 @@ Any future transaction that cannot expose a durable marker with the same propert
 
 ## Smoke Coverage
 
-The first three smoke checks now live in `rust_hotpath/tests/transactional_replay_smoke.rs`:
+The transactional replay smoke suite now lives in `rust_hotpath/tests/transactional_replay_smoke.rs` and covers:
 
-- body disconnects are replayed once and confirmed by the resulting filesystem row
-- multi-statement file creation replays once after the file insert is interrupted in-flight
-- commit disconnects are confirmed by probing the durable `request_token` row after reconnect
+- body disconnects for directory creation
+- multi-statement file creation
+- commit disconnect confirmation through a durable `request_token` row
+- commit-disconnect replay for `set_file_size()`
+- commit-disconnect replay for `persist_copy_block_crc_rows()`
+- commit-disconnect replay for `persist_file_blocks_with_crc_flag()`
+- commit-disconnect replay for `persist_file_extents_with_crc_flag()`
+- commit-disconnect replay for lock-lease pruning and lock-range blob replacement
 
 ## Current Baseline
 
