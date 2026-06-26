@@ -95,6 +95,10 @@ BENCHMARK_TARGETS := \
 	test-rust-hotpath-copy-dedupe-benchmark \
 	test-rust-hotpath-extent-poc-benchmark
 
+POSTGRES_BENCHMARK_TARGETS := \
+	test-postgresql-wal-pressure \
+	test-postgresql-connection-churn
+
 VENV_DIR ?= .venv
 VENV_PYTHON := $(VENV_DIR)/bin/python
 VENV_PIP := $(VENV_DIR)/bin/pip
@@ -182,7 +186,7 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
+.PHONY: help benchmark benchmarks postgres-benchmarks venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
 
 help:
 	@printf '%s\n' \
@@ -240,6 +244,7 @@ help:
 		'  make smoke      - quick database connectivity test' \
 		'  make benchmarks - run the benchmark suite sequentially' \
 		'  make benchmark  - alias for make benchmarks' \
+		'  make postgres-benchmarks - run PostgreSQL optimization benchmark targets sequentially' \
 		'  make mount      - mount FOD at $(MOUNTPOINT)' \
 		'  make qnap-mount - mount FOD at $(MOUNTPOINT) using QNAP=1' \
 		'  make mount-qnap - mount using the remote QNAP PostgreSQL preset (no local Docker)' \
@@ -313,6 +318,8 @@ help:
 		'  make test-symlink - mount + ln -s + readlink + rename symlink + orphaned symlink ls on the symlink path' \
 		'  make test-throughput - benchmark FOD writes with dd if=/dev/zero' \
 		'  make test-throughput-sync - benchmark FOD writes with conv=fsync' \
+		'  make test-postgresql-wal-pressure - benchmark WAL and checkpoint pressure during mounted write bursts' \
+		'  make test-postgresql-connection-churn - benchmark repeated short PostgreSQL connections' \
 		'  make test-rust-hotpath-helper-parity - run the shared Rust hot-path helper parity test suite once' \
 		'  make test-rust-hotpath-copy-plan - Rust helper parity tests for copy planner and related helpers' \
 		'  make test-rust-hotpath-copy-dedupe - Rust helper parity tests for changed-copy dedupe' \
@@ -841,6 +848,12 @@ test-throughput: venv up
 test-throughput-sync: venv up
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) THROUGHPUT_BLOCK_SIZE=$(THROUGHPUT_BLOCK_SIZE) THROUGHPUT_COUNT=$(THROUGHPUT_COUNT) THROUGHPUT_SYNC=1 bash tests/integration/test_throughput.sh
 
+test-postgresql-wal-pressure: venv init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PG_HOST=$(FOD_PG_HOST) FOD_PG_PORT=$(FOD_PG_PORT) FOD_PG_DBNAME=$(FOD_PG_DBNAME) FOD_PG_USER=$(FOD_PG_USER) FOD_PG_PASSWORD=$(FOD_PG_PASSWORD) FOD_PG_SSLMODE=$(FOD_PG_SSLMODE) FOD_PG_SSLROOTCERT=$(FOD_PG_SSLROOTCERT) FOD_PG_SSLCERT=$(FOD_PG_SSLCERT) FOD_PG_SSLKEY=$(FOD_PG_SSLKEY) $(VENV_PYTHON) tests/integration/test_postgresql_wal_pressure.py
+
+test-postgresql-connection-churn: venv init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PG_HOST=$(FOD_PG_HOST) FOD_PG_PORT=$(FOD_PG_PORT) FOD_PG_DBNAME=$(FOD_PG_DBNAME) FOD_PG_USER=$(FOD_PG_USER) FOD_PG_PASSWORD=$(FOD_PG_PASSWORD) FOD_PG_SSLMODE=$(FOD_PG_SSLMODE) FOD_PG_SSLROOTCERT=$(FOD_PG_SSLROOTCERT) FOD_PG_SSLCERT=$(FOD_PG_SSLCERT) FOD_PG_SSLKEY=$(FOD_PG_SSLKEY) $(VENV_PYTHON) tests/integration/test_postgresql_connection_churn.py
+
 test-fio-sequential-io: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) bash tests/integration/test_fio_sequential_io.sh
 
@@ -1048,6 +1061,12 @@ benchmark: benchmarks
 benchmarks:
 	@set -eu; \
 	for target in $(BENCHMARK_TARGETS); do \
+		$(MAKE) --no-print-directory $$target; \
+	done
+
+postgres-benchmarks:
+	@set -eu; \
+	for target in $(POSTGRES_BENCHMARK_TARGETS); do \
 		$(MAKE) --no-print-directory $$target; \
 	done
 
