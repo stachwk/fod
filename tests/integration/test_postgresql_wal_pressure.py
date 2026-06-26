@@ -12,6 +12,8 @@ import time
 import uuid
 from pathlib import Path
 
+import psycopg2
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -47,6 +49,8 @@ def main() -> None:
     file_count = int(os.environ.get("PG_WAL_PRESSURE_COUNT", "64"))
     block_size_text = os.environ.get("PG_WAL_PRESSURE_BLOCK_SIZE", "512k")
     sync_mode = _bool_env("PG_WAL_PRESSURE_SYNC", "1")
+    force_checkpoint = _bool_env("PG_WAL_PRESSURE_FORCE_CHECKPOINT", "0")
+    benchmark_label = os.environ.get("POSTGRES_BENCHMARK_LABEL", "default")
     block_size = _size_to_bytes(block_size_text)
     total_bytes = file_count * block_size
     payload = _build_payload(block_size)
@@ -88,6 +92,15 @@ def main() -> None:
                         f"{sample_file.stat().st_size} != {block_size}"
                     )
 
+            checkpoint_elapsed_ns = None
+            if force_checkpoint:
+                checkpoint_start_ns = time.perf_counter_ns()
+                with psycopg2.connect(**dsn) as conn:
+                    conn.autocommit = True
+                    with conn.cursor() as cur:
+                        cur.execute("CHECKPOINT")
+                checkpoint_elapsed_ns = time.perf_counter_ns() - checkpoint_start_ns
+
             stats_after = capture_postgres_stats(dsn)
         finally:
             launcher.stop()
@@ -97,13 +110,20 @@ def main() -> None:
     elapsed_s = elapsed_ns / 1_000_000_000
     files_per_s = file_count / elapsed_s if elapsed_s > 0 else 0.0
     mebibytes_per_s = total_bytes / 1024 / 1024 / elapsed_s if elapsed_s > 0 else 0.0
+    checkpoint_elapsed_s = (
+        checkpoint_elapsed_ns / 1_000_000_000 if checkpoint_elapsed_ns is not None else None
+    )
 
     print(
         "OK postgres/wal-pressure "
+        f"backend={benchmark_label} "
         f"files={file_count} block_size={block_size_text} sync={int(sync_mode)} "
+        f"checkpoint={int(force_checkpoint)} "
         f"elapsed_s={elapsed_s:.3f} files_per_s={files_per_s:.2f} "
         f"mib_per_s={mebibytes_per_s:.2f} total_bytes={total_bytes}"
     )
+    if checkpoint_elapsed_s is not None:
+        print(f"CHECKPOINT elapsed_s={checkpoint_elapsed_s:.3f}")
     print(
         "pg_stat_wal delta "
         + " ".join(

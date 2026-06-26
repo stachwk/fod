@@ -23,6 +23,7 @@ from tests.integration.fod_postgres_benchmark import resolve_postgres_dsn
 def main() -> None:
     connection_count = int(os.environ.get("PG_CONNECTION_CHURN_COUNT", "100"))
     statement = os.environ.get("PG_CONNECTION_CHURN_SQL", "SELECT 1")
+    benchmark_label = os.environ.get("POSTGRES_BENCHMARK_LABEL", "default")
     dsn = resolve_postgres_dsn(ROOT)
 
     connect_times_ns: list[int] = []
@@ -50,6 +51,7 @@ def main() -> None:
 
     print(
         "OK postgres/connection-churn "
+        f"backend={benchmark_label} "
         f"count={connection_count} elapsed_s={elapsed_ns / 1_000_000_000:.3f} "
         f"connect_avg_ms={connect_avg_ms:.3f} connect_p95_ms={connect_p95_ms:.3f} "
         f"query_avg_ms={query_avg_ms:.3f} query_p95_ms={query_p95_ms:.3f}"
