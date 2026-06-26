@@ -251,6 +251,7 @@ help:
 		'  make test-fod-indexer-materialize - alias for make test-fod-indexer-smoke' \
 		'  make test-fod-indexer-materialize-rollback - smoke automatic rollback for failed materialize' \
 		'  make test-fod-indexer-usability - smoke help, browse, progress, dry-run, and clean UX' \
+		'  make test-fod-indexer-json-output - smoke JSON output and snapshot exports for fod-indexer' \
 		'  make test-fod-indexer-plan-import-scope - smoke the fod-indexer plan-import source scoping' \
 		'  make test-fod-indexer-cleanup-failed - smoke cleanup for failed fod-indexer materialization' \
 		'  make smoke      - quick database connectivity test' \
@@ -603,6 +604,11 @@ test-fod-indexer-usability: venv init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_usability.py
 
 .PHONY: test-fod-indexer-usability
+
+test-fod-indexer-json-output: venv init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_json_output.py
+
+.PHONY: test-fod-indexer-json-output
 
 test-fod-indexer-plan-import-scope: venv init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_plan_import_scope.py
