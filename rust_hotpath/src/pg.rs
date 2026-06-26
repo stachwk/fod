@@ -6682,7 +6682,7 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 let src_info = fetch_file_info(conn, &src_file_id)?;
                 let (src_size, src_data_object_id) = match src_info {
                     Some(value) => value,
@@ -6697,6 +6697,9 @@ impl DbRepo {
                     Some(value) => value,
                     None => return Ok(false),
                 };
+                if dst_size == src_size && src_data_object_id == dst_data_object_id {
+                    return Ok(true);
+                }
                 if dst_size != 0 || src_data_object_id == dst_data_object_id {
                     return Ok(false);
                 }

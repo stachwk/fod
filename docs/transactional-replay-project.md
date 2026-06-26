@@ -79,19 +79,20 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 | `persist_copy_block_crc_rows()` | delete + upsert | CRC rows are rewritten deterministically for the file/block set. |
 | `set_file_size()` | single-row update | The write is keyed by `id_file` and only sets the current size. |
 | `purge_primary_file()` | delete + row reassignment | A committed purge is observable because the file row disappears after reconnect. |
+| `adopt_source_data_object()` | source/destination row confirmation | A committed adoption is observable because the destination file already points at the source data object with the expected size. |
 
 ### Replayable Only With Extra Confirmation
 
 These wrappers mostly do the right thing, but the transaction as a whole still needs an idempotency key,
 request token, or commit-outcome proof before automatic replay can be trusted:
 
-The create-entry family now also uses `transactional_replayable()`, so a lost `COMMIT`
-is retried once before the existing natural-key probe confirms the already-committed row.
+The create-entry family and `adopt_source_data_object()` now also use `transactional_replayable()`, so a lost `COMMIT`
+is retried once before the existing natural-key or source/destination row probe confirms the already-committed state.
+
 
 | Function | Why it still needs more design |
 | --- | --- |
 | `create_data_object()` | It bumps `reference_count`, so repeating it after a reconnect can change counts. |
-| `adopt_source_data_object()` | It rewires the destination file and adjusts shared-object counts. |
 | `persist_file_blocks_with_crc_flag()` | The direct branch is close, but the detach step and the COPY staging branch still need stronger replay identity. |
 | `persist_file_extents_with_crc_flag()` | COPY-based extent materialization needs a different replay contract before blind retry is safe. |
 | `create_hardlink()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |
