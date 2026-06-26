@@ -24,6 +24,7 @@ Use this file to record concise conclusions that matter for future work.
 - The same commit also produced two short throughput references: `make test-throughput` reported `1048576 bytes in 0.185s (5.41 MiB/s)`, and `make test-throughput-sync` reported `1048576 bytes in 0.099s (10.08 MiB/s)`. These are good host-local comparison points, but they are still only single-block smokes.
 - The wrapper inventory follow-up now has a first real code pass: `set_file_size()`, `persist_lock_range_state_blob()`, and `replace_lock_range_state_blob_for_owner()` all use `transactional_replayable()`, and the replay smoke suite now covers commit-disconnect replay for all three.
 - `purge_primary_file()` is now commit-replayable too. The successful outcome is observable by the missing file row after reconnect, so a lost COMMIT can be replayed once without widening the retry envelope to the reference-counted object creation paths.
+- The create-entry family now also uses `transactional_replayable()`, so `create_hardlink()`, `create_symlink()`, `create_directory()`, `create_file()`, and `create_special_file()` can survive a lost COMMIT and then confirm the already-committed natural-key row instead of failing closed on the duplicate insert.
 
 ## 2026-06-24
 

@@ -85,6 +85,9 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 These wrappers mostly do the right thing, but the transaction as a whole still needs an idempotency key,
 request token, or commit-outcome proof before automatic replay can be trusted:
 
+The create-entry family now also uses `transactional_replayable()`, so a lost `COMMIT`
+is retried once before the existing natural-key probe confirms the already-committed row.
+
 | Function | Why it still needs more design |
 | --- | --- |
 | `create_data_object()` | It bumps `reference_count`, so repeating it after a reconnect can change counts. |

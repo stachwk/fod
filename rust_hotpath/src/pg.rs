@@ -5638,7 +5638,7 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         let result = self.with_cached_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -5742,7 +5742,7 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         let result = self.with_cached_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -5847,7 +5847,7 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         let result = self.with_cached_connection(|conn| unsafe {
-            let result = transactional(conn, |conn| {
+            let result = transactional_replayable(conn, |conn| {
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -5958,7 +5958,7 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         let result = self.with_cached_connection(|conn| unsafe {
-            let result = transactional(conn, |conn| {
+            let result = transactional_replayable(conn, |conn| {
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
                 let data_object_id = fetch_single_text(data_object_res)?
                     .trim()
@@ -6110,7 +6110,7 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         let result = self.with_cached_connection(|conn| unsafe {
-            let result = transactional(conn, |conn| {
+            let result = transactional_replayable(conn, |conn| {
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
                 let data_object_id = fetch_single_text(data_object_res)?
                     .trim()
