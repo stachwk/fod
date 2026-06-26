@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
 pub struct IndexSource {
     pub id_source: u64,
     pub name: String,
@@ -8,13 +10,13 @@ pub struct IndexSource {
     pub root_path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SourceBrowseEntry {
     pub path: PathBuf,
     pub added_sources: Vec<IndexSource>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IndexedFile {
     pub id_file: u64,
     pub source_id: u64,
@@ -31,7 +33,7 @@ pub struct IndexedFile {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileHash {
     pub id_file: u64,
     pub hash_algorithm: String,
@@ -44,7 +46,7 @@ pub struct FileHash {
     pub observed_device: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DuplicateSet {
     pub id_duplicate_set: u64,
     pub hash_algorithm: String,
@@ -54,7 +56,7 @@ pub struct DuplicateSet {
     pub total_bytes: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ScanSummary {
     pub source_name: String,
     pub source_path: String,
@@ -84,9 +86,10 @@ impl ScanSummary {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct HashSummary {
     pub source_name: String,
+    pub source_path: String,
     pub scanned_files: u64,
     pub candidate_files: u64,
     pub partial_hashed_files: u64,
@@ -110,8 +113,9 @@ impl HashSummary {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ImportPlanSummary {
+    pub plan_id: Option<u64>,
     pub source_filter: Option<String>,
     pub scanned_files: u64,
     pub candidate_duplicate_groups: u64,
@@ -128,8 +132,13 @@ impl ImportPlanSummary {
             Some(source) => format!("source: {}\n", source),
             None => "source: all sources\n".to_string(),
         };
+        let plan_line = self
+            .plan_id
+            .map(|plan_id| format!("plan id: {}\n", plan_id))
+            .unwrap_or_default();
         format!(
-            "FOD indexer dry-run import plan\n{}scanned files: {}\ncandidate duplicate groups: {}\nconfirmed duplicate groups: {}\nunique payloads: {}\nsource bytes: {}\nestimated import bytes: {}\nestimated saved bytes: {}",
+            "FOD indexer dry-run import plan\n{}{}scanned files: {}\ncandidate duplicate groups: {}\nconfirmed duplicate groups: {}\nunique payloads: {}\nsource bytes: {}\nestimated import bytes: {}\nestimated saved bytes: {}",
+            plan_line,
             source_line,
             self.scanned_files,
             self.candidate_duplicate_groups,
@@ -142,7 +151,7 @@ impl ImportPlanSummary {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct CleanupFailedSummary {
     pub plan_id: u64,
     pub source_name: String,
@@ -172,7 +181,7 @@ impl CleanupFailedSummary {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct CleanSourceSummary {
     pub source_name: String,
     pub source_path: String,
@@ -210,11 +219,12 @@ impl CleanSourceSummary {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MaterializeSummary {
     pub source_name: String,
     pub import_root: String,
     pub dry_run: bool,
+    pub plan_id: Option<u64>,
     pub scanned_files: u64,
     pub validated_files: u64,
     pub duplicate_groups: u64,
@@ -229,6 +239,7 @@ pub struct MaterializeSummary {
 impl MaterializeSummary {
     pub fn as_import_plan_summary(&self) -> ImportPlanSummary {
         ImportPlanSummary {
+            plan_id: self.plan_id,
             source_filter: None,
             scanned_files: self.validated_files,
             candidate_duplicate_groups: self.duplicate_groups,
@@ -246,9 +257,14 @@ impl MaterializeSummary {
         } else {
             "materialize"
         };
+        let plan_line = self
+            .plan_id
+            .map(|plan_id| format!("plan id: {}\n", plan_id))
+            .unwrap_or_default();
         format!(
-            "FOD indexer materialize\nmode: {}\nsource: {}\nimport root: {}\nscanned files: {}\nvalidated files: {}\nduplicate groups: {}\ncanonical files: {}\nreference files: {}\ncreated directories: {}\nsource bytes: {}\nimported bytes: {}\nsaved bytes: {}",
+            "FOD indexer materialize\nmode: {}\n{}source: {}\nimport root: {}\nscanned files: {}\nvalidated files: {}\nduplicate groups: {}\ncanonical files: {}\nreference files: {}\ncreated directories: {}\nsource bytes: {}\nimported bytes: {}\nsaved bytes: {}",
             mode,
+            plan_line,
             self.source_name,
             self.import_root,
             self.scanned_files,

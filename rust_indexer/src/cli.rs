@@ -9,11 +9,13 @@ use std::ffi::OsString;
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
     long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42"
+    after_long_help = "Examples:\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
 )]
 pub struct Cli {
     #[arg(long)]
     pub conninfo: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text, help = "Select text or machine-readable JSON output.")]
+    pub output: OutputFormat,
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -59,6 +61,14 @@ pub enum Commands {
     Report {
         #[command(subcommand)]
         command: ReportCommands,
+    },
+    #[command(
+        about = "Inspect stored import plans.",
+        long_about = "Inspect a stored import plan without rerunning the pipeline.\n\nUse plan show --id <id> to export the recorded plan snapshot, including the summary counts and plan entries. This stays on the read side of the contract and does not rebuild the plan."
+    )]
+    Plan {
+        #[command(subcommand)]
+        command: PlanCommands,
     },
     #[command(
         about = "Create a dry-run import plan.",
@@ -163,12 +173,38 @@ pub enum SourceCommands {
 pub enum ReportCommands {
     #[command(
         about = "Show duplicate files.",
-        long_about = "Print the duplicate groups currently known to the indexer."
+        long_about = "Print the duplicate groups currently known to the indexer.\n\nUse --id <id> to export an already stored duplicate-set snapshot without rebuilding the live duplicate tables."
     )]
     Duplicates {
         #[arg(long, default_value_t = 100)]
         limit: usize,
+        #[arg(long)]
+        id: Option<u64>,
     },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum PlanCommands {
+    #[command(
+        about = "Show a stored import plan.",
+        long_about = "Export a stored import plan by id.\n\nThis command reads the plan snapshot that was already written earlier and does not rerun scan, hash, or import planning."
+    )]
+    Show {
+        #[arg(long)]
+        id: u64,
+    },
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
+pub enum OutputFormat {
+    Text,
+    Json,
+}
+
+impl OutputFormat {
+    pub fn is_json(self) -> bool {
+        matches!(self, OutputFormat::Json)
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -237,6 +273,9 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
         let token = args[idx].to_string_lossy();
         match token.as_ref() {
             "--conninfo" => {
+                idx = idx.saturating_add(2);
+            }
+            "--output" => {
                 idx = idx.saturating_add(2);
             }
             "-h" | "--help" | "-V" | "--version" => {

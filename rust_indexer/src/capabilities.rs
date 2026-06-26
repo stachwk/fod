@@ -1,6 +1,9 @@
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SourcePolicy {
     PathBacked,
     Mirrored,
@@ -17,7 +20,7 @@ impl fmt::Display for SourcePolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 pub struct SourceCapabilities {
     pub path_backed: bool,
     pub readonly: bool,

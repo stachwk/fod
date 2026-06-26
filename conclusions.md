@@ -226,3 +226,9 @@ FOD checklist for the common FUSE/FS bottlenecks:
 - The smoke test needed an explicit cleanup of stale `index-source-*` materialization roots before each run, because reruns can otherwise collide with an existing imported directory tree and fail on `uniq_files_parent_name`. The DB assertions also need `search_path TO fod, public` before querying `index_*` tables.
 - `fod-indexer plan-import` now requires an explicit scope. `--source <name>` limits the dry-run plan to one registered source, while `--all-sources` keeps the global view. The dry-run summary now prints the chosen scope, and the new scope test pins both the single-source and all-sources paths.
 - `ReadBlockCache` now exposes an explicit FIFO/LRU eviction choice through `FOD_READ_CACHE_EVICTION_POLICY`. Re-running the fio comparisons with six runs per policy/workload changed the picture on this host: sequential reads favored LRU on the repeat series, mixed workloads still favored FIFO, and random mixed was effectively a tie. The earlier one-run FIFO-wide win was not stable.
+
+## 2026-06-26
+
+- `fod-indexer` now has a top-level `--output json` mode for `source list`, `scan`, `hash`, `report duplicates`, `plan-import`, `clean`, `materialize`, and `cleanup-failed`, plus read-only snapshot exports for `plan show --id <id>` and `report duplicates --id <id>`. The JSON mode keeps the same underlying contract as the text mode, but exposes structured source views, stored plan snapshots, and duplicate-set snapshots for `msfind`.
+- The retry boundary is now documented explicitly in `docs/fod-indexer.md`: `scan`, `hash`, `plan-import`, and `cleanup-failed` stay inside the bounded idempotent envelope, while full transactional replay remains a separate project. `materialize` still uses best-effort rollback plus `cleanup-failed` as fallback.
+- `cargo check -p fod-rust-indexer` passed after the output/snapshot refactor.

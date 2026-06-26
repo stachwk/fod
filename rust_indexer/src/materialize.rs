@@ -461,6 +461,7 @@ pub fn materialize_source(
         source_name: source.name.clone(),
         import_root: format!("/{}", root_name),
         dry_run: false,
+        plan_id: Some(plan_id),
         scanned_files,
         validated_files: scanned_files,
         source_bytes,

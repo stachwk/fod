@@ -7,6 +7,7 @@ mod db;
 mod hash;
 mod materialize;
 mod model;
+mod output;
 mod plan;
 mod progress;
 mod replay;
@@ -15,7 +16,8 @@ mod source;
 mod source_registry;
 
 use crate::model::IndexSource;
-use cli::{Cli, Commands, ReportCommands, SourceCommands, SourceKind};
+use cli::{Cli, Commands, PlanCommands, ReportCommands, SourceCommands, SourceKind};
+use output::{print_json, SourceListOutput, SourceMutationOutput};
 use std::path::Path;
 
 fn main() {
@@ -27,6 +29,7 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let cli = Cli::parse_with_source_aliases();
+    let output = cli.output;
     config::initialize_indexer_settings()?;
     let repo = db::open_repo(cli.conninfo.as_deref())?;
 
@@ -34,70 +37,54 @@ fn run() -> Result<(), String> {
         Commands::Source { command } => match command {
             SourceCommands::Add { name, path, kind } => {
                 let source = source_registry::register_source(&repo, name.as_deref(), &path, kind)?;
-                println!(
-                    "Registered source {} as {} at {} (id={})",
-                    source.name,
-                    source.kind,
-                    source.root_path.display(),
-                    source.id_source
-                );
-                println!("policy: {}", kind.capabilities().policy());
-                println!("capabilities: {}", kind.capabilities());
+                if output.is_json() {
+                    print_json(&SourceMutationOutput {
+                        source: (&source).into(),
+                    })?;
+                } else {
+                    println!(
+                        "Registered source {} as {} at {} (id={})",
+                        source.name,
+                        source.kind,
+                        source.root_path.display(),
+                        source.id_source
+                    );
+                    println!("policy: {}", kind.capabilities().policy());
+                    println!("capabilities: {}", kind.capabilities());
+                }
                 Ok(())
             }
             SourceCommands::List { kind, path } => match path {
                 Some(path) => {
                     let (root_path, entries) =
                         source_registry::list_source_directories(&repo, &path)?;
-                    println!("FOD indexer source list");
-                    println!("mode: browse");
-                    println!("root: {}", root_path.display());
-                    println!(
-                        "kind hint: {}",
-                        kind.as_ref().map(|kind| kind.as_str()).unwrap_or("none")
-                    );
-                    if let Some(kind) = kind.as_ref() {
-                        println!("policy: {}", kind.capabilities().policy());
-                        println!("capabilities: {}", kind.capabilities());
-                    }
-                    println!("directories: {}", entries.len());
-                    for entry in entries {
-                        if entry.added_sources.is_empty() {
-                            println!("- available path={}", entry.path.display());
-                            println!(
-                                "  {}",
-                                render_source_add_command(kind.as_ref(), &entry.path)
-                            );
-                        } else {
-                            println!(
-                                "- added path={} sources={}",
-                                entry.path.display(),
-                                format_registered_sources(&entry.added_sources)
-                            );
-                        }
-                    }
-                    Ok(())
-                }
-                None => {
-                    if matches!(kind, Some(SourceKind::Adb)) {
-                        let adb_root = crate::source::adb_browse_root()?;
-                        let (root_path, entries) =
-                            source_registry::list_source_directories(&repo, &adb_root.local_root)?;
+                    if output.is_json() {
+                        print_json(&SourceListOutput::browse(
+                            kind.as_ref().map(|kind| kind.as_str().to_string()),
+                            root_path.display().to_string(),
+                            entries,
+                            kind.as_ref().map(|kind| kind.capabilities().policy()),
+                            kind.as_ref().map(|kind| kind.capabilities()),
+                        ))?;
+                    } else {
                         println!("FOD indexer source list");
-                        println!("mode: adb-shell");
-                        println!("device: {}", adb_root.serial);
-                        println!("adb root: {}", adb_root.remote_root);
+                        println!("mode: browse");
                         println!("root: {}", root_path.display());
-                        println!("kind hint: adb");
-                        println!("policy: {}", SourceKind::Adb.capabilities().policy());
-                        println!("capabilities: {}", SourceKind::Adb.capabilities());
+                        println!(
+                            "kind hint: {}",
+                            kind.as_ref().map(|kind| kind.as_str()).unwrap_or("none")
+                        );
+                        if let Some(kind) = kind.as_ref() {
+                            println!("policy: {}", kind.capabilities().policy());
+                            println!("capabilities: {}", kind.capabilities());
+                        }
                         println!("directories: {}", entries.len());
                         for entry in entries {
                             if entry.added_sources.is_empty() {
                                 println!("- available path={}", entry.path.display());
                                 println!(
                                     "  {}",
-                                    render_source_add_command(Some(&SourceKind::Adb), &entry.path)
+                                    render_source_add_command(kind.as_ref(), &entry.path)
                                 );
                             } else {
                                 println!(
@@ -107,23 +94,74 @@ fn run() -> Result<(), String> {
                                 );
                             }
                         }
+                    }
+                    Ok(())
+                }
+                None => {
+                    if matches!(kind, Some(SourceKind::Adb)) {
+                        let adb_root = crate::source::adb_browse_root()?;
+                        let (root_path, entries) =
+                            source_registry::list_source_directories(&repo, &adb_root.local_root)?;
+                        if output.is_json() {
+                            print_json(&SourceListOutput::adb(
+                                adb_root.serial,
+                                adb_root.remote_root,
+                                root_path.display().to_string(),
+                                entries,
+                            ))?;
+                        } else {
+                            println!("FOD indexer source list");
+                            println!("mode: adb-shell");
+                            println!("device: {}", adb_root.serial);
+                            println!("adb root: {}", adb_root.remote_root);
+                            println!("root: {}", root_path.display());
+                            println!("kind hint: adb");
+                            println!("policy: {}", SourceKind::Adb.capabilities().policy());
+                            println!("capabilities: {}", SourceKind::Adb.capabilities());
+                            println!("directories: {}", entries.len());
+                            for entry in entries {
+                                if entry.added_sources.is_empty() {
+                                    println!("- available path={}", entry.path.display());
+                                    println!(
+                                        "  {}",
+                                        render_source_add_command(
+                                            Some(&SourceKind::Adb),
+                                            &entry.path
+                                        )
+                                    );
+                                } else {
+                                    println!(
+                                        "- added path={} sources={}",
+                                        entry.path.display(),
+                                        format_registered_sources(&entry.added_sources)
+                                    );
+                                }
+                            }
+                        }
                         Ok(())
                     } else {
                         let kind_filter = kind.as_ref().map(|kind| kind.as_str());
                         let sources = source_registry::list_sources(&repo, kind_filter)?;
-                        println!("FOD indexer source list");
-                        println!("kind filter: {}", kind_filter.unwrap_or("all"));
-                        println!("registered sources: {}", sources.len());
-                        for source in sources {
-                            println!(
-                                "- id={} name={} kind={} policy={} capabilities={} path={}",
-                                source.id_source,
-                                source.name,
-                                source.kind,
-                                source_kind_policy(&source.kind),
-                                source_kind_capabilities(&source.kind),
-                                source.root_path.display()
-                            );
+                        if output.is_json() {
+                            print_json(&SourceListOutput::registered(
+                                kind_filter.map(|value| value.to_string()),
+                                sources,
+                            ))?;
+                        } else {
+                            println!("FOD indexer source list");
+                            println!("kind filter: {}", kind_filter.unwrap_or("all"));
+                            println!("registered sources: {}", sources.len());
+                            for source in sources {
+                                println!(
+                                    "- id={} name={} kind={} policy={} capabilities={} path={}",
+                                    source.id_source,
+                                    source.name,
+                                    source.kind,
+                                    source_kind_policy(&source.kind),
+                                    source_kind_capabilities(&source.kind),
+                                    source.root_path.display()
+                                );
+                            }
                         }
                         Ok(())
                     }
@@ -131,19 +169,29 @@ fn run() -> Result<(), String> {
             },
             SourceCommands::Remove { name } => {
                 let source = source_registry::remove_source(&repo, &name)?;
-                println!(
-                    "Removed source {} as {} at {} (id={})",
-                    source.name,
-                    source.kind,
-                    source.root_path.display(),
-                    source.id_source
-                );
+                if output.is_json() {
+                    print_json(&SourceMutationOutput {
+                        source: (&source).into(),
+                    })?;
+                } else {
+                    println!(
+                        "Removed source {} as {} at {} (id={})",
+                        source.name,
+                        source.kind,
+                        source.root_path.display(),
+                        source.id_source
+                    );
+                }
                 Ok(())
             }
         },
         Commands::Scan { source } => {
             let summary = scan::scan_source(&repo, &source)?;
-            println!("{}", summary.human_readable());
+            if output.is_json() {
+                print_json(&summary)?;
+            } else {
+                println!("{}", summary.human_readable());
+            }
             Ok(())
         }
         Commands::Hash {
@@ -151,12 +199,40 @@ fn run() -> Result<(), String> {
             candidates_only,
         } => {
             let summary = hash::hash_source(&repo, &source, candidates_only)?;
-            println!("{}", summary.human_readable());
+            if output.is_json() {
+                print_json(&summary)?;
+            } else {
+                println!("{}", summary.human_readable());
+            }
             Ok(())
         }
         Commands::Report { command } => match command {
-            ReportCommands::Duplicates { limit } => {
-                plan::report_duplicate_sets(&repo, limit)?;
+            ReportCommands::Duplicates { limit, id } => {
+                if let Some(id) = id {
+                    let snapshot = plan::load_duplicate_set_snapshot(&repo, id)?;
+                    if output.is_json() {
+                        print_json(&snapshot)?;
+                    } else {
+                        println!("FOD indexer duplicate report");
+                        println!("{}", snapshot.human_readable());
+                    }
+                } else if output.is_json() {
+                    let snapshot = plan::load_duplicate_report_snapshot(&repo, limit)?;
+                    print_json(&snapshot)?;
+                } else {
+                    plan::report_duplicate_sets(&repo, limit)?;
+                }
+                Ok(())
+            }
+        },
+        Commands::Plan { command } => match command {
+            PlanCommands::Show { id } => {
+                let snapshot = plan::load_import_plan_snapshot(&repo, id)?;
+                if output.is_json() {
+                    print_json(&snapshot)?;
+                } else {
+                    println!("{}", snapshot.human_readable());
+                }
                 Ok(())
             }
         },
@@ -181,22 +257,38 @@ fn run() -> Result<(), String> {
                 }
             };
             let summary = plan::dry_run_import_plan(&repo, source_filter)?;
-            println!("{}", summary.human_readable());
+            if output.is_json() {
+                print_json(&summary)?;
+            } else {
+                println!("{}", summary.human_readable());
+            }
             Ok(())
         }
         Commands::CleanupFailed { plan } => {
             let summary = cleanup::cleanup_failed_materialization(&repo, plan)?;
-            println!("{}", summary.human_readable());
+            if output.is_json() {
+                print_json(&summary)?;
+            } else {
+                println!("{}", summary.human_readable());
+            }
             Ok(())
         }
         Commands::Clean { source, dry_run } => {
             let summary = clean::clean_source(&repo, &source, dry_run)?;
-            println!("{}", summary.human_readable());
+            if output.is_json() {
+                print_json(&summary)?;
+            } else {
+                println!("{}", summary.human_readable());
+            }
             Ok(())
         }
         Commands::Materialize { source, dry_run } => {
             let summary = materialize::materialize_source(&repo, &source, dry_run)?;
-            println!("{}", summary.human_readable());
+            if output.is_json() {
+                print_json(&summary)?;
+            } else {
+                println!("{}", summary.human_readable());
+            }
             Ok(())
         }
     }

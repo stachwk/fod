@@ -1,6 +1,10 @@
 use crate::db::{ensure_indexer_request_token_schema, sql_nullable_u64, sql_quote_literal};
 use crate::hash;
 use crate::model::{DuplicateSet, ImportPlanSummary, IndexedFile};
+use crate::output::{
+    DuplicateReportSnapshot, DuplicateSetMemberView, DuplicateSetSnapshot, ImportPlanEntryView,
+    ImportPlanSnapshot,
+};
 use crate::replay;
 use crate::source;
 use fod_rust_hotpath::pg::DbRepo;
@@ -263,8 +267,49 @@ pub(crate) fn insert_import_plan_entry(
 }
 
 pub fn report_duplicate_sets(repo: &DbRepo, limit: usize) -> Result<(), String> {
-    hash::rebuild_duplicate_sets(repo)?;
-    let rows = repo.query_rows_text(
+    let snapshot = load_duplicate_report_snapshot(repo, limit)?;
+    println!("{}", snapshot.human_readable());
+    Ok(())
+}
+
+fn parse_bool(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "t" | "true" | "1" | "on"
+    )
+}
+
+fn duplicate_set_member_from_row(row: &[String]) -> Result<DuplicateSetMemberView, String> {
+    if row.len() < 15 {
+        return Err("duplicate set member row is too short".to_string());
+    }
+    let file = IndexedFile::from_row(&row[0..12])?;
+    let source_name = file.source_name.clone();
+    let source_path = file.source_path();
+    let source_kind = row[12].clone();
+    let hash_algorithm = row[13].clone();
+    let full_hash_hex = row[14].clone();
+    Ok(DuplicateSetMemberView {
+        file_id: file.id_file,
+        source_id: file.source_id,
+        source_name,
+        source_kind,
+        source_root_path: file.root_path.display().to_string(),
+        logical_path: file.path.clone(),
+        source_path,
+        size: file.size,
+        hash_algorithm,
+        full_hash_hex,
+        hash_status: "full".to_string(),
+        is_canonical: false,
+    })
+}
+
+pub(crate) fn load_duplicate_set_snapshot(
+    repo: &DbRepo,
+    duplicate_set_id: u64,
+) -> Result<DuplicateSetSnapshot, String> {
+    let rows = repo.query_rows_text(&format!(
         "
         SELECT
             ds.id_duplicate_set,
@@ -277,7 +322,17 @@ pub fn report_duplicate_sets(repo: &DbRepo, limit: usize) -> Result<(), String> 
             f.id_index_source,
             s.name,
             s.root_path,
-            f.path
+            f.path,
+            f.size,
+            COALESCE(f.mtime_ns::text, ''),
+            COALESCE(f.inode::text, ''),
+            COALESCE(f.device::text, ''),
+            f.file_kind,
+            f.scan_status,
+            f.source_changed::text,
+            s.kind,
+            h.hash_algorithm,
+            COALESCE(encode(h.full_hash, 'hex'), '')
         FROM index_duplicate_sets ds
         JOIN index_file_hashes h
             ON h.hash_algorithm = ds.hash_algorithm
@@ -285,82 +340,299 @@ pub fn report_duplicate_sets(repo: &DbRepo, limit: usize) -> Result<(), String> 
            AND h.observed_size = ds.file_size
         JOIN index_files f ON f.id_file = h.id_file
         JOIN index_sources s ON s.id_index_source = f.id_index_source
-        ORDER BY ds.id_duplicate_set, f.id_index_source, length(f.path), f.path
+        WHERE ds.id_duplicate_set = {duplicate_set_id}
+        ORDER BY f.id_index_source, length(f.path), f.path
         ",
-    )?;
+    ))?;
 
-    let mut sets: BTreeMap<u64, (DuplicateSet, Vec<PlannableFile>)> = BTreeMap::new();
+    let mut duplicate_set: Option<DuplicateSet> = None;
+    let mut members = Vec::new();
     for row in rows {
-        if row.len() < 11 {
+        if row.len() < 21 {
             continue;
         }
         if source::is_ignored_index_path(Path::new(&row[9]), &row[10]) {
             continue;
         }
-        let set_id = row[0]
+        let current_set = DuplicateSet::from_row(&row[0..6])?;
+        if current_set.file_size == 0 {
+            return Err(format!(
+                "duplicate set {duplicate_set_id} has zero size and is skipped by the report output"
+            ));
+        }
+        duplicate_set.get_or_insert(current_set);
+        let mut member = duplicate_set_member_from_row(&row[6..21])?;
+        member.is_canonical = members.is_empty();
+        members.push(member);
+    }
+
+    let duplicate_set =
+        duplicate_set.ok_or_else(|| format!("unknown duplicate set: {duplicate_set_id}"))?;
+    members.sort_by(|left, right| {
+        let left_file = IndexedFile {
+            id_file: left.file_id,
+            source_id: left.source_id,
+            source_name: left.source_name.clone(),
+            root_path: std::path::PathBuf::from(&left.source_root_path),
+            path: left.logical_path.clone(),
+            size: left.size,
+            mtime_ns: None,
+            inode: None,
+            device: None,
+            file_kind: "regular".to_string(),
+            scan_status: "ok".to_string(),
+            source_changed: false,
+        };
+        let right_file = IndexedFile {
+            id_file: right.file_id,
+            source_id: right.source_id,
+            source_name: right.source_name.clone(),
+            root_path: std::path::PathBuf::from(&right.source_root_path),
+            path: right.logical_path.clone(),
+            size: right.size,
+            mtime_ns: None,
+            inode: None,
+            device: None,
+            file_kind: "regular".to_string(),
+            scan_status: "ok".to_string(),
+            source_changed: false,
+        };
+        canonical_sort_key(&left_file).cmp(&canonical_sort_key(&right_file))
+    });
+    for (idx, member) in members.iter_mut().enumerate() {
+        member.is_canonical = idx == 0;
+    }
+    if members.is_empty() {
+        return Err(format!(
+            "duplicate set {duplicate_set_id} has no visible members after applying the current filters"
+        ));
+    }
+    Ok(DuplicateSetSnapshot {
+        duplicate_set,
+        members,
+    })
+}
+
+pub(crate) fn load_duplicate_report_snapshot(
+    repo: &DbRepo,
+    limit: usize,
+) -> Result<DuplicateReportSnapshot, String> {
+    hash::rebuild_duplicate_sets(repo)?;
+    let rows = repo.query_rows_text(
+        "
+        SELECT
+            id_duplicate_set,
+            file_size
+        FROM index_duplicate_sets
+        ORDER BY id_duplicate_set
+        ",
+    )?;
+
+    let mut duplicate_sets = Vec::new();
+    for row in rows {
+        if row.len() < 2 {
+            continue;
+        }
+        let file_size = row[1]
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid duplicate set file size: {err}"))?;
+        if file_size == 0 {
+            continue;
+        }
+        let set_id = row
+            .first()
+            .ok_or_else(|| "duplicate set row is malformed".to_string())?
             .trim()
             .parse::<u64>()
             .map_err(|err| format!("invalid duplicate set id: {err}"))?;
-        let duplicate_set = DuplicateSet::from_row(&row[0..6])?;
-        if duplicate_set.file_size == 0 {
-            continue;
-        }
-        let file = IndexedFile::from_row(&[
-            row[6].clone(),
-            row[7].clone(),
-            row[8].clone(),
-            row[9].clone(),
-            row[10].clone(),
-            duplicate_set.file_size.to_string(),
-            String::new(),
-            String::new(),
-            String::new(),
-            "regular".to_string(),
-            "ok".to_string(),
-            "false".to_string(),
-        ])?;
-        let plannable = PlannableFile {
-            file,
-            hash_algorithm: Some(duplicate_set.hash_algorithm.clone()),
-            full_hash_hex: Some(duplicate_set.full_hash_hex.clone()),
-            hash_status: Some("full".to_string()),
+        let snapshot = match load_duplicate_set_snapshot(repo, set_id) {
+            Ok(snapshot) => snapshot,
+            Err(err) if err.contains("no visible members") => continue,
+            Err(err) => return Err(err),
         };
-        sets.entry(set_id)
-            .and_modify(|(_, members)| members.push(plannable.clone()))
-            .or_insert_with(|| (duplicate_set, vec![plannable]));
+        duplicate_sets.push(snapshot);
     }
 
-    println!("FOD indexer duplicate report");
-    println!("confirmed duplicate sets: {}", sets.len());
-    for (idx, (_set_id, (duplicate_set, mut members))) in sets.into_iter().enumerate() {
-        if idx >= limit {
-            println!("... truncated after {limit} sets");
-            break;
-        }
-        members.sort_by(|left, right| {
-            canonical_sort_key(&left.file).cmp(&canonical_sort_key(&right.file))
-        });
-        let canonical = members.first().expect("duplicate set must have members");
-        println!(
-            "set {}: size={} files={} hash={} total_bytes={}",
-            duplicate_set.id_duplicate_set,
-            duplicate_set.file_size,
-            duplicate_set.file_count,
-            duplicate_set.full_hash_hex,
-            duplicate_set.total_bytes
-        );
-        println!(
-            "  canonical: {}:{}",
-            canonical.file.source_name, canonical.file.path
-        );
-        for member in members.iter().skip(1) {
-            println!(
-                "  reference: {}:{}",
-                member.file.source_name, member.file.path
-            );
-        }
+    let confirmed_duplicate_sets = duplicate_sets.len() as u64;
+    let truncated = duplicate_sets.len() > limit;
+    let duplicate_sets = duplicate_sets.into_iter().take(limit).collect::<Vec<_>>();
+    Ok(DuplicateReportSnapshot {
+        limit: Some(limit),
+        confirmed_duplicate_sets,
+        truncated,
+        duplicate_sets,
+    })
+}
+
+pub(crate) fn load_import_plan_snapshot(
+    repo: &DbRepo,
+    plan_id: u64,
+) -> Result<ImportPlanSnapshot, String> {
+    let plan_rows = repo.query_rows_text(&format!(
+        "
+        SELECT
+            id_import_plan,
+            created_at::text,
+            updated_at::text,
+            status,
+            request_token,
+            dry_run::text,
+            COALESCE(source_filter, ''),
+            scanned_file_count,
+            candidate_group_count,
+            confirmed_group_count,
+            unique_payload_count,
+            total_source_bytes,
+            estimated_import_bytes,
+            saved_bytes
+        FROM index_import_plans
+        WHERE id_import_plan = {plan_id}
+        ",
+    ))?;
+    let plan_row = plan_rows
+        .first()
+        .ok_or_else(|| format!("unknown import plan: {plan_id}"))?;
+    if plan_row.len() < 14 {
+        return Err("import plan row is too short".to_string());
     }
-    Ok(())
+    let summary = ImportPlanSummary {
+        plan_id: Some(plan_id),
+        source_filter: if plan_row[6].trim().is_empty() {
+            None
+        } else {
+            Some(plan_row[6].clone())
+        },
+        scanned_files: plan_row[7]
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid scanned file count: {err}"))?,
+        candidate_duplicate_groups: plan_row[8]
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid candidate group count: {err}"))?,
+        confirmed_duplicate_groups: plan_row[9]
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid confirmed group count: {err}"))?,
+        unique_payload_count: plan_row[10]
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid unique payload count: {err}"))?,
+        total_source_bytes: plan_row[11]
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid total source bytes: {err}"))?,
+        estimated_import_bytes: plan_row[12]
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid estimated import bytes: {err}"))?,
+        saved_bytes: plan_row[13]
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid saved bytes: {err}"))?,
+    };
+
+    let entry_rows = repo.query_rows_text(&format!(
+        "
+        SELECT
+            e.id_import_plan_entry,
+            e.id_import_plan,
+            e.id_file,
+            f.id_index_source,
+            s.name,
+            s.kind,
+            s.root_path,
+            e.id_duplicate_set,
+            e.action,
+            e.canonical_file_id,
+            e.logical_path,
+            e.source_path,
+            e.size,
+            COALESCE(e.mtime_ns::text, ''),
+            e.source_changed::text
+        FROM index_import_plan_entries e
+        JOIN index_files f ON f.id_file = e.id_file
+        JOIN index_sources s ON s.id_index_source = f.id_index_source
+        WHERE e.id_import_plan = {plan_id}
+        ORDER BY e.id_import_plan_entry
+        ",
+    ))?;
+    let mut entries = Vec::new();
+    for row in entry_rows {
+        if row.len() < 15 {
+            continue;
+        }
+        entries.push(ImportPlanEntryView {
+            id_import_plan_entry: row[0]
+                .trim()
+                .parse::<u64>()
+                .map_err(|err| format!("invalid import plan entry id: {err}"))?,
+            id_import_plan: row[1]
+                .trim()
+                .parse::<u64>()
+                .map_err(|err| format!("invalid import plan id: {err}"))?,
+            id_file: row[2]
+                .trim()
+                .parse::<u64>()
+                .map_err(|err| format!("invalid file id: {err}"))?,
+            source_id: row[3]
+                .trim()
+                .parse::<u64>()
+                .map_err(|err| format!("invalid source id: {err}"))?,
+            source_name: row[4].clone(),
+            source_kind: row[5].clone(),
+            source_root_path: row[6].clone(),
+            id_duplicate_set: if row[7].trim().is_empty() {
+                None
+            } else {
+                Some(
+                    row[7]
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|err| format!("invalid duplicate set id: {err}"))?,
+                )
+            },
+            action: row[8].clone(),
+            canonical_file_id: if row[9].trim().is_empty() {
+                None
+            } else {
+                Some(
+                    row[9]
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|err| format!("invalid canonical file id: {err}"))?,
+                )
+            },
+            logical_path: row[10].clone(),
+            source_path: row[11].clone(),
+            size: row[12]
+                .trim()
+                .parse::<u64>()
+                .map_err(|err| format!("invalid plan entry size: {err}"))?,
+            mtime_ns: if row[13].trim().is_empty() {
+                None
+            } else {
+                Some(
+                    row[13]
+                        .trim()
+                        .parse::<i64>()
+                        .map_err(|err| format!("invalid plan entry mtime: {err}"))?,
+                )
+            },
+            source_changed: parse_bool(&row[14]),
+        });
+    }
+
+    Ok(ImportPlanSnapshot {
+        summary,
+        status: plan_row[3].clone(),
+        request_token: plan_row[4].clone(),
+        dry_run: parse_bool(&plan_row[5]),
+        created_at: plan_row[1].clone(),
+        updated_at: plan_row[2].clone(),
+        entries,
+    })
 }
 
 pub fn dry_run_import_plan(
@@ -388,6 +660,7 @@ pub fn dry_run_import_plan(
     let files = load_plannable_files(repo, source_filter)?;
     let plan_id = insert_import_plan(repo, "dry_run_running", true, source_filter)?;
     let mut summary = ImportPlanSummary {
+        plan_id: Some(plan_id),
         source_filter: source_filter.map(|value| value.to_string()),
         ..ImportPlanSummary::default()
     };

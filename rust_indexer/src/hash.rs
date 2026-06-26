@@ -558,6 +558,7 @@ pub fn hash_source(
         .collect::<Vec<_>>();
     let mut summary = HashSummary {
         source_name: source.name.clone(),
+        source_path: source.root_path.display().to_string(),
         scanned_files: files.len() as u64,
         ..HashSummary::default()
     };

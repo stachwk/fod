@@ -14,14 +14,14 @@ At the current stage, `fod-indexer` is already useful for `msfind` as the single
 
 ## Requests
 
-- [ ] Provide a machine-readable output mode for `source list`, `scan`, `hash`, `report duplicates`, `plan-import`, `clean`, `materialize`, and `cleanup-failed`.
+- [x] Provide a machine-readable output mode for `source list`, `scan`, `hash`, `report duplicates`, `plan-import`, `clean`, `materialize`, and `cleanup-failed`.
   - `msfind` should not need to parse ad-hoc human-readable CLI text.
   - Keep the current text output for interactive use.
-- [ ] Expose a read-only source-inspection view that returns source kind, policy, capability metadata, and browsable roots in one structured response.
+- [x] Expose a read-only source-inspection view that returns source kind, policy, capability metadata, and browsable roots in one structured response.
   - `msfind` should reuse the same discovery logic for `local`, `smb`, `qnap`, `adb`, and `github` instead of duplicating it.
-- [ ] Add plan and duplicate snapshot export by id, so an existing import plan or duplicate set can be inspected later without rerunning the pipeline.
+- [x] Add plan and duplicate snapshot export by id, so an existing import plan or duplicate set can be inspected later without rerunning the pipeline.
   - That keeps `msfind` on the consumer side of the contract.
-- [ ] Document and preserve the idempotent retry boundary for replay-safe commands.
+- [x] Document and preserve the idempotent retry boundary for replay-safe commands.
   - `msfind` may call into `fod-indexer` across transient disconnects and needs the contract to stay explicit.
-- [ ] Keep non-indexing work out of the shared core.
+- [x] Keep non-indexing work out of the shared core.
   - Text extraction, classification, embeddings, and other AI steps should stay in `msfind`; `fod-indexer` should only own source indexing and materialization.

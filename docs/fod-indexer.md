@@ -64,9 +64,14 @@ Supported actions:
 - `fod-indexer scan --source <name>`
 - `fod-indexer hash --source <name> --candidates-only`
 - `fod-indexer report duplicates`
+- `fod-indexer report duplicates --id <id>`
 - `fod-indexer plan-import --dry-run`
+- `fod-indexer plan show --id <id>`
 - `fod-indexer clean --source <name> --dry-run`
 - `fod-indexer materialize --source <name>`
+- `fod-indexer cleanup-failed --plan <id>`
+
+Every command above also accepts `--output json` for machine-readable output. The JSON mode keeps the same underlying contract as the text mode, but returns structured source views, summaries, and stored snapshots instead of ad-hoc prose.
 
 If `--name` is omitted, `fod-indexer` uses a kind-aware naming heuristic with the current hostname as the final fallback. Examples:
 
@@ -79,6 +84,20 @@ Explicit `--name` stays available when you want to override the suggestion or re
 
 Use `fod-indexer source list --kind adb` when you want to browse the detected ADB runtime root before scanning it. The command probes the device through `adb shell`, reads `EXTERNAL_STORAGE` and `SECONDARY_STORAGE`, and then maps the chosen storage root to a local `gvfs` mount when one is available so the printed `source add --path` values stay usable and shell-quoted. Use `fod-indexer source list --path /run/user/1000/adb/<serial> --kind adb` when you want to override the detected root and inspect one specific mounted device or copy a child directory path into `source add`.
 Use `fod-indexer source remove --name <name>` to unregister an added source once you no longer want it indexed.
+
+## Snapshot export
+
+`fod-indexer plan show --id <id>` exports a stored import-plan snapshot without rerunning scan or hash. The snapshot includes the stored summary counts, status, request token, timestamps, and plan entries.
+
+`fod-indexer report duplicates --id <id>` exports a stored duplicate-set snapshot without rebuilding the live report. This is the read-only path for inspecting an already captured set later.
+
+## Retry boundary
+
+The current replay-safe boundary stays intentionally bounded:
+
+- `scan`, `hash`, `plan-import`, and `cleanup-failed` stay inside the idempotent retry envelope that is safe to repeat after transient disconnects.
+- `materialize` keeps best-effort rollback for partial failures and falls back to `cleanup-failed` when the rollback cannot finish.
+- Full transactional replay of in-flight SQL remains a separate project and should not be treated as part of the shared core.
 
 ## Indexer Filters
 
