@@ -595,6 +595,58 @@ fn transactional_commit_disconnect_is_replayed_for_promote_hardlink_to_primary()
 }
 
 #[test]
+fn transactional_commit_disconnect_is_replayed_for_touch_client_session_owner_key() {
+    let _guard = test_guard();
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    direct_repo
+        .ensure_lock_schema()
+        .expect("ensure lock schema");
+    direct_repo
+        .ensure_client_session_schema()
+        .expect("ensure client session schema");
+
+    let host_name = unique_name("transactional_session_host");
+    let mountpoint = format!("/mnt/{}", unique_name("transactional_session_mount"));
+    let session_id = direct_repo
+        .register_client_session(
+            &host_name,
+            &mountpoint,
+            "primary",
+            "postgres_lease",
+            1234,
+            60,
+        )
+        .expect("register client session");
+    let owner_key = session_id.saturating_add(11);
+
+    let proxy = QueryDropProxy::start("COMMIT", Duration::from_millis(50)).expect("start proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+    repo.touch_client_session_owner_key(session_id, owner_key)
+        .expect("touch client session owner key with replay");
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert_eq!(proxy.match_hits(), 2);
+    let owner_key_rows = direct_repo
+        .query_scalar_text(&format!(
+            "SELECT COUNT(*) FROM client_session_owner_keys WHERE session_id = {session_id} AND owner_key = {owner_key}"
+        ))
+        .expect("count client session owner key rows");
+    assert_eq!(owner_key_rows.trim(), "1");
+    let last_lock_at = direct_repo
+        .query_scalar_text(&format!(
+            "SELECT CASE WHEN last_lock_at IS NOT NULL THEN 't' ELSE 'f' END FROM client_sessions WHERE session_id = {session_id}"
+        ))
+        .expect("query client session last_lock_at");
+    assert_eq!(last_lock_at.trim(), "t");
+
+    direct_repo
+        .exec(&format!(
+            "DELETE FROM client_sessions WHERE session_id = {session_id}"
+        ))
+        .expect("cleanup client session");
+}
+
+#[test]
 fn transactional_commit_disconnect_is_replayed_for_lock_range_state_blob() {
     let _guard = test_guard();
     let direct_repo = repo_from_conninfo(&direct_conninfo());

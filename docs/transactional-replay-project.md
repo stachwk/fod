@@ -84,6 +84,7 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 | `adopt_source_data_object()` | source/destination row confirmation | A committed adoption is observable because the destination file already points at the source data object with the expected size. |
 | `create_data_object()` | request-token-backed insert/reuse | A committed object creation is observable because the durable token row returns the already-chosen `id_data_object` without replaying the refcount increment. |
 | `promote_hardlink_to_primary()` | request-token-backed promotion | A committed promotion is observable because the durable token row records the outcome and prevents a second promotion on replay. |
+| `touch_client_session_owner_key()` | session-owner-key upsert + session touch | A committed owner-key touch is observable through the durable owner-key row and the touched client-session row. |
 
 ### Replayable Only With Extra Confirmation
 
@@ -146,6 +147,7 @@ The transactional replay smoke suite now lives in `rust_hotpath/tests/transactio
 - commit-disconnect replay for `persist_file_blocks_with_crc_flag()`
 - commit-disconnect replay for `persist_file_extents_with_crc_flag()`
 - commit-disconnect replay for `promote_hardlink_to_primary()`
+- commit-disconnect replay for `touch_client_session_owner_key()`
 - commit-disconnect replay for lock-lease pruning and lock-range blob replacement
 
 ## Current Baseline
