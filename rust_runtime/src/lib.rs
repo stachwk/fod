@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod ini_config;
 
@@ -22,6 +24,8 @@ pub const FOD_SCHEMA_NAME: &str = "fod";
 pub const FOD_SEARCH_PATH: &str = "fod";
 // Version is sourced from ../fod_version.txt via rust_runtime/build.rs.
 pub const FOD_VERSION_LABEL: &str = env!("FOD_VERSION_LABEL");
+
+static NEXT_REQUEST_TOKEN: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MountRole {
@@ -81,6 +85,17 @@ pub fn parse_bool(value: &str) -> Result<bool, String> {
 
 pub fn duration_to_micros(elapsed: Duration) -> u64 {
     elapsed.as_micros().min(u128::from(u64::MAX)) as u64
+}
+
+pub fn request_token(prefix: &str) -> String {
+    let hostname = current_hostname().unwrap_or_else(|_| "unknown-host".to_string());
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let seq = NEXT_REQUEST_TOKEN.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    format!("{prefix}:{hostname}:{pid}:{nanos}:{seq}")
 }
 
 #[cfg(unix)]

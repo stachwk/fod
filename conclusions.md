@@ -4,6 +4,7 @@ Use this file to record concise conclusions that matter for future work.
 
 ## 2026-06-26
 
+- `create_data_object()` is now replay-safe through a durable request-token row in `data_object_request_tokens`, so a lost COMMIT no longer doubles `reference_count` on retry. The new `rust_hotpath/tests/transactional_replay_smoke.rs::transactional_commit_disconnect_is_replayed_for_create_data_object` smoke covers the COMMIT-drop path and confirms the token-backed row reuse.
 - The new local-vs-QNAP PostgreSQL comparison on commit `1605384` makes the backend split obvious. On the same 128-file, 64 MiB WAL-pressure workload the local Docker run finished in `5.316s` at `12.04 MiB/s`, while QNAP took `52.863s` at `1.21 MiB/s`. The forced-checkpoint variant showed the same shape: `4.904s` local versus `55.109s` on QNAP.
 - The checkpoint counters are now useful. Local forced checkpointing reported `CHECKPOINT elapsed_s=0.059` and `checkpoint_write_time=8.0`, `checkpoint_sync_time=32.0`; QNAP reported `CHECKPOINT elapsed_s=1.379` with `checkpoint_write_time=102.0` and `checkpoint_sync_time=795.0`. That is a strong sign that checkpoint behavior, not just raw WAL volume, deserves attention on the remote backend.
 - Connection churn is also much more expensive on QNAP. The local run averaged `8.437 ms` connect latency and `0.541 ms` for the simple query, while QNAP averaged `47.536 ms` connect latency and `5.532 ms` for the same query, with a much worse p95 tail. That makes the benchmark useful for pool/session tuning and for proving network cost separately from FUSE cost.

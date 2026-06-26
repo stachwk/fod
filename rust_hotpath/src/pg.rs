@@ -5,8 +5,8 @@ use crate::crc32_bytes;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use fod_rust_runtime::{
-    env_var_truthy_with_legacy_alias, PersistBlockTransport, RuntimeConfig, RuntimeStorageSettings,
-    FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
+    env_var_truthy_with_legacy_alias, request_token as generate_request_token,
+    PersistBlockTransport, RuntimeConfig, RuntimeStorageSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
 };
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -3063,6 +3063,9 @@ impl DbRepo {
         file_size: u64,
         content_hash: Option<&str>,
     ) -> Result<u64, String> {
+        let request_token_value = generate_request_token("data-object");
+        let request_token = CString::new(request_token_value)
+            .map_err(|_| "request token contains NUL byte".to_string())?;
         let file_size = CString::new(file_size.to_string())
             .map_err(|_| "file size contains NUL byte".to_string())?;
         let content_hash = match content_hash {
@@ -3096,6 +3099,17 @@ impl DbRepo {
             "UPDATE data_objects SET reference_count = reference_count + 1, modification_date = NOW() WHERE id_data_object = $1",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_lookup_request_token = CString::new(
+            "SELECT COALESCE((SELECT id_data_object::text FROM data_object_request_tokens WHERE request_token = $1 LIMIT 1), '')",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_store_request_token = CString::new(
+            "INSERT INTO data_object_request_tokens (request_token, id_data_object, created_at, updated_at) \
+             VALUES ($1, $2, NOW(), NOW()) \
+             ON CONFLICT (request_token) DO UPDATE SET updated_at = NOW() \
+             RETURNING id_data_object",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_upsert_hash = CString::new(
             "INSERT INTO data_objects AS existing (file_size, content_hash, reference_count, creation_date, modification_date) \
              VALUES ($1, $2, 1, NOW(), NOW()) \
@@ -3106,7 +3120,18 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
+                let request_token_params = [&request_token];
+                let existing_token_res =
+                    exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
+                let existing_token = fetch_single_text(existing_token_res)?;
+                if !existing_token.trim().is_empty() {
+                    return existing_token
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|_| "invalid data object request token mapping".to_string());
+                }
+
                 let value = match content_hash.as_ref() {
                     Some(content_hash) if hash_dedupe_enabled => {
                         let params = [&file_size, content_hash];
@@ -3144,6 +3169,19 @@ impl DbRepo {
                             .map_err(|_| "invalid id_data_object value".to_string())?
                     }
                 };
+
+                let value_text = CString::new(value.to_string())
+                    .map_err(|_| "data object id contains NUL byte".to_string())?;
+                let params = [&request_token, &value_text];
+                let res = exec_params(conn, &sql_store_request_token, &params)?;
+                let stored = fetch_single_text(res)?;
+                let stored_id = stored
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| "invalid data object request token mapping".to_string())?;
+                if stored_id != value {
+                    return Err("data object request token mapped to unexpected id".to_string());
+                }
                 Ok(value)
             })
         })

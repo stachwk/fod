@@ -4,10 +4,10 @@ use crate::db::{
 };
 use crate::model::{IndexedFile, ScanSummary};
 use crate::progress::ThrottledProgress;
-use crate::replay;
 use crate::source;
 use crate::source_registry;
 use fod_rust_hotpath::pg::DbRepo;
+use fod_rust_runtime::request_token;
 use std::fs;
 use std::fs::{File, FileType};
 use std::io::{self, Write};
@@ -20,7 +20,7 @@ const SCAN_PROGRESS_FILE_STEP: u64 = 50;
 const SCAN_PROGRESS_TIME_STEP: Duration = Duration::from_secs(1);
 
 fn create_scan_run(repo: &DbRepo, source_id: u64) -> Result<u64, String> {
-    let request_token = replay::request_token("scan");
+    let request_token = request_token("scan");
     let sql = format!(
         "
         INSERT INTO index_scan_runs (

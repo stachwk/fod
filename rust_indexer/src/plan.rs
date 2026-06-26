@@ -5,9 +5,9 @@ use crate::output::{
     DuplicateReportSnapshot, DuplicateSetMemberView, DuplicateSetSnapshot, ImportPlanEntryView,
     ImportPlanSnapshot,
 };
-use crate::replay;
 use crate::source;
 use fod_rust_hotpath::pg::DbRepo;
+use fod_rust_runtime::request_token;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -127,7 +127,7 @@ pub(crate) fn insert_import_plan(
     dry_run: bool,
     source_filter: Option<&str>,
 ) -> Result<u64, String> {
-    let request_token = replay::request_token("plan");
+    let request_token = request_token("plan");
     let sql = format!(
         "
         INSERT INTO index_import_plans (

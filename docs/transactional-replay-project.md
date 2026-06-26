@@ -80,19 +80,19 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 | `set_file_size()` | single-row update | The write is keyed by `id_file` and only sets the current size. |
 | `purge_primary_file()` | delete + row reassignment | A committed purge is observable because the file row disappears after reconnect. |
 | `adopt_source_data_object()` | source/destination row confirmation | A committed adoption is observable because the destination file already points at the source data object with the expected size. |
+| `create_data_object()` | request-token-backed insert/reuse | A committed object creation is observable because the durable token row returns the already-chosen `id_data_object` without replaying the refcount increment. |
 
 ### Replayable Only With Extra Confirmation
 
 These wrappers mostly do the right thing, but the transaction as a whole still needs an idempotency key,
 request token, or commit-outcome proof before automatic replay can be trusted:
 
-The create-entry family and `adopt_source_data_object()` now also use `transactional_replayable()`, so a lost `COMMIT`
-is retried once before the existing natural-key or source/destination row probe confirms the already-committed state.
+The create-entry family, `adopt_source_data_object()`, and `create_data_object()` now also use `transactional_replayable()`, so a lost `COMMIT`
+is retried once before the existing natural-key, source/destination row, or request-token probe confirms the already-committed state.
 
 
 | Function | Why it still needs more design |
 | --- | --- |
-| `create_data_object()` | It bumps `reference_count`, so repeating it after a reconnect can change counts. |
 | `persist_file_blocks_with_crc_flag()` | The direct branch is close, but the detach step and the COPY staging branch still need stronger replay identity. |
 | `persist_file_extents_with_crc_flag()` | COPY-based extent materialization needs a different replay contract before blind retry is safe. |
 | `create_hardlink()` | A natural-key unique violation can now be confirmed against the existing row after a replayed commit disconnect. |

@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 14;
-const MIGRATION_FILES: [&str; 14] = [
+const SCHEMA_VERSION: u64 = 15;
+const MIGRATION_FILES: [&str; 15] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -40,9 +40,10 @@ const MIGRATION_FILES: [&str; 14] = [
     "0012_data_extents.sql",
     "0013_indexer.sql",
     "0014_indexer_request_tokens.sql",
+    "0015_data_object_request_tokens.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 14] = [
+const MIGRATION_DESCRIPTIONS: [&str; 15] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -57,6 +58,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 14] = [
     "Introduce native extent storage",
     "Add fod-indexer metadata tables",
     "Make indexer run creation replay-safe",
+    "Add request tokens for data object creation",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -182,6 +184,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0014_indexer_request_tokens.sql"
         )),
+        15 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0015_data_object_request_tokens.sql"
+        )),
         _ => "",
     }
 }
@@ -202,6 +208,7 @@ fn migration_description(version: u64) -> &'static str {
         12 => MIGRATION_DESCRIPTIONS[11],
         13 => MIGRATION_DESCRIPTIONS[12],
         14 => MIGRATION_DESCRIPTIONS[13],
+        15 => MIGRATION_DESCRIPTIONS[14],
         _ => "Migration",
     }
 }
@@ -222,6 +229,7 @@ fn migration_filename(version: u64) -> &'static str {
         12 => MIGRATION_FILES[11],
         13 => MIGRATION_FILES[12],
         14 => MIGRATION_FILES[13],
+        15 => MIGRATION_FILES[14],
         _ => "unknown.sql",
     }
 }
@@ -324,6 +332,7 @@ fn schema_objects_exist(conn: &DbConn, schema: &str, prune_function: &str) -> Re
             to_regclass({}) IS NOT NULL OR \
             to_regclass({}) IS NOT NULL OR \
             to_regclass({}) IS NOT NULL OR \
+            to_regclass({}) IS NOT NULL OR \
             to_regprocedure({}) IS NOT NULL",
         quote_schema_regclass(schema, "directories"),
         quote_schema_regclass(schema, "files"),
@@ -339,6 +348,7 @@ fn schema_objects_exist(conn: &DbConn, schema: &str, prune_function: &str) -> Re
         quote_schema_regclass(schema, "lock_leases"),
         quote_schema_regclass(schema, "lock_range_leases"),
         quote_schema_regclass(schema, "data_objects"),
+        quote_schema_regclass(schema, "data_object_request_tokens"),
         quote_schema_regclass(schema, "copy_block_crc"),
         quote_schema_regclass(schema, "client_sessions"),
         quote_schema_regclass(schema, "client_session_owner_keys"),

@@ -10,7 +10,6 @@ mod model;
 mod output;
 mod plan;
 mod progress;
-mod replay;
 mod scan;
 mod source;
 mod source_registry;

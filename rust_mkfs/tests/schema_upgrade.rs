@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 14;
+const SCHEMA_VERSION: u64 = 15;
 
 fn conninfo_from_env() -> String {
     let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -459,10 +459,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 14",
+        "FOD schema version: 15",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 14",
+        "Latest migration version: 15",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -480,6 +480,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0012: 0012_data_extents.sql",
         "0013: 0013_indexer.sql",
         "0014: 0014_indexer_request_tokens.sql",
+        "0015: 0015_data_object_request_tokens.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -498,10 +499,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 14",
+        "Latest migration version: 15",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015",
     ] {
         assert!(
             status_without_version.contains(needle),

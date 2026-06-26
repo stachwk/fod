@@ -475,6 +475,51 @@ fn transactional_commit_disconnect_is_replayed_for_set_file_size() {
 }
 
 #[test]
+fn transactional_commit_disconnect_is_replayed_for_create_data_object() {
+    let _guard = test_guard();
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    let proxy = QueryDropProxy::start("COMMIT", Duration::from_millis(50)).expect("start proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+
+    let content_hash = unique_name("transactional_data_object_hash");
+    let data_object_id = repo
+        .create_data_object(8_192, Some(content_hash.as_str()))
+        .expect("create data object with replay");
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert_eq!(proxy.match_hits(), 2);
+
+    let reference_count = direct_repo
+        .query_scalar_text(&format!(
+            "SELECT reference_count FROM data_objects WHERE id_data_object = {}",
+            data_object_id
+        ))
+        .expect("query data object reference count")
+        .trim()
+        .parse::<u64>()
+        .expect("parse reference count");
+    assert_eq!(
+        reference_count, 1,
+        "replayed create_data_object should not double increment reference_count"
+    );
+
+    let token_rows = direct_repo
+        .query_scalar_text(&format!(
+            "SELECT COUNT(*) FROM data_object_request_tokens WHERE id_data_object = {}",
+            data_object_id
+        ))
+        .expect("query data object request token count");
+    assert_eq!(token_rows.trim(), "1");
+
+    direct_repo
+        .query_scalar_text(&format!(
+            "DELETE FROM data_objects WHERE id_data_object = {} RETURNING id_data_object::text",
+            data_object_id
+        ))
+        .expect("cleanup data object");
+}
+
+#[test]
 fn transactional_commit_disconnect_is_replayed_for_lock_range_state_blob() {
     let _guard = test_guard();
     let direct_repo = repo_from_conninfo(&direct_conninfo());
