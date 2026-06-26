@@ -207,6 +207,14 @@ CREATE TABLE IF NOT EXISTS data_object_request_tokens (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS hardlink_promotion_request_tokens (
+    request_token TEXT PRIMARY KEY,
+    id_file INTEGER NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
+    did_promote BOOLEAN NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 ALTER TABLE files
     ADD COLUMN IF NOT EXISTS data_object_id INTEGER;
 

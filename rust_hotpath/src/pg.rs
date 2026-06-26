@@ -5340,6 +5340,9 @@ impl DbRepo {
     }
 
     pub fn promote_hardlink_to_primary(&self, file_id: u64) -> Result<bool, String> {
+        let request_token_value = generate_request_token("promote-hardlink");
+        let request_token = CString::new(request_token_value)
+            .map_err(|_| "request token contains NUL byte".to_string())?;
         let sql_choose = CString::new(
             "
             SELECT id_hardlink, id_directory, name
@@ -5368,11 +5371,36 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete = CString::new("DELETE FROM hardlinks WHERE id_hardlink = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_lookup_request_token = CString::new(
+            "SELECT COALESCE((SELECT did_promote::text FROM hardlink_promotion_request_tokens WHERE request_token = $1 LIMIT 1), '')",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_store_request_token = CString::new(
+            "INSERT INTO hardlink_promotion_request_tokens (request_token, id_file, did_promote, created_at, updated_at) \
+             VALUES ($1, $2, $3, NOW(), NOW()) \
+             ON CONFLICT (request_token) DO UPDATE SET updated_at = NOW() \
+             RETURNING did_promote",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
+        let parse_bool = |value: &str| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "t" | "true" | "1" | "on"
+            )
+        };
 
         self.with_cached_connection(|conn| unsafe {
-            let result = transactional(conn, |conn| {
+            let result = transactional_replayable(conn, |conn| {
+                let request_token_params = [&request_token];
+                let existing_token_res =
+                    exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
+                let existing_token = fetch_single_text(existing_token_res)?;
+                if !existing_token.trim().is_empty() {
+                    return Ok(parse_bool(&existing_token));
+                }
+
                 let params = [&file_id];
                 let res = exec_params(conn, &sql_choose, &params)?;
                 let chosen = match PQresultStatus(res) {
@@ -5413,6 +5441,16 @@ impl DbRepo {
                 };
 
                 let Some((hardlink_id, parent_id, name)) = chosen else {
+                    let did_promote = CString::new("false")
+                        .map_err(|_| "promotion flag contains NUL byte".to_string())?;
+                    let params = [&request_token, &file_id, &did_promote];
+                    let res = exec_params(conn, &sql_store_request_token, &params)?;
+                    let stored = fetch_single_text(res)?;
+                    if parse_bool(&stored) {
+                        return Err(
+                            "hardlink promotion request token stored unexpected result".to_string()
+                        );
+                    }
                     return Ok(false);
                 };
 
@@ -5434,6 +5472,16 @@ impl DbRepo {
                 let params = [&hardlink_id];
                 let res = exec_params(conn, &sql_delete, &params)?;
                 PQclear(res);
+                let did_promote = CString::new("true")
+                    .map_err(|_| "promotion flag contains NUL byte".to_string())?;
+                let params = [&request_token, &file_id, &did_promote];
+                let res = exec_params(conn, &sql_store_request_token, &params)?;
+                let stored = fetch_single_text(res)?;
+                if !parse_bool(&stored) {
+                    return Err(
+                        "hardlink promotion request token stored unexpected result".to_string()
+                    );
+                }
                 Ok(true)
             });
             result

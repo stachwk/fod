@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 15;
-const MIGRATION_FILES: [&str; 15] = [
+const SCHEMA_VERSION: u64 = 16;
+const MIGRATION_FILES: [&str; 16] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -41,9 +41,10 @@ const MIGRATION_FILES: [&str; 15] = [
     "0013_indexer.sql",
     "0014_indexer_request_tokens.sql",
     "0015_data_object_request_tokens.sql",
+    "0016_hardlink_promotion_request_tokens.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 15] = [
+const MIGRATION_DESCRIPTIONS: [&str; 16] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -59,6 +60,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 15] = [
     "Add fod-indexer metadata tables",
     "Make indexer run creation replay-safe",
     "Add request tokens for data object creation",
+    "Add request tokens for hardlink promotion replay",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -188,6 +190,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0015_data_object_request_tokens.sql"
         )),
+        16 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0016_hardlink_promotion_request_tokens.sql"
+        )),
         _ => "",
     }
 }
@@ -209,6 +215,7 @@ fn migration_description(version: u64) -> &'static str {
         13 => MIGRATION_DESCRIPTIONS[12],
         14 => MIGRATION_DESCRIPTIONS[13],
         15 => MIGRATION_DESCRIPTIONS[14],
+        16 => MIGRATION_DESCRIPTIONS[15],
         _ => "Migration",
     }
 }
@@ -230,6 +237,7 @@ fn migration_filename(version: u64) -> &'static str {
         13 => MIGRATION_FILES[12],
         14 => MIGRATION_FILES[13],
         15 => MIGRATION_FILES[14],
+        16 => MIGRATION_FILES[15],
         _ => "unknown.sql",
     }
 }

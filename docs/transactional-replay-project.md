@@ -83,6 +83,7 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 | `purge_primary_file()` | delete + row reassignment | A committed purge is observable because the file row disappears after reconnect. |
 | `adopt_source_data_object()` | source/destination row confirmation | A committed adoption is observable because the destination file already points at the source data object with the expected size. |
 | `create_data_object()` | request-token-backed insert/reuse | A committed object creation is observable because the durable token row returns the already-chosen `id_data_object` without replaying the refcount increment. |
+| `promote_hardlink_to_primary()` | request-token-backed promotion | A committed promotion is observable because the durable token row records the outcome and prevents a second promotion on replay. |
 
 ### Replayable Only With Extra Confirmation
 
@@ -103,12 +104,7 @@ is retried once before the existing natural-key probe confirms the already-commi
 
 ### Keep Out Of Automatic Replay
 
-These wrappers still create or promote user-visible filesystem objects and should stay out of blind automatic replay
-until they get a stronger commit-outcome proof:
-
-| Function | Why it stays out for now |
-| --- | --- |
-| `promote_hardlink_to_primary()` | The chosen survivor and row promotion are not stable enough for blind replay. |
+No explicit transactional wrappers remain in the out-of-envelope bucket. The remaining replay-sensitive paths now either use request-token confirmation or stay inside the bounded replay envelope as deterministic updates.
 
 The bounded replay classifier already covers single-statement helpers such as `touch_data_object()`, `touch_file_entry()`,
 `touch_directory_entry()`, `touch_symlink_entry()`, and the `rename_*()` / `delete_*()` helpers. They stay outside this
