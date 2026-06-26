@@ -84,6 +84,24 @@ workers_write = 8
     fs::write(config_path, contents).unwrap();
 }
 
+fn fod_config_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fod-config"));
+    for key in [
+        "FOD_PG_HOST",
+        "FOD_PG_PORT",
+        "FOD_PG_DBNAME",
+        "FOD_PG_USER",
+        "FOD_PG_PASSWORD",
+        "FOD_PG_SSLMODE",
+        "FOD_PG_SSLROOTCERT",
+        "FOD_PG_SSLCERT",
+        "FOD_PG_SSLKEY",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
 #[test]
 fn version_matches_bootstrap_and_mkfs() {
     let _guard = env_guard();
@@ -113,17 +131,14 @@ fn resolve_path_and_runtime_config_and_connection_params() {
     let _old_config = env::var_os("FOD_CONFIG");
     env::set_var("FOD_CONFIG", &config_path);
 
-    let resolve = Command::new(env!("CARGO_BIN_EXE_fod-config"))
-        .arg("resolve-path")
-        .output()
-        .unwrap();
+    let resolve = fod_config_command().arg("resolve-path").output().unwrap();
     assert!(resolve.status.success());
     assert_eq!(
         String::from_utf8(resolve.stdout).unwrap().trim(),
         config_path.display().to_string()
     );
 
-    let connection = Command::new(env!("CARGO_BIN_EXE_fod-config"))
+    let connection = fod_config_command()
         .arg("connection-params")
         .output()
         .unwrap();
@@ -148,7 +163,7 @@ fn resolve_path_and_runtime_config_and_connection_params() {
         temp_dir.join("client.key").display().to_string()
     );
 
-    let runtime = Command::new(env!("CARGO_BIN_EXE_fod-config"))
+    let runtime = fod_config_command()
         .env("FOD_PROFILE", "bulk_write")
         .arg("runtime-config")
         .output()
@@ -211,10 +226,7 @@ fn resolve_path_fails_fast_for_missing_fod_config() {
     let _old_config = env::var_os("FOD_CONFIG");
     env::set_var("FOD_CONFIG", &missing_config);
 
-    let resolve = Command::new(env!("CARGO_BIN_EXE_fod-config"))
-        .arg("resolve-path")
-        .output()
-        .unwrap();
+    let resolve = fod_config_command().arg("resolve-path").output().unwrap();
     assert!(!resolve.status.success());
     let stderr = String::from_utf8(resolve.stderr).unwrap();
     assert!(stderr.contains("FOD_CONFIG"));
@@ -235,7 +247,7 @@ fn inline_comment_markers_survive_inside_values() {
     let _old_config = env::var_os("FOD_CONFIG");
     env::set_var("FOD_CONFIG", &config_path);
 
-    let connection = Command::new(env!("CARGO_BIN_EXE_fod-config"))
+    let connection = fod_config_command()
         .arg("connection-params")
         .output()
         .unwrap();
@@ -258,7 +270,7 @@ fn generate_tls_command_creates_client_pair_and_reuses_existing_files() {
     let config_path = temp_dir.join("fod_config.ini");
     let material_dir = temp_dir.join("tls-material");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_fod-config"))
+    let output = fod_config_command()
         .args([
             "--config-path",
             config_path.to_str().unwrap(),
@@ -284,7 +296,7 @@ fn generate_tls_command_creates_client_pair_and_reuses_existing_files() {
     let cert_bytes = fs::read(&cert_path).unwrap();
     let key_bytes = fs::read(&key_path).unwrap();
 
-    let second_output = Command::new(env!("CARGO_BIN_EXE_fod-config"))
+    let second_output = fod_config_command()
         .args([
             "--config-path",
             config_path.to_str().unwrap(),
