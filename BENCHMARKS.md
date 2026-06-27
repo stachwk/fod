@@ -23,7 +23,43 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-27 from commit `c24daeb` using `make postgres-benchmarks-wal-preset` and includes a 128-file WAL-pressure run plus a forced-`CHECKPOINT` variant on both local Docker and QNAP.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-27 from working tree based on commit `790feab` and includes a local planner/autovacuum preset refresh plus the WAL/checkpoint preset comparison on local Docker and QNAP.
+
+## 2026-06-27 PostgreSQL Local Planner Preset Refresh
+
+Collected from working tree based on commit `790feab`.
+
+This run used `make postgres-benchmarks-local-planner-preset`, which set `POSTGRES_SHARED_BUFFERS=512MB`, `POSTGRES_RANDOM_PAGE_COST=1.1`, `POSTGRES_EFFECTIVE_CACHE_SIZE=4GB`, `POSTGRES_MAINTENANCE_WORK_MEM=512MB`, `POSTGRES_AUTOVACUUM_MAX_WORKERS=3`, and `POSTGRES_AUTOVACUUM_WORK_MEM=256MB` before running the local-only PostgreSQL benchmark suite.
+
+### WAL Pressure Benchmark
+
+Observed with `make postgres-benchmarks-local-planner-preset` using `PG_WAL_PRESSURE_COUNT=128`.
+
+| Backend | Mode | Files | Block size | Sync | Checkpoint | Elapsed | Throughput |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| local | base | `128` | `512k` | `1` | `0` | `5.841s` | `10.96 MiB/s` |
+
+Stats delta:
+
+- local base: `wal_records=102897`, `wal_fpi=114`, `wal_bytes=9120370`, `wal_write=518`, `wal_sync=517`, `buffers_alloc=589`
+
+Notes:
+
+- This preset is focused on the planner/autovacuum side, so the WAL-pressure smoke is best read as a local consistency check rather than a direct endorsement of those exact values.
+- On this host, the local preset did not materially outperform the earlier WAL-tuned compare run on this workload.
+
+### Connection Churn Benchmark
+
+Observed on the same run of `make postgres-benchmarks-local-planner-preset`.
+
+| Backend | Connections | Elapsed | Connect avg | Connect p95 | Query avg | Query p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| local | `100` | `0.843s` | `7.865 ms` | `8.356 ms` | `0.534 ms` | `0.648 ms` |
+
+Notes:
+
+- The local planner/autovacuum preset kept connection churn in the same general shape as the baseline run.
+- This is the local-only preset baseline to compare against future planner and autovacuum tweaks.
 
 ## 2026-06-27 PostgreSQL WAL Preset Refresh
 

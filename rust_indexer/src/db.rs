@@ -80,25 +80,9 @@ pub fn ensure_indexer_request_token_schema(repo: &DbRepo, operation: &str) -> Re
     ))
 }
 
-pub fn sql_bytea_hex(bytes: &[u8]) -> String {
-    format!("decode('{}', 'hex')", hex_encode(bytes))
-}
-
 pub fn sql_nullable_string(value: Option<&str>) -> String {
     value
         .map(sql_quote_literal)
-        .unwrap_or_else(|| "NULL".to_string())
-}
-
-pub fn sql_nullable_u64(value: Option<u64>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "NULL".to_string())
-}
-
-pub fn sql_nullable_i64(value: Option<i64>) -> String {
-    value
-        .map(|value| value.to_string())
         .unwrap_or_else(|| "NULL".to_string())
 }
 

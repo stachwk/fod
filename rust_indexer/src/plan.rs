@@ -1,4 +1,4 @@
-use crate::db::{ensure_indexer_request_token_schema, sql_nullable_u64, sql_quote_literal};
+use crate::db::{ensure_indexer_request_token_schema, sql_quote_literal};
 use crate::hash;
 use crate::model::{DuplicateSet, ImportPlanSummary, IndexedFile};
 use crate::output::{
@@ -6,7 +6,7 @@ use crate::output::{
     ImportPlanSnapshot,
 };
 use crate::source;
-use fod_rust_hotpath::pg::DbRepo;
+use fod_rust_hotpath::pg::{DbRepo, IndexImportPlanEntryStageRow};
 use fod_rust_runtime::request_token;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -203,65 +203,6 @@ pub(crate) fn update_import_plan(
         estimated_import_bytes = summary.estimated_import_bytes,
         saved_bytes = summary.saved_bytes,
         plan_id = plan_id,
-    );
-    repo.exec(&sql)
-}
-
-pub(crate) fn insert_import_plan_entry(
-    repo: &DbRepo,
-    plan_id: u64,
-    file: &IndexedFile,
-    duplicate_set_id: Option<u64>,
-    action: &str,
-    canonical_file_id: Option<u64>,
-) -> Result<(), String> {
-    let sql = format!(
-        "
-        DELETE FROM index_import_plan_entries
-        WHERE id_import_plan = {plan_id}
-          AND id_file = {file_id};
-        INSERT INTO index_import_plan_entries (
-            id_import_plan,
-            id_file,
-            id_duplicate_set,
-            action,
-            canonical_file_id,
-            logical_path,
-            source_path,
-            size,
-            mtime_ns,
-            source_changed,
-            created_at,
-            updated_at
-        )
-        VALUES (
-            {plan_id},
-            {file_id},
-            {duplicate_set_id},
-            {action},
-            {canonical_file_id},
-            {logical_path},
-            {source_path},
-            {size},
-            {mtime_ns},
-            {source_changed},
-            NOW(),
-            NOW()
-        )
-        ",
-        plan_id = plan_id,
-        file_id = file.id_file,
-        duplicate_set_id = sql_nullable_u64(duplicate_set_id),
-        action = sql_quote_literal(action),
-        canonical_file_id = sql_nullable_u64(canonical_file_id),
-        logical_path = sql_quote_literal(&file.path),
-        source_path = sql_quote_literal(&file.source_path()),
-        size = file.size,
-        mtime_ns = match file.mtime_ns {
-            Some(value) => value.to_string(),
-            None => "NULL".to_string(),
-        },
-        source_changed = if file.source_changed { "TRUE" } else { "FALSE" },
     );
     repo.exec(&sql)
 }
@@ -666,6 +607,7 @@ pub fn dry_run_import_plan(
     };
     summary.scanned_files = files.len() as u64;
     summary.total_source_bytes = files.iter().map(|file| file.file.size).sum();
+    let mut staged_rows: Vec<IndexImportPlanEntryStageRow> = Vec::new();
 
     let mut size_groups: BTreeMap<u64, Vec<PlannableFile>> = BTreeMap::new();
     for file in files {
@@ -716,23 +658,31 @@ pub fn dry_run_import_plan(
                 summary.estimated_import_bytes = summary
                     .estimated_import_bytes
                     .saturating_add(duplicate_set.file_size);
-                insert_import_plan_entry(
-                    repo,
-                    plan_id,
-                    &canonical.file,
-                    Some(duplicate_set.id_duplicate_set),
-                    "canonical",
-                    Some(canonical.file.id_file),
-                )?;
+                staged_rows.push(IndexImportPlanEntryStageRow {
+                    id_import_plan: plan_id,
+                    id_file: canonical.file.id_file,
+                    id_duplicate_set: Some(duplicate_set.id_duplicate_set),
+                    action: "canonical".to_string(),
+                    canonical_file_id: Some(canonical.file.id_file),
+                    logical_path: canonical.file.path.clone(),
+                    source_path: canonical.file.source_path(),
+                    size: canonical.file.size,
+                    mtime_ns: canonical.file.mtime_ns,
+                    source_changed: canonical.file.source_changed,
+                });
                 for reference in members.iter().skip(1) {
-                    insert_import_plan_entry(
-                        repo,
-                        plan_id,
-                        &reference.file,
-                        Some(duplicate_set.id_duplicate_set),
-                        "reference",
-                        Some(canonical.file.id_file),
-                    )?;
+                    staged_rows.push(IndexImportPlanEntryStageRow {
+                        id_import_plan: plan_id,
+                        id_file: reference.file.id_file,
+                        id_duplicate_set: Some(duplicate_set.id_duplicate_set),
+                        action: "reference".to_string(),
+                        canonical_file_id: Some(canonical.file.id_file),
+                        logical_path: reference.file.path.clone(),
+                        source_path: reference.file.source_path(),
+                        size: reference.file.size,
+                        mtime_ns: reference.file.mtime_ns,
+                        source_changed: reference.file.source_changed,
+                    });
                 }
             } else {
                 leftover.extend(members);
@@ -744,24 +694,29 @@ pub fn dry_run_import_plan(
             summary.estimated_import_bytes = summary
                 .estimated_import_bytes
                 .saturating_add(file.file.size);
-            insert_import_plan_entry(
-                repo,
-                plan_id,
-                &file.file,
-                None,
-                if file.needs_revalidation() {
-                    "needs_revalidation"
+            staged_rows.push(IndexImportPlanEntryStageRow {
+                id_import_plan: plan_id,
+                id_file: file.file.id_file,
+                id_duplicate_set: None,
+                action: if file.needs_revalidation() {
+                    "needs_revalidation".to_string()
                 } else {
-                    "unique"
+                    "unique".to_string()
                 },
-                Some(file.file.id_file),
-            )?;
+                canonical_file_id: Some(file.file.id_file),
+                logical_path: file.file.path.clone(),
+                source_path: file.file.source_path(),
+                size: file.file.size,
+                mtime_ns: file.file.mtime_ns,
+                source_changed: file.file.source_changed,
+            });
         }
     }
 
     summary.saved_bytes = summary
         .total_source_bytes
         .saturating_sub(summary.estimated_import_bytes);
+    repo.upsert_index_import_plan_entries_staged(&staged_rows)?;
     update_import_plan(repo, plan_id, "dry_run_completed", true, &summary)?;
     Ok(summary)
 }

@@ -65,8 +65,9 @@ This document records the small set of open follow-ups plus completed work, clos
 ### PostgreSQL tuning and ingest hardening
 
 - [ ] Expose server-side WAL/checkpoint/planner/autovacuum knobs in the Docker Compose and Makefile presets so local and QNAP benchmark runs can A/B the same config without editing container images.
-  - Progress: the compose stack now accepts optional `POSTGRES_*` tuning env vars and `make qnap-config-show` / `make postgres-config-show` print the resolved preset; the benchmark A/B baseline is now recorded in `BENCHMARKS.md`.
+  - Progress: the compose stack now accepts optional `POSTGRES_*` tuning env vars and `make qnap-config-show` / `make postgres-config-show` print the resolved preset; the benchmark A/B baseline and the local planner/autovacuum smoke are now recorded in `BENCHMARKS.md`.
 - [ ] Move indexer metadata writes onto staging + `COPY` + set-based merge, starting with `index_files`, `index_file_hashes`, `index_duplicate_sets`, and import plan entries.
+  - Progress: `index_files`, `index_file_hashes`, `index_duplicate_sets`, and `index_import_plan_entries` now write through staged temp tables with `COPY` plus set-based merge helpers; `materialize` plan-entry writes use the same path too, while the streaming payload collection remains a separate follow-up.
 - [ ] Stream `materialize` payload collection instead of buffering whole files in memory; keep fully replay-safe batch import as a separate design.
 
 ### Direct I/O Microscope

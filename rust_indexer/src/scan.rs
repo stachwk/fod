@@ -1,12 +1,9 @@
-use crate::db::{
-    ensure_indexer_request_token_schema, sql_nullable_i64, sql_nullable_string, sql_nullable_u64,
-    sql_quote_literal,
-};
+use crate::db::{ensure_indexer_request_token_schema, sql_nullable_string, sql_quote_literal};
 use crate::model::{IndexedFile, ScanSummary};
 use crate::progress::ThrottledProgress;
 use crate::source;
 use crate::source_registry;
-use fod_rust_hotpath::pg::DbRepo;
+use fod_rust_hotpath::pg::{DbRepo, IndexFileStageRow};
 use fod_rust_runtime::request_token;
 use std::fs;
 use std::fs::{File, FileType};
@@ -82,71 +79,6 @@ fn file_kind_label(file_type: &FileType) -> &'static str {
     }
 }
 
-fn upsert_index_file(
-    repo: &DbRepo,
-    source_id: u64,
-    scan_run_id: u64,
-    path: &str,
-    size: u64,
-    mtime_ns: Option<i64>,
-    inode: Option<u64>,
-    device: Option<u64>,
-    file_kind: &str,
-    scan_status: &str,
-    source_changed: bool,
-) -> Result<(), String> {
-    let sql = format!(
-        "
-        INSERT INTO index_files (
-            id_index_source,
-            id_scan_run,
-            path,
-            size,
-            mtime_ns,
-            inode,
-            device,
-            file_kind,
-            scan_status,
-            source_changed,
-            created_at,
-            updated_at
-        )
-        VALUES (
-            {source_id},
-            {scan_run_id},
-            {path},
-            {size},
-            {mtime_ns},
-            {inode},
-            {device},
-            {file_kind},
-            {scan_status},
-            {source_changed},
-            NOW(),
-            NOW()
-        )
-        ON CONFLICT (id_index_source, path) DO UPDATE SET
-            id_scan_run = EXCLUDED.id_scan_run,
-            size = EXCLUDED.size,
-            mtime_ns = EXCLUDED.mtime_ns,
-            inode = EXCLUDED.inode,
-            device = EXCLUDED.device,
-            file_kind = EXCLUDED.file_kind,
-            scan_status = EXCLUDED.scan_status,
-            source_changed = EXCLUDED.source_changed,
-            updated_at = NOW()
-        ",
-        path = sql_quote_literal(path),
-        file_kind = sql_quote_literal(file_kind),
-        scan_status = sql_quote_literal(scan_status),
-        source_changed = if source_changed { "TRUE" } else { "FALSE" },
-        mtime_ns = sql_nullable_i64(mtime_ns),
-        inode = sql_nullable_u64(inode),
-        device = sql_nullable_u64(device),
-    );
-    repo.exec(&sql)
-}
-
 pub(crate) fn relative_source_path(root_path: &Path, entry_path: &Path) -> String {
     entry_path
         .strip_prefix(root_path)
@@ -166,6 +98,7 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
         ..ScanSummary::default()
     };
     let mut progress = ScanProgressReporter::new(&source.name, &source.root_path);
+    let mut staged_rows: Vec<IndexFileStageRow> = Vec::new();
 
     let scan_result = (|| -> Result<(), String> {
         let walker = WalkDir::new(&source.root_path)
@@ -192,19 +125,18 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
 
             if file_kind != "regular" {
                 summary.unsupported_files = summary.unsupported_files.saturating_add(1);
-                upsert_index_file(
-                    repo,
-                    source.id_source,
-                    scan_run_id,
-                    &relative_path,
-                    0,
-                    None,
-                    None,
-                    None,
-                    file_kind,
-                    "unsupported_type",
-                    false,
-                )?;
+                staged_rows.push(IndexFileStageRow {
+                    id_index_source: source.id_source,
+                    id_scan_run: scan_run_id,
+                    path: relative_path,
+                    size: 0,
+                    mtime_ns: None,
+                    inode: None,
+                    device: None,
+                    file_kind: file_kind.to_string(),
+                    scan_status: "unsupported_type".to_string(),
+                    source_changed: false,
+                });
                 progress.maybe_report(&summary, &entry_path, "unsupported_type");
                 continue;
             }
@@ -219,19 +151,18 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
                 Ok(metadata) => metadata,
                 Err(err) => {
                     summary.stat_failed_files = summary.stat_failed_files.saturating_add(1);
-                    upsert_index_file(
-                        repo,
-                        source.id_source,
-                        scan_run_id,
-                        &relative_path,
-                        0,
-                        None,
-                        None,
-                        None,
-                        "regular",
-                        "stat_failed",
-                        false,
-                    )?;
+                    staged_rows.push(IndexFileStageRow {
+                        id_index_source: source.id_source,
+                        id_scan_run: scan_run_id,
+                        path: relative_path,
+                        size: 0,
+                        mtime_ns: None,
+                        inode: None,
+                        device: None,
+                        file_kind: "regular".to_string(),
+                        scan_status: "stat_failed".to_string(),
+                        source_changed: false,
+                    });
                     eprintln!(
                         "FOD indexer scan warning: file={} stat failed: {}",
                         entry_path.display(),
@@ -273,19 +204,18 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
                 }
             };
 
-            upsert_index_file(
-                repo,
-                source.id_source,
-                scan_run_id,
-                &relative_path,
+            staged_rows.push(IndexFileStageRow {
+                id_index_source: source.id_source,
+                id_scan_run: scan_run_id,
+                path: relative_path,
                 size,
                 mtime_ns,
                 inode,
                 device,
-                "regular",
-                scan_status,
-                false,
-            )?;
+                file_kind: "regular".to_string(),
+                scan_status: scan_status.to_string(),
+                source_changed: false,
+            });
             progress.maybe_report(&summary, &entry_path, scan_status);
         }
         Ok(())
@@ -293,6 +223,7 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
 
     match scan_result {
         Ok(()) => {
+            repo.upsert_index_files_staged(&staged_rows)?;
             progress.finish(&summary);
             finish_scan_run(repo, scan_run_id, "completed", None);
             Ok(summary)

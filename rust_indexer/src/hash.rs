@@ -1,10 +1,10 @@
-use crate::db::{hex_encode, sql_bytea_hex, sql_nullable_i64, sql_nullable_u64, sql_quote_literal};
+use crate::db::hex_encode;
 use crate::model::{HashSummary, IndexedFile};
 use crate::progress::ThrottledProgress;
 use crate::scan;
 use crate::source;
 use crate::source_registry;
-use fod_rust_hotpath::pg::DbRepo;
+use fod_rust_hotpath::pg::{DbRepo, DuplicateSetStageRow, IndexFileHashStageRow};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
@@ -157,72 +157,6 @@ fn mark_file_changed(repo: &DbRepo, file_id: u64) {
     let _ = repo.exec(&sql);
 }
 
-fn upsert_file_hash(
-    repo: &DbRepo,
-    file: &IndexedFile,
-    snapshot: &FileSnapshot,
-    partial_hash: Option<&[u8]>,
-    full_hash: Option<&[u8]>,
-    hash_status: &str,
-) -> Result<(), String> {
-    let partial_sql = partial_hash
-        .map(sql_bytea_hex)
-        .unwrap_or_else(|| "NULL".to_string());
-    let full_sql = full_hash
-        .map(sql_bytea_hex)
-        .unwrap_or_else(|| "NULL".to_string());
-    let sql = format!(
-        "
-        INSERT INTO index_file_hashes (
-            id_file,
-            hash_algorithm,
-            partial_hash,
-            full_hash,
-            hash_status,
-            observed_size,
-            observed_mtime_ns,
-            observed_inode,
-            observed_device,
-            created_at,
-            updated_at
-        )
-        VALUES (
-            {file_id},
-            {hash_algorithm},
-            {partial_hash},
-            {full_hash},
-            {hash_status},
-            {observed_size},
-            {observed_mtime_ns},
-            {observed_inode},
-            {observed_device},
-            NOW(),
-            NOW()
-        )
-        ON CONFLICT (id_file) DO UPDATE SET
-            hash_algorithm = EXCLUDED.hash_algorithm,
-            partial_hash = EXCLUDED.partial_hash,
-            full_hash = EXCLUDED.full_hash,
-            hash_status = EXCLUDED.hash_status,
-            observed_size = EXCLUDED.observed_size,
-            observed_mtime_ns = EXCLUDED.observed_mtime_ns,
-            observed_inode = EXCLUDED.observed_inode,
-            observed_device = EXCLUDED.observed_device,
-            updated_at = NOW()
-        ",
-        file_id = file.id_file,
-        hash_algorithm = sql_quote_literal(HASH_ALGORITHM),
-        partial_hash = partial_sql,
-        full_hash = full_sql,
-        hash_status = sql_quote_literal(hash_status),
-        observed_size = snapshot.size,
-        observed_mtime_ns = sql_nullable_i64(snapshot.mtime_ns),
-        observed_inode = sql_nullable_u64(snapshot.inode),
-        observed_device = sql_nullable_u64(snapshot.device),
-    );
-    repo.exec(&sql)
-}
-
 fn sample_ranges(file_size: u64) -> Vec<(u64, usize)> {
     if file_size == 0 {
         return Vec::new();
@@ -344,7 +278,7 @@ pub fn rebuild_duplicate_sets(repo: &DbRepo) -> Result<u64, String> {
             .push(file_id);
     }
 
-    let mut duplicate_sets = 0u64;
+    let mut duplicate_rows = Vec::new();
     for ((algorithm, full_hash_hex, file_size), file_ids) in groups {
         if file_ids.len() <= 1 {
             continue;
@@ -352,42 +286,16 @@ pub fn rebuild_duplicate_sets(repo: &DbRepo) -> Result<u64, String> {
         let full_hash_bytes = decode_hex(&full_hash_hex)?;
         let file_count = file_ids.len() as u64;
         let total_bytes = file_size.saturating_mul(file_count);
-        let sql = format!(
-            "
-            INSERT INTO index_duplicate_sets (
-                hash_algorithm,
-                full_hash,
-                file_size,
-                file_count,
-                total_bytes,
-                created_at,
-                updated_at
-            )
-            VALUES (
-                {hash_algorithm},
-                {full_hash},
-                {file_size},
-                {file_count},
-                {total_bytes},
-                NOW(),
-                NOW()
-            )
-            ON CONFLICT (hash_algorithm, full_hash, file_size) DO UPDATE SET
-                file_count = EXCLUDED.file_count,
-                total_bytes = EXCLUDED.total_bytes,
-                updated_at = NOW()
-            ",
-            hash_algorithm = sql_quote_literal(&algorithm),
-            full_hash = sql_bytea_hex(&full_hash_bytes),
-            file_size = file_size,
-            file_count = file_count,
-            total_bytes = total_bytes,
-        );
-        repo.exec(&sql)?;
-        duplicate_sets = duplicate_sets.saturating_add(1);
+        duplicate_rows.push(DuplicateSetStageRow {
+            hash_algorithm: algorithm,
+            full_hash: full_hash_bytes,
+            file_size,
+            file_count,
+            total_bytes,
+        });
     }
 
-    Ok(duplicate_sets)
+    repo.upsert_index_duplicate_sets_staged(&duplicate_rows)
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
@@ -417,6 +325,7 @@ fn partial_results_for_group(
     summary: &mut HashSummary,
     progress: &mut HashProgressReporter,
     processed_files: &mut u64,
+    staged_rows: &mut HashMap<u64, IndexFileHashStageRow>,
 ) -> Result<Vec<PartialHashResult>, String> {
     let mut results = Vec::with_capacity(group.len());
     for file in group {
@@ -432,7 +341,17 @@ fn partial_results_for_group(
         if snapshot != expected_snapshot {
             summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, file.id_file);
-            upsert_file_hash(repo, file, &snapshot, None, None, "changed_retry_needed")?;
+            staged_rows.insert(file.id_file, IndexFileHashStageRow {
+                id_file: file.id_file,
+                hash_algorithm: HASH_ALGORITHM.to_string(),
+                partial_hash: None,
+                full_hash: None,
+                hash_status: "changed_retry_needed".to_string(),
+                observed_size: snapshot.size,
+                observed_mtime_ns: snapshot.mtime_ns,
+                observed_inode: snapshot.inode,
+                observed_device: snapshot.device,
+            });
             progress.maybe_report(
                 summary,
                 *processed_files,
@@ -446,7 +365,17 @@ fn partial_results_for_group(
         if after != snapshot {
             summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, file.id_file);
-            upsert_file_hash(repo, file, &snapshot, None, None, "changed_retry_needed")?;
+            staged_rows.insert(file.id_file, IndexFileHashStageRow {
+                id_file: file.id_file,
+                hash_algorithm: HASH_ALGORITHM.to_string(),
+                partial_hash: None,
+                full_hash: None,
+                hash_status: "changed_retry_needed".to_string(),
+                observed_size: snapshot.size,
+                observed_mtime_ns: snapshot.mtime_ns,
+                observed_inode: snapshot.inode,
+                observed_device: snapshot.device,
+            });
             progress.maybe_report(
                 summary,
                 *processed_files,
@@ -455,7 +384,17 @@ fn partial_results_for_group(
             );
             continue;
         }
-        upsert_file_hash(repo, file, &snapshot, Some(&partial_hash), None, "partial")?;
+        staged_rows.insert(file.id_file, IndexFileHashStageRow {
+            id_file: file.id_file,
+            hash_algorithm: HASH_ALGORITHM.to_string(),
+            partial_hash: Some(partial_hash.clone()),
+            full_hash: None,
+            hash_status: "partial".to_string(),
+            observed_size: snapshot.size,
+            observed_mtime_ns: snapshot.mtime_ns,
+            observed_inode: snapshot.inode,
+            observed_device: snapshot.device,
+        });
         summary.partial_hashed_files = summary.partial_hashed_files.saturating_add(1);
         progress.maybe_report(
             summary,
@@ -478,6 +417,7 @@ fn full_hash_group(
     summary: &mut HashSummary,
     progress: &mut HashProgressReporter,
     processed_files: &mut u64,
+    staged_rows: &mut HashMap<u64, IndexFileHashStageRow>,
 ) -> Result<Vec<(IndexedFile, FileSnapshot, Vec<u8>)>, String> {
     let mut results = Vec::with_capacity(group.len());
     for item in group {
@@ -487,14 +427,17 @@ fn full_hash_group(
         if before != item.snapshot {
             summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, item.file.id_file);
-            upsert_file_hash(
-                repo,
-                &item.file,
-                &before,
-                None,
-                None,
-                "changed_retry_needed",
-            )?;
+            staged_rows.insert(item.file.id_file, IndexFileHashStageRow {
+                id_file: item.file.id_file,
+                hash_algorithm: HASH_ALGORITHM.to_string(),
+                partial_hash: None,
+                full_hash: None,
+                hash_status: "changed_retry_needed".to_string(),
+                observed_size: before.size,
+                observed_mtime_ns: before.mtime_ns,
+                observed_inode: before.inode,
+                observed_device: before.device,
+            });
             progress.maybe_report(
                 summary,
                 *processed_files,
@@ -508,14 +451,17 @@ fn full_hash_group(
         if after != before {
             summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, item.file.id_file);
-            upsert_file_hash(
-                repo,
-                &item.file,
-                &before,
-                None,
-                None,
-                "changed_retry_needed",
-            )?;
+            staged_rows.insert(item.file.id_file, IndexFileHashStageRow {
+                id_file: item.file.id_file,
+                hash_algorithm: HASH_ALGORITHM.to_string(),
+                partial_hash: None,
+                full_hash: None,
+                hash_status: "changed_retry_needed".to_string(),
+                observed_size: before.size,
+                observed_mtime_ns: before.mtime_ns,
+                observed_inode: before.inode,
+                observed_device: before.device,
+            });
             progress.maybe_report(
                 summary,
                 *processed_files,
@@ -524,14 +470,17 @@ fn full_hash_group(
             );
             continue;
         }
-        upsert_file_hash(
-            repo,
-            &item.file,
-            &before,
-            Some(&item.partial_hash),
-            Some(&full_hash),
-            "full",
-        )?;
+        staged_rows.insert(item.file.id_file, IndexFileHashStageRow {
+            id_file: item.file.id_file,
+            hash_algorithm: HASH_ALGORITHM.to_string(),
+            partial_hash: Some(item.partial_hash.clone()),
+            full_hash: Some(full_hash.clone()),
+            hash_status: "full".to_string(),
+            observed_size: before.size,
+            observed_mtime_ns: before.mtime_ns,
+            observed_inode: before.inode,
+            observed_device: before.device,
+        });
         summary.full_hashed_files = summary.full_hashed_files.saturating_add(1);
         progress.maybe_report(
             summary,
@@ -565,6 +514,7 @@ pub fn hash_source(
     let mut progress =
         HashProgressReporter::new(&source.name, &source.root_path, candidates_only, &summary);
     let mut processed_files = 0u64;
+    let mut staged_rows: HashMap<u64, IndexFileHashStageRow> = HashMap::new();
 
     let hash_result = (|| -> Result<(), String> {
         let mut groups: BTreeMap<u64, Vec<IndexedFile>> = BTreeMap::new();
@@ -584,6 +534,7 @@ pub fn hash_source(
                 &mut summary,
                 &mut progress,
                 &mut processed_files,
+                &mut staged_rows,
             )?;
             for item in partials {
                 partial_groups
@@ -604,9 +555,12 @@ pub fn hash_source(
                 &mut summary,
                 &mut progress,
                 &mut processed_files,
+                &mut staged_rows,
             )?;
         }
 
+        let staged_rows = staged_rows.into_values().collect::<Vec<_>>();
+        repo.upsert_index_file_hashes_staged(&staged_rows)?;
         let duplicate_sets = rebuild_duplicate_sets(repo)?;
         summary.duplicate_sets = duplicate_sets;
         Ok(())

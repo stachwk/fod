@@ -5,7 +5,7 @@ use crate::plan::{self, canonical_sort_key, PlannableFile};
 use crate::source_registry;
 use crate::{hash, scan, source};
 use fod_rust_hotpath::block_count_for_length;
-use fod_rust_hotpath::pg::{DbRepo, PersistBlockRow};
+use fod_rust_hotpath::pg::{DbRepo, IndexImportPlanEntryStageRow, PersistBlockRow};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
@@ -468,6 +468,7 @@ pub fn materialize_source(
         created_directories: root_created,
         ..MaterializeSummary::default()
     };
+    let mut staged_rows: Vec<IndexImportPlanEntryStageRow> = Vec::new();
 
     let result = (|| -> Result<(), String> {
         for ((algorithm, full_hash_hex, file_size), mut members) in groups {
@@ -499,18 +500,22 @@ pub fn materialize_source(
             summary.imported_bytes = summary
                 .imported_bytes
                 .saturating_add(canonical.file.file.size);
-            plan::insert_import_plan_entry(
-                repo,
-                plan_id,
-                &canonical.file.file,
-                duplicate_set_id,
-                if is_duplicate_group {
-                    "materialized_canonical"
+            staged_rows.push(IndexImportPlanEntryStageRow {
+                id_import_plan: plan_id,
+                id_file: canonical.file.file.id_file,
+                id_duplicate_set: duplicate_set_id,
+                action: if is_duplicate_group {
+                    "materialized_canonical".to_string()
                 } else {
-                    "materialized_unique"
+                    "materialized_unique".to_string()
                 },
-                Some(canonical.file.file.id_file),
-            )?;
+                canonical_file_id: Some(canonical.file.file.id_file),
+                logical_path: canonical.file.file.path.clone(),
+                source_path: canonical.file.file.source_path(),
+                size: canonical.file.file.size,
+                mtime_ns: canonical.file.file.mtime_ns,
+                source_changed: canonical.file.file.source_changed,
+            });
 
             for reference in members.iter().skip(1) {
                 let created_dirs = materialize_reference_file(
@@ -524,14 +529,18 @@ pub fn materialize_source(
                 summary.created_directories =
                     summary.created_directories.saturating_add(created_dirs);
                 summary.reference_files = summary.reference_files.saturating_add(1);
-                plan::insert_import_plan_entry(
-                    repo,
-                    plan_id,
-                    &reference.file.file,
-                    duplicate_set_id,
-                    "materialized_reference",
-                    Some(canonical.file.file.id_file),
-                )?;
+                staged_rows.push(IndexImportPlanEntryStageRow {
+                    id_import_plan: plan_id,
+                    id_file: reference.file.file.id_file,
+                    id_duplicate_set: duplicate_set_id,
+                    action: "materialized_reference".to_string(),
+                    canonical_file_id: Some(canonical.file.file.id_file),
+                    logical_path: reference.file.file.path.clone(),
+                    source_path: reference.file.file.source_path(),
+                    size: reference.file.file.size,
+                    mtime_ns: reference.file.file.mtime_ns,
+                    source_changed: reference.file.file.source_changed,
+                });
             }
         }
 
@@ -540,6 +549,7 @@ pub fn materialize_source(
 
     match result {
         Ok(()) => {
+            repo.upsert_index_import_plan_entries_staged(&staged_rows)?;
             summary.saved_bytes = summary.source_bytes.saturating_sub(summary.imported_bytes);
             let plan_summary = summary.as_import_plan_summary();
             plan::update_import_plan(repo, plan_id, "materialize_completed", false, &plan_summary)?;
