@@ -66,6 +66,7 @@ This document records the small set of open follow-ups plus completed work, clos
 
 - [ ] Expose server-side WAL/checkpoint/planner/autovacuum knobs in the Docker Compose and Makefile presets so local and QNAP benchmark runs can A/B the same config without editing container images.
   - Progress: the compose stack now accepts optional `POSTGRES_*` tuning env vars and `make qnap-config-show` / `make postgres-config-show` print the resolved preset; the benchmark A/B baseline and the local planner/autovacuum smoke are now recorded in `BENCHMARKS.md`.
+  - Progress: the 2026-06-27 short local/QNAP smoke on commit `a7504c6` confirmed the knobs can be A/B-tested without editing images, but it stayed checkpoint-free (`checkpoints_req=0` everywhere), so `max_wal_size` and `checkpoint_timeout` still need a longer pressure test before they can be judged.
 - [ ] Move indexer metadata writes onto staging + `COPY` + set-based merge, starting with `index_files`, `index_file_hashes`, `index_duplicate_sets`, and import plan entries.
   - Progress: `index_files`, `index_file_hashes`, `index_duplicate_sets`, and `index_import_plan_entries` now write through staged temp tables with `COPY` plus set-based merge helpers; `materialize` plan-entry writes use the same path too, while the streaming payload collection remains a separate follow-up.
 - [x] Stream `materialize` payload collection instead of buffering whole files in memory; keep fully replay-safe batch import as a separate design.

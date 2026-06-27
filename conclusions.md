@@ -5,6 +5,7 @@ Use this file to record concise conclusions that matter for future work.
 ## 2026-06-27
 
 - `fod-indexer materialize` now streams file payload import from disk instead of building a whole-file `Vec<Vec<u8>>` first. The new `DbRepo::persist_file_blocks_from_path(...)` path keeps the transaction boundary intact, bounds memory to chunk-sized blocks, and the existing `make test-fod-indexer-smoke` still passes after the change.
+- The new short local/QNAP WAL knob sweep on commit `a7504c6` stayed checkpoint-free (`checkpoints_req=0` everywhere), so `max_wal_size` and `checkpoint_timeout` did not produce a meaningful signal on this smoke. `synchronous_commit=off` was slightly slower on local and effectively flat on QNAP, while `wal_compression=on/lz4` trimmed only a little WAL volume without improving throughput. This run is a useful sanity check, but it is too short to treat checkpoint tuning as measured.
 
 ## 2026-06-26
 

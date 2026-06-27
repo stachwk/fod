@@ -23,7 +23,7 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-27 from working tree based on commit `790feab` and includes a local planner/autovacuum preset refresh plus the WAL/checkpoint preset comparison on local Docker and QNAP.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-27 from working tree based on commit `a7504c6` and includes the short WAL knob smoke below in addition to the earlier local planner/autovacuum preset refresh and the WAL/checkpoint preset comparison on local Docker and QNAP.
 
 ## 2026-06-27 PostgreSQL Local Planner Preset Refresh
 
@@ -168,6 +168,40 @@ Notes:
 
 - The local backend stayed much faster than QNAP on the same workload.
 - The QNAP checkpoint run is still the clearest sign that checkpoint and backend latency remain the dominant cost center there.
+
+## 2026-06-27 PostgreSQL WAL Knob Short Smoke
+
+Collected from working tree based on commit `a7504c6`.
+
+This run used the same short `PG_WAL_PRESSURE_COUNT=128` smoke on both local Docker and QNAP, but restarted PostgreSQL between profiles so the tuning env vars actually applied to a fresh backend each time. The workload is intentionally short and is best read as a sanity check for WAL and session-shape changes, not as a checkpoint saturation test.
+
+### WAL Pressure Benchmark
+
+Observed with `PG_WAL_PRESSURE_COUNT=128`.
+
+| Backend | Profile | Sync | Wal compression | Max WAL | Checkpoint timeout | Elapsed | Throughput | wal_bytes | wal_records | checkpoints_req | user_ins | activity_total_peak | activity_active_peak |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| local | baseline | `on` | `off` | current | current | `5.258s` | `12.17 MiB/s` | `10264094` | `110974` | `0` | `16578` | `6` | `1` |
+| local | synchronous_commit_off | `off` | `off` | current | current | `5.663s` | `11.30 MiB/s` | `12092064` | `118989` | `0` | `16386` | `6` | `0` |
+| local | wal_compression_on | `on` | `on` | current | current | `7.449s` | `8.59 MiB/s` | `10139189` | `118927` | `0` | `16386` | `6` | `1` |
+| local | wal_compression_lz4 | `on` | `lz4` | current | current | `6.073s` | `10.54 MiB/s` | `10207445` | `118707` | `0` | `16386` | `6` | `0` |
+| local | max_wal_size_8GB | `on` | `off` | `8GB` | current | `5.556s` | `11.52 MiB/s` | `12054971` | `118735` | `0` | `16386` | `6` | `0` |
+| local | checkpoint_timeout_15min | `on` | `off` | current | `15min` | `4.892s` | `13.08 MiB/s` | `12032927` | `118678` | `0` | `16386` | `6` | `1` |
+| local | checkpoint_timeout_30min | `on` | `off` | current | `30min` | `5.301s` | `12.07 MiB/s` | `12067647` | `118767` | `0` | `16386` | `6` | `1` |
+| qnap | baseline | `on` | `off` | current | current | `4.642s` | `13.79 MiB/s` | `9339591` | `118641` | `0` | `16386` | `6` | `1` |
+| qnap | synchronous_commit_off | `off` | `off` | current | current | `4.629s` | `13.83 MiB/s` | `9294928` | `118527` | `0` | `16386` | `6` | `0` |
+| qnap | wal_compression_on | `on` | `on` | current | current | `5.019s` | `12.75 MiB/s` | `9340557` | `118572` | `0` | `16386` | `6` | `1` |
+| qnap | wal_compression_lz4 | `on` | `lz4` | current | current | `5.308s` | `12.06 MiB/s` | `9290024` | `118542` | `0` | `16386` | `6` | `0` |
+| qnap | max_wal_size_8GB | `on` | `off` | `8GB` | current | `4.784s` | `13.38 MiB/s` | `9330919` | `118655` | `0` | `16386` | `6` | `1` |
+| qnap | checkpoint_timeout_15min | `on` | `off` | current | `15min` | `5.654s` | `11.32 MiB/s` | `9297310` | `118595` | `0` | `16386` | `6` | `1` |
+| qnap | checkpoint_timeout_30min | `on` | `off` | current | `30min` | `5.117s` | `12.51 MiB/s` | `9348541` | `118644` | `0` | `16386` | `6` | `1` |
+
+Notes:
+
+- `pg_stat_bgwriter.checkpoints_req` stayed `0` in every row, so this short smoke did not actually reach checkpoint pressure.
+- `pg_stat_activity` stayed at `6` total backend rows throughout the run, with only occasional active hits because the workload was too short for a stable activity peak.
+- On local Docker, `synchronous_commit=off` was slower than the baseline and `wal_compression=on/lz4` shaved only a small amount from `wal_bytes` while also lowering throughput.
+- On QNAP, the differences were small enough to stay inside short-run noise; none of the checkpoint-related knobs produced a useful signal in this smoke.
 
 ## 2026-06-26 PostgreSQL Benchmark Comparison
 
