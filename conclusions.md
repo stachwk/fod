@@ -2,6 +2,10 @@
 
 Use this file to record concise conclusions that matter for future work.
 
+## 2026-06-27
+
+- `fod-indexer materialize` now streams file payload import from disk instead of building a whole-file `Vec<Vec<u8>>` first. The new `DbRepo::persist_file_blocks_from_path(...)` path keeps the transaction boundary intact, bounds memory to chunk-sized blocks, and the existing `make test-fod-indexer-smoke` still passes after the change.
+
 ## 2026-06-26
 
 - `create_data_object()` is now replay-safe through a durable request-token row in `data_object_request_tokens`, so a lost COMMIT no longer doubles `reference_count` on retry. The new `rust_hotpath/tests/transactional_replay_smoke.rs::transactional_commit_disconnect_is_replayed_for_create_data_object` smoke covers the COMMIT-drop path and confirms the token-backed row reuse.

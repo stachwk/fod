@@ -341,17 +341,20 @@ fn partial_results_for_group(
         if snapshot != expected_snapshot {
             summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, file.id_file);
-            staged_rows.insert(file.id_file, IndexFileHashStageRow {
-                id_file: file.id_file,
-                hash_algorithm: HASH_ALGORITHM.to_string(),
-                partial_hash: None,
-                full_hash: None,
-                hash_status: "changed_retry_needed".to_string(),
-                observed_size: snapshot.size,
-                observed_mtime_ns: snapshot.mtime_ns,
-                observed_inode: snapshot.inode,
-                observed_device: snapshot.device,
-            });
+            staged_rows.insert(
+                file.id_file,
+                IndexFileHashStageRow {
+                    id_file: file.id_file,
+                    hash_algorithm: HASH_ALGORITHM.to_string(),
+                    partial_hash: None,
+                    full_hash: None,
+                    hash_status: "changed_retry_needed".to_string(),
+                    observed_size: snapshot.size,
+                    observed_mtime_ns: snapshot.mtime_ns,
+                    observed_inode: snapshot.inode,
+                    observed_device: snapshot.device,
+                },
+            );
             progress.maybe_report(
                 summary,
                 *processed_files,
@@ -365,17 +368,20 @@ fn partial_results_for_group(
         if after != snapshot {
             summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, file.id_file);
-            staged_rows.insert(file.id_file, IndexFileHashStageRow {
-                id_file: file.id_file,
-                hash_algorithm: HASH_ALGORITHM.to_string(),
-                partial_hash: None,
-                full_hash: None,
-                hash_status: "changed_retry_needed".to_string(),
-                observed_size: snapshot.size,
-                observed_mtime_ns: snapshot.mtime_ns,
-                observed_inode: snapshot.inode,
-                observed_device: snapshot.device,
-            });
+            staged_rows.insert(
+                file.id_file,
+                IndexFileHashStageRow {
+                    id_file: file.id_file,
+                    hash_algorithm: HASH_ALGORITHM.to_string(),
+                    partial_hash: None,
+                    full_hash: None,
+                    hash_status: "changed_retry_needed".to_string(),
+                    observed_size: snapshot.size,
+                    observed_mtime_ns: snapshot.mtime_ns,
+                    observed_inode: snapshot.inode,
+                    observed_device: snapshot.device,
+                },
+            );
             progress.maybe_report(
                 summary,
                 *processed_files,
@@ -384,17 +390,20 @@ fn partial_results_for_group(
             );
             continue;
         }
-        staged_rows.insert(file.id_file, IndexFileHashStageRow {
-            id_file: file.id_file,
-            hash_algorithm: HASH_ALGORITHM.to_string(),
-            partial_hash: Some(partial_hash.clone()),
-            full_hash: None,
-            hash_status: "partial".to_string(),
-            observed_size: snapshot.size,
-            observed_mtime_ns: snapshot.mtime_ns,
-            observed_inode: snapshot.inode,
-            observed_device: snapshot.device,
-        });
+        staged_rows.insert(
+            file.id_file,
+            IndexFileHashStageRow {
+                id_file: file.id_file,
+                hash_algorithm: HASH_ALGORITHM.to_string(),
+                partial_hash: Some(partial_hash.clone()),
+                full_hash: None,
+                hash_status: "partial".to_string(),
+                observed_size: snapshot.size,
+                observed_mtime_ns: snapshot.mtime_ns,
+                observed_inode: snapshot.inode,
+                observed_device: snapshot.device,
+            },
+        );
         summary.partial_hashed_files = summary.partial_hashed_files.saturating_add(1);
         progress.maybe_report(
             summary,
@@ -427,17 +436,20 @@ fn full_hash_group(
         if before != item.snapshot {
             summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, item.file.id_file);
-            staged_rows.insert(item.file.id_file, IndexFileHashStageRow {
-                id_file: item.file.id_file,
-                hash_algorithm: HASH_ALGORITHM.to_string(),
-                partial_hash: None,
-                full_hash: None,
-                hash_status: "changed_retry_needed".to_string(),
-                observed_size: before.size,
-                observed_mtime_ns: before.mtime_ns,
-                observed_inode: before.inode,
-                observed_device: before.device,
-            });
+            staged_rows.insert(
+                item.file.id_file,
+                IndexFileHashStageRow {
+                    id_file: item.file.id_file,
+                    hash_algorithm: HASH_ALGORITHM.to_string(),
+                    partial_hash: None,
+                    full_hash: None,
+                    hash_status: "changed_retry_needed".to_string(),
+                    observed_size: before.size,
+                    observed_mtime_ns: before.mtime_ns,
+                    observed_inode: before.inode,
+                    observed_device: before.device,
+                },
+            );
             progress.maybe_report(
                 summary,
                 *processed_files,
@@ -451,17 +463,20 @@ fn full_hash_group(
         if after != before {
             summary.changed_retry_files = summary.changed_retry_files.saturating_add(1);
             mark_file_changed(repo, item.file.id_file);
-            staged_rows.insert(item.file.id_file, IndexFileHashStageRow {
-                id_file: item.file.id_file,
-                hash_algorithm: HASH_ALGORITHM.to_string(),
-                partial_hash: None,
-                full_hash: None,
-                hash_status: "changed_retry_needed".to_string(),
-                observed_size: before.size,
-                observed_mtime_ns: before.mtime_ns,
-                observed_inode: before.inode,
-                observed_device: before.device,
-            });
+            staged_rows.insert(
+                item.file.id_file,
+                IndexFileHashStageRow {
+                    id_file: item.file.id_file,
+                    hash_algorithm: HASH_ALGORITHM.to_string(),
+                    partial_hash: None,
+                    full_hash: None,
+                    hash_status: "changed_retry_needed".to_string(),
+                    observed_size: before.size,
+                    observed_mtime_ns: before.mtime_ns,
+                    observed_inode: before.inode,
+                    observed_device: before.device,
+                },
+            );
             progress.maybe_report(
                 summary,
                 *processed_files,
@@ -470,17 +485,20 @@ fn full_hash_group(
             );
             continue;
         }
-        staged_rows.insert(item.file.id_file, IndexFileHashStageRow {
-            id_file: item.file.id_file,
-            hash_algorithm: HASH_ALGORITHM.to_string(),
-            partial_hash: Some(item.partial_hash.clone()),
-            full_hash: Some(full_hash.clone()),
-            hash_status: "full".to_string(),
-            observed_size: before.size,
-            observed_mtime_ns: before.mtime_ns,
-            observed_inode: before.inode,
-            observed_device: before.device,
-        });
+        staged_rows.insert(
+            item.file.id_file,
+            IndexFileHashStageRow {
+                id_file: item.file.id_file,
+                hash_algorithm: HASH_ALGORITHM.to_string(),
+                partial_hash: Some(item.partial_hash.clone()),
+                full_hash: Some(full_hash.clone()),
+                hash_status: "full".to_string(),
+                observed_size: before.size,
+                observed_mtime_ns: before.mtime_ns,
+                observed_inode: before.inode,
+                observed_device: before.device,
+            },
+        );
         summary.full_hashed_files = summary.full_hashed_files.saturating_add(1);
         progress.maybe_report(
             summary,

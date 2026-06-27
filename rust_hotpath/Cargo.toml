@@ -11,3 +11,4 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 base64 = "0.22.1"
 fod_rust_runtime = { package = "fod-rust-runtime", path = "../rust_runtime" }
+sha2 = "0.10.9"

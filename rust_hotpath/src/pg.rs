@@ -8,10 +8,14 @@ use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, request_token as generate_request_token,
     PersistBlockTransport, RuntimeConfig, RuntimeStorageSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
 };
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString};
+use std::fs::File;
+use std::io::Read;
 use std::os::raw::{c_char, c_int, c_uint};
+use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -7056,6 +7060,393 @@ impl DbRepo {
 
         self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
         Ok(())
+    }
+
+    unsafe fn persist_file_blocks_streaming_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+        file_size: u64,
+        block_size: u64,
+        total_blocks: u64,
+        truncate_pending: bool,
+        path: &Path,
+        expected_hash: &str,
+        maintain_copy_crc_table: bool,
+    ) -> Result<(), String> {
+        let block_size = block_size.max(1);
+        let block_size_usize = block_size as usize;
+        let total_blocks_text = CString::new(total_blocks.to_string())
+            .map_err(|_| "total blocks contains NUL byte".to_string())?;
+        let sql_delete_tail = CString::new(
+            "
+            DELETE FROM data_blocks
+            WHERE data_object_id = $1 AND _order >= $2
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_crc_tail = CString::new(
+            "
+            DELETE FROM copy_block_crc
+            WHERE data_object_id = $1 AND _order >= $2
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let data_object_id = match self.detach_shared_data_object_on_conn(
+            conn,
+            file_id,
+            file_size,
+            maintain_copy_crc_table,
+        )? {
+            Some(value) => value,
+            None => return Ok(()),
+        };
+        let data_object_id_text = CString::new(data_object_id.to_string())
+            .map_err(|_| "data object id contains NUL byte".to_string())?;
+        // Switching a file back to block storage must drop stale extent rows so
+        // extent-first reads cannot shadow the fresh block rows.
+        self.delete_extent_rows_on_conn(conn, &data_object_id_text)?;
+        if truncate_pending {
+            let params = [&data_object_id_text, &total_blocks_text];
+            exec_command_params(conn, &sql_delete_tail, &params)?;
+            if maintain_copy_crc_table {
+                exec_command_params(conn, &sql_delete_crc_tail, &params)?;
+            }
+        }
+
+        let chunk_limit = self.persist_buffer_chunk_blocks.max(1) as usize;
+        let mut file = File::open(path)
+            .map_err(|err| format!("unable to open {} for import: {err}", path.display()))?;
+        let mut hasher = Sha256::new();
+        let mut read_total = 0u64;
+        let mut next_block_index = 0u64;
+        let mut chunk_start_block = 0u64;
+        let mut chunk_data: Vec<Vec<u8>> = Vec::with_capacity(chunk_limit);
+        let mut buffer = vec![0u8; block_size_usize];
+
+        match self.persist_block_transport {
+            PersistBlockTransport::CopyBinaryStaging => {
+                create_persist_block_stage_table(conn)?;
+                let copy_sql = CString::new(format!(
+                    "COPY {} (id_file, data_object_id, _order, data, crc32) FROM STDIN BINARY",
+                    PERSIST_BLOCK_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let mut copy = CopyInSession::start(conn, &copy_sql)?;
+                let mut copy_buffer = Vec::with_capacity(64);
+                append_copy_binary_header(&mut copy_buffer);
+                copy.send(&copy_buffer)?;
+                let file_id_i64 = i64::try_from(file_id)
+                    .map_err(|_| "file id out of range for copy staging".to_string())?;
+                let data_object_id_i64 = i64::try_from(data_object_id)
+                    .map_err(|_| "data object id out of range for copy staging".to_string())?;
+
+                loop {
+                    let read = file.read(&mut buffer).map_err(|err| {
+                        format!("read failed while importing {}: {err}", path.display())
+                    })?;
+                    if read == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..read]);
+                    read_total = read_total.saturating_add(read as u64);
+                    if chunk_data.is_empty() {
+                        chunk_start_block = next_block_index;
+                    }
+                    chunk_data.push(buffer[..read].to_vec());
+                    next_block_index = next_block_index.saturating_add(1);
+                    if chunk_data.len() >= chunk_limit {
+                        let chunk_rows = chunk_data
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, data)| PersistBlockRow {
+                                block_index: chunk_start_block + offset as u64,
+                                data: data.as_slice(),
+                                used_len: data.len() as u64,
+                            })
+                            .collect::<Vec<_>>();
+                        for row in &chunk_rows {
+                            copy_buffer.clear();
+                            append_persist_block_copy_binary_row(
+                                &mut copy_buffer,
+                                file_id_i64,
+                                data_object_id_i64,
+                                row,
+                                block_size,
+                            )?;
+                            copy.send(&copy_buffer)?;
+                        }
+                        chunk_data.clear();
+                    }
+                }
+
+                if !chunk_data.is_empty() {
+                    let chunk_rows = chunk_data
+                        .iter()
+                        .enumerate()
+                        .map(|(offset, data)| PersistBlockRow {
+                            block_index: chunk_start_block + offset as u64,
+                            data: data.as_slice(),
+                            used_len: data.len() as u64,
+                        })
+                        .collect::<Vec<_>>();
+                    for row in &chunk_rows {
+                        copy_buffer.clear();
+                        append_persist_block_copy_binary_row(
+                            &mut copy_buffer,
+                            file_id_i64,
+                            data_object_id_i64,
+                            row,
+                            block_size,
+                        )?;
+                        copy.send(&copy_buffer)?;
+                    }
+                    chunk_data.clear();
+                }
+
+                if read_total != file_size {
+                    return Err(format!(
+                        "source file changed while importing {}",
+                        path.display()
+                    ));
+                }
+                let actual_hash = hex_encode_bytes(&hasher.finalize());
+                if actual_hash != expected_hash {
+                    return Err(format!(
+                        "full hash changed while importing {}",
+                        path.display()
+                    ));
+                }
+
+                copy.finish()?;
+                merge_persist_block_stage_table(conn, maintain_copy_crc_table)?;
+            }
+            PersistBlockTransport::BinaryBytea | PersistBlockTransport::LegacyHex => {
+                let file_id_text = CString::new(file_id.to_string())
+                    .map_err(|_| "file id contains NUL byte".to_string())?;
+                let sql_upsert_data_binary = CString::new(
+                    "
+                    INSERT INTO data_blocks (id_file, data_object_id, _order, data)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (data_object_id, _order)
+                    DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+                    ",
+                )
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let sql_upsert_data_hex = CString::new(
+                    "
+                    INSERT INTO data_blocks (id_file, data_object_id, _order, data)
+                    VALUES ($1, $2, $3, decode($4, 'hex'))
+                    ON CONFLICT (data_object_id, _order)
+                    DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+                    ",
+                )
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let sql_delete_data = CString::new(
+                    "
+                    DELETE FROM data_blocks
+                    WHERE data_object_id = $1 AND _order = $2
+                    ",
+                )
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+                loop {
+                    let read = file.read(&mut buffer).map_err(|err| {
+                        format!("read failed while importing {}: {err}", path.display())
+                    })?;
+                    if read == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..read]);
+                    read_total = read_total.saturating_add(read as u64);
+                    if chunk_data.is_empty() {
+                        chunk_start_block = next_block_index;
+                    }
+                    chunk_data.push(buffer[..read].to_vec());
+                    next_block_index = next_block_index.saturating_add(1);
+                    if chunk_data.len() >= chunk_limit {
+                        let chunk_rows = chunk_data
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, data)| PersistBlockRow {
+                                block_index: chunk_start_block + offset as u64,
+                                data: data.as_slice(),
+                                used_len: data.len() as u64,
+                            })
+                            .collect::<Vec<_>>();
+                        for row in &chunk_rows {
+                            let block_index_text = CString::new(row.block_index.to_string())
+                                .map_err(|_| "block index contains NUL byte".to_string())?;
+                            if row.used_len >= block_size {
+                                let normalized = normalize_block_bytes(row.data, block_size_usize);
+                                match self.persist_block_transport {
+                                    PersistBlockTransport::BinaryBytea => {
+                                        let params = [
+                                            SqlParam::Text(&file_id_text),
+                                            SqlParam::Text(&data_object_id_text),
+                                            SqlParam::Text(&block_index_text),
+                                            SqlParam::Binary(&normalized),
+                                        ];
+                                        exec_command_params_with_formats(
+                                            conn,
+                                            &sql_upsert_data_binary,
+                                            &params,
+                                        )?;
+                                    }
+                                    PersistBlockTransport::LegacyHex => {
+                                        let hex = CString::new(hex_encode_bytes(&normalized))
+                                            .map_err(|_| {
+                                                "hex payload contains NUL byte".to_string()
+                                            })?;
+                                        let params = [
+                                            SqlParam::Text(&file_id_text),
+                                            SqlParam::Text(&data_object_id_text),
+                                            SqlParam::Text(&block_index_text),
+                                            SqlParam::Text(&hex),
+                                        ];
+                                        exec_command_params_with_formats(
+                                            conn,
+                                            &sql_upsert_data_hex,
+                                            &params,
+                                        )?;
+                                    }
+                                    PersistBlockTransport::CopyBinaryStaging => {
+                                        return Err(
+                                            "copy_binary_staging is handled by the staging write path"
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                            } else {
+                                let params = [&data_object_id_text, &block_index_text];
+                                exec_command_params(conn, &sql_delete_data, &params)?;
+                            }
+                        }
+                        if maintain_copy_crc_table {
+                            self.persist_copy_block_crc_rows_on_conn(
+                                conn,
+                                file_id,
+                                block_size,
+                                &chunk_rows,
+                            )?;
+                        }
+                        chunk_data.clear();
+                    }
+                }
+
+                if !chunk_data.is_empty() {
+                    let chunk_rows = chunk_data
+                        .iter()
+                        .enumerate()
+                        .map(|(offset, data)| PersistBlockRow {
+                            block_index: chunk_start_block + offset as u64,
+                            data: data.as_slice(),
+                            used_len: data.len() as u64,
+                        })
+                        .collect::<Vec<_>>();
+                    for row in &chunk_rows {
+                        let block_index_text = CString::new(row.block_index.to_string())
+                            .map_err(|_| "block index contains NUL byte".to_string())?;
+                        if row.used_len >= block_size {
+                            let normalized = normalize_block_bytes(row.data, block_size_usize);
+                            match self.persist_block_transport {
+                                PersistBlockTransport::BinaryBytea => {
+                                    let params = [
+                                        SqlParam::Text(&file_id_text),
+                                        SqlParam::Text(&data_object_id_text),
+                                        SqlParam::Text(&block_index_text),
+                                        SqlParam::Binary(&normalized),
+                                    ];
+                                    exec_command_params_with_formats(
+                                        conn,
+                                        &sql_upsert_data_binary,
+                                        &params,
+                                    )?;
+                                }
+                                PersistBlockTransport::LegacyHex => {
+                                    let hex = CString::new(hex_encode_bytes(&normalized))
+                                        .map_err(|_| "hex payload contains NUL byte".to_string())?;
+                                    let params = [
+                                        SqlParam::Text(&file_id_text),
+                                        SqlParam::Text(&data_object_id_text),
+                                        SqlParam::Text(&block_index_text),
+                                        SqlParam::Text(&hex),
+                                    ];
+                                    exec_command_params_with_formats(
+                                        conn,
+                                        &sql_upsert_data_hex,
+                                        &params,
+                                    )?;
+                                }
+                                PersistBlockTransport::CopyBinaryStaging => {
+                                    return Err(
+                                        "copy_binary_staging is handled by the staging write path"
+                                            .to_string(),
+                                    );
+                                }
+                            }
+                        } else {
+                            let params = [&data_object_id_text, &block_index_text];
+                            exec_command_params(conn, &sql_delete_data, &params)?;
+                        }
+                    }
+                    if maintain_copy_crc_table {
+                        self.persist_copy_block_crc_rows_on_conn(
+                            conn,
+                            file_id,
+                            block_size,
+                            &chunk_rows,
+                        )?;
+                    }
+                    chunk_data.clear();
+                }
+
+                if read_total != file_size {
+                    return Err(format!(
+                        "source file changed while importing {}",
+                        path.display()
+                    ));
+                }
+                let actual_hash = hex_encode_bytes(&hasher.finalize());
+                if actual_hash != expected_hash {
+                    return Err(format!(
+                        "full hash changed while importing {}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+
+        self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
+        Ok(())
+    }
+
+    pub fn persist_file_blocks_from_path(
+        &self,
+        file_id: u64,
+        file_size: u64,
+        block_size: u64,
+        total_blocks: u64,
+        truncate_pending: bool,
+        path: &Path,
+        expected_hash: &str,
+        maintain_copy_crc_table: bool,
+    ) -> Result<(), String> {
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                self.persist_file_blocks_streaming_on_conn(
+                    conn,
+                    file_id,
+                    file_size,
+                    block_size,
+                    total_blocks,
+                    truncate_pending,
+                    path,
+                    expected_hash,
+                    maintain_copy_crc_table,
+                )
+            })
+        })
     }
 
     pub fn persist_file_blocks(

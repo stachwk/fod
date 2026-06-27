@@ -5,10 +5,9 @@ use crate::plan::{self, canonical_sort_key, PlannableFile};
 use crate::source_registry;
 use crate::{hash, scan, source};
 use fod_rust_hotpath::block_count_for_length;
-use fod_rust_hotpath::pg::{DbRepo, IndexImportPlanEntryStageRow, PersistBlockRow};
+use fod_rust_hotpath::pg::{DbRepo, IndexImportPlanEntryStageRow};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
-use std::convert::TryFrom;
 use std::fs::{self, File};
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
@@ -39,27 +38,6 @@ fn collect_full_hash(path: &Path) -> Result<String, String> {
         hasher.update(&buffer[..read]);
     }
     Ok(hex_encode(&hasher.finalize()))
-}
-
-fn collect_file_blocks(path: &Path, block_size: usize) -> Result<(Vec<Vec<u8>>, String), String> {
-    let mut file = File::open(path)
-        .map_err(|err| format!("unable to open {} for import: {err}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut blocks = Vec::new();
-    let mut buffer = vec![0u8; block_size.max(1)];
-
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|err| format!("read failed while importing {}: {err}", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        blocks.push(buffer[..read].to_vec());
-    }
-
-    Ok((blocks, hex_encode(&hasher.finalize())))
 }
 
 fn source_path(candidate: &PlannableFile) -> PathBuf {
@@ -320,29 +298,17 @@ fn materialize_canonical_file(
         ));
     }
 
-    let (blocks, actual_hash) = collect_file_blocks(
-        &path,
-        usize::try_from(block_size)
-            .map_err(|_| format!("block size is too large for this platform: {block_size}"))?,
-    )?;
-    if actual_hash != expected_hash {
-        return Err(format!(
-            "full hash changed while importing {}",
-            path.display()
-        ));
-    }
-
-    let block_rows = blocks
-        .iter()
-        .enumerate()
-        .map(|(block_index, block)| PersistBlockRow {
-            block_index: block_index as u64,
-            data: block.as_slice(),
-            used_len: block.len() as u64,
-        })
-        .collect::<Vec<_>>();
     let total_blocks = block_count_for_length(size, block_size, false);
-    repo.persist_file_blocks(file_id, size, block_size, total_blocks, false, &block_rows)?;
+    repo.persist_file_blocks_from_path(
+        file_id,
+        size,
+        block_size,
+        total_blocks,
+        false,
+        &path,
+        expected_hash,
+        false,
+    )?;
     Ok((file_id, created_dirs))
 }
 
