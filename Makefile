@@ -103,6 +103,9 @@ POSTGRES_BENCHMARK_CHECKPOINT_TARGETS := \
 	test-postgresql-wal-pressure-checkpoint
 
 PG_WAL_PRESSURE_COUNT ?= 128
+POSTGRES_BENCHMARK_WAL_PRESET_MAX_WAL_SIZE ?= 8GB
+POSTGRES_BENCHMARK_WAL_PRESET_CHECKPOINT_TIMEOUT ?= 15min
+POSTGRES_BENCHMARK_WAL_PRESET_WAL_COMPRESSION ?= pglz
 
 define RUN_POSTGRES_BENCHMARKS
 	@set -eu; \
@@ -127,6 +130,19 @@ POSTGRES_DB_BASE ?= foddbname
 POSTGRES_USER_BASE ?= foduser
 POSTGRES_PASSWORD_BASE ?= cichosza
 POSTGRES_PORT_BASE ?= 5432
+POSTGRES_SHARED_PRELOAD_LIBRARIES ?= pg_stat_statements
+POSTGRES_SHARED_BUFFERS ?=
+POSTGRES_MAX_CONNECTIONS ?=
+POSTGRES_MAX_WAL_SIZE ?=
+POSTGRES_CHECKPOINT_TIMEOUT ?=
+POSTGRES_CHECKPOINT_COMPLETION_TARGET ?=
+POSTGRES_WAL_COMPRESSION ?=
+POSTGRES_RANDOM_PAGE_COST ?=
+POSTGRES_EFFECTIVE_CACHE_SIZE ?=
+POSTGRES_MAINTENANCE_WORK_MEM ?=
+POSTGRES_AUTOVACUUM_MAX_WORKERS ?=
+POSTGRES_AUTOVACUUM_WORK_MEM ?=
+POSTGRES_SERVER_TUNING_ENV := POSTGRES_SHARED_PRELOAD_LIBRARIES=$(POSTGRES_SHARED_PRELOAD_LIBRARIES) POSTGRES_SHARED_BUFFERS=$(POSTGRES_SHARED_BUFFERS) POSTGRES_MAX_CONNECTIONS=$(POSTGRES_MAX_CONNECTIONS) POSTGRES_MAX_WAL_SIZE=$(POSTGRES_MAX_WAL_SIZE) POSTGRES_CHECKPOINT_TIMEOUT=$(POSTGRES_CHECKPOINT_TIMEOUT) POSTGRES_CHECKPOINT_COMPLETION_TARGET=$(POSTGRES_CHECKPOINT_COMPLETION_TARGET) POSTGRES_WAL_COMPRESSION=$(POSTGRES_WAL_COMPRESSION) POSTGRES_RANDOM_PAGE_COST=$(POSTGRES_RANDOM_PAGE_COST) POSTGRES_EFFECTIVE_CACHE_SIZE=$(POSTGRES_EFFECTIVE_CACHE_SIZE) POSTGRES_MAINTENANCE_WORK_MEM=$(POSTGRES_MAINTENANCE_WORK_MEM) POSTGRES_AUTOVACUUM_MAX_WORKERS=$(POSTGRES_AUTOVACUUM_MAX_WORKERS) POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_AUTOVACUUM_WORK_MEM)
 QNAP ?= 0
 QNAP_ENABLED := $(filter 1 true yes on,$(QNAP))
 QNAP_DOCKER_HOST ?= tcp://192.168.1.11:2376
@@ -137,7 +153,7 @@ QNAP_PG_PORT ?= 5432
 QNAP_PG_DBNAME ?= $(POSTGRES_DB_BASE)
 QNAP_PG_USER ?= postgresql
 QNAP_PG_PASSWORD ?= postgresqlfod
-COMPOSE_RUN := $(if $(QNAP_ENABLED),DOCKER_HOST=$(QNAP_DOCKER_HOST) DOCKER_TLS_VERIFY=$(QNAP_DOCKER_TLS_VERIFY) DOCKER_CERT_PATH=$(QNAP_DOCKER_CERT_PATH),) $(COMPOSE)
+COMPOSE_RUN := $(if $(QNAP_ENABLED),DOCKER_HOST=$(QNAP_DOCKER_HOST) DOCKER_TLS_VERIFY=$(QNAP_DOCKER_TLS_VERIFY) DOCKER_CERT_PATH=$(QNAP_DOCKER_CERT_PATH),) $(POSTGRES_SERVER_TUNING_ENV) $(COMPOSE)
 FOD_REMOTE_PG_HOST ?= $(QNAP_PG_HOST)
 FOD_REMOTE_PG_PORT ?= $(QNAP_PG_PORT)
 FOD_REMOTE_PG_DBNAME ?= $(QNAP_PG_DBNAME)
@@ -198,13 +214,14 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
+.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
 	'  make cargo-profile-show - print the active Cargo build profile used by Makefile install targets' \
-		'  make qnap-config-show - print the resolved QNAP Docker and PostgreSQL preset' \
+		'  make qnap-config-show - print the resolved QNAP Docker, PostgreSQL endpoint, and server tuning preset' \
+		'  make postgres-config-show - print the resolved PostgreSQL server tuning preset' \
 		'  make change-runtime-list - show the effective live reloadable snapshot via fod.change' \
 		'  make change-runtime-get - print one live reloadable key via fod.change (set FOD_CHANGE_KEY=...)' \
 		'  make reload-runtime - apply reloadable FOD_* values from the current config via fod.change (no remount needed)' \
@@ -261,6 +278,7 @@ help:
 		'  make postgres-benchmarks-local - run PostgreSQL optimization benchmarks on local Docker' \
 		'  make postgres-benchmarks-qnap - run PostgreSQL optimization benchmarks on QNAP' \
 		'  make postgres-benchmarks-checkpoint - run the checkpoint-forcing PostgreSQL WAL benchmark on the selected backend' \
+		'  make postgres-benchmarks-wal-preset - run the WAL/checkpoint benchmark preset across local Docker and QNAP' \
 		'  make postgres-benchmarks-compare - run the PostgreSQL optimization benchmarks on local Docker and QNAP' \
 		'  make mount      - mount FOD at $(MOUNTPOINT)' \
 		'  make qnap-mount - mount FOD at $(MOUNTPOINT) using QNAP=1' \
@@ -1109,6 +1127,13 @@ postgres-benchmarks-compare:
 	$(MAKE) --no-print-directory QNAP=0 postgres-benchmarks-checkpoint; \
 	$(MAKE) --no-print-directory QNAP=1 postgres-benchmarks-checkpoint
 
+postgres-benchmarks-wal-preset:
+	@$(MAKE) --no-print-directory \
+		POSTGRES_MAX_WAL_SIZE=$(POSTGRES_BENCHMARK_WAL_PRESET_MAX_WAL_SIZE) \
+		POSTGRES_CHECKPOINT_TIMEOUT=$(POSTGRES_BENCHMARK_WAL_PRESET_CHECKPOINT_TIMEOUT) \
+		POSTGRES_WAL_COMPRESSION=$(POSTGRES_BENCHMARK_WAL_PRESET_WAL_COMPRESSION) \
+		postgres-benchmarks-compare
+
 db-shell:
 	$(COMPOSE_RUN) -f $(COMPOSE_FILE) exec postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
 
@@ -1126,7 +1151,36 @@ qnap-config-show-inner:
 		"  FOD_PG_PORT=$(FOD_PG_PORT)" \
 		"  FOD_PG_DBNAME=$(FOD_PG_DBNAME)" \
 		"  FOD_PG_USER=$(FOD_PG_USER)" \
-		"  FOD_PG_PASSWORD=$(FOD_PG_PASSWORD)"
+		"  FOD_PG_PASSWORD=$(FOD_PG_PASSWORD)" \
+		'PostgreSQL server tuning preset:' \
+		"  POSTGRES_SHARED_PRELOAD_LIBRARIES=$(POSTGRES_SHARED_PRELOAD_LIBRARIES)" \
+		"  POSTGRES_SHARED_BUFFERS=$(if $(strip $(POSTGRES_SHARED_BUFFERS)),$(POSTGRES_SHARED_BUFFERS),<default>)" \
+		"  POSTGRES_MAX_CONNECTIONS=$(if $(strip $(POSTGRES_MAX_CONNECTIONS)),$(POSTGRES_MAX_CONNECTIONS),<default>)" \
+		"  POSTGRES_MAX_WAL_SIZE=$(if $(strip $(POSTGRES_MAX_WAL_SIZE)),$(POSTGRES_MAX_WAL_SIZE),<default>)" \
+		"  POSTGRES_CHECKPOINT_TIMEOUT=$(if $(strip $(POSTGRES_CHECKPOINT_TIMEOUT)),$(POSTGRES_CHECKPOINT_TIMEOUT),<default>)" \
+		"  POSTGRES_CHECKPOINT_COMPLETION_TARGET=$(if $(strip $(POSTGRES_CHECKPOINT_COMPLETION_TARGET)),$(POSTGRES_CHECKPOINT_COMPLETION_TARGET),<default>)" \
+		"  POSTGRES_WAL_COMPRESSION=$(if $(strip $(POSTGRES_WAL_COMPRESSION)),$(POSTGRES_WAL_COMPRESSION),<default>)" \
+		"  POSTGRES_RANDOM_PAGE_COST=$(if $(strip $(POSTGRES_RANDOM_PAGE_COST)),$(POSTGRES_RANDOM_PAGE_COST),<default>)" \
+		"  POSTGRES_EFFECTIVE_CACHE_SIZE=$(if $(strip $(POSTGRES_EFFECTIVE_CACHE_SIZE)),$(POSTGRES_EFFECTIVE_CACHE_SIZE),<default>)" \
+		"  POSTGRES_MAINTENANCE_WORK_MEM=$(if $(strip $(POSTGRES_MAINTENANCE_WORK_MEM)),$(POSTGRES_MAINTENANCE_WORK_MEM),<default>)" \
+		"  POSTGRES_AUTOVACUUM_MAX_WORKERS=$(if $(strip $(POSTGRES_AUTOVACUUM_MAX_WORKERS)),$(POSTGRES_AUTOVACUUM_MAX_WORKERS),<default>)" \
+		"  POSTGRES_AUTOVACUUM_WORK_MEM=$(if $(strip $(POSTGRES_AUTOVACUUM_WORK_MEM)),$(POSTGRES_AUTOVACUUM_WORK_MEM),<default>)"
+
+postgres-config-show:
+	@printf '%s\n' \
+		'PostgreSQL server tuning preset:' \
+		"  POSTGRES_SHARED_PRELOAD_LIBRARIES=$(POSTGRES_SHARED_PRELOAD_LIBRARIES)" \
+		"  POSTGRES_SHARED_BUFFERS=$(if $(strip $(POSTGRES_SHARED_BUFFERS)),$(POSTGRES_SHARED_BUFFERS),<default>)" \
+		"  POSTGRES_MAX_CONNECTIONS=$(if $(strip $(POSTGRES_MAX_CONNECTIONS)),$(POSTGRES_MAX_CONNECTIONS),<default>)" \
+		"  POSTGRES_MAX_WAL_SIZE=$(if $(strip $(POSTGRES_MAX_WAL_SIZE)),$(POSTGRES_MAX_WAL_SIZE),<default>)" \
+		"  POSTGRES_CHECKPOINT_TIMEOUT=$(if $(strip $(POSTGRES_CHECKPOINT_TIMEOUT)),$(POSTGRES_CHECKPOINT_TIMEOUT),<default>)" \
+		"  POSTGRES_CHECKPOINT_COMPLETION_TARGET=$(if $(strip $(POSTGRES_CHECKPOINT_COMPLETION_TARGET)),$(POSTGRES_CHECKPOINT_COMPLETION_TARGET),<default>)" \
+		"  POSTGRES_WAL_COMPRESSION=$(if $(strip $(POSTGRES_WAL_COMPRESSION)),$(POSTGRES_WAL_COMPRESSION),<default>)" \
+		"  POSTGRES_RANDOM_PAGE_COST=$(if $(strip $(POSTGRES_RANDOM_PAGE_COST)),$(POSTGRES_RANDOM_PAGE_COST),<default>)" \
+		"  POSTGRES_EFFECTIVE_CACHE_SIZE=$(if $(strip $(POSTGRES_EFFECTIVE_CACHE_SIZE)),$(POSTGRES_EFFECTIVE_CACHE_SIZE),<default>)" \
+		"  POSTGRES_MAINTENANCE_WORK_MEM=$(if $(strip $(POSTGRES_MAINTENANCE_WORK_MEM)),$(POSTGRES_MAINTENANCE_WORK_MEM),<default>)" \
+		"  POSTGRES_AUTOVACUUM_MAX_WORKERS=$(if $(strip $(POSTGRES_AUTOVACUUM_MAX_WORKERS)),$(POSTGRES_AUTOVACUUM_MAX_WORKERS),<default>)" \
+		"  POSTGRES_AUTOVACUUM_WORK_MEM=$(if $(strip $(POSTGRES_AUTOVACUUM_WORK_MEM)),$(POSTGRES_AUTOVACUUM_WORK_MEM),<default>)"
 
 qnap-up:
 	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) up

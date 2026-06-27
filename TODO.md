@@ -62,6 +62,13 @@ This document records the small set of open follow-ups plus completed work, clos
     - Progress: `tests/integration/test_ioctl.py` now covers `FICLONE` alongside `FIONREAD`, accepting the current unsupported path while still verifying that a successful clone would preserve payload contents. The host-side conclusion remains that the request is blocked before userspace on this stack.
 - [x] Zaprojektować pełną politykę mount-label SELinux. Celowo zamknięte jako non-goal: FOD trzyma SELinux jako xattr-backed metadata plus runtime gating, bez pełnej polityki mount-label.
 
+### PostgreSQL tuning and ingest hardening
+
+- [ ] Expose server-side WAL/checkpoint/planner/autovacuum knobs in the Docker Compose and Makefile presets so local and QNAP benchmark runs can A/B the same config without editing container images.
+  - Progress: the compose stack now accepts optional `POSTGRES_*` tuning env vars and `make qnap-config-show` / `make postgres-config-show` print the resolved preset; the benchmark A/B baseline is now recorded in `BENCHMARKS.md`.
+- [ ] Move indexer metadata writes onto staging + `COPY` + set-based merge, starting with `index_files`, `index_file_hashes`, `index_duplicate_sets`, and import plan entries.
+- [ ] Stream `materialize` payload collection instead of buffering whole files in memory; keep fully replay-safe batch import as a separate design.
+
 ### Direct I/O Microscope
 
 - [x] Add fine-grained hot-path profiling around `read_block_map()`, `fetch_block_range_chunk()`, `fetch_block_range_parallel()`, `assemble_read_slice()`, `update_write_buffer()`, `flush_write_state()`, `prepare_persist_rows_from_block_plan()`, `prepare_persist_extent_rows_from_extent_ranges()`, `clear_read_cache_for_file()`, and the cache / write-state clone paths so `FOD_FOPEN_DIRECT_IO=1` can be used as a stress microscope instead of a production mode.

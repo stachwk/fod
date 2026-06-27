@@ -23,7 +23,50 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-26 from commit `1605384` (`FOD 3.1.1: add PostgreSQL benchmark compare wrappers`) and includes a 128-file WAL-pressure run plus a forced-`CHECKPOINT` variant on both local Docker and QNAP.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-27 from commit `c24daeb` using `make postgres-benchmarks-wal-preset` and includes a 128-file WAL-pressure run plus a forced-`CHECKPOINT` variant on both local Docker and QNAP.
+
+## 2026-06-27 PostgreSQL WAL Preset Refresh
+
+Collected from commit `c24daeb` (`main` at the time of the run).
+
+This run used `make postgres-benchmarks-wal-preset`, which set `POSTGRES_MAX_WAL_SIZE=8GB`, `POSTGRES_CHECKPOINT_TIMEOUT=15min`, and `POSTGRES_WAL_COMPRESSION=pglz` before re-running the local and QNAP comparison suite.
+
+### WAL Pressure Benchmark
+
+Observed with `make postgres-benchmarks-wal-preset` using `PG_WAL_PRESSURE_COUNT=128`.
+
+| Backend | Mode | Files | Block size | Sync | Checkpoint | Elapsed | Throughput |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| local | base | `128` | `512k` | `1` | `0` | `5.128s` | `12.48 MiB/s` |
+| qnap | base | `128` | `512k` | `1` | `0` | `73.593s` | `0.87 MiB/s` |
+| local | checkpoint | `128` | `512k` | `1` | `1` | `5.349s` | `11.97 MiB/s` |
+| qnap | checkpoint | `128` | `512k` | `1` | `1` | `105.948s` | `0.60 MiB/s` |
+
+Stats delta:
+
+- local base: `wal_records=100623`, `wal_fpi=102`, `wal_bytes=8720371`, `wal_write=519`, `wal_sync=516`, `buffers_alloc=587`
+- qnap base: `wal_records=103794`, `wal_fpi=114`, `wal_bytes=9091535`, `wal_write=669`, `wal_sync=669`, `buffers_alloc=770`
+- local checkpoint: `CHECKPOINT elapsed_s=0.076`, `wal_records=97326`, `wal_fpi=3`, `wal_bytes=8362514`, `wal_write=503`, `wal_sync=502`, `checkpoints_req=1`, `checkpoint_write_time=20.0`, `checkpoint_sync_time=36.0`, `buffers_checkpoint=1001`, `buffers_backend=765`, `buffers_alloc=409`
+- qnap checkpoint: `CHECKPOINT elapsed_s=10.924`, `wal_records=104514`, `wal_fpi=87`, `wal_bytes=9118605`, `wal_write=724`, `wal_sync=719`, `checkpoints_req=1`, `checkpoint_write_time=7330.0`, `checkpoint_sync_time=1729.0`, `buffers_checkpoint=977`, `buffers_backend=871`, `buffers_alloc=465`
+
+Notes:
+
+- The WAL preset did not materially change the local profile, but the QNAP backend stayed much slower on the same workload.
+- The forced-checkpoint variant keeps exposing checkpoint cost as the dominant QNAP pain point.
+
+### Connection Churn Benchmark
+
+Observed on the same run of `make postgres-benchmarks-wal-preset`.
+
+| Backend | Connections | Elapsed | Connect avg | Connect p95 | Query avg | Query p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| local | `100` | `0.897s` | `8.399 ms` | `9.778 ms` | `0.541 ms` | `0.697 ms` |
+| qnap | `100` | `4.149s` | `37.134 ms` | `62.436 ms` | `4.269 ms` | `10.628 ms` |
+
+Notes:
+
+- The connection churn profile stayed in the same shape as the earlier QNAP runs: backend setup cost dominates the total round-trip time.
+- This remains a good smoke for pool/session churn, not a raw throughput indicator.
 
 ## 2026-06-27 QNAP Benchmark Refresh
 

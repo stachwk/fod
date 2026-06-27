@@ -2,7 +2,25 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: ${CONTAINER_POSTGRES_NAME:-fod-postgres}
-    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    command:
+      - gosu
+      - postgres
+      - sh
+      - -ec
+      - |
+        set -- postgres -c "shared_preload_libraries=${POSTGRES_SHARED_PRELOAD_LIBRARIES:-pg_stat_statements}"
+        [ -n "${POSTGRES_SHARED_BUFFERS:-}" ] && set -- "$@" -c "shared_buffers=${POSTGRES_SHARED_BUFFERS}"
+        [ -n "${POSTGRES_MAX_CONNECTIONS:-}" ] && set -- "$@" -c "max_connections=${POSTGRES_MAX_CONNECTIONS}"
+        [ -n "${POSTGRES_MAX_WAL_SIZE:-}" ] && set -- "$@" -c "max_wal_size=${POSTGRES_MAX_WAL_SIZE}"
+        [ -n "${POSTGRES_CHECKPOINT_TIMEOUT:-}" ] && set -- "$@" -c "checkpoint_timeout=${POSTGRES_CHECKPOINT_TIMEOUT}"
+        [ -n "${POSTGRES_CHECKPOINT_COMPLETION_TARGET:-}" ] && set -- "$@" -c "checkpoint_completion_target=${POSTGRES_CHECKPOINT_COMPLETION_TARGET}"
+        [ -n "${POSTGRES_WAL_COMPRESSION:-}" ] && set -- "$@" -c "wal_compression=${POSTGRES_WAL_COMPRESSION}"
+        [ -n "${POSTGRES_RANDOM_PAGE_COST:-}" ] && set -- "$@" -c "random_page_cost=${POSTGRES_RANDOM_PAGE_COST}"
+        [ -n "${POSTGRES_EFFECTIVE_CACHE_SIZE:-}" ] && set -- "$@" -c "effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE}"
+        [ -n "${POSTGRES_MAINTENANCE_WORK_MEM:-}" ] && set -- "$@" -c "maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM}"
+        [ -n "${POSTGRES_AUTOVACUUM_MAX_WORKERS:-}" ] && set -- "$@" -c "autovacuum_max_workers=${POSTGRES_AUTOVACUUM_MAX_WORKERS}"
+        [ -n "${POSTGRES_AUTOVACUUM_WORK_MEM:-}" ] && set -- "$@" -c "autovacuum_work_mem=${POSTGRES_AUTOVACUUM_WORK_MEM}"
+        exec "$@"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-foddbname}
       POSTGRES_USER: ${POSTGRES_USER:-foduser}
