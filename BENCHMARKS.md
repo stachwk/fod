@@ -23,7 +23,41 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-27 from working tree based on commit `a7504c6` and includes the short WAL knob smoke below in addition to the earlier local planner/autovacuum preset refresh and the WAL/checkpoint preset comparison on local Docker and QNAP.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-28 from working tree based on commit `e66e66c` and includes the local-only long WAL timeout smoke below in addition to the earlier local planner/autovacuum preset refresh and the WAL/checkpoint preset comparison on local Docker and QNAP.
+
+## 2026-06-28 Local PostgreSQL Timeout Sweep
+
+Collected from working tree based on commit `e66e66c`.
+
+This run stayed local-only and used `PG_WAL_PRESSURE_COUNT=10000` with `PG_WAL_PRESSURE_BLOCK_SIZE=512k` so the workload would run long enough to cross the checkpoint boundary on the local backend. It is the first pass in this thread that really separated the 5-minute timeout effect from the later WAL-request effect.
+
+### WAL Pressure Benchmark
+
+Observed with `PG_WAL_PRESSURE_COUNT=10000` and `PG_WAL_PRESSURE_BLOCK_SIZE=512k`.
+
+| Profile | Elapsed | Throughput | wal_bytes | wal_records | checkpoints_req | checkpoints_timed | buffers_checkpoint | buffers_backend | activity_total_peak | activity_active_peak |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | `459.581s` | `10.88 MiB/s` | `670184101` | `8077820` | `0` | `1` | `1372` | `26061` | `6` | `0` |
+| `max_wal_size=8GB` | `437.092s` | `11.44 MiB/s` | `950195482` | `9382337` | `0` | `1` | `6268` | `9397` | `6` | `0` |
+| `checkpoint_timeout=15min` | `434.652s` | `11.50 MiB/s` | `962282038` | `9391764` | `1` | `0` | `5868` | `12049` | `6` | `0` |
+| `checkpoint_timeout=30min` | `426.220s` | `11.73 MiB/s` | `948620638` | `9370960` | `1` | `0` | `3893` | `6773` | `6` | `1` |
+
+`pg_stat_user_tables` delta:
+
+| Profile | n_tup_ins | n_tup_upd | n_tup_del | n_tup_hot_upd | seq_scan | idx_scan |
+| --- | --- | --- | --- | --- | --- | --- |
+| baseline | `1308466` | `50711` | `514` | `30010` | `274341` | `2992156` |
+| `max_wal_size=8GB` | `1280002` | `60176` | `1280002` | `29898` | `342324` | `3211982` |
+| `checkpoint_timeout=15min` | `1280002` | `60169` | `1280002` | `29992` | `342309` | `3211951` |
+| `checkpoint_timeout=30min` | `1280002` | `60181` | `1280002` | `30013` | `342277` | `3211916` |
+
+Notes:
+
+- The default 5-minute timeout still produced a timed checkpoint, even though the run stayed under 1 GB of WAL.
+- `max_wal_size=8GB` alone did not remove that timed checkpoint, so timeout was still the dominant trigger at this workload size.
+- Once `checkpoint_timeout` moved to 15 or 30 minutes, the timed checkpoint disappeared and the checkpoint switched to the requested path instead.
+- `pg_stat_activity` stayed flat at six total backend rows; the sampler only caught 0 to 1 active sessions, so this workload is still I/O and checkpoint dominated rather than connection churn dominated.
+- The local-only long smoke is the first run here that makes the timeout effect visible without QNAP noise, so it is the better baseline for the next PostgreSQL tuning pass.
 
 ## 2026-06-27 PostgreSQL Local Planner Preset Refresh
 

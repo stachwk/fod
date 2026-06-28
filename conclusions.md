@@ -7,6 +7,11 @@ Use this file to record concise conclusions that matter for future work.
 - `fod-indexer materialize` now streams file payload import from disk instead of building a whole-file `Vec<Vec<u8>>` first. The new `DbRepo::persist_file_blocks_from_path(...)` path keeps the transaction boundary intact, bounds memory to chunk-sized blocks, and the existing `make test-fod-indexer-smoke` still passes after the change.
 - The new short local/QNAP WAL knob sweep on commit `a7504c6` stayed checkpoint-free (`checkpoints_req=0` everywhere), so `max_wal_size` and `checkpoint_timeout` did not produce a meaningful signal on this smoke. `synchronous_commit=off` was slightly slower on local and effectively flat on QNAP, while `wal_compression=on/lz4` trimmed only a little WAL volume without improving throughput. This run is a useful sanity check, but it is too short to treat checkpoint tuning as measured.
 
+## 2026-06-28
+
+- The local-only long WAL smoke on commit `e66e66c` finally crossed the checkpoint boundary. With `PG_WAL_PRESSURE_COUNT=10000` and `PG_WAL_PRESSURE_BLOCK_SIZE=512k`, the baseline and `max_wal_size=8GB` runs both ended with a timed checkpoint (`checkpoints_timed=1`, `checkpoints_req=0`) around `670 MB` and `950 MB` of WAL respectively. When `checkpoint_timeout` was stretched to `15min` or `30min`, the timed checkpoint disappeared and the checkpoint moved to the requested path (`checkpoints_req=1`, `checkpoints_timed=0`), which suggests the 5-minute timer is the first limiter on this workload and the size/request path becomes visible once the timer is relaxed.
+- `pg_stat_activity` stayed flat during the same long pass, so the local write burst still looks checkpoint-dominated rather than connection-churn-dominated. That makes this benchmark a better baseline for the next PostgreSQL tuning pass than the earlier short smoke.
+
 ## 2026-06-26
 
 - `create_data_object()` is now replay-safe through a durable request-token row in `data_object_request_tokens`, so a lost COMMIT no longer doubles `reference_count` on retry. The new `rust_hotpath/tests/transactional_replay_smoke.rs::transactional_commit_disconnect_is_replayed_for_create_data_object` smoke covers the COMMIT-drop path and confirms the token-backed row reuse.
