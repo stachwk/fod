@@ -23,7 +23,43 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-28 from working tree based on commit `e66e66c` and includes the local-only long WAL timeout smoke below in addition to the earlier local planner/autovacuum preset refresh and the WAL/checkpoint preset comparison on local Docker and QNAP.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-28 from working tree based on commit `1fee771` and includes the shared planner/autovacuum preset sweep below in addition to the earlier local-only long WAL timeout smoke and the WAL/checkpoint preset comparison on local Docker and QNAP.
+
+## 2026-06-28 PostgreSQL Planner Preset Sweep
+
+Collected from working tree based on commit `1fee771`.
+
+This run used `make postgres-benchmarks-planner-preset`, which applies the shared planner/autovacuum profile to both local Docker and QNAP before running the same comparison suite on each backend.
+
+### WAL Pressure Benchmark
+
+Observed with `PG_WAL_PRESSURE_COUNT=128`.
+
+| Backend | Mode | Checkpoint | Elapsed | Throughput | wal_bytes | wal_records | checkpoints_req | checkpoints_timed | checkpoint_write_time | checkpoint_sync_time | buffers_checkpoint | buffers_backend |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| local | base | `0` | `5.698s` | `11.23 MiB/s` | `8114698` | `91060` | `0` | `0` | `0.0` | `0.0` | `0` | `0` |
+| qnap | base | `0` | `86.606s` | `0.74 MiB/s` | `9485772` | `103763` | `0` | `0` | `0.0` | `0.0` | `0` | `0` |
+| local | checkpoint | `1` | `4.792s` | `13.35 MiB/s` | `7603229` | `87849` | `1` | `0` | `7.0` | `38.0` | `1022` | `129` |
+| qnap | checkpoint | `1` | `62.008s` | `1.03 MiB/s` | `8975106` | `104120` | `1` | `0` | `365.0` | `503.0` | `984` | `826` |
+
+Notes:
+
+- The shared planner/autovacuum preset does not erase the backend gap; QNAP is still dominated by remote latency and checkpoint cost.
+- The forced-checkpoint variant is still much cheaper locally than remotely, so checkpoint tuning on QNAP remains a separate concern from planner tuning.
+
+### Connection Churn Benchmark
+
+Observed on the same run of `make postgres-benchmarks-planner-preset`.
+
+| Backend | Connections | Elapsed | Connect avg | Connect p95 | Query avg | Query p95 |
+| --- | --- | --- | --- | --- | --- | --- |
+| local | `100` | `1.076s` | `10.159 ms` | `14.932 ms` | `0.572 ms` | `0.685 ms` |
+| qnap | `100` | `8.937s` | `81.769 ms` | `193.997 ms` | `7.490 ms` | `19.837 ms` |
+
+Notes:
+
+- Planner/autovacuum changes did not materially reduce the backend split on this workload.
+- QNAP connection churn is still roughly an order of magnitude slower than local Docker on this run, so network and remote-docker overhead remain the first thing to account for.
 
 ## 2026-06-28 Local PostgreSQL Timeout Sweep
 
