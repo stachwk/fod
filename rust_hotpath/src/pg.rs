@@ -953,6 +953,16 @@ unsafe fn fetch_single_text(res: *mut PGresult) -> Result<String, String> {
     value
 }
 
+unsafe fn fetch_single_text_option(res: *mut PGresult) -> Result<Option<String>, String> {
+    let value = fetch_single_text(res)?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
 unsafe fn fetch_first_row_texts(res: *mut PGresult) -> Result<Vec<String>, String> {
     let result = match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
@@ -1238,6 +1248,29 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
     let sql = sql_compact(sql);
 
     sql.starts_with("DELETE FROM ")
+        || sql.starts_with("INSERT INTO data_objects ")
+            && sql.contains("RETURNING id_data_object")
+        || sql.starts_with("INSERT INTO hardlinks ")
+            && sql.contains("RETURNING id_hardlink")
+        || sql.starts_with("INSERT INTO symlinks ")
+            && sql.contains("RETURNING id_symlink")
+        || sql.starts_with("INSERT INTO directories ")
+            && sql.contains("RETURNING id_directory")
+        || sql.starts_with("INSERT INTO files ")
+            && sql.contains("RETURNING id_file")
+        || sql.starts_with("INSERT INTO special_files ")
+        || sql.starts_with("INSERT INTO data_object_request_tokens ")
+            && sql.contains(
+                "ON CONFLICT (request_token) DO UPDATE SET updated_at = NOW() RETURNING id_data_object",
+            )
+        || sql.starts_with("INSERT INTO hardlink_promotion_request_tokens ")
+            && sql.contains(
+                "ON CONFLICT (request_token) DO UPDATE SET updated_at = NOW() RETURNING did_promote",
+            )
+        || sql.starts_with("INSERT INTO lock_lease_request_tokens ")
+            && sql.contains(
+                "ON CONFLICT (request_token) DO UPDATE SET did_grant = EXCLUDED.did_grant, updated_at = NOW() RETURNING did_grant",
+            )
         || sql.starts_with("INSERT INTO index_sources ")
             && sql.contains("ON CONFLICT (name) DO UPDATE SET kind = EXCLUDED.kind, root_path = EXCLUDED.root_path, updated_at = NOW()")
         || sql.starts_with("INSERT INTO index_files ")
@@ -1267,6 +1300,8 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
         || sql.starts_with("INSERT INTO lock_range_leases ")
         || sql.starts_with("UPDATE data_objects SET file_size = ")
         || sql.starts_with("UPDATE data_objects SET modification_date = NOW() WHERE id_data_object = $1")
+        || sql.starts_with("UPDATE data_objects SET reference_count = reference_count + 1, modification_date = NOW() WHERE id_data_object = $1")
+        || sql.starts_with("UPDATE data_objects SET reference_count = GREATEST(reference_count - 1, 0), modification_date = NOW() WHERE id_data_object = $1")
         || sql.starts_with("UPDATE files SET size = ")
         || sql.starts_with("UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
         || sql.starts_with("UPDATE data_blocks SET id_file = $2 WHERE data_object_id = $1")
@@ -2024,6 +2059,25 @@ where
     F: FnMut(*mut PGconn) -> Result<T, String>,
 {
     transactional_impl(conn, f, true)
+}
+
+/// Probe a durable outcome during the transaction so a committed result can be
+/// confirmed after a lost COMMIT acknowledgement without replaying the body.
+unsafe fn transactional_replay_confirmed<T, Probe, Body>(
+    conn: *mut PGconn,
+    mut probe: Probe,
+    mut body: Body,
+) -> Result<T, String>
+where
+    Probe: FnMut(*mut PGconn) -> Result<Option<T>, String>,
+    Body: FnMut(*mut PGconn) -> Result<T, String>,
+{
+    transactional_replayable(conn, |conn| {
+        if let Some(value) = probe(conn)? {
+            return Ok(value);
+        }
+        body(conn)
+    })
 }
 
 /// DbRepo keeps separate cached connections for write-heavy work and control-plane
@@ -3283,70 +3337,75 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| {
-                let request_token_params = [&request_token];
-                let existing_token_res =
-                    exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
-                let existing_token = fetch_single_text(existing_token_res)?;
-                if !existing_token.trim().is_empty() {
-                    return existing_token
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|_| "invalid data object request token mapping".to_string());
-                }
-
-                let value = match content_hash.as_ref() {
-                    Some(content_hash) if hash_dedupe_enabled => {
-                        let params = [&file_size, content_hash];
-                        let res = exec_params(conn, &sql_upsert_hash, &params)?;
-                        let text = fetch_single_text(res)?;
-                        text.trim()
+            transactional_replay_confirmed(
+                conn,
+                |conn| {
+                    let request_token_params = [&request_token];
+                    let existing_token_res =
+                        exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
+                    let existing_token = fetch_single_text_option(existing_token_res)?;
+                    match existing_token {
+                        Some(existing) => existing
                             .parse::<u64>()
-                            .map_err(|_| "invalid id_data_object value".to_string())?
+                            .map(Some)
+                            .map_err(|_| "invalid data object request token mapping".to_string()),
+                        None => Ok(None),
                     }
-                    Some(content_hash) => {
-                        let params = [&file_size, content_hash];
-                        let res = exec_params(conn, &sql_lookup_hash, &params)?;
-                        let existing = fetch_single_text(res)?;
-                        if let Ok(existing_id) = existing.trim().parse::<u64>() {
-                            let existing_id_text = CString::new(existing_id.to_string())
-                                .map_err(|_| "data object id contains NUL byte".to_string())?;
-                            let params = [&existing_id_text];
-                            exec_command_params(conn, &sql_touch_existing, &params)?;
-                            existing_id
-                        } else {
+                },
+                |conn| {
+                    let value = match content_hash.as_ref() {
+                        Some(content_hash) if hash_dedupe_enabled => {
                             let params = [&file_size, content_hash];
-                            let res = exec_params(conn, &sql_insert_hash, &params)?;
+                            let res = exec_params(conn, &sql_upsert_hash, &params)?;
                             let text = fetch_single_text(res)?;
                             text.trim()
                                 .parse::<u64>()
                                 .map_err(|_| "invalid id_data_object value".to_string())?
                         }
-                    }
-                    None => {
-                        let params = [&file_size];
-                        let res = exec_params(conn, &sql_insert_null, &params)?;
-                        let text = fetch_single_text(res)?;
-                        text.trim()
-                            .parse::<u64>()
-                            .map_err(|_| "invalid id_data_object value".to_string())?
-                    }
-                };
+                        Some(content_hash) => {
+                            let params = [&file_size, content_hash];
+                            let res = exec_params(conn, &sql_lookup_hash, &params)?;
+                            let existing = fetch_single_text(res)?;
+                            if let Ok(existing_id) = existing.trim().parse::<u64>() {
+                                let existing_id_text = CString::new(existing_id.to_string())
+                                    .map_err(|_| "data object id contains NUL byte".to_string())?;
+                                let params = [&existing_id_text];
+                                exec_command_params(conn, &sql_touch_existing, &params)?;
+                                existing_id
+                            } else {
+                                let params = [&file_size, content_hash];
+                                let res = exec_params(conn, &sql_insert_hash, &params)?;
+                                let text = fetch_single_text(res)?;
+                                text.trim()
+                                    .parse::<u64>()
+                                    .map_err(|_| "invalid id_data_object value".to_string())?
+                            }
+                        }
+                        None => {
+                            let params = [&file_size];
+                            let res = exec_params(conn, &sql_insert_null, &params)?;
+                            let text = fetch_single_text(res)?;
+                            text.trim()
+                                .parse::<u64>()
+                                .map_err(|_| "invalid id_data_object value".to_string())?
+                        }
+                    };
 
-                let value_text = CString::new(value.to_string())
-                    .map_err(|_| "data object id contains NUL byte".to_string())?;
-                let params = [&request_token, &value_text];
-                let res = exec_params(conn, &sql_store_request_token, &params)?;
-                let stored = fetch_single_text(res)?;
-                let stored_id = stored
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|_| "invalid data object request token mapping".to_string())?;
-                if stored_id != value {
-                    return Err("data object request token mapped to unexpected id".to_string());
-                }
-                Ok(value)
-            })
+                    let value_text = CString::new(value.to_string())
+                        .map_err(|_| "data object id contains NUL byte".to_string())?;
+                    let params = [&request_token, &value_text];
+                    let res = exec_params(conn, &sql_store_request_token, &params)?;
+                    let stored = fetch_single_text(res)?;
+                    let stored_id = stored
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|_| "invalid data object request token mapping".to_string())?;
+                    if stored_id != value {
+                        return Err("data object request token mapped to unexpected id".to_string());
+                    }
+                    Ok(value)
+                },
+            )
         })
     }
 
@@ -4134,6 +4193,7 @@ impl DbRepo {
             "
             SELECT CASE WHEN
                 to_regclass('{schema}.lock_leases') IS NOT NULL
+                AND to_regclass('{schema}.lock_lease_request_tokens') IS NOT NULL
                 AND to_regclass('{schema}.lock_range_leases') IS NOT NULL
                 AND EXISTS (
                     SELECT 1
@@ -4149,6 +4209,20 @@ impl DbRepo {
                     WHERE table_schema = '{schema}'
                       AND table_name = 'lock_leases'
                       AND column_name = 'request_token'
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = '{schema}'
+                      AND table_name = 'lock_lease_request_tokens'
+                      AND column_name = 'request_token'
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = '{schema}'
+                      AND table_name = 'lock_lease_request_tokens'
+                      AND column_name = 'did_grant'
                 )
                 AND EXISTS (
                     SELECT 1
@@ -4388,6 +4462,17 @@ impl DbRepo {
                             "
                             CREATE UNIQUE INDEX IF NOT EXISTS idx_lock_leases_request_token
                             ON lock_leases (request_token)
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
+                            CREATE TABLE IF NOT EXISTS lock_lease_request_tokens (
+                                request_token TEXT PRIMARY KEY,
+                                did_grant BOOLEAN NOT NULL,
+                                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                                updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                            )
                             ",
                         )
                         .map_err(|_| "SQL contains NUL byte".to_string())?,
@@ -4965,6 +5050,12 @@ impl DbRepo {
         let request_token_value = generate_request_token("client-session");
         let request_token = CString::new(request_token_value)
             .map_err(|_| "request token contains NUL byte".to_string())?;
+        let sql_lookup_request_token = CString::new(
+            "
+            SELECT COALESCE((SELECT session_id::text FROM client_sessions WHERE request_token = $1 LIMIT 1), '')
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql = CString::new(
             "
             INSERT INTO client_sessions (
@@ -5009,29 +5100,53 @@ impl DbRepo {
             .map_err(|_| "lease ttl contains NUL byte".to_string())?;
 
         self.with_control_connection(|conn| unsafe {
-            let params = [
-                &host_name,
-                &mountpoint,
-                &mount_mode,
-                &lock_backend,
-                &pid,
-                &request_token,
-                &lease_ttl_seconds,
-            ];
-            let res = exec_params(conn, &sql, &params)?;
-            let session_id = fetch_single_text(res)?;
-            if session_id.trim().is_empty() {
-                return Err("failed to create client session".to_string());
-            }
-            let session_id = session_id
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| "invalid client session id value".to_string())?;
-            if session_id > i64::MAX as u64 {
-                return Err("invalid client session id value".to_string());
-            }
-            self.set_lock_session_id(session_id as i64)?;
-            Ok(session_id)
+            transactional_replay_confirmed(
+                conn,
+                |conn| {
+                    let request_token_params = [&request_token];
+                    let existing_token_res =
+                        exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
+                    let existing_token = fetch_single_text_option(existing_token_res)?;
+                    match existing_token {
+                        Some(session_id_text) => {
+                            let session_id = session_id_text
+                                .parse::<u64>()
+                                .map_err(|_| "invalid client session id value".to_string())?;
+                            if session_id > i64::MAX as u64 {
+                                return Err("invalid client session id value".to_string());
+                            }
+                            self.set_lock_session_id(session_id as i64)?;
+                            Ok(Some(session_id))
+                        }
+                        None => Ok(None),
+                    }
+                },
+                |conn| {
+                    let params = [
+                        &host_name,
+                        &mountpoint,
+                        &mount_mode,
+                        &lock_backend,
+                        &pid,
+                        &request_token,
+                        &lease_ttl_seconds,
+                    ];
+                    let res = exec_params(conn, &sql, &params)?;
+                    let session_id = fetch_single_text(res)?;
+                    if session_id.trim().is_empty() {
+                        return Err("failed to create client session".to_string());
+                    }
+                    let session_id = session_id
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|_| "invalid client session id value".to_string())?;
+                    if session_id > i64::MAX as u64 {
+                        return Err("invalid client session id value".to_string());
+                    }
+                    self.set_lock_session_id(session_id as i64)?;
+                    Ok(session_id)
+                },
+            )
         })
     }
 
@@ -5066,58 +5181,80 @@ impl DbRepo {
         session_id: u64,
         owner_key: u64,
     ) -> Result<(), String> {
+        let session_id_value = i64::try_from(session_id).unwrap_or(0);
+        let owner_key_value = owner_key;
+        let probe_sql = CString::new(
+            "
+            SELECT COALESCE((SELECT owner_key::text FROM client_session_owner_keys WHERE session_id = $1 AND owner_key = $2 LIMIT 1), '')
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         self.with_control_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| {
-                let insert_sql = CString::new(
-                    "
-                    INSERT INTO client_session_owner_keys (
-                        session_id,
-                        owner_key,
-                        first_seen_at,
-                        last_seen_at,
-                        updated_at
-                    ) VALUES (
-                        $1,
-                        $2,
-                        NOW(),
-                        NOW(),
-                        NOW()
+            transactional_replay_confirmed(
+                conn,
+                |conn| {
+                    let session_id = CString::new(session_id.to_string())
+                        .map_err(|_| "session id contains NUL byte".to_string())?;
+                    let owner_key = CString::new(owner_key_value.to_string())
+                        .map_err(|_| "owner key contains NUL byte".to_string())?;
+                    let params = [&session_id, &owner_key];
+                    let existing_res = exec_params(conn, &probe_sql, &params)?;
+                    match fetch_single_text_option(existing_res)? {
+                        Some(_) => {
+                            if let Ok(mut guard) = self.owner_session_cache.lock() {
+                                guard.insert(owner_key_value, session_id_value);
+                            }
+                            Ok(Some(()))
+                        }
+                        None => Ok(None),
+                    }
+                },
+                |conn| {
+                    let insert_sql = CString::new(
+                        "
+                        INSERT INTO client_session_owner_keys (
+                            session_id,
+                            owner_key,
+                            first_seen_at,
+                            last_seen_at,
+                            updated_at
+                        ) VALUES (
+                            $1,
+                            $2,
+                            NOW(),
+                            NOW(),
+                            NOW()
+                        )
+                        ON CONFLICT (session_id, owner_key)
+                        DO UPDATE SET
+                            last_seen_at = NOW(),
+                            updated_at = NOW()
+                        ",
                     )
-                    ON CONFLICT (session_id, owner_key)
-                    DO UPDATE SET
-                        last_seen_at = NOW(),
-                        updated_at = NOW()
-                    ",
-                )
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-                let touch_sql = CString::new(
-                    "
-                    UPDATE client_sessions
-                    SET last_lock_at = NOW(),
-                        updated_at = NOW()
-                    WHERE session_id = $1
-                    ",
-                )
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-                let session_id = CString::new(session_id.to_string())
-                    .map_err(|_| "session id contains NUL byte".to_string())?;
-                let owner_key_value = owner_key;
-                let owner_key = CString::new(owner_key_value.to_string())
-                    .map_err(|_| "owner key contains NUL byte".to_string())?;
-                let session_id_value = session_id
-                    .as_c_str()
-                    .to_string_lossy()
-                    .parse::<i64>()
-                    .unwrap_or(0);
-                let params = [&session_id, &owner_key];
-                exec_command_params(conn, &insert_sql, &params)?;
-                let touch_params = [&session_id];
-                exec_command_params(conn, &touch_sql, &touch_params)?;
-                if let Ok(mut guard) = self.owner_session_cache.lock() {
-                    guard.insert(owner_key_value, session_id_value);
-                }
-                Ok(())
-            })
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let touch_sql = CString::new(
+                        "
+                        UPDATE client_sessions
+                        SET last_lock_at = NOW(),
+                            updated_at = NOW()
+                        WHERE session_id = $1
+                        ",
+                    )
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let session_id = CString::new(session_id.to_string())
+                        .map_err(|_| "session id contains NUL byte".to_string())?;
+                    let owner_key = CString::new(owner_key_value.to_string())
+                        .map_err(|_| "owner key contains NUL byte".to_string())?;
+                    let params = [&session_id, &owner_key];
+                    exec_command_params(conn, &insert_sql, &params)?;
+                    let touch_params = [&session_id];
+                    exec_command_params(conn, &touch_sql, &touch_params)?;
+                    if let Ok(mut guard) = self.owner_session_cache.lock() {
+                        guard.insert(owner_key_value, session_id_value);
+                    }
+                    Ok(())
+                },
+            )
         })
     }
 
@@ -5216,134 +5353,202 @@ impl DbRepo {
         let request_token = CString::new(request_token_value)
             .map_err(|_| "request token contains NUL byte".to_string())?;
         let sql_lookup_request_token = CString::new(
-            "SELECT COALESCE((SELECT request_token FROM lock_leases WHERE request_token = $1 LIMIT 1), '')",
+            "SELECT COALESCE((SELECT did_grant::text FROM lock_lease_request_tokens WHERE request_token = $1 LIMIT 1), '')",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_store_request_token = CString::new(
+            "
+            INSERT INTO lock_lease_request_tokens (
+                request_token,
+                did_grant,
+                created_at,
+                updated_at
+            ) VALUES (
+                $1,
+                $2,
+                NOW(),
+                NOW()
+            )
+            ON CONFLICT (request_token) DO UPDATE SET
+                did_grant = EXCLUDED.did_grant,
+                updated_at = NOW()
+            RETURNING did_grant
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let resource_kind = CString::new(resource_kind)
+            .map_err(|_| "resource kind contains NUL byte".to_string())?;
+        let resource_id = CString::new(resource_id.to_string())
+            .map_err(|_| "resource id contains NUL byte".to_string())?;
+        let lease_kind =
+            CString::new("flock").map_err(|_| "lease kind contains NUL byte".to_string())?;
+        let requested_type_value = requested_type;
+        let requested_type = CString::new(requested_type_value.to_string())
+            .map_err(|_| "lock type contains NUL byte".to_string())?;
+        let lease_ttl_seconds = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "lease ttl contains NUL byte".to_string())?;
+        let owner_key = CString::new(owner_key.to_string())
+            .map_err(|_| "owner key contains NUL byte".to_string())?;
+
         self.with_control_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| {
-                let request_token_params = [&request_token];
-                let existing_token_res =
-                    exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
-                let existing_token = fetch_single_text(existing_token_res)?;
-                if !existing_token.trim().is_empty() {
-                    return Ok(true);
-                }
-
-                let lock_granted = Self::try_advisory_xact_lock_on_conn(conn, resource_lock_id)?;
-                if !lock_granted {
-                    return Ok(false);
-                }
-
-                let prune_sql = CString::new(
-                    "
-                    DELETE FROM lock_leases
-                    WHERE resource_kind = $1
-                      AND resource_id = $2
-                      AND lease_kind = $3
-                      AND lease_expires_at <= NOW()
-                    ",
-                )
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-                let resource_kind = CString::new(resource_kind)
-                    .map_err(|_| "resource kind contains NUL byte".to_string())?;
-                let resource_id = CString::new(resource_id.to_string())
-                    .map_err(|_| "resource id contains NUL byte".to_string())?;
-                let lease_kind = CString::new("flock")
-                    .map_err(|_| "lease kind contains NUL byte".to_string())?;
-                let prune_params = [&resource_kind, &resource_id, &lease_kind];
-                exec_command_params(conn, &prune_sql, &prune_params)?;
-
-                let conflict_sql = CString::new(
-                    "
-                    SELECT lock_type
-                    FROM lock_leases
-                    WHERE resource_kind = $1
-                      AND resource_id = $2
-                      AND lease_kind = $3
-                      AND lease_expires_at > NOW()
-                      AND NOT (session_id = $4 AND owner_key = $5)
-                    ORDER BY session_id, owner_key
-                    LIMIT 1
-                    ",
-                )
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-                let owner_key = CString::new(owner_key.to_string())
-                    .map_err(|_| "owner key contains NUL byte".to_string())?;
-                let conflict_params = [
-                    &resource_kind,
-                    &resource_id,
-                    &lease_kind,
-                    &session_id,
-                    &owner_key,
-                ];
-                let res = exec_params(conn, &conflict_sql, &conflict_params)?;
-                let conflict = fetch_single_text(res)?;
-                if !conflict.trim().is_empty() {
-                    let other_type = conflict.trim().parse::<i32>().unwrap_or(0);
-                    let blocked = match requested_type {
-                        1 => other_type == 2,
-                        2 => other_type == 1 || other_type == 2,
-                        _ => false,
-                    };
-                    if blocked {
+            transactional_replay_confirmed(
+                conn,
+                |conn| {
+                    let request_token_params = [&request_token];
+                    let existing_token_res =
+                        exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
+                    let existing_token = fetch_single_text_option(existing_token_res)?;
+                    match existing_token {
+                        Some(existing) => Ok(Some(matches!(
+                            existing.trim().to_ascii_lowercase().as_str(),
+                            "t" | "true" | "1" | "on"
+                        ))),
+                        None => Ok(None),
+                    }
+                },
+                |conn| {
+                    let lock_granted =
+                        Self::try_advisory_xact_lock_on_conn(conn, resource_lock_id)?;
+                    if !lock_granted {
+                        let did_grant = CString::new("false")
+                            .map_err(|_| "lock lease outcome contains NUL byte".to_string())?;
+                        let params = [&request_token, &did_grant];
+                        let res = exec_params(conn, &sql_store_request_token, &params)?;
+                        let stored = fetch_single_text(res)?;
+                        if !matches!(
+                            stored.trim().to_ascii_lowercase().as_str(),
+                            "f" | "false" | "0" | "off"
+                        ) {
+                            return Err(
+                                "lock lease request token stored unexpected result".to_string()
+                            );
+                        }
                         return Ok(false);
                     }
-                }
 
-                let upsert_sql = CString::new(
-                    "
-                    INSERT INTO lock_leases (
-                        resource_kind,
-                        resource_id,
-                        session_id,
-                        owner_key,
-                        lease_kind,
-                        lock_type,
-                        request_token,
-                        lease_expires_at,
-                        heartbeat_at,
-                        created_at,
-                        updated_at
-                    ) VALUES (
-                        $1,
-                        $2,
-                        $3,
-                        $4,
-                        $5,
-                        $6,
-                        $7,
-                        NOW() + ($8 || ' seconds')::interval,
-                        NOW(),
-                        NOW(),
-                        NOW()
+                    let prune_sql = CString::new(
+                        "
+                        DELETE FROM lock_leases
+                        WHERE resource_kind = $1
+                          AND resource_id = $2
+                          AND lease_kind = $3
+                          AND lease_expires_at <= NOW()
+                        ",
                     )
-                    ON CONFLICT (resource_kind, resource_id, session_id, owner_key, lease_kind)
-                    DO UPDATE SET
-                        lock_type = EXCLUDED.lock_type,
-                        request_token = EXCLUDED.request_token,
-                        lease_expires_at = EXCLUDED.lease_expires_at,
-                        heartbeat_at = EXCLUDED.heartbeat_at,
-                        updated_at = NOW()
-                    ",
-                )
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-                let requested_type = CString::new(requested_type.to_string())
-                    .map_err(|_| "lock type contains NUL byte".to_string())?;
-                let lease_ttl_seconds = CString::new(lease_ttl_seconds.to_string())
-                    .map_err(|_| "lease ttl contains NUL byte".to_string())?;
-                let upsert_params = [
-                    &resource_kind,
-                    &resource_id,
-                    &session_id,
-                    &owner_key,
-                    &lease_kind,
-                    &requested_type,
-                    &request_token,
-                    &lease_ttl_seconds,
-                ];
-                exec_command_params(conn, &upsert_sql, &upsert_params)?;
-                Ok(true)
-            })
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let prune_params = [&resource_kind, &resource_id, &lease_kind];
+                    exec_command_params(conn, &prune_sql, &prune_params)?;
+
+                    let conflict_sql = CString::new(
+                        "
+                        SELECT lock_type
+                        FROM lock_leases
+                        WHERE resource_kind = $1
+                          AND resource_id = $2
+                          AND lease_kind = $3
+                          AND lease_expires_at > NOW()
+                          AND NOT (session_id = $4 AND owner_key = $5)
+                        ORDER BY session_id, owner_key
+                        LIMIT 1
+                        ",
+                    )
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let conflict_params = [
+                        &resource_kind,
+                        &resource_id,
+                        &lease_kind,
+                        &session_id,
+                        &owner_key,
+                    ];
+                    let res = exec_params(conn, &conflict_sql, &conflict_params)?;
+                    let conflict = fetch_single_text(res)?;
+                    if !conflict.trim().is_empty() {
+                        let other_type = conflict.trim().parse::<i32>().unwrap_or(0);
+                        let blocked = match requested_type_value {
+                            1 => other_type == 2,
+                            2 => other_type == 1 || other_type == 2,
+                            _ => false,
+                        };
+                        if blocked {
+                            let did_grant = CString::new("false")
+                                .map_err(|_| "lock lease outcome contains NUL byte".to_string())?;
+                            let params = [&request_token, &did_grant];
+                            let res = exec_params(conn, &sql_store_request_token, &params)?;
+                            let stored = fetch_single_text(res)?;
+                            if !matches!(
+                                stored.trim().to_ascii_lowercase().as_str(),
+                                "f" | "false" | "0" | "off"
+                            ) {
+                                return Err(
+                                    "lock lease request token stored unexpected result".to_string()
+                                );
+                            }
+                            return Ok(false);
+                        }
+                    }
+
+                    let upsert_sql = CString::new(
+                        "
+                        INSERT INTO lock_leases (
+                            resource_kind,
+                            resource_id,
+                            session_id,
+                            owner_key,
+                            lease_kind,
+                            lock_type,
+                            request_token,
+                            lease_expires_at,
+                            heartbeat_at,
+                            created_at,
+                            updated_at
+                        ) VALUES (
+                            $1,
+                            $2,
+                            $3,
+                            $4,
+                            $5,
+                            $6,
+                            $7,
+                            NOW() + ($8 || ' seconds')::interval,
+                            NOW(),
+                            NOW(),
+                            NOW()
+                        )
+                        ON CONFLICT (resource_kind, resource_id, session_id, owner_key, lease_kind)
+                        DO UPDATE SET
+                            lock_type = EXCLUDED.lock_type,
+                            request_token = EXCLUDED.request_token,
+                            lease_expires_at = EXCLUDED.lease_expires_at,
+                            heartbeat_at = EXCLUDED.heartbeat_at,
+                            updated_at = NOW()
+                        ",
+                    )
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let upsert_params = [
+                        &resource_kind,
+                        &resource_id,
+                        &session_id,
+                        &owner_key,
+                        &lease_kind,
+                        &requested_type,
+                        &request_token,
+                        &lease_ttl_seconds,
+                    ];
+                    exec_command_params(conn, &upsert_sql, &upsert_params)?;
+                    let did_grant = CString::new("true")
+                        .map_err(|_| "lock lease outcome contains NUL byte".to_string())?;
+                    let params = [&request_token, &did_grant];
+                    let res = exec_params(conn, &sql_store_request_token, &params)?;
+                    let stored = fetch_single_text(res)?;
+                    if !matches!(
+                        stored.trim().to_ascii_lowercase().as_str(),
+                        "t" | "true" | "1" | "on"
+                    ) {
+                        return Err("lock lease request token stored unexpected result".to_string());
+                    }
+                    Ok(true)
+                },
+            )
         })
     }
 
@@ -6254,99 +6459,107 @@ impl DbRepo {
         };
 
         self.with_cached_connection(|conn| unsafe {
-            let result = transactional_replayable(conn, |conn| {
-                let request_token_params = [&request_token];
-                let existing_token_res =
-                    exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
-                let existing_token = fetch_single_text(existing_token_res)?;
-                if !existing_token.trim().is_empty() {
-                    return Ok(parse_bool(&existing_token));
-                }
-
-                let params = [&file_id];
-                let res = exec_params(conn, &sql_choose, &params)?;
-                let chosen = match PQresultStatus(res) {
-                    PGRES_TUPLES_OK => {
-                        let rows = PQntuples(res);
-                        let cols = PQnfields(res);
-                        let value = if rows < 1 || cols < 3 {
-                            None
-                        } else {
-                            let hardlink_ptr = PQgetvalue(res, 0, 0);
-                            let parent_ptr = PQgetvalue(res, 0, 1);
-                            let name_ptr = PQgetvalue(res, 0, 2);
-                            if hardlink_ptr.is_null() || parent_ptr.is_null() || name_ptr.is_null()
-                            {
+            transactional_replay_confirmed(
+                conn,
+                |conn| {
+                    let request_token_params = [&request_token];
+                    let existing_token_res =
+                        exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
+                    let existing_token = fetch_single_text_option(existing_token_res)?;
+                    match existing_token {
+                        Some(existing) => Ok(Some(parse_bool(&existing))),
+                        None => Ok(None),
+                    }
+                },
+                |conn| {
+                    let params = [&file_id];
+                    let res = exec_params(conn, &sql_choose, &params)?;
+                    let chosen = match PQresultStatus(res) {
+                        PGRES_TUPLES_OK => {
+                            let rows = PQntuples(res);
+                            let cols = PQnfields(res);
+                            let value = if rows < 1 || cols < 3 {
                                 None
                             } else {
-                                let hardlink_id = CStr::from_ptr(hardlink_ptr)
-                                    .to_string_lossy()
-                                    .trim()
-                                    .parse::<u64>()
-                                    .ok();
-                                let parent_id = CStr::from_ptr(parent_ptr)
-                                    .to_string_lossy()
-                                    .trim()
-                                    .parse::<u64>()
-                                    .ok();
-                                let name = CStr::from_ptr(name_ptr).to_string_lossy().to_string();
-                                hardlink_id.map(|hardlink_id| (hardlink_id, parent_id, name))
-                            }
-                        };
-                        PQclear(res);
-                        value
-                    }
-                    _ => {
-                        PQclear(res);
-                        return Err(conn_error(conn));
-                    }
-                };
+                                let hardlink_ptr = PQgetvalue(res, 0, 0);
+                                let parent_ptr = PQgetvalue(res, 0, 1);
+                                let name_ptr = PQgetvalue(res, 0, 2);
+                                if hardlink_ptr.is_null()
+                                    || parent_ptr.is_null()
+                                    || name_ptr.is_null()
+                                {
+                                    None
+                                } else {
+                                    let hardlink_id = CStr::from_ptr(hardlink_ptr)
+                                        .to_string_lossy()
+                                        .trim()
+                                        .parse::<u64>()
+                                        .ok();
+                                    let parent_id = CStr::from_ptr(parent_ptr)
+                                        .to_string_lossy()
+                                        .trim()
+                                        .parse::<u64>()
+                                        .ok();
+                                    let name =
+                                        CStr::from_ptr(name_ptr).to_string_lossy().to_string();
+                                    hardlink_id.map(|hardlink_id| (hardlink_id, parent_id, name))
+                                }
+                            };
+                            PQclear(res);
+                            value
+                        }
+                        _ => {
+                            PQclear(res);
+                            return Err(conn_error(conn));
+                        }
+                    };
 
-                let Some((hardlink_id, parent_id, name)) = chosen else {
-                    let did_promote = CString::new("false")
+                    let Some((hardlink_id, parent_id, name)) = chosen else {
+                        let did_promote = CString::new("false")
+                            .map_err(|_| "promotion flag contains NUL byte".to_string())?;
+                        let params = [&request_token, &file_id, &did_promote];
+                        let res = exec_params(conn, &sql_store_request_token, &params)?;
+                        let stored = fetch_single_text(res)?;
+                        if parse_bool(&stored) {
+                            return Err(
+                                "hardlink promotion request token stored unexpected result"
+                                    .to_string(),
+                            );
+                        }
+                        return Ok(false);
+                    };
+
+                    let file_name = CString::new(name)
+                        .map_err(|_| "hardlink name contains NUL byte".to_string())?;
+                    let hardlink_id = CString::new(hardlink_id.to_string())
+                        .map_err(|_| "hardlink id contains NUL byte".to_string())?;
+                    if let Some(parent_id) = parent_id {
+                        let parent_id = CString::new(parent_id.to_string())
+                            .map_err(|_| "parent id contains NUL byte".to_string())?;
+                        let params = [&parent_id, &file_name, &file_id];
+                        let res = exec_params(conn, &sql_update_parent, &params)?;
+                        PQclear(res);
+                    } else {
+                        let params = [&file_name, &file_id];
+                        let res = exec_params(conn, &sql_update_null_parent, &params)?;
+                        PQclear(res);
+                    }
+                    let params = [&hardlink_id];
+                    let res = exec_params(conn, &sql_delete, &params)?;
+                    PQclear(res);
+                    let did_promote = CString::new("true")
                         .map_err(|_| "promotion flag contains NUL byte".to_string())?;
                     let params = [&request_token, &file_id, &did_promote];
                     let res = exec_params(conn, &sql_store_request_token, &params)?;
                     let stored = fetch_single_text(res)?;
-                    if parse_bool(&stored) {
+                    if !parse_bool(&stored) {
                         return Err(
                             "hardlink promotion request token stored unexpected result".to_string()
                         );
                     }
-                    return Ok(false);
-                };
-
-                let file_name = CString::new(name)
-                    .map_err(|_| "hardlink name contains NUL byte".to_string())?;
-                let hardlink_id = CString::new(hardlink_id.to_string())
-                    .map_err(|_| "hardlink id contains NUL byte".to_string())?;
-                if let Some(parent_id) = parent_id {
-                    let parent_id = CString::new(parent_id.to_string())
-                        .map_err(|_| "parent id contains NUL byte".to_string())?;
-                    let params = [&parent_id, &file_name, &file_id];
-                    let res = exec_params(conn, &sql_update_parent, &params)?;
-                    PQclear(res);
-                } else {
-                    let params = [&file_name, &file_id];
-                    let res = exec_params(conn, &sql_update_null_parent, &params)?;
-                    PQclear(res);
-                }
-                let params = [&hardlink_id];
-                let res = exec_params(conn, &sql_delete, &params)?;
-                PQclear(res);
-                let did_promote = CString::new("true")
-                    .map_err(|_| "promotion flag contains NUL byte".to_string())?;
-                let params = [&request_token, &file_id, &did_promote];
-                let res = exec_params(conn, &sql_store_request_token, &params)?;
-                let stored = fetch_single_text(res)?;
-                if !parse_bool(&stored) {
-                    return Err(
-                        "hardlink promotion request token stored unexpected result".to_string()
-                    );
-                }
-                Ok(true)
-            });
-            result
+                    Ok(true)
+                },
+            )
         })
     }
 

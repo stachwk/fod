@@ -1,9 +1,9 @@
 # Transactional Replay Project
 
-This document defines the separate project for full transactional replay after PostgreSQL disconnects.
-It is intentionally split from the current bounded replay path so the existing retry contract stays stable.
+This document records the shared transactional replay mechanism after PostgreSQL disconnects.
+The reusable helper now lives in `rust_hotpath/src/pg.rs`, and the remaining notes focus on what still sits outside the replay envelope.
 
-## Why This Is Separate
+## Why This Matters
 
 The current hot-path replay already covers:
 
