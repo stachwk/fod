@@ -93,7 +93,7 @@ Notes:
 
 Collected from working tree based on commit `790feab`.
 
-This run used `make postgres-benchmarks-local-planner-preset`, which set `POSTGRES_SHARED_BUFFERS=512MB`, `POSTGRES_RANDOM_PAGE_COST=1.1`, `POSTGRES_EFFECTIVE_CACHE_SIZE=4GB`, `POSTGRES_MAINTENANCE_WORK_MEM=512MB`, `POSTGRES_AUTOVACUUM_MAX_WORKERS=3`, and `POSTGRES_AUTOVACUUM_WORK_MEM=256MB` before running the local-only PostgreSQL benchmark suite.
+This historical run used `make postgres-benchmarks-local-planner-preset`, which set `POSTGRES_SHARED_BUFFERS=512MB`, `POSTGRES_RANDOM_PAGE_COST=1.1`, `POSTGRES_EFFECTIVE_CACHE_SIZE=4GB`, `POSTGRES_MAINTENANCE_WORK_MEM=512MB`, `POSTGRES_AUTOVACUUM_MAX_WORKERS=3`, and `POSTGRES_AUTOVACUUM_WORK_MEM=256MB` before running the local-only PostgreSQL benchmark suite. The current shared preset is `make postgres-benchmarks-planner-preset`.
 
 ### WAL Pressure Benchmark
 

@@ -13,6 +13,7 @@ Use this file to record concise conclusions that matter for future work.
 - `pg_stat_activity` stayed flat during the same long pass, so the local write burst still looks checkpoint-dominated rather than connection-churn-dominated. That makes this benchmark a better baseline for the next PostgreSQL tuning pass than the earlier short smoke.
 - The follow-up local-only max-WAL sweep on commit `be642a6` isolated the size cap itself. With `checkpoint_timeout=30min`, the default `max_wal_size` still produced two requested checkpoints at `1.29 GB` of WAL, while `POSTGRES_MAX_WAL_SIZE=8GB` removed both requested and timed checkpoints on the same workload. Throughput stayed in the same band, so the benefit here is checkpoint-shape reduction rather than raw speed.
 - `fod-indexer` metadata writes are now aligned on the staged `COPY` + set-based merge path all the way through source registration, scan-run creation, and import-plan creation. That removes the last direct metadata insert from the shared indexer flow and keeps the low-volume rows on the same replay-friendly merge shape as files, hashes, duplicate sets, and plan entries.
+- The PostgreSQL benchmark presets are now shared across local Docker and QNAP for both WAL tuning and planner/autovacuum tuning. `make postgres-benchmarks-wal-preset` and `make postgres-benchmarks-planner-preset` both apply the same server knobs through the Compose layer, so future A/B runs no longer need image edits to compare backends on identical preset values.
 
 ## 2026-06-26
 

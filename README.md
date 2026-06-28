@@ -593,6 +593,7 @@ What the tests cover:
 - `make test-postgresql-wal-pressure-checkpoint` measures the same burst with a forced `CHECKPOINT` and prints the extra checkpoint timing plus `pg_stat_bgwriter` deltas.
 - `make test-postgresql-connection-churn` measures repeated short-lived PostgreSQL connections against the configured backend and prints average and p95 latency.
 - `make postgres-benchmarks-compare` runs the PostgreSQL optimization benchmarks against local Docker and QNAP so the same profile can be compared across backends.
+- `make postgres-benchmarks-planner-preset` applies a shared planner/autovacuum profile and then runs the same comparison suite against local Docker and QNAP.
 - `make test-large-copy-benchmark` measures a large `copy_file_range()` transfer through the backend and prints elapsed time plus MiB/s.
 - `make test-large-file-multiblock-benchmark` measures a large multi-block file write and prints write/persist/flush split times.
 - `make test-remount-durability-benchmark` checks that data survives a stop/remount/reopen cycle and prints the round-trip time.
