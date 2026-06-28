@@ -11,6 +11,7 @@ Use this file to record concise conclusions that matter for future work.
 
 - The local-only long WAL smoke on commit `e66e66c` finally crossed the checkpoint boundary. With `PG_WAL_PRESSURE_COUNT=10000` and `PG_WAL_PRESSURE_BLOCK_SIZE=512k`, the baseline and `max_wal_size=8GB` runs both ended with a timed checkpoint (`checkpoints_timed=1`, `checkpoints_req=0`) around `670 MB` and `950 MB` of WAL respectively. When `checkpoint_timeout` was stretched to `15min` or `30min`, the timed checkpoint disappeared and the checkpoint moved to the requested path (`checkpoints_req=1`, `checkpoints_timed=0`), which suggests the 5-minute timer is the first limiter on this workload and the size/request path becomes visible once the timer is relaxed.
 - `pg_stat_activity` stayed flat during the same long pass, so the local write burst still looks checkpoint-dominated rather than connection-churn-dominated. That makes this benchmark a better baseline for the next PostgreSQL tuning pass than the earlier short smoke.
+- The follow-up local-only max-WAL sweep on commit `be642a6` isolated the size cap itself. With `checkpoint_timeout=30min`, the default `max_wal_size` still produced two requested checkpoints at `1.29 GB` of WAL, while `POSTGRES_MAX_WAL_SIZE=8GB` removed both requested and timed checkpoints on the same workload. Throughput stayed in the same band, so the benefit here is checkpoint-shape reduction rather than raw speed.
 
 ## 2026-06-26
 

@@ -59,6 +59,36 @@ Notes:
 - `pg_stat_activity` stayed flat at six total backend rows; the sampler only caught 0 to 1 active sessions, so this workload is still I/O and checkpoint dominated rather than connection churn dominated.
 - The local-only long smoke is the first run here that makes the timeout effect visible without QNAP noise, so it is the better baseline for the next PostgreSQL tuning pass.
 
+## 2026-06-28 Local PostgreSQL Max WAL Sweep
+
+Collected from working tree based on commit `be642a6`.
+
+This run stayed local-only and reused `PG_WAL_PRESSURE_COUNT=15000`, `PG_WAL_PRESSURE_BLOCK_SIZE=512k`, and `POSTGRES_CHECKPOINT_TIMEOUT=30min`. It compares the current default `max_wal_size` against `8GB` on the same long WAL-pressure workload so the size-based checkpoint threshold is the only major moving part.
+
+### WAL Pressure Benchmark
+
+Observed with `PG_WAL_PRESSURE_COUNT=15000` and `PG_WAL_PRESSURE_BLOCK_SIZE=512k`.
+
+| Profile | Elapsed | Throughput | wal_bytes | wal_records | checkpoints_req | checkpoints_timed | buffers_checkpoint | buffers_backend | activity_total_peak | activity_active_peak |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| current max_wal_size | `644.558s` | `11.64 MiB/s` | `1291798464` | `13423472` | `2` | `0` | `10034` | `11809` | `6` | `1` |
+| `max_wal_size=8GB` | `655.934s` | `11.43 MiB/s` | `1422527425` | `14081659` | `0` | `0` | `0` | `29517` | `6` | `0` |
+
+`pg_stat_user_tables` delta:
+
+| Profile | n_tup_ins | n_tup_upd | n_tup_del | seq_scan | idx_scan |
+| --- | --- | --- | --- | --- | --- |
+| current max_wal_size | `1935002` | `85256` | `1280002` | `477608` | `4702022` |
+| `max_wal_size=8GB` | `1920002` | `90283` | `1920002` | `513492` | `4817928` |
+
+Notes:
+
+- The current 1 GB-style cap still forced two requested checkpoints on this workload even with `checkpoint_timeout=30min`.
+- `max_wal_size=8GB` removed both requested and timed checkpoints entirely on the same run shape.
+- Throughput stayed in the same band, with the larger WAL cap slightly slower on this sample, so the main benefit here is checkpoint-shape reduction rather than raw speed.
+- `pg_stat_activity` stayed flat at six total backend rows in both profiles, which keeps this workload squarely in the I/O/checkpoint bucket rather than the connection-churn bucket.
+- This is the first local-only run in the thread that isolates the size cap itself after the timeout was already relaxed.
+
 ## 2026-06-27 PostgreSQL Local Planner Preset Refresh
 
 Collected from working tree based on commit `790feab`.
