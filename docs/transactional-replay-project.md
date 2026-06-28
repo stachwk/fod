@@ -86,6 +86,9 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 | `promote_hardlink_to_primary()` | request-token-backed promotion | A committed promotion is observable because the durable token row records the outcome and prevents a second promotion on replay. |
 | `touch_client_session_owner_key()` | session-owner-key upsert + session touch | A committed owner-key touch is observable through the durable owner-key row and the touched client-session row. |
 
+The same helper now also short-circuits `set_file_size()` and `adopt_source_data_object()` on durable row probes.
+`purge_primary_file()` stays on the older bounded replay shape for now because its cleanup branches are still easier to validate there than through a single durable marker.
+
 ### Replayable Only With Extra Confirmation
 
 These wrappers mostly do the right thing, but the transaction as a whole still needs an idempotency key,

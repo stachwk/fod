@@ -8230,79 +8230,126 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| {
-                let src_info = fetch_file_info(conn, &src_file_id)?;
-                let (src_size, src_data_object_id) = match src_info {
-                    Some(value) => value,
-                    None => return Ok(false),
-                };
-                if src_size == 0 {
-                    return Ok(false);
-                }
+            transactional_replay_confirmed(
+                conn,
+                |conn| {
+                    let src_info = fetch_file_info(conn, &src_file_id)?;
+                    let (src_size, src_data_object_id) = match src_info {
+                        Some(value) => value,
+                        None => return Ok(None),
+                    };
+                    if src_size == 0 {
+                        return Ok(None);
+                    }
 
-                let dst_info = fetch_file_info(conn, &dst_file_id)?;
-                let (dst_size, dst_data_object_id) = match dst_info {
-                    Some(value) => value,
-                    None => return Ok(false),
-                };
-                if dst_size == src_size && src_data_object_id == dst_data_object_id {
-                    return Ok(true);
-                }
-                if dst_size != 0 || src_data_object_id == dst_data_object_id {
-                    return Ok(false);
-                }
+                    let dst_info = fetch_file_info(conn, &dst_file_id)?;
+                    let (dst_size, dst_data_object_id) = match dst_info {
+                        Some(value) => value,
+                        None => return Ok(None),
+                    };
+                    if dst_size == src_size && src_data_object_id == dst_data_object_id {
+                        return Ok(Some(true));
+                    }
+                    Ok(None)
+                },
+                |conn| {
+                    let src_info = fetch_file_info(conn, &src_file_id)?;
+                    let (src_size, src_data_object_id) = match src_info {
+                        Some(value) => value,
+                        None => return Ok(false),
+                    };
+                    if src_size == 0 {
+                        return Ok(false);
+                    }
 
-                let src_data_object_id = CString::new(src_data_object_id.to_string())
-                    .map_err(|_| "data object id contains NUL byte".to_string())?;
-                let dst_data_object_id = CString::new(dst_data_object_id.to_string())
-                    .map_err(|_| "data object id contains NUL byte".to_string())?;
-                let src_size_text = CString::new(src_size.to_string())
-                    .map_err(|_| "file size contains NUL byte".to_string())?;
+                    let dst_info = fetch_file_info(conn, &dst_file_id)?;
+                    let (dst_size, dst_data_object_id) = match dst_info {
+                        Some(value) => value,
+                        None => return Ok(false),
+                    };
+                    if dst_size == src_size && src_data_object_id == dst_data_object_id {
+                        return Ok(true);
+                    }
+                    if dst_size != 0 || src_data_object_id == dst_data_object_id {
+                        return Ok(false);
+                    }
 
-                let params = [&src_data_object_id];
-                exec_command_params(conn, &sql_touch_src_object, &params)?;
+                    let src_data_object_id = CString::new(src_data_object_id.to_string())
+                        .map_err(|_| "data object id contains NUL byte".to_string())?;
+                    let dst_data_object_id = CString::new(dst_data_object_id.to_string())
+                        .map_err(|_| "data object id contains NUL byte".to_string())?;
+                    let src_size_text = CString::new(src_size.to_string())
+                        .map_err(|_| "file size contains NUL byte".to_string())?;
 
-                let params = [&src_data_object_id, &src_size_text, &dst_file_id];
-                exec_command_params(conn, &sql_update_dst_file, &params)?;
+                    let params = [&src_data_object_id];
+                    exec_command_params(conn, &sql_touch_src_object, &params)?;
 
-                let params = [&dst_data_object_id];
-                let res = exec_params(conn, &sql_count_dst_references, &params)?;
-                let dst_reference_count =
-                    fetch_single_text(res)?.trim().parse::<u64>().unwrap_or(0);
+                    let params = [&src_data_object_id, &src_size_text, &dst_file_id];
+                    exec_command_params(conn, &sql_update_dst_file, &params)?;
 
-                if dst_reference_count <= 1 {
-                    let params = [&dst_data_object_id, &dst_file_id];
-                    exec_command_params(conn, &sql_delete_data, &params)?;
-                    exec_command_params(conn, &sql_delete_extents, &params)?;
-                    exec_command_params(conn, &sql_delete_crc, &params)?;
                     let params = [&dst_data_object_id];
-                    exec_command_params(conn, &sql_delete_data_object, &params)?;
-                } else {
-                    let params = [&dst_data_object_id];
-                    exec_command_params(conn, &sql_touch_dst_object, &params)?;
-                }
+                    let res = exec_params(conn, &sql_count_dst_references, &params)?;
+                    let dst_reference_count =
+                        fetch_single_text(res)?.trim().parse::<u64>().unwrap_or(0);
 
-                Ok(true)
-            })
+                    if dst_reference_count <= 1 {
+                        let params = [&dst_data_object_id, &dst_file_id];
+                        exec_command_params(conn, &sql_delete_data, &params)?;
+                        exec_command_params(conn, &sql_delete_extents, &params)?;
+                        exec_command_params(conn, &sql_delete_crc, &params)?;
+                        let params = [&dst_data_object_id];
+                        exec_command_params(conn, &sql_delete_data_object, &params)?;
+                    } else {
+                        let params = [&dst_data_object_id];
+                        exec_command_params(conn, &sql_touch_dst_object, &params)?;
+                    }
+
+                    Ok(true)
+                },
+            )
         })
     }
 
     pub fn set_file_size(&self, file_id: u64, file_size: u64) -> Result<(), String> {
+        let desired_file_size = file_size;
         let sql_update_file = CString::new(
             "UPDATE files SET size = $1, modification_date = NOW(), change_date = NOW() WHERE id_file = $2",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_lookup_size = CString::new("SELECT size FROM files WHERE id_file = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
-        let file_size = CString::new(file_size.to_string())
+        let file_size = CString::new(desired_file_size.to_string())
             .map_err(|_| "file size contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| {
-                let params = [&file_size, &file_id];
-                exec_command_params(conn, &sql_update_file, &params)?;
-                Ok(())
-            })
+            transactional_replay_confirmed(
+                conn,
+                |conn| {
+                    let params = [&file_id];
+                    let res = exec_params(conn, &sql_lookup_size, &params)?;
+                    match fetch_single_text_option(res)? {
+                        Some(current_size) => {
+                            let current_size = current_size
+                                .trim()
+                                .parse::<u64>()
+                                .map_err(|_| "invalid file size value".to_string())?;
+                            if current_size == desired_file_size {
+                                Ok(Some(()))
+                            } else {
+                                Ok(None)
+                            }
+                        }
+                        None => Ok(None),
+                    }
+                },
+                |conn| {
+                    let params = [&file_size, &file_id];
+                    exec_command_params(conn, &sql_update_file, &params)?;
+                    Ok(())
+                },
+            )
         })
     }
 
@@ -8345,66 +8392,80 @@ impl DbRepo {
 
         self.with_cached_connection(|conn| unsafe {
             // A committed purge is observable because the file row disappears,
-            // so a lost COMMIT can be confirmed by the empty lookup on retry.
-            transactional_replayable(conn, |conn| {
-                let data_object_id = match {
+            // so a lost COMMIT can be confirmed by the empty lookup before the
+            // body runs again.
+            transactional_replay_confirmed(
+                conn,
+                |conn| {
                     let params = [&file_id];
                     let res = exec_params(conn, &sql_lookup, &params)?;
-                    let text = fetch_single_text(res)?;
-                    if text.is_empty() {
-                        None
+                    match fetch_single_text_option(res)? {
+                        Some(_) => Ok(None),
+                        None => Ok(Some(())),
+                    }
+                },
+                |conn| {
+                    let data_object_id = match {
+                        let params = [&file_id];
+                        let res = exec_params(conn, &sql_lookup, &params)?;
+                        let text = fetch_single_text(res)?;
+                        if text.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                text.trim()
+                                    .parse::<u64>()
+                                    .map_err(|_| "invalid data_object_id value".to_string())?,
+                            )
+                        }
+                    } {
+                        Some(value) => value,
+                        None => {
+                            let params = [&file_id];
+                            exec_command_params(conn, &sql_delete_file, &params)?;
+                            return Ok(());
+                        }
+                    };
+                    let reference_count = self
+                        .data_object_reference_count_on_conn(conn, data_object_id)?
+                        .unwrap_or(1);
+                    let data_object_id = CString::new(data_object_id.to_string())
+                        .map_err(|_| "data object id contains NUL byte".to_string())?;
+                    if reference_count <= 1 {
+                        let params = [&data_object_id, &file_id];
+                        exec_command_params(conn, &sql_delete_data, &params)?;
+                        exec_command_params(conn, &sql_delete_extents, &params)?;
+                        exec_command_params(conn, &sql_delete_crc, &params)?;
+                        let params = [&data_object_id];
+                        exec_command_params(conn, &sql_delete_data_object, &params)?;
                     } else {
-                        Some(
+                        let survivor_file_id = {
+                            let params = [&data_object_id, &file_id];
+                            let res = exec_params(conn, &sql_find_survivor, &params)?;
+                            let text = fetch_single_text(res)?;
+                            if text.trim().is_empty() {
+                                return Err(
+                                    "missing surviving file for shared data object".to_string()
+                                );
+                            }
                             text.trim()
                                 .parse::<u64>()
-                                .map_err(|_| "invalid data_object_id value".to_string())?,
-                        )
+                                .map_err(|_| "invalid file id value".to_string())?
+                        };
+                        let survivor_file_id = CString::new(survivor_file_id.to_string())
+                            .map_err(|_| "file id contains NUL byte".to_string())?;
+                        let params = [&data_object_id, &survivor_file_id];
+                        exec_command_params(conn, &sql_reassign_data_rows, &params)?;
+                        exec_command_params(conn, &sql_reassign_extent_rows, &params)?;
+                        exec_command_params(conn, &sql_reassign_crc_rows, &params)?;
+                        let params = [&data_object_id];
+                        exec_command_params(conn, &sql_touch_data_object, &params)?;
                     }
-                } {
-                    Some(value) => value,
-                    None => {
-                        let params = [&file_id];
-                        exec_command_params(conn, &sql_delete_file, &params)?;
-                        return Ok(());
-                    }
-                };
-                let reference_count = self
-                    .data_object_reference_count_on_conn(conn, data_object_id)?
-                    .unwrap_or(1);
-                let data_object_id = CString::new(data_object_id.to_string())
-                    .map_err(|_| "data object id contains NUL byte".to_string())?;
-                if reference_count <= 1 {
-                    let params = [&data_object_id, &file_id];
-                    exec_command_params(conn, &sql_delete_data, &params)?;
-                    exec_command_params(conn, &sql_delete_extents, &params)?;
-                    exec_command_params(conn, &sql_delete_crc, &params)?;
-                    let params = [&data_object_id];
-                    exec_command_params(conn, &sql_delete_data_object, &params)?;
-                } else {
-                    let survivor_file_id = {
-                        let params = [&data_object_id, &file_id];
-                        let res = exec_params(conn, &sql_find_survivor, &params)?;
-                        let text = fetch_single_text(res)?;
-                        if text.trim().is_empty() {
-                            return Err("missing surviving file for shared data object".to_string());
-                        }
-                        text.trim()
-                            .parse::<u64>()
-                            .map_err(|_| "invalid file id value".to_string())?
-                    };
-                    let survivor_file_id = CString::new(survivor_file_id.to_string())
-                        .map_err(|_| "file id contains NUL byte".to_string())?;
-                    let params = [&data_object_id, &survivor_file_id];
-                    exec_command_params(conn, &sql_reassign_data_rows, &params)?;
-                    exec_command_params(conn, &sql_reassign_extent_rows, &params)?;
-                    exec_command_params(conn, &sql_reassign_crc_rows, &params)?;
-                    let params = [&data_object_id];
-                    exec_command_params(conn, &sql_touch_data_object, &params)?;
-                }
-                let params = [&file_id];
-                exec_command_params(conn, &sql_delete_file, &params)?;
-                Ok(())
-            })
+                    let params = [&file_id];
+                    exec_command_params(conn, &sql_delete_file, &params)?;
+                    Ok(())
+                },
+            )
         })
     }
 
