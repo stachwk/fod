@@ -6,7 +6,7 @@ use crate::output::{
     ImportPlanSnapshot,
 };
 use crate::source;
-use fod_rust_hotpath::pg::{DbRepo, IndexImportPlanEntryStageRow};
+use fod_rust_hotpath::pg::{DbRepo, IndexImportPlanEntryStageRow, IndexImportPlanStageRow};
 use fod_rust_runtime::request_token;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -128,47 +128,12 @@ pub(crate) fn insert_import_plan(
     source_filter: Option<&str>,
 ) -> Result<u64, String> {
     let request_token = request_token("plan");
-    let sql = format!(
-        "
-        INSERT INTO index_import_plans (
-            created_at,
-            updated_at,
-            status,
-            request_token,
-            dry_run,
-            source_filter
-        )
-        VALUES (
-            NOW(),
-            NOW(),
-            {status},
-            {request_token},
-            {dry_run},
-            {source_filter}
-        )
-        ON CONFLICT (request_token) DO UPDATE SET
-            status = EXCLUDED.status,
-            dry_run = EXCLUDED.dry_run,
-            source_filter = EXCLUDED.source_filter,
-            updated_at = NOW()
-        RETURNING id_import_plan
-        ",
-        status = sql_quote_literal(status),
-        request_token = sql_quote_literal(&request_token),
-        dry_run = if dry_run { "TRUE" } else { "FALSE" },
-        source_filter = source_filter
-            .map(sql_quote_literal)
-            .unwrap_or_else(|| "NULL".to_string()),
-    );
-    let rows = repo.query_rows_text(&sql)?;
-    let row = rows
-        .first()
-        .ok_or_else(|| "import plan creation did not return an id".to_string())?;
-    row.first()
-        .ok_or_else(|| "import plan creation returned no id".to_string())?
-        .trim()
-        .parse::<u64>()
-        .map_err(|err| format!("invalid import plan id: {err}"))
+    repo.upsert_index_import_plan_staged(&IndexImportPlanStageRow {
+        status: status.to_string(),
+        request_token,
+        dry_run,
+        source_filter: source_filter.map(|value| value.to_string()),
+    })
 }
 
 pub(crate) fn update_import_plan(

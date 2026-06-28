@@ -3,7 +3,7 @@ use crate::model::{IndexedFile, ScanSummary};
 use crate::progress::ThrottledProgress;
 use crate::source;
 use crate::source_registry;
-use fod_rust_hotpath::pg::{DbRepo, IndexFileStageRow};
+use fod_rust_hotpath::pg::{DbRepo, IndexFileStageRow, IndexScanRunStageRow};
 use fod_rust_runtime::request_token;
 use std::fs;
 use std::fs::{File, FileType};
@@ -18,37 +18,11 @@ const SCAN_PROGRESS_TIME_STEP: Duration = Duration::from_secs(1);
 
 fn create_scan_run(repo: &DbRepo, source_id: u64) -> Result<u64, String> {
     let request_token = request_token("scan");
-    let sql = format!(
-        "
-        INSERT INTO index_scan_runs (
-            id_index_source,
-            started_at,
-            status,
-            request_token
-        )
-        VALUES (
-            {source_id},
-            NOW(),
-            'running',
-            {request_token}
-        )
-        ON CONFLICT (request_token) DO UPDATE SET
-            id_index_source = EXCLUDED.id_index_source,
-            status = EXCLUDED.status,
-            updated_at = NOW()
-        RETURNING id_scan_run
-        ",
-        request_token = sql_quote_literal(&request_token),
-    );
-    let rows = repo.query_rows_text(&sql)?;
-    let row = rows
-        .first()
-        .ok_or_else(|| "scan run creation did not return a row".to_string())?;
-    row.first()
-        .ok_or_else(|| "scan run creation returned no id".to_string())?
-        .trim()
-        .parse::<u64>()
-        .map_err(|err| format!("invalid scan run id: {err}"))
+    repo.upsert_index_scan_run_staged(&IndexScanRunStageRow {
+        id_index_source: source_id,
+        status: "running".to_string(),
+        request_token,
+    })
 }
 
 fn finish_scan_run(repo: &DbRepo, scan_run_id: u64, status: &str, error_message: Option<&str>) {

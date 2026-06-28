@@ -37,8 +37,11 @@ const PGRES_COPY_IN: c_int = 4;
 const PG_DIAG_SQLSTATE: c_int = 67;
 const COPY_BINARY_SIGNATURE: &[u8] = b"PGCOPY\n\xff\r\n\0";
 const PERSIST_BLOCK_STAGE_TABLE: &str = "fod_persist_block_stage";
+const INDEX_SOURCES_STAGE_TABLE: &str = "index_sources_stage";
+const INDEX_SCAN_RUNS_STAGE_TABLE: &str = "index_scan_runs_stage";
 const INDEX_FILES_STAGE_TABLE: &str = "index_files_stage";
 const INDEX_FILE_HASHES_STAGE_TABLE: &str = "index_file_hashes_stage";
+const INDEX_IMPORT_PLANS_STAGE_TABLE: &str = "index_import_plans_stage";
 const INDEX_IMPORT_PLAN_ENTRIES_STAGE_TABLE: &str = "index_import_plan_entries_stage";
 const REPLAYABLE_SQL_ERROR_PREFIX: &str = "__FOD_REPLAYABLE_SQL_ERROR__: ";
 const UNIQUE_VIOLATION_ERROR_PREFIX: &str = "SQLSTATE 23505:";
@@ -1205,6 +1208,7 @@ fn sql_is_replayable_copy_block_crc_upsert(sql: &str) -> bool {
 
 fn sql_is_replayable_schema_ddl(sql: &str) -> bool {
     sql.starts_with("CREATE TABLE IF NOT EXISTS ")
+        || sql.starts_with("CREATE TEMP TABLE IF NOT EXISTS ")
         || sql.starts_with("CREATE INDEX IF NOT EXISTS ")
         || sql.starts_with("CREATE UNIQUE INDEX IF NOT EXISTS ")
         || sql.starts_with("CREATE OR REPLACE FUNCTION ")
@@ -1234,6 +1238,8 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
     let sql = sql_compact(sql);
 
     sql.starts_with("DELETE FROM ")
+        || sql.starts_with("INSERT INTO index_sources ")
+            && sql.contains("ON CONFLICT (name) DO UPDATE SET kind = EXCLUDED.kind, root_path = EXCLUDED.root_path, updated_at = NOW()")
         || sql.starts_with("INSERT INTO index_files ")
             && sql.contains("ON CONFLICT (id_index_source, path) DO UPDATE SET id_scan_run = EXCLUDED.id_scan_run, size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns, inode = EXCLUDED.inode, device = EXCLUDED.device, file_kind = EXCLUDED.file_kind, scan_status = EXCLUDED.scan_status, source_changed = EXCLUDED.source_changed, updated_at = NOW()")
         || sql.starts_with("INSERT INTO index_scan_runs ")
@@ -2096,6 +2102,28 @@ pub struct PersistExtentRow {
     pub block_count: u64,
     pub used_bytes: u64,
     pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexSourceStageRow {
+    pub name: String,
+    pub kind: String,
+    pub root_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexScanRunStageRow {
+    pub id_index_source: u64,
+    pub status: String,
+    pub request_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexImportPlanStageRow {
+    pub status: String,
+    pub request_token: String,
+    pub dry_run: bool,
+    pub source_filter: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3362,6 +3390,225 @@ impl DbRepo {
                 Ok(()) => Ok(true),
                 Err(_) => Err("failed to update data object".to_string()),
             }
+        })
+    }
+
+    pub fn upsert_index_source_staged(&self, row: &IndexSourceStageRow) -> Result<u64, String> {
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let stage_sql = CString::new(format!(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS {stage} (
+                        name TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        root_path TEXT NOT NULL
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE {stage}
+                    ",
+                    stage = INDEX_SOURCES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(std::slice::from_ref(row), |row, out| {
+                    append_copy_text_string_field(out, &row.name);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.kind);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.root_path);
+                });
+                let copy_sql = CString::new(format!(
+                    "COPY {stage} (name, kind, root_path) FROM STDIN",
+                    stage = INDEX_SOURCES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(format!(
+                    "
+                    INSERT INTO index_sources (
+                        name,
+                        kind,
+                        root_path,
+                        created_at,
+                        updated_at
+                    )
+                    SELECT
+                        name,
+                        kind,
+                        root_path,
+                        NOW(),
+                        NOW()
+                    FROM {stage}
+                    ON CONFLICT (name) DO UPDATE SET
+                        kind = EXCLUDED.kind,
+                        root_path = EXCLUDED.root_path,
+                        updated_at = NOW()
+                    RETURNING id_index_source
+                    ",
+                    stage = INDEX_SOURCES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let rows = query_rows_text_on_conn(conn, &merge_sql)?;
+                let row = rows
+                    .first()
+                    .ok_or_else(|| "source registration did not return a row".to_string())?;
+                row.first()
+                    .ok_or_else(|| "source registration returned no id".to_string())?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|err| format!("invalid source id: {err}"))
+            })
+        })
+    }
+
+    pub fn upsert_index_scan_run_staged(&self, row: &IndexScanRunStageRow) -> Result<u64, String> {
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let stage_sql = CString::new(format!(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS {stage} (
+                        id_index_source BIGINT NOT NULL,
+                        status TEXT NOT NULL,
+                        request_token TEXT NOT NULL
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE {stage}
+                    ",
+                    stage = INDEX_SCAN_RUNS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(std::slice::from_ref(row), |row, out| {
+                    append_copy_text_u64_field(out, row.id_index_source);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.status);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.request_token);
+                });
+                let copy_sql = CString::new(format!(
+                    "COPY {stage} (id_index_source, status, request_token) FROM STDIN",
+                    stage = INDEX_SCAN_RUNS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(format!(
+                    "
+                    INSERT INTO index_scan_runs (
+                        id_index_source,
+                        started_at,
+                        status,
+                        updated_at,
+                        request_token
+                    )
+                    SELECT
+                        id_index_source,
+                        NOW(),
+                        status,
+                        NOW(),
+                        request_token
+                    FROM {stage}
+                    ON CONFLICT (request_token) DO UPDATE SET
+                        id_index_source = EXCLUDED.id_index_source,
+                        status = EXCLUDED.status,
+                        updated_at = NOW()
+                    RETURNING id_scan_run
+                    ",
+                    stage = INDEX_SCAN_RUNS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let rows = query_rows_text_on_conn(conn, &merge_sql)?;
+                let row = rows
+                    .first()
+                    .ok_or_else(|| "scan run creation did not return a row".to_string())?;
+                row.first()
+                    .ok_or_else(|| "scan run creation returned no id".to_string())?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|err| format!("invalid scan run id: {err}"))
+            })
+        })
+    }
+
+    pub fn upsert_index_import_plan_staged(
+        &self,
+        row: &IndexImportPlanStageRow,
+    ) -> Result<u64, String> {
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let stage_sql = CString::new(format!(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS {stage} (
+                        status TEXT NOT NULL,
+                        request_token TEXT NOT NULL,
+                        dry_run BOOLEAN NOT NULL,
+                        source_filter TEXT
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE {stage}
+                    ",
+                    stage = INDEX_IMPORT_PLANS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(std::slice::from_ref(row), |row, out| {
+                    append_copy_text_string_field(out, &row.status);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.request_token);
+                    out.push('\t');
+                    append_copy_text_bool_field(out, row.dry_run);
+                    out.push('\t');
+                    match &row.source_filter {
+                        Some(value) => append_copy_text_string_field(out, value),
+                        None => append_copy_text_null_field(out),
+                    }
+                });
+                let copy_sql = CString::new(format!(
+                    "COPY {stage} (status, request_token, dry_run, source_filter) FROM STDIN",
+                    stage = INDEX_IMPORT_PLANS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(format!(
+                    "
+                    INSERT INTO index_import_plans (
+                        created_at,
+                        updated_at,
+                        status,
+                        request_token,
+                        dry_run,
+                        source_filter
+                    )
+                    SELECT
+                        NOW(),
+                        NOW(),
+                        status,
+                        request_token,
+                        dry_run,
+                        source_filter
+                    FROM {stage}
+                    ON CONFLICT (request_token) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        dry_run = EXCLUDED.dry_run,
+                        source_filter = EXCLUDED.source_filter,
+                        updated_at = NOW()
+                    RETURNING id_import_plan
+                    ",
+                    stage = INDEX_IMPORT_PLANS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let rows = query_rows_text_on_conn(conn, &merge_sql)?;
+                let row = rows
+                    .first()
+                    .ok_or_else(|| "import plan creation did not return a row".to_string())?;
+                row.first()
+                    .ok_or_else(|| "import plan creation returned no id".to_string())?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|err| format!("invalid import plan id: {err}"))
+            })
         })
     }
 

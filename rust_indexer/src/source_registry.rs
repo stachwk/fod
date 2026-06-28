@@ -2,7 +2,7 @@ use crate::cli::SourceKind;
 use crate::db::sql_quote_literal;
 use crate::model::{IndexSource, SourceBrowseEntry};
 use crate::source;
-use fod_rust_hotpath::pg::DbRepo;
+use fod_rust_hotpath::pg::{DbRepo, IndexSourceStageRow};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,25 +25,18 @@ pub fn register_source(
         ));
     }
 
-    let sql = format!(
-        "
-        INSERT INTO index_sources (name, kind, root_path, created_at, updated_at)
-        VALUES ({name}, {kind}, {root_path}, NOW(), NOW())
-        ON CONFLICT (name) DO UPDATE SET
-            kind = EXCLUDED.kind,
-            root_path = EXCLUDED.root_path,
-            updated_at = NOW()
-        RETURNING id_index_source, name, kind, root_path
-        ",
-        name = sql_quote_literal(&name),
-        kind = sql_quote_literal(kind.as_str()),
-        root_path = sql_quote_literal(&root_path.to_string_lossy()),
-    );
-    let rows = repo.query_rows_text(&sql)?;
-    let row = rows
-        .first()
-        .ok_or_else(|| "source registration did not return a row".to_string())?;
-    IndexSource::from_row(row)
+    let id_source = repo.upsert_index_source_staged(&IndexSourceStageRow {
+        name: name.clone(),
+        kind: kind.as_str().to_string(),
+        root_path: root_path.to_string_lossy().to_string(),
+    })?;
+
+    Ok(IndexSource {
+        id_source,
+        name,
+        kind: kind.as_str().to_string(),
+        root_path,
+    })
 }
 
 pub fn load_source(repo: &DbRepo, name: &str) -> Result<IndexSource, String> {
