@@ -2017,13 +2017,6 @@ where
     }
 }
 
-unsafe fn transactional<T, F>(conn: *mut PGconn, f: F) -> Result<T, String>
-where
-    F: FnMut(*mut PGconn) -> Result<T, String>,
-{
-    transactional_impl(conn, f, false)
-}
-
 unsafe fn transactional_replayable<T, F>(conn: *mut PGconn, f: F) -> Result<T, String>
 where
     F: FnMut(*mut PGconn) -> Result<T, String>,
@@ -4152,6 +4145,13 @@ impl DbRepo {
                     SELECT 1
                     FROM information_schema.columns
                     WHERE table_schema = '{schema}'
+                      AND table_name = 'lock_leases'
+                      AND column_name = 'request_token'
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = '{schema}'
                       AND table_name = 'lock_range_leases'
                       AND column_name = 'session_id'
                       AND is_nullable = 'NO'
@@ -4161,6 +4161,12 @@ impl DbRepo {
                     FROM pg_indexes
                     WHERE schemaname = '{schema}'
                       AND indexname = 'idx_lock_leases_identity'
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_indexes
+                    WHERE schemaname = '{schema}'
+                      AND indexname = 'idx_lock_leases_request_token'
                 )
                 AND EXISTS (
                     SELECT 1
@@ -4286,6 +4292,13 @@ impl DbRepo {
                         .map_err(|_| "SQL contains NUL byte".to_string())?,
                         CString::new(
                             "
+                            ALTER TABLE IF EXISTS lock_leases
+                            ADD COLUMN IF NOT EXISTS request_token TEXT
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
                             UPDATE lock_leases
                             SET session_id = 0
                             WHERE session_id IS NULL
@@ -4353,6 +4366,13 @@ impl DbRepo {
                             "
                             CREATE UNIQUE INDEX IF NOT EXISTS idx_lock_leases_identity
                             ON lock_leases (resource_kind, resource_id, session_id, owner_key, lease_kind)
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
+                            CREATE UNIQUE INDEX IF NOT EXISTS idx_lock_leases_request_token
+                            ON lock_leases (request_token)
                             ",
                         )
                         .map_err(|_| "SQL contains NUL byte".to_string())?,
@@ -5154,8 +5174,23 @@ impl DbRepo {
     ) -> Result<bool, String> {
         self.ensure_lock_schema_ready()?;
         let session_id = self.session_id_for_owner_key_text(owner_key)?;
+        let request_token_value = generate_request_token("flock-lease");
+        let request_token = CString::new(request_token_value)
+            .map_err(|_| "request token contains NUL byte".to_string())?;
+        let sql_lookup_request_token = CString::new(
+            "SELECT COALESCE((SELECT request_token FROM lock_leases WHERE request_token = $1 LIMIT 1), '')",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         self.with_control_connection(|conn| unsafe {
-            transactional(conn, |conn| {
+            transactional_replayable(conn, |conn| {
+                let request_token_params = [&request_token];
+                let existing_token_res =
+                    exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
+                let existing_token = fetch_single_text(existing_token_res)?;
+                if !existing_token.trim().is_empty() {
+                    return Ok(true);
+                }
+
                 let lock_granted = Self::try_advisory_xact_lock_on_conn(conn, resource_lock_id)?;
                 if !lock_granted {
                     return Ok(false);
@@ -5226,6 +5261,7 @@ impl DbRepo {
                         owner_key,
                         lease_kind,
                         lock_type,
+                        request_token,
                         lease_expires_at,
                         heartbeat_at,
                         created_at,
@@ -5235,9 +5271,10 @@ impl DbRepo {
                         $2,
                         $3,
                         $4,
-                    $5,
-                    $6,
-                        NOW() + ($7 || ' seconds')::interval,
+                        $5,
+                        $6,
+                        $7,
+                        NOW() + ($8 || ' seconds')::interval,
                         NOW(),
                         NOW(),
                         NOW()
@@ -5245,6 +5282,7 @@ impl DbRepo {
                     ON CONFLICT (resource_kind, resource_id, session_id, owner_key, lease_kind)
                     DO UPDATE SET
                         lock_type = EXCLUDED.lock_type,
+                        request_token = EXCLUDED.request_token,
                         lease_expires_at = EXCLUDED.lease_expires_at,
                         heartbeat_at = EXCLUDED.heartbeat_at,
                         updated_at = NOW()
@@ -5262,6 +5300,7 @@ impl DbRepo {
                     &owner_key,
                     &lease_kind,
                     &requested_type,
+                    &request_token,
                     &lease_ttl_seconds,
                 ];
                 exec_command_params(conn, &upsert_sql, &upsert_params)?;

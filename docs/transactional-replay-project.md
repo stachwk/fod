@@ -58,7 +58,7 @@ These are the first places worth rechecking once the project starts:
 
 ## Transactional Call-Site Inventory
 
-The inventory below covers the explicit `transactional(conn, ...)` wrappers in `rust_hotpath/src/pg.rs`.
+The inventory below covers the transactional call sites in `rust_hotpath/src/pg.rs`.
 It intentionally leaves out single-statement helpers that already sit inside the bounded replay classifier,
 because this project is about commit-bound transactional replay rather than the existing safe command retry path.
 
@@ -77,7 +77,7 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 | `replace_lock_range_state_blob_for_owner()` | delete + reinsert | Same as above, but scoped to one owner key. |
 | `persist_file_blocks_with_crc_flag()` | delete + upsert / COPY staging | The block persist path rewrites deterministic rows and now has commit-disconnect smoke coverage. |
 | `persist_file_extents_with_crc_flag()` | COPY-based extent materialization | The extent persist path rewrites deterministic rows and now has commit-disconnect smoke coverage. |
-| `acquire_flock_lease()` | advisory lock + upsert | The lease row is keyed and the upsert path is already bounded-replay safe. |
+| `acquire_flock_lease()` | advisory lock + request-token-backed upsert | The lease row is keyed and the durable request token confirms a replayed commit before the body runs again. |
 | `persist_copy_block_crc_rows()` | delete + upsert | CRC rows are rewritten deterministically for the file/block set. |
 | `set_file_size()` | single-row update | The write is keyed by `id_file` and only sets the current size. |
 | `purge_primary_file()` | delete + row reassignment | A committed purge is observable because the file row disappears after reconnect. |
