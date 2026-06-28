@@ -101,8 +101,9 @@ FOD is source-available software licensed under Business Source License 1.1 (BSL
 - Reads use block-range loading with a small read cache and read-ahead instead of loading whole files on every access.
 - The permissions comparison test is intentionally local-filesystem-vs-FOD, not ext4-only; it compares the host's writable local filesystem against FOD and asserts matching semantics for mode, ownership, access checks, sticky-bit unlink/rmdir, and root-owned files.
 - `allow_other` visibility is host-dependent: the dedicated test skips when the host does not expose the mount to `nobody`, so it is a diagnostic coverage check rather than a universal pass/fail guarantee.
-- The runtime is Rust-backed end to end: the mount frontend lives in `rust_fuse`, schema/bootstrap live in `rust_mkfs`, and the old Python runtime modules have been removed.
+- The runtime is Rust-backed end to end: the mount frontend lives in `rust_fuse`, schema/bootstrap live in `rust_mkfs`, indexing lives in `rust_indexer`, and the old Python runtime modules have been removed.
 - Lookup, namespace CRUD, metadata, permissions, xattrs, locking, storage, and journal handling now live in Rust instead of in Python helper modules.
+- The shared `fod-indexer` core now covers source registration, `scan`, `hash`, duplicate reporting, `plan-import`, `materialize`, and `cleanup-failed` through one source-capability model. Current source kinds stay path-backed, mirrored, or export-backed (`local`, `smb`, `qnap`, `adb`, `github`), and `--name` remains an explicit override.
 - For FUSE backend selection, `libfuse3` is the strategic baseline when compatibility, standardness, and easier upstream-aligned debugging matter most; other stacks are kept for comparisons, prototypes, and diagnostics.
 - Metadata caching is now explicitly split between attribute cache and directory-entry cache instead of using one shared payload shape for both.
 - SELinux is xattr-backed with runtime gating; full mount-label policy is intentionally out of scope.
@@ -145,6 +146,7 @@ For step-by-step local verification profiles, see [zasady_sprawdzen.md](zasady_s
 
 - Full SELinux mount-label policy is intentionally out of scope; FOD keeps SELinux as xattr-backed metadata plus runtime gating.
 - `ioctl` support currently covers `FIONREAD`, `FIGETBSZ`, `FS_IOC_GETFLAGS`, and `FS_IOC_FSGETXATTR`; `FS_IOC_SETFLAGS` and `FS_IOC_FSSETXATTR` accept only zero/no-op requests until a real flag policy is defined.
+- `FICLONE` remains experimental and may still be blocked before userspace on some stacks, so reflinks are not a production promise yet.
 - Special device node metadata is stored, but direct special-node execution semantics are still not a general-purpose focus.
 - FOD is still early-stage, so APIs, benchmarks, and performance defaults may still evolve.
 - `make test-all` is the main regression target; mount-heavy workflows are covered, but CI is still focused on a curated subset that is stable in automation.
@@ -167,6 +169,8 @@ FOD is built and installed from the Rust crates. The main runtime commands are:
 - `fod-config`
 - `mkfs.fod`
 - `mount.fod`
+
+Additional Rust tooling includes `fod-indexer` for source registration, scanning, duplicate reporting, planning, materialization, and cleanup of external sources before import.
 
 The installed `mount.fod` wrapper prefers `target/debug/fod-bootstrap` and `target/release/fod-bootstrap` from the current project checkout, then the legacy `rust_mkfs/target/debug/fod-bootstrap` and `rust_mkfs/target/release/fod-bootstrap` paths, then `fod-bootstrap` from `PATH` and `/usr/local/bin/fod-bootstrap`. The bootstrapper itself prefers `rust_fuse/target/debug/fod-rust-fuse`, then `fod-rust-fuse` from `PATH`, then `/usr/local/bin/fod-rust-fuse`. If `FOD_CONFIG` is not set and a local `./fod_config.ini` exists in the current directory, the wrapper exports that file automatically. Unrecognized FOD-like options now print a warning on stderr so typos like `rool=primary` do not fail silently; common system passthrough options such as `_netdev`, `nofail`, and `x-systemd.*` are still ignored. If neither bootstrapper nor a usable config file is available, it exits with a clear setup hint instead of guessing a Python interpreter.
 

@@ -104,8 +104,9 @@ FOD to oprogramowanie source-available licencjonowane na warunkach Business Sour
 - Odczyty korzystają teraz z blokowego ładowania z małym cache i read-ahead zamiast pełnego ładowania pliku przy każdym dostępie.
 - Test porównujący uprawnienia jest świadomie local-filesystem-vs-FOD, a nie tylko ext4-vs-FOD; porównuje hostowy zapisywalny local filesystem z FOD i sprawdza zgodność semantyki dla mode, ownership, access checków, sticky-bit unlink/rmdir oraz plików należących do root.
 - Widoczność `allow_other` zależy od hosta: dedykowany test robi skip, jeśli host nie wystawia mounta dla `nobody`, więc jest to test diagnostyczny, a nie uniwersalna gwarancja pass/fail.
-- Runtime jest teraz w całości oparty o Rust: frontend mounta żyje w `rust_fuse`, a bootstrap/schemat/mkfs w `rust_mkfs`.
+- Runtime jest teraz w całości oparty o Rust: frontend mounta żyje w `rust_fuse`, bootstrap/schemat/mkfs w `rust_mkfs`, a indeksowanie w `rust_indexer`.
 - Lookup, CRUD namespace, metadane, permissions, xattr, locking, storage i journal handling żyją już w Rust zamiast w Pythonowych helperach.
+- Wspólny core `fod-indexer` obsługuje rejestrację źródeł, `scan`, `hash`, raport duplikatów, `plan-import`, `materialize` i `cleanup-failed` przez jeden model możliwości. Obecne typy źródeł pozostają oparte o ścieżkę, mirror albo eksport (`local`, `smb`, `qnap`, `adb`, `github`), a `--name` nadal jest jawnym nadpisaniem.
 - Przy wyborze backendu FUSE `libfuse3` jest strategicznym baseline'em, jeśli najważniejsze są kompatybilność, standardowość i łatwiejsze debugowanie zgodne z upstream; inne stacki zostają do porównań, prototypów i diagnostyki.
 - SELinux działa jako xattr z runtime gating; pełna polityka mount-label jest celowo poza zakresem.
 - PostgreSQL TLS jest opcjonalny i konfigurowalny; FOD może też wygenerować lokalną parę certyfikat/klucz na żądanie.
@@ -147,6 +148,7 @@ Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasa
 
 - Pełna polityka mount-label SELinux jest celowo poza zakresem; FOD trzyma SELinux jako metadane w xattr plus runtime gating.
 - Obsługa `ioctl` obejmuje już `FIONREAD`, `FIGETBSZ`, `FS_IOC_GETFLAGS` i `FS_IOC_FSGETXATTR`; `FS_IOC_SETFLAGS` oraz `FS_IOC_FSSETXATTR` przyjmują tylko żądanie z `0` jako bezpieczny no-op do czasu ustalenia realnej polityki flag.
+- `FICLONE` nadal jest eksperymentalny i na niektórych stackach może zostać ucięty przed userspace, więc reflinki nie są jeszcze obietnicą produkcyjną.
 - Metadane specjalnych urządzeń są zapisywane, ale pełna semantyka uruchamiania takich node'ów nie jest głównym celem projektu.
 - FOD jest nadal na wczesnym etapie, więc API, benchmarki i domyślne ustawienia wydajności mogą się jeszcze zmieniać.
 - `make test-all` jest głównym targetem regresji; workflow mounta są pokryte, ale CI skupia się na wybranym zestawie stabilnym w automatyzacji.
@@ -161,21 +163,23 @@ Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasa
 - wsparcie FUSE na hoście
 - `openssl`, jeśli FOD ma automatycznie generować parę certyfikat/klucz TLS dla PostgreSQL
 
-## Pakiet Pip
+## Binaria Rust
 
-FOD można zainstalować do virtualenv przez pip:
+FOD jest budowany i instalowany z crate'ów Rustowych. Główny sposób instalacji to:
 
 ```bash
 make install-on-root
 ```
 
-To instaluje skrypty projektu do aktywnego venv:
+To instaluje binaria projektu do aktywnego środowiska:
 
 - `fod-bootstrap`
+- `fod-config`
 - `mkfs.fod`
 - `mount.fod`
+- `fod-indexer`
 
-W drzewie źródłowym nie ma już Pythonowych launcherów runtime. FOD dostarcza bezpośrednio binaria Rust: `fod-bootstrap`, `fod-config` i `mkfs.fod`. Zainstalowany `mount.fod` najpierw wybiera `target/debug/fod-bootstrap` i `target/release/fod-bootstrap` z bieżącego checkoutu, potem stare ścieżki `rust_mkfs/target/debug/fod-bootstrap` i `rust_mkfs/target/release/fod-bootstrap`, a dopiero później `fod-bootstrap` z `PATH` oraz `/usr/local/bin/fod-bootstrap`. Sam `fod-bootstrap` najpierw wybiera `rust_fuse/target/debug/fod-rust-fuse`, potem `fod-rust-fuse` z `PATH`, a na końcu `/usr/local/bin/fod-rust-fuse`. Jeśli `FOD_CONFIG` nie jest ustawione, a w bieżącym katalogu istnieje lokalny `./fod_config.ini`, wrapper eksportuje go automatycznie. Nieznane opcje wyglądające na FOD-owe wypisują ostrzeżenie na stderr, więc literówki typu `rool=primary` nie przechodzą po cichu; typowe opcje systemowe typu `_netdev`, `nofail` i `x-systemd.*` nadal są ignorowane. Jeśli nie znajdzie żadnego poprawnego bootstrappera ani sensownego pliku konfiguracyjnego, kończy się jasnym komunikatem zamiast zgadywać interpreter Pythona.
+W drzewie źródłowym nie ma już Pythonowych launcherów runtime. FOD dostarcza bezpośrednio binaria Rust: `fod-bootstrap`, `fod-config`, `mkfs.fod` i `fod-indexer`. Zainstalowany `mount.fod` najpierw wybiera `target/debug/fod-bootstrap` i `target/release/fod-bootstrap` z bieżącego checkoutu, potem stare ścieżki `rust_mkfs/target/debug/fod-bootstrap` i `rust_mkfs/target/release/fod-bootstrap`, a dopiero później `fod-bootstrap` z `PATH` oraz `/usr/local/bin/fod-bootstrap`. Sam `fod-bootstrap` najpierw wybiera `rust_fuse/target/debug/fod-rust-fuse`, potem `fod-rust-fuse` z `PATH`, a na końcu `/usr/local/bin/fod-rust-fuse`. Jeśli `FOD_CONFIG` nie jest ustawione, a w bieżącym katalogu istnieje lokalny `./fod_config.ini`, wrapper eksportuje go automatycznie. Nieznane opcje wyglądające na FOD-owe wypisują ostrzeżenie na stderr, więc literówki typu `rool=primary` nie przechodzą po cichu; typowe opcje systemowe typu `_netdev`, `nofail` i `x-systemd.*` nadal są ignorowane. Jeśli nie znajdzie żadnego poprawnego bootstrappera ani sensownego pliku konfiguracyjnego, kończy się jasnym komunikatem zamiast zgadywać interpreter Pythona.
 
 Przykład:
 
