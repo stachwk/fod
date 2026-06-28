@@ -1389,7 +1389,7 @@ impl FodFuse {
             obj_type
         };
         let payload = format!("{normalized_obj_type}:{inode_seed}");
-        let inode = Self::hash_inode64(payload.as_bytes());
+        let inode = Self::hash_inode64(payload.as_bytes()) & i64::MAX as u64;
         if inode == 0 {
             self.logical_inode(obj_type, entry_id)
         } else {
@@ -2758,7 +2758,7 @@ impl FodFuse {
             file_attr: FileAttr {
                 ino: ROOT_INO,
                 size: 0,
-                blocks: 0,
+                blocks: self.block_count(0, "dir"),
                 atime: now,
                 mtime: now,
                 ctime: now,

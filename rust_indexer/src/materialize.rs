@@ -513,26 +513,49 @@ pub fn materialize_source(
         Ok(())
     })();
 
-    match result {
-        Ok(()) => {
-            repo.upsert_index_import_plan_entries_staged(&staged_rows)?;
-            summary.saved_bytes = summary.source_bytes.saturating_sub(summary.imported_bytes);
-            let plan_summary = summary.as_import_plan_summary();
-            plan::update_import_plan(repo, plan_id, "materialize_completed", false, &plan_summary)?;
-            Ok(summary)
-        }
-        Err(err) => {
-            let plan_summary = summary.as_import_plan_summary();
-            let _ =
-                plan::update_import_plan(repo, plan_id, "materialize_failed", false, &plan_summary);
-            match cleanup::cleanup_failed_materialization(repo, plan_id) {
-                Ok(_) => Err(format!(
+    fn rollback_materialize_failure(
+        repo: &DbRepo,
+        plan_id: u64,
+        summary: &MaterializeSummary,
+        err: String,
+    ) -> Result<MaterializeSummary, String> {
+        let plan_summary = summary.as_import_plan_summary();
+        let _ = plan::update_import_plan(repo, plan_id, "materialize_failed", false, &plan_summary);
+        match cleanup::cleanup_failed_materialization(repo, plan_id) {
+            Ok(_) => {
+                let rollback_message = format!(
                     "{err}; partial materialization was rolled back automatically for plan {plan_id}"
-                )),
-                Err(cleanup_err) => Err(format!(
-                    "{err}; automatic rollback failed for plan {plan_id}: {cleanup_err}"
-                )),
+                );
+                eprintln!("{rollback_message}");
+                Err(rollback_message)
+            }
+            Err(cleanup_err) => {
+                let rollback_message =
+                    format!("{err}; automatic rollback failed for plan {plan_id}: {cleanup_err}");
+                eprintln!("{rollback_message}");
+                Err(rollback_message)
             }
         }
+    }
+
+    match result {
+        Ok(()) => {
+            if let Err(err) = repo.upsert_index_import_plan_entries_staged(&staged_rows) {
+                return rollback_materialize_failure(repo, plan_id, &summary, err);
+            }
+            summary.saved_bytes = summary.source_bytes.saturating_sub(summary.imported_bytes);
+            let plan_summary = summary.as_import_plan_summary();
+            if let Err(err) = plan::update_import_plan(
+                repo,
+                plan_id,
+                "materialize_completed",
+                false,
+                &plan_summary,
+            ) {
+                return rollback_materialize_failure(repo, plan_id, &summary, err);
+            }
+            Ok(summary)
+        }
+        Err(err) => rollback_materialize_failure(repo, plan_id, &summary, err),
     }
 }

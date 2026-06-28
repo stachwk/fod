@@ -2,13 +2,11 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: ${CONTAINER_POSTGRES_NAME:-fod-postgres}
-    command:
-      - gosu
-      - postgres
-      - sh
+    entrypoint:
+      - /bin/sh
       - -ec
       - |
-        set -- postgres -c "shared_preload_libraries=${POSTGRES_SHARED_PRELOAD_LIBRARIES:-pg_stat_statements}"
+        set -- /usr/local/bin/docker-entrypoint.sh postgres -c "shared_preload_libraries=${POSTGRES_SHARED_PRELOAD_LIBRARIES:-pg_stat_statements}"
         [ -n "${POSTGRES_SHARED_BUFFERS:-}" ] && set -- "$@" -c "shared_buffers=${POSTGRES_SHARED_BUFFERS}"
         [ -n "${POSTGRES_MAX_CONNECTIONS:-}" ] && set -- "$@" -c "max_connections=${POSTGRES_MAX_CONNECTIONS}"
         [ -n "${POSTGRES_MAX_WAL_SIZE:-}" ] && set -- "$@" -c "max_wal_size=${POSTGRES_MAX_WAL_SIZE}"
