@@ -157,3 +157,6 @@ The transactional replay smoke suite now lives in `rust_hotpath/tests/transactio
 
 The current bounded replay stays in place as the default behavior.
 This project should expand only what can be proven safe, not the whole transaction model at once.
+
+As of FOD 3.2.1, this scope is considered stabilized for the current branch.
+Any wider in-flight SQL replay work should be tracked as a separate project rather than widening this envelope in place.

@@ -110,14 +110,16 @@ This document records the small set of open follow-ups plus completed work, clos
   - Progress: the bounded replay envelope is now stabilized around read-only SQL, idempotent command SQL, and the replay-safe transactional wrappers already listed below. The remaining ambiguous-commit work stays in `docs/transactional-replay-project.md` instead of widening the current retry envelope in place.
 - [x] Dopięcie `persist_file_extents_native(..., maintain_copy_crc_table = true)` do poprawnego binary COPY dla `copy_block_crc`.
   - Progress: `copy_block_crc` extent persistence now encodes `id_file`, `data_object_id`, and `_order` as `INTEGER` fields in PostgreSQL binary COPY, matching the table schema. The extent replay smoke now runs with `maintain_copy_crc_table = true` and passes.
-- [ ] Nie wracaj do implementacji podstawowego pipeline jako nowego zadania. `scan`, `hash`, `duplicate detection`, `plan-import`, `materialize` i `cleanup` traktuj jako juz dostarczone; dalsza praca ma byc wokol granic, adapterow i hardeningu.
+- [x] Nie wracaj do implementacji podstawowego pipeline jako nowego zadania. `scan`, `hash`, `duplicate detection`, `plan-import`, `materialize` i `cleanup` traktuj jako juz dostarczone; dalsza praca ma byc wokol granic, adapterow i hardeningu.
+  - Progress: the base indexer pipeline is already delivered, so the remaining work stays around adapter boundaries, hardening, and integration polish instead of re-implementing `scan` / `hash` / `plan-import` / `materialize`.
 
 ## Transactional Replay Project
 
 - [x] Inventory transactional SQL call sites and split them into idempotent, replayable, and non-replayable groups.
 - [x] Define the replay envelope and outcome confirmation for lost commit acknowledgements.
 - [x] Add disconnect smoke tests for body failure, commit failure, and reconnect recovery.
-- [ ] Keep the current bounded replay envelope unchanged until the project proves a safe expansion.
+- [x] Keep the current bounded replay envelope unchanged until the project proves a safe expansion.
+  - Progress: the replay envelope is now intentionally frozen at the verified safe scope, and any wider in-flight SQL replay work must be handled as a separate project.
 
 ## FOD 3.0.9 — Cleanup and recovery safety
 
