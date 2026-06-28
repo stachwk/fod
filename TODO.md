@@ -2,6 +2,11 @@
 
 This document records the small set of open follow-ups plus completed work, closed decisions, and regression notes for FOD. It is not an active implementation backlog.
 
+Reading guide:
+- `Historical note:` means closed-item context, benchmark results, or archived implementation detail.
+- `Decision:` means durable guidance that still applies.
+- Plain bullets under `Extent Engine Direction` and `Target Architecture` are current architectural guidance, not open tasks.
+
 ## Current Follow-ups
 
 - [x] Detect single-node vs read-only replica mode early and let runtime choose the appropriate lock strategy before mount. Handled in `rust_fuse/src/startup.rs` via `effective_read_only()` and `lock_settings(read_only)`.
@@ -39,12 +44,12 @@ This document records the small set of open follow-ups plus completed work, clos
 ### Obszary do rozwoju
 
 - [x] Dodać pełniejszy replay in-flight SQL po błędach.
-  - Progress: `transactional_replay_confirmed()` now centralizes the durable probe pattern for request-token-backed and natural-key-confirmed transactions, and it now also short-circuits `set_file_size()` and `adopt_source_data_object()` on durable row state. `lock_lease_request_tokens` makes flock-lease grant/deny outcomes durable, and `sql_is_replayable_command()` now covers the remaining create-entry inserts plus the `data_objects` reference-count updates that were still missing from the replayable set. The replay smoke and lock-manager suites passed after the refactor.
+  - Historical note: `transactional_replay_confirmed()` now centralizes the durable probe pattern for request-token-backed and natural-key-confirmed transactions, and it now also short-circuits `set_file_size()` and `adopt_source_data_object()` on durable row state. `lock_lease_request_tokens` makes flock-lease grant/deny outcomes durable, and `sql_is_replayable_command()` now covers the remaining create-entry inserts plus the `data_objects` reference-count updates that were still missing from the replayable set. The replay smoke and lock-manager suites passed after the refactor.
 - [x] Review `fod-indexer` CLI ergonomics after manual use; keep the explicit `--source` contract if that remains the intended API, but consider clearer examples or a positional alias if users keep trying the old style. Added positional source shorthand for `scan`, `hash`, `plan-import`, and `materialize` while preserving `--source`.
 - [x] Usprawnić automatyczne sugerowanie nazw źródłom w `fod-indexer source add`, bez usuwania `--name`.
-  - Progress: local sources default to the current hostname; SMB/QNAP try to infer the remote host or IP from the mounted share; ADB prefers the device serial from `ANDROID_SERIAL`, `ADB_SERIAL`, `ADB_DEVICE_SERIAL`, or `adb devices`; GitHub sources try the git remote slug or repository name. Explicit `--name` still overrides the suggestion.
+  - Historical note: local sources default to the current hostname; SMB/QNAP try to infer the remote host or IP from the mounted share; ADB prefers the device serial from `ANDROID_SERIAL`, `ADB_SERIAL`, `ADB_DEVICE_SERIAL`, or `adb devices`; GitHub sources try the git remote slug or repository name. Explicit `--name` still overrides the suggestion.
 - [x] Rozdzielić adaptery path-backed od przyszłych crawlerów SMB/QNAP/ADB/GitHub.
-  - Progress: the source kinds and naming heuristics are in place, scan/hash/plan/materialize still operate on mounted or mirrored filesystem roots, and the adapter boundary is now explicit in `docs/fod-indexer.md`.
+  - Historical note: the source kinds and naming heuristics are in place, scan/hash/plan/materialize still operate on mounted or mirrored filesystem roots, and the adapter boundary is now explicit in `docs/fod-indexer.md`.
   - Decision: current kinds stay path-backed/mirrored/export-backed through filesystem roots; none of them gets a direct remote crawler in the shared core. Future non-path-backed kinds should arrive as separate adapter projects.
 - [x] Plan implementacji ioctl:
   - [x] Najpierw `FIGETBSZ`. Zaimplementowane w `rust_fuse/src/fs.rs` jako odpowiedź oparta o bieżący `blksize`.
@@ -52,18 +57,18 @@ This document records the small set of open follow-ups plus completed work, clos
   - [x] `FS_IOC_SETFLAGS` przyjmuje teraz tylko `0` jako bezpieczny no-op; inne flagi dostają `EOPNOTSUPP` do czasu decyzji o trwałej polityce.
   - [x] `FS_IOC_FSGETXATTR` zwraca teraz wyzerowany `fsxattr`, a `FS_IOC_FSSETXATTR` przyjmuje tylko zero/no-op do czasu decyzji o trwałej polityce xflags.
   - [x] `FICLONE` zostaje na razie eksperymentalny, bo na tym hoście obecny kernel/FUSE stack ucina ten request przed userspace; FOD nie ma jeszcze end-to-end potwierdzenia dla tego pathu.
-    - Progress: `tests/integration/test_ioctl.py` now covers `FICLONE` alongside `FIONREAD`, accepting the current unsupported path while still verifying that a successful clone would preserve payload contents. The host-side conclusion remains that the request is blocked before userspace on this stack.
+    - Historical note: `tests/integration/test_ioctl.py` now covers `FICLONE` alongside `FIONREAD`, accepting the current unsupported path while still verifying that a successful clone would preserve payload contents. The host-side conclusion remains that the request is blocked before userspace on this stack.
 - [x] Zaprojektować pełną politykę mount-label SELinux. Celowo zamknięte jako non-goal: FOD trzyma SELinux jako xattr-backed metadata plus runtime gating, bez pełnej polityki mount-label.
 
 ### PostgreSQL tuning and ingest hardening
 
 - [x] Expose server-side WAL/checkpoint/planner/autovacuum knobs in the Docker Compose and Makefile presets so local and QNAP benchmark runs can A/B the same config without editing container images.
-  - Progress: the compose stack now accepts optional `POSTGRES_*` tuning env vars and `make qnap-config-show` / `make postgres-config-show` print the resolved preset; `make postgres-benchmarks-wal-preset` and `make postgres-benchmarks-planner-preset` now apply the shared tuning profiles to both local Docker and QNAP without editing container images, and the benchmark A/B baseline is recorded in `BENCHMARKS.md`.
-  - Progress: the 2026-06-27 short local/QNAP smoke on commit `a7504c6` confirmed the knobs can be A/B-tested without editing images, but it stayed checkpoint-free (`checkpoints_req=0` everywhere), so `max_wal_size` and `checkpoint_timeout` still need a longer pressure test before they can be judged.
-  - Progress: the 2026-06-28 local-only long smoke on commit `e66e66c` finally crossed the checkpoint boundary at `PG_WAL_PRESSURE_COUNT=10000`. The baseline and `max_wal_size=8GB` runs both produced a timed checkpoint, while `checkpoint_timeout=15min` and `checkpoint_timeout=30min` moved the checkpoint to the requested path instead. That makes the 5-minute timeout the first knob to address on this workload, and it suggests a separate size-bound pass is still useful if we want to isolate `max_wal_size` further.
-  - Progress: the 2026-06-28 local-only max-WAL sweep on commit `be642a6` isolated that size cap. With `POSTGRES_CHECKPOINT_TIMEOUT=30min`, the current 1 GB-style `max_wal_size` still forced two requested checkpoints at `1.29 GB` of WAL, while `POSTGRES_MAX_WAL_SIZE=8GB` removed both requested and timed checkpoints on the same workload. That makes the default size cap the remaining checkpoint trigger once timeout has already been relaxed.
+  - Historical note: the compose stack now accepts optional `POSTGRES_*` tuning env vars and `make qnap-config-show` / `make postgres-config-show` print the resolved preset; `make postgres-benchmarks-wal-preset` and `make postgres-benchmarks-planner-preset` now apply the shared tuning profiles to both local Docker and QNAP without editing container images, and the benchmark A/B baseline is recorded in `BENCHMARKS.md`.
+  - Historical note: the 2026-06-27 short local/QNAP smoke on commit `a7504c6` confirmed the knobs can be A/B-tested without editing images, but it stayed checkpoint-free (`checkpoints_req=0` everywhere), so `max_wal_size` and `checkpoint_timeout` still need a longer pressure test before they can be judged.
+  - Historical note: the 2026-06-28 local-only long smoke on commit `e66e66c` finally crossed the checkpoint boundary at `PG_WAL_PRESSURE_COUNT=10000`. The baseline and `max_wal_size=8GB` runs both produced a timed checkpoint, while `checkpoint_timeout=15min` and `checkpoint_timeout=30min` moved the checkpoint to the requested path instead. That makes the 5-minute timeout the first knob to address on this workload, and it suggests a separate size-bound pass is still useful if we want to isolate `max_wal_size` further.
+  - Historical note: the 2026-06-28 local-only max-WAL sweep on commit `be642a6` isolated that size cap. With `POSTGRES_CHECKPOINT_TIMEOUT=30min`, the current 1 GB-style `max_wal_size` still forced two requested checkpoints at `1.29 GB` of WAL, while `POSTGRES_MAX_WAL_SIZE=8GB` removed both requested and timed checkpoints on the same workload. That makes the default size cap the remaining checkpoint trigger once timeout has already been relaxed.
 - [x] Move indexer metadata writes onto staging + `COPY` + set-based merge, starting with `index_files`, `index_file_hashes`, `index_duplicate_sets`, and import plan entries.
-  - Progress: `index_sources`, `index_scan_runs`, `index_import_plans`, `index_files`, `index_file_hashes`, `index_duplicate_sets`, and `index_import_plan_entries` now write through staged temp tables with `COPY` plus set-based merge helpers; `materialize` plan-entry writes use the same path too, while the streaming payload collection remains a separate follow-up.
+  - Historical note: `index_sources`, `index_scan_runs`, `index_import_plans`, `index_files`, `index_file_hashes`, `index_duplicate_sets`, and `index_import_plan_entries` now write through staged temp tables with `COPY` plus set-based merge helpers; `materialize` plan-entry writes use the same path too, while the streaming payload collection remains a separate follow-up.
 - [x] Stream `materialize` payload collection instead of buffering whole files in memory; keep fully replay-safe batch import as a separate design.
 
 ### Direct I/O Microscope
@@ -93,25 +98,25 @@ This document records the small set of open follow-ups plus completed work, clos
 ## FOD indexer: dalszy plan dla Codex
 
 - [x] Utrwal granice miedzy core engine a adapterami zrodel. `fod-indexer` ma zostac wspolnym silnikiem indeksowania, a nie zbiorem osobnych crawlerow; wszystko, co da sie przedstawic jako lokalny katalog, mount albo mirror, powinno przechodzic przez jeden path-backed flow.
-  - Progress: source registration, browsing, list/remove, and source discovery now live in `rust_indexer/src/source_registry.rs`, while `rust_indexer/src/scan.rs` keeps the scan path focused on walking and persisting indexed files.
+  - Historical note: source registration, browsing, list/remove, and source discovery now live in `rust_indexer/src/source_registry.rs`, while `rust_indexer/src/scan.rs` keeps the scan path focused on walking and persisting indexed files.
 - [x] Wydziel model zdolnosci zrodla i trzymaj go osobno od samego skanu. Dla kazdego `source kind` doprecyzuj metadane takie jak `path_backed`, `readonly`, `mirror_required`, `needs_export` i `direct_crawler_possible`, zeby sposob pobrania danych byl deklaratywny.
-  - Progress: implemented in `rust_indexer/src/capabilities.rs` and surfaced through `SourceKind::capabilities()`, with `source add` / `source list` now printing the profile.
+  - Historical note: implemented in `rust_indexer/src/capabilities.rs` and surfaced through `SourceKind::capabilities()`, with `source add` / `source list` now printing the profile.
 - [x] Ustal polityke dla `local`, `qnap`, `smb`, `adb` i `github`. Domyslnie maja byc path-backed albo mirrored, a direct crawler tylko wtedy, gdy naprawde nie da sie tego sensownie sprowadzic do katalogu.
-  - Progress: `local` is path-backed; `smb` / `qnap` are mirrored; `adb` / `github` are export-backed. The CLI now prints the policy alongside the capability profile.
+  - Historical note: `local` is path-backed; `smb` / `qnap` are mirrored; `adb` / `github` are export-backed. The CLI now prints the policy alongside the capability profile.
 - [x] Dopnij nazewnictwo i rejestracje zrodel do modelu capabilities. Heurystyki nazw maja pozostac pomocnicze, ale `--name` musi zostac jawna nadpiska; nazwa nie moze ukrywac, czy zrodlo jest mounted, mirrored, czy tylko importowane do katalogu roboczego.
-  - Progress: `--name` remains the explicit override, and the capability profile is now shown alongside source registration and listing so the kind stays visible.
+  - Historical note: `--name` remains the explicit override, and the capability profile is now shown alongside source registration and listing so the kind stays visible.
 - [x] Rozszerz testy integracyjne o scenariusze miedzyzrodlowe i adapterowe. Sprawdzaj osobno lokalny mount, mirror/backed source, cleanup po zniknieciu zrodla, ignorowanie hidden/cache paths oraz stabilnosc import/materialize przy kilku `source kind`ach.
-  - Progress: `tests/integration/test_fod_indexer_source_kinds.py` now covers local, smb, and github roots, browse filtering for hidden/cache trees, source-scoped scan/hash/materialize flows, and cleanup after a source root disappears.
+  - Historical note: `tests/integration/test_fod_indexer_source_kinds.py` now covers local, smb, and github roots, browse filtering for hidden/cache trees, source-scoped scan/hash/materialize flows, and cleanup after a source root disappears.
 - [x] Doprecyzuj dokumentacje FOD jako wspolnego silnika indeksowania. Wprost zapisz, ze `fod-indexer` ma byc wspolnym core dla `scan/hash/dedupe/plan/materialize/cleanup`, a `msfind` ma korzystac z tego rdzenia zamiast implementowac drugi, podobny pipeline.
-  - Progress: `docs/fod-indexer.md` now states that `fod-indexer` is the shared indexing core for registration, scan, hash, duplicate detection, planning, materialization, and cleanup, and `docs/msfind-fod-indexer-requests.md` now frames requests as gaps against that shared core instead of a parallel pipeline.
+  - Historical note: `docs/fod-indexer.md` now states that `fod-indexer` is the shared indexing core for registration, scan, hash, duplicate detection, planning, materialization, and cleanup, and `docs/msfind-fod-indexer-requests.md` now frames requests as gaps against that shared core instead of a parallel pipeline.
 - [x] Zostaw w backlogu tylko to, czego realnie brakuje: decyzje, ktore `source kind`y beda kiedys potrzebowaly direct crawlerow, oraz czy maja byc mirror-only czy native API adapters. Nie rozszerzaj core o protokoly, jesli nie ma konkretnego, nieobslugiwnego jeszcze przypadku.
-  - Progress: the current kinds now have an explicit boundary in `docs/fod-indexer.md`, and none of them gets a direct remote crawler in the shared core. Future non-path-backed sources should come in as separate adapter projects.
+  - Historical note: the current kinds now have an explicit boundary in `docs/fod-indexer.md`, and none of them gets a direct remote crawler in the shared core. Future non-path-backed sources should come in as separate adapter projects.
 - [x] Uporzadkuj safety i retry tylko tam, gdzie sa jeszcze luki. Read-only i idempotentne operacje maja zostac bounded-retry friendly, ale nie dokladaj pelnego replay nieidempotentnych transakcji bez osobnego projektu.
-  - Progress: the bounded replay envelope is now stabilized around read-only SQL, idempotent command SQL, and the replay-safe transactional wrappers already listed below. The remaining ambiguous-commit work stays in `docs/transactional-replay-project.md` instead of widening the current retry envelope in place.
+  - Historical note: the bounded replay envelope is now stabilized around read-only SQL, idempotent command SQL, and the replay-safe transactional wrappers already listed below. The remaining ambiguous-commit work stays in `docs/transactional-replay-project.md` instead of widening the current retry envelope in place.
 - [x] Dopięcie `persist_file_extents_native(..., maintain_copy_crc_table = true)` do poprawnego binary COPY dla `copy_block_crc`.
-  - Progress: `copy_block_crc` extent persistence now encodes `id_file`, `data_object_id`, and `_order` as `INTEGER` fields in PostgreSQL binary COPY, matching the table schema. The extent replay smoke now runs with `maintain_copy_crc_table = true` and passes.
+  - Historical note: `copy_block_crc` extent persistence now encodes `id_file`, `data_object_id`, and `_order` as `INTEGER` fields in PostgreSQL binary COPY, matching the table schema. The extent replay smoke now runs with `maintain_copy_crc_table = true` and passes.
 - [x] Nie wracaj do implementacji podstawowego pipeline jako nowego zadania. `scan`, `hash`, `duplicate detection`, `plan-import`, `materialize` i `cleanup` traktuj jako juz dostarczone; dalsza praca ma byc wokol granic, adapterow i hardeningu.
-  - Progress: the base indexer pipeline is already delivered, so the remaining work stays around adapter boundaries, hardening, and integration polish instead of re-implementing `scan` / `hash` / `plan-import` / `materialize`.
+  - Historical note: the base indexer pipeline is already delivered, so the remaining work stays around adapter boundaries, hardening, and integration polish instead of re-implementing `scan` / `hash` / `plan-import` / `materialize`.
 
 ## Transactional Replay Project
 
@@ -119,7 +124,7 @@ This document records the small set of open follow-ups plus completed work, clos
 - [x] Define the replay envelope and outcome confirmation for lost commit acknowledgements.
 - [x] Add disconnect smoke tests for body failure, commit failure, and reconnect recovery.
 - [x] Keep the current bounded replay envelope unchanged until the project proves a safe expansion.
-  - Progress: the replay envelope is now intentionally frozen at the verified safe scope, and any wider in-flight SQL replay work must be handled as a separate project.
+  - Historical note: the replay envelope is now intentionally frozen at the verified safe scope, and any wider in-flight SQL replay work must be handled as a separate project.
 
 ## FOD 3.0.9 — Cleanup and recovery safety
 
