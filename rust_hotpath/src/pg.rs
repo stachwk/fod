@@ -1250,6 +1250,8 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
             && sql.contains("ON CONFLICT (hash_algorithm, full_hash, file_size) DO UPDATE SET file_count = EXCLUDED.file_count, total_bytes = EXCLUDED.total_bytes, updated_at = NOW()")
         || sql.starts_with("INSERT INTO index_import_plans ")
             && sql.contains("ON CONFLICT (request_token) DO UPDATE SET status = EXCLUDED.status, dry_run = EXCLUDED.dry_run, source_filter = EXCLUDED.source_filter, updated_at = NOW()")
+        || sql.starts_with("INSERT INTO client_sessions ")
+            && sql.contains("ON CONFLICT (request_token) DO UPDATE SET updated_at = NOW()")
         || sql.starts_with("UPDATE index_scan_runs SET finished_at = NOW(), status = ")
         || sql.starts_with("UPDATE index_import_plans SET status = ")
         || sql.starts_with("UPDATE index_files SET source_changed = TRUE, updated_at = NOW() WHERE id_file = ")
@@ -4199,6 +4201,13 @@ impl DbRepo {
                     SELECT 1
                     FROM information_schema.columns
                     WHERE table_schema = '{schema}'
+                      AND table_name = 'client_sessions'
+                      AND column_name = 'request_token'
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = '{schema}'
                       AND table_name = 'client_session_owner_keys'
                       AND column_name = 'owner_key'
                 )
@@ -4207,6 +4216,12 @@ impl DbRepo {
                     FROM pg_indexes
                     WHERE schemaname = '{schema}'
                       AND indexname = 'idx_client_sessions_expires'
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_indexes
+                    WHERE schemaname = '{schema}'
+                      AND indexname = 'idx_client_sessions_request_token'
                 )
                 AND EXISTS (
                     SELECT 1
@@ -4522,6 +4537,7 @@ impl DbRepo {
                                 mount_mode VARCHAR(20) NOT NULL,
                                 lock_backend VARCHAR(20) NOT NULL,
                                 pid BIGINT NOT NULL,
+                                request_token TEXT,
                                 lease_expires_at TIMESTAMP NOT NULL,
                                 heartbeat_at TIMESTAMP NOT NULL,
                                 last_lock_at TIMESTAMP NULL,
@@ -4536,6 +4552,20 @@ impl DbRepo {
                             "
                             CREATE INDEX IF NOT EXISTS idx_client_sessions_expires
                             ON client_sessions (lease_expires_at)
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
+                            ALTER TABLE IF EXISTS client_sessions
+                            ADD COLUMN IF NOT EXISTS request_token TEXT
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
+                            CREATE UNIQUE INDEX IF NOT EXISTS idx_client_sessions_request_token
+                            ON client_sessions (request_token)
                             ",
                         )
                         .map_err(|_| "SQL contains NUL byte".to_string())?,
@@ -4932,6 +4962,9 @@ impl DbRepo {
         pid: u64,
         lease_ttl_seconds: u64,
     ) -> Result<u64, String> {
+        let request_token_value = generate_request_token("client-session");
+        let request_token = CString::new(request_token_value)
+            .map_err(|_| "request token contains NUL byte".to_string())?;
         let sql = CString::new(
             "
             INSERT INTO client_sessions (
@@ -4940,6 +4973,7 @@ impl DbRepo {
                 mount_mode,
                 lock_backend,
                 pid,
+                request_token,
                 lease_expires_at,
                 heartbeat_at,
                 started_at,
@@ -4950,11 +4984,14 @@ impl DbRepo {
                 $3,
                 $4,
                 $5,
-                NOW() + ($6 || ' seconds')::interval,
+                $6,
+                NOW() + ($7 || ' seconds')::interval,
                 NOW(),
                 NOW(),
                 NOW()
             )
+            ON CONFLICT (request_token) DO UPDATE SET
+                updated_at = NOW()
             RETURNING session_id
             ",
         )
@@ -4978,6 +5015,7 @@ impl DbRepo {
                 &mount_mode,
                 &lock_backend,
                 &pid,
+                &request_token,
                 &lease_ttl_seconds,
             ];
             let res = exec_params(conn, &sql, &params)?;
