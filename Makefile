@@ -344,6 +344,7 @@ help:
 		'  make profile-perf-record - record perf samples around PROFILE_WORKLOAD' \
 		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
+		'  make profile-pg-data-blocks-merge-explain - capture temp-table EXPLAIN for the current data_blocks merge shape' \
 		'  make profile-fuse-attach PROFILE_PID=<pid> - attach perf to a running fod-rust-fuse process' \
 		'  make mount      - mount FOD at $(MOUNTPOINT)' \
 		'  make qnap-mount - mount FOD at $(MOUNTPOINT) using QNAP=1' \
@@ -1391,9 +1392,14 @@ qnap-mount:
 clean:
 	rm -rf $(VENV_DIR)
 
-.PHONY: profile-pg-data-blocks-semantics
+.PHONY: profile-pg-data-blocks-semantics profile-pg-data-blocks-merge-explain
 
 profile-pg-data-blocks-semantics:
 	@mkdir -p $(ARTIFACTS_DIR)
 	$(PSQL) -f scripts/perf/pg/data_blocks_semantics.sql > $(ARTIFACTS_DIR)/pg_data_blocks_semantics$(PROFILE_CAPTURE_SUFFIX).txt
 	@cat $(ARTIFACTS_DIR)/pg_data_blocks_semantics$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-data-blocks-merge-explain:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/explain_data_blocks_merge.sql > $(ARTIFACTS_DIR)/pg_data_blocks_merge_explain$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_data_blocks_merge_explain$(PROFILE_CAPTURE_SUFFIX).txt

@@ -304,3 +304,84 @@ System-wide sudo `perf stat` after the patch:
 - The dominant measured area remains server-side payload persistence: `COPY fod_persist_block_stage` plus `INSERT INTO data_blocks ... ON CONFLICT`.
 - Generic `bpftrace` syscall capture worked but was too noisy for attribution because it included host and Docker processes. A filtered PID/comm script is needed before syscall counts can drive the next decision.
 - A profiling harness follow-up is needed because `FOD_PROFILE_IO=1` during Rust FUSE cargo tests can write useful `pg.copy_put_data.aggregate` data to the temporary mount log, but the test support removes that log before the aggregate is visible in successful runs.
+
+## 2026-07-01 Current `data_blocks` Merge Diagnostics
+
+### Run Metadata
+
+- Base commit at validation time: `4a66459` (`FOD 3.2.1: record rejected data block DO NOTHING probe`)
+- FOD version: `3.2.1`
+- Host: `lt7300`
+- Mode: local Docker PostgreSQL
+- Profile run id: `merge-current-20260701T184307Z`
+- Artifact directory: `artifacts/perf/4a66459/lt7300-merge-current-20260701T184307Z`
+- Runtime workload: `FOD_PROFILE_IO=1 make test-large-copy-benchmark`
+- Diagnostic target: `make profile-pg-data-blocks-merge-explain PROFILE_CAPTURE_LABEL=merge-explain`
+
+### Runtime Result
+
+```text
+OK large-copy-benchmark bytes=67108864 elapsed_s=3.849497 throughput_mib_s=16.63
+```
+
+Visible client-side COPY send aggregates:
+
+| Pass | Seconds | Bytes | Count | Max | Avg |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | `0.022504` | `67993619` | `65` | `0.000664` | `0.000346` |
+| 2 | `0.020275` | `67993619` | `65` | `0.000537` | `0.000312` |
+
+The two `PQputCopyData` aggregate passes total about `0.043 s`, so client send time remains small relative to the `3.849 s` workload.
+
+### PostgreSQL Top Statements
+
+| Query family | Calls | Total ms | Rows | shared_blks_hit | shared_blks_dirtied | shared_blks_written |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `COPY fod_persist_block_stage (...) FROM STDIN BINARY` | 2 | `1218.576` | 32768 | 0 | 0 | 0 |
+| `INSERT INTO data_blocks ... SELECT ... ON CONFLICT ...` | 1 | `499.954` | 16384 | 230970 | 345 | 336 |
+| `INSERT INTO data_blocks ... SELECT ... ON CONFLICT ...` | 1 | `435.851` | 16384 | 214587 | 336 | 336 |
+| recursive path walk over `directories` | 2076 | `167.903` | 2067 | 8273 | 0 | 0 |
+| child entry lookup | 2067 | `115.453` | 2062 | 14469 | 0 | 0 |
+
+Payload SQL time:
+
+```text
+1218.576 + 499.954 + 435.851 = 2154.381 ms
+2154.381 ms / 3849.497 ms ~= 56.0% of measured workload time
+```
+
+### `data_blocks` Semantics Snapshot
+
+The current local database after the workload reported:
+
+- `data_blocks_rows=1245341`
+- `data_blocks_without_matching_file_owner=0`
+- `data_objects_with_multiple_files=0`
+- `objects_with_multiple_block_id_files=0`
+
+This snapshot does not justify weakening `ON CONFLICT DO UPDATE`. It only confirms that the current database state is internally consistent after the correct merge path.
+
+### Temp-Table `EXPLAIN` Reproducer
+
+The new `profile-pg-data-blocks-merge-explain` target creates a temporary target table with a primary key, an index on `data_object_id`, and the unique `(data_object_id, _order)` arbiter index. It then runs the existing merge shape against 16k staged 4 KiB rows.
+
+This target does not alter real `fod.data_blocks`; the real row count was `1245341` before and after the reproducer.
+
+| Scenario | Tuples inserted | Conflicting tuples | Execution ms | Buffers summary |
+| --- | ---: | ---: | ---: | --- |
+| fresh insert into empty temp target | 16384 | 0 | `235.611` | `local hit=178435 read=3 dirtied=313 written=312` |
+| conflict update with identical payload | 0 | 16384 | `307.665` | `local hit=247218 dirtied=309 written=309` |
+| conflict update with changed payload and `id_file` | 0 | 16384 | `359.060` | `local hit=277396 dirtied=225 written=271` |
+
+Limitations:
+
+- Temporary tables do not provide production-representative WAL numbers.
+- The temp reproducer is useful for plan shape and relative insert/update cost, not final production timing.
+- The live runtime merge is still slower than the temp reproducer, so the next diagnostics should inspect real table/index bloat, WAL/write amplification, and whether batch size changes the real merge cost.
+
+### Interpretation
+
+- The rejected `DO NOTHING` probe confirms that correctness currently requires the conflict update path.
+- The correct live path is still dominated by server-side `COPY` plus two `data_blocks` merges.
+- The temp-table reproducer gives a safe way to compare candidate plans before touching production SQL.
+- Do not change runtime merge semantics until a candidate improves the real path and passes `test-copy-block-crc-table`, remount durability, chunking, and unlink-after-write.
