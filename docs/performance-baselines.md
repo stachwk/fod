@@ -416,6 +416,50 @@ Interpretation:
 - The `idx_data_blocks_data_object_id` read/fetch counters are high relative to its scan count, so future investigation should check which cleanup/read paths rely on that index before removing or changing it.
 - This snapshot is a size/churn signal, not a mathematical bloat estimate.
 
+### Real WAL Delta Snapshot
+
+Captured with:
+
+```bash
+make profile-pg-wal-snapshot PROFILE_RUN_ID=wal-current-20260701T185934Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=before
+FOD_PROFILE_IO=1 make test-large-copy-benchmark
+make profile-pg-wal-snapshot PROFILE_RUN_ID=wal-current-20260701T185934Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=after
+make profile-pg-wal-delta PROFILE_RUN_ID=wal-current-20260701T185934Z PROFILE_HOST=lt7300
+```
+
+Runtime output:
+
+```text
+OK large-copy-benchmark bytes=67108864 elapsed_s=3.725767 throughput_mib_s=17.18
+```
+
+Visible client-side COPY send aggregates:
+
+| Pass | Seconds | Bytes | Count | Max | Avg |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | `0.023847` | `67993619` | `65` | `0.000641` | `0.000367` |
+| 2 | `0.022095` | `67993619` | `65` | `0.000511` | `0.000340` |
+
+WAL/checkpointer delta for this single workload:
+
+| Metric | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| `buffers_backend` | 44910 | 44910 | 0 |
+| `buffers_backend_fsync` | 0 | 0 | 0 |
+| `buffers_checkpoint` | 30188 | 30188 | 0 |
+| `wal_buffers_full` | 13176 | 13355 | 179 |
+| `wal_bytes` | 751608509 | 764465924 | 12857415 |
+| `wal_fpi` | 5616 | 5622 | 6 |
+| `wal_records` | 8533154 | 8698779 | 165625 |
+| `wal_sync` | 16766 | 16786 | 20 |
+| `wal_write` | 30777 | 30976 | 199 |
+
+Interpretation:
+
+- This is the first real production-path WAL delta for the current large-copy workload, not a cumulative-only snapshot.
+- The run produced about `12.86 MB` of WAL for the 64 MiB copy workload on this local setup.
+- There was no checkpoint/backend-buffer delta in this short run, so the immediate signal is WAL generation/write/sync activity rather than checkpoint pressure.
+
 ### Interpretation
 
 - The rejected `DO NOTHING` probe confirms that correctness currently requires the conflict update path.

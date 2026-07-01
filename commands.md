@@ -485,3 +485,23 @@ Base commit at execution time: `8d5b1b6`
 - `make help | rg 'profile-pg-data-blocks-bloat|profile-pg-data-blocks-merge-explain'`
 - `git add Makefile scripts/perf/pg/data_blocks_bloat.sql commands.md conclusions.md docs/performance-baselines.md`
 - `git commit -m 'FOD 3.2.1: add data block bloat diagnostics'`
+
+Base commit at execution time: `5ca6f1e`
+
+- `PROFILE_RUN_ID=wal-current-$(date -u +%Y%m%dT%H%M%SZ); PROFILE_HOST=$(hostname -s 2>/dev/null || hostname); printf '%s\n' "$PROFILE_RUN_ID" > /tmp/fod_wal_current_run_id; printf '%s\n' "$PROFILE_HOST" > /tmp/fod_wal_current_host; printf 'PROFILE_RUN_ID=%s\nPROFILE_HOST=%s\n' "$PROFILE_RUN_ID" "$PROFILE_HOST"`
+- `make profile-env PROFILE_RUN_ID=wal-current-20260701T185834Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=wal && make profile-pg-wal-snapshot PROFILE_RUN_ID=wal-current-20260701T185834Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=before`
+- `FOD_PROFILE_IO=1 make test-large-copy-benchmark 2>&1 | tee /tmp/fod-wal-current.log`
+- `make profile-pg-wal-snapshot PROFILE_RUN_ID=wal-current-20260701T185834Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=after && make profile-pg-wal-delta PROFILE_RUN_ID=wal-current-20260701T185834Z PROFILE_HOST=lt7300`
+- `PROFILE_RUN_ID=wal-current-$(date -u +%Y%m%dT%H%M%SZ); PROFILE_HOST=$(hostname -s 2>/dev/null || hostname); printf '%s\n' "$PROFILE_RUN_ID" > /tmp/fod_wal_current_run_id; printf '%s\n' "$PROFILE_HOST" > /tmp/fod_wal_current_host; printf 'PROFILE_RUN_ID=%s\nPROFILE_HOST=%s\n' "$PROFILE_RUN_ID" "$PROFILE_HOST"`
+- `make profile-env PROFILE_RUN_ID=wal-current-20260701T185934Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=wal && make profile-pg-wal-snapshot PROFILE_RUN_ID=wal-current-20260701T185934Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=before`
+- `FOD_PROFILE_IO=1 make test-large-copy-benchmark 2>&1 | tee /tmp/fod-wal-current.log`
+- `make profile-pg-wal-snapshot PROFILE_RUN_ID=wal-current-20260701T185934Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=after && make profile-pg-wal-delta PROFILE_RUN_ID=wal-current-20260701T185934Z PROFILE_HOST=lt7300`
+- `make help | rg 'profile-pg-wal-snapshot|profile-pg-wal-delta'`
+- `rg -n "OK large-copy|pg.copy_put_data.aggregate" /tmp/fod-wal-current.log && cat artifacts/perf/5ca6f1e/lt7300-wal-current-20260701T185934Z/pg_wal_delta-before-to-after.tsv`
+- `find artifacts/perf/5ca6f1e/lt7300-wal-current-20260701T185934Z -maxdepth 1 -type f -printf '%f %s\n' | sort`
+- `git diff --check`
+- `git diff --stat`
+- `git status --short`
+- `sed -n '1,140p' scripts/perf/pg/wal_snapshot.sql && make help | rg 'profile-pg-wal-snapshot|profile-pg-wal-delta'`
+- `git add Makefile scripts/perf/pg/wal_snapshot.sql TODO.md commands.md conclusions.md docs/performance-baselines.md`
+- `git commit -m 'FOD 3.2.1: capture data block WAL amplification'`

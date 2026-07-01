@@ -140,6 +140,11 @@ PROFILE_WORKLOAD ?= test-large-copy-benchmark
 PROFILE_PID ?=
 PROFILE_MAKE ?= make
 PROFILE_SUDO ?= sudo -n
+PROFILE_WAL_BEFORE_LABEL ?= before
+PROFILE_WAL_AFTER_LABEL ?= after
+PROFILE_WAL_BEFORE_FILE ?= $(ARTIFACTS_DIR)/pg_wal_snapshot-$(PROFILE_WAL_BEFORE_LABEL).tsv
+PROFILE_WAL_AFTER_FILE ?= $(ARTIFACTS_DIR)/pg_wal_snapshot-$(PROFILE_WAL_AFTER_LABEL).tsv
+PROFILE_WAL_DELTA_FILE ?= $(ARTIFACTS_DIR)/pg_wal_delta-$(PROFILE_WAL_BEFORE_LABEL)-to-$(PROFILE_WAL_AFTER_LABEL).tsv
 
 define RUN_POSTGRES_BENCHMARK_REPEAT
 	@set -eu; \
@@ -342,6 +347,8 @@ help:
 		'  make profile-local-baseline - run PROFILE_WORKLOAD with pg_stat capture before/after' \
 		'  make profile-perf-stat - run perf stat around PROFILE_WORKLOAD' \
 		'  make profile-perf-record - record perf samples around PROFILE_WORKLOAD' \
+		'  make profile-pg-wal-snapshot - capture machine-readable WAL/checkpointer counters' \
+		'  make profile-pg-wal-delta - compare PROFILE_WAL_BEFORE_LABEL and PROFILE_WAL_AFTER_LABEL snapshots' \
 		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-pg-data-blocks-merge-explain - capture temp-table EXPLAIN for the current data_blocks merge shape' \
@@ -1193,7 +1200,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1223,6 +1230,21 @@ profile-pg-wal:
 	@mkdir -p $(ARTIFACTS_DIR)
 	$(PSQL) -f scripts/perf/pg/wal_checkpointer.sql > $(ARTIFACTS_DIR)/pg_wal_checkpointer$(PROFILE_CAPTURE_SUFFIX).txt
 	@cat $(ARTIFACTS_DIR)/pg_wal_checkpointer$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-wal-snapshot:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/wal_snapshot.sql > $(ARTIFACTS_DIR)/pg_wal_snapshot$(PROFILE_CAPTURE_SUFFIX).tsv
+	@cat $(ARTIFACTS_DIR)/pg_wal_snapshot$(PROFILE_CAPTURE_SUFFIX).tsv
+
+profile-pg-wal-delta:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@before="$(PROFILE_WAL_BEFORE_FILE)"; \
+	after="$(PROFILE_WAL_AFTER_FILE)"; \
+	out="$(PROFILE_WAL_DELTA_FILE)"; \
+	test -f "$$before" || { echo "Missing before WAL snapshot: $$before" >&2; exit 2; }; \
+	test -f "$$after" || { echo "Missing after WAL snapshot: $$after" >&2; exit 2; }; \
+	awk -F '\t' 'BEGIN { OFS="\t"; print "metric", "before", "after", "delta" } NR == FNR { if ($$1 ~ /^(wal_|buffers_)/) before[$$1] = $$2; next } $$1 ~ /^(wal_|buffers_)/ { base = (($$1 in before) ? before[$$1] : 0); print $$1, base, $$2, $$2 - base }' "$$before" "$$after" > "$$out"; \
+	cat "$$out"
 
 profile-pg-io:
 	@mkdir -p $(ARTIFACTS_DIR)
