@@ -25,6 +25,30 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-06-28 from working tree based on commit `1fee771` and includes the shared planner/autovacuum preset sweep below in addition to the earlier local-only long WAL timeout smoke and the WAL/checkpoint preset comparison on local Docker and QNAP.
 
+## 2026-07-01 SQL Payload Persistence Send Batching
+
+Collected from a working tree based on commit `024547a` (`FOD 3.2.1: add safe sudo profiling helpers`) with the FOD version at `3.2.1`.
+
+Workload: `make test-large-copy-benchmark` on local Docker PostgreSQL with a 64 MiB payload.
+
+Change under test: batch binary `COPY` rows for `fod_persist_block_stage` into 1 MiB client-side send buffers. The SQL shape, staging table, transaction, and `INSERT INTO data_blocks ... ON CONFLICT ...` merge are unchanged.
+
+| Run | elapsed_s | throughput_mib_s | COPY total ms | data_blocks merge total ms |
+| --- | ---: | ---: | ---: | ---: |
+| before | `3.523786` | `18.16` | `1224.010` | `771.421` |
+| after SQL capture | `3.766381` | `16.99` | `1284.245` | `912.490` |
+| after repeat 1 | `3.818472` | `16.76` | n/a | n/a |
+| after repeat 2 | `3.557921` | `17.99` | n/a | n/a |
+| after repeat 3 | `3.542274` | `18.07` | n/a | n/a |
+| after sudo `perf stat` workload | `3.494957` | `18.31` | n/a | n/a |
+
+Interpretation:
+
+- The patch is low-risk transport hardening, not a proven major throughput win on this host.
+- End-to-end timing stayed inside the observed local variance.
+- `COPY fod_persist_block_stage` plus the `data_blocks` merge remains the dominant SQL area for future optimization.
+- The next useful measurement is a filtered profile or preserved `FOD_PROFILE_IO` aggregate showing actual `PQputCopyData` send counts and sizes during successful Rust FUSE benchmarks.
+
 ## 2026-06-28 PostgreSQL Planner Preset Sweep
 
 Collected from working tree based on commit `1fee771`.

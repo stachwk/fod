@@ -364,3 +364,45 @@ Base commit at execution time: `0d047bb`
 - `git diff --check`
 - `git add Makefile TODO.md conclusions.md docs/performance.md commands.md`
 - `git commit -m 'FOD 3.2.1: add safe sudo profiling helpers'`
+
+Base commit at execution time: `024547a`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/d9cb3817-38c8-4cdd-a19c-b78fdc6b7da2/pasted-text.txt`
+- `sed -n '260,620p' /home/wojtek/.codex/attachments/d9cb3817-38c8-4cdd-a19c-b78fdc6b7da2/pasted-text.txt`
+- `sed -n '620,920p' /home/wojtek/.codex/attachments/d9cb3817-38c8-4cdd-a19c-b78fdc6b7da2/pasted-text.txt`
+- `rg -n "fod_persist_block_stage|data_blocks|COPY .*persist|ON CONFLICT|persist_block|PersistBlock|copy_in|copy_in_writer|binary" rust_hotpath rust_fuse rust_runtime rust_mkfs migrations tests -S`
+- `rg -n "persist|data_blocks|block_stage|copy" rust_hotpath/src rust_fuse/src rust_runtime/src -S`
+- `rg -n "CREATE TABLE.*data_blocks|CREATE INDEX.*data_blocks|UNIQUE.*data_blocks|data_blocks" migrations rust_mkfs rust_hotpath -S`
+- `sed -n '1830,1895p' rust_hotpath/src/pg.rs`
+- `sed -n '7370,7475p' rust_hotpath/src/pg.rs`
+- `sed -n '7600,7765p' rust_hotpath/src/pg.rs`
+- `rg -n "struct CopyInSession|impl CopyInSession|fn send\(" rust_hotpath/src/pg.rs`
+- `sed -n '1,240p' rust_fuse/tests/large_copy_benchmark.rs`
+- `PROFILE_RUN_ID=sql-persist-before-$(date +%Y%m%d-%H%M%S); echo "$PROFILE_RUN_ID" > /tmp/fod_sql_persist_before_run_id; echo "$PROFILE_RUN_ID"`
+- `make build-debug`
+- `make profile-env PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before`
+- `make profile-pg-reset PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before`
+- `make test-large-copy-benchmark`
+- `make profile-pg-top PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before`
+- `make profile-pg-wal PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before`
+- `make profile-pg-activity PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before`
+- `make profile-sudo-perf-stat-system PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before PROFILE_SUDO='sudo -n'`
+- `cargo fmt`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-hotpath`
+- `cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --offline`
+- `make build-debug`
+- `PROFILE_RUN_ID=sql-persist-after-$(date +%Y%m%d-%H%M%S); echo "$PROFILE_RUN_ID" > /tmp/fod_sql_persist_after_run_id; echo "$PROFILE_RUN_ID"`
+- `make profile-env PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after`
+- `make profile-pg-reset PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after`
+- `make test-large-copy-benchmark`
+- `make profile-pg-top PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after`
+- `make profile-pg-wal PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after`
+- `for i in 1 2 3; do printf 'after_repeat=%s\n' "$i"; make test-large-copy-benchmark | rg 'OK large-copy-benchmark|test result'; done`
+- `make profile-sudo-perf-stat-system PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after PROFILE_SUDO='sudo -n'`
+- `make profile-sudo-bpftrace-syscalls-workload PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after PROFILE_SECONDS=12 PROFILE_SUDO='sudo -n'`
+- `FOD_PROFILE_IO=1 make test-large-copy-benchmark`
+- `make test-fod-indexer-materialize`
+- `make test-copy-block-crc-table`
+- `make test-remount-durability-benchmark`
+- `make test-persist-buffer-chunking`
+- `make test-unlink-after-write`

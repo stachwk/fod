@@ -205,3 +205,102 @@ Secondary follow-up:
 ```text
 Review repeated metadata lookup/prepared statement reuse after the payload persistence path has a before/after measurement, because high-call path lookups are visible but not dominant in this run.
 ```
+
+## 2026-07-01 SQL Payload Persistence Batching Check
+
+### Run Metadata
+
+- Base commit before implementation: `024547a` (`FOD 3.2.1: add safe sudo profiling helpers`)
+- FOD version: `3.2.1`
+- Host: local workstation, local Docker PostgreSQL
+- Workload: `make test-large-copy-benchmark`
+- Payload size: 64 MiB
+- Implementation under test: batch binary `COPY` payload sends into 1 MiB client buffers for `fod_persist_block_stage`; staging table, transaction scope, and `data_blocks` merge SQL stay unchanged.
+- Before artifact directory: `artifacts/perf/024547a/local-sql-persist-before-20260701-143036`
+- After artifact directory: `artifacts/perf/024547a/local-sql-persist-after-20260701-143317`
+- After results were collected from a working tree based on `024547a` with the batching patch applied; the final commit contains the same code.
+
+### Commands
+
+```bash
+make build-debug
+make profile-env PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before
+make profile-pg-reset PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before
+make test-large-copy-benchmark
+make profile-pg-top PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before
+make profile-pg-wal PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before
+make profile-sudo-perf-stat-system PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=sql-persist-before-20260701-143036 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=before PROFILE_SUDO='sudo -n'
+
+make build-debug
+make profile-env PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after
+make profile-pg-reset PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after
+make test-large-copy-benchmark
+make profile-pg-top PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after
+make profile-pg-wal PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after
+make profile-sudo-perf-stat-system PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=sql-persist-after-20260701-143317 PROFILE_HOST=local PROFILE_CAPTURE_LABEL=after PROFILE_SUDO='sudo -n'
+```
+
+### Before
+
+Runtime output:
+
+- `elapsed_s=3.523786`
+- `throughput_mib_s=18.16`
+
+Top payload SQL:
+
+| Query family | Calls | Total ms | Rows |
+| --- | ---: | ---: | ---: |
+| `COPY fod_persist_block_stage (...) FROM STDIN BINARY` | 2 | `1224.010` | 32768 |
+| `INSERT INTO data_blocks ... SELECT ... ON CONFLICT ...` | 1 | `390.044` | 16384 |
+| `INSERT INTO data_blocks ... SELECT ... ON CONFLICT ...` | 1 | `381.377` | 16384 |
+
+System-wide sudo `perf stat` around the same workload:
+
+- workload output: `elapsed_s=3.719708`, `throughput_mib_s=17.21`
+- elapsed wall time: `9.126 s`
+- context switches: `277466`
+- page faults: `372622`
+- instructions: `52.254 B`
+- cycles: `47.025 B`
+
+### After
+
+First SQL-captured run:
+
+- `elapsed_s=3.766381`
+- `throughput_mib_s=16.99`
+
+Top payload SQL:
+
+| Query family | Calls | Total ms | Rows |
+| --- | ---: | ---: | ---: |
+| `COPY fod_persist_block_stage (...) FROM STDIN BINARY` | 2 | `1284.245` | 32768 |
+| `INSERT INTO data_blocks ... SELECT ... ON CONFLICT ...` | 1 | `463.377` | 16384 |
+| `INSERT INTO data_blocks ... SELECT ... ON CONFLICT ...` | 1 | `449.113` | 16384 |
+
+Follow-up repeated workload timings after the patch:
+
+| Run | elapsed_s | throughput_mib_s |
+| --- | ---: | ---: |
+| repeat 1 | `3.818472` | `16.76` |
+| repeat 2 | `3.557921` | `17.99` |
+| repeat 3 | `3.542274` | `18.07` |
+| `FOD_PROFILE_IO=1` smoke | `3.504494` | `18.26` |
+| sudo `perf stat` workload | `3.494957` | `18.31` |
+
+System-wide sudo `perf stat` after the patch:
+
+- elapsed wall time: `8.716 s`
+- context switches: `192068`
+- page faults: `372363`
+- instructions: `54.085 B`
+- cycles: `46.305 B`
+
+### Interpretation
+
+- The batching patch is safe transport hardening: it reduces the number of client-side `PQputCopyData` calls by buffering binary COPY rows before sending, without changing persistence semantics, replay boundaries, PostgreSQL durability, or the merge SQL.
+- The local throughput result is mixed. Some after runs were faster than the before perf run, but the SQL-captured after run was slower than the first before run. Treat this as no proven large end-to-end speedup on this host.
+- The dominant measured area remains server-side payload persistence: `COPY fod_persist_block_stage` plus `INSERT INTO data_blocks ... ON CONFLICT`.
+- Generic `bpftrace` syscall capture worked but was too noisy for attribution because it included host and Docker processes. A filtered PID/comm script is needed before syscall counts can drive the next decision.
+- A profiling harness follow-up is needed because `FOD_PROFILE_IO=1` during Rust FUSE cargo tests can write useful `pg.copy_put_data.aggregate` data to the temporary mount log, but the test support removes that log before the aggregate is visible in successful runs.

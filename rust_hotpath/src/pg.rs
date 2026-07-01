@@ -36,6 +36,7 @@ const PGRES_COMMAND_OK: c_int = 1;
 const PGRES_COPY_IN: c_int = 4;
 const PG_DIAG_SQLSTATE: c_int = 67;
 const COPY_BINARY_SIGNATURE: &[u8] = b"PGCOPY\n\xff\r\n\0";
+const PERSIST_COPY_SEND_BUFFER_BYTES: usize = 1024 * 1024;
 const PERSIST_BLOCK_STAGE_TABLE: &str = "fod_persist_block_stage";
 const INDEX_SOURCES_STAGE_TABLE: &str = "index_sources_stage";
 const INDEX_SCAN_RUNS_STAGE_TABLE: &str = "index_scan_runs_stage";
@@ -1979,6 +1980,28 @@ impl CopyInSession {
             PQclear(res);
         }
     }
+}
+
+unsafe fn flush_copy_send_buffer_if_full(
+    copy: &mut CopyInSession,
+    buffer: &mut Vec<u8>,
+) -> Result<(), String> {
+    if buffer.len() >= PERSIST_COPY_SEND_BUFFER_BYTES {
+        copy.send(buffer)?;
+        buffer.clear();
+    }
+    Ok(())
+}
+
+unsafe fn flush_copy_send_buffer(
+    copy: &mut CopyInSession,
+    buffer: &mut Vec<u8>,
+) -> Result<(), String> {
+    if !buffer.is_empty() {
+        copy.send(buffer)?;
+        buffer.clear();
+    }
+    Ok(())
 }
 
 unsafe fn copy_text_payload_on_conn(
@@ -7444,16 +7467,14 @@ impl DbRepo {
             ))
             .map_err(|_| "SQL contains NUL byte".to_string())?;
             let mut copy = CopyInSession::start(conn, &copy_sql)?;
-            let mut copy_buffer = Vec::with_capacity(64);
+            let mut copy_buffer = Vec::with_capacity(PERSIST_COPY_SEND_BUFFER_BYTES);
             append_copy_binary_header(&mut copy_buffer);
-            copy.send(&copy_buffer)?;
             let file_id_i64 = i64::try_from(file_id)
                 .map_err(|_| "file id out of range for copy staging".to_string())?;
             let data_object_id_i64 = i64::try_from(data_object_id)
                 .map_err(|_| "data object id out of range for copy staging".to_string())?;
             let block_size = block_size.max(1);
             for block in blocks {
-                copy_buffer.clear();
                 append_persist_block_copy_binary_row(
                     &mut copy_buffer,
                     file_id_i64,
@@ -7461,8 +7482,9 @@ impl DbRepo {
                     block,
                     block_size,
                 )?;
-                copy.send(&copy_buffer)?;
+                flush_copy_send_buffer_if_full(&mut copy, &mut copy_buffer)?;
             }
+            flush_copy_send_buffer(&mut copy, &mut copy_buffer)?;
             copy.finish()?;
             merge_persist_block_stage_table(conn, maintain_copy_crc_table)?;
         }
@@ -7670,9 +7692,8 @@ impl DbRepo {
                 ))
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 let mut copy = CopyInSession::start(conn, &copy_sql)?;
-                let mut copy_buffer = Vec::with_capacity(64);
+                let mut copy_buffer = Vec::with_capacity(PERSIST_COPY_SEND_BUFFER_BYTES);
                 append_copy_binary_header(&mut copy_buffer);
-                copy.send(&copy_buffer)?;
                 let file_id_i64 = i64::try_from(file_id)
                     .map_err(|_| "file id out of range for copy staging".to_string())?;
                 let data_object_id_i64 = i64::try_from(data_object_id)
@@ -7703,7 +7724,6 @@ impl DbRepo {
                             })
                             .collect::<Vec<_>>();
                         for row in &chunk_rows {
-                            copy_buffer.clear();
                             append_persist_block_copy_binary_row(
                                 &mut copy_buffer,
                                 file_id_i64,
@@ -7711,7 +7731,7 @@ impl DbRepo {
                                 row,
                                 block_size,
                             )?;
-                            copy.send(&copy_buffer)?;
+                            flush_copy_send_buffer_if_full(&mut copy, &mut copy_buffer)?;
                         }
                         chunk_data.clear();
                     }
@@ -7728,7 +7748,6 @@ impl DbRepo {
                         })
                         .collect::<Vec<_>>();
                     for row in &chunk_rows {
-                        copy_buffer.clear();
                         append_persist_block_copy_binary_row(
                             &mut copy_buffer,
                             file_id_i64,
@@ -7736,7 +7755,7 @@ impl DbRepo {
                             row,
                             block_size,
                         )?;
-                        copy.send(&copy_buffer)?;
+                        flush_copy_send_buffer_if_full(&mut copy, &mut copy_buffer)?;
                     }
                     chunk_data.clear();
                 }
@@ -7755,6 +7774,7 @@ impl DbRepo {
                     ));
                 }
 
+                flush_copy_send_buffer(&mut copy, &mut copy_buffer)?;
                 copy.finish()?;
                 merge_persist_block_stage_table(conn, maintain_copy_crc_table)?;
             }
