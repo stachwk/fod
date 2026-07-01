@@ -460,6 +460,66 @@ Interpretation:
 - The run produced about `12.86 MB` of WAL for the 64 MiB copy workload on this local setup.
 - There was no checkpoint/backend-buffer delta in this short run, so the immediate signal is WAL generation/write/sync activity rather than checkpoint pressure.
 
+### COPY Send Buffer Sensitivity
+
+Captured with a working-tree patch based on commit `2659c1b` that added the diagnostic
+`FOD_PERSIST_COPY_SEND_BUFFER_BYTES` knob. The default remains `1 MiB`.
+
+Commands:
+
+```bash
+make profile-pg-reset PROFILE_RUN_ID=copy-send-buffer-default-20260701T190336Z PROFILE_HOST=lt7300
+make profile-pg-wal-snapshot PROFILE_RUN_ID=copy-send-buffer-default-20260701T190336Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=before
+FOD_PROFILE_IO=1 make test-large-copy-benchmark
+make profile-pg-top PROFILE_RUN_ID=copy-send-buffer-default-20260701T190336Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=default
+make profile-pg-wal-snapshot PROFILE_RUN_ID=copy-send-buffer-default-20260701T190336Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=after
+make profile-pg-wal-delta PROFILE_RUN_ID=copy-send-buffer-default-20260701T190336Z PROFILE_HOST=lt7300
+
+make profile-pg-reset PROFILE_RUN_ID=copy-send-buffer-smaller-20260701T190359Z PROFILE_HOST=lt7300
+make profile-pg-wal-snapshot PROFILE_RUN_ID=copy-send-buffer-smaller-20260701T190359Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=before
+FOD_PROFILE_IO=1 FOD_PERSIST_COPY_SEND_BUFFER_BYTES=65536 make test-large-copy-benchmark
+make profile-pg-top PROFILE_RUN_ID=copy-send-buffer-smaller-20260701T190359Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=smaller
+make profile-pg-wal-snapshot PROFILE_RUN_ID=copy-send-buffer-smaller-20260701T190359Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=after
+make profile-pg-wal-delta PROFILE_RUN_ID=copy-send-buffer-smaller-20260701T190359Z PROFILE_HOST=lt7300
+
+make profile-pg-reset PROFILE_RUN_ID=copy-send-buffer-larger-20260701T190408Z PROFILE_HOST=lt7300
+make profile-pg-wal-snapshot PROFILE_RUN_ID=copy-send-buffer-larger-20260701T190408Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=before
+FOD_PROFILE_IO=1 FOD_PERSIST_COPY_SEND_BUFFER_BYTES=4194304 make test-large-copy-benchmark
+make profile-pg-top PROFILE_RUN_ID=copy-send-buffer-larger-20260701T190408Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=larger
+make profile-pg-wal-snapshot PROFILE_RUN_ID=copy-send-buffer-larger-20260701T190408Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=after
+make profile-pg-wal-delta PROFILE_RUN_ID=copy-send-buffer-larger-20260701T190408Z PROFILE_HOST=lt7300
+```
+
+Runtime results:
+
+| Variant | Send buffer | Elapsed seconds | Throughput MiB/s | COPY send count per pass | COPY send seconds pass 1 | COPY send seconds pass 2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| default | `1 MiB` | `3.911174` | `16.36` | `65` | `0.027204` | `0.023541` |
+| smaller | `64 KiB` | `3.766007` | `16.99` | `1024` | `0.023709` | `0.025002` |
+| larger | `4 MiB` | `3.753964` | `17.05` | `17` | `0.025311` | `0.022531` |
+
+Top SQL shape:
+
+| Variant | `COPY fod_persist_block_stage` total ms | Merge 1 total ms | Merge 2 total ms |
+| --- | ---: | ---: | ---: |
+| default | `1262.694` | `524.364` | `503.525` |
+| smaller | `1285.920` | `543.928` | `475.865` |
+| larger | `1272.227` | `491.472` | `490.611` |
+
+WAL/checkpointer delta:
+
+| Variant | `wal_bytes` | `wal_records` | `wal_buffers_full` | `wal_write` | `wal_sync` | `buffers_checkpoint` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| default | `13011592` | `165623` | `196` | `215` | `19` | `226` |
+| smaller | `12866693` | `165621` | `232` | `250` | `18` | `84` |
+| larger | `12871442` | `165622` | `111` | `132` | `21` | `84` |
+
+Interpretation:
+
+- The knob changes client-side send fragmentation exactly as expected: `64 KiB` produces many more `PQputCopyData` sends, while `4 MiB` produces far fewer.
+- On this short local run, the end-to-end time and WAL volume stayed in the same band. The server-side `COPY` and `data_blocks` merge remain the dominant cost.
+- Keep `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` as an opt-in diagnostic/benchmark knob. Do not change the default without repeated runs on local and QNAP backends.
+
 ### Interpretation
 
 - The rejected `DO NOTHING` probe confirms that correctness currently requires the conflict update path.

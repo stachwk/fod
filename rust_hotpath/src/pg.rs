@@ -36,7 +36,7 @@ const PGRES_COMMAND_OK: c_int = 1;
 const PGRES_COPY_IN: c_int = 4;
 const PG_DIAG_SQLSTATE: c_int = 67;
 const COPY_BINARY_SIGNATURE: &[u8] = b"PGCOPY\n\xff\r\n\0";
-const PERSIST_COPY_SEND_BUFFER_BYTES: usize = 1024 * 1024;
+const DEFAULT_PERSIST_COPY_SEND_BUFFER_BYTES: usize = 1024 * 1024;
 const PERSIST_BLOCK_STAGE_TABLE: &str = "fod_persist_block_stage";
 const INDEX_SOURCES_STAGE_TABLE: &str = "index_sources_stage";
 const INDEX_SCAN_RUNS_STAGE_TABLE: &str = "index_scan_runs_stage";
@@ -59,6 +59,17 @@ fn fod_sql_label(sql: &CString) -> String {
     let raw = sql.to_string_lossy();
     let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     compact.chars().take(160).collect()
+}
+
+fn persist_copy_send_buffer_bytes() -> usize {
+    static VALUE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("FOD_PERSIST_COPY_SEND_BUFFER_BYTES")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_PERSIST_COPY_SEND_BUFFER_BYTES)
+    })
 }
 
 #[derive(Debug, Default)]
@@ -1986,7 +1997,7 @@ unsafe fn flush_copy_send_buffer_if_full(
     copy: &mut CopyInSession,
     buffer: &mut Vec<u8>,
 ) -> Result<(), String> {
-    if buffer.len() >= PERSIST_COPY_SEND_BUFFER_BYTES {
+    if buffer.len() >= persist_copy_send_buffer_bytes() {
         copy.send(buffer)?;
         buffer.clear();
     }
@@ -7467,7 +7478,7 @@ impl DbRepo {
             ))
             .map_err(|_| "SQL contains NUL byte".to_string())?;
             let mut copy = CopyInSession::start(conn, &copy_sql)?;
-            let mut copy_buffer = Vec::with_capacity(PERSIST_COPY_SEND_BUFFER_BYTES);
+            let mut copy_buffer = Vec::with_capacity(persist_copy_send_buffer_bytes());
             append_copy_binary_header(&mut copy_buffer);
             let file_id_i64 = i64::try_from(file_id)
                 .map_err(|_| "file id out of range for copy staging".to_string())?;
@@ -7692,7 +7703,7 @@ impl DbRepo {
                 ))
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 let mut copy = CopyInSession::start(conn, &copy_sql)?;
-                let mut copy_buffer = Vec::with_capacity(PERSIST_COPY_SEND_BUFFER_BYTES);
+                let mut copy_buffer = Vec::with_capacity(persist_copy_send_buffer_bytes());
                 append_copy_binary_header(&mut copy_buffer);
                 let file_id_i64 = i64::try_from(file_id)
                     .map_err(|_| "file id out of range for copy staging".to_string())?;

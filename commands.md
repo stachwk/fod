@@ -505,3 +505,42 @@ Base commit at execution time: `5ca6f1e`
 - `sed -n '1,140p' scripts/perf/pg/wal_snapshot.sql && make help | rg 'profile-pg-wal-snapshot|profile-pg-wal-delta'`
 - `git add Makefile scripts/perf/pg/wal_snapshot.sql TODO.md commands.md conclusions.md docs/performance-baselines.md`
 - `git commit -m 'FOD 3.2.1: capture data block WAL amplification'`
+
+Base commit at execution time: `2659c1b`
+
+- `git status --short`
+- `find artifacts/perf -maxdepth 2 -type d -name '*copy-send-buffer*' | sort`
+- `ls -l /tmp/fod-copy-send-buffer-default.log /tmp/fod-copy-send-buffer-smaller.log /tmp/fod-copy-send-buffer-larger.log`
+- `git rev-parse --short HEAD`
+- `find artifacts/perf/2659c1b/lt7300-copy-send-buffer-default-20260701T190336Z -maxdepth 1 -type f -printf '%f\n' | sort`
+- `find artifacts/perf/2659c1b/lt7300-copy-send-buffer-smaller-20260701T190359Z -maxdepth 1 -type f -printf '%f\n' | sort`
+- `find artifacts/perf/2659c1b/lt7300-copy-send-buffer-larger-20260701T190408Z -maxdepth 1 -type f -printf '%f\n' | sort`
+- `rg -n "OK large-copy-benchmark|FOD_IO_AGGREGATE|FAILED|ERROR" /tmp/fod-copy-send-buffer-default.log /tmp/fod-copy-send-buffer-smaller.log /tmp/fod-copy-send-buffer-larger.log`
+- `sed -n '1,220p' /tmp/fod-copy-send-buffer-default.log`
+- `sed -n '1,220p' /tmp/fod-copy-send-buffer-smaller.log`
+- `sed -n '1,220p' /tmp/fod-copy-send-buffer-larger.log`
+- `for f in artifacts/perf/2659c1b/lt7300-copy-send-buffer-*/pg_wal_delta-before-to-after.tsv; do printf '%s\n' "$f"; sed -n '1,40p' "$f"; done`
+- `sed -n '1,240p' artifacts/perf/2659c1b/lt7300-copy-send-buffer-default-20260701T190336Z/pg_top_statements-default.txt`
+- `sed -n '1,240p' artifacts/perf/2659c1b/lt7300-copy-send-buffer-smaller-20260701T190359Z/pg_top_statements-smaller.txt`
+- `sed -n '1,240p' artifacts/perf/2659c1b/lt7300-copy-send-buffer-larger-20260701T190408Z/pg_top_statements-larger.txt`
+- `git diff -- rust_hotpath/src/pg.rs`
+- `sed -n '1,90p' TODO.md`
+- `sed -n '1,180p' docs/performance-baselines.md`
+- `head -n 40 commands.md`
+- `head -n 30 conclusions.md`
+- `cargo fmt --all`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-hotpath`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-fuse`
+- `FOD_PROFILE_IO=1 make test-large-copy-benchmark`
+- `make test-copy-block-crc-table`
+- `make test-remount-durability-benchmark`
+- `make test-persist-buffer-chunking`
+- `make test-unlink-after-write`
+- `make test-rust-hotpath-copy-dedupe`
+- `git diff --check`
+- `git diff --stat`
+- `git status --short`
+- `cat fod_version.txt`
+- `git diff -- rust_hotpath/src/pg.rs`
+- `git diff -- TODO.md conclusions.md docs/performance-baselines.md`
+- `git diff -- commands.md`
