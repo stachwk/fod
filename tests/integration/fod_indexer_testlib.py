@@ -16,6 +16,43 @@ from typing import Mapping
 
 import psycopg2
 
+TEST_RUN_TOKEN = f"{os.getpid()}_{time.time_ns()}"
+
+
+def _safe_name(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in value)
+    return safe.strip("-_") or "indexer"
+
+
+def unique_indexer_name(prefix: str) -> str:
+    return f"{_safe_name(prefix)}_{TEST_RUN_TOKEN}"
+
+
+def unique_source_name(prefix: str) -> str:
+    return unique_indexer_name(prefix)
+
+
+def unique_indexer_path(prefix: str) -> Path:
+    return Path("/tmp") / f"fod-indexer-{unique_indexer_name(prefix)}"
+
+
+def _assert_test_tmp_path(path: Path) -> None:
+    resolved = path.resolve()
+    if not resolved.as_posix().startswith("/tmp/fod-indexer-"):
+        raise ValueError(f"refusing to remove non-indexer test path: {resolved}")
+
+
+def prepare_clean_dir(path: Path) -> Path:
+    _assert_test_tmp_path(path)
+    shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def cleanup_test_dir(path: Path) -> None:
+    _assert_test_tmp_path(path)
+    shutil.rmtree(path, ignore_errors=True)
+
 
 def sha256_hex(path: Path) -> str:
     hasher = hashlib.sha256()
@@ -143,6 +180,68 @@ def cleanup_materialized_roots(dsn: dict[str, str]) -> None:
         root_names = [str(row[0]) for row in cur.fetchall()]
     for root_name in root_names:
         cleanup_materialized_root(dsn, root_name)
+
+
+def materialized_root_names_for_sources(
+    dsn: dict[str, str], source_names: list[str]
+) -> list[str]:
+    if not source_names:
+        return []
+    with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
+        set_fod_search_path(conn)
+        cur.execute(
+            """
+            SELECT id_index_source
+            FROM index_sources
+            WHERE name = ANY(%s)
+            ORDER BY id_index_source
+            """,
+            (source_names,),
+        )
+        source_ids = [int(row[0]) for row in cur.fetchall()]
+        if not source_ids:
+            return []
+        patterns = [f"index-source-{source_id}-import-%" for source_id in source_ids]
+        cur.execute(
+            """
+            SELECT name
+            FROM directories
+            WHERE id_parent IS NULL
+              AND name LIKE ANY(%s)
+            ORDER BY name
+            """,
+            (patterns,),
+        )
+        return [str(row[0]) for row in cur.fetchall()]
+
+
+def cleanup_materialized_roots_for_sources(
+    dsn: dict[str, str], source_names: list[str]
+) -> None:
+    for root_name in materialized_root_names_for_sources(dsn, source_names):
+        cleanup_materialized_root(dsn, root_name)
+
+
+def cleanup_indexer_sources(dsn: dict[str, str], source_names: list[str]) -> None:
+    if not source_names:
+        return
+    cleanup_materialized_roots_for_sources(dsn, source_names)
+    with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
+        set_fod_search_path(conn)
+        cur.execute(
+            """
+            DELETE FROM index_import_plans
+            WHERE source_filter = ANY(%s)
+            """,
+            (source_names,),
+        )
+        cur.execute(
+            """
+            DELETE FROM index_sources
+            WHERE name = ANY(%s)
+            """,
+            (source_names,),
+        )
 
 
 def run_indexer(root: Path, args: list[str]) -> str:

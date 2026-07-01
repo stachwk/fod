@@ -133,3 +133,65 @@ Base commit at execution time: `3af1bda`
 - `git diff -- conclusions.md commands.md`
 - `git add conclusions.md commands.md`
 - `git commit -m 'FOD 3.2.1: record venv verification'`
+
+Base commit at execution time: `95e26b4`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/12547a85-324b-4c78-8fe9-ec04b0bb28d6/pasted-text.txt`
+- `git rev-parse --short HEAD`
+- `git status --short`
+- `cat fod_version.txt`
+- `sed -n '261,520p' /home/wojtek/.codex/attachments/12547a85-324b-4c78-8fe9-ec04b0bb28d6/pasted-text.txt`
+- `ls tests/integration/test_fod_indexer_*.py`
+- `rg -n "smoke|source|SOURCE|cleanup|DELETE FROM|TRUNCATE|shutil\\.rmtree|/tmp/fod-indexer|plan-import|materialize|index_sources|index_files|index_import" tests/integration/test_fod_indexer_*.py`
+- `rg -n "CREATE TABLE index_sources|index_import_plans|index_import_plan_entries|index_files|index_file_hashes|index_duplicate_sets" migrations rust_mkfs rust_indexer -S`
+- `sed -n '1,260p' tests/integration/test_fod_indexer_materialize.py`
+- `sed -n '1,360p' tests/integration/test_fod_indexer_materialize_rollback.py`
+- `sed -n '1,360p' tests/integration/test_fod_indexer_cleanup_failed.py`
+- `sed -n '1,320p' tests/integration/test_fod_indexer_plan_import_scope.py`
+- `sed -n '1,320p' tests/integration/fod_indexer_testlib.py`
+- `sed -n '1,300p' tests/integration/test_fod_indexer_json_output.py`
+- `sed -n '1,340p' tests/integration/test_fod_indexer_source_kinds.py`
+- `sed -n '1,640p' tests/integration/test_fod_indexer_usability.py`
+- `sed -n '270,370p' migrations/base_schema.sql`
+- `sed -n '1,120p' migrations/0013_indexer.sql`
+- `rg -n "test-fod-indexer|test-all|\\.PHONY" Makefile`
+- `sed -n '640,700p' Makefile`
+- `sed -n '210,310p' rust_indexer/src/hash.rs`
+- `rg -n "report duplicates|duplicate_sets|source" rust_indexer/src/report.rs rust_indexer/src/cli.rs rust_indexer/src/hash.rs rust_indexer/src/plan.rs -S`
+- `sed -n '1,140p' rust_indexer/src/report.rs && sed -n '1,140p' rust_indexer/src/hash.rs`
+- `sed -n '160,260p' rust_indexer/src/plan.rs`
+- `sed -n '300,385p' rust_indexer/src/plan.rs`
+- `rg -n "struct Duplicate|DuplicateReport|human_readable|serde|members" rust_indexer/src -S`
+- `sed -n '130,220p' rust_indexer/src/output.rs`
+- `sed -n '1,260p' tests/integration/test_fod_indexer_materialize_rollback.py`
+- `sed -n '260,420p' tests/integration/test_fod_indexer_materialize_rollback.py`
+- `python3 -m py_compile tests/integration/test_fod_indexer_materialize_rollback.py`
+- `tail -n 20 tests/integration/test_fod_indexer_materialize_rollback.py && python3 -m py_compile tests/integration/test_fod_indexer_materialize_rollback.py`
+- `python3 -m py_compile tests/integration/test_fod_indexer_usability.py`
+- `rg -n "cleanup_indexer_state|cleanup_materialized_roots\\(|/tmp/fod-indexer|\\\"smoke\\\"|json-smoke|ux-smoke|clean-smoke|local-smoke|mirror-smoke|github-smoke|adb-documents|rollback-smoke|rollback-completed-smoke" tests/integration/test_fod_indexer_*.py tests/integration/fod_indexer_testlib.py`
+- `python3 -m py_compile tests/integration/test_fod_indexer_*.py tests/integration/fod_indexer_testlib.py`
+- `rg -n "import shutil|shutil\\." tests/integration/test_fod_indexer_*.py`
+- `rg -n "cleanup_indexer_state|cleanup_materialized_roots\\(|json-smoke|ux-smoke|clean-smoke|local-smoke|mirror-smoke|github-smoke|adb-documents|rollback-smoke|rollback-completed-smoke|--name\\s+smoke|\\\"smoke\\\"" tests/integration/test_fod_indexer_*.py`
+- `python3 -m py_compile tests/integration/test_fod_indexer_*.py tests/integration/fod_indexer_testlib.py`
+- `git diff --stat`
+- `make -n test-fod-indexer-parallel-smoke`
+- `make test-fod-indexer-materialize-rollback`
+- `make test-fod-indexer-usability`
+- `make test-fod-indexer-plan-import-scope`
+- `make test-fod-indexer-cleanup-failed`
+- `make test-fod-indexer-json-output`
+- `make test-fod-indexer-smoke`
+- `POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza POSTGRES_PORT=5432 .venv/bin/python tests/integration/test_fod_indexer_source_kinds.py`
+- `make test-fod-indexer-parallel-smoke`
+- `sed -n '1,24p' TODO.md`
+- `sed -n '1,45p' conclusions.md`
+- `tail -n 50 commands.md`
+- `git status --short`
+- `date -Is`
+- `git diff --stat`
+- `git diff --check`
+- `python3 -m py_compile tests/integration/test_fod_indexer_*.py tests/integration/fod_indexer_testlib.py`
+- `git diff -- Makefile TODO.md conclusions.md | sed -n '1,240p'`
+- `git diff -- Makefile tests/integration/fod_indexer_testlib.py tests/integration/test_fod_indexer_materialize.py tests/integration/test_fod_indexer_materialize_rollback.py tests/integration/test_fod_indexer_cleanup_failed.py tests/integration/test_fod_indexer_plan_import_scope.py tests/integration/test_fod_indexer_json_output.py tests/integration/test_fod_indexer_usability.py tests/integration/test_fod_indexer_source_kinds.py TODO.md conclusions.md commands.md`
+- `git add Makefile tests/integration/fod_indexer_testlib.py tests/integration/test_fod_indexer_materialize.py tests/integration/test_fod_indexer_materialize_rollback.py tests/integration/test_fod_indexer_cleanup_failed.py tests/integration/test_fod_indexer_plan_import_scope.py tests/integration/test_fod_indexer_json_output.py tests/integration/test_fod_indexer_usability.py tests/integration/test_fod_indexer_source_kinds.py TODO.md conclusions.md commands.md`
+- `git commit -m 'FOD 3.2.1: isolate fod-indexer integration smokes'`

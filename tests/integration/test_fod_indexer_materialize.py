@@ -5,7 +5,6 @@
 
 import sys
 import tempfile
-import shutil
 from pathlib import Path
 
 import psycopg2
@@ -18,18 +17,21 @@ from fod_backend import load_dsn_from_config
 from tests.integration.fod_indexer_testlib import (
     apply_database_env,
     assert_contains,
-    cleanup_indexer_state,
-    cleanup_materialized_roots,
+    cleanup_indexer_sources,
+    cleanup_materialized_roots_for_sources,
+    cleanup_test_dir,
     fetch_all,
     fetch_one,
+    prepare_clean_dir,
     run_indexer,
     snapshot_tree,
+    unique_indexer_path,
+    unique_source_name,
     wait_for_mount_children,
     write_tree,
 )
 from tests.integration.fod_mount import FODMount
 
-SOURCE_ROOT = Path("/tmp/fod-indexer-src")
 SOURCE_FILES: dict[str, bytes] = {
     "a.txt": b"same",
     "b.txt": b"same",
@@ -40,21 +42,22 @@ SOURCE_FILES: dict[str, bytes] = {
 def main() -> None:
     dsn, _ = load_dsn_from_config(ROOT)
     apply_database_env(ROOT, dsn)
-    cleanup_indexer_state(dsn)
-    cleanup_materialized_roots(dsn)
+    source_name = unique_source_name("materialize_smoke")
+    source_root = prepare_clean_dir(unique_indexer_path("materialize-src"))
+    cleanup_indexer_sources(dsn, [source_name])
 
     source_snapshot = None
     root_name = None
     try:
-        write_tree(SOURCE_ROOT, SOURCE_FILES)
-        source_snapshot = snapshot_tree(SOURCE_ROOT)
+        write_tree(source_root, SOURCE_FILES)
+        source_snapshot = snapshot_tree(source_root)
 
         with tempfile.TemporaryDirectory(prefix="fod-indexer-materialize-") as mount_dir:
             with FODMount(str(ROOT)) as mount:
                 mount.init_schema()
-                cleanup_indexer_state(dsn)
+                cleanup_indexer_sources(dsn, [source_name])
                 mount.start(mount_dir)
-                cleanup_materialized_roots(dsn)
+                cleanup_materialized_roots_for_sources(dsn, [source_name])
 
                 source_add_output = run_indexer(
                     ROOT,
@@ -62,43 +65,42 @@ def main() -> None:
                         "source",
                         "add",
                         "--name",
-                        "smoke",
+                        source_name,
                         "--path",
-                        str(SOURCE_ROOT),
+                        str(source_root),
                         "--kind",
                         "local",
                     ]
                 )
-                assert_contains(source_add_output, "Registered source smoke as local", "source add")
-                assert_contains(source_add_output, str(SOURCE_ROOT), "source add")
+                assert_contains(source_add_output, f"Registered source {source_name} as local", "source add")
+                assert_contains(source_add_output, str(source_root), "source add")
 
-                scan_output = run_indexer(ROOT, ["scan", "--source", "smoke"])
+                scan_output = run_indexer(ROOT, ["scan", "--source", source_name])
                 assert_contains(scan_output, "FOD indexer scan", "scan")
                 assert_contains(scan_output, "scanned files: 3", "scan")
                 assert_contains(scan_output, "ok files: 3", "scan")
                 assert_contains(scan_output, "total bytes: 14", "scan")
 
-                hash_output = run_indexer(ROOT, ["hash", "--source", "smoke", "--candidates-only"])
+                hash_output = run_indexer(ROOT, ["hash", "--source", source_name, "--candidates-only"])
                 assert_contains(hash_output, "FOD indexer hash", "hash")
-                assert_contains(hash_output, "source: smoke", "hash")
-                assert_contains(hash_output, "duplicate sets: 1", "hash")
+                assert_contains(hash_output, f"source: {source_name}", "hash")
 
                 report_output = run_indexer(ROOT, ["report", "duplicates"])
                 assert_contains(report_output, "FOD indexer duplicate report", "duplicate report")
-                assert_contains(report_output, "confirmed duplicate sets: 1", "duplicate report")
+                assert_contains(report_output, source_name, "duplicate report")
                 assert_contains(report_output, "a.txt", "duplicate report")
                 assert_contains(report_output, "b.txt", "duplicate report")
 
-                dry_run_output = run_indexer(ROOT, ["plan-import", "--source", "smoke", "--dry-run"])
+                dry_run_output = run_indexer(ROOT, ["plan-import", "--source", source_name, "--dry-run"])
                 assert_contains(dry_run_output, "FOD indexer dry-run import plan", "dry-run import plan")
-                assert_contains(dry_run_output, "source: smoke", "dry-run import plan")
+                assert_contains(dry_run_output, f"source: {source_name}", "dry-run import plan")
                 assert_contains(dry_run_output, "scanned files: 3", "dry-run import plan")
                 assert_contains(dry_run_output, "candidate duplicate groups: 1", "dry-run import plan")
                 assert_contains(dry_run_output, "confirmed duplicate groups: 1", "dry-run import plan")
                 assert_contains(dry_run_output, "unique payloads: 2", "dry-run import plan")
                 assert_contains(dry_run_output, "saved bytes: 4", "dry-run import plan")
 
-                materialize_output = run_indexer(ROOT, ["materialize", "--source", "smoke"])
+                materialize_output = run_indexer(ROOT, ["materialize", "--source", source_name])
                 assert_contains(materialize_output, "FOD indexer materialize", "materialize")
                 assert_contains(materialize_output, "scanned files: 3", "materialize")
                 assert_contains(materialize_output, "validated files: 3", "materialize")
@@ -109,7 +111,7 @@ def main() -> None:
                 assert_contains(materialize_output, "imported bytes: 10", "materialize")
                 assert_contains(materialize_output, "saved bytes: 4", "materialize")
 
-                if snapshot_tree(SOURCE_ROOT) != source_snapshot:
+                if snapshot_tree(source_root) != source_snapshot:
                     raise AssertionError("source tree changed during materialize")
 
                 with psycopg2.connect(**dsn) as conn:
@@ -119,7 +121,7 @@ def main() -> None:
                         fetch_one(
                             conn,
                             "SELECT id_index_source FROM index_sources WHERE name = %s",
-                            ("smoke",),
+                            (source_name,),
                         )
                     )
                     plan_id = int(
@@ -132,7 +134,7 @@ def main() -> None:
                             ORDER BY id_import_plan DESC
                             LIMIT 1
                             """,
-                            ("smoke",),
+                            (source_name,),
                         )
                     )
                     root_name = f"index-source-{source_id}-import-{plan_id}"
@@ -230,17 +232,17 @@ def main() -> None:
                         raise AssertionError("duplicate plan entries do not point at the same canonical file")
 
                 print(
-                    f"OK fod-indexer materialize smoke source={SOURCE_ROOT} root={root_name} "
+                    f"OK fod-indexer materialize smoke source={source_root} root={root_name} "
                     f"source_id={source_id} plan_id={plan_id}"
                 )
     finally:
         try:
-            cleanup_materialized_roots(dsn)
+            cleanup_materialized_roots_for_sources(dsn, [source_name])
         except Exception:
             pass
-        shutil.rmtree(SOURCE_ROOT, ignore_errors=True)
+        cleanup_test_dir(source_root)
         try:
-            cleanup_indexer_state(dsn)
+            cleanup_indexer_sources(dsn, [source_name])
         except Exception:
             pass
 

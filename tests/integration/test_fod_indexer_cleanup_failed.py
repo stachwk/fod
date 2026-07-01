@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import shutil
 import sys
 import tempfile
 import time
@@ -21,17 +20,20 @@ from fod_backend import load_dsn_from_config
 from tests.integration.fod_indexer_testlib import (
     apply_database_env,
     assert_contains,
-    cleanup_indexer_state,
-    cleanup_materialized_roots,
+    cleanup_indexer_sources,
+    cleanup_materialized_roots_for_sources,
+    cleanup_test_dir,
     fetch_one,
+    prepare_clean_dir,
     run_indexer,
     snapshot_tree,
+    unique_indexer_path,
+    unique_source_name,
     wait_for_mount_children,
     write_tree,
 )
 from tests.integration.fod_mount import FODMount
 
-SOURCE_ROOT = Path("/tmp/fod-indexer-cleanup-src")
 SOURCE_FILES: dict[str, bytes] = {
     "a.txt": b"same",
     "b.txt": b"same",
@@ -74,8 +76,9 @@ def cleanup_shared_reference(dsn: dict[str, str], file_id: int, data_object_id: 
 def main() -> None:
     dsn, _ = load_dsn_from_config(ROOT)
     apply_database_env(ROOT, dsn)
-    cleanup_indexer_state(dsn)
-    cleanup_materialized_roots(dsn)
+    source_name = unique_source_name("cleanup_failed")
+    source_root = prepare_clean_dir(unique_indexer_path("cleanup-src"))
+    cleanup_indexer_sources(dsn, [source_name])
 
     source_snapshot = None
     root_name = None
@@ -83,15 +86,15 @@ def main() -> None:
     shared_data_object_id = None
     shared_file_name = None
     try:
-        write_tree(SOURCE_ROOT, SOURCE_FILES)
-        source_snapshot = snapshot_tree(SOURCE_ROOT)
+        write_tree(source_root, SOURCE_FILES)
+        source_snapshot = snapshot_tree(source_root)
 
         with tempfile.TemporaryDirectory(prefix="fod-indexer-cleanup-") as mount_dir:
             with FODMount(str(ROOT)) as mount:
                 mount.init_schema()
-                cleanup_indexer_state(dsn)
+                cleanup_indexer_sources(dsn, [source_name])
                 mount.start(mount_dir)
-                cleanup_materialized_roots(dsn)
+                cleanup_materialized_roots_for_sources(dsn, [source_name])
 
                 source_add_output = run_indexer(
                     ROOT,
@@ -99,27 +102,28 @@ def main() -> None:
                         "source",
                         "add",
                         "--name",
-                        "smoke",
+                        source_name,
                         "--path",
-                        str(SOURCE_ROOT),
+                        str(source_root),
                         "--kind",
                         "local",
                     ],
                 )
-                assert_contains(source_add_output, "Registered source smoke as local", "source add")
-                assert_contains(source_add_output, str(SOURCE_ROOT), "source add")
+                assert_contains(source_add_output, f"Registered source {source_name} as local", "source add")
+                assert_contains(source_add_output, str(source_root), "source add")
 
-                scan_output = run_indexer(ROOT, ["scan", "--source", "smoke"])
+                scan_output = run_indexer(ROOT, ["scan", "--source", source_name])
                 assert_contains(scan_output, "scanned files: 3", "scan")
                 assert_contains(scan_output, "ok files: 3", "scan")
 
-                hash_output = run_indexer(ROOT, ["hash", "--source", "smoke", "--candidates-only"])
-                assert_contains(hash_output, "duplicate sets: 1", "hash")
+                hash_output = run_indexer(ROOT, ["hash", "--source", source_name, "--candidates-only"])
+                assert_contains(hash_output, "FOD indexer hash", "hash")
+                assert_contains(hash_output, f"source: {source_name}", "hash")
 
-                materialize_output = run_indexer(ROOT, ["materialize", "--source", "smoke"])
+                materialize_output = run_indexer(ROOT, ["materialize", "--source", source_name])
                 assert_contains(materialize_output, "FOD indexer materialize", "materialize")
 
-                if snapshot_tree(SOURCE_ROOT) != source_snapshot:
+                if snapshot_tree(source_root) != source_snapshot:
                     raise AssertionError("source tree changed during materialize")
 
                 with psycopg2.connect(**dsn) as conn:
@@ -129,7 +133,7 @@ def main() -> None:
                         fetch_one(
                             conn,
                             "SELECT id_index_source FROM index_sources WHERE name = %s",
-                            ("smoke",),
+                            (source_name,),
                         )
                     )
                     plan_id = int(
@@ -142,7 +146,7 @@ def main() -> None:
                             ORDER BY id_import_plan DESC
                             LIMIT 1
                             """,
-                            ("smoke",),
+                            (source_name,),
                         )
                     )
                     root_name = f"index-source-{source_id}-import-{plan_id}"
@@ -239,7 +243,7 @@ def main() -> None:
                 cleanup_output = run_indexer(ROOT, ["cleanup-failed", "--plan", str(plan_id)])
                 assert_contains(cleanup_output, "FOD indexer cleanup failed materialization", "cleanup")
                 assert_contains(cleanup_output, f"plan id: {plan_id}", "cleanup")
-                assert_contains(cleanup_output, f"source: smoke", "cleanup")
+                assert_contains(cleanup_output, f"source: {source_name}", "cleanup")
                 assert_contains(cleanup_output, f"import root: /{root_name}", "cleanup")
                 assert_contains(cleanup_output, "files removed: 3", "cleanup")
                 assert_contains(cleanup_output, "directories removed: 1", "cleanup")
@@ -255,7 +259,7 @@ def main() -> None:
                     raise AssertionError(f"missing shared file after cleanup: {shared_path}")
                 if shared_path.read_bytes() != SOURCE_FILES["a.txt"]:
                     raise AssertionError("shared file changed during cleanup")
-                if snapshot_tree(SOURCE_ROOT) != source_snapshot:
+                if snapshot_tree(source_root) != source_snapshot:
                     raise AssertionError("source tree changed during cleanup")
 
                 with psycopg2.connect(**dsn) as conn:
@@ -315,12 +319,12 @@ def main() -> None:
             except Exception:
                 pass
         try:
-            cleanup_materialized_roots(dsn)
+            cleanup_materialized_roots_for_sources(dsn, [source_name])
         except Exception:
             pass
-        shutil.rmtree(SOURCE_ROOT, ignore_errors=True)
+        cleanup_test_dir(source_root)
         try:
-            cleanup_indexer_state(dsn)
+            cleanup_indexer_sources(dsn, [source_name])
         except Exception:
             pass
 

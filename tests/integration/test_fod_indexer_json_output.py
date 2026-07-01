@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,15 +21,16 @@ if str(ROOT) not in sys.path:
 from fod_backend import load_dsn_from_config
 from tests.integration.fod_indexer_testlib import (
     apply_database_env,
-    cleanup_indexer_state,
-    cleanup_materialized_roots,
+    cleanup_indexer_sources,
+    cleanup_materialized_roots_for_sources,
+    cleanup_test_dir,
+    prepare_clean_dir,
     snapshot_tree,
+    unique_indexer_path,
+    unique_source_name,
 )
 from tests.integration.fod_mount import FODMount
 
-SOURCE_PARENT = Path("/tmp/fod-indexer-json-output")
-SOURCE_ROOT = SOURCE_PARENT / "indexed"
-BROWSE_ONLY_ROOT = SOURCE_PARENT / "browse-only"
 SOURCE_FILES: dict[str, bytes] = {
     "a.txt": b"same",
     "b.txt": b"same",
@@ -67,30 +67,59 @@ def run_indexer_json(args: list[str]) -> dict[str, object]:
         ) from err
 
 
-def prepare_source_tree() -> None:
-    shutil.rmtree(SOURCE_PARENT, ignore_errors=True)
-    SOURCE_ROOT.mkdir(parents=True, exist_ok=True)
-    BROWSE_ONLY_ROOT.mkdir(parents=True, exist_ok=True)
+def prepare_source_tree(source_parent: Path, source_root: Path, browse_only_root: Path) -> None:
+    prepare_clean_dir(source_parent)
+    source_root.mkdir(parents=True, exist_ok=True)
+    browse_only_root.mkdir(parents=True, exist_ok=True)
     for rel_path, content in SOURCE_FILES.items():
-        (SOURCE_ROOT / rel_path).write_bytes(content)
+        (source_root / rel_path).write_bytes(content)
+
+
+def find_duplicate_set_id_for_source(
+    duplicate_report: dict[str, object], source_name: str, paths: set[str]
+) -> int:
+    duplicate_sets = duplicate_report.get("duplicate_sets")
+    if not isinstance(duplicate_sets, list):
+        raise AssertionError(f"unexpected duplicate sets payload: {duplicate_report}")
+    for duplicate_set in duplicate_sets:
+        if not isinstance(duplicate_set, dict):
+            continue
+        members = duplicate_set.get("members")
+        if not isinstance(members, list):
+            continue
+        member_paths = {
+            member.get("logical_path")
+            for member in members
+            if isinstance(member, dict) and member.get("source_name") == source_name
+        }
+        if paths.issubset(member_paths):
+            duplicate = duplicate_set.get("duplicate_set")
+            if isinstance(duplicate, dict) and isinstance(duplicate.get("id_duplicate_set"), int):
+                return duplicate["id_duplicate_set"]
+    raise AssertionError(
+        f"duplicate report does not contain source={source_name} paths={sorted(paths)}: {duplicate_report}"
+    )
 
 
 def main() -> None:
     dsn, _ = load_dsn_from_config(ROOT)
     apply_database_env(ROOT, dsn)
-    cleanup_indexer_state(dsn)
-    cleanup_materialized_roots(dsn)
+    source_name = unique_source_name("json_output")
+    source_parent = prepare_clean_dir(unique_indexer_path("json-output"))
+    source_root = source_parent / "indexed"
+    browse_only_root = source_parent / "browse-only"
+    cleanup_indexer_sources(dsn, [source_name])
 
     source_snapshot = None
     try:
-        prepare_source_tree()
-        source_snapshot = snapshot_tree(SOURCE_PARENT)
+        prepare_source_tree(source_parent, source_root, browse_only_root)
+        source_snapshot = snapshot_tree(source_parent)
 
         with tempfile.TemporaryDirectory(prefix="fod-indexer-json-output-"):
             with FODMount(str(ROOT)) as mount:
                 mount.init_schema()
-                cleanup_indexer_state(dsn)
-                cleanup_materialized_roots(dsn)
+                cleanup_indexer_sources(dsn, [source_name])
+                cleanup_materialized_roots_for_sources(dsn, [source_name])
 
                 add_payload = run_indexer_json(
                     [
@@ -99,9 +128,9 @@ def main() -> None:
                         "source",
                         "add",
                         "--name",
-                        "json-smoke",
+                        source_name,
                         "--path",
-                        str(SOURCE_ROOT),
+                        str(source_root),
                         "--kind",
                         "local",
                     ]
@@ -109,7 +138,7 @@ def main() -> None:
                 source_record = add_payload["source"]
                 if not isinstance(source_record, dict):
                     raise AssertionError(f"unexpected source add payload: {add_payload}")
-                if source_record.get("name") != "json-smoke":
+                if source_record.get("name") != source_name:
                     raise AssertionError(f"unexpected source add name: {source_record}")
                 if source_record.get("kind") != "local":
                     raise AssertionError(f"unexpected source add kind: {source_record}")
@@ -121,10 +150,17 @@ def main() -> None:
                 if registered_payload.get("mode") != "registered":
                     raise AssertionError(f"unexpected registered source mode: {registered_payload}")
                 registered_sources = registered_payload.get("registered_sources")
-                if not isinstance(registered_sources, list) or len(registered_sources) != 1:
+                if not isinstance(registered_sources, list):
                     raise AssertionError(f"unexpected registered sources payload: {registered_payload}")
-                registered_source = registered_sources[0]
-                if not isinstance(registered_source, dict) or registered_source.get("name") != "json-smoke":
+                registered_source = next(
+                    (
+                        source
+                        for source in registered_sources
+                        if isinstance(source, dict) and source.get("name") == source_name
+                    ),
+                    None,
+                )
+                if registered_source is None:
                     raise AssertionError(f"unexpected registered source entry: {registered_payload}")
 
                 browse_payload = run_indexer_json(
@@ -134,7 +170,7 @@ def main() -> None:
                         "source",
                         "list",
                         "--path",
-                        str(SOURCE_PARENT),
+                        str(source_parent),
                         "--kind",
                         "local",
                     ]
@@ -145,49 +181,44 @@ def main() -> None:
                 if not isinstance(directories, list) or len(directories) != 2:
                     raise AssertionError(f"unexpected browse directories payload: {browse_payload}")
 
-                scan_payload = run_indexer_json(["--output", "json", "scan", "--source", "json-smoke"])
-                if scan_payload.get("source_name") != "json-smoke":
+                scan_payload = run_indexer_json(["--output", "json", "scan", "--source", source_name])
+                if scan_payload.get("source_name") != source_name:
                     raise AssertionError(f"unexpected scan payload: {scan_payload}")
-                if scan_payload.get("source_path") != str(SOURCE_ROOT.resolve()):
+                if scan_payload.get("source_path") != str(source_root.resolve()):
                     raise AssertionError(f"unexpected scan source path: {scan_payload}")
                 if scan_payload.get("scanned_files") != 3:
                     raise AssertionError(f"unexpected scan count: {scan_payload}")
                 if scan_payload.get("ok_files") != 3:
                     raise AssertionError(f"unexpected scan ok count: {scan_payload}")
 
-                hash_payload = run_indexer_json(["--output", "json", "hash", "--source", "json-smoke", "--candidates-only"])
-                if hash_payload.get("source_name") != "json-smoke":
+                hash_payload = run_indexer_json(["--output", "json", "hash", "--source", source_name, "--candidates-only"])
+                if hash_payload.get("source_name") != source_name:
                     raise AssertionError(f"unexpected hash payload: {hash_payload}")
-                if hash_payload.get("source_path") != str(SOURCE_ROOT.resolve()):
+                if hash_payload.get("source_path") != str(source_root.resolve()):
                     raise AssertionError(f"unexpected hash source path: {hash_payload}")
-                if hash_payload.get("duplicate_sets") != 1:
-                    raise AssertionError(f"unexpected hash duplicate set count: {hash_payload}")
 
                 duplicate_report = run_indexer_json(["--output", "json", "report", "duplicates"])
-                if duplicate_report.get("confirmed_duplicate_sets") != 1:
-                    raise AssertionError(f"unexpected duplicate report payload: {duplicate_report}")
-                duplicate_sets = duplicate_report.get("duplicate_sets")
-                if not isinstance(duplicate_sets, list) or len(duplicate_sets) != 1:
-                    raise AssertionError(f"unexpected duplicate sets payload: {duplicate_report}")
-                first_set = duplicate_sets[0]
-                if not isinstance(first_set, dict):
-                    raise AssertionError(f"unexpected duplicate set payload: {duplicate_report}")
-                set_id = first_set.get("duplicate_set", {}).get("id_duplicate_set")
-                if not isinstance(set_id, int):
-                    raise AssertionError(f"missing duplicate set id: {duplicate_report}")
+                set_id = find_duplicate_set_id_for_source(duplicate_report, source_name, {"a.txt", "b.txt"})
 
                 duplicate_snapshot = run_indexer_json(["--output", "json", "report", "duplicates", "--id", str(set_id)])
                 if duplicate_snapshot.get("duplicate_set", {}).get("id_duplicate_set") != set_id:
                     raise AssertionError(f"unexpected duplicate set snapshot: {duplicate_snapshot}")
                 members = duplicate_snapshot.get("members")
-                if not isinstance(members, list) or len(members) != 2:
+                if not isinstance(members, list):
                     raise AssertionError(f"unexpected duplicate snapshot members: {duplicate_snapshot}")
+                member_paths = {
+                    member.get("logical_path")
+                    for member in members
+                    if isinstance(member, dict) and member.get("source_name") == source_name
+                }
+                if not {"a.txt", "b.txt"}.issubset(member_paths):
+                    raise AssertionError(f"duplicate snapshot is missing test members: {duplicate_snapshot}")
 
-                plan_payload = run_indexer_json(["--output", "json", "plan-import", "--source", "json-smoke", "--dry-run"])
+                plan_payload = run_indexer_json(["--output", "json", "plan-import", "--source", source_name, "--dry-run"])
                 plan_id = plan_payload.get("plan_id")
                 if not isinstance(plan_id, int):
                     raise AssertionError(f"missing plan id in import plan: {plan_payload}")
-                if plan_payload.get("source_filter") != "json-smoke":
+                if plan_payload.get("source_filter") != source_name:
                     raise AssertionError(f"unexpected plan source filter: {plan_payload}")
                 if plan_payload.get("unique_payload_count") != 2:
                     raise AssertionError(f"unexpected plan unique payload count: {plan_payload}")
@@ -200,8 +231,8 @@ def main() -> None:
                 if not isinstance(entries, list) or len(entries) != 3:
                     raise AssertionError(f"unexpected plan snapshot entries: {plan_snapshot}")
 
-                clean_payload = run_indexer_json(["--output", "json", "clean", "--source", "json-smoke", "--dry-run"])
-                if clean_payload.get("source_name") != "json-smoke":
+                clean_payload = run_indexer_json(["--output", "json", "clean", "--source", source_name, "--dry-run"])
+                if clean_payload.get("source_name") != source_name:
                     raise AssertionError(f"unexpected clean payload: {clean_payload}")
                 if clean_payload.get("dry_run") is not True:
                     raise AssertionError(f"unexpected clean dry-run payload: {clean_payload}")
@@ -209,29 +240,29 @@ def main() -> None:
                     raise AssertionError(f"unexpected clean indexed file count: {clean_payload}")
 
                 materialize_payload = run_indexer_json(
-                    ["--output", "json", "materialize", "--source", "json-smoke", "--dry-run"]
+                    ["--output", "json", "materialize", "--source", source_name, "--dry-run"]
                 )
-                if materialize_payload.get("source_name") != "json-smoke":
+                if materialize_payload.get("source_name") != source_name:
                     raise AssertionError(f"unexpected materialize payload: {materialize_payload}")
                 if materialize_payload.get("dry_run") is not True:
                     raise AssertionError(f"unexpected materialize dry-run payload: {materialize_payload}")
                 if materialize_payload.get("scanned_files") != 3:
                     raise AssertionError(f"unexpected materialize scanned count: {materialize_payload}")
 
-                if snapshot_tree(SOURCE_PARENT) != source_snapshot:
+                if snapshot_tree(source_parent) != source_snapshot:
                     raise AssertionError("source tree changed during JSON-output smoke")
 
                 print(
-                    f"OK fod-indexer json output source={SOURCE_ROOT} plan_id={plan_id} duplicate_set_id={set_id}"
+                    f"OK fod-indexer json output source={source_root} plan_id={plan_id} duplicate_set_id={set_id}"
                 )
     finally:
         try:
-            cleanup_materialized_roots(dsn)
+            cleanup_materialized_roots_for_sources(dsn, [source_name])
         except Exception:
             pass
-        shutil.rmtree(SOURCE_PARENT, ignore_errors=True)
+        cleanup_test_dir(source_parent)
         try:
-            cleanup_indexer_state(dsn)
+            cleanup_indexer_sources(dsn, [source_name])
         except Exception:
             pass
 

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import psycopg2
+from psycopg2 import sql
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -25,23 +25,23 @@ from fod_backend import load_dsn_from_config
 from tests.integration.fod_indexer_testlib import (
     apply_database_env,
     assert_contains,
-    cleanup_indexer_state,
-    cleanup_materialized_roots,
+    cleanup_indexer_sources,
+    cleanup_materialized_roots_for_sources,
+    cleanup_test_dir,
     fetch_one,
+    prepare_clean_dir,
     run_indexer,
     snapshot_tree,
+    unique_indexer_path,
+    unique_source_name,
     write_tree,
 )
 from tests.integration.fod_mount import FODMount
 
-SOURCE_ROOT_PLAN_ENTRY_FAILURE = Path("/tmp/fod-indexer-materialize-rollback-src")
 SOURCE_FILES_PLAN_ENTRY_FAILURE: dict[str, bytes] = {
     "rollback.txt": b"rollback me\n",
 }
 
-SOURCE_ROOT_COMPLETED_FAILURE = Path(
-    "/tmp/fod-indexer-materialize-final-status-rollback-src"
-)
 SOURCE_FILES_COMPLETED_FAILURE: dict[str, bytes] = {
     "a.txt": b"same",
     "b.txt": b"same",
@@ -58,6 +58,11 @@ def wait_for_path_missing(path: Path, timeout_s: float = 10.0) -> None:
             return
         time.sleep(0.2)
     raise AssertionError(f"timed out waiting for {path} to disappear; last_exists={last_state}")
+
+
+def sql_suffix(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "_" for ch in value)
+    return safe[-40:]
 
 
 def run_indexer_result(root: Path, args: list[str], extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -77,73 +82,112 @@ def run_indexer_result(root: Path, args: list[str], extra_env: dict[str, str] | 
     )
 
 
-def install_materialize_plan_entry_failure_trigger(dsn: dict[str, str]) -> None:
+def install_materialize_plan_entry_failure_trigger(dsn: dict[str, str], source_name: str) -> None:
+    suffix = sql_suffix(source_name)
+    function_name = f"fod_force_plan_entry_failure_{suffix}"
+    trigger_name = f"fod_force_plan_entry_failure_{suffix}"
     with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
         cur.execute("SET search_path TO fod, public")
         cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION fod_force_materialize_plan_entry_failure()
+            sql.SQL(
+                """
+            CREATE OR REPLACE FUNCTION {}()
             RETURNS trigger AS $$
             BEGIN
-                RAISE EXCEPTION 'forced materialize failure for rollback smoke';
+                IF EXISTS (
+                    SELECT 1
+                    FROM index_import_plans
+                    WHERE id_import_plan = NEW.id_import_plan
+                      AND source_filter = {}
+                ) THEN
+                    RAISE EXCEPTION 'forced materialize failure for rollback smoke';
+                END IF;
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
             """
+            ).format(sql.Identifier(function_name), sql.Literal(source_name))
         )
         cur.execute(
-            "DROP TRIGGER IF EXISTS fod_force_materialize_plan_entry_failure ON index_import_plan_entries"
+            sql.SQL("DROP TRIGGER IF EXISTS {} ON index_import_plan_entries").format(
+                sql.Identifier(trigger_name)
+            )
         )
         cur.execute(
-            """
-            CREATE TRIGGER fod_force_materialize_plan_entry_failure
+            sql.SQL(
+                """
+            CREATE TRIGGER {}
             BEFORE INSERT ON index_import_plan_entries
             FOR EACH ROW
-            EXECUTE FUNCTION fod_force_materialize_plan_entry_failure()
+            EXECUTE FUNCTION {}()
             """
+            ).format(sql.Identifier(trigger_name), sql.Identifier(function_name))
         )
 
 
-def install_materialize_completed_failure_trigger(dsn: dict[str, str]) -> None:
+def install_materialize_completed_failure_trigger(dsn: dict[str, str], source_name: str) -> None:
+    suffix = sql_suffix(source_name)
+    function_name = f"fod_force_completed_failure_{suffix}"
+    trigger_name = f"fod_force_completed_failure_{suffix}"
     with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
         cur.execute("SET search_path TO fod, public")
         cur.execute(
-            """
-            CREATE OR REPLACE FUNCTION fod_force_materialize_completed_failure()
+            sql.SQL(
+                """
+            CREATE OR REPLACE FUNCTION {}()
             RETURNS trigger AS $$
             BEGIN
-                IF NEW.status = 'materialize_completed' THEN
+                IF NEW.status = 'materialize_completed' AND NEW.source_filter = {} THEN
                     RAISE EXCEPTION 'forced materialize completed failure for rollback smoke';
                 END IF;
                 RETURN NEW;
             END;
             $$ LANGUAGE plpgsql
             """
+            ).format(sql.Identifier(function_name), sql.Literal(source_name))
         )
         cur.execute(
-            "DROP TRIGGER IF EXISTS fod_force_materialize_completed_failure ON index_import_plans"
+            sql.SQL("DROP TRIGGER IF EXISTS {} ON index_import_plans").format(
+                sql.Identifier(trigger_name)
+            )
         )
         cur.execute(
-            """
-            CREATE TRIGGER fod_force_materialize_completed_failure
+            sql.SQL(
+                """
+            CREATE TRIGGER {}
             BEFORE UPDATE ON index_import_plans
             FOR EACH ROW
-            EXECUTE FUNCTION fod_force_materialize_completed_failure()
+            EXECUTE FUNCTION {}()
             """
+            ).format(sql.Identifier(trigger_name), sql.Identifier(function_name))
         )
 
 
-def remove_materialize_failure_triggers(dsn: dict[str, str]) -> None:
+def remove_materialize_failure_triggers(dsn: dict[str, str], source_name: str) -> None:
+    suffix = sql_suffix(source_name)
+    names = [
+        (
+            "index_import_plan_entries",
+            f"fod_force_plan_entry_failure_{suffix}",
+            f"fod_force_plan_entry_failure_{suffix}",
+        ),
+        (
+            "index_import_plans",
+            f"fod_force_completed_failure_{suffix}",
+            f"fod_force_completed_failure_{suffix}",
+        ),
+    ]
     with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
         cur.execute("SET search_path TO fod, public")
-        cur.execute(
-            "DROP TRIGGER IF EXISTS fod_force_materialize_plan_entry_failure ON index_import_plan_entries"
-        )
-        cur.execute("DROP FUNCTION IF EXISTS fod_force_materialize_plan_entry_failure()")
-        cur.execute(
-            "DROP TRIGGER IF EXISTS fod_force_materialize_completed_failure ON index_import_plans"
-        )
-        cur.execute("DROP FUNCTION IF EXISTS fod_force_materialize_completed_failure()")
+        for table_name, trigger_name, function_name in names:
+            cur.execute(
+                sql.SQL("DROP TRIGGER IF EXISTS {} ON {}").format(
+                    sql.Identifier(trigger_name), sql.Identifier(table_name)
+                )
+            )
+            cur.execute(
+                sql.SQL("DROP FUNCTION IF EXISTS {}()").format(sql.Identifier(function_name))
+            )
 
 
 def run_materialize_rollback_case(
@@ -153,7 +197,7 @@ def run_materialize_rollback_case(
     source_files: dict[str, bytes],
     source_name: str,
     expected_plan_entry_count: int,
-    install_failure_trigger: Callable[[dict[str, str]], None],
+    install_failure_trigger: Callable[[dict[str, str], str], None],
     failure_label: str,
 ) -> None:
     source_snapshot = None
@@ -178,7 +222,7 @@ def run_materialize_rollback_case(
         assert_contains(source_add_output, f"Registered source {source_name} as local", "source add")
         assert_contains(source_add_output, str(source_root), "source add")
 
-        install_failure_trigger(dsn)
+        install_failure_trigger(dsn, source_name)
 
         materialize_result = run_indexer_result(
             ROOT,
@@ -282,39 +326,43 @@ def run_materialize_rollback_case(
         )
     finally:
         try:
-            remove_materialize_failure_triggers(dsn)
+            remove_materialize_failure_triggers(dsn, source_name)
         except Exception:
             pass
         try:
-            cleanup_materialized_roots(dsn)
+            cleanup_materialized_roots_for_sources(dsn, [source_name])
         except Exception:
             pass
         try:
-            cleanup_indexer_state(dsn)
+            cleanup_indexer_sources(dsn, [source_name])
         except Exception:
             pass
-        shutil.rmtree(source_root, ignore_errors=True)
+        cleanup_test_dir(source_root)
 
 
 def main() -> None:
     dsn, _ = load_dsn_from_config(ROOT)
     apply_database_env(ROOT, dsn)
-    cleanup_indexer_state(dsn)
-    cleanup_materialized_roots(dsn)
+    early_source_name = unique_source_name("rollback_early")
+    late_source_name = unique_source_name("rollback_late")
+    source_names = [early_source_name, late_source_name]
+    early_source_root = prepare_clean_dir(unique_indexer_path("materialize-rollback-early-src"))
+    late_source_root = prepare_clean_dir(unique_indexer_path("materialize-rollback-late-src"))
+    cleanup_indexer_sources(dsn, source_names)
 
     try:
         with tempfile.TemporaryDirectory(prefix="fod-indexer-materialize-rollback-") as mount_dir:
             with FODMount(str(ROOT)) as mount:
                 mount.init_schema()
-                cleanup_indexer_state(dsn)
+                cleanup_indexer_sources(dsn, source_names)
                 mount.start(mount_dir)
-                cleanup_materialized_roots(dsn)
+                cleanup_materialized_roots_for_sources(dsn, source_names)
                 run_materialize_rollback_case(
                     dsn,
                     mount,
-                    SOURCE_ROOT_PLAN_ENTRY_FAILURE,
+                    early_source_root,
                     SOURCE_FILES_PLAN_ENTRY_FAILURE,
-                    "rollback-smoke",
+                    early_source_name,
                     0,
                     install_materialize_plan_entry_failure_trigger,
                     "forced materialize failure for rollback smoke",
@@ -322,26 +370,27 @@ def main() -> None:
                 run_materialize_rollback_case(
                     dsn,
                     mount,
-                    SOURCE_ROOT_COMPLETED_FAILURE,
+                    late_source_root,
                     SOURCE_FILES_COMPLETED_FAILURE,
-                    "rollback-completed-smoke",
+                    late_source_name,
                     3,
                     install_materialize_completed_failure_trigger,
                     "forced materialize completed failure for rollback smoke",
                 )
     finally:
+        for source_name in source_names:
+            try:
+                remove_materialize_failure_triggers(dsn, source_name)
+            except Exception:
+                pass
         try:
-            remove_materialize_failure_triggers(dsn)
+            cleanup_materialized_roots_for_sources(dsn, source_names)
         except Exception:
             pass
+        cleanup_test_dir(early_source_root)
+        cleanup_test_dir(late_source_root)
         try:
-            cleanup_materialized_roots(dsn)
-        except Exception:
-            pass
-        shutil.rmtree(SOURCE_ROOT_PLAN_ENTRY_FAILURE, ignore_errors=True)
-        shutil.rmtree(SOURCE_ROOT_COMPLETED_FAILURE, ignore_errors=True)
-        try:
-            cleanup_indexer_state(dsn)
+            cleanup_indexer_sources(dsn, source_names)
         except Exception:
             pass
 

@@ -20,16 +20,16 @@ from fod_backend import load_dsn_from_config
 from tests.integration.fod_indexer_testlib import (
     apply_database_env,
     assert_contains,
-    cleanup_indexer_state,
-    cleanup_materialized_roots,
+    cleanup_indexer_sources,
+    cleanup_materialized_roots_for_sources,
+    cleanup_test_dir,
+    prepare_clean_dir,
     run_indexer,
     snapshot_tree,
+    unique_indexer_path,
+    unique_source_name,
 )
 from tests.integration.fod_mount import FODMount
-
-LOCAL_ROOT = Path("/tmp/fod-indexer-kind-local")
-MIRROR_ROOT = Path("/tmp/fod-indexer-kind-mirror")
-GITHUB_ROOT = Path("/tmp/fod-indexer-kind-github")
 
 LOCAL_FILES: dict[str, bytes] = {
     "a.txt": b"same",
@@ -69,26 +69,32 @@ def assert_not_contains(text: str, needle: str, label: str) -> None:
 def main() -> None:
     dsn, _ = load_dsn_from_config(ROOT)
     apply_database_env(ROOT, dsn)
-    cleanup_indexer_state(dsn)
-    cleanup_materialized_roots(dsn)
+    local_source = unique_source_name("kind_local")
+    mirror_source = unique_source_name("kind_mirror")
+    github_source = unique_source_name("kind_github")
+    source_names = [local_source, mirror_source, github_source]
+    local_root = prepare_clean_dir(unique_indexer_path("kind-local"))
+    mirror_root = prepare_clean_dir(unique_indexer_path("kind-mirror"))
+    github_root = prepare_clean_dir(unique_indexer_path("kind-github"))
+    cleanup_indexer_sources(dsn, source_names)
 
     local_snapshot = None
     mirror_snapshot = None
     github_snapshot = None
     try:
-        write_nested_tree(LOCAL_ROOT, LOCAL_FILES)
-        write_nested_tree(MIRROR_ROOT, MIRROR_FILES)
-        write_nested_tree(GITHUB_ROOT, GITHUB_FILES)
-        local_snapshot = snapshot_tree(LOCAL_ROOT)
-        mirror_snapshot = snapshot_tree(MIRROR_ROOT)
-        github_snapshot = snapshot_tree(GITHUB_ROOT)
+        write_nested_tree(local_root, LOCAL_FILES)
+        write_nested_tree(mirror_root, MIRROR_FILES)
+        write_nested_tree(github_root, GITHUB_FILES)
+        local_snapshot = snapshot_tree(local_root)
+        mirror_snapshot = snapshot_tree(mirror_root)
+        github_snapshot = snapshot_tree(github_root)
 
         with tempfile.TemporaryDirectory(prefix="fod-indexer-kinds-") as mount_dir:
             with FODMount(str(ROOT)) as mount:
                 mount.init_schema()
-                cleanup_indexer_state(dsn)
+                cleanup_indexer_sources(dsn, source_names)
                 mount.start(mount_dir)
-                cleanup_materialized_roots(dsn)
+                cleanup_materialized_roots_for_sources(dsn, source_names)
 
                 local_add_output = run_indexer(
                     ROOT,
@@ -96,14 +102,14 @@ def main() -> None:
                         "source",
                         "add",
                         "--name",
-                        "local-smoke",
+                        local_source,
                         "--path",
-                        str(LOCAL_ROOT),
+                        str(local_root),
                         "--kind",
                         "local",
                     ],
                 )
-                assert_contains(local_add_output, "Registered source local-smoke as local", "local add")
+                assert_contains(local_add_output, f"Registered source {local_source} as local", "local add")
                 assert_contains(local_add_output, "policy: path-backed", "local add")
                 assert_contains(local_add_output, "capabilities: path_backed=true", "local add")
 
@@ -113,14 +119,14 @@ def main() -> None:
                         "source",
                         "add",
                         "--name",
-                        "mirror-smoke",
+                        mirror_source,
                         "--path",
-                        str(MIRROR_ROOT),
+                        str(mirror_root),
                         "--kind",
                         "smb",
                     ],
                 )
-                assert_contains(mirror_add_output, "Registered source mirror-smoke as smb", "mirror add")
+                assert_contains(mirror_add_output, f"Registered source {mirror_source} as smb", "mirror add")
                 assert_contains(mirror_add_output, "policy: mirrored", "mirror add")
                 assert_contains(mirror_add_output, "capabilities: path_backed=true", "mirror add")
 
@@ -130,20 +136,20 @@ def main() -> None:
                         "source",
                         "add",
                         "--name",
-                        "github-smoke",
+                        github_source,
                         "--path",
-                        str(GITHUB_ROOT),
+                        str(github_root),
                         "--kind",
                         "github",
                     ],
                 )
-                assert_contains(github_add_output, "Registered source github-smoke as github", "github add")
+                assert_contains(github_add_output, f"Registered source {github_source} as github", "github add")
                 assert_contains(github_add_output, "policy: export-backed", "github add")
                 assert_contains(github_add_output, "capabilities: path_backed=true", "github add")
 
                 registered_smb_output = run_indexer(ROOT, ["source", "list", "--kind", "smb"])
                 assert_contains(registered_smb_output, "kind filter: smb", "source list smb")
-                assert_contains(registered_smb_output, "mirror-smoke", "source list smb")
+                assert_contains(registered_smb_output, mirror_source, "source list smb")
                 assert_contains(registered_smb_output, "policy=mirrored", "source list smb")
 
                 browsed_mirror_output = run_indexer(
@@ -152,7 +158,7 @@ def main() -> None:
                         "source",
                         "list",
                         "--path",
-                        str(MIRROR_ROOT),
+                        str(mirror_root),
                         "--kind",
                         "smb",
                     ],
@@ -169,24 +175,24 @@ def main() -> None:
                 assert_not_contains(browsed_mirror_output, "node_modules", "browse mirror")
                 assert_not_contains(browsed_mirror_output, "build", "browse mirror")
 
-                local_scan_output = run_indexer(ROOT, ["scan", "--source", "local-smoke"])
+                local_scan_output = run_indexer(ROOT, ["scan", "--source", local_source])
                 assert_contains(local_scan_output, "scanned files: 3", "local scan")
                 assert_contains(local_scan_output, "ok files: 3", "local scan")
                 assert_contains(local_scan_output, "total bytes: 14", "local scan")
 
-                local_hash_output = run_indexer(ROOT, ["hash", "--source", "local-smoke", "--candidates-only"])
+                local_hash_output = run_indexer(ROOT, ["hash", "--source", local_source, "--candidates-only"])
                 assert_contains(local_hash_output, "candidate files: 2", "local hash")
-                assert_contains(local_hash_output, "duplicate sets: 1", "local hash")
+                assert_contains(local_hash_output, f"source: {local_source}", "local hash")
 
-                local_plan_output = run_indexer(ROOT, ["plan-import", "--source", "local-smoke", "--dry-run"])
-                assert_contains(local_plan_output, "source: local-smoke", "local plan")
+                local_plan_output = run_indexer(ROOT, ["plan-import", "--source", local_source, "--dry-run"])
+                assert_contains(local_plan_output, f"source: {local_source}", "local plan")
                 assert_contains(local_plan_output, "scanned files: 3", "local plan")
                 assert_contains(local_plan_output, "unique payloads: 2", "local plan")
                 assert_contains(local_plan_output, "source bytes: 14", "local plan")
                 assert_contains(local_plan_output, "estimated import bytes: 10", "local plan")
                 assert_contains(local_plan_output, "estimated saved bytes: 4", "local plan")
 
-                local_materialize_output = run_indexer(ROOT, ["materialize", "--source", "local-smoke"])
+                local_materialize_output = run_indexer(ROOT, ["materialize", "--source", local_source])
                 assert_contains(local_materialize_output, "FOD indexer materialize", "local materialize")
                 assert_contains(local_materialize_output, "duplicate groups: 1", "local materialize")
                 assert_contains(local_materialize_output, "canonical files: 2", "local materialize")
@@ -194,26 +200,26 @@ def main() -> None:
                 assert_contains(local_materialize_output, "source bytes: 14", "local materialize")
                 assert_contains(local_materialize_output, "imported bytes: 10", "local materialize")
                 assert_contains(local_materialize_output, "saved bytes: 4", "local materialize")
-                if snapshot_tree(LOCAL_ROOT) != local_snapshot:
+                if snapshot_tree(local_root) != local_snapshot:
                     raise AssertionError("local source tree changed during materialize")
 
-                mirror_scan_output = run_indexer(ROOT, ["scan", "--source", "mirror-smoke"])
+                mirror_scan_output = run_indexer(ROOT, ["scan", "--source", mirror_source])
                 assert_contains(mirror_scan_output, "scanned files: 2", "mirror scan")
                 assert_contains(mirror_scan_output, "ok files: 2", "mirror scan")
                 assert_contains(mirror_scan_output, "total bytes: 10", "mirror scan")
 
-                mirror_hash_output = run_indexer(ROOT, ["hash", "--source", "mirror-smoke", "--candidates-only"])
+                mirror_hash_output = run_indexer(ROOT, ["hash", "--source", mirror_source, "--candidates-only"])
                 assert_contains(mirror_hash_output, "candidate files: 0", "mirror hash")
 
-                mirror_plan_output = run_indexer(ROOT, ["plan-import", "--source", "mirror-smoke", "--dry-run"])
-                assert_contains(mirror_plan_output, "source: mirror-smoke", "mirror plan")
+                mirror_plan_output = run_indexer(ROOT, ["plan-import", "--source", mirror_source, "--dry-run"])
+                assert_contains(mirror_plan_output, f"source: {mirror_source}", "mirror plan")
                 assert_contains(mirror_plan_output, "scanned files: 2", "mirror plan")
                 assert_contains(mirror_plan_output, "unique payloads: 2", "mirror plan")
                 assert_contains(mirror_plan_output, "source bytes: 10", "mirror plan")
                 assert_contains(mirror_plan_output, "estimated import bytes: 10", "mirror plan")
                 assert_contains(mirror_plan_output, "estimated saved bytes: 0", "mirror plan")
 
-                mirror_materialize_output = run_indexer(ROOT, ["materialize", "--source", "mirror-smoke"])
+                mirror_materialize_output = run_indexer(ROOT, ["materialize", "--source", mirror_source])
                 assert_contains(mirror_materialize_output, "FOD indexer materialize", "mirror materialize")
                 assert_contains(mirror_materialize_output, "duplicate groups: 0", "mirror materialize")
                 assert_contains(mirror_materialize_output, "canonical files: 2", "mirror materialize")
@@ -221,33 +227,26 @@ def main() -> None:
                 assert_contains(mirror_materialize_output, "source bytes: 10", "mirror materialize")
                 assert_contains(mirror_materialize_output, "imported bytes: 10", "mirror materialize")
                 assert_contains(mirror_materialize_output, "saved bytes: 0", "mirror materialize")
-                if snapshot_tree(MIRROR_ROOT) != mirror_snapshot:
+                if snapshot_tree(mirror_root) != mirror_snapshot:
                     raise AssertionError("mirror source tree changed during materialize")
 
-                github_scan_output = run_indexer(ROOT, ["scan", "--source", "github-smoke"])
+                github_scan_output = run_indexer(ROOT, ["scan", "--source", github_source])
                 assert_contains(github_scan_output, "scanned files: 2", "github scan")
                 assert_contains(github_scan_output, "ok files: 2", "github scan")
                 assert_contains(github_scan_output, "total bytes: 10", "github scan")
 
-                github_hash_output = run_indexer(ROOT, ["hash", "--source", "github-smoke", "--candidates-only"])
+                github_hash_output = run_indexer(ROOT, ["hash", "--source", github_source, "--candidates-only"])
                 assert_contains(github_hash_output, "candidate files: 0", "github hash")
 
                 all_plan_output = run_indexer(ROOT, ["plan-import", "--all-sources", "--dry-run"])
                 assert_contains(all_plan_output, "source: all sources", "all plan")
-                assert_contains(all_plan_output, "scanned files: 7", "all plan")
-                assert_contains(all_plan_output, "candidate duplicate groups: 1", "all plan")
-                assert_contains(all_plan_output, "confirmed duplicate groups: 1", "all plan")
-                assert_contains(all_plan_output, "unique payloads: 6", "all plan")
-                assert_contains(all_plan_output, "source bytes: 34", "all plan")
-                assert_contains(all_plan_output, "estimated import bytes: 30", "all plan")
-                assert_contains(all_plan_output, "estimated saved bytes: 4", "all plan")
 
-                github_plan_output = run_indexer(ROOT, ["plan-import", "--source", "github-smoke", "--dry-run"])
-                assert_contains(github_plan_output, "source: github-smoke", "github plan")
+                github_plan_output = run_indexer(ROOT, ["plan-import", "--source", github_source, "--dry-run"])
+                assert_contains(github_plan_output, f"source: {github_source}", "github plan")
                 assert_contains(github_plan_output, "scanned files: 2", "github plan")
                 assert_contains(github_plan_output, "unique payloads: 2", "github plan")
 
-                github_materialize_output = run_indexer(ROOT, ["materialize", "--source", "github-smoke"])
+                github_materialize_output = run_indexer(ROOT, ["materialize", "--source", github_source])
                 assert_contains(github_materialize_output, "FOD indexer materialize", "github materialize")
                 assert_contains(github_materialize_output, "duplicate groups: 0", "github materialize")
                 assert_contains(github_materialize_output, "canonical files: 2", "github materialize")
@@ -255,12 +254,12 @@ def main() -> None:
                 assert_contains(github_materialize_output, "source bytes: 10", "github materialize")
                 assert_contains(github_materialize_output, "imported bytes: 10", "github materialize")
                 assert_contains(github_materialize_output, "saved bytes: 0", "github materialize")
-                if snapshot_tree(GITHUB_ROOT) != github_snapshot:
+                if snapshot_tree(github_root) != github_snapshot:
                     raise AssertionError("github source tree changed during materialize")
 
-                shutil.rmtree(MIRROR_ROOT, ignore_errors=True)
+                shutil.rmtree(mirror_root, ignore_errors=True)
 
-                mirror_clean_preview = run_indexer(ROOT, ["clean", "--source", "mirror-smoke", "--dry-run"])
+                mirror_clean_preview = run_indexer(ROOT, ["clean", "--source", mirror_source, "--dry-run"])
                 assert_contains(mirror_clean_preview, "FOD indexer clean", "mirror clean dry-run")
                 assert_contains(mirror_clean_preview, "source root: missing", "mirror clean dry-run")
                 assert_contains(mirror_clean_preview, "indexed files: 2", "mirror clean dry-run")
@@ -268,7 +267,7 @@ def main() -> None:
                 assert_contains(mirror_clean_preview, "stale files: 2", "mirror clean dry-run")
                 assert_contains(mirror_clean_preview, "plan entries removed:", "mirror clean dry-run")
 
-                mirror_clean_output = run_indexer(ROOT, ["clean", "--source", "mirror-smoke"])
+                mirror_clean_output = run_indexer(ROOT, ["clean", "--source", mirror_source])
                 assert_contains(mirror_clean_output, "FOD indexer clean", "mirror clean")
                 assert_contains(mirror_clean_output, "source root: missing", "mirror clean")
                 assert_contains(mirror_clean_output, "indexed files: 2", "mirror clean")
@@ -282,31 +281,31 @@ def main() -> None:
                         cur.execute("SET search_path TO fod, public")
                         cur.execute(
                             "SELECT COUNT(*) FROM index_files f JOIN index_sources s ON s.id_index_source = f.id_index_source WHERE s.name = %s",
-                            ("mirror-smoke",),
+                            (mirror_source,),
                         )
                         row = cur.fetchone()
                         if row is None or int(row[0]) != 0:
                             raise AssertionError(f"mirror rows still indexed after cleanup: {row}")
 
-                mirror_post_clean_plan = run_indexer(ROOT, ["plan-import", "--source", "mirror-smoke", "--dry-run"])
-                assert_contains(mirror_post_clean_plan, "source: mirror-smoke", "mirror post-clean plan")
+                mirror_post_clean_plan = run_indexer(ROOT, ["plan-import", "--source", mirror_source, "--dry-run"])
+                assert_contains(mirror_post_clean_plan, f"source: {mirror_source}", "mirror post-clean plan")
                 assert_contains(mirror_post_clean_plan, "scanned files: 0", "mirror post-clean plan")
                 assert_contains(mirror_post_clean_plan, "unique payloads: 0", "mirror post-clean plan")
 
                 print(
                     "OK fod-indexer source-kind matrix "
-                    f"local={LOCAL_ROOT} mirror={MIRROR_ROOT} github={GITHUB_ROOT}"
+                    f"local={local_root} mirror={mirror_root} github={github_root}"
                 )
     finally:
         try:
-            cleanup_materialized_roots(dsn)
+            cleanup_materialized_roots_for_sources(dsn, source_names)
         except Exception:
             pass
-        shutil.rmtree(LOCAL_ROOT, ignore_errors=True)
-        shutil.rmtree(MIRROR_ROOT, ignore_errors=True)
-        shutil.rmtree(GITHUB_ROOT, ignore_errors=True)
+        cleanup_test_dir(local_root)
+        cleanup_test_dir(mirror_root)
+        cleanup_test_dir(github_root)
         try:
-            cleanup_indexer_state(dsn)
+            cleanup_indexer_sources(dsn, source_names)
         except Exception:
             pass
 

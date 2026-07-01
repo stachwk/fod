@@ -23,19 +23,19 @@ from fod_backend import load_dsn_from_config
 from tests.integration.fod_indexer_testlib import (
     apply_database_env,
     assert_contains,
-    cleanup_indexer_state,
-    cleanup_materialized_roots,
+    cleanup_indexer_sources,
+    cleanup_materialized_roots_for_sources,
+    cleanup_test_dir,
     fetch_one,
+    prepare_clean_dir,
     run_indexer,
     snapshot_tree,
+    unique_indexer_path,
+    unique_source_name,
 )
 from tests.integration.fod_mount import FODMount
 
-USABILITY_PARENT = Path("/tmp/fod-indexer-usability")
-USABILITY_INDEXED_ROOT = USABILITY_PARENT / "indexed"
-USABILITY_BROWSE_ONLY_ROOT = USABILITY_PARENT / "browse-only"
 USABILITY_ADB_RUNTIME = "fod-indexer-adb-runtime"
-USABILITY_CLEAN_ROOT = Path("/tmp/fod-indexer-clean-usability")
 USABILITY_CLEAN_FILES: dict[str, bytes] = {
     "a.txt": b"same",
     "b.txt": b"same",
@@ -53,19 +53,18 @@ class SkipTest(RuntimeError):
     pass
 
 
-def write_usability_tree() -> None:
-    shutil.rmtree(USABILITY_PARENT, ignore_errors=True)
-    USABILITY_INDEXED_ROOT.mkdir(parents=True, exist_ok=True)
-    USABILITY_BROWSE_ONLY_ROOT.mkdir(parents=True, exist_ok=True)
+def write_usability_tree(parent: Path, indexed_root: Path, browse_only_root: Path) -> None:
+    prepare_clean_dir(parent)
+    indexed_root.mkdir(parents=True, exist_ok=True)
+    browse_only_root.mkdir(parents=True, exist_ok=True)
     for rel_path, content in USABILITY_FILES.items():
-        (USABILITY_INDEXED_ROOT / rel_path).write_bytes(content)
+        (indexed_root / rel_path).write_bytes(content)
 
 
-def write_clean_tree() -> None:
-    shutil.rmtree(USABILITY_CLEAN_ROOT, ignore_errors=True)
-    USABILITY_CLEAN_ROOT.mkdir(parents=True, exist_ok=True)
+def write_clean_tree(clean_root: Path) -> None:
+    prepare_clean_dir(clean_root)
     for rel_path, content in USABILITY_CLEAN_FILES.items():
-        (USABILITY_CLEAN_ROOT / rel_path).write_bytes(content)
+        (clean_root / rel_path).write_bytes(content)
 
 
 def run_indexer_result(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -267,20 +266,23 @@ def test_user_journey_surfaces_progress_and_browse_hints() -> None:
     dsn: dict[str, str] | None = None
     dsn, _ = load_dsn_from_config(ROOT)
     apply_database_env(ROOT, dsn)
-    cleanup_indexer_state(dsn)
-    cleanup_materialized_roots(dsn)
+    source_name = unique_source_name("ux_smoke")
+    usability_parent = prepare_clean_dir(unique_indexer_path("usability"))
+    usability_indexed_root = usability_parent / "indexed"
+    usability_browse_only_root = usability_parent / "browse-only"
+    cleanup_indexer_sources(dsn, [source_name])
 
     parent_snapshot = None
     try:
-        write_usability_tree()
-        parent_snapshot = snapshot_tree(USABILITY_PARENT)
+        write_usability_tree(usability_parent, usability_indexed_root, usability_browse_only_root)
+        parent_snapshot = snapshot_tree(usability_parent)
 
         with tempfile.TemporaryDirectory(prefix="fod-indexer-usability-") as mount_dir:
             with FODMount(str(ROOT)) as mount:
                 mount.init_schema()
-                cleanup_indexer_state(dsn)
+                cleanup_indexer_sources(dsn, [source_name])
                 mount.start(mount_dir)
-                cleanup_materialized_roots(dsn)
+                cleanup_materialized_roots_for_sources(dsn, [source_name])
 
                 source_add_output = run_indexer(
                     ROOT,
@@ -288,20 +290,20 @@ def test_user_journey_surfaces_progress_and_browse_hints() -> None:
                         "source",
                         "add",
                         "--name",
-                        "ux-smoke",
+                        source_name,
                         "--path",
-                        str(USABILITY_INDEXED_ROOT),
+                        str(usability_indexed_root),
                         "--kind",
                         "local",
                     ],
                 )
-                assert_contains(source_add_output, "Registered source ux-smoke as local", "source add")
+                assert_contains(source_add_output, f"Registered source {source_name} as local", "source add")
                 assert_contains(source_add_output, "policy: path-backed", "source add")
                 assert_contains(source_add_output, "capabilities: path_backed=true", "source add")
 
                 browse_output = run_indexer(
                     ROOT,
-                    ["source", "list", "--path", str(USABILITY_PARENT), "--kind", "local"],
+                    ["source", "list", "--path", str(usability_parent), "--kind", "local"],
                 )
                 assert_contains(browse_output, "FOD indexer source list", "source browse")
                 assert_contains(browse_output, "mode: browse", "source browse")
@@ -310,52 +312,53 @@ def test_user_journey_surfaces_progress_and_browse_hints() -> None:
                 assert_contains(browse_output, "added path=", "source browse")
                 assert_contains(browse_output, "fod-indexer source add --kind local --path", "source browse")
 
-                scan_output = run_indexer(ROOT, ["scan", "--source", "ux-smoke"])
+                scan_output = run_indexer(ROOT, ["scan", "--source", source_name])
                 assert_contains(scan_output, "FOD indexer scan progress: phase=started", "scan")
                 assert_contains(scan_output, "FOD indexer scan progress: phase=running", "scan")
                 assert_contains(scan_output, "current=", "scan")
                 assert_contains(scan_output, "scanned files: 3", "scan")
                 assert_contains(scan_output, "ok files: 3", "scan")
 
-                hash_output = run_indexer(ROOT, ["hash", "--source", "ux-smoke", "--candidates-only"])
+                hash_output = run_indexer(ROOT, ["hash", "--source", source_name, "--candidates-only"])
                 assert_contains(hash_output, "FOD indexer hash progress: phase=started", "hash")
                 assert_contains(hash_output, "FOD indexer hash progress: phase=partial", "hash")
                 assert_contains(hash_output, "FOD indexer hash progress: phase=done", "hash")
                 assert_contains(hash_output, "current=", "hash")
                 assert_contains(hash_output, "mode=candidates-only", "hash")
-                assert_contains(hash_output, "duplicate sets: 1", "hash")
 
                 report_output = run_indexer(ROOT, ["report", "duplicates"])
                 assert_contains(report_output, "FOD indexer duplicate report", "duplicates")
-                assert_contains(report_output, "confirmed duplicate sets: 1", "duplicates")
+                assert_contains(report_output, source_name, "duplicates")
+                assert_contains(report_output, "a.txt", "duplicates")
+                assert_contains(report_output, "b.txt", "duplicates")
 
-                plan_output = run_indexer(ROOT, ["plan-import", "--source", "ux-smoke", "--dry-run"])
+                plan_output = run_indexer(ROOT, ["plan-import", "--source", source_name, "--dry-run"])
                 assert_contains(plan_output, "FOD indexer dry-run import plan", "plan-import")
-                assert_contains(plan_output, "source: ux-smoke", "plan-import")
+                assert_contains(plan_output, f"source: {source_name}", "plan-import")
                 assert_contains(plan_output, "unique payloads: 2", "plan-import")
                 assert_contains(plan_output, "estimated saved bytes: 4", "plan-import")
 
-                materialize_preview_output = run_indexer(ROOT, ["materialize", "--source", "ux-smoke", "--dry-run"])
+                materialize_preview_output = run_indexer(ROOT, ["materialize", "--source", source_name, "--dry-run"])
                 assert_contains(materialize_preview_output, "FOD indexer materialize", "materialize dry-run")
                 assert_contains(materialize_preview_output, "mode: dry-run", "materialize dry-run")
-                assert_contains(materialize_preview_output, "source: ux-smoke", "materialize dry-run")
+                assert_contains(materialize_preview_output, f"source: {source_name}", "materialize dry-run")
 
-                if snapshot_tree(USABILITY_PARENT) != parent_snapshot:
+                if snapshot_tree(usability_parent) != parent_snapshot:
                     raise AssertionError("user-journey source tree changed during dry-run flow")
 
                 print(
-                    f"OK fod-indexer usability source={USABILITY_INDEXED_ROOT} browse_root={USABILITY_PARENT}"
+                    f"OK fod-indexer usability source={usability_indexed_root} browse_root={usability_parent}"
                 )
     finally:
         if dsn is not None:
             try:
-                cleanup_materialized_roots(dsn)
+                cleanup_materialized_roots_for_sources(dsn, [source_name])
             except Exception:
                 pass
-        shutil.rmtree(USABILITY_PARENT, ignore_errors=True)
+        cleanup_test_dir(usability_parent)
         if dsn is not None:
             try:
-                cleanup_indexer_state(dsn)
+                cleanup_indexer_sources(dsn, [source_name])
             except Exception:
                 pass
 
@@ -372,92 +375,104 @@ def test_adb_source_list_surfaces_device_and_browse_root() -> None:
     dsn: dict[str, str] | None = None
     dsn, _ = load_dsn_from_config(ROOT)
     apply_database_env(ROOT, dsn)
-    cleanup_indexer_state(dsn)
-    cleanup_materialized_roots(dsn)
+    source_name = unique_source_name("adb_documents")
+    cleanup_indexer_sources(dsn, [source_name])
 
-    with tempfile.TemporaryDirectory(prefix=f"{USABILITY_ADB_RUNTIME}-") as runtime_dir:
-        runtime_root = Path(runtime_dir)
-        mount_root = runtime_root / "gvfs" / f"mtp:host={serial}" / "Internal storage"
-        visible_one = mount_root / "Documents"
-        visible_two = mount_root / "Pictures"
-        hidden_one = mount_root / ".hidden"
-        ignored_one = mount_root / "cache"
-        for path in [visible_one, visible_two, hidden_one, ignored_one]:
-            path.mkdir(parents=True, exist_ok=True)
-        adb_snapshot = snapshot_tree(mount_root)
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"{USABILITY_ADB_RUNTIME}-") as runtime_dir:
+            runtime_root = Path(runtime_dir)
+            mount_root = runtime_root / "gvfs" / f"mtp:host={serial}" / "Internal storage"
+            visible_one = mount_root / "Documents"
+            visible_two = mount_root / "Pictures"
+            hidden_one = mount_root / ".hidden"
+            ignored_one = mount_root / "cache"
+            for path in [visible_one, visible_two, hidden_one, ignored_one]:
+                path.mkdir(parents=True, exist_ok=True)
+            adb_snapshot = snapshot_tree(mount_root)
 
-        with tempfile.TemporaryDirectory(prefix="fod-indexer-adb-smoke-") as mount_dir:
-            with FODMount(str(ROOT)) as mount:
-                mount.init_schema()
-                cleanup_indexer_state(dsn)
-                mount.start(mount_dir)
-                cleanup_materialized_roots(dsn)
+            with tempfile.TemporaryDirectory(prefix="fod-indexer-adb-smoke-") as mount_dir:
+                with FODMount(str(ROOT)) as mount:
+                    mount.init_schema()
+                    cleanup_indexer_sources(dsn, [source_name])
+                    mount.start(mount_dir)
+                    cleanup_materialized_roots_for_sources(dsn, [source_name])
 
-                registered_output = run_indexer(
-                    ROOT,
-                    [
-                        "source",
-                        "add",
-                        "--name",
-                        "adb-documents",
-                        "--path",
-                        str(visible_one),
-                        "--kind",
-                        "adb",
-                    ],
-                )
-                assert_contains(registered_output, "Registered source adb-documents as adb", "adb source add")
-                assert_contains(registered_output, "policy: export-backed", "adb source add")
+                    registered_output = run_indexer(
+                        ROOT,
+                        [
+                            "source",
+                            "add",
+                            "--name",
+                            source_name,
+                            "--path",
+                            str(visible_one),
+                            "--kind",
+                            "adb",
+                        ],
+                    )
+                    assert_contains(registered_output, f"Registered source {source_name} as adb", "adb source add")
+                    assert_contains(registered_output, "policy: export-backed", "adb source add")
 
-                browse_output = run_indexer_result_with_env(
-                    ["source", "list", "--kind", "adb"],
-                    {
-                        "XDG_RUNTIME_DIR": str(runtime_root),
-                        "ANDROID_SERIAL": serial,
-                    },
-                )
-                browse_text = browse_output.stdout + browse_output.stderr
-                assert_contains(browse_text, "FOD indexer source list", "adb source list")
-                assert_contains(browse_text, "mode: adb-shell", "adb source list")
-                assert_contains(browse_text, f"device: {serial}", "adb source list")
-                assert_contains(browse_text, f"adb root: {remote_root}", "adb source list")
-                assert_contains(browse_text, "kind hint: adb", "adb source list")
-                assert_contains(browse_text, "policy: export-backed", "adb source list")
-                assert_contains(browse_text, "directories: 2", "adb source list")
-                assert_contains(browse_text, "Documents", "adb source list")
-                assert_contains(browse_text, "Pictures", "adb source list")
-                assert_contains(browse_text, "added path=", "adb source list")
-                assert_contains(browse_text, "adb-documents", "adb source list")
-                assert_contains(browse_text, "fod-indexer source add --kind adb --path", "adb source list")
-                assert_contains(browse_text, "available path=", "adb source list")
-                assert_not_contains(browse_text, ".hidden", "adb source list")
-                assert_not_contains(browse_text, "cache", "adb source list")
+                    browse_output = run_indexer_result_with_env(
+                        ["source", "list", "--kind", "adb"],
+                        {
+                            "XDG_RUNTIME_DIR": str(runtime_root),
+                            "ANDROID_SERIAL": serial,
+                        },
+                    )
+                    browse_text = browse_output.stdout + browse_output.stderr
+                    assert_contains(browse_text, "FOD indexer source list", "adb source list")
+                    assert_contains(browse_text, "mode: adb-shell", "adb source list")
+                    assert_contains(browse_text, f"device: {serial}", "adb source list")
+                    assert_contains(browse_text, f"adb root: {remote_root}", "adb source list")
+                    assert_contains(browse_text, "kind hint: adb", "adb source list")
+                    assert_contains(browse_text, "policy: export-backed", "adb source list")
+                    assert_contains(browse_text, "directories: 2", "adb source list")
+                    assert_contains(browse_text, "Documents", "adb source list")
+                    assert_contains(browse_text, "Pictures", "adb source list")
+                    assert_contains(browse_text, "added path=", "adb source list")
+                    assert_contains(browse_text, source_name, "adb source list")
+                    assert_contains(browse_text, "fod-indexer source add --kind adb --path", "adb source list")
+                    assert_contains(browse_text, "available path=", "adb source list")
+                    assert_not_contains(browse_text, ".hidden", "adb source list")
+                    assert_not_contains(browse_text, "cache", "adb source list")
 
-                if snapshot_tree(mount_root) != adb_snapshot:
-                    raise AssertionError("adb browse tree changed unexpectedly")
+                    if snapshot_tree(mount_root) != adb_snapshot:
+                        raise AssertionError("adb browse tree changed unexpectedly")
 
-                print(
-                    f"OK fod-indexer adb browse serial={serial} remote_root={remote_root} runtime={runtime_root}"
-                )
+                    print(
+                        f"OK fod-indexer adb browse serial={serial} remote_root={remote_root} runtime={runtime_root}"
+                    )
+    finally:
+        if dsn is not None:
+            try:
+                cleanup_materialized_roots_for_sources(dsn, [source_name])
+            except Exception:
+                pass
+            try:
+                cleanup_indexer_sources(dsn, [source_name])
+            except Exception:
+                pass
 
 
 def test_clean_user_journey_prunes_stale_rows_without_touching_source_tree() -> None:
     dsn: dict[str, str] | None = None
     dsn, _ = load_dsn_from_config(ROOT)
     apply_database_env(ROOT, dsn)
-    cleanup_indexer_state(dsn)
-    cleanup_materialized_roots(dsn)
+    source_name = unique_source_name("clean_smoke")
+    clean_root = prepare_clean_dir(unique_indexer_path("clean-usability"))
+    cleanup_indexer_sources(dsn, [source_name])
 
     post_delete_snapshot = None
     try:
-        write_clean_tree()
+        write_clean_tree(clean_root)
 
         with tempfile.TemporaryDirectory(prefix="fod-indexer-clean-usability-") as mount_dir:
             with FODMount(str(ROOT)) as mount:
                 mount.init_schema()
-                cleanup_indexer_state(dsn)
+                cleanup_indexer_sources(dsn, [source_name])
                 mount.start(mount_dir)
-                cleanup_materialized_roots(dsn)
+                cleanup_materialized_roots_for_sources(dsn, [source_name])
 
                 source_add_output = run_indexer(
                     ROOT,
@@ -465,27 +480,27 @@ def test_clean_user_journey_prunes_stale_rows_without_touching_source_tree() -> 
                         "source",
                         "add",
                         "--name",
-                        "clean-smoke",
+                        source_name,
                         "--path",
-                        str(USABILITY_CLEAN_ROOT),
+                        str(clean_root),
                         "--kind",
                         "local",
                     ],
                 )
-                assert_contains(source_add_output, "Registered source clean-smoke as local", "clean source add")
+                assert_contains(source_add_output, f"Registered source {source_name} as local", "clean source add")
                 assert_contains(source_add_output, "policy: path-backed", "clean source add")
 
-                scan_output = run_indexer(ROOT, ["scan", "--source", "clean-smoke"])
+                scan_output = run_indexer(ROOT, ["scan", "--source", source_name])
                 assert_contains(scan_output, "scanned files: 3", "clean scan")
                 assert_contains(scan_output, "ok files: 3", "clean scan")
 
-                hash_output = run_indexer(ROOT, ["hash", "--source", "clean-smoke", "--candidates-only"])
+                hash_output = run_indexer(ROOT, ["hash", "--source", source_name, "--candidates-only"])
                 assert_contains(hash_output, "candidate files: 2", "clean hash")
-                assert_contains(hash_output, "duplicate sets: 1", "clean hash")
+                assert_contains(hash_output, f"source: {source_name}", "clean hash")
 
-                plan_output = run_indexer(ROOT, ["plan-import", "--source", "clean-smoke", "--dry-run"])
+                plan_output = run_indexer(ROOT, ["plan-import", "--source", source_name, "--dry-run"])
                 assert_contains(plan_output, "FOD indexer dry-run import plan", "clean plan")
-                assert_contains(plan_output, "source: clean-smoke", "clean plan")
+                assert_contains(plan_output, f"source: {source_name}", "clean plan")
                 assert_contains(plan_output, "unique payloads: 2", "clean plan")
                 assert_contains(plan_output, "estimated saved bytes: 4", "clean plan")
 
@@ -502,17 +517,17 @@ def test_clean_user_journey_prunes_stale_rows_without_touching_source_tree() -> 
                             ORDER BY id_import_plan DESC
                             LIMIT 1
                             """,
-                            ("clean-smoke",),
+                            (source_name,),
                         )
                     )
 
-                (USABILITY_CLEAN_ROOT / "b.txt").unlink()
-                post_delete_snapshot = snapshot_tree(USABILITY_CLEAN_ROOT)
+                (clean_root / "b.txt").unlink()
+                post_delete_snapshot = snapshot_tree(clean_root)
 
-                clean_preview_output = run_indexer(ROOT, ["clean", "--source", "clean-smoke", "--dry-run"])
+                clean_preview_output = run_indexer(ROOT, ["clean", "--source", source_name, "--dry-run"])
                 assert_contains(clean_preview_output, "FOD indexer clean", "clean dry-run")
                 assert_contains(clean_preview_output, "mode: dry-run", "clean dry-run")
-                assert_contains(clean_preview_output, "source: clean-smoke", "clean dry-run")
+                assert_contains(clean_preview_output, f"source: {source_name}", "clean dry-run")
                 assert_contains(clean_preview_output, "source root: present", "clean dry-run")
                 assert_contains(clean_preview_output, "indexed files: 3", "clean dry-run")
                 assert_contains(clean_preview_output, "present files: 2", "clean dry-run")
@@ -521,10 +536,10 @@ def test_clean_user_journey_prunes_stale_rows_without_touching_source_tree() -> 
                 assert_contains(clean_preview_output, "plan entries removed: 1", "clean dry-run")
                 assert_contains(clean_preview_output, "duplicate sets refreshed: 0", "clean dry-run")
 
-                clean_output = run_indexer(ROOT, ["clean", "--source", "clean-smoke"])
+                clean_output = run_indexer(ROOT, ["clean", "--source", source_name])
                 assert_contains(clean_output, "FOD indexer clean", "clean")
                 assert_contains(clean_output, "mode: clean", "clean")
-                assert_contains(clean_output, "source: clean-smoke", "clean")
+                assert_contains(clean_output, f"source: {source_name}", "clean")
                 assert_contains(clean_output, "source root: present", "clean")
                 assert_contains(clean_output, "indexed files: 3", "clean")
                 assert_contains(clean_output, "present files: 2", "clean")
@@ -533,7 +548,7 @@ def test_clean_user_journey_prunes_stale_rows_without_touching_source_tree() -> 
                 assert_contains(clean_output, "plan entries removed: 1", "clean")
                 assert_contains(clean_output, "duplicate sets refreshed: 0", "clean")
 
-                if snapshot_tree(USABILITY_CLEAN_ROOT) != post_delete_snapshot:
+                if snapshot_tree(clean_root) != post_delete_snapshot:
                     raise AssertionError("clean source tree changed during cleanup")
 
                 with psycopg2.connect(**dsn) as conn:
@@ -546,7 +561,7 @@ def test_clean_user_journey_prunes_stale_rows_without_touching_source_tree() -> 
                             JOIN index_sources s ON s.id_index_source = f.id_index_source
                             WHERE s.name = %s
                             """,
-                            ("clean-smoke",),
+                            (source_name,),
                         )
                         file_count_row = cur.fetchone()
                         if file_count_row is None or int(file_count_row[0]) != 2:
@@ -559,16 +574,16 @@ def test_clean_user_journey_prunes_stale_rows_without_touching_source_tree() -> 
                         if entry_count_row is None or int(entry_count_row[0]) != 2:
                             raise AssertionError(f"unexpected plan entry count after clean: {entry_count_row}")
 
-                print(f"OK fod-indexer clean usability source={USABILITY_CLEAN_ROOT} plan={plan_id}")
+                print(f"OK fod-indexer clean usability source={clean_root} plan={plan_id}")
     finally:
-        shutil.rmtree(USABILITY_CLEAN_ROOT, ignore_errors=True)
+        cleanup_test_dir(clean_root)
         if dsn is not None:
             try:
-                cleanup_materialized_roots(dsn)
+                cleanup_materialized_roots_for_sources(dsn, [source_name])
             except Exception:
                 pass
             try:
-                cleanup_indexer_state(dsn)
+                cleanup_indexer_sources(dsn, [source_name])
             except Exception:
                 pass
 
