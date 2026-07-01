@@ -129,6 +129,12 @@ POSTGRES_BENCHMARK_PLANNER_PRESET_EFFECTIVE_CACHE_SIZE ?= 4GB
 POSTGRES_BENCHMARK_PLANNER_PRESET_MAINTENANCE_WORK_MEM ?= 512MB
 POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_MAX_WORKERS ?= 3
 POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM ?= 256MB
+ARTIFACTS_DIR ?= artifacts/perf/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+PERF_FREQ ?= 99
+PROFILE_SECONDS ?= 60
+PROFILE_WORKLOAD ?= test-large-copy-benchmark
+PROFILE_PID ?=
+PROFILE_MAKE ?= make
 
 define RUN_POSTGRES_BENCHMARK_REPEAT
 	@set -eu; \
@@ -218,6 +224,7 @@ export FOD_PG_PORT
 export FOD_PG_DBNAME
 export FOD_PG_USER
 export FOD_PG_PASSWORD
+PSQL ?= PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h $(FOD_PG_HOST) -p $(FOD_PG_PORT) -U $(FOD_PG_USER) -d $(FOD_PG_DBNAME)
 MOUNTPOINT ?= /tmp/fod-mount
 FOD_SELINUX ?= auto
 FOD_DEFAULT_PERMISSIONS ?= 1
@@ -326,6 +333,11 @@ help:
 		'  make postgres-benchmarks-wal-preset - run the WAL/checkpoint benchmark preset across local Docker and QNAP; set POSTGRES_BENCHMARK_REPEAT=N to repeat the full preset' \
 		'  make postgres-benchmarks-planner-preset - run the planner/autovacuum benchmark preset across local Docker and QNAP' \
 		'  make postgres-benchmarks-compare - run the PostgreSQL optimization benchmarks on local Docker and QNAP' \
+		'  make profile-env - capture local environment fingerprint under artifacts/perf/<commit>' \
+		'  make profile-local-baseline - run PROFILE_WORKLOAD with pg_stat capture before/after' \
+		'  make profile-perf-stat - run perf stat around PROFILE_WORKLOAD' \
+		'  make profile-perf-record - record perf samples around PROFILE_WORKLOAD' \
+		'  make profile-fuse-attach PROFILE_PID=<pid> - attach perf to a running fod-rust-fuse process' \
 		'  make mount      - mount FOD at $(MOUNTPOINT)' \
 		'  make qnap-mount - mount FOD at $(MOUNTPOINT) using QNAP=1' \
 		'  make mount-qnap - mount using the remote QNAP PostgreSQL preset (no local Docker)' \
@@ -1171,6 +1183,93 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_MAX_WORKERS=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_MAX_WORKERS) \
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
+
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline
+
+profile-env:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@{ \
+		echo "commit=$$(git rev-parse HEAD 2>/dev/null || true)"; \
+		echo "fod_version=$$(cat fod_version.txt 2>/dev/null || true)"; \
+		echo "date=$$(date -Is)"; \
+		echo "uname=$$(uname -a)"; \
+		echo "cargo=$$(cargo --version 2>/dev/null || true)"; \
+		echo "rustc=$$(rustc --version 2>/dev/null || true)"; \
+		echo "psql=$$(psql --version 2>/dev/null || true)"; \
+		echo "--- lscpu ---"; lscpu 2>/dev/null || true; \
+		echo "--- free -h ---"; free -h 2>/dev/null || true; \
+		echo "--- df -hT ---"; df -hT 2>/dev/null || true; \
+	} > $(ARTIFACTS_DIR)/env.txt
+	@printf '%s\n' "Wrote $(ARTIFACTS_DIR)/env.txt"
+
+profile-pg-reset:
+	$(PSQL) -f scripts/perf/pg/reset.sql
+
+profile-pg-top:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/top_statements.sql > $(ARTIFACTS_DIR)/pg_top_statements.txt
+	@cat $(ARTIFACTS_DIR)/pg_top_statements.txt
+
+profile-pg-wal:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/wal_checkpointer.sql > $(ARTIFACTS_DIR)/pg_wal_checkpointer.txt
+	@cat $(ARTIFACTS_DIR)/pg_wal_checkpointer.txt
+
+profile-pg-io:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@set +e; \
+	$(PSQL) -f scripts/perf/pg/io_stats.sql > $(ARTIFACTS_DIR)/pg_io_stats.txt 2>&1; \
+	status=$$?; \
+	cat $(ARTIFACTS_DIR)/pg_io_stats.txt; \
+	if [ "$$status" -ne 0 ]; then \
+		if grep -q "pg_stat_io" $(ARTIFACTS_DIR)/pg_io_stats.txt; then \
+			echo "Optional pg_stat_io capture failed with status $$status; this usually means PostgreSQL does not expose pg_stat_io."; \
+			exit 0; \
+		fi; \
+		exit "$$status"; \
+	fi; \
+	exit 0
+
+profile-pg-activity:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/activity.sql > $(ARTIFACTS_DIR)/pg_activity.txt
+	@cat $(ARTIFACTS_DIR)/pg_activity.txt
+
+profile-perf-stat:
+	@mkdir -p $(ARTIFACTS_DIR)
+	perf stat -d -d -d -r 5 -o $(ARTIFACTS_DIR)/perf-stat-$(PROFILE_WORKLOAD).txt -- $(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD)
+
+profile-perf-record:
+	@mkdir -p $(ARTIFACTS_DIR)
+	perf record -F $(PERF_FREQ) -g --call-graph dwarf,16384 -o $(ARTIFACTS_DIR)/perf-$(PROFILE_WORKLOAD).data -- $(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD)
+	@printf '%s\n' "Run: perf report -i $(ARTIFACTS_DIR)/perf-$(PROFILE_WORKLOAD).data"
+
+profile-fuse-attach:
+	@test -n "$(PROFILE_PID)" || { echo "Set PROFILE_PID to fod-rust-fuse PID"; exit 2; }
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo perf record -F $(PERF_FREQ) -g --call-graph dwarf,16384 -p $(PROFILE_PID) -o $(ARTIFACTS_DIR)/perf-fuse-attach.data -- sleep $(PROFILE_SECONDS)
+
+profile-indexer-attach:
+	@test -n "$(PROFILE_PID)" || { echo "Set PROFILE_PID to fod-indexer PID"; exit 2; }
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo perf record -F $(PERF_FREQ) -g --call-graph dwarf,16384 -p $(PROFILE_PID) -o $(ARTIFACTS_DIR)/perf-indexer-attach.data -- sleep $(PROFILE_SECONDS)
+
+profile-bpftrace-syscalls:
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo timeout $(PROFILE_SECONDS)s bpftrace scripts/perf/bpftrace/syscalls_by_comm.bt | tee $(ARTIFACTS_DIR)/bpftrace-syscalls.txt
+
+profile-bpftrace-read-hist:
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo timeout $(PROFILE_SECONDS)s bpftrace scripts/perf/bpftrace/read_size_hist.bt | tee $(ARTIFACTS_DIR)/bpftrace-read-hist.txt
+
+profile-bpftrace-write-hist:
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo timeout $(PROFILE_SECONDS)s bpftrace scripts/perf/bpftrace/write_size_hist.bt | tee $(ARTIFACTS_DIR)/bpftrace-write-hist.txt
+
+profile-local-baseline: profile-env profile-pg-reset
+	$(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD)
+	$(PROFILE_MAKE) --no-print-directory profile-pg-top
+	$(PROFILE_MAKE) --no-print-directory profile-pg-wal
 
 db-shell:
 	$(COMPOSE_RUN) -f $(COMPOSE_FILE) exec postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)

@@ -12,6 +12,10 @@ Reading guide:
 - [x] Make Python test venv setup incremental with `requirements-test.txt` and `$(VENV_DIR)/.fod-venv.stamp`.
 - [x] Isolate fod-indexer integration smokes for parallel execution with per-test source names, temporary paths, scoped cleanup, and `test-fod-indexer-parallel-smoke`.
 - [ ] Consider adding `test-fod-indexer-parallel-smoke` to extended CI after it is stable on more than one host.
+- [x] Add repeatable performance profiling capture infrastructure for environment fingerprints, PostgreSQL statistics, `perf`, and optional bpftrace helpers.
+- [ ] Reassess FUSE cache, timeout, and `max_background` tuning after the first profiling baseline.
+- [ ] Review prepared statement and connection reuse in hot SQL paths after `pg_stat_statements` identifies the top repeated queries.
+- [ ] Review `rust_indexer` allocation and buffer reuse after heap or allocation profiling.
 - [x] Detect single-node vs read-only replica mode early and let runtime choose the appropriate lock strategy before mount. Handled in `rust_fuse/src/startup.rs` via `effective_read_only()` and `lock_settings(read_only)`.
 - [x] Keep `workers_read` and `workers_write` constrained to the cases where they really help: disjoint read gaps and segmented copy operations, not small contiguous fetches. Read-side gating now goes through `rust_hotpath::read_missing_range_worker_count`; write-side gating already goes through the shared hot-path worker planner.
 - [x] Primary mounts keep the PostgreSQL lease backend. Covered by `rust_fuse/tests/lock_backend_smoke.rs::primary_uses_pg_leases_and_replica_stays_memory_backed`.

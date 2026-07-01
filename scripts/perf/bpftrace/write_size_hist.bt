@@ -1,0 +1,5 @@
+tracepoint:syscalls:sys_exit_write
+/args.ret > 0/
+{
+    @[comm] = hist(args.ret);
+}

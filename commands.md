@@ -195,3 +195,75 @@ Base commit at execution time: `95e26b4`
 - `git diff -- Makefile tests/integration/fod_indexer_testlib.py tests/integration/test_fod_indexer_materialize.py tests/integration/test_fod_indexer_materialize_rollback.py tests/integration/test_fod_indexer_cleanup_failed.py tests/integration/test_fod_indexer_plan_import_scope.py tests/integration/test_fod_indexer_json_output.py tests/integration/test_fod_indexer_usability.py tests/integration/test_fod_indexer_source_kinds.py TODO.md conclusions.md commands.md`
 - `git add Makefile tests/integration/fod_indexer_testlib.py tests/integration/test_fod_indexer_materialize.py tests/integration/test_fod_indexer_materialize_rollback.py tests/integration/test_fod_indexer_cleanup_failed.py tests/integration/test_fod_indexer_plan_import_scope.py tests/integration/test_fod_indexer_json_output.py tests/integration/test_fod_indexer_usability.py tests/integration/test_fod_indexer_source_kinds.py TODO.md conclusions.md commands.md`
 - `git commit -m 'FOD 3.2.1: isolate fod-indexer integration smokes'`
+
+Base commit at execution time: `ad72bfc`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/1c7d5b4a-61cb-454d-ac12-1b2c4327abf2/pasted-text.txt`
+- `git rev-parse --short HEAD`
+- `git status --short`
+- `cat fod_version.txt`
+- `sed -n '261,620p' /home/wojtek/.codex/attachments/1c7d5b4a-61cb-454d-ac12-1b2c4327abf2/pasted-text.txt`
+- `rg -n "\[profile|postgres-benchmarks|pg_stat|bpftrace|perf" Cargo.toml Makefile docs scripts tests BENCHMARKS.md TODO.md conclusions.md -S`
+- `find scripts -maxdepth 3 -type f -printf '%p\n'`
+- `sed -n '1,120p' Cargo.toml && sed -n '920,980p' Makefile && sed -n '1130,1185p' Makefile`
+- `sed -n '621,980p' /home/wojtek/.codex/attachments/1c7d5b4a-61cb-454d-ac12-1b2c4327abf2/pasted-text.txt`
+- `sed -n '120,210p' Makefile && sed -n '210,270p' Makefile && sed -n '700,735p' Makefile`
+- `find docs -maxdepth 2 -type f -printf '%p\n' | sort`
+- `rg -n "PSQL|psql -h|PGPASSWORD|FOD_PG_HOST|POSTGRES_PORT|COMPOSE_RUN" Makefile`
+- `test -f .gitignore && sed -n '1,200p' .gitignore || true`
+- `rg -n "artifacts|target|\.venv|perf" .gitignore .git/info/exclude 2>/dev/null || true`
+- `sed -n '270,325p' TODO.md && sed -n '325,350p' TODO.md`
+- `tail -n 80 commands.md`
+- `mkdir -p scripts/perf/pg scripts/perf/bpftrace`
+- `make -n profile-env`
+- `make -n profile-pg-reset`
+- `make -n profile-pg-top`
+- `make -n profile-pg-wal`
+- `make -n profile-perf-stat PROFILE_WORKLOAD=test-large-copy-benchmark`
+- `make -n profile-perf-record PROFILE_WORKLOAD=test-large-copy-benchmark`
+- `make -n profile-fuse-attach PROFILE_PID=12345`
+- `make -n profile-indexer-attach PROFILE_PID=12345`
+- `make -n profile-bpftrace-syscalls PROFILE_SECONDS=10`
+- `make -n profile-local-baseline PROFILE_WORKLOAD=test-fod-indexer-materialize-rollback`
+- `cargo build --profile profiling --workspace`
+- `make build-debug`
+- `make venv`
+- `make init`
+- `make profile-env`
+- `make profile-pg-reset`
+- `make test-fod-indexer-materialize-rollback`
+- `make profile-pg-top`
+- `make profile-pg-wal`
+- `make -n profile-pg-activity`
+- `make -n profile-pg-io`
+- `test -f docs/performance.md`
+- `command -v perf || true; command -v bpftrace || true`
+- `make profile-pg-activity`
+- `make profile-pg-io`
+- `git status --short`
+- `test -s artifacts/perf/ad72bfc/pg_io_stats.txt && { wc -l artifacts/perf/ad72bfc/pg_io_stats.txt; sed -n '1,80p' artifacts/perf/ad72bfc/pg_io_stats.txt; } || true`
+- `find artifacts/perf/ad72bfc -maxdepth 1 -type f -printf '%p %s\n' 2>/dev/null || true`
+- `grep -n "profile-pg-io" -A18 -B4 Makefile`
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/1c7d5b4a-61cb-454d-ac12-1b2c4327abf2/pasted-text.txt`
+- `sed -n '260,620p' /home/wojtek/.codex/attachments/1c7d5b4a-61cb-454d-ac12-1b2c4327abf2/pasted-text.txt`
+- `sed -n '1187,1275p' Makefile`
+- `sed -n '1,260p' docs/performance.md`
+- `sed -n '620,900p' /home/wojtek/.codex/attachments/1c7d5b4a-61cb-454d-ac12-1b2c4327abf2/pasted-text.txt`
+- `make -n profile-bpftrace-read-hist PROFILE_SECONDS=10`
+- `make -n profile-bpftrace-write-hist PROFILE_SECONDS=10`
+- `git diff --stat && git diff -- Cargo.toml Makefile TODO.md conclusions.md docs/performance.md scripts/perf/pg/reset.sql scripts/perf/pg/top_statements.sql scripts/perf/pg/wal_checkpointer.sql scripts/perf/pg/io_stats.sql scripts/perf/pg/activity.sql scripts/perf/bpftrace/syscalls_by_comm.bt scripts/perf/bpftrace/read_size_hist.bt scripts/perf/bpftrace/write_size_hist.bt`
+- `tail -n 120 commands.md`
+- `sed -n '1,80p' conclusions.md`
+- `git rev-parse --short HEAD && git rev-parse HEAD`
+- `date -Is`
+- `for f in scripts/perf/pg/*.sql scripts/perf/bpftrace/*.bt; do printf '\n== %s ==\n' "$f"; sed -n '1,200p' "$f"; done`
+- `sed -n '1,80p' TODO.md`
+- `rg -n "profile-|profiling|performance" Makefile docs/performance.md TODO.md conclusions.md scripts/perf -S`
+- `git diff --check`
+- `make -n profile-pg-activity`
+- `make -n profile-pg-io`
+- `test -f docs/performance.md && test -f scripts/perf/pg/reset.sql && test -f scripts/perf/bpftrace/syscalls_by_comm.bt`
+- `rm -rf artifacts/perf/ad72bfc && rmdir -p artifacts/perf artifacts 2>/dev/null || true`
+- `make -n profile-pg-io`
+- `make profile-pg-io`
+- `rm -rf artifacts/perf/ad72bfc && rmdir -p artifacts/perf artifacts 2>/dev/null || true`
