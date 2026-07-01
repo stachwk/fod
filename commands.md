@@ -267,3 +267,56 @@ Base commit at execution time: `ad72bfc`
 - `make -n profile-pg-io`
 - `make profile-pg-io`
 - `rm -rf artifacts/perf/ad72bfc && rmdir -p artifacts/perf artifacts 2>/dev/null || true`
+
+Date: `2026-07-01`
+Base commit at execution time: `8e8e95f`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/484dad60-c192-481b-9924-3eec20619898/pasted-text.txt`
+- `sed -n '260,620p' /home/wojtek/.codex/attachments/484dad60-c192-481b-9924-3eec20619898/pasted-text.txt`
+- `git status --short && git log -1 --oneline && cat fod_version.txt`
+- `date -Is`
+- `rg -n "profile-env|profile-local-baseline|profile-pg-top|profile-pg-wal|profile-perf-stat|profile-fuse-attach|ARTIFACTS_DIR" Makefile`
+- `find scripts/perf -maxdepth 3 -type f -print | sort`
+- `sed -n '1,180p' docs/performance.md`
+- `sed -n '1,30p' TODO.md`
+- `rg -n "artifacts|perf" .gitignore || true`
+- `find artifacts -maxdepth 4 -type f -printf '%p %s\n' 2>/dev/null | sort || true`
+- `sed -n '120,140p' Makefile`
+- `sed -n '1,220p' .gitignore`
+- `test -f docs/performance-baselines.md && sed -n '1,200p' docs/performance-baselines.md || true`
+- `printf 'PROFILE_RUN_ID=%s\nPROFILE_HOST=%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" "$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown-host)"`
+- `make build-debug && make venv && make init`
+- `make profile-env PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 && make profile-pg-reset PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 && make test-fod-indexer-materialize-rollback && make profile-pg-top PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 && make profile-pg-wal PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 && make profile-pg-activity PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 && make profile-pg-io PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300`
+- `make profile-pg-reset PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 && make test-fod-indexer-materialize-rollback && make profile-pg-top PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=rollback && make profile-pg-wal PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=rollback && make profile-pg-activity PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=rollback && make profile-pg-io PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=rollback`
+- `make profile-pg-reset PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 && make test-fod-indexer-plan-import-scope && make profile-pg-top PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=plan-import-scope && make profile-pg-wal PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=plan-import-scope`
+- `make profile-pg-reset PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 && make test-large-copy-benchmark && make profile-pg-top PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=large-copy && make profile-pg-wal PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=large-copy`
+- `command -v perf || true`
+- `make profile-perf-stat PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300`
+- `find artifacts/perf -maxdepth 4 -type f -printf '%p %s\n' | sort`
+- `find artifacts/perf/8e8e95f/lt7300-20260701T115956Z -maxdepth 1 -type f -printf '%f\n' | sort`
+- `sed -n '1,80p' artifacts/perf/8e8e95f/lt7300-20260701T115956Z/env.txt`
+- `test -f artifacts/perf/8e8e95f/lt7300-20260701T115956Z/perf-stat-test-large-copy-benchmark.txt && sed -n '1,120p' artifacts/perf/8e8e95f/lt7300-20260701T115956Z/perf-stat-test-large-copy-benchmark.txt || true`
+- `for f in pg_top_statements-rollback.txt pg_top_statements-plan-import-scope.txt pg_top_statements-large-copy.txt; do echo "== $f =="; sed -n '1,12p' "artifacts/perf/8e8e95f/lt7300-20260701T115956Z/$f"; done`
+- `for f in pg_wal_checkpointer-rollback.txt pg_wal_checkpointer-plan-import-scope.txt pg_wal_checkpointer-large-copy.txt; do echo "== $f =="; sed -n '1,28p' "artifacts/perf/8e8e95f/lt7300-20260701T115956Z/$f"; done`
+- `sed -n '1,60p' artifacts/perf/8e8e95f/lt7300-20260701T115956Z/pg_io_stats-rollback.txt`
+- `sed -n '1,40p' artifacts/perf/8e8e95f/lt7300-20260701T115956Z/perf-stat-test-large-copy-benchmark.txt`
+- `make profile-local-baseline PROFILE_WORKLOAD=test-fod-indexer-materialize-rollback PROFILE_RUN_ID=20260701T115956Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=validation`
+- `PGPASSWORD="cichosza" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U foduser -d foddbname -At -c "SELECT version();" -c "SHOW server_version_num;"`
+- `git diff --check`
+- `make -n profile-env`
+- `make -n profile-local-baseline PROFILE_WORKLOAD=test-fod-indexer-materialize-rollback`
+- `make -n profile-perf-stat PROFILE_WORKLOAD=test-large-copy-benchmark`
+- `test -f docs/performance.md && test -f docs/performance-baselines.md && test -f scripts/perf/pg/reset.sql && test -f scripts/perf/bpftrace/syscalls_by_comm.bt`
+- `perf stat failed: /usr/bin/perf is installed, but kernel perf_event_paranoid=4 blocks unprivileged counters.`
+- `QNAP baseline skipped: this plan requested local PostgreSQL only.`
+- `bpftrace real run skipped: not part of this local baseline and requires elevated host permissions.`
+- `tail -n 100 commands.md`
+- `git status --short --ignored | sed -n '1,80p'`
+- `git diff --stat`
+- `git diff --check`
+- `git diff -- .gitignore Makefile docs/performance.md docs/performance-baselines.md TODO.md conclusions.md commands.md | sed -n '1,260p'`
+- `sed -n '1,260p' docs/performance-baselines.md`
+- `cat fod_version.txt && git status --short`
+- `find artifacts/perf/8e8e95f/lt7300-20260701T115956Z -maxdepth 1 -type f -printf '%f %s\n' | sort`
+- `git add .gitignore Makefile TODO.md commands.md conclusions.md docs/performance.md docs/performance-baselines.md`
+- `git commit -m 'FOD 3.2.1: record first performance baseline'`

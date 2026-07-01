@@ -129,7 +129,11 @@ POSTGRES_BENCHMARK_PLANNER_PRESET_EFFECTIVE_CACHE_SIZE ?= 4GB
 POSTGRES_BENCHMARK_PLANNER_PRESET_MAINTENANCE_WORK_MEM ?= 512MB
 POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_MAX_WORKERS ?= 3
 POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM ?= 256MB
-ARTIFACTS_DIR ?= artifacts/perf/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+PROFILE_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+PROFILE_HOST ?= $(shell hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown-host)
+ARTIFACTS_DIR ?= artifacts/perf/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)/$(PROFILE_HOST)-$(PROFILE_RUN_ID)
+PROFILE_CAPTURE_LABEL ?=
+PROFILE_CAPTURE_SUFFIX = $(if $(PROFILE_CAPTURE_LABEL),-$(PROFILE_CAPTURE_LABEL),)
 PERF_FREQ ?= 99
 PROFILE_SECONDS ?= 60
 PROFILE_WORKLOAD ?= test-large-copy-benchmark
@@ -1207,22 +1211,22 @@ profile-pg-reset:
 
 profile-pg-top:
 	@mkdir -p $(ARTIFACTS_DIR)
-	$(PSQL) -f scripts/perf/pg/top_statements.sql > $(ARTIFACTS_DIR)/pg_top_statements.txt
-	@cat $(ARTIFACTS_DIR)/pg_top_statements.txt
+	$(PSQL) -f scripts/perf/pg/top_statements.sql > $(ARTIFACTS_DIR)/pg_top_statements$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_top_statements$(PROFILE_CAPTURE_SUFFIX).txt
 
 profile-pg-wal:
 	@mkdir -p $(ARTIFACTS_DIR)
-	$(PSQL) -f scripts/perf/pg/wal_checkpointer.sql > $(ARTIFACTS_DIR)/pg_wal_checkpointer.txt
-	@cat $(ARTIFACTS_DIR)/pg_wal_checkpointer.txt
+	$(PSQL) -f scripts/perf/pg/wal_checkpointer.sql > $(ARTIFACTS_DIR)/pg_wal_checkpointer$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_wal_checkpointer$(PROFILE_CAPTURE_SUFFIX).txt
 
 profile-pg-io:
 	@mkdir -p $(ARTIFACTS_DIR)
 	@set +e; \
-	$(PSQL) -f scripts/perf/pg/io_stats.sql > $(ARTIFACTS_DIR)/pg_io_stats.txt 2>&1; \
+	$(PSQL) -f scripts/perf/pg/io_stats.sql > $(ARTIFACTS_DIR)/pg_io_stats$(PROFILE_CAPTURE_SUFFIX).txt 2>&1; \
 	status=$$?; \
-	cat $(ARTIFACTS_DIR)/pg_io_stats.txt; \
+	cat $(ARTIFACTS_DIR)/pg_io_stats$(PROFILE_CAPTURE_SUFFIX).txt; \
 	if [ "$$status" -ne 0 ]; then \
-		if grep -q "pg_stat_io" $(ARTIFACTS_DIR)/pg_io_stats.txt; then \
+		if grep -q "pg_stat_io" $(ARTIFACTS_DIR)/pg_io_stats$(PROFILE_CAPTURE_SUFFIX).txt; then \
 			echo "Optional pg_stat_io capture failed with status $$status; this usually means PostgreSQL does not expose pg_stat_io."; \
 			exit 0; \
 		fi; \
@@ -1232,8 +1236,8 @@ profile-pg-io:
 
 profile-pg-activity:
 	@mkdir -p $(ARTIFACTS_DIR)
-	$(PSQL) -f scripts/perf/pg/activity.sql > $(ARTIFACTS_DIR)/pg_activity.txt
-	@cat $(ARTIFACTS_DIR)/pg_activity.txt
+	$(PSQL) -f scripts/perf/pg/activity.sql > $(ARTIFACTS_DIR)/pg_activity$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_activity$(PROFILE_CAPTURE_SUFFIX).txt
 
 profile-perf-stat:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1267,9 +1271,9 @@ profile-bpftrace-write-hist:
 	sudo timeout $(PROFILE_SECONDS)s bpftrace scripts/perf/bpftrace/write_size_hist.bt | tee $(ARTIFACTS_DIR)/bpftrace-write-hist.txt
 
 profile-local-baseline: profile-env profile-pg-reset
-	$(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD)
-	$(PROFILE_MAKE) --no-print-directory profile-pg-top
-	$(PROFILE_MAKE) --no-print-directory profile-pg-wal
+	$(PROFILE_MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_WORKLOAD=$(PROFILE_WORKLOAD) $(PROFILE_WORKLOAD)
+	$(PROFILE_MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=$(PROFILE_CAPTURE_LABEL) profile-pg-top
+	$(PROFILE_MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=$(PROFILE_CAPTURE_LABEL) profile-pg-wal
 
 db-shell:
 	$(COMPOSE_RUN) -f $(COMPOSE_FILE) exec postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)

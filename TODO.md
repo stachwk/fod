@@ -13,8 +13,9 @@ Reading guide:
 - [x] Isolate fod-indexer integration smokes for parallel execution with per-test source names, temporary paths, scoped cleanup, and `test-fod-indexer-parallel-smoke`.
 - [ ] Consider adding `test-fod-indexer-parallel-smoke` to extended CI after it is stable on more than one host.
 - [x] Add repeatable performance profiling capture infrastructure for environment fingerprints, PostgreSQL statistics, `perf`, and optional bpftrace helpers.
-- [ ] Reassess FUSE cache, timeout, and `max_background` tuning after the first profiling baseline.
-- [ ] Review prepared statement and connection reuse in hot SQL paths after `pg_stat_statements` identifies the top repeated queries.
+- [ ] Benchmark and optimize the SQL payload persistence path identified by the first local baseline: `COPY fod_persist_block_stage` plus `INSERT INTO data_blocks ... SELECT ... ON CONFLICT ...` dominated the 64 MiB `test-large-copy-benchmark` run.
+- [ ] Reassess FUSE cache, timeout, and `max_background` tuning after a FUSE-specific profile can collect `perf` or bpftrace counters on a host that allows them.
+- [ ] Review prepared statement and connection reuse in high-call metadata lookup paths after the payload persistence path has before/after numbers; the first baseline showed path and child-entry lookups as visible but secondary.
 - [ ] Review `rust_indexer` allocation and buffer reuse after heap or allocation profiling.
 - [x] Detect single-node vs read-only replica mode early and let runtime choose the appropriate lock strategy before mount. Handled in `rust_fuse/src/startup.rs` via `effective_read_only()` and `lock_settings(read_only)`.
 - [x] Keep `workers_read` and `workers_write` constrained to the cases where they really help: disjoint read gaps and segmented copy operations, not small contiguous fetches. Read-side gating now goes through `rust_hotpath::read_missing_range_worker_count`; write-side gating already goes through the shared hot-path worker planner.

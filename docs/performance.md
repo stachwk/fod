@@ -21,7 +21,7 @@ Capture host, toolchain, PostgreSQL client, CPU, memory, and filesystem context:
 make profile-env
 ```
 
-The output is written under `artifacts/perf/<commit>/env.txt` by default. Override `ARTIFACTS_DIR` when comparing several runs from the same commit.
+The output is written under `artifacts/perf/<commit>/<host>-<run-id>/env.txt` by default. Override `ARTIFACTS_DIR`, `PROFILE_HOST`, or `PROFILE_RUN_ID` when comparing controlled runs.
 
 ## PostgreSQL Capture
 
@@ -33,6 +33,13 @@ make test-fod-indexer-materialize-rollback
 make profile-pg-top
 make profile-pg-wal
 make profile-pg-activity
+```
+
+When one profiling run captures several workloads into the same `PROFILE_RUN_ID`, set `PROFILE_CAPTURE_LABEL` to avoid overwriting PostgreSQL snapshots:
+
+```bash
+make profile-pg-top PROFILE_CAPTURE_LABEL=rollback
+make profile-pg-wal PROFILE_CAPTURE_LABEL=rollback
 ```
 
 `profile-pg-reset` and `profile-pg-top` require `pg_stat_statements`. If PostgreSQL reports that the extension must be loaded through `shared_preload_libraries`, restart the database with the existing project setting instead of ignoring the failure.
