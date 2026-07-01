@@ -129,14 +129,59 @@ The WAL counters are cumulative from PostgreSQL `stats_reset`, not per-workload 
 
 ### `perf stat`
 
-`perf` was installed at `/usr/bin/perf`, but the run failed before collecting counters:
+Unprivileged `perf` was installed at `/usr/bin/perf`, but the first run failed before collecting counters:
 
 ```text
 perf_event_paranoid setting is 4
 Access to performance monitoring and observability operations is limited.
 ```
 
-No `task-clock`, `cycles`, `instructions`, IPC, context-switch, or page-fault counters were available from this run.
+Follow-up sudo observability run on the same host:
+
+- Commit at run time: `918f8b1`
+- Artifact directory: `artifacts/perf/918f8b1/lt7300-20260701T120934Z`
+- `sudo -n` was available.
+- Direct `sudo perf stat -- make ...` worked, but it ran the workload as root and temporarily left root-owned files under `target/`; ownership was restored after the run. Treat direct sudo-wrapped workload counters as diagnostic only.
+- A cleaner system-wide `sudo perf stat -a ... sleep 12` run kept the workload as the normal user.
+
+Warm direct sudo `perf stat` around `test-large-copy-benchmark`, after compilation:
+
+| Metric | Value |
+| --- | ---: |
+| Runs | 3 |
+| task-clock | `4.486 s` |
+| CPUs utilized | `0.556` |
+| elapsed time | `8.069 +/- 0.110 s` |
+| context switches | `15661` |
+| page faults | `97091` |
+| instructions | `24.405 B` |
+| cycles | `15.288 B` |
+| IPC | `1.60` |
+
+System-wide sudo `perf stat -a` while the workload ran as the normal user:
+
+| Metric | Value |
+| --- | ---: |
+| elapsed time | `12.007 s` |
+| cpu-clock | `96.045 s` |
+| CPUs utilized | `7.999` |
+| context switches | `313891` |
+| page faults | `381500` |
+| instructions | `62.821 B` |
+| cycles | `61.779 B` |
+| IPC | `1.02` |
+
+The system-wide counters include host noise, but they confirm the host can collect privileged performance counters without running FOD as root.
+
+### `bpftrace`
+
+`sudo -n bpftrace` worked. A generic `syscalls_by_comm` capture during a warm `test-large-copy-benchmark` made FOD and PostgreSQL visible:
+
+- `fod-rust-fuse` appeared in repeated one-second samples, including intervals around `6818`, `5101`, `16729`, `12351`, `13627`, `7702`, and `9508` syscalls.
+- `postgres` appeared in repeated one-second samples, including intervals around `10170`, `64912`, `29529`, `21662`, `28689`, `66085`, and `17142` syscalls.
+- `docker-proxy` was also high in some intervals, so this generic comm-level trace is useful for visibility but too noisy for final bottleneck attribution.
+
+Future syscall tracing should use a filtered script or attach to specific PIDs once the exact process boundary is selected.
 
 ### Interpretation
 
@@ -146,7 +191,7 @@ The strongest measured signal is SQL payload persistence in the large-copy path:
 - That is about 58% of the `3.892 s` measured 64 MiB write workload time.
 - The repeated path/entry metadata lookups are visible (`2076` and `2067` calls), but their combined total is about `222 ms`, so they are secondary on this baseline.
 - The indexer smokes show small absolute SQL times dominated by temp staging table setup and cleanup, not by large repeated query families.
-- `perf stat` could not confirm FUSE CPU/context-switch behavior on this host.
+- Unprivileged `perf stat` was blocked, but sudo `perf` and sudo `bpftrace` confirmed that privileged host observability works. The safest mode is attach or system-wide capture while the workload still runs as the normal user.
 - WAL/checkpoint counters did not show a new checkpoint during the large-copy capture.
 
 First optimization target from this baseline:

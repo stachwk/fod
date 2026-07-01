@@ -70,6 +70,17 @@ Use `perf stat` for a low-friction repeated counter snapshot:
 make profile-perf-stat PROFILE_WORKLOAD=test-large-copy-benchmark
 ```
 
+If the host blocks unprivileged `perf` with `perf_event_paranoid`, do not run the whole workload as root through `sudo perf stat -- make ...` unless that is explicitly what you want to measure. That form executes `make` and the test process as root and can leave root-owned build artifacts under `target/`.
+
+Prefer attach or system-wide capture where only `perf` has elevated privileges and the workload still runs as the normal user, for example:
+
+```bash
+mkdir -p artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s)-manual
+sudo -n perf stat -a -d -d -d -o artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s)-manual/perf-stat-system.txt -- sleep 12 &
+make test-large-copy-benchmark
+wait
+```
+
 Use `perf record` when call stacks are needed:
 
 ```bash
