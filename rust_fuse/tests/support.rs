@@ -278,6 +278,42 @@ pub fn tail_log(path: &Path, max_lines: usize) -> String {
     lines[lines.len() - max_lines..].join("\n")
 }
 
+fn env_var_truthy(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn should_print_profile_io_line(line: &str) -> bool {
+    line.contains("FOD I/O profile:")
+        && (line.contains("pg.copy_put_data.aggregate")
+            || line.contains("pg.copy_put_end")
+            || line.contains("pg.copy_get_result"))
+}
+
+fn print_profile_io_summaries_if_enabled(log_path: &Path) {
+    if !env_var_truthy("FOD_PROFILE_IO") {
+        return;
+    }
+
+    let Ok(contents) = fs::read_to_string(log_path) else {
+        return;
+    };
+
+    for line in contents
+        .lines()
+        .filter(|line| should_print_profile_io_line(line))
+    {
+        eprintln!("{line}");
+    }
+}
+
 pub struct MountedFs {
     pub workspace: PathBuf,
     pub mountpoint: PathBuf,
@@ -378,6 +414,7 @@ impl Drop for MountedFs {
         try_unmount(&self.mountpoint);
         let _ = self.child.kill();
         let _ = self.child.wait();
+        print_profile_io_summaries_if_enabled(&self.log_path);
         let _ = fs::remove_dir_all(&self.workspace);
     }
 }
