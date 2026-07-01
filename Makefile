@@ -1390,3 +1390,10 @@ qnap-mount:
 
 clean:
 	rm -rf $(VENV_DIR)
+
+.PHONY: profile-pg-data-blocks-semantics
+
+profile-pg-data-blocks-semantics:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/data_blocks_semantics.sql > $(ARTIFACTS_DIR)/pg_data_blocks_semantics$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_data_blocks_semantics$(PROFILE_CAPTURE_SUFFIX).txt
