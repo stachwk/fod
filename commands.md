@@ -84,3 +84,19 @@ Base commit at execution time: `453896f`
 - `make -n test-runtime-profile`
 - `test -f .venv/.fod-venv.stamp && ls -l .venv/.fod-venv.stamp requirements-test.txt`
 - `make venv && make test-fod-indexer-materialize-rollback && make test-fod-indexer-usability && make test-runtime-profile && make test-fod-indexer-plan-import-scope`
+
+Base commit at execution time: `669e2bd`
+
+- `rg -n "minimal|minimaln|minimum|mał[aey]? zakres|keep.*small|small.*change|zmian[ay].*mał|zmian[ay].*minimal" --glob '*.md' .`
+- `git rev-parse --short HEAD`
+- `git status --short`
+- `date -Is`
+- `tail -n 60 conclusions.md`
+- `tail -n 60 commands.md`
+- `head -n 80 commands.md`
+- `tail -n 40 commands.md`
+- `tail -n 20 conclusions.md`
+- `cat fod_version.txt`
+- `git diff -- conclusions.md commands.md`
+- `git add conclusions.md commands.md`
+- `git commit -m 'FOD 3.2.1: record scope conclusion'`

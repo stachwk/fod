@@ -269,3 +269,7 @@ FOD checklist for the common FUSE/FS bottlenecks:
 - The retry boundary is now documented explicitly in `docs/fod-indexer.md`: `scan`, `hash`, `plan-import`, and `cleanup-failed` stay inside the bounded idempotent envelope, while full transactional replay remains a separate project. `materialize` still uses best-effort rollback plus `cleanup-failed` as fallback.
 - `cargo check -p fod-rust-indexer` passed after the output/snapshot refactor.
 - `make test-fod-indexer-json-output` passed against the live PostgreSQL-backed integration stack. The new smoke covers JSON source inspection, JSON scan/hash summaries, duplicate-set export by id, and stored import-plan export by id, and it confirmed that the source tree stayed unchanged.
+
+## 2026-07-01
+
+- There is no local project rule in `AGENTS.md` or the checked Markdown files that requires every change to be minimal. Mentions of `minimal` or `small` in other documents are descriptive and context-specific, not a general policy. For future work, scope should be chosen to close the actual task cleanly, without artificially minimizing changes, while still avoiding unrelated refactors.
