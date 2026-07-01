@@ -451,6 +451,7 @@ Base commit at execution time: `4a66459`
 - `git diff --stat`
 - `git status --short`
 - `cat fod_version.txt`
+
 - `git diff -- Makefile scripts/perf/pg/explain_data_blocks_merge.sql | sed -n '1,260p'`
 - `git diff -- TODO.md conclusions.md docs/performance-baselines.md | sed -n '1,260p'`
 - `git diff -- commands.md | sed -n '1,220p'`
@@ -598,3 +599,25 @@ Base commit at execution time: `85b3ee0`
 - `git diff --stat`
 - `git status --short`
 - `cat fod_version.txt`
+
+Base commit at execution time: `c2ce42b`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/ba5394c1-1281-430a-bd3f-b82ef6a24d27/pasted-text.txt`
+- `sed -n '261,620p' /home/wojtek/.codex/attachments/ba5394c1-1281-430a-bd3f-b82ef6a24d27/pasted-text.txt`
+- `git status --short && git log -5 --oneline && cat fod_version.txt`
+- `rg -n "FOD_DATA_BLOCKS_MERGE_DO_NOTHING|data_blocks_merge_do_nothing_enabled|DO NOTHING" rust_hotpath/src/pg.rs || true`
+- `sed -n '1,200p' scripts/perf/pg/wal_snapshot.sql`
+- `sed -n '1228,1248p' Makefile`
+- `rg -n "PROFILE_WAL|PROFILE_CAPTURE|ARTIFACTS_DIR|PROFILE_HOST|PROFILE_RUN_ID" Makefile | sed -n '1,120p'`
+- `sed -n '120,155p' Makefile`
+- `sed -n '1418,1436p' Makefile`
+- `sed -n '1,140p' scripts/perf/pg/data_blocks_bloat.sql`
+- `rg -n "^PYTHON|VENV_PYTHON" Makefile | head -n 20`
+- `sed -n '270,365p' Makefile`
+- `rg -n "pg_wal_delta|PROFILE_WAL_DELTA_FILE|profile-data-blocks-summary" . -S`
+- `python3 -m py_compile scripts/perf/pg/wal_delta.py scripts/perf/summarize_data_blocks_profile.py`
+- `cargo fmt --check`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-hotpath`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-fuse`
+- `make profile-pg-data-blocks-bloat`
+- `RUN_ID="wal-delta-tool-smoke-$(date -u +%Y%m%dT%H%M%SZ)"; HOST=$(hostname -s 2>/dev/null || hostname); make profile-env PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=tool-smoke && make profile-pg-wal-snapshot PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=before && make profile-pg-wal-snapshot PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=after && make profile-pg-wal-delta PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST"`

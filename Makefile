@@ -145,6 +145,10 @@ PROFILE_WAL_AFTER_LABEL ?= after
 PROFILE_WAL_BEFORE_FILE ?= $(ARTIFACTS_DIR)/pg_wal_snapshot-$(PROFILE_WAL_BEFORE_LABEL).tsv
 PROFILE_WAL_AFTER_FILE ?= $(ARTIFACTS_DIR)/pg_wal_snapshot-$(PROFILE_WAL_AFTER_LABEL).tsv
 PROFILE_WAL_DELTA_FILE ?= $(ARTIFACTS_DIR)/pg_wal_delta-$(PROFILE_WAL_BEFORE_LABEL)-to-$(PROFILE_WAL_AFTER_LABEL).tsv
+PROFILE_LARGE_COPY_LOG ?= /tmp/fod-data-blocks-current.log
+PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT ?= docs/performance-data-blocks-profile-$(shell date +%F).md
+PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION ?= Real-path data_blocks profile captured.
+PROFILE_DATA_BLOCKS_SUMMARY_NEXT ?= Keep runtime SQL unchanged until repeated local/QNAP data confirms the next bottleneck.
 
 define RUN_POSTGRES_BENCHMARK_REPEAT
 	@set -eu; \
@@ -349,6 +353,7 @@ help:
 		'  make profile-perf-record - record perf samples around PROFILE_WORKLOAD' \
 		'  make profile-pg-wal-snapshot - capture machine-readable WAL/checkpointer counters' \
 		'  make profile-pg-wal-delta - compare PROFILE_WAL_BEFORE_LABEL and PROFILE_WAL_AFTER_LABEL snapshots' \
+		'  make profile-data-blocks-summary - write a markdown summary from data_blocks profiling artifacts' \
 		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-pg-data-blocks-merge-explain - capture temp-table EXPLAIN for the current data_blocks merge shape' \
@@ -1200,7 +1205,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1243,8 +1248,21 @@ profile-pg-wal-delta:
 	out="$(PROFILE_WAL_DELTA_FILE)"; \
 	test -f "$$before" || { echo "Missing before WAL snapshot: $$before" >&2; exit 2; }; \
 	test -f "$$after" || { echo "Missing after WAL snapshot: $$after" >&2; exit 2; }; \
-	awk -F '\t' 'BEGIN { OFS="\t"; print "metric", "before", "after", "delta" } NR == FNR { if ($$1 ~ /^(wal_|buffers_)/) before[$$1] = $$2; next } $$1 ~ /^(wal_|buffers_)/ { base = (($$1 in before) ? before[$$1] : 0); print $$1, base, $$2, $$2 - base }' "$$before" "$$after" > "$$out"; \
+	$(PYTHON) scripts/perf/pg/wal_delta.py "$$before" "$$after" > "$$out"; \
 	cat "$$out"
+
+profile-data-blocks-summary:
+	$(PYTHON) scripts/perf/summarize_data_blocks_profile.py \
+		--artifact-dir "$(ARTIFACTS_DIR)" \
+		--large-copy-log "$(PROFILE_LARGE_COPY_LOG)" \
+		--pg-top "$(ARTIFACTS_DIR)/pg_top_statements$(PROFILE_CAPTURE_SUFFIX).txt" \
+		--wal-delta "$(PROFILE_WAL_DELTA_FILE)" \
+		--data-blocks-bloat "$(ARTIFACTS_DIR)/pg_data_blocks_bloat$(PROFILE_CAPTURE_SUFFIX).txt" \
+		--output "$(PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT)" \
+		--run-id "$(PROFILE_RUN_ID)" \
+		--host "$(PROFILE_HOST)" \
+		--conclusion "$(PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION)" \
+		--next-candidate "$(PROFILE_DATA_BLOCKS_SUMMARY_NEXT)"
 
 profile-pg-io:
 	@mkdir -p $(ARTIFACTS_DIR)

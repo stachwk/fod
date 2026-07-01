@@ -27,10 +27,26 @@ FROM (
     UNION ALL
     SELECT 'wal_sync', wal_sync::numeric FROM pg_stat_wal
     UNION ALL
+    SELECT 'wal_write_time', wal_write_time::numeric FROM pg_stat_wal
+    UNION ALL
+    SELECT 'wal_sync_time', wal_sync_time::numeric FROM pg_stat_wal
+    UNION ALL
+    SELECT 'checkpoints_timed', checkpoints_timed::numeric FROM pg_stat_bgwriter
+    UNION ALL
+    SELECT 'checkpoints_req', checkpoints_req::numeric FROM pg_stat_bgwriter
+    UNION ALL
+    SELECT 'checkpoint_write_time', checkpoint_write_time::numeric FROM pg_stat_bgwriter
+    UNION ALL
+    SELECT 'checkpoint_sync_time', checkpoint_sync_time::numeric FROM pg_stat_bgwriter
+    UNION ALL
     SELECT 'buffers_checkpoint', buffers_checkpoint::numeric FROM pg_stat_bgwriter
+    UNION ALL
+    SELECT 'buffers_clean', buffers_clean::numeric FROM pg_stat_bgwriter
     UNION ALL
     SELECT 'buffers_backend', buffers_backend::numeric FROM pg_stat_bgwriter
     UNION ALL
     SELECT 'buffers_backend_fsync', buffers_backend_fsync::numeric FROM pg_stat_bgwriter
+    UNION ALL
+    SELECT 'buffers_alloc', buffers_alloc::numeric FROM pg_stat_bgwriter
 ) AS snapshot
 ORDER BY metric;
