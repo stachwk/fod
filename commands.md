@@ -20,3 +20,15 @@ Base commit at execution time: `7bcfc5d`
 - `POSTGRES_BENCHMARK_REPEAT=0 make postgres-benchmarks-wal-preset`
 - `make -n POSTGRES_BENCHMARK_REPEAT=2 postgres-benchmarks-wal-preset`
 - `make help`
+
+Base commit at execution time: `53b30d1`
+
+- `sed -n '1,240p' /home/wojtek/.codex/attachments/e8504898-5964-40bc-9686-03b49ddef26f/pasted-text.txt`
+- `sed -n '241,520p' /home/wojtek/.codex/attachments/e8504898-5964-40bc-9686-03b49ddef26f/pasted-text.txt`
+- `sed -n '521,900p' /home/wojtek/.codex/attachments/e8504898-5964-40bc-9686-03b49ddef26f/pasted-text.txt`
+- `sed -n '901,1300p' /home/wojtek/.codex/attachments/e8504898-5964-40bc-9686-03b49ddef26f/pasted-text.txt`
+- `python3 -m py_compile tests/integration/test_fod_indexer_usability.py`
+- `make test-fod-indexer-usability`
+- `make test-fod-indexer-plan-import-scope`
+- `make test-fod-indexer-cleanup-failed`
+- `make test-fod-indexer-plan-import-scope && make test-fod-indexer-cleanup-failed`

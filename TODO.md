@@ -9,6 +9,7 @@ Reading guide:
 
 ## Current Follow-ups
 
+- [ ] Revisit fod-indexer integration test isolation for parallel execution. The current smokes share source names such as `smoke` and cleanup global indexer state, so running targets like `test-fod-indexer-plan-import-scope` and `test-fod-indexer-cleanup-failed` in parallel can race even though the sequential Makefile flow passes.
 - [x] Detect single-node vs read-only replica mode early and let runtime choose the appropriate lock strategy before mount. Handled in `rust_fuse/src/startup.rs` via `effective_read_only()` and `lock_settings(read_only)`.
 - [x] Keep `workers_read` and `workers_write` constrained to the cases where they really help: disjoint read gaps and segmented copy operations, not small contiguous fetches. Read-side gating now goes through `rust_hotpath::read_missing_range_worker_count`; write-side gating already goes through the shared hot-path worker planner.
 - [x] Primary mounts keep the PostgreSQL lease backend. Covered by `rust_fuse/tests/lock_backend_smoke.rs::primary_uses_pg_leases_and_replica_stays_memory_backed`.

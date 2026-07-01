@@ -49,6 +49,10 @@ USABILITY_FILES: dict[str, bytes] = {
 }
 
 
+class SkipTest(RuntimeError):
+    pass
+
+
 def write_usability_tree() -> None:
     shutil.rmtree(USABILITY_PARENT, ignore_errors=True)
     USABILITY_INDEXED_ROOT.mkdir(parents=True, exist_ok=True)
@@ -87,6 +91,9 @@ def run_indexer_result_with_env(
 
 
 def adb_target_serial() -> str:
+    if shutil.which("adb") is None:
+        raise SkipTest("adb is not installed")
+
     result = subprocess.run(
         ["adb", "devices"],
         cwd=ROOT,
@@ -95,7 +102,7 @@ def adb_target_serial() -> str:
         check=False,
     )
     if result.returncode != 0:
-        raise AssertionError(f"unable to run adb devices:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        raise SkipTest(f"unable to run adb devices:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
 
     for line in result.stdout.splitlines()[1:]:
         line = line.strip()
@@ -107,7 +114,7 @@ def adb_target_serial() -> str:
         if status == "device" and serial:
             return serial
 
-    raise AssertionError(f"no authorized adb device found:\n{result.stdout}")
+    raise SkipTest(f"no authorized adb device found:\n{result.stdout}")
 
 
 def adb_shell_output(serial: str, args: list[str]) -> str:
@@ -354,7 +361,12 @@ def test_user_journey_surfaces_progress_and_browse_hints() -> None:
 
 
 def test_adb_source_list_surfaces_device_and_browse_root() -> None:
-    serial = adb_target_serial()
+    try:
+        serial = adb_target_serial()
+    except SkipTest as exc:
+        print(f"SKIP fod-indexer adb usability: {exc}")
+        return
+
     remote_root = adb_storage_root(serial)
 
     dsn: dict[str, str] | None = None

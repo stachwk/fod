@@ -24,6 +24,7 @@ Use this file to record concise conclusions that matter for future work.
 ## 2026-07-01
 
 - `tests/integration/test_fod_indexer_materialize_rollback.py` now covers two rollback boundaries: an early failure while staging `index_import_plan_entries`, and a late failure on the final `materialize_completed` plan update after all materialized entries have been written. The late case keeps the imported plan entries visible for the plan while still rolling back the materialized root and leaving the plan in `materialize_cleaned`. `make test-fod-indexer-materialize-rollback` passed with both cases.
+- `test_fod_indexer_usability.py` now treats missing or unauthorized ADB devices as a host-dependent skip for the ADB browse smoke instead of failing the whole usability target. The local `make test-fod-indexer-usability` run passed with `SKIP fod-indexer adb usability`, and the remaining interrupted indexer targets passed when rerun sequentially.
 
 ## 2026-06-26
 
