@@ -63,6 +63,9 @@ FOD_BOOTSTRAP_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-bootstrap
 FOD_MKFS_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-rust-mkfs
 FOD_CONFIG_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-config
 FOD_FUSE_DEBUG_BIN := $(RUST_FUSE_TARGET_DIR)/debug/fod-rust-fuse
+FOD_INDEXER_DEBUG_BIN := $(RUST_INDEXER_TARGET_DIR)/debug/fod-indexer
+FOD_DEBUG_BUILD_STAMP := target/.fod-debug-build.stamp
+FOD_RUST_INPUTS := $(shell find Cargo.toml Cargo.lock rust_mkfs rust_fuse rust_hotpath rust_runtime rust_indexer -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' \) 2>/dev/null)
 
 FOD_BOOTSTRAP_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-bootstrap
 FOD_MKFS_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-rust-mkfs
@@ -74,6 +77,17 @@ FOD_HOTPATH_PROFILE_LIB := $(RUST_HOTPATH_TARGET_DIR)/$(FOD_CARGO_PROFILE)/libfo
 ifeq ($(wildcard $(CARGO_ROOT_MANIFEST)),)
 CARGO_BUILD_INSTALL_ROOT := $(CARGO_BUILD_MKFS) $(FOD_RELEASE_FLAG) --bins && $(CARGO_BUILD_FUSE) $(FOD_RELEASE_FLAG) --bin $(FOD_FUSE_BIN)
 endif
+
+build-debug: $(FOD_DEBUG_BUILD_STAMP)
+
+$(FOD_DEBUG_BUILD_STAMP): Makefile $(FOD_RUST_INPUTS)
+	$(CARGO_BUILD_MKFS) --bins
+	$(CARGO_BUILD_FUSE) --bin $(FOD_FUSE_BIN)
+	$(CARGO_BUILD_INDEXER) --bin $(FOD_INDEXER_BIN)
+	mkdir -p $(dir $@)
+	touch $@
+
+.PHONY: build-debug
 
 # Benchmark targets are run sequentially because they share the same local
 # Docker/PostgreSQL state and often rebuild the same binaries.
@@ -512,35 +526,35 @@ wait:
 	exit 1
 
 
-init: up
+init: build-debug up
 	@set -eu; \
-	status_output="$$($(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- status 2>/dev/null || true)"; \
+	status_output="$$($(FOD_MKFS_DEBUG_BIN) status 2>/dev/null || true)"; \
 	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
 		echo 'FOD schema already initialized; skipping init.'; \
 	else \
-		POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
+		POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_DEBUG_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 		mkdir -p .fod; \
 		printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"; \
 	fi
 
-init-qnap:
+init-qnap: build-debug
 	@set -eu; \
-	status_output="$$($(FOD_REMOTE_PG_ENV) $(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- status 2>/dev/null || true)"; \
+	status_output="$$($(FOD_REMOTE_PG_ENV) $(FOD_MKFS_DEBUG_BIN) status 2>/dev/null || true)"; \
 	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
 		echo 'FOD schema already initialized; skipping qnap init.'; \
 	else \
-		$(FOD_REMOTE_PG_ENV) $(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
+		$(FOD_REMOTE_PG_ENV) $(FOD_MKFS_DEBUG_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 		mkdir -p .fod; \
 		printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"; \
 	fi
 
 
-reset:
+reset: build-debug
 	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
 	$(COMPOSE_RUN) -f $(COMPOSE_FILE) down -v
 	$(MAKE) up QNAP=$(QNAP)
 	sleep 2
-	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_RUN_MKFS) --quiet --bin fod-rust-mkfs -- init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_DEBUG_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"
 	mkdir -p .fod
 	printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"
 
@@ -611,24 +625,24 @@ pip-install-editable:
 	@exit 1
 
 
-config-show:
-	$(CARGO_RUN_MKFS) --quiet --bin fod-config -- --config-path . resolve-path
+config-show: build-debug
+	$(FOD_CONFIG_DEBUG_BIN) --config-path . resolve-path
 
-indexer:
+indexer: build-debug
 	@set -eu; \
 	if [ -z "$(strip $(INDEXER_ARGS))" ]; then \
 		echo 'Set INDEXER_ARGS=...'; \
 		exit 1; \
 	fi; \
-	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_RUN_INDEXER) -- $(INDEXER_ARGS)
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_INDEXER_DEBUG_BIN) $(INDEXER_ARGS)
 
-indexer-import: init
+indexer-import: build-debug init
 	@set -eu; \
 	if [ -z "$(strip $(INDEXER_SOURCE))" ]; then \
 		echo 'Set INDEXER_SOURCE=...'; \
 		exit 1; \
 	fi; \
-	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_RUN_INDEXER) -- materialize --source "$(INDEXER_SOURCE)"
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_INDEXER_DEBUG_BIN) materialize --source "$(INDEXER_SOURCE)"
 
 .PHONY: indexer indexer-import
 
@@ -686,23 +700,17 @@ enable-pg-stat-statements: up
 	COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
 	$(COMPOSE_RUN) -f $(COMPOSE_FILE) exec -T postgres sh -lc 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"'
 
-mount: up
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+mount: build-debug up
 	mkdir -p $(MOUNTPOINT)
 	@printf '%s\n' "Using FOD config file: /etc/fod/fod_config.ini (fallback: ./fod_config.ini)"
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_DEBUG_BIN) --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
 
-mount-qnap:
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+mount-qnap: build-debug
 	mkdir -p $(MOUNTPOINT)
 	@printf '%s\n' "Using remote PostgreSQL at $(FOD_REMOTE_PG_HOST):$(FOD_REMOTE_PG_PORT) (db=$(FOD_REMOTE_PG_DBNAME), user=$(FOD_REMOTE_PG_USER))"
 	$(FOD_REMOTE_PG_ENV) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_DEBUG_BIN) --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
 
-mount-user: up
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+mount-user: build-debug up
 	mkdir -p $(MOUNTPOINT)
 	@set -eu; \
 	config_path="$$HOME/.config/fod/fod_config.ini"; \
@@ -715,9 +723,7 @@ mount-user: up
 	fi; \
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_DEBUG_BIN) --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
 
-demo: init
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+demo: build-debug init
 	mkdir -p $(MOUNTPOINT)
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_DEBUG_BIN) --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
 

@@ -32,3 +32,19 @@ Base commit at execution time: `53b30d1`
 - `make test-fod-indexer-plan-import-scope`
 - `make test-fod-indexer-cleanup-failed`
 - `make test-fod-indexer-plan-import-scope && make test-fod-indexer-cleanup-failed`
+
+Base commit at execution time: `b619fb5`
+
+- `rg -n "CARGO_RUN|FOD_.*DEBUG_BIN|^init:|^init-qnap:|^reset:|^config-show:|^indexer:|^indexer-import:|^mount:|^mount-qnap:|^mount-user:|^demo:" Makefile`
+- `sed -n '1,90p' Makefile`
+- `sed -n '520,720p' Makefile`
+- `make -n build-debug`
+- `make build-debug`
+- `make init`
+- `make indexer INDEXER_ARGS='--help'`
+- `test -e /dev/fuse && test -r /dev/fuse && test -w /dev/fuse; echo fuse_device=$?`
+- `command -v fusermount3 || command -v fusermount || true`
+- `mountpoint -q /tmp/fod-mount; echo mounted=$?`
+- `timeout 12s make mount`
+- `mountpoint -q /tmp/fod-mount; echo mounted=$?`
+- `make test-fod-indexer-materialize-rollback`
