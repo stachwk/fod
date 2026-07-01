@@ -379,6 +379,43 @@ Limitations:
 - The temp reproducer is useful for plan shape and relative insert/update cost, not final production timing.
 - The live runtime merge is still slower than the temp reproducer, so the next diagnostics should inspect real table/index bloat, WAL/write amplification, and whether batch size changes the real merge cost.
 
+### Real Table/Index Size And Churn Snapshot
+
+Captured with:
+
+```bash
+make profile-pg-data-blocks-bloat PROFILE_RUN_ID=merge-current-20260701T185415Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=current
+```
+
+Current table statistics after the large-copy workload:
+
+| Relation | n_live_tup | n_dead_tup | n_mod_since_analyze | last_autovacuum | last_autoanalyze |
+| --- | ---: | ---: | ---: | --- | --- |
+| `data_blocks` | 1278109 | 84 | 32768 | `2026-07-01 18:22:35.905885+00` | `2026-07-01 18:44:36.253954+00` |
+| `copy_block_crc` | 46 | 22 | 0 | `2026-07-01 13:40:37.637849+00` | `2026-07-01 18:31:35.673848+00` |
+| `data_objects` | 121 | 11 | 20 | `2026-07-01 18:30:35.664995+00` | `2026-07-01 18:30:35.67172+00` |
+| `files` | 121 | 8 | 24 | `2026-07-01 18:29:35.671599+00` | `2026-07-01 18:30:35.677719+00` |
+
+Real relation sizes:
+
+| Relation | relation_size | total_size |
+| --- | ---: | ---: |
+| `data_blocks` | `143 MB` | `206 MB` |
+| `idx_data_blocks_object_order` | `27 MB` | `27 MB` |
+| `idx_data_blocks_data_object_id` | `8176 kB` | `8176 kB` |
+| `copy_block_crc` | `8192 bytes` | `72 kB` |
+
+Index usage snapshot:
+
+- `idx_data_blocks_data_object_id`: `idx_scan=69`, `idx_tup_read=28773806`, `idx_tup_fetch=11809106`
+- `idx_data_blocks_object_order`: `idx_scan=1291182`, `idx_tup_read=229`, `idx_tup_fetch=225`
+
+Interpretation:
+
+- The current local database does not show a large `n_dead_tup` accumulation in `data_blocks` after the run.
+- The `idx_data_blocks_data_object_id` read/fetch counters are high relative to its scan count, so future investigation should check which cleanup/read paths rely on that index before removing or changing it.
+- This snapshot is a size/churn signal, not a mathematical bloat estimate.
+
 ### Interpretation
 
 - The rejected `DO NOTHING` probe confirms that correctness currently requires the conflict update path.

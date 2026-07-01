@@ -458,3 +458,30 @@ Base commit at execution time: `4a66459`
 - `make help | rg 'profile-pg-data-blocks-merge-explain|profile-pg-data-blocks-semantics'`
 - `git add Makefile scripts/perf/pg/explain_data_blocks_merge.sql TODO.md commands.md conclusions.md docs/performance-baselines.md`
 - `git commit -m 'FOD 3.2.1: add data block merge explain capture'`
+
+Base commit at execution time: `8d5b1b6`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/35f5e54c-970c-4412-bca0-422f749ab2b9/pasted-text.txt`
+- `sed -n '261,620p' /home/wojtek/.codex/attachments/35f5e54c-970c-4412-bca0-422f749ab2b9/pasted-text.txt`
+- `git status --short && git log -5 --oneline && cat fod_version.txt`
+- `git fetch origin`
+- `rg -n "FOD_DATA_BLOCKS_MERGE_DO_NOTHING|data_blocks_merge_do_nothing_enabled" rust_hotpath/src/pg.rs || true`
+- `git status --short && git log -5 --oneline`
+- `PROFILE_RUN_ID=merge-current-$(date -u +%Y%m%dT%H%M%SZ); PROFILE_HOST=$(hostname -s 2>/dev/null || hostname); printf '%s\n' "$PROFILE_RUN_ID" > /tmp/fod_merge_current_run_id; printf '%s\n' "$PROFILE_HOST" > /tmp/fod_merge_current_host; printf 'PROFILE_RUN_ID=%s\nPROFILE_HOST=%s\n' "$PROFILE_RUN_ID" "$PROFILE_HOST"`
+- `make profile-env PROFILE_RUN_ID=merge-current-20260701T185415Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=current && make profile-pg-reset PROFILE_RUN_ID=merge-current-20260701T185415Z PROFILE_HOST=lt7300`
+- `FOD_PROFILE_IO=1 make test-large-copy-benchmark 2>&1 | tee /tmp/fod-merge-current.log`
+- `make profile-pg-top PROFILE_RUN_ID=merge-current-20260701T185415Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=current`
+- `make profile-pg-wal PROFILE_RUN_ID=merge-current-20260701T185415Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=current`
+- `make profile-pg-data-blocks-semantics PROFILE_RUN_ID=merge-current-20260701T185415Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=current`
+- `make profile-pg-data-blocks-merge-explain PROFILE_RUN_ID=merge-current-20260701T185415Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=current`
+- `sed -n '1,170p' Makefile`
+- `sed -n '1220,1265p' Makefile`
+- `sed -n '1,160p' scripts/perf/pg/wal_checkpointer.sql`
+- `rg -n "^PROFILE_|ARTIFACTS_DIR|PROFILE_CAPTURE_SUFFIX|PSQL" Makefile`
+- `make profile-pg-data-blocks-bloat PROFILE_RUN_ID=merge-current-20260701T185415Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=current`
+- `git diff --check`
+- `git diff --stat`
+- `git status --short`
+- `make help | rg 'profile-pg-data-blocks-bloat|profile-pg-data-blocks-merge-explain'`
+- `git add Makefile scripts/perf/pg/data_blocks_bloat.sql commands.md conclusions.md docs/performance-baselines.md`
+- `git commit -m 'FOD 3.2.1: add data block bloat diagnostics'`
