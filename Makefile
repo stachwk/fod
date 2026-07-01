@@ -106,12 +106,33 @@ PG_WAL_PRESSURE_COUNT ?= 128
 POSTGRES_BENCHMARK_WAL_PRESET_MAX_WAL_SIZE ?= 8GB
 POSTGRES_BENCHMARK_WAL_PRESET_CHECKPOINT_TIMEOUT ?= 15min
 POSTGRES_BENCHMARK_WAL_PRESET_WAL_COMPRESSION ?= pglz
+POSTGRES_BENCHMARK_REPEAT ?= 1
 POSTGRES_BENCHMARK_PLANNER_PRESET_SHARED_BUFFERS ?= 512MB
 POSTGRES_BENCHMARK_PLANNER_PRESET_RANDOM_PAGE_COST ?= 1.1
 POSTGRES_BENCHMARK_PLANNER_PRESET_EFFECTIVE_CACHE_SIZE ?= 4GB
 POSTGRES_BENCHMARK_PLANNER_PRESET_MAINTENANCE_WORK_MEM ?= 512MB
 POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_MAX_WORKERS ?= 3
 POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM ?= 256MB
+
+define RUN_POSTGRES_BENCHMARK_REPEAT
+	@set -eu; \
+	repeat="$(POSTGRES_BENCHMARK_REPEAT)"; \
+	case "$$repeat" in \
+		''|*[!0-9]*) \
+			echo "POSTGRES_BENCHMARK_REPEAT must be a positive integer, got: $$repeat" >&2; \
+			exit 1 ;; \
+	esac; \
+	if [ "$$repeat" -lt 1 ]; then \
+		echo "POSTGRES_BENCHMARK_REPEAT must be at least 1, got: $$repeat" >&2; \
+		exit 1; \
+	fi; \
+	i=1; \
+	while [ "$$i" -le "$$repeat" ]; do \
+		printf '%s\n' "PostgreSQL benchmark run $$i/$$repeat"; \
+		$(MAKE) --no-print-directory $(1); \
+		i=$$((i + 1)); \
+	done
+endef
 
 define RUN_POSTGRES_BENCHMARKS
 	@set -eu; \
@@ -284,7 +305,7 @@ help:
 		'  make postgres-benchmarks-local - run PostgreSQL optimization benchmarks on local Docker' \
 		'  make postgres-benchmarks-qnap - run PostgreSQL optimization benchmarks on QNAP' \
 		'  make postgres-benchmarks-checkpoint - run the checkpoint-forcing PostgreSQL WAL benchmark on the selected backend' \
-		'  make postgres-benchmarks-wal-preset - run the WAL/checkpoint benchmark preset across local Docker and QNAP' \
+		'  make postgres-benchmarks-wal-preset - run the WAL/checkpoint benchmark preset across local Docker and QNAP; set POSTGRES_BENCHMARK_REPEAT=N to repeat the full preset' \
 		'  make postgres-benchmarks-planner-preset - run the planner/autovacuum benchmark preset across local Docker and QNAP' \
 		'  make postgres-benchmarks-compare - run the PostgreSQL optimization benchmarks on local Docker and QNAP' \
 		'  make mount      - mount FOD at $(MOUNTPOINT)' \
@@ -1135,11 +1156,7 @@ postgres-benchmarks-compare:
 	$(MAKE) --no-print-directory QNAP=1 postgres-benchmarks-checkpoint
 
 postgres-benchmarks-wal-preset:
-	@$(MAKE) --no-print-directory \
-		POSTGRES_MAX_WAL_SIZE=$(POSTGRES_BENCHMARK_WAL_PRESET_MAX_WAL_SIZE) \
-		POSTGRES_CHECKPOINT_TIMEOUT=$(POSTGRES_BENCHMARK_WAL_PRESET_CHECKPOINT_TIMEOUT) \
-		POSTGRES_WAL_COMPRESSION=$(POSTGRES_BENCHMARK_WAL_PRESET_WAL_COMPRESSION) \
-		postgres-benchmarks-compare
+	$(call RUN_POSTGRES_BENCHMARK_REPEAT,POSTGRES_MAX_WAL_SIZE=$(POSTGRES_BENCHMARK_WAL_PRESET_MAX_WAL_SIZE) POSTGRES_CHECKPOINT_TIMEOUT=$(POSTGRES_BENCHMARK_WAL_PRESET_CHECKPOINT_TIMEOUT) POSTGRES_WAL_COMPRESSION=$(POSTGRES_BENCHMARK_WAL_PRESET_WAL_COMPRESSION) postgres-benchmarks-compare)
 
 postgres-benchmarks-planner-preset:
 	@$(MAKE) --no-print-directory \
