@@ -100,3 +100,36 @@ Base commit at execution time: `669e2bd`
 - `git diff -- conclusions.md commands.md`
 - `git add conclusions.md commands.md`
 - `git commit -m 'FOD 3.2.1: record scope conclusion'`
+
+Base commit at execution time: `3af1bda`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/370c8b40-d234-494a-9dea-50151c5da4dc/pasted-text.txt`
+- `git rev-parse --short HEAD`
+- `git status --short`
+- `rg -n "^venv:|VENV_|ensurepip|pip install|requirements-test|\\.fod-venv\\.stamp|^deps:|^clean:" Makefile`
+- `cat fod_version.txt`
+- `sed -n '261,520p' /home/wojtek/.codex/attachments/370c8b40-d234-494a-9dea-50151c5da4dc/pasted-text.txt`
+- `test -f requirements-test.txt && cat requirements-test.txt || true`
+- `rg -n "incremental venv|venv setup|fod-venv|requirements-test|Python test virtualenv|parallel test isolation" TODO.md conclusions.md`
+- `sed -n '140,175p' Makefile && sed -n '445,465p' Makefile && sed -n '1228,1238p' Makefile`
+- `rg -n "ensurepip|pip install|requirements-test|VENV_STAMP" Makefile requirements-test.txt`
+- `make -n venv`
+- `make -n test-fod-indexer-materialize-rollback`
+- `make -n test-runtime-profile`
+- `make -n test-fod-indexer-usability`
+- `make venv`
+- `make -n venv`
+- `make test-fod-indexer-materialize-rollback`
+- `make test-fod-indexer-usability`
+- `make test-runtime-profile`
+- `make test-fod-indexer-plan-import-scope`
+- `rg -n "ensurepip|pip install|requirements-test|VENV_STAMP" Makefile requirements-test.txt`
+- `git status --short`
+- `date -Is`
+- `git rev-parse --short HEAD`
+- `sed -n '1,55p' conclusions.md`
+- `tail -n 40 commands.md`
+- `sed -n '1,35p' TODO.md`
+- `git diff -- conclusions.md commands.md`
+- `git add conclusions.md commands.md`
+- `git commit -m 'FOD 3.2.1: record venv verification'`
