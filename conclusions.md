@@ -21,6 +21,10 @@ Use this file to record concise conclusions that matter for future work.
 - The PostgreSQL benchmark presets are now shared across local Docker and QNAP for both WAL tuning and planner/autovacuum tuning. `make postgres-benchmarks-wal-preset` and `make postgres-benchmarks-planner-preset` both apply the same server knobs through the Compose layer, so future A/B runs no longer need image edits to compare backends on identical preset values.
 - The new shared planner/autovacuum sweep on commit `1fee771` confirms the backend split is still dominated by remote execution cost, not by the planner knobs themselves. Local came in at `11.23 MiB/s` for the WAL burst and `10.159 ms` average connect latency, while QNAP landed at `0.74 MiB/s` and `81.769 ms` connect latency on the same preset; the forced-checkpoint variant remained much cheaper locally (`4.792s` elapsed, `0.063s` checkpoint) than remotely (`62.008s` elapsed, `1.079s` checkpoint).
 
+## 2026-07-01
+
+- `tests/integration/test_fod_indexer_materialize_rollback.py` now covers two rollback boundaries: an early failure while staging `index_import_plan_entries`, and a late failure on the final `materialize_completed` plan update after all materialized entries have been written. The late case keeps the imported plan entries visible for the plan while still rolling back the materialized root and leaving the plan in `materialize_cleaned`. `make test-fod-indexer-materialize-rollback` passed with both cases.
+
 ## 2026-06-26
 
 - `create_data_object()` is now replay-safe through a durable request-token row in `data_object_request_tokens`, so a lost COMMIT no longer doubles `reference_count` on retry. The new `rust_hotpath/tests/transactional_replay_smoke.rs::transactional_commit_disconnect_is_replayed_for_create_data_object` smoke covers the COMMIT-drop path and confirms the token-backed row reuse.
