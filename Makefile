@@ -66,7 +66,8 @@ FOD_CHANGE_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-change
 FOD_FUSE_DEBUG_BIN := $(RUST_FUSE_TARGET_DIR)/debug/fod-rust-fuse
 FOD_INDEXER_DEBUG_BIN := $(RUST_INDEXER_TARGET_DIR)/debug/fod-indexer
 FOD_DEBUG_BUILD_STAMP := target/.fod-debug-build.stamp
-FOD_RUST_INPUTS := $(shell find Cargo.toml Cargo.lock rust_mkfs rust_fuse rust_hotpath rust_runtime rust_indexer -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' \) 2>/dev/null)
+FOD_RUST_INPUT_ROOTS := Cargo.toml Cargo.lock fod_version.txt rust_mkfs rust_fuse rust_hotpath rust_runtime rust_indexer migrations
+FOD_RUST_INPUTS := $(shell find $(FOD_RUST_INPUT_ROOTS) -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' -o -name '*.sql' -o -name '*.txt' \) 2>/dev/null)
 
 FOD_BOOTSTRAP_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-bootstrap
 FOD_MKFS_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-rust-mkfs
@@ -505,6 +506,7 @@ docker-selinux-acl-shell:
 	$(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec fod-selinux-acl bash
 
 docker-selinux-acl-smoke: docker-selinux-acl-up
+	# This lab builds inside the container because it validates the container-local FUSE/SELinux toolchain.
 	COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T fod-selinux-acl bash -lc 'set -euo pipefail; $(CARGO_BUILD_MKFS) --bin fod-bootstrap --bin fod-rust-mkfs; $(CARGO_BUILD_FUSE) --bin fod-rust-fuse; ./.venv/bin/python tests/integration/test_fuse_context_identity.py; ./.venv/bin/python tests/integration/test_xattr.py; $(CARGO_TEST_FUSE) --test root_permissions_smoke -- --nocapture'
 
 restart: down up
@@ -800,8 +802,6 @@ test-copy-file-range: init
 test-copy-dedupe-benchmark: test-rust-hotpath-copy-dedupe-benchmark
 	@:
 test-copy-block-crc-table: init
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke copy_block_crc_table --offline
 
 test-worker-thresholds-block-size: init
@@ -987,51 +987,36 @@ test-rust-pg-query: init
 	$(CARGO_TEST_HOTPATH) --test pg_query
 
 test-large-copy-benchmark: init
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
 
 test-large-file-multiblock-benchmark: init
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test large_file_multiblock_benchmark --offline -- --nocapture
 
 test-remount-durability-benchmark: init
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test remount_durability_benchmark --offline -- --nocapture
 
 test-tree-scale: venv up
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) TREE_SCALE_DIRS=$(TREE_SCALE_DIRS) TREE_SCALE_FILES=$(TREE_SCALE_FILES) bash tests/integration/test_tree_scale.sh
 
 test-flush-release-profile: reset
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke flush_release_profile --offline
 
 test-truncate-release-profile: reset
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke truncate_release_profile --offline
 
 test-persist-buffer-chunking: init
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke persist_buffer_chunking --offline
 
 test-write-flush-threshold: init
 	$(CARGO_TEST_FUSE) --test profile_smoke write_flush_threshold --offline -- --nocapture
 
 test-utimens-noop: init
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke utimens_noop --offline
 
 test-write-noop: init
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test mount_smoke write_noop
 
 test-unlink-after-write: init
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test mount_smoke unlink_after_write
 
 test-local-vs-fod-permissions: init
@@ -1046,8 +1031,6 @@ test-allow-other-visibility: init
 	bash tests/integration/test_allow_other_visibility.sh
 
 test-multi-open-unique-handles: init
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test mount_smoke multi_open_unique_handles
 
 

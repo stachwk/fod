@@ -58,3 +58,15 @@ Base commit at execution time: `597b185`
 - `make -n change-runtime-list`
 - `make build-debug && make test-runtime-profile`
 - `make change-runtime-list`
+
+Base commit at execution time: `9d3f255`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/8de54ae6-1430-4108-b525-05bd3cb3b015/pasted-text.txt`
+- `sed -n '261,520p' /home/wojtek/.codex/attachments/8de54ae6-1430-4108-b525-05bd3cb3b015/pasted-text.txt`
+- `rg -n "CARGO_BUILD_MKFS|CARGO_BUILD_FUSE|CARGO_BUILD_INDEXER|CARGO_RUN_MKFS|CARGO_RUN_INDEXER|cargo run|cargo build" Makefile`
+- `make -n build-debug`
+- `make -n test-multi-open-unique-handles && make -n test-copy-block-crc-table`
+- `make build-debug && make init && make indexer INDEXER_ARGS='--help' && make test-fod-indexer-materialize-rollback && make test-multi-open-unique-handles && make test-copy-block-crc-table`
+- `make -n docker-selinux-acl-smoke`
+- `make test-runtime-profile`
+- `make change-runtime-list`
