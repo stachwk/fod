@@ -109,6 +109,26 @@ The WAL/checkpointer counters are cumulative from PostgreSQL `stats_reset` and s
 - The dominant measured area remains server-side payload SQL: `COPY fod_persist_block_stage` plus `INSERT INTO data_blocks ... ON CONFLICT`, about `1843.741 ms` or roughly `49.6%` of measured workload time.
 - Repeated metadata lookups are visible, but still secondary compared with payload persistence SQL.
 
+## Rejected `DO NOTHING` Probe
+
+An opt-in runtime experiment that replaced the `data_blocks` conflict update with `DO NOTHING` was rejected and must not be kept as a production path.
+
+The probe kept large-copy and remount durability superficially passing, but broke `copy_block_crc_table` because the second copy left stale CRC ownership/state behind. This confirms that the current `ON CONFLICT DO UPDATE` behavior is required for correctness until a different persisted block/CRC ownership model is designed and tested.
+
+Failed test command:
+
+```bash
+FOD_DATA_BLOCKS_MERGE_DO_NOTHING=1 make test-copy-block-crc-table
+```
+
+Failure detail:
+
+```text
+CRC rows after second copy do not match source:
+got      [1796809269, 3908932036, 1508472627, 1835173265]
+expected [377268347, 3908932036, 1508472627, 1835173265]
+```
+
 ## Next Recommended Target
 
 The next Codex task should investigate and benchmark the server-side `data_blocks` merge path, especially the `ON CONFLICT DO UPDATE` behavior, using `EXPLAIN (ANALYZE, BUFFERS, WAL)` where possible and before/after measurements on `test-large-copy-benchmark`.

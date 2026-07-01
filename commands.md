@@ -406,3 +406,19 @@ Base commit at execution time: `024547a`
 - `make test-remount-durability-benchmark`
 - `make test-persist-buffer-chunking`
 - `make test-unlink-after-write`
+
+Base commit at execution time: `a7f12f8`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/be96d8d6-8d74-4117-aba9-5d7690259dfe/pasted-text.txt`
+- `sed -n '261,560p' /home/wojtek/.codex/attachments/be96d8d6-8d74-4117-aba9-5d7690259dfe/pasted-text.txt`
+- `git status --short && git log -1 --oneline && cat fod_version.txt`
+- `git show --stat --oneline --name-status HEAD`
+- `rg -n "data-blocks|data_blocks|profile-pg-data-blocks" Makefile scripts/perf docs conclusions.md commands.md TODO.md -S`
+- `ls -l scripts/perf/pg && sed -n '1,220p' scripts/perf/pg/data_blocks_semantics.sql 2>/dev/null`
+- `sed -n '1,180p' docs/performance-profile-io-visibility-2026-07-01.md`
+- `sed -n '1360,1410p' Makefile`
+- `tail -n 80 conclusions.md`
+- `tail -n 100 commands.md`
+- `git log --oneline -8`
+- `rg -n "DO NOTHING|FOD_DATA_BLOCKS_MERGE_DO_NOTHING|CRC rows after second copy" . -S`
+- `git show --name-status --oneline 4bac9cf 2>/dev/null | sed -n '1,120p'`
