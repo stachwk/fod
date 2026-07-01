@@ -160,6 +160,7 @@ endef
 VENV_DIR ?= .venv
 VENV_PYTHON := $(VENV_DIR)/bin/python
 VENV_PIP := $(VENV_DIR)/bin/pip
+VENV_STAMP := $(VENV_DIR)/.fod-venv.stamp
 SYSTEM_SITE_PACKAGES := $(shell $(PYTHON) -c 'import site; print(":".join(site.getsitepackages()))')
 COMPOSE ?= docker compose
 COMPOSE_FILE ?= docker-compose.yml
@@ -449,13 +450,14 @@ help:
 $(VENV_PYTHON):
 	$(PYTHON) -m venv $(VENV_DIR)
 
-venv: $(VENV_PYTHON)
+$(VENV_STAMP): requirements-test.txt $(VENV_PYTHON)
 	$(VENV_PYTHON) -m ensurepip --upgrade
-	$(VENV_PIP) install fusepy psycopg2-binary
+	$(VENV_PIP) install -r requirements-test.txt
+	@touch $@
 
-deps: $(VENV_PYTHON)
-	$(VENV_PYTHON) -m ensurepip --upgrade
-	$(VENV_PIP) install fusepy psycopg2-binary
+venv: $(VENV_STAMP)
+
+deps: venv
 
 deps-ubuntu:
 	@printf '%s\n' \

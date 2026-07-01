@@ -70,3 +70,17 @@ Base commit at execution time: `9d3f255`
 - `make -n docker-selinux-acl-smoke`
 - `make test-runtime-profile`
 - `make change-runtime-list`
+
+Base commit at execution time: `453896f`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/b3be45ea-82c6-427e-bfda-7a5d3cef960c/pasted-text.txt`
+- `sed -n '261,520p' /home/wojtek/.codex/attachments/b3be45ea-82c6-427e-bfda-7a5d3cef960c/pasted-text.txt`
+- `rg -n "^venv:|VENV_|ensurepip|pip install|^deps:|^clean:" Makefile`
+- `sed -n '130,180p' Makefile`
+- `sed -n '220,270p' Makefile`
+- `make -n venv`
+- `make venv && make -n venv`
+- `make -n test-fod-indexer-materialize-rollback`
+- `make -n test-runtime-profile`
+- `test -f .venv/.fod-venv.stamp && ls -l .venv/.fod-venv.stamp requirements-test.txt`
+- `make venv && make test-fod-indexer-materialize-rollback && make test-fod-indexer-usability && make test-runtime-profile && make test-fod-indexer-plan-import-scope`

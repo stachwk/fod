@@ -9,7 +9,7 @@ Reading guide:
 
 ## Current Follow-ups
 
-- [ ] Consider an incremental venv setup stamp. The current `venv` target still reruns `ensurepip` and `pip install` for many integration targets; keep this separate from Rust debug binary reuse.
+- [x] Make Python test venv setup incremental with `requirements-test.txt` and `$(VENV_DIR)/.fod-venv.stamp`.
 - [ ] Revisit fod-indexer integration test isolation for parallel execution. The current smokes share source names such as `smoke` and cleanup global indexer state, so running targets like `test-fod-indexer-plan-import-scope` and `test-fod-indexer-cleanup-failed` in parallel can race even though the sequential Makefile flow passes.
 - [x] Detect single-node vs read-only replica mode early and let runtime choose the appropriate lock strategy before mount. Handled in `rust_fuse/src/startup.rs` via `effective_read_only()` and `lock_settings(read_only)`.
 - [x] Keep `workers_read` and `workers_write` constrained to the cases where they really help: disjoint read gaps and segmented copy operations, not small contiguous fetches. Read-side gating now goes through `rust_hotpath::read_missing_range_worker_count`; write-side gating already goes through the shared hot-path worker planner.
