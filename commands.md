@@ -544,3 +544,57 @@ Base commit at execution time: `2659c1b`
 - `git diff -- rust_hotpath/src/pg.rs`
 - `git diff -- TODO.md conclusions.md docs/performance-baselines.md`
 - `git diff -- commands.md`
+
+Base commit at execution time: `85b3ee0`
+
+- `git status --short`
+- `git rev-parse --short HEAD`
+- `rg -n "QNAP|qnap|test-large-copy-benchmark|profile-pg" Makefile docker-compose.yml docs scripts -S`
+- `ls -la /home/wojtek/git/config && rg -n "QNAP|qnap|DOCKER_HOST|192\\.168\\.1\\.11|POSTGRES" /home/wojtek/git/config -S`
+- `sed -n '1200,1250p' Makefile`
+- `sed -n '1030,1045p' Makefile`
+- `sed -n '1340,1415p' Makefile`
+- `sed -n '190,240p' Makefile`
+- `make qnap-config-show`
+- `sed -n '480,525p' Makefile`
+- `make qnap-smoke`
+- `make QNAP=1 profile-env PROFILE_RUN_ID=qnap-copy-send-buffer-preflight-20260701T191240Z PROFILE_HOST=qnap`
+- `make QNAP=1 profile-env PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=default`
+- `make QNAP=1 profile-pg-reset PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap`
+- `make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=before`
+- `FOD_PROFILE_IO=1 make QNAP=1 test-large-copy-benchmark`
+- `make QNAP=1 profile-pg-top PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=default`
+- `make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=after`
+- `make QNAP=1 profile-pg-wal-delta PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap`
+- `make QNAP=1 profile-env PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=smaller`
+- `make QNAP=1 profile-pg-reset PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap`
+- `make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=before`
+- `FOD_PROFILE_IO=1 FOD_PERSIST_COPY_SEND_BUFFER_BYTES=65536 make QNAP=1 test-large-copy-benchmark`
+- `make QNAP=1 profile-pg-top PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=smaller`
+- `make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=after`
+- `make QNAP=1 profile-pg-wal-delta PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap`
+- `make QNAP=1 profile-env PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=larger`
+- `make QNAP=1 profile-pg-reset PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap`
+- `make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=before`
+- `FOD_PROFILE_IO=1 FOD_PERSIST_COPY_SEND_BUFFER_BYTES=4194304 make QNAP=1 test-large-copy-benchmark`
+- `make QNAP=1 profile-pg-top PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=larger`
+- `make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=after`
+- `make QNAP=1 profile-pg-wal-delta PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap`
+- `make QNAP=1 profile-env PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=default-warm`
+- `make QNAP=1 profile-pg-reset PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap`
+- `make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=before`
+- `FOD_PROFILE_IO=1 make QNAP=1 test-large-copy-benchmark`
+- `make QNAP=1 profile-pg-top PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=default-warm`
+- `make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=after`
+- `make QNAP=1 profile-pg-wal-delta PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap`
+- `find artifacts/perf/85b3ee0 -maxdepth 1 -type d -name 'qnap-*copy-send-buffer*' | sort`
+- `rg -n "OK large-copy-benchmark|FOD I/O profile: op=pg.copy_put_data.aggregate" /tmp/fod-qnap-copy-send-buffer-default.log /tmp/fod-qnap-copy-send-buffer-smaller.log /tmp/fod-qnap-copy-send-buffer-larger.log /tmp/fod-qnap-copy-send-buffer-default-warm.log`
+- `for f in artifacts/perf/85b3ee0/qnap-qnap-copy-send-buffer-*/pg_wal_delta-before-to-after.tsv; do printf '%s\n' "$f"; sed -n '1,20p' "$f"; done`
+- `for f in artifacts/perf/85b3ee0/qnap-qnap-copy-send-buffer-default-20260701T191302Z/pg_top_statements-default.txt artifacts/perf/85b3ee0/qnap-qnap-copy-send-buffer-default-warm-20260701T191517Z/pg_top_statements-default-warm.txt artifacts/perf/85b3ee0/qnap-qnap-copy-send-buffer-smaller-20260701T191346Z/pg_top_statements-smaller.txt artifacts/perf/85b3ee0/qnap-qnap-copy-send-buffer-larger-20260701T191428Z/pg_top_statements-larger.txt; do printf '%s\n' "$f"; rg -n "COPY fod_persist_block_stage|INSERT INTO data_blocks" "$f" | head -n 3; done`
+- `cat artifacts/perf/85b3ee0/qnap-qnap-copy-send-buffer-default-warm-20260701T191517Z/env.txt | sed -n '1,40p'`
+- `date -Is`
+- `git log -1 --oneline`
+- `git diff --check`
+- `git diff --stat`
+- `git status --short`
+- `cat fod_version.txt`

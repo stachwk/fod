@@ -520,6 +520,88 @@ Interpretation:
 - On this short local run, the end-to-end time and WAL volume stayed in the same band. The server-side `COPY` and `data_blocks` merge remain the dominant cost.
 - Keep `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` as an opt-in diagnostic/benchmark knob. Do not change the default without repeated runs on local and QNAP backends.
 
+### QNAP COPY Send Buffer Sensitivity
+
+Captured on 2026-07-01 at commit `85b3ee0`
+(`FOD 3.2.1: add COPY send buffer benchmark knob`).
+
+Mode:
+
+- QNAP Docker transport: `DOCKER_HOST=tcp://192.168.1.11:2376`
+- PostgreSQL endpoint: `192.168.1.11:5432`
+- PostgreSQL user/database: `postgresql` / `foddbname`
+- Client host: `lt7300`
+- Artifact root: `artifacts/perf/85b3ee0/`
+
+Commands:
+
+```bash
+make qnap-config-show
+make qnap-smoke
+
+make QNAP=1 profile-pg-reset PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap
+make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=before
+FOD_PROFILE_IO=1 make QNAP=1 test-large-copy-benchmark
+make QNAP=1 profile-pg-top PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=default
+make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=after
+make QNAP=1 profile-pg-wal-delta PROFILE_RUN_ID=qnap-copy-send-buffer-default-20260701T191302Z PROFILE_HOST=qnap
+
+make QNAP=1 profile-pg-reset PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap
+make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=before
+FOD_PROFILE_IO=1 FOD_PERSIST_COPY_SEND_BUFFER_BYTES=65536 make QNAP=1 test-large-copy-benchmark
+make QNAP=1 profile-pg-top PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=smaller
+make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=after
+make QNAP=1 profile-pg-wal-delta PROFILE_RUN_ID=qnap-copy-send-buffer-smaller-20260701T191346Z PROFILE_HOST=qnap
+
+make QNAP=1 profile-pg-reset PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap
+make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=before
+FOD_PROFILE_IO=1 FOD_PERSIST_COPY_SEND_BUFFER_BYTES=4194304 make QNAP=1 test-large-copy-benchmark
+make QNAP=1 profile-pg-top PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=larger
+make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=after
+make QNAP=1 profile-pg-wal-delta PROFILE_RUN_ID=qnap-copy-send-buffer-larger-20260701T191428Z PROFILE_HOST=qnap
+
+make QNAP=1 profile-pg-reset PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap
+make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=before
+FOD_PROFILE_IO=1 make QNAP=1 test-large-copy-benchmark
+make QNAP=1 profile-pg-top PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=default-warm
+make QNAP=1 profile-pg-wal-snapshot PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap PROFILE_CAPTURE_LABEL=after
+make QNAP=1 profile-pg-wal-delta PROFILE_RUN_ID=qnap-copy-send-buffer-default-warm-20260701T191517Z PROFILE_HOST=qnap
+```
+
+Runtime results:
+
+| Variant | Send buffer | Elapsed seconds | Throughput MiB/s | COPY send count per pass | COPY send seconds pass 1 | COPY send seconds pass 2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| default cold | `1 MiB` | `22.536190` | `2.84` | `65` | `0.904711` | `1.205528` |
+| smaller | `64 KiB` | `23.893037` | `2.68` | `1024` | `0.817423` | `0.791216` |
+| larger | `4 MiB` | `20.376766` | `3.14` | `17` | `0.744381` | `1.473567` |
+| default warm | `1 MiB` | `24.598270` | `2.60` | `65` | `0.994643` | `1.137845` |
+
+Top SQL shape:
+
+| Variant | `COPY fod_persist_block_stage` total ms | Merge 1 total ms | Merge 2 total ms |
+| --- | ---: | ---: | ---: |
+| default cold | `3952.538` | `3187.904` | `2928.791` |
+| smaller | `3992.805` | `3329.605` | `3214.364` |
+| larger | `4274.408` | `3985.658` | `2407.041` |
+| default warm | `4625.604` | `5657.098` | `2851.256` |
+
+WAL/checkpointer delta:
+
+| Variant | `wal_bytes` | `wal_records` | `wal_buffers_full` | `wal_write` | `wal_sync` | `buffers_checkpoint` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| default cold | `13347075` | `166966` | `0` | `57` | `57` | `0` |
+| smaller | `12917901` | `166397` | `0` | `40` | `40` | `0` |
+| larger | `12848223` | `165657` | `0` | `40` | `40` | `0` |
+| default warm | `12924189` | `166424` | `0` | `50` | `50` | `0` |
+
+Interpretation:
+
+- The QNAP remote path is much slower than local for this workload: roughly `2.60-3.14 MiB/s` versus the local `16.36-17.05 MiB/s` range.
+- The `4 MiB` send buffer was fastest in this single QNAP pass, but the warmed default run was slower than the earlier cold default, so the spread is still too noisy for a default change.
+- WAL volume stayed in the same range as local, around `12.85-13.35 MB`; the remote penalty is visible primarily as elapsed time and SQL execution time, not extra WAL.
+- The first default run after `qnap-smoke` included one-time DDL/upgrade noise in `pg_stat_statements`, so prefer the `default warm` row when comparing warm runtime behavior.
+
 ### Interpretation
 
 - The rejected `DO NOTHING` probe confirms that correctness currently requires the conflict update path.
