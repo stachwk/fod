@@ -62,6 +62,7 @@ endif
 FOD_BOOTSTRAP_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-bootstrap
 FOD_MKFS_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-rust-mkfs
 FOD_CONFIG_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-config
+FOD_CHANGE_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-change
 FOD_FUSE_DEBUG_BIN := $(RUST_FUSE_TARGET_DIR)/debug/fod-rust-fuse
 FOD_INDEXER_DEBUG_BIN := $(RUST_INDEXER_TARGET_DIR)/debug/fod-indexer
 FOD_DEBUG_BUILD_STAMP := target/.fod-debug-build.stamp
@@ -1067,36 +1068,30 @@ test-postgresql-requirements-autocommit-on: venv up
 test-postgresql-requirements: test-postgresql-requirements-autocommit-off
 	@:
 
-test-runtime-profile: venv up
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+test-runtime-profile: venv build-debug up
 	sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_profile.py
 
-test-runtime-reload: venv
+test-runtime-reload: venv build-debug
 	$(MAKE) reset
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap --bin fod-change
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
 	sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_reload.py
 
-test-runtime-profile-extents: venv up
-	$(CARGO_BUILD_MKFS) --bin fod-bootstrap
-	$(CARGO_BUILD_FUSE) --bin fod-rust-fuse
+test-runtime-profile-extents: venv build-debug up
 	sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PROFILE=extents FOD_ENABLE_EXTENTS=1 $(VENV_PYTHON) tests/integration/test_runtime_profile.py
 
 .PHONY: test-runtime-profile-extents test-runtime-reload
 
-change-runtime-list: up wait
-	$(CARGO_RUN_MKFS) --bin $(FOD_CHANGE_BIN) -- --config-path $(FOD_CHANGE_CONFIG_PATH) --list
+change-runtime-list: build-debug up wait
+	$(FOD_CHANGE_DEBUG_BIN) --config-path $(FOD_CHANGE_CONFIG_PATH) --list
 
-change-runtime-get: up wait
+change-runtime-get: build-debug up wait
 	@set -eu; \
 	if [ -z "$(strip $(FOD_CHANGE_KEY))" ]; then \
 		echo 'Set FOD_CHANGE_KEY=...'; \
 		exit 1; \
 	fi; \
-	$(CARGO_RUN_MKFS) --bin $(FOD_CHANGE_BIN) -- --config-path $(FOD_CHANGE_CONFIG_PATH) --get $(FOD_CHANGE_KEY)
+	$(FOD_CHANGE_DEBUG_BIN) --config-path $(FOD_CHANGE_CONFIG_PATH) --get $(FOD_CHANGE_KEY)
 
-change-runtime-set: up wait
+change-runtime-set: build-debug up wait
 	@set -eu; \
 	if [ -z "$(strip $(FOD_CHANGE_KEY))" ]; then \
 		echo 'Set FOD_CHANGE_KEY=...'; \
@@ -1110,16 +1105,16 @@ change-runtime-set: up wait
 		echo 'Set FOD_CHANGE_PASSWORD=...'; \
 		exit 1; \
 	fi; \
-	$(CARGO_RUN_MKFS) --bin $(FOD_CHANGE_BIN) -- --config-path $(FOD_CHANGE_CONFIG_PATH) --password $(FOD_CHANGE_PASSWORD) --set $(FOD_CHANGE_KEY)=$(FOD_CHANGE_VALUE)
+	$(FOD_CHANGE_DEBUG_BIN) --config-path $(FOD_CHANGE_CONFIG_PATH) --password $(FOD_CHANGE_PASSWORD) --set $(FOD_CHANGE_KEY)=$(FOD_CHANGE_VALUE)
 
 change-runtime: change-runtime-set
 	@:
 
 change-runtime-sync: reload-runtime
 
-reload-runtime: up wait
+reload-runtime: build-debug up wait
 	@set -eu; \
-	$(CARGO_RUN_MKFS) --bin $(FOD_CHANGE_BIN) -- --config-path $(FOD_CHANGE_CONFIG_PATH) --sync-config
+	$(FOD_CHANGE_DEBUG_BIN) --config-path $(FOD_CHANGE_CONFIG_PATH) --sync-config
 
 .PHONY: reload-runtime change-runtime change-runtime-sync change-runtime-list change-runtime-get change-runtime-set
 

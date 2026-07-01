@@ -48,3 +48,13 @@ Base commit at execution time: `b619fb5`
 - `timeout 12s make mount`
 - `mountpoint -q /tmp/fod-mount; echo mounted=$?`
 - `make test-fod-indexer-materialize-rollback`
+
+Base commit at execution time: `597b185`
+
+- `rg -n "test-runtime-profile|runtime_profile|CARGO_BUILD_MKFS|CARGO_BUILD_FUSE" Makefile tests/integration/test_runtime_profile.py tests/integration/fod_mount.py -S`
+- `sed -n '1060,1090p' Makefile`
+- `rg -n "def run_fod_change|fod-change|FOD_CHANGE" tests/integration/fod_runtime_testlib.py -S`
+- `make -n test-runtime-profile`
+- `make -n change-runtime-list`
+- `make build-debug && make test-runtime-profile`
+- `make change-runtime-list`
