@@ -72,7 +72,13 @@ make profile-perf-stat PROFILE_WORKLOAD=test-large-copy-benchmark
 
 If the host blocks unprivileged `perf` with `perf_event_paranoid`, do not run the whole workload as root through `sudo perf stat -- make ...` unless that is explicitly what you want to measure. That form executes `make` and the test process as root and can leave root-owned build artifacts under `target/`.
 
-Prefer attach or system-wide capture where only `perf` has elevated privileges and the workload still runs as the normal user, for example:
+Prefer attach or system-wide capture where only `perf` has elevated privileges and the workload still runs as the normal user. The Makefile helper does that and restores ownership of the root-written perf output file:
+
+```bash
+make profile-sudo-perf-stat-system PROFILE_WORKLOAD=test-large-copy-benchmark
+```
+
+The equivalent manual shape is:
 
 ```bash
 mkdir -p artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s)-manual
@@ -118,6 +124,12 @@ make profile-bpftrace-write-hist PROFILE_SECONDS=30
 ```
 
 They are host-dependent and require `bpftrace` plus sufficient privileges.
+
+To run a short bpftrace syscall sample while the workload still runs as the normal user:
+
+```bash
+make profile-sudo-bpftrace-syscalls-workload PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_SECONDS=12
+```
 
 ## QNAP And Remote Rules
 

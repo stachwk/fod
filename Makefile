@@ -139,6 +139,7 @@ PROFILE_SECONDS ?= 60
 PROFILE_WORKLOAD ?= test-large-copy-benchmark
 PROFILE_PID ?=
 PROFILE_MAKE ?= make
+PROFILE_SUDO ?= sudo -n
 
 define RUN_POSTGRES_BENCHMARK_REPEAT
 	@set -eu; \
@@ -341,6 +342,8 @@ help:
 		'  make profile-local-baseline - run PROFILE_WORKLOAD with pg_stat capture before/after' \
 		'  make profile-perf-stat - run perf stat around PROFILE_WORKLOAD' \
 		'  make profile-perf-record - record perf samples around PROFILE_WORKLOAD' \
+		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
+		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-fuse-attach PROFILE_PID=<pid> - attach perf to a running fod-rust-fuse process' \
 		'  make mount      - mount FOD at $(MOUNTPOINT)' \
 		'  make qnap-mount - mount FOD at $(MOUNTPOINT) using QNAP=1' \
@@ -1188,7 +1191,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1247,6 +1250,41 @@ profile-perf-record:
 	@mkdir -p $(ARTIFACTS_DIR)
 	perf record -F $(PERF_FREQ) -g --call-graph dwarf,16384 -o $(ARTIFACTS_DIR)/perf-$(PROFILE_WORKLOAD).data -- $(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD)
 	@printf '%s\n' "Run: perf report -i $(ARTIFACTS_DIR)/perf-$(PROFILE_WORKLOAD).data"
+
+profile-sudo-perf-stat-system:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@set +e; \
+	out="$(ARTIFACTS_DIR)/perf-stat-system-$(PROFILE_WORKLOAD)$(PROFILE_CAPTURE_SUFFIX).txt"; \
+	status_file="$(ARTIFACTS_DIR)/.profile-workload-status-$$$$"; \
+	rm -f "$$status_file"; \
+	( sleep 1; $(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD); echo "$$?" > "$$status_file" ) & \
+	workload_pid="$$!"; \
+	$(PROFILE_SUDO) perf stat -a -d -d -d -o "$$out" -- sh -c 'sleep 1; while [ ! -f "$$1" ]; do sleep 0.2; done' sh "$$status_file"; \
+	perf_status="$$?"; \
+	wait "$$workload_pid"; \
+	workload_status="$$(cat "$$status_file" 2>/dev/null || echo 1)"; \
+	rm -f "$$status_file"; \
+	$(PROFILE_SUDO) chown "$$(id -u):$$(id -g)" "$$out" 2>/dev/null || true; \
+	printf 'workload_status=%s\nperf_status=%s\n' "$$workload_status" "$$perf_status" >> "$$out"; \
+	cat "$$out"; \
+	if [ "$$workload_status" -ne 0 ]; then exit "$$workload_status"; fi; \
+	if [ "$$perf_status" -ne 0 ]; then exit "$$perf_status"; fi
+
+profile-sudo-bpftrace-syscalls-workload:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@set +e; \
+	out="$(ARTIFACTS_DIR)/bpftrace-syscalls-$(PROFILE_WORKLOAD)$(PROFILE_CAPTURE_SUFFIX).txt"; \
+	$(PROFILE_SUDO) timeout $(PROFILE_SECONDS)s bpftrace scripts/perf/bpftrace/syscalls_by_comm.bt > "$$out" 2>&1 & \
+	trace_pid="$$!"; \
+	sleep 1; \
+	$(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD); \
+	workload_status="$$?"; \
+	wait "$$trace_pid"; \
+	trace_status="$$?"; \
+	printf 'workload_status=%s\nbpftrace_status=%s\n' "$$workload_status" "$$trace_status" >> "$$out"; \
+	cat "$$out"; \
+	if [ "$$workload_status" -ne 0 ]; then exit "$$workload_status"; fi; \
+	if [ "$$trace_status" -ne 0 ] && [ "$$trace_status" -ne 124 ]; then exit "$$trace_status"; fi
 
 profile-fuse-attach:
 	@test -n "$(PROFILE_PID)" || { echo "Set PROFILE_PID to fod-rust-fuse PID"; exit 2; }

@@ -14,7 +14,7 @@ Reading guide:
 - [ ] Consider adding `test-fod-indexer-parallel-smoke` to extended CI after it is stable on more than one host.
 - [x] Add repeatable performance profiling capture infrastructure for environment fingerprints, PostgreSQL statistics, `perf`, and optional bpftrace helpers.
 - [ ] Benchmark and optimize the SQL payload persistence path identified by the first local baseline: `COPY fod_persist_block_stage` plus `INSERT INTO data_blocks ... SELECT ... ON CONFLICT ...` dominated the 64 MiB `test-large-copy-benchmark` run.
-- [ ] Add a safe privileged profiling workflow or Makefile helper that uses sudo only for `perf`/bpftrace attach or system-wide capture, without running FOD workloads as root; direct `sudo perf stat -- make ...` leaves root-owned build artifacts and should remain diagnostic only.
+- [x] Add a safe privileged profiling workflow or Makefile helper that uses sudo only for `perf`/bpftrace attach or system-wide capture, without running FOD workloads as root; direct `sudo perf stat -- make ...` leaves root-owned build artifacts and should remain diagnostic only. Covered by `profile-sudo-perf-stat-system` and `profile-sudo-bpftrace-syscalls-workload`.
 - [ ] Reassess FUSE cache, timeout, and `max_background` tuning after a FUSE-specific profile can collect `perf` or bpftrace counters on a host that allows them.
 - [ ] Review prepared statement and connection reuse in high-call metadata lookup paths after the payload persistence path has before/after numbers; the first baseline showed path and child-entry lookups as visible but secondary.
 - [ ] Review `rust_indexer` allocation and buffer reuse after heap or allocation profiling.

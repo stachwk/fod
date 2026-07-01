@@ -343,3 +343,24 @@ Base commit at execution time: `918f8b1`
 - `set -u; ART=artifacts/perf/918f8b1/lt7300-20260701T120934Z; make --no-print-directory test-large-copy-benchmark >/tmp/fod-large-copy-warmup.log 2>&1; sudo -n timeout 14s bpftrace scripts/perf/bpftrace/syscalls_by_comm.bt > "$ART/bpftrace-syscalls-sudo-large-copy-warm.txt" 2>&1 & BPF_PID=$!; sleep 1; make --no-print-directory test-large-copy-benchmark; wait "$BPF_PID" || BPF_STATUS=$?; printf 'bpftrace_status=%s\n' "${BPF_STATUS:-0}" >> "$ART/bpftrace-syscalls-sudo-large-copy-warm.txt"; sed -n '1,220p' "$ART/bpftrace-syscalls-sudo-large-copy-warm.txt"`
 - `set -u; ART=artifacts/perf/918f8b1/lt7300-20260701T120934Z; mkdir -p "$ART"; sudo -n perf stat -a -d -d -d -o "$ART/perf-stat-sudo-system-large-copy.txt" -- sleep 12 & PERF_PID=$!; sleep 1; make --no-print-directory test-large-copy-benchmark; wait "$PERF_PID" || PERF_STATUS=$?; printf 'perf_system_status=%s\n' "${PERF_STATUS:-0}" >> "$ART/perf-stat-sudo-system-large-copy.txt"; sed -n '1,220p' "$ART/perf-stat-sudo-system-large-copy.txt"`
 - `sudo -n chown -R "$(id -u):$(id -g)" artifacts/perf/918f8b1/lt7300-20260701T120934Z target && { echo '== perf warm =='; sed -n '1,80p' artifacts/perf/918f8b1/lt7300-20260701T120934Z/perf-stat-sudo-warm-test-large-copy-benchmark.txt; echo '== perf system =='; sed -n '1,80p' artifacts/perf/918f8b1/lt7300-20260701T120934Z/perf-stat-sudo-system-large-copy.txt; echo '== bpftrace fod/postgres snippets =='; grep -E '@\[(fod|postgres|large_copy|docker-proxy|docker|cargo|rustc)' artifacts/perf/918f8b1/lt7300-20260701T120934Z/bpftrace-syscalls-sudo-large-copy-warm.txt | tail -n 80; }`
+
+Date: `2026-07-01`
+Base commit at execution time: `0d047bb`
+
+- `git status --short && git log -1 --oneline && cat fod_version.txt`
+- `sed -n '120,145p' Makefile && sed -n '1187,1285p' Makefile`
+- `sed -n '55,110p' docs/performance.md && sed -n '10,24p' TODO.md`
+- `date -Is`
+- `rg -n "^SHELL|.SHELLFLAGS" Makefile`
+- `make -n profile-sudo-perf-stat-system PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=20260701T122000Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=helper PROFILE_SUDO='sudo -n'`
+- `make -n profile-sudo-bpftrace-syscalls-workload PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=20260701T122000Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=helper PROFILE_SECONDS=5 PROFILE_SUDO='sudo -n'`
+- `git diff --check`
+- `git diff --stat`
+- `make profile-sudo-perf-stat-system PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=20260701T122000Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=helper PROFILE_SUDO='sudo -n'`
+- `make profile-sudo-bpftrace-syscalls-workload PROFILE_WORKLOAD=test-large-copy-benchmark PROFILE_RUN_ID=20260701T122000Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=helper PROFILE_SECONDS=8 PROFILE_SUDO='sudo -n'`
+- `find target artifacts/perf/0d047bb/lt7300-20260701T122000Z -user root -maxdepth 4 -printf '%u:%g %p\n' 2>/dev/null | sed -n '1,80p'`
+- `find artifacts/perf/0d047bb/lt7300-20260701T122000Z -maxdepth 1 -type f -printf '%f %s\n' 2>/dev/null | sort`
+- `git status --short --ignored | sed -n '1,100p'`
+- `git diff --check`
+- `git add Makefile TODO.md conclusions.md docs/performance.md commands.md`
+- `git commit -m 'FOD 3.2.1: add safe sudo profiling helpers'`
