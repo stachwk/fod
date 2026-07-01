@@ -85,7 +85,7 @@ def bloat_snapshot(text: str) -> dict[str, str]:
     for line in text.splitlines():
         if " data_blocks " in f" {line} " and "|" in line:
             parts = [part.strip() for part in line.split("|")]
-            if len(parts) >= 5 and parts[1] == "data_blocks":
+            if len(parts) >= 5 and parts[1] == "data_blocks" and parts[2].isdigit():
                 snapshot["data_blocks_n_live_tup"] = parts[2]
                 snapshot["data_blocks_n_dead_tup"] = parts[3]
         if "|" not in line:
