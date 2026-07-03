@@ -649,6 +649,21 @@ Base commit at execution time: `d5150c3`
 - `SNAP="$(find artifacts/perf/d5150c3 -path '*dml-snapshot-smoke-*' -name 'pg_table_dml_snapshot-smoke.txt' | sort | tail -n 1)"; make profile-pg-table-dml-delta PROFILE_TABLE_DML_BEFORE_FILE="$SNAP" PROFILE_TABLE_DML_AFTER_FILE="$SNAP" PROFILE_RUN_ID=dml-delta-smoke-$(date -u +%Y%m%dT%H%M%SZ) PROFILE_HOST=$(hostname -s 2>/dev/null || hostname)`
 - `tail -n 40 commands.md`
 - `date -Is && git rev-parse --short HEAD && git status --short`
+
+Base commit at execution time: `c5d7f24`
+
+- `git add Makefile commands.md docs/performance.md scripts/perf/pg/metric_snapshot.py scripts/perf/pg/table_dml_delta.py scripts/perf/pg/table_dml_snapshot.sql scripts/perf/pg/wal_delta.py scripts/perf/summarize_data_blocks_profile.py && git commit -m "FOD 3.2.1: add data block DML delta profiling"`
+- `PROFILE_RUN_ID="data-blocks-dml-$(date -u +%Y%m%dT%H%M%SZ)"; PROFILE_HOST="$(hostname -s 2>/dev/null || hostname)"; printf '%s\n' "$PROFILE_RUN_ID" > /tmp/fod_data_blocks_dml_run_id; printf '%s\n' "$PROFILE_HOST" > /tmp/fod_data_blocks_dml_host; make profile-env PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST"; make profile-pg-reset PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST"; make profile-pg-table-dml-snapshot PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST" PROFILE_CAPTURE_LABEL=before; make profile-pg-wal-snapshot PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST" PROFILE_CAPTURE_LABEL=before; FOD_PROFILE_IO=1 make test-large-copy-benchmark 2>&1 | tee /tmp/fod-data-blocks-dml-current.log; make profile-pg-table-dml-snapshot PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST" PROFILE_CAPTURE_LABEL=after; make profile-pg-table-dml-delta PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST"; make profile-pg-wal-snapshot PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST" PROFILE_CAPTURE_LABEL=after; make profile-pg-wal-delta PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST"; make profile-pg-top PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST" PROFILE_CAPTURE_LABEL=dml; make profile-pg-data-blocks-bloat PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST" PROFILE_CAPTURE_LABEL=dml`
+- `PROFILE_RUN_ID=$(cat /tmp/fod_data_blocks_dml_run_id); PROFILE_HOST=$(cat /tmp/fod_data_blocks_dml_host); make profile-data-blocks-summary PROFILE_RUN_ID="$PROFILE_RUN_ID" PROFILE_HOST="$PROFILE_HOST" PROFILE_CAPTURE_LABEL=dml PROFILE_LARGE_COPY_LOG=/tmp/fod-data-blocks-dml-current.log PROFILE_TABLE_DML_DELTA_FILE="artifacts/perf/$(git rev-parse --short HEAD)/${PROFILE_HOST}-${PROFILE_RUN_ID}/pg_table_dml_delta-before-to-after.txt" PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT=docs/performance-data-blocks-dml-profile-2026-07-03.md PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION='The real local large-copy path inserted 32768 data_blocks rows with zero data_blocks UPDATE/HOT/dead-tuple growth; this run measures insert-heavy COPY plus conflict lookup, not a conflict-update heap rewrite case.' PROFILE_DATA_BLOCKS_SUMMARY_NEXT='Add or run a targeted overwrite/conflict workload if the next question is HOT update eligibility for real data_blocks rewrites; keep production SQL unchanged until that separate update-heavy evidence exists.'`
+- `sed -n '1,220p' docs/performance-data-blocks-dml-profile-2026-07-03.md`
+- `sed -n '90,160p' BENCHMARKS.md && tail -n 30 BENCHMARKS.md`
+- `git status --short && git diff --stat`
+- `sed -n '16,28p' TODO.md && tail -n 20 conclusions.md`
+- `sed -n '1,90p' BENCHMARKS.md`
+- `git diff --check && git status --short`
+- `git diff --stat && git diff -- BENCHMARKS.md TODO.md conclusions.md commands.md docs/performance-data-blocks-dml-profile-2026-07-03.md | sed -n '1,260p'`
+- `git log -3 --oneline && cat fod_version.txt`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance-data-blocks-dml-profile-2026-07-03.md && git commit -m "FOD 3.2.1: record data block DML delta profile"`
 - `git status --short`
 - `git diff --check`
 - `git diff --stat`

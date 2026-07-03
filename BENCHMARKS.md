@@ -23,7 +23,40 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-06-28 from working tree based on commit `1fee771` and includes the shared planner/autovacuum preset sweep below in addition to the earlier local-only long WAL timeout smoke and the WAL/checkpoint preset comparison on local Docker and QNAP.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-03 from commit `c5d7f24` and adds real `data_blocks` DML deltas for the local large-copy path.
+
+## 2026-07-03 Data Blocks DML Delta Profile
+
+Collected from commit `c5d7f241fc98fd5ac410e1ad89d63b7a2d23cd50` (`FOD 3.2.1: add data block DML delta profiling`) with the FOD version at `3.2.1`.
+
+Workload: `FOD_PROFILE_IO=1 make test-large-copy-benchmark` on local Docker PostgreSQL with a 64 MiB payload.
+
+Artifact summary: `docs/performance-data-blocks-dml-profile-2026-07-03.md`, run ID `data-blocks-dml-20260703T134344Z`.
+
+| Metric | Value |
+| --- | ---: |
+| elapsed_s | `3.798770` |
+| throughput_mib_s | `16.85` |
+| COPY `fod_persist_block_stage` total_exec_ms | `1221.565` |
+| `data_blocks` merge total_exec_ms | `1089.486` |
+| wal_bytes_delta | `13045983` |
+| wal_records_delta | `165633` |
+| `data_blocks_n_tup_ins_delta` | `32768` |
+| `data_blocks_n_tup_upd_delta` | `0` |
+| `data_blocks_n_tup_hot_upd_delta` | `0` |
+| `data_blocks_non_hot_update_delta` | `0` |
+| `data_blocks_n_tup_del_delta` | `0` |
+| `data_blocks_n_dead_tup_delta` | `0` |
+| `idx_data_blocks_object_order_idx_scan_delta` | `32768` |
+| `data_blocks_relation_size_bytes_delta` | `3833856` |
+| `idx_data_blocks_object_order_relation_size_bytes_delta` | `737280` |
+
+Interpretation:
+
+- This large-copy run is insert-heavy: it inserted `32768` `data_blocks` rows and did not exercise a real conflict-update rewrite.
+- HOT eligibility cannot be judged from this workload because `data_blocks_n_tup_upd_delta=0`; the HOT ratio is therefore `n/a`, not `0%`.
+- `idx_data_blocks_object_order` still saw `32768` scans, so conflict lookup cost is measurable even when the outcome is insert rather than update.
+- The next SQL evidence should use a targeted overwrite/conflict workload if the question is heap rewrite/HOT behavior under `ON CONFLICT DO UPDATE`.
 
 ## 2026-07-01 SQL Payload Persistence Send Batching
 
