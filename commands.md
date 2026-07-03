@@ -884,3 +884,5 @@ Base commit at execution time: `0eb2d0e`
 - `git diff --stat`
 - `git diff -- BENCHMARKS.md TODO.md conclusions.md commands.md docs/performance-data-blocks-swap-profile-2026-07-03.md | sed -n '1,260p'`
 - `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance-data-blocks-swap-profile-2026-07-03.md && git diff --cached --check`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance-data-blocks-swap-profile-2026-07-03.md && git diff --cached --check`
+- `git commit -m "FOD 3.2.1: record data block swap overwrite profile"`
