@@ -623,6 +623,44 @@ Base commit at execution time: `c2ce42b`
 
 ## 2026-07-03
 
+Base commit at execution time: `a395cb8`
+
+- `git rev-parse --short HEAD && git status --short`
+- `which rust-analyzer || true; rust-analyzer --version || true; rustc --version; cargo --version; rustup show active-toolchain 2>/dev/null || true`
+- `rg -n "rust-analyzer|checkOnSave|rust-src|sysroot|linkedProjects|procMacro|cargo|targetDir" -S . .vscode ~/.config/Code/User/settings.json ~/.config/Code\ -\ OSS/User/settings.json 2>/dev/null`
+- `find . -maxdepth 3 \( -name 'rust-toolchain*' -o -name 'rust-project.json' -o -name '.rust-analyzer.toml' -o -path './.vscode/*' \) -print`
+- `sed -n '1,120p' .vscode/settings.json`
+- `test -d /usr/src/rustc-1.85.1/library && find /usr/src/rustc-1.85.1/library -maxdepth 2 -type f -name lib.rs | head -n 20 || true; test -d /usr/lib/rust-1.85 && find /usr/lib/rust-1.85 -maxdepth 3 -type d | sed -n '1,40p' || true`
+- `find ~/.vscode ~/.vscode-server ~/.var/app ~/.local/share -path '*rust-analyzer*' \( -type f -o -type l \) 2>/dev/null | sed -n '1,80p'`
+- `find ~/.vscode/extensions ~/.vscode-server/extensions -maxdepth 2 -type f -name package.json 2>/dev/null | xargs -r rg -n '"name": "rust-analyzer"|"version"|rust-lang.rust-analyzer' | sed -n '1,120p'`
+- `find ~/.vscode/extensions/rust-lang.rust-analyzer-0.3.2955-linux-x64 -maxdepth 4 -type f -o -type l | sed -n '1,160p'`
+- `find ~/.vscode/extensions/rust-lang.rust-analyzer-0.3.2955-linux-x64 -maxdepth 5 -type f -perm -111 -print -exec file {} \; | sed -n '1,120p'`
+- `find ~/.cache ~/.config ~/.local/share -iname '*rust*analyzer*' -o -iname '*ra-*' 2>/dev/null | sed -n '1,120p'`
+- `~/.vscode/extensions/rust-lang.rust-analyzer-0.3.2955-linux-x64/server/rust-analyzer --version || true`
+- `sed -n '1,240p' /home/wojtek/.config/Code/logs/20260703T233425/window1/exthost/output_logging_20260703T233429/1-rust-analyzer\ Language\ Server.log`
+- `sed -n '1,240p' /home/wojtek/.config/Code/logs/20260703T233425/window1/exthost/rust-lang.rust-analyzer/rust-analyzer\ Extension.log`
+- `tail -120 /home/wojtek/.config/Code/logs/20260703T233425/window1/exthost/output_logging_20260703T233429/1-rust-analyzer\ Language\ Server.log`
+- `~/.vscode/extensions/rust-lang.rust-analyzer-0.3.2955-linux-x64/server/rust-analyzer --help | sed -n '1,220p'`
+- `git ls-files .vscode/settings.json .vscode/extensions.json .vscode/tasks.json .vscode/launch.json && git status --short`
+- `sed -n '240,520p' /home/wojtek/.config/Code/logs/20260703T233425/window1/exthost/rust-lang.rust-analyzer/rust-analyzer\ Extension.log`
+- `git check-ignore -v .vscode/settings.json .vscode/extensions.json .vscode/tasks.json .vscode/launch.json || true`
+- `git status --ignored --short .vscode/settings.json .vscode/extensions.json .vscode/tasks.json .vscode/launch.json`
+- `git ls-files commands.md conclusions.md TODO.md BENCHMARKS.md | sed -n '1,40p'`
+- `timeout 90s env RUST_BACKTRACE=1 ~/.vscode/extensions/rust-lang.rust-analyzer-0.3.2955-linux-x64/server/rust-analyzer prime-caches . 2>&1 | tee /tmp/fod-rust-analyzer-prime-caches.log; printf 'exit=%s\n' "${PIPESTATUS[0]}"`
+- `find /usr/lib/rust-1.85/lib/rustlib/src /usr/lib/rust-1.85/rustlib/src -maxdepth 4 -type d -name library -print 2>/dev/null; find /usr/lib/rust-1.85/lib/rustlib/src /usr/lib/rust-1.85/rustlib/src -maxdepth 5 -type f -name lib.rs | sed -n '1,60p'`
+- `tail -40 /tmp/fod-rust-analyzer-prime-caches.log`
+- `ls -ld /usr/src/rustc-1.85.1/library /usr/lib/rust-1.85/lib/rustlib/src/rust/library /usr/lib/rust-1.85/rustlib/src/rust/library 2>/dev/null || true`
+- `jq empty .vscode/settings.json && sed -n '1,40p' .vscode/settings.json`
+- `git status --short --ignored .vscode/settings.json commands.md conclusions.md`
+- `git status --short`
+- `git diff --check`
+- `git diff --stat`
+- `git status --short`
+- `rg -n 'VS Code `rust-analyzer` panic|cachePriming|a395cb8|rust-analyzer-0.3.2955' conclusions.md commands.md | tail -n 80`
+- `git add commands.md conclusions.md && git commit -m "FOD 3.2.1: record rust analyzer cache priming workaround"`
+
+## 2026-07-03
+
 Base commit at execution time: `778a805` with uncommitted working-tree changes for unchanged `data_blocks` conflict filtering.
 
 - `git status --short`
