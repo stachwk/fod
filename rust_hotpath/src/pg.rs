@@ -6,7 +6,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, request_token as generate_request_token,
-    PersistBlockTransport, RuntimeConfig, RuntimeStorageSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
+    DataObjectSwapCleanup, PersistBlockTransport, RuntimeConfig, RuntimeStorageSettings,
+    FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -1327,6 +1328,9 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
         || sql.starts_with("UPDATE data_objects SET modification_date = NOW() WHERE id_data_object = $1")
         || sql.starts_with("UPDATE data_objects SET reference_count = reference_count + 1, modification_date = NOW() WHERE id_data_object = $1")
         || sql.starts_with("UPDATE data_objects SET reference_count = GREATEST(reference_count - 1, 0), modification_date = NOW() WHERE id_data_object = $1")
+        || sql.starts_with(
+            "UPDATE data_objects SET reference_count = 0, modification_date = NOW() WHERE id_data_object = $1",
+        )
         || sql.starts_with("UPDATE files SET size = ")
         || sql.starts_with("UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
         || sql.starts_with("UPDATE data_blocks SET id_file = $2 WHERE data_object_id = $1")
@@ -2173,6 +2177,7 @@ pub struct DbRepo {
     connection_tuning: ConnectionTuning,
     persist_buffer_chunk_blocks: u64,
     persist_block_transport: PersistBlockTransport,
+    data_object_swap_cleanup: DataObjectSwapCleanup,
     pool: Arc<SharedConnectionPool>,
     lock_session_id: Mutex<i64>,
     lock_schema_ready: Mutex<bool>,
@@ -2186,6 +2191,7 @@ impl Clone for DbRepo {
             connection_tuning: self.connection_tuning.clone(),
             persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,
             persist_block_transport: self.persist_block_transport,
+            data_object_swap_cleanup: self.data_object_swap_cleanup,
             pool: Arc::clone(&self.pool),
             lock_session_id: Mutex::new(
                 self.lock_session_id
@@ -2526,6 +2532,7 @@ impl DbRepo {
             ConnectionTuning::from_storage(&storage),
             storage.persist_buffer_chunk_blocks,
             storage.persist_block_transport,
+            storage.data_object_swap_cleanup,
             core.pool_max_connections.max(1) as usize,
         )
     }
@@ -2535,6 +2542,7 @@ impl DbRepo {
         connection_tuning: ConnectionTuning,
         persist_buffer_chunk_blocks: u64,
         persist_block_transport: PersistBlockTransport,
+        data_object_swap_cleanup: DataObjectSwapCleanup,
         connection_limit: usize,
     ) -> Result<Self, String> {
         if conninfo.is_empty() {
@@ -2545,6 +2553,7 @@ impl DbRepo {
             connection_tuning,
             persist_buffer_chunk_blocks: persist_buffer_chunk_blocks.max(1),
             persist_block_transport,
+            data_object_swap_cleanup,
             pool: Arc::new(SharedConnectionPool::new(connection_limit.max(1))),
             lock_session_id: Mutex::new(NEXT_LOCK_SESSION_ID.fetch_sub(1, Ordering::Relaxed)),
             lock_schema_ready: Mutex::new(false),
@@ -3213,6 +3222,10 @@ impl DbRepo {
         let sql_delete_data_object =
             CString::new("DELETE FROM data_objects WHERE id_data_object = $1")
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_mark_old_object_unreferenced = CString::new(
+            "UPDATE data_objects SET reference_count = 0, modification_date = NOW() WHERE id_data_object = $1",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_touch_old_object = CString::new(
             "UPDATE data_objects SET reference_count = GREATEST(reference_count - 1, 0), modification_date = NOW() WHERE id_data_object = $1",
         )
@@ -3230,7 +3243,10 @@ impl DbRepo {
         let params = [&new_data_object_id, &file_size, &file_id];
         exec_command_params(conn, &sql_update_file, &params)?;
 
-        if replaced.old_reference_count <= 1 {
+        if replaced.old_reference_count <= 1 && self.data_object_swap_cleanup.is_deferred() {
+            let params = [&old_data_object_id];
+            exec_command_params(conn, &sql_mark_old_object_unreferenced, &params)?;
+        } else if replaced.old_reference_count <= 1 {
             let params = [&old_data_object_id];
             exec_command_params(conn, &sql_delete_data, &params)?;
             exec_command_params(conn, &sql_delete_extents, &params)?;

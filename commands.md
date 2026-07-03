@@ -30,6 +30,80 @@ Base commit at execution time: `53b30d1`
 - `python3 -m py_compile tests/integration/test_fod_indexer_usability.py`
 - `make test-fod-indexer-usability`
 - `make test-fod-indexer-plan-import-scope`
+
+## 2026-07-04
+
+Base commit at execution time: `1c6c87d`
+
+- `git status --short`
+- `git log -8 --oneline`
+- `cat fod_version.txt`
+- `rg -n "data-blocks|full-overwrite|object-GC|garbage|cleanup|profile-data-blocks|repeat|autovacuum|dead" Makefile TODO.md BENCHMARKS.md conclusions.md docs rust_hotpath rust_fuse -S`
+- `tail -80 commands.md`
+- `sed -n '130,190p' Makefile`
+- `sed -n '1048,1080p' Makefile`
+- `sed -n '1240,1348p' Makefile`
+- `sed -n '1,240p' rust_fuse/tests/data_blocks_conflict_benchmark.rs`
+- `sed -n '1,130p' docs/performance.md`
+- `rg -n "CREATE TABLE data_objects|CREATE TABLE data_blocks|reference_count|FOREIGN KEY|data_object_id" base_schema.sql migrations rust_mkfs -S`
+- `rg -n "RuntimeConfig|RuntimeStorageSettings|storage_settings|FOD_.*CLEAN|copy_dedupe|persist_block_transport|env::var" rust_runtime rust_hotpath rust_fuse/src/startup.rs rust_fuse/src/fs.rs -S`
+- `sed -n '1,260p' rust_runtime/src/lib.rs`
+- `sed -n '1,220p' migrations/0016*.sql 2>/dev/null || true && ls migrations | tail -10`
+- `sed -n '330,475p' rust_runtime/src/lib.rs`
+- `sed -n '960,1188p' rust_runtime/src/lib.rs`
+- `sed -n '1270,1530p' rust_runtime/src/lib.rs`
+- `sed -n '1580,1775p' rust_runtime/src/lib.rs`
+- `sed -n '70,90p' migrations/base_schema.sql && sed -n '190,260p' migrations/base_schema.sql && sed -n '1,70p' migrations/0005_data_objects.sql`
+- `sed -n '1,120p' rust_hotpath/src/pg.rs && sed -n '240,340p' rust_runtime/src/lib.rs`
+- `rg -n "fn runtime_env_var_name|struct RuntimeValueSpec|tuning_and_runtime_env|RuntimeValidationTarget|validate_runtime_value_specs|lookup_" rust_runtime/src/lib.rs | head -n 120 && sed -n '480,620p' rust_runtime/src/lib.rs && sed -n '760,950p' rust_runtime/src/lib.rs`
+- `nl -ba rust_fuse/src/startup.rs | sed -n '250,292p'`
+- `rg -n "persist_block_transport|copy_dedupe_crc_table|enable_extents|synchronous_commit|write_flush_threshold" README.md README.pl.md fod_config*.ini docs -S`
+- `sed -n '1,220p' fod_config.example.ini`
+- `sed -n '1,220p' fod_config.ini`
+- `sed -n '130,190p' docs/performance.md`
+- `sed -n '360,390p' README.md`
+- `sed -n '612,635p' README.md`
+- `sed -n '400,435p' README.md`
+- `git status --short`
+- `git diff -- Makefile rust_runtime/src/lib.rs rust_hotpath/src/pg.rs rust_fuse/src/startup.rs rust_fuse/tests/data_blocks_conflict_benchmark.rs scripts/perf/pg/data_object_gc.sql`
+- `sed -n '1,220p' docs/performance.md`
+- `sed -n '350,440p' README.md`
+- `sed -n '1,220p' fod_config.example.ini`
+- `git rev-parse --short HEAD && cat fod_version.txt`
+- `rg -n "data_objects|data_blocks|full-overwrite|full overwrite|object-GC|object GC|deferred|data_object_swap|TODO|Pozosta" TODO.md BENCHMARKS.md conclusions.md README.md docs -S`
+- `sed -n '1,220p' TODO.md`
+- `tail -120 BENCHMARKS.md`
+- `tail -120 conclusions.md`
+- `rg -n "RuntimeConfig|data_object_swap_cleanup|runtime_env|to_runtime_map|export_runtime_env|#\\[test\\]" rust_runtime/src/lib.rs`
+- `sed -n '1,180p' commands.md`
+- `sed -n '405,430p' README.md`
+- `sed -n '610,630p' README.md`
+- `sed -n '2140,2195p' rust_runtime/src/lib.rs`
+- `sed -n '2195,2245p' rust_runtime/src/lib.rs`
+- `sed -n '1960,2020p' rust_runtime/src/lib.rs`
+- `sed -n '1,90p' BENCHMARKS.md`
+- `sed -n '840,910p' rust_runtime/src/lib.rs`
+- `sed -n '120,165p' rust_runtime/src/lib.rs`
+- `sed -n '1240,1310p' rust_hotpath/src/pg.rs`
+- `sed -n '3160,3265p' rust_hotpath/src/pg.rs`
+- `sed -n '1360,1425p' rust_runtime/src/lib.rs`
+- `sed -n '90,125p' rust_runtime/src/lib.rs`
+- `rg -n "reloadable_setting_keys" -C 3 rust_runtime/src/lib.rs`
+- `rg -n "RELOADABLE_RUNTIME_KEYS" -C 2 rust_runtime/src/lib.rs`
+- `sed -n '519,538p' rust_runtime/src/lib.rs`
+- `sed -n '1285,1350p' rust_hotpath/src/pg.rs`
+- `sed -n '1965,2015p' rust_runtime/src/lib.rs && sed -n '2190,2240p' rust_runtime/src/lib.rs`
+- `sed -n '2178,2248p' rust_runtime/src/lib.rs`
+- `cargo fmt`
+- `git diff --check`
+- `make -n profile-data-blocks-swap-repeat-dml PROFILE_RUN_ID=repeat-smoke DATA_BLOCKS_CONFLICT_ID=repeat-smoke PROFILE_DATA_BLOCKS_SWAP_REPEAT=2`
+- `cargo test --manifest-path Cargo.toml -p fod-rust-runtime maps_runtime_keys_to_fod_env_names applies_runtime_env_to_process_environment builds_runtime_config_from_bootstrap_inputs -- --nocapture`
+- `cargo test --manifest-path Cargo.toml -p fod-rust-runtime -- --nocapture`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-hotpath`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-fuse`
+- `git status --short`
+- `git diff --stat`
+- `git diff -- rust_runtime/src/lib.rs rust_hotpath/src/pg.rs Makefile docs/performance.md README.md fod_config.example.ini scripts/perf/pg/data_object_gc.sql`
 - `make test-fod-indexer-cleanup-failed`
 - `make test-fod-indexer-plan-import-scope && make test-fod-indexer-cleanup-failed`
 

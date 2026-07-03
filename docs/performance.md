@@ -77,6 +77,35 @@ make profile-data-blocks-conflict-noop-dml \
 
 This target should keep `data_blocks_n_tup_upd_delta` and `data_blocks_n_dead_tup_delta` at zero when the staged block data is identical to the existing block rows.
 
+To measure repeated changed-payload full overwrites after the data-object swap optimization, run:
+
+```bash
+make profile-data-blocks-swap-repeat-dml \
+  PROFILE_RUN_ID=data-blocks-swap-repeat-$(date -u +%Y%m%dT%H%M%SZ) \
+  DATA_BLOCKS_CONFLICT_ID=swap-repeat-$(date -u +%Y%m%dT%H%M%SZ) \
+  PROFILE_DATA_BLOCKS_SWAP_REPEAT=5
+```
+
+The target seeds one logical file, then overwrites it several times with a different payload marker on each pass. It captures before/after table DML, WAL, top SQL, and `data_blocks` bloat signals. Use this target for WAL, relation growth, dead tuple, and autovacuum behavior before changing the full-overwrite strategy again.
+
+The default full-overwrite swap cleanup policy is immediate cleanup inside the write transaction. For an opt-in delayed-cleanup experiment, run the same profile with:
+
+```bash
+FOD_DATA_OBJECT_SWAP_CLEANUP=deferred \
+make profile-data-blocks-swap-repeat-dml \
+  PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-$(date -u +%Y%m%dT%H%M%SZ) \
+  DATA_BLOCKS_CONFLICT_ID=swap-repeat-deferred-$(date -u +%Y%m%dT%H%M%SZ) \
+  PROFILE_DATA_BLOCKS_SWAP_REPEAT=5
+```
+
+Deferred cleanup leaves old unreferenced data objects in place so the hot overwrite transaction avoids delete churn. Purge those candidates explicitly when measuring the maintenance phase:
+
+```bash
+make profile-pg-data-object-gc DATA_OBJECT_GC_LIMIT=1000000
+```
+
+Do not treat deferred cleanup as a default until repeated local and remote runs show that moving delete work into object GC is better than immediate cleanup for the target workload.
+
 `profile-pg-io` uses `pg_stat_io` and is optional because it is PostgreSQL-version dependent:
 
 ```bash

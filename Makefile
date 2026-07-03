@@ -158,9 +158,13 @@ PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION ?= Real-path data_blocks profile captured
 PROFILE_DATA_BLOCKS_SUMMARY_NEXT ?= Keep runtime SQL unchanged until repeated local/QNAP data confirms the next bottleneck.
 PROFILE_DATA_BLOCKS_CONFLICT_LOG ?= /tmp/fod-data-blocks-conflict-current.log
 PROFILE_DATA_BLOCKS_CONFLICT_NOOP_LOG ?= /tmp/fod-data-blocks-conflict-noop-current.log
+PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG ?= /tmp/fod-data-blocks-swap-repeat-current.log
+PROFILE_DATA_BLOCKS_SWAP_REPEAT ?= 5
+DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER ?=
 DATA_BLOCKS_CONFLICT_ID ?= data-blocks-conflict-current
 DATA_BLOCKS_CONFLICT_BLOCK_SIZE ?= 4M
 DATA_BLOCKS_CONFLICT_BLOCK_COUNT ?= 16
+DATA_OBJECT_GC_LIMIT ?= 1000000
 
 define RUN_POSTGRES_BENCHMARK_REPEAT
 	@set -eu; \
@@ -369,6 +373,8 @@ help:
 		'  make profile-pg-table-dml-delta - compare table/index DML snapshots before/after a workload' \
 		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
 		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
+		'  make profile-data-blocks-swap-repeat-dml - profile repeated full-overwrite data-object swaps; set PROFILE_DATA_BLOCKS_SWAP_REPEAT=N' \
+		'  make profile-pg-data-object-gc - purge unreferenced data objects for deferred cleanup experiments' \
 		'  make profile-data-blocks-summary - write a markdown summary from data_blocks profiling artifacts' \
 		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
@@ -1064,7 +1070,7 @@ test-data-blocks-conflict-seed: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_seed --offline -- --nocapture
 
 test-data-blocks-conflict-overwrite-benchmark: init
-	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_overwrite_benchmark --offline -- --nocapture
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER="$(DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER)" $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_overwrite_benchmark --offline -- --nocapture
 
 test-data-blocks-conflict-noop-overwrite-benchmark: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_noop_overwrite_benchmark --offline -- --nocapture
@@ -1238,7 +1244,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1299,6 +1305,11 @@ profile-pg-table-dml-delta:
 	$(PYTHON) scripts/perf/pg/table_dml_delta.py "$$before" "$$after" > "$$out"; \
 	cat "$$out"
 
+profile-pg-data-object-gc:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -v gc_limit=$(DATA_OBJECT_GC_LIMIT) -f scripts/perf/pg/data_object_gc.sql > $(ARTIFACTS_DIR)/pg_data_object_gc$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_data_object_gc$(PROFILE_CAPTURE_SUFFIX).txt
+
 profile-data-blocks-summary:
 	$(PYTHON) scripts/perf/summarize_data_blocks_profile.py \
 		--artifact-dir "$(ARTIFACTS_DIR)" \
@@ -1340,6 +1351,36 @@ profile-data-blocks-conflict-noop-dml:
 	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
 	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict-noop profile-pg-top
 	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict-noop profile-pg-data-blocks-bloat
+
+profile-data-blocks-swap-repeat-dml:
+	@$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-seed
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-env
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-reset
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-wal-snapshot
+	@: > "$(PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG)"
+	@set -eu; \
+	repeat="$(PROFILE_DATA_BLOCKS_SWAP_REPEAT)"; \
+	case "$$repeat" in \
+		''|*[!0-9]*) echo "PROFILE_DATA_BLOCKS_SWAP_REPEAT must be a positive integer, got: $$repeat" >&2; exit 1 ;; \
+	esac; \
+	if [ "$$repeat" -lt 1 ]; then \
+		echo "PROFILE_DATA_BLOCKS_SWAP_REPEAT must be at least 1, got: $$repeat" >&2; \
+		exit 1; \
+	fi; \
+	i=1; \
+	while [ "$$i" -le "$$repeat" ]; do \
+		marker="fod-data-blocks-conflict-overwrite-$(PROFILE_RUN_ID)-$$i-"; \
+		printf 'FOD data-blocks swap repeat %s/%s marker=%s\n' "$$i" "$$repeat" "$$marker" | tee -a "$(PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG)"; \
+		$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER="$$marker" test-data-blocks-conflict-overwrite-benchmark 2>&1 | tee -a "$(PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG)"; \
+		i=$$((i + 1)); \
+	done
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-table-dml-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-wal-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=swap-repeat profile-pg-top
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=swap-repeat profile-pg-data-blocks-bloat
 
 profile-pg-io:
 	@mkdir -p $(ARTIFACTS_DIR)

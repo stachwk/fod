@@ -264,7 +264,7 @@ fn log_mount_status(
         security.selinux_rootcontext
     );
     info!(
-        "FOD storage block_size={} write_flush_threshold={} bytes max_fs_size_bytes={:?} pg_visible_path={:?} workers_read={} workers_read_min_blocks={} workers_write={} workers_write_min_blocks={} persist_buffer_chunk_blocks={} persist_block_transport={} synchronous_commit={} copy_dedupe_enabled={} copy_dedupe_min_blocks={} copy_dedupe_max_blocks={} copy_dedupe_crc_table={} enable_extents={}",
+        "FOD storage block_size={} write_flush_threshold={} bytes max_fs_size_bytes={:?} pg_visible_path={:?} workers_read={} workers_read_min_blocks={} workers_write={} workers_write_min_blocks={} persist_buffer_chunk_blocks={} persist_block_transport={} data_object_swap_cleanup={} synchronous_commit={} copy_dedupe_enabled={} copy_dedupe_min_blocks={} copy_dedupe_max_blocks={} copy_dedupe_crc_table={} enable_extents={}",
         fs.block_size,
         storage.write_flush_threshold_bytes,
         storage.max_fs_size_bytes,
@@ -278,6 +278,7 @@ fn log_mount_status(
         storage.workers_write_min_blocks,
         storage.persist_buffer_chunk_blocks,
         storage.persist_block_transport.as_str(),
+        storage.data_object_swap_cleanup.as_str(),
         storage.synchronous_commit.as_str(),
         storage.copy_dedupe_enabled,
         storage.copy_dedupe_min_blocks,

@@ -321,6 +321,33 @@ impl PersistBlockTransport {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataObjectSwapCleanup {
+    Immediate,
+    Deferred,
+}
+
+impl DataObjectSwapCleanup {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "immediate" => Ok(Self::Immediate),
+            "deferred" => Ok(Self::Deferred),
+            other => Err(format!("invalid data object swap cleanup policy: {other}")),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Immediate => "immediate",
+            Self::Deferred => "deferred",
+        }
+    }
+
+    pub fn is_deferred(self) -> bool {
+        matches!(self, Self::Deferred)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BootstrapOverrides {
     pub profile: Option<String>,
@@ -366,6 +393,7 @@ pub struct RuntimeConfig {
     pub workers_write_min_blocks: u64,
     pub persist_buffer_chunk_blocks: u64,
     pub persist_block_transport: PersistBlockTransport,
+    pub data_object_swap_cleanup: DataObjectSwapCleanup,
     pub synchronous_commit: String,
     pub write_flush_threshold_bytes: u64,
     pub max_fs_size_bytes: Option<u64>,
@@ -453,6 +481,7 @@ pub struct RuntimeStorageSettings {
     pub workers_write_min_blocks: u64,
     pub persist_buffer_chunk_blocks: u64,
     pub persist_block_transport: PersistBlockTransport,
+    pub data_object_swap_cleanup: DataObjectSwapCleanup,
     pub synchronous_commit: String,
     pub write_flush_threshold_bytes: u64,
     pub max_fs_size_bytes: Option<u64>,
@@ -991,6 +1020,10 @@ const RUNTIME_VALUE_SPECS: &[RuntimeValueSpec] = &[
         RuntimeValueKind::Choice(&["copy_binary_staging", "binary_bytea", "legacy_hex"]),
     ),
     RuntimeValueSpec::tuning_and_runtime_env(
+        "data_object_swap_cleanup",
+        RuntimeValueKind::Choice(&["immediate", "deferred"]),
+    ),
+    RuntimeValueSpec::tuning_and_runtime_env(
         "write_flush_threshold_bytes",
         RuntimeValueKind::SizeBytes,
     ),
@@ -1099,6 +1132,11 @@ impl RuntimeConfig {
             "persist_block_transport",
             "copy_binary_staging",
         ))?;
+        let data_object_swap_cleanup = DataObjectSwapCleanup::parse(&lookup_string(
+            &lookup,
+            "data_object_swap_cleanup",
+            "immediate",
+        ))?;
         let synchronous_commit = lookup_string(&lookup, "synchronous_commit", "on");
         let write_flush_threshold_bytes =
             lookup_size_u64(&lookup, "write_flush_threshold_bytes", 0);
@@ -1168,6 +1206,7 @@ impl RuntimeConfig {
             workers_write_min_blocks,
             persist_buffer_chunk_blocks,
             persist_block_transport,
+            data_object_swap_cleanup,
             synchronous_commit,
             write_flush_threshold_bytes,
             max_fs_size_bytes,
@@ -1278,6 +1317,7 @@ impl RuntimeConfig {
             workers_write_min_blocks: self.workers_write_min_blocks,
             persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,
             persist_block_transport: self.persist_block_transport,
+            data_object_swap_cleanup: self.data_object_swap_cleanup,
             synchronous_commit: self.synchronous_commit.clone(),
             write_flush_threshold_bytes: self.write_flush_threshold_bytes,
             max_fs_size_bytes: self.max_fs_size_bytes,
@@ -1456,6 +1496,9 @@ impl RuntimeConfig {
         self.persist_block_transport = env_var_with_legacy_alias("FOD_PERSIST_BLOCK_TRANSPORT")
             .and_then(|value| PersistBlockTransport::parse(&value).ok())
             .unwrap_or(self.persist_block_transport);
+        self.data_object_swap_cleanup = env_var_with_legacy_alias("FOD_DATA_OBJECT_SWAP_CLEANUP")
+            .and_then(|value| DataObjectSwapCleanup::parse(&value).ok())
+            .unwrap_or(self.data_object_swap_cleanup);
         self.synchronous_commit = env_var_with_legacy_alias("FOD_SYNCHRONOUS_COMMIT")
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| self.synchronous_commit.clone());
@@ -1602,6 +1645,10 @@ impl RuntimeConfig {
             Some(self.persist_block_transport.as_str()),
         );
         set_string(
+            "FOD_DATA_OBJECT_SWAP_CLEANUP",
+            Some(self.data_object_swap_cleanup.as_str()),
+        );
+        set_string(
             "FOD_SYNCHRONOUS_COMMIT",
             Some(self.synchronous_commit.as_str()),
         );
@@ -1703,6 +1750,11 @@ impl RuntimeConfig {
             &mut runtime,
             "persist_block_transport",
             Some(self.persist_block_transport.as_str()),
+        );
+        set_map_string(
+            &mut runtime,
+            "data_object_swap_cleanup",
+            Some(self.data_object_swap_cleanup.as_str()),
         );
         set_map_string(
             &mut runtime,
@@ -1929,6 +1981,10 @@ mod tests {
             Some("FOD_POOL_MAX_CONNECTIONS".to_string())
         );
         assert_eq!(
+            runtime_env_var_name("data_object_swap_cleanup"),
+            Some("FOD_DATA_OBJECT_SWAP_CLEANUP".to_string())
+        );
+        assert_eq!(
             runtime_env_var_name("force_read_only"),
             Some("FOD_RUST_FUSE_READONLY".to_string())
         );
@@ -1940,6 +1996,10 @@ mod tests {
         let mut runtime = HashMap::new();
         runtime.insert("copy_dedupe_enabled".to_string(), "true".to_string());
         runtime.insert(
+            "data_object_swap_cleanup".to_string(),
+            "deferred".to_string(),
+        );
+        runtime.insert(
             "write_flush_threshold_bytes".to_string(),
             "12345".to_string(),
         );
@@ -1950,6 +2010,10 @@ mod tests {
         apply_runtime_env_from_map(&runtime);
         assert_eq!(env::var("FOD_COPY_DEDUPE_ENABLED").unwrap(), "true");
         assert_eq!(
+            env::var("FOD_DATA_OBJECT_SWAP_CLEANUP").unwrap(),
+            "deferred"
+        );
+        assert_eq!(
             env::var("FOD_WRITE_FLUSH_THRESHOLD_BYTES").unwrap(),
             "12345"
         );
@@ -1958,6 +2022,7 @@ mod tests {
             "7"
         );
         env::remove_var("FOD_COPY_DEDUPE_ENABLED");
+        env::remove_var("FOD_DATA_OBJECT_SWAP_CLEANUP");
         env::remove_var("FOD_WRITE_FLUSH_THRESHOLD_BYTES");
         env::remove_var("FOD_LOCK_HEARTBEAT_INTERVAL_SECONDS");
     }
@@ -2147,6 +2212,10 @@ mod tests {
         runtime.insert("workers_write".to_string(), "8".to_string());
         runtime.insert("workers_write_min_blocks".to_string(), "16".to_string());
         runtime.insert("persist_buffer_chunk_blocks".to_string(), "512".to_string());
+        runtime.insert(
+            "data_object_swap_cleanup".to_string(),
+            "deferred".to_string(),
+        );
         runtime.insert("synchronous_commit".to_string(), "off".to_string());
         runtime.insert("pool_max_connections".to_string(), "12".to_string());
         runtime.insert(
@@ -2187,6 +2256,10 @@ mod tests {
         assert_eq!(config.workers_write, 8);
         assert_eq!(config.workers_write_min_blocks, 16);
         assert_eq!(config.persist_buffer_chunk_blocks, 512);
+        assert_eq!(
+            config.data_object_swap_cleanup,
+            super::DataObjectSwapCleanup::Deferred
+        );
         assert_eq!(config.synchronous_commit, "off");
         assert_eq!(config.write_flush_threshold_bytes, 64 * 1024 * 1024);
         assert_eq!(config.max_fs_size_bytes, Some(10 * 1024 * 1024 * 1024));

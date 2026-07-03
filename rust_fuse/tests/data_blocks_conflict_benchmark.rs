@@ -36,6 +36,14 @@ fn payload(marker: &[u8]) -> Result<Vec<u8>, String> {
     Ok(repeating_payload(marker, total))
 }
 
+fn overwrite_marker(default_marker: &[u8]) -> Vec<u8> {
+    env::var("DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(Vec::from)
+        .unwrap_or_else(|| default_marker.to_vec())
+}
+
 fn workload_paths(mountpoint: &Path) -> (PathBuf, PathBuf) {
     let dir_path = mountpoint.join(format!("data-blocks-conflict-{}", conflict_id()));
     let file_path = dir_path.join("payload.bin");
@@ -144,7 +152,7 @@ fn data_blocks_conflict_seed() -> Result<(), String> {
 fn data_blocks_conflict_overwrite_benchmark() -> Result<(), String> {
     run_overwrite_benchmark(
         "data-blocks-conflict-overwrite",
-        b"fod-data-blocks-conflict-overwrite-",
+        &overwrite_marker(b"fod-data-blocks-conflict-overwrite-"),
     )
 }
 
