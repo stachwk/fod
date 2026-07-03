@@ -158,6 +158,12 @@ Base commit at execution time: `60658e8`
 - `git status --short`
 - `git diff --check`
 - `git diff --stat`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance-data-blocks-swap-repeat-profile-2026-07-04.md`
+- `git diff --cached --check`
+- `git commit -m 'FOD 3.2.1: record repeated data object cleanup profile'`
+- `git status --short && git log -5 --oneline`
+- `git add commands.md`
+- `git commit -m 'FOD 3.2.1: record repeated cleanup command history'`
 - `sed -n '1,180p' docs/performance-data-blocks-swap-repeat-profile-2026-07-04.md`
 - `sed -n '1,70p' BENCHMARKS.md && sed -n '20,30p' TODO.md && tail -18 conclusions.md`
 
