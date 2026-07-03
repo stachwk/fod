@@ -120,6 +120,46 @@ Base commit at execution time: `8583ace`
 - `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T221630Z PROFILE_CAPTURE_LABEL=gc-before make profile-pg-wal-snapshot`
 - `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T221630Z PROFILE_CAPTURE_LABEL=gc make profile-pg-data-object-gc DATA_OBJECT_GC_LIMIT=1000000`
 - `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T221630Z PROFILE_CAPTURE_LABEL=gc-retry make profile-pg-data-object-gc DATA_OBJECT_GC_LIMIT=1000000`
+- `git status --short`
+- `git diff --check`
+- `git diff -- scripts/perf/pg/data_object_gc.sql commands.md`
+- `git add commands.md scripts/perf/pg/data_object_gc.sql`
+- `git commit -m 'FOD 3.2.1: fix deferred data object GC script'`
+
+Base commit at execution time: `60658e8`
+
+- `make reset`
+- `date -u +%Y%m%dT%H%M%SZ`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-immediate-20260703T221936Z DATA_BLOCKS_CONFLICT_ID=swap-repeat-immediate-20260703T221936Z PROFILE_DATA_BLOCKS_SWAP_REPEAT=5 PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG=/tmp/fod-data-blocks-swap-repeat-immediate-20260703T221936Z.log make profile-data-blocks-swap-repeat-dml`
+- `make reset`
+- `date -u +%Y%m%dT%H%M%SZ`
+- `FOD_DATA_OBJECT_SWAP_CLEANUP=deferred PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T222026Z DATA_BLOCKS_CONFLICT_ID=swap-repeat-deferred-20260703T222026Z PROFILE_DATA_BLOCKS_SWAP_REPEAT=5 PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG=/tmp/fod-data-blocks-swap-repeat-deferred-20260703T222026Z.log make profile-data-blocks-swap-repeat-dml`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T222026Z PROFILE_CAPTURE_LABEL=gc-before make profile-pg-table-dml-snapshot`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T222026Z PROFILE_CAPTURE_LABEL=gc-before make profile-pg-wal-snapshot`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T222026Z PROFILE_CAPTURE_LABEL=gc make profile-pg-data-object-gc DATA_OBJECT_GC_LIMIT=1000000`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T222026Z PROFILE_CAPTURE_LABEL=gc-after make profile-pg-table-dml-snapshot`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T222026Z PROFILE_CAPTURE_LABEL=gc-after make profile-pg-wal-snapshot`
+- `python3 scripts/perf/pg/table_dml_delta.py artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_table_dml_snapshot-gc-before.txt artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_table_dml_snapshot-gc-after.txt`
+- `python3 scripts/perf/pg/table_dml_delta.py artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_table_dml_snapshot-gc-before.txt artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_table_dml_snapshot-gc-after.txt > artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_table_dml_delta-gc-before-to-after.txt`
+- `python3 scripts/perf/pg/wal_delta.py artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_wal_snapshot-gc-before.tsv artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_wal_snapshot-gc-after.tsv > artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_wal_delta-gc-before-to-after.tsv`
+- `sed -n '1,60p' artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_wal_delta-gc-before-to-after.tsv`
+- `sed -n '1,70p' artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_table_dml_delta-gc-before-to-after.txt`
+- `rg -n "OK data-blocks-conflict-overwrite|OK data-blocks-conflict-seed" /tmp/fod-data-blocks-swap-repeat-immediate-20260703T221936Z.log /tmp/fod-data-blocks-swap-repeat-deferred-20260703T222026Z.log`
+- `sed -n '1,65p' artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-immediate-20260703T221936Z/pg_table_dml_delta-before-to-after.txt && sed -n '1,45p' artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-immediate-20260703T221936Z/pg_wal_delta-before-to-after.tsv`
+- `sed -n '1,65p' artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_table_dml_delta-before-to-after.txt && sed -n '1,45p' artifacts/perf/60658e8/lt7300-data-blocks-swap-repeat-deferred-20260703T222026Z/pg_wal_delta-before-to-after.tsv`
+- `awk '/OK data-blocks-conflict-overwrite/ { split($0,a,"elapsed_s="); split(a[2],b," "); elapsed+=b[1]; split($0,c,"throughput_mib_s="); throughput+=c[2]; count++ } END { if (count > 0) printf "count=%d mean_elapsed_s=%.6f mean_throughput_mib_s=%.2f\\n", count, elapsed/count, throughput/count }' /tmp/fod-data-blocks-swap-repeat-immediate-20260703T221936Z.log /tmp/fod-data-blocks-swap-repeat-deferred-20260703T222026Z.log`
+- `for f in /tmp/fod-data-blocks-swap-repeat-immediate-20260703T221936Z.log /tmp/fod-data-blocks-swap-repeat-deferred-20260703T222026Z.log; do awk -v file="$f" '/OK data-blocks-conflict-overwrite/ { split($0,a,"elapsed_s="); split(a[2],b," "); elapsed+=b[1]; split($0,c,"throughput_mib_s="); throughput+=c[2]; count++ } END { if (count > 0) printf "%s count=%d mean_elapsed_s=%.6f mean_throughput_mib_s=%.2f\\n", file, count, elapsed/count, throughput/count }' "$f"; done`
+- `PGPASSWORD="${POSTGRES_PASSWORD:-cichosza}" psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST:-127.0.0.1}" -p "${POSTGRES_PORT:-5432}" -U "${POSTGRES_USER:-foduser}" -d "${POSTGRES_DB:-foddbname}" -c "SET search_path TO fod, public; SELECT (SELECT COUNT(*) FROM data_objects d WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.data_object_id = d.id_data_object)) AS unreferenced_data_objects, (SELECT COUNT(*) FROM data_blocks db WHERE NOT EXISTS (SELECT 1 FROM data_objects d WHERE d.id_data_object = db.data_object_id)) AS blocks_without_object, (SELECT COUNT(*) FROM files f WHERE NOT EXISTS (SELECT 1 FROM data_objects d WHERE d.id_data_object = f.data_object_id)) AS files_without_object;"`
+- `git rev-parse HEAD && git rev-parse --short HEAD && date -Is`
+- `sed -n '1,35p' TODO.md`
+- `sed -n '1,75p' BENCHMARKS.md`
+- `tail -35 conclusions.md`
+- `sed -n '105,135p' commands.md`
+- `git status --short`
+- `git diff --check`
+- `git diff --stat`
+- `sed -n '1,180p' docs/performance-data-blocks-swap-repeat-profile-2026-07-04.md`
+- `sed -n '1,70p' BENCHMARKS.md && sed -n '20,30p' TODO.md && tail -18 conclusions.md`
 
 Base commit at execution time: `b619fb5`
 

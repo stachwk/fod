@@ -23,7 +23,35 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-03 from commit `0eb2d0e` and adds full-overwrite data-object swap evidence for `data_blocks`.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-04 from commit `60658e8` and adds repeated full-overwrite data-object swap cleanup evidence for `data_blocks`.
+
+## 2026-07-04 Data Blocks Repeated Full-Overwrite Cleanup Profile
+
+Collected from commit `60658e878c136728df023d08f9c88a88176cb824` (`FOD 3.2.1: fix deferred data object GC script`) with the FOD version at `3.2.1`.
+
+Workload: local Docker PostgreSQL, `make reset` before each policy, then `PROFILE_DATA_BLOCKS_SWAP_REPEAT=5 make profile-data-blocks-swap-repeat-dml` over one seeded 64 MiB file.
+
+Artifact summary: `docs/performance-data-blocks-swap-repeat-profile-2026-07-04.md`.
+
+| Metric | `immediate` | `deferred` |
+| --- | ---: | ---: |
+| mean overwrite elapsed_s | `1.435899` | `1.405703` |
+| mean throughput_mib_s | `44.59` | `45.53` |
+| wal_bytes_delta | `43069493` | `37976180` |
+| wal_records_delta | `499295` | `415428` |
+| `data_blocks_n_tup_ins_delta` | `81920` | `81920` |
+| `data_blocks_n_tup_del_delta` | `81920` | `0` |
+| `data_blocks_n_dead_tup_delta` | `49152` | `0` |
+| `data_blocks_n_live_tup_delta` | `0` | `81920` |
+| `data_blocks_relation_size_bytes_delta` | `10174464` | `15605760` |
+
+Deferred GC on the same run removed `6` unreferenced data objects and `81920` `data_blocks` rows, generating `4429524` WAL bytes and `81920` new `data_blocks` dead tuples. After GC, the consistency query returned `0` unreferenced data objects, `0` blocks without objects, and `0` files without objects.
+
+Interpretation:
+
+- `deferred` shifts delete/dead-tuple cost out of the overwrite transaction; it does not eliminate that cost.
+- On this local five-run smoke, deferred hot-path WAL was lower by about `5.09 MB`, but GC added about `4.43 MB`, so combined WAL was only marginally lower than immediate cleanup.
+- Keep `data_object_swap_cleanup = immediate` as the default. Use `deferred` only as an opt-in policy when shorter write transactions are worth temporary relation growth and a scheduled object-GC pass.
 
 ## 2026-07-03 Data Blocks Full-Overwrite Data-Object Swap Profile
 
