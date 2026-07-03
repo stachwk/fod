@@ -23,7 +23,38 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-03 from commit `c5d7f24` and adds real `data_blocks` DML deltas for the local large-copy path.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-03 from commit `1969674` and adds overwrite-only `data_blocks` conflict-update DML deltas.
+
+## 2026-07-03 Data Blocks Conflict Update Profile
+
+Collected from commit `19696742e82220e2c46355d55078be463759ee65` (`FOD 3.2.1: add data block conflict update benchmark`) with the FOD version at `3.2.1`.
+
+Workload: `make profile-data-blocks-conflict-dml` on local Docker PostgreSQL. The target first seeds a 64 MiB file, then snapshots DML/WAL only around overwriting that same logical file with a different 64 MiB payload.
+
+Artifact summary: `docs/performance-data-blocks-conflict-profile-2026-07-03.md`, run ID `data-blocks-conflict-20260703T135637Z`.
+
+| Metric | Value |
+| --- | ---: |
+| overwrite elapsed_s | `1.169478` |
+| overwrite throughput_mib_s | `54.73` |
+| COPY `fod_persist_block_stage` total_exec_ms | `534.021` |
+| `data_blocks` conflict merge total_exec_ms | `397.522` |
+| wal_bytes_delta | `8493118` |
+| wal_records_delta | `99680` |
+| `data_blocks_n_tup_ins_delta` | `0` |
+| `data_blocks_n_tup_upd_delta` | `16384` |
+| `data_blocks_n_tup_hot_upd_delta` | `0` |
+| `data_blocks_non_hot_update_delta` | `16384` |
+| `data_blocks_n_dead_tup_delta` | `16384` |
+| `idx_data_blocks_object_order_idx_scan_delta` | `16385` |
+| `data_blocks_relation_size_bytes_delta` | `2310144` |
+| `idx_data_blocks_object_order_relation_size_bytes_delta` | `368640` |
+
+Interpretation:
+
+- This run isolates the real conflict-update phase; it does not include the seed insert in the DML delta.
+- The current overwrite path is entirely non-HOT for `data_blocks`: `16384` updates, `0` HOT updates, and `16384` new dead tuples.
+- Future SQL work should focus on reducing repeated row rewrites or avoiding conflict updates when a higher-level data-object swap is safe.
 
 ## 2026-07-03 Data Blocks DML Delta Profile
 

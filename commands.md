@@ -652,6 +652,21 @@ Base commit at execution time: `d5c63e2`
 - `git diff --stat && git status --short`
 - `sed -n '1,120p' rust_fuse/tests/data_blocks_conflict_benchmark.rs && sed -n '52,72p' docs/performance.md`
 - `make test-large-copy-benchmark`
+- `git diff --check && git status --short`
+- `git diff --stat`
+- `cat fod_version.txt`
+- `git add Makefile commands.md docs/performance.md rust_fuse/tests/support.rs rust_fuse/tests/large_copy_benchmark.rs rust_fuse/tests/large_file_multiblock_benchmark.rs rust_fuse/tests/data_blocks_conflict_benchmark.rs && git commit -m "FOD 3.2.1: add data block conflict update benchmark"`
+
+Base commit at execution time: `1969674`
+
+- `PROFILE_RUN_ID="data-blocks-conflict-$(date -u +%Y%m%dT%H%M%SZ)"; DATA_BLOCKS_CONFLICT_ID="$PROFILE_RUN_ID"; printf '%s\n' "$PROFILE_RUN_ID" > /tmp/fod_data_blocks_conflict_run_id; printf '%s\n' "$DATA_BLOCKS_CONFLICT_ID" > /tmp/fod_data_blocks_conflict_id; make profile-data-blocks-conflict-dml PROFILE_RUN_ID="$PROFILE_RUN_ID" DATA_BLOCKS_CONFLICT_ID="$DATA_BLOCKS_CONFLICT_ID" PROFILE_DATA_BLOCKS_CONFLICT_LOG=/tmp/fod-data-blocks-conflict-current.log`
+- `RUN_ID=$(cat /tmp/fod_data_blocks_conflict_run_id); ART="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s 2>/dev/null || hostname)-${RUN_ID}"; printf 'ART=%s\n' "$ART"; sed -n '1,80p' "$ART/pg_table_dml_delta-before-to-after.txt"; sed -n '1,45p' "$ART/pg_wal_delta-before-to-after.tsv"; sed -n '1,40p' /tmp/fod-data-blocks-conflict-current.log`
+- `RUN_ID=$(cat /tmp/fod_data_blocks_conflict_run_id); ART="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s 2>/dev/null || hostname)-${RUN_ID}"; rg -n "COPY fod_persist_block_stage|INSERT INTO data_blocks" "$ART/pg_top_statements-conflict.txt" | head -n 5; sed -n '1,80p' "$ART/env.txt"`
+- `git status --short && git log -3 --oneline && cat fod_version.txt`
+- `git diff --check && git status --short`
+- `git diff --stat && sed -n '1,180p' docs/performance-data-blocks-conflict-profile-2026-07-03.md`
+- `sed -n '1,80p' BENCHMARKS.md && sed -n '18,26p' TODO.md && tail -n 10 conclusions.md`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance-data-blocks-conflict-profile-2026-07-03.md && git commit -m "FOD 3.2.1: record data block conflict profile"`
 
 ## 2026-07-03
 
