@@ -1,6 +1,6 @@
 SET search_path TO fod, public;
 
-CREATE TEMP TABLE fod_gc_data_objects ON COMMIT DROP AS
+CREATE TEMP TABLE fod_gc_data_objects AS
 SELECT d.id_data_object
 FROM data_objects d
 WHERE NOT EXISTS (

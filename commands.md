@@ -104,8 +104,22 @@ Base commit at execution time: `1c6c87d`
 - `git status --short`
 - `git diff --stat`
 - `git diff -- rust_runtime/src/lib.rs rust_hotpath/src/pg.rs Makefile docs/performance.md README.md fod_config.example.ini scripts/perf/pg/data_object_gc.sql`
-- `make test-fod-indexer-cleanup-failed`
-- `make test-fod-indexer-plan-import-scope && make test-fod-indexer-cleanup-failed`
+- `git add Makefile README.md commands.md docs/performance.md fod_config.example.ini rust_fuse/src/startup.rs rust_fuse/tests/data_blocks_conflict_benchmark.rs rust_hotpath/src/pg.rs rust_runtime/src/lib.rs scripts/perf/pg/data_object_gc.sql`
+- `git commit -m 'FOD 3.2.1: profile deferred data object swap cleanup'`
+
+Base commit at execution time: `8583ace`
+
+- `date -u +%Y%m%dT%H%M%SZ`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-immediate-20260703T221520Z DATA_BLOCKS_CONFLICT_ID=swap-repeat-immediate-20260703T221520Z PROFILE_DATA_BLOCKS_SWAP_REPEAT=5 PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG=/tmp/fod-data-blocks-swap-repeat-immediate-20260703T221520Z.log make profile-data-blocks-swap-repeat-dml`
+- `date -u +%Y%m%dT%H%M%SZ`
+- `FOD_DATA_OBJECT_SWAP_CLEANUP=deferred PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T221630Z DATA_BLOCKS_CONFLICT_ID=swap-repeat-deferred-20260703T221630Z PROFILE_DATA_BLOCKS_SWAP_REPEAT=5 PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG=/tmp/fod-data-blocks-swap-repeat-deferred-20260703T221630Z.log make profile-data-blocks-swap-repeat-dml`
+- `sed -n '1,220p' scripts/perf/pg/table_dml_snapshot.sql`
+- `sed -n '1,220p' scripts/perf/pg/table_dml_delta.py`
+- `sed -n '1,120p' scripts/perf/pg/wal_delta.py`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T221630Z PROFILE_CAPTURE_LABEL=gc-before make profile-pg-table-dml-snapshot`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T221630Z PROFILE_CAPTURE_LABEL=gc-before make profile-pg-wal-snapshot`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T221630Z PROFILE_CAPTURE_LABEL=gc make profile-pg-data-object-gc DATA_OBJECT_GC_LIMIT=1000000`
+- `PROFILE_RUN_ID=data-blocks-swap-repeat-deferred-20260703T221630Z PROFILE_CAPTURE_LABEL=gc-retry make profile-pg-data-object-gc DATA_OBJECT_GC_LIMIT=1000000`
 
 Base commit at execution time: `b619fb5`
 
