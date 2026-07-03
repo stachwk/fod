@@ -818,3 +818,42 @@ Base commit at execution time: `ac47828`
 - `cargo check --manifest-path Cargo.toml -p fod-rust-hotpath`
 - `cargo check --manifest-path Cargo.toml -p fod-rust-fuse`
 - `make profile-pg-data-blocks-bloat`
+
+Base commit at execution time: `4cdaffb`
+
+- `git status --short`
+- `git diff -- rust_hotpath/src/pg.rs`
+- `git rev-parse --short HEAD && cat fod_version.txt`
+- `tail -80 commands.md`
+- `tail -100 conclusions.md`
+- `rg -n "data block|data_blocks|overwrite|swap|HOT|non-HOT|profile" TODO.md BENCHMARKS.md docs -g '*.md'`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '3000,3185p'`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '7350,8240p'`
+- `rg -n "fn file_data_object_info_on_conn|fn file_data_object_id_on_conn|fn detach_shared_data_object_on_conn|fn update_file_sizes_on_conn|fn persist_file_blocks" rust_hotpath/src/pg.rs`
+- `rg -n "BEGIN|COMMIT|ROLLBACK|with_transaction|exec_command\\(conn" rust_hotpath/src/pg.rs | head -n 120`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '2840,3275p'`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '7687,7828p'`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '7829,8195p'`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '8195,8275p'`
+- `rg -n "persist_file_blocks_with_crc_flag\\(|persist_file_blocks_from_path\\(|maintain_copy_crc_table|enable_extents|PersistExtent" rust_hotpath/src/pg.rs rust_fuse -S`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '3234,3365p'`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '2045,2185p'`
+- `rg -n "replayable_sql_error|Replay|REPLAY|with_cached_connection|retry" rust_hotpath/src/pg.rs | head -n 200`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '2500,2618p' && nl -ba rust_hotpath/src/pg.rs | sed -n '9800,10020p'`
+- `rg -n "data_object_id|block_map|load_block|load_blocks|fetch_block|read_block" rust_hotpath/src/pg.rs rust_fuse/src -S`
+- `rg -n "file_data_object_id\\(|data_object_id\\(" rust_hotpath/src/pg.rs rust_fuse/src -S`
+- `rg -n "cache|ReadBlockCache|read_cache|recent_write_blocks|write_state" rust_fuse/src rust_hotpath/src/pg.rs -S`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '3358,3485p' && nl -ba rust_fuse/src/read_cache.rs | sed -n '450,515p' && nl -ba rust_fuse/src/write_buffer.rs | sed -n '150,205p'`
+- `nl -ba rust_hotpath/src/pg.rs | sed -n '360,575p'`
+- `cargo fmt --check`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-hotpath`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-fuse`
+- `cargo fmt`
+- `cargo fmt --check`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-hotpath`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-fuse`
+- `cargo test --manifest-path Cargo.toml -p fod-rust-hotpath recognizes_replayable_command_sql_for_disconnect_retry -- --nocapture`
+- `git diff --check`
+- `git diff --stat`
+- `git diff -- rust_hotpath/src/pg.rs`
+- `date -Is && git rev-parse --short HEAD && git status --short`

@@ -533,30 +533,43 @@ impl PreparedStatement {
                 "SELECT id_hardlink, id_directory, name FROM hardlinks WHERE id_file = $1 ORDER BY id_hardlink ASC LIMIT 1"
             }
             PreparedStatement::LoadBlock => {
-                "SELECT encode(data, 'base64') FROM data_blocks WHERE data_object_id = $1 AND _order = $2"
+                "
+                SELECT encode(db.data, 'base64')
+                FROM files f
+                JOIN data_blocks db ON db.data_object_id = f.data_object_id
+                WHERE f.id_file = $1 AND db._order = $2
+                "
             }
             PreparedStatement::FetchBlockRange => {
-                "SELECT _order, encode(data, 'base64') FROM data_blocks WHERE data_object_id = $1 AND _order BETWEEN $2 AND $3 ORDER BY _order ASC"
+                "
+                SELECT db._order, encode(db.data, 'base64')
+                FROM files f
+                JOIN data_blocks db ON db.data_object_id = f.data_object_id
+                WHERE f.id_file = $1 AND db._order BETWEEN $2 AND $3
+                ORDER BY db._order ASC
+                "
             }
             PreparedStatement::LoadExtentBlock => {
                 "
-                SELECT start_block, block_count, used_bytes, payload
-                FROM data_extents
-                WHERE data_object_id = $1
-                  AND start_block <= $2
-                  AND $2 < start_block + block_count
-                ORDER BY start_block DESC
+                SELECT de.start_block, de.block_count, de.used_bytes, de.payload
+                FROM files f
+                JOIN data_extents de ON de.data_object_id = f.data_object_id
+                WHERE f.id_file = $1
+                  AND de.start_block <= $2
+                  AND $2 < de.start_block + de.block_count
+                ORDER BY de.start_block DESC
                 LIMIT 1
                 "
             }
             PreparedStatement::FetchExtentRange => {
                 "
-                SELECT start_block, block_count, used_bytes, payload
-                FROM data_extents
-                WHERE data_object_id = $1
-                  AND start_block <= $3
-                  AND start_block + block_count - 1 >= $2
-                ORDER BY start_block ASC
+                SELECT de.start_block, de.block_count, de.used_bytes, de.payload
+                FROM files f
+                JOIN data_extents de ON de.data_object_id = f.data_object_id
+                WHERE f.id_file = $1
+                  AND de.start_block <= $3
+                  AND de.start_block + de.block_count - 1 >= $2
+                ORDER BY de.start_block ASC
                 "
             }
             PreparedStatement::ResolvePathRoot => {
@@ -1702,6 +1715,43 @@ fn normalize_block_bytes(bytes: &[u8], target_len: usize) -> Vec<u8> {
     out
 }
 
+fn persist_blocks_cover_full_file(
+    file_size: u64,
+    block_size: u64,
+    total_blocks: u64,
+    blocks: &[PersistBlockRow<'_>],
+) -> bool {
+    if file_size == 0 {
+        return false;
+    }
+
+    let block_size = block_size.max(1);
+    let expected_total_blocks = 1 + (file_size - 1) / block_size;
+    if total_blocks != expected_total_blocks {
+        return false;
+    }
+    if u64::try_from(blocks.len()).ok() != Some(expected_total_blocks) {
+        return false;
+    }
+
+    for (expected_block, block) in blocks.iter().enumerate() {
+        let expected_block = expected_block as u64;
+        if block.block_index != expected_block {
+            return false;
+        }
+
+        let block_start = expected_block.saturating_mul(block_size);
+        let expected_used_len = file_size
+            .min(block_start.saturating_add(block_size))
+            .saturating_sub(block_start);
+        if block.used_len != expected_used_len {
+            return false;
+        }
+    }
+
+    true
+}
+
 fn append_copy_binary_i16(out: &mut Vec<u8>, value: i16) {
     out.extend_from_slice(&value.to_be_bytes());
 }
@@ -2179,6 +2229,18 @@ pub struct PersistBlockRow<'a> {
     pub block_index: u64,
     pub data: &'a [u8],
     pub used_len: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReplacedDataObject {
+    old_data_object_id: u64,
+    old_reference_count: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DataObjectWriteTarget {
+    data_object_id: u64,
+    replaced: Option<ReplacedDataObject>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2890,6 +2952,27 @@ impl DbRepo {
         block_size: u64,
         blocks: &[PersistBlockRow<'a>],
     ) -> Result<(), String> {
+        let data_object_id = match self.file_data_object_id_on_conn(conn, file_id)? {
+            Some(value) => value,
+            None => return Ok(()),
+        };
+        self.persist_copy_block_crc_rows_for_data_object_on_conn(
+            conn,
+            file_id,
+            data_object_id,
+            block_size,
+            blocks,
+        )
+    }
+
+    unsafe fn persist_copy_block_crc_rows_for_data_object_on_conn<'a>(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+        data_object_id: u64,
+        block_size: u64,
+        blocks: &[PersistBlockRow<'a>],
+    ) -> Result<(), String> {
         if blocks.is_empty() {
             return Ok(());
         }
@@ -2911,10 +2994,6 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        let data_object_id = match self.file_data_object_id_on_conn(conn, file_id)? {
-            Some(value) => value,
-            None => return Ok(()),
-        };
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
         let data_object_id = CString::new(data_object_id.to_string())
@@ -3057,6 +3136,114 @@ impl DbRepo {
         exec_command(conn, &sql)
     }
 
+    unsafe fn create_data_object_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_size: u64,
+    ) -> Result<u64, String> {
+        let sql = CString::new(
+            "INSERT INTO data_objects (file_size, content_hash, reference_count, creation_date, modification_date) \
+             VALUES ($1, NULL, 1, NOW(), NOW()) RETURNING id_data_object",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let file_size = CString::new(file_size.to_string())
+            .map_err(|_| "file size contains NUL byte".to_string())?;
+        let params = [&file_size];
+        let res = exec_params(conn, &sql, &params)?;
+        fetch_single_text(res)?
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| "invalid id_data_object value".to_string())
+    }
+
+    unsafe fn data_object_write_target_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+        file_size: u64,
+        prefer_replacement: bool,
+        maintain_copy_crc_table: bool,
+    ) -> Result<Option<DataObjectWriteTarget>, String> {
+        if prefer_replacement {
+            let Some((old_data_object_id, old_reference_count)) =
+                self.file_data_object_info_on_conn(conn, file_id)?
+            else {
+                return Ok(None);
+            };
+            let new_data_object_id = self.create_data_object_on_conn(conn, file_size)?;
+            return Ok(Some(DataObjectWriteTarget {
+                data_object_id: new_data_object_id,
+                replaced: Some(ReplacedDataObject {
+                    old_data_object_id,
+                    old_reference_count,
+                }),
+            }));
+        }
+
+        self.detach_shared_data_object_on_conn(conn, file_id, file_size, maintain_copy_crc_table)
+            .map(|value| {
+                value.map(|data_object_id| DataObjectWriteTarget {
+                    data_object_id,
+                    replaced: None,
+                })
+            })
+    }
+
+    unsafe fn finish_data_object_write_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+        file_size: u64,
+        target: DataObjectWriteTarget,
+    ) -> Result<(), String> {
+        let Some(replaced) = target.replaced else {
+            return self.update_file_sizes_on_conn(conn, file_id, target.data_object_id, file_size);
+        };
+
+        let sql_update_file = CString::new(
+            "UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_data = CString::new("DELETE FROM data_blocks WHERE data_object_id = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_extents = CString::new("DELETE FROM data_extents WHERE data_object_id = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_crc = CString::new("DELETE FROM copy_block_crc WHERE data_object_id = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_data_object =
+            CString::new("DELETE FROM data_objects WHERE id_data_object = $1")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_touch_old_object = CString::new(
+            "UPDATE data_objects SET reference_count = GREATEST(reference_count - 1, 0), modification_date = NOW() WHERE id_data_object = $1",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        let new_data_object_id = CString::new(target.data_object_id.to_string())
+            .map_err(|_| "data object id contains NUL byte".to_string())?;
+        let old_data_object_id = CString::new(replaced.old_data_object_id.to_string())
+            .map_err(|_| "data object id contains NUL byte".to_string())?;
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let file_size = CString::new(file_size.to_string())
+            .map_err(|_| "file size contains NUL byte".to_string())?;
+
+        let params = [&new_data_object_id, &file_size, &file_id];
+        exec_command_params(conn, &sql_update_file, &params)?;
+
+        if replaced.old_reference_count <= 1 {
+            let params = [&old_data_object_id];
+            exec_command_params(conn, &sql_delete_data, &params)?;
+            exec_command_params(conn, &sql_delete_extents, &params)?;
+            exec_command_params(conn, &sql_delete_crc, &params)?;
+            exec_command_params(conn, &sql_delete_data_object, &params)?;
+        } else {
+            let params = [&old_data_object_id];
+            exec_command_params(conn, &sql_touch_old_object, &params)?;
+        }
+
+        Ok(())
+    }
+
     fn detach_shared_data_object_on_conn(
         &self,
         conn: *mut PGconn,
@@ -3187,18 +3374,14 @@ impl DbRepo {
         block_index: u64,
         block_size: u64,
     ) -> Result<Option<Vec<u8>>, String> {
-        let data_object_id = match self.file_data_object_id(file_id)? {
-            Some(value) => value,
-            None => return Ok(None),
-        };
-        let data_object_id = CString::new(data_object_id.to_string())
-            .map_err(|_| "data object id contains NUL byte".to_string())?;
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
         let block_index_text = CString::new(block_index.to_string())
             .map_err(|_| "block index contains NUL byte".to_string())?;
         let block_size = block_size.max(1) as usize;
 
         self.with_cached_connection(|conn| unsafe {
-            let params = [&data_object_id, &block_index_text];
+            let params = [&file_id_text, &block_index_text];
             let res = exec_prepared_params_binary_result(
                 conn,
                 PreparedStatement::LoadExtentBlock,
@@ -3239,12 +3422,8 @@ impl DbRepo {
         if last_block < first_block {
             return Ok(Vec::new());
         }
-        let data_object_id = match self.file_data_object_id(file_id)? {
-            Some(value) => value,
-            None => return Ok(Vec::new()),
-        };
-        let data_object_id = CString::new(data_object_id.to_string())
-            .map_err(|_| "data object id contains NUL byte".to_string())?;
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
         let first_block_text = CString::new(first_block.to_string())
             .map_err(|_| "block index contains NUL byte".to_string())?;
         let last_block_text = CString::new(last_block.to_string())
@@ -3252,7 +3431,7 @@ impl DbRepo {
         let block_size = block_size.max(1) as usize;
 
         self.with_cached_connection(|conn| unsafe {
-            let params = [&data_object_id, &first_block_text, &last_block_text];
+            let params = [&file_id_text, &first_block_text, &last_block_text];
             let res = exec_prepared_params_binary_result(
                 conn,
                 PreparedStatement::FetchExtentRange,
@@ -7450,15 +7629,19 @@ impl DbRepo {
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let data_object_id = match self.detach_shared_data_object_on_conn(
+        let prefer_replacement =
+            persist_blocks_cover_full_file(file_size, block_size, total_blocks, blocks);
+        let target = match self.data_object_write_target_on_conn(
             conn,
             file_id,
             file_size,
+            prefer_replacement,
             maintain_copy_crc_table,
         )? {
             Some(value) => value,
             None => return Ok(()),
         };
+        let data_object_id = target.data_object_id;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
         // Switching a file back to block storage must drop stale extent rows so
@@ -7502,7 +7685,7 @@ impl DbRepo {
             merge_persist_block_stage_table(conn, maintain_copy_crc_table)?;
         }
 
-        self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
+        self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
         Ok(())
     }
 
@@ -7567,15 +7750,19 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        let data_object_id = match self.detach_shared_data_object_on_conn(
+        let prefer_replacement =
+            persist_blocks_cover_full_file(file_size, block_size, total_blocks, blocks);
+        let target = match self.data_object_write_target_on_conn(
             conn,
             file_id,
             file_size,
+            prefer_replacement,
             maintain_copy_crc_table,
         )? {
             Some(value) => value,
             None => return Ok(()),
         };
+        let data_object_id = target.data_object_id;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
         if truncate_pending {
@@ -7631,10 +7818,16 @@ impl DbRepo {
         }
 
         if maintain_copy_crc_table {
-            self.persist_copy_block_crc_rows_on_conn(conn, file_id, block_size, blocks)?;
+            self.persist_copy_block_crc_rows_for_data_object_on_conn(
+                conn,
+                file_id,
+                data_object_id,
+                block_size,
+                blocks,
+            )?;
         }
 
-        self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
+        self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
         Ok(())
     }
 
@@ -7668,15 +7861,18 @@ impl DbRepo {
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let data_object_id = match self.detach_shared_data_object_on_conn(
+        let prefer_replacement = file_size > 0;
+        let target = match self.data_object_write_target_on_conn(
             conn,
             file_id,
             file_size,
+            prefer_replacement,
             maintain_copy_crc_table,
         )? {
             Some(value) => value,
             None => return Ok(()),
         };
+        let data_object_id = target.data_object_id;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
         // Switching a file back to block storage must drop stale extent rows so
@@ -7901,9 +8097,10 @@ impl DbRepo {
                             }
                         }
                         if maintain_copy_crc_table {
-                            self.persist_copy_block_crc_rows_on_conn(
+                            self.persist_copy_block_crc_rows_for_data_object_on_conn(
                                 conn,
                                 file_id,
+                                data_object_id,
                                 block_size,
                                 &chunk_rows,
                             )?;
@@ -7969,9 +8166,10 @@ impl DbRepo {
                         }
                     }
                     if maintain_copy_crc_table {
-                        self.persist_copy_block_crc_rows_on_conn(
+                        self.persist_copy_block_crc_rows_for_data_object_on_conn(
                             conn,
                             file_id,
+                            data_object_id,
                             block_size,
                             &chunk_rows,
                         )?;
@@ -7995,7 +8193,7 @@ impl DbRepo {
             }
         }
 
-        self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
+        self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
         Ok(())
     }
 
