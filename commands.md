@@ -857,3 +857,30 @@ Base commit at execution time: `4cdaffb`
 - `git diff --stat`
 - `git diff -- rust_hotpath/src/pg.rs`
 - `date -Is && git rev-parse --short HEAD && git status --short`
+- `git diff --check`
+- `git status --short`
+- `git diff --stat`
+- `cat fod_version.txt`
+- `git add rust_hotpath/src/pg.rs commands.md && git commit -m "FOD 3.2.1: swap data objects for full block overwrites"`
+
+Base commit at execution time: `0eb2d0e`
+
+- `date -u +%Y%m%dT%H%M%SZ`
+- `PROFILE_RUN_ID=data-blocks-swap-20260703T215237Z DATA_BLOCKS_CONFLICT_ID=data-blocks-swap-20260703T215237Z PROFILE_DATA_BLOCKS_CONFLICT_LOG=/tmp/fod-data-blocks-swap-current.log make profile-data-blocks-conflict-dml`
+- `sed -n '1,240p' scripts/perf/summarize_data_blocks_profile.py`
+- `rg -n "profile-data-blocks-summary|PROFILE_DATA_BLOCKS_SUMMARY|profile-data-blocks-conflict" Makefile`
+- `sed -n '1,115p' BENCHMARKS.md`
+- `sed -n '1,40p' TODO.md`
+- `tail -40 conclusions.md`
+- `sed -n '1288,1328p' Makefile`
+- `PROFILE_RUN_ID=data-blocks-swap-20260703T215237Z PROFILE_HOST=lt7300 PROFILE_CAPTURE_LABEL=conflict PROFILE_LARGE_COPY_LOG=/tmp/fod-data-blocks-swap-current.log PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT=docs/performance-data-blocks-swap-profile-2026-07-03.md PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION="Full-overwrite data-object swap removed changed-payload data_blocks conflict updates from the profiled local overwrite path: data_blocks updates and non-HOT updates dropped to zero. The path now writes a new data object and deletes the old object rows, so remaining write amplification is insert/delete churn and dead tuple cleanup rather than heap rewrite updates." PROFILE_DATA_BLOCKS_SUMMARY_NEXT="Measure repeated full-overwrite runs and evaluate delayed cleanup or object-GC policy if insert/delete churn and dead tuples become the next bottleneck; do not reintroduce changed-payload conflict updates." make profile-data-blocks-summary`
+- `sed -n '1,180p' docs/performance-data-blocks-swap-profile-2026-07-03.md`
+- `sed -n '1,80p' artifacts/perf/0eb2d0e/lt7300-data-blocks-swap-20260703T215237Z/pg_table_dml_delta-before-to-after.txt`
+- `sed -n '1,50p' artifacts/perf/0eb2d0e/lt7300-data-blocks-swap-20260703T215237Z/pg_wal_delta-before-to-after.tsv`
+- `rg -n "OK data-blocks-conflict-overwrite|OK data-blocks-conflict-seed" /tmp/fod-data-blocks-swap-current.log`
+- `PGPASSWORD="${POSTGRES_PASSWORD:-cichosza}" psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST:-127.0.0.1}" -p "${POSTGRES_PORT:-5432}" -U "${POSTGRES_USER:-foduser}" -d "${POSTGRES_DB:-foddbname}" -c "SET search_path TO fod, public; SELECT (SELECT COUNT(*) FROM data_objects d WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.data_object_id = d.id_data_object)) AS unreferenced_data_objects, (SELECT COUNT(*) FROM data_blocks db WHERE NOT EXISTS (SELECT 1 FROM data_objects d WHERE d.id_data_object = db.data_object_id)) AS blocks_without_object, (SELECT COUNT(*) FROM files f WHERE NOT EXISTS (SELECT 1 FROM data_objects d WHERE d.id_data_object = f.data_object_id)) AS files_without_object;"`
+- `git diff --check`
+- `git status --short`
+- `git diff --stat`
+- `git diff -- BENCHMARKS.md TODO.md conclusions.md commands.md docs/performance-data-blocks-swap-profile-2026-07-03.md | sed -n '1,260p'`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance-data-blocks-swap-profile-2026-07-03.md && git diff --cached --check`

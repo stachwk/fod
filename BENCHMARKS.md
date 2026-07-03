@@ -23,7 +23,43 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-03 from commit `76867aa` and adds unchanged-block conflict filtering evidence for `data_blocks`.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-03 from commit `0eb2d0e` and adds full-overwrite data-object swap evidence for `data_blocks`.
+
+## 2026-07-03 Data Blocks Full-Overwrite Data-Object Swap Profile
+
+Collected from commit `0eb2d0efb2b62bb38b6c1e0be16a16f8a0b44524` (`FOD 3.2.1: swap data objects for full block overwrites`) with the FOD version at `3.2.1`.
+
+Workload: `make profile-data-blocks-conflict-dml` on local Docker PostgreSQL. The target first seeds a 64 MiB file, then snapshots DML/WAL around overwriting that same logical file with a different 64 MiB payload.
+
+Artifact summary: `docs/performance-data-blocks-swap-profile-2026-07-03.md`, run ID `data-blocks-swap-20260703T215237Z`.
+
+| Metric | Value |
+| --- | ---: |
+| overwrite elapsed_s | `2.955563` |
+| overwrite throughput_mib_s | `21.65` |
+| COPY `fod_persist_block_stage` total_exec_ms | `1217.262` |
+| `data_blocks` insert/merge total_exec_ms | `1244.614` |
+| wal_bytes_delta | `7754478` |
+| wal_records_delta | `99199` |
+| `data_blocks_n_tup_ins_delta` | `16384` |
+| `data_blocks_n_tup_upd_delta` | `0` |
+| `data_blocks_n_tup_hot_upd_delta` | `0` |
+| `data_blocks_non_hot_update_delta` | `0` |
+| `data_blocks_n_tup_del_delta` | `16384` |
+| `data_blocks_n_dead_tup_delta` | `33883` |
+| `idx_data_blocks_object_order_idx_scan_delta` | `16385` |
+| `idx_data_blocks_data_object_id_idx_tup_read_delta` | `16384` |
+| `data_blocks_relation_size_bytes_delta` | `2318336` |
+| `idx_data_blocks_object_order_relation_size_bytes_delta` | `376832` |
+
+Interpretation:
+
+- Full-overwrite data-object swap removes the changed-payload `data_blocks` conflict-update path from this profiled overwrite: `data_blocks_n_tup_upd_delta=0`, `data_blocks_non_hot_update_delta=0`.
+- The remaining cost is now new-object insert plus old-object cleanup: `16384` inserts and `16384` deletes for a 64 MiB overwrite.
+- `n_dead_tup` is approximate and was affected by an autoanalyze in the measured window, but the profile still shows the relevant direction: no heap rewrite updates, with insert/delete churn and cleanup now the next bottleneck.
+- The read path now fetches block/extent data by joining through `files.data_object_id` in the same statement, avoiding a stale object-id lookup window during data-object swaps.
+- A post-run consistency query returned `0` unreferenced data objects, `0` data blocks without objects, and `0` files without data objects.
+- The next performance question is repeated full-overwrite bloat/WAL growth and whether delayed cleanup or object GC is better than immediate delete for production workloads.
 
 ## 2026-07-03 Data Blocks Unchanged Conflict Filter Profile
 
