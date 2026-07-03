@@ -102,6 +102,7 @@ BENCHMARK_TARGETS := \
 	test-flush-release-profile \
 	test-truncate-release-profile \
 	test-large-copy-benchmark \
+	test-data-blocks-conflict-benchmark \
 	test-large-file-multiblock-benchmark \
 	test-remount-durability-benchmark \
 	test-tree-scale \
@@ -154,6 +155,10 @@ PROFILE_LARGE_COPY_LOG ?= /tmp/fod-data-blocks-current.log
 PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT ?= docs/performance-data-blocks-profile-$(shell date +%F).md
 PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION ?= Real-path data_blocks profile captured.
 PROFILE_DATA_BLOCKS_SUMMARY_NEXT ?= Keep runtime SQL unchanged until repeated local/QNAP data confirms the next bottleneck.
+PROFILE_DATA_BLOCKS_CONFLICT_LOG ?= /tmp/fod-data-blocks-conflict-current.log
+DATA_BLOCKS_CONFLICT_ID ?= data-blocks-conflict-current
+DATA_BLOCKS_CONFLICT_BLOCK_SIZE ?= 4M
+DATA_BLOCKS_CONFLICT_BLOCK_COUNT ?= 16
 
 define RUN_POSTGRES_BENCHMARK_REPEAT
 	@set -eu; \
@@ -284,7 +289,7 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke
+.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke
 
 help:
 	@printf '%s\n' \
@@ -360,6 +365,7 @@ help:
 		'  make profile-pg-wal-delta - compare PROFILE_WAL_BEFORE_LABEL and PROFILE_WAL_AFTER_LABEL snapshots' \
 		'  make profile-pg-table-dml-snapshot - capture data_blocks table/index DML counters' \
 		'  make profile-pg-table-dml-delta - compare table/index DML snapshots before/after a workload' \
+		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
 		'  make profile-data-blocks-summary - write a markdown summary from data_blocks profiling artifacts' \
 		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
@@ -469,6 +475,7 @@ help:
 		'  make test-rust-hotpath-parallel-worker-count - Rust helper parity tests for shared worker counting' \
 		'  make test-rust-hotpath-missing-ranges - Rust helper parity tests for missing-range handling' \
 		'  make test-large-copy-benchmark - benchmark large copy_file_range transfers' \
+		'  make test-data-blocks-conflict-benchmark - benchmark overwrite conflict updates in data_blocks' \
 		'  make test-large-file-multiblock-benchmark - benchmark large multi-block file writes' \
 		'  make test-remount-durability-benchmark - benchmark data survival across remounts' \
 		'  make test-tree-scale - benchmark getattr/readdir on a larger tree' \
@@ -1049,6 +1056,15 @@ test-rust-pg-query: init
 test-large-copy-benchmark: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
 
+test-data-blocks-conflict-seed: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_seed --offline -- --nocapture
+
+test-data-blocks-conflict-overwrite-benchmark: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_overwrite_benchmark --offline -- --nocapture
+
+test-data-blocks-conflict-benchmark: test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark
+	@:
+
 test-large-file-multiblock-benchmark: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test large_file_multiblock_benchmark --offline -- --nocapture
 
@@ -1212,7 +1228,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-conflict-dml
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1286,6 +1302,20 @@ profile-data-blocks-summary:
 		--host "$(PROFILE_HOST)" \
 		--conclusion "$(PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION)" \
 		--next-candidate "$(PROFILE_DATA_BLOCKS_SUMMARY_NEXT)"
+
+profile-data-blocks-conflict-dml:
+	@$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-seed
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-env
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-reset
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-wal-snapshot
+	@bash -o pipefail -c '$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-overwrite-benchmark 2>&1 | tee "$(PROFILE_DATA_BLOCKS_CONFLICT_LOG)"'
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-table-dml-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-wal-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict profile-pg-top
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict profile-pg-data-blocks-bloat
 
 profile-pg-io:
 	@mkdir -p $(ARTIFACTS_DIR)

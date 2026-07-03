@@ -9,35 +9,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use support::{unique_suffix, MountedFs};
-
-fn parse_bytes(value: &str) -> Result<usize, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err("empty size value".to_string());
-    }
-    let (number, multiplier) = match value.chars().last().map(|ch| ch.to_ascii_lowercase()) {
-        Some('k') => (&value[..value.len() - 1], 1024usize),
-        Some('m') => (&value[..value.len() - 1], 1024usize * 1024),
-        Some('g') => (&value[..value.len() - 1], 1024usize * 1024 * 1024),
-        _ => (value, 1usize),
-    };
-    let base = number
-        .parse::<usize>()
-        .map_err(|err| format!("failed to parse size {value:?}: {err}"))?;
-    base.checked_mul(multiplier)
-        .ok_or_else(|| format!("size overflow for {value:?}"))
-}
-
-fn build_payload(chunk_size: usize, chunk_count: usize) -> Vec<u8> {
-    let total = chunk_size.saturating_mul(chunk_count);
-    let mut payload = Vec::with_capacity(total);
-    while payload.len() < total {
-        payload.extend_from_slice(b"fod-large-file-");
-    }
-    payload.truncate(total);
-    payload
-}
+use support::{checked_payload_len, parse_size_bytes, repeating_payload, unique_suffix, MountedFs};
 
 struct Cleanup {
     file_path: PathBuf,
@@ -66,12 +38,15 @@ fn large_file_multiblock_benchmark() -> Result<(), String> {
     let dir_path = mounted.mountpoint.join(format!("large-file-{suffix}"));
     let file_path = dir_path.join("payload.bin");
     let chunk_size =
-        parse_bytes(&env::var("LARGE_FILE_CHUNK_SIZE").unwrap_or_else(|_| "4M".to_string()))?;
+        parse_size_bytes(&env::var("LARGE_FILE_CHUNK_SIZE").unwrap_or_else(|_| "4M".to_string()))?;
     let chunk_count = env::var("LARGE_FILE_CHUNK_COUNT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(16);
-    let payload = build_payload(chunk_size, chunk_count);
+    let payload = repeating_payload(
+        b"fod-large-file-",
+        checked_payload_len(chunk_size, chunk_count)?,
+    );
     let _cleanup = Cleanup {
         file_path: file_path.clone(),
         dir_path: dir_path.clone(),

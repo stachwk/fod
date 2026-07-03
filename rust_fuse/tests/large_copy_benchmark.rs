@@ -8,35 +8,7 @@ use std::fs::{self, File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::time::Instant;
 
-use support::{unique_suffix, MountedFs};
-
-fn parse_bytes(value: &str) -> Result<usize, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err("empty size value".to_string());
-    }
-    let (number, multiplier) = match value.chars().last().map(|ch| ch.to_ascii_lowercase()) {
-        Some('k') => (&value[..value.len() - 1], 1024usize),
-        Some('m') => (&value[..value.len() - 1], 1024usize * 1024),
-        Some('g') => (&value[..value.len() - 1], 1024usize * 1024 * 1024),
-        _ => (value, 1usize),
-    };
-    let base = number
-        .parse::<usize>()
-        .map_err(|err| format!("failed to parse size {value:?}: {err}"))?;
-    base.checked_mul(multiplier)
-        .ok_or_else(|| format!("size overflow for {value:?}"))
-}
-
-fn build_payload(block_size: usize, block_count: usize) -> Vec<u8> {
-    let total = block_size.saturating_mul(block_count);
-    let mut payload = Vec::with_capacity(total);
-    while payload.len() < total {
-        payload.extend_from_slice(b"fod-large-copy-");
-    }
-    payload.truncate(total);
-    payload
-}
+use support::{checked_payload_len, parse_size_bytes, repeating_payload, unique_suffix, MountedFs};
 
 fn copy_file_range_all(src: &File, dst: &File, mut len: usize) -> Result<usize, String> {
     let mut copied = 0usize;
@@ -70,7 +42,7 @@ fn large_copy_benchmark() -> Result<(), String> {
     let mounted = MountedFs::start("large-copy-benchmark")?;
     let suffix = unique_suffix();
     let block_size =
-        parse_bytes(&env::var("LARGE_COPY_BLOCK_SIZE").unwrap_or_else(|_| "4M".to_string()))?;
+        parse_size_bytes(&env::var("LARGE_COPY_BLOCK_SIZE").unwrap_or_else(|_| "4M".to_string()))?;
     let block_count = env::var("LARGE_COPY_BLOCK_COUNT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -84,7 +56,10 @@ fn large_copy_benchmark() -> Result<(), String> {
             )
         })
         .unwrap_or(false);
-    let payload = build_payload(block_size, block_count);
+    let payload = repeating_payload(
+        b"fod-large-copy-",
+        checked_payload_len(block_size, block_count)?,
+    );
     let dir_path = mounted.mountpoint.join(format!("large-copy-{suffix}"));
     let src_path = dir_path.join("src.bin");
     let dst_path = dir_path.join("dst.bin");

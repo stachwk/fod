@@ -33,6 +33,40 @@ pub fn unique_suffix() -> String {
     format!("{}-{nanos}", std::process::id())
 }
 
+pub fn parse_size_bytes(value: &str) -> Result<usize, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("empty size value".to_string());
+    }
+    let (number, multiplier) = match value.chars().last().map(|ch| ch.to_ascii_lowercase()) {
+        Some('k') => (&value[..value.len() - 1], 1024usize),
+        Some('m') => (&value[..value.len() - 1], 1024usize * 1024),
+        Some('g') => (&value[..value.len() - 1], 1024usize * 1024 * 1024),
+        _ => (value, 1usize),
+    };
+    let base = number
+        .parse::<usize>()
+        .map_err(|err| format!("failed to parse size {value:?}: {err}"))?;
+    base.checked_mul(multiplier)
+        .ok_or_else(|| format!("size overflow for {value:?}"))
+}
+
+pub fn checked_payload_len(block_size: usize, block_count: usize) -> Result<usize, String> {
+    block_size.checked_mul(block_count).ok_or_else(|| {
+        format!("payload size overflow for block_size={block_size} block_count={block_count}")
+    })
+}
+
+pub fn repeating_payload(marker: &[u8], total: usize) -> Vec<u8> {
+    let pattern = if marker.is_empty() { b"\0" } else { marker };
+    let mut payload = Vec::with_capacity(total);
+    while payload.len() < total {
+        payload.extend_from_slice(pattern);
+    }
+    payload.truncate(total);
+    payload
+}
+
 fn binary_from_env_or_candidates(
     env_var: &str,
     candidates: &[PathBuf],

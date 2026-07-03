@@ -57,6 +57,16 @@ make profile-pg-table-dml-delta
 
 The DML delta records `n_tup_ins`, `n_tup_upd`, `n_tup_hot_upd`, `n_tup_del`, `n_dead_tup`, relation-size changes, and `idx_data_blocks_object_order` lookup counters. Use it before changing the `data_blocks` conflict merge, because it shows whether the live path is insert-heavy, HOT-update friendly, or doing non-HOT heap rewrites.
 
+To isolate real conflict-update behavior, seed the file first and snapshot only the overwrite phase:
+
+```bash
+make profile-data-blocks-conflict-dml \
+  PROFILE_RUN_ID=data-blocks-conflict-$(date -u +%Y%m%dT%H%M%SZ) \
+  DATA_BLOCKS_CONFLICT_ID=conflict-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+The target runs `test-data-blocks-conflict-seed`, captures DML/WAL snapshots, then runs `test-data-blocks-conflict-overwrite-benchmark` against the same logical file. The resulting table DML delta should show the update-only phase, including `n_tup_upd`, `n_tup_hot_upd`, non-HOT updates, dead-tuple growth, and `idx_data_blocks_object_order` activity.
+
 `profile-pg-io` uses `pg_stat_io` and is optional because it is PostgreSQL-version dependent:
 
 ```bash

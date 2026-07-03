@@ -623,6 +623,38 @@ Base commit at execution time: `c2ce42b`
 
 ## 2026-07-03
 
+Base commit at execution time: `d5c63e2`
+
+- `git status --short && git log -5 --oneline && cat fod_version.txt`
+- `rg -n "large_copy_benchmark|test-large-copy-benchmark|copy_file_range|FOD_PROFILE_IO|data_blocks" rust_fuse rust_hotpath tests Makefile scripts docs | head -n 200`
+- `sed -n '1,260p' rust_fuse/tests/large_copy_benchmark.rs && sed -n '1,260p' rust_fuse/tests/support/mod.rs`
+- `rg -n "test-large-copy|large-copy|benchmark" Makefile rust_fuse/tests Cargo.toml rust_fuse/Cargo.toml`
+- `sed -n '1,420p' rust_fuse/tests/support.rs`
+- `sed -n '1,140p' rust_fuse/tests/large_file_multiblock_benchmark.rs && sed -n '1,120p' rust_fuse/tests/remount_durability_benchmark.rs`
+- `sed -n '1035,1062p' Makefile && sed -n '60,115p' Makefile && sed -n '460,480p' Makefile`
+- `rg -n "OpenOptions|seek\\(|write_all|flush|sync_all|truncate|set_len|FOD_BOOTSTRAP_BIN" rust_fuse/tests -S`
+- `git status --short`
+- `nl -ba Makefile | sed -n '88,115p' && nl -ba Makefile | sed -n '146,162p' && nl -ba Makefile | sed -n '280,292p' && nl -ba Makefile | sed -n '354,366p' && nl -ba Makefile | sed -n '466,474p' && nl -ba Makefile | sed -n '1045,1060p' && nl -ba Makefile | sed -n '1208,1216p' && nl -ba Makefile | sed -n '1270,1296p'`
+- `nl -ba docs/performance.md | sed -n '45,70p'`
+- `cargo fmt --check`
+- `make -n test-data-blocks-conflict-seed && make -n test-data-blocks-conflict-overwrite-benchmark && make -n profile-data-blocks-conflict-dml PROFILE_RUN_ID=conflict-dry DATA_BLOCKS_CONFLICT_ID=conflict-dry`
+- `make help | rg -n "data-blocks-conflict|profile-pg-table-dml"`
+- `git diff --check && git status --short && git diff --stat`
+- `cargo fmt`
+- `git diff -- docs/performance.md Makefile rust_fuse/tests/support.rs rust_fuse/tests/data_blocks_conflict_benchmark.rs rust_fuse/tests/large_copy_benchmark.rs rust_fuse/tests/large_file_multiblock_benchmark.rs | sed -n '1,260p'`
+- `cargo fmt --check && cargo check --manifest-path Cargo.toml -p fod-rust-fuse && git diff --check`
+- `make -n profile-data-blocks-conflict-dml PROFILE_RUN_ID=conflict-dry DATA_BLOCKS_CONFLICT_ID=conflict-dry | sed -n '1,220p'`
+- `git diff --stat && git status --short`
+- `sed -n '1,120p' rust_fuse/tests/data_blocks_conflict_benchmark.rs && sed -n '52,72p' docs/performance.md`
+- `PROFILE_RUN_ID="data-blocks-conflict-smoke-$(date -u +%Y%m%dT%H%M%SZ)"; DATA_BLOCKS_CONFLICT_ID="$PROFILE_RUN_ID"; make profile-data-blocks-conflict-dml PROFILE_RUN_ID="$PROFILE_RUN_ID" DATA_BLOCKS_CONFLICT_ID="$DATA_BLOCKS_CONFLICT_ID" DATA_BLOCKS_CONFLICT_BLOCK_SIZE=1M DATA_BLOCKS_CONFLICT_BLOCK_COUNT=2 PROFILE_DATA_BLOCKS_CONFLICT_LOG=/tmp/fod-data-blocks-conflict-smoke.log`
+- `cargo fmt --check && cargo check --manifest-path Cargo.toml -p fod-rust-fuse && git diff --check`
+- `make -n profile-data-blocks-conflict-dml PROFILE_RUN_ID=conflict-dry DATA_BLOCKS_CONFLICT_ID=conflict-dry | sed -n '1,220p'`
+- `git diff --stat && git status --short`
+- `sed -n '1,120p' rust_fuse/tests/data_blocks_conflict_benchmark.rs && sed -n '52,72p' docs/performance.md`
+- `make test-large-copy-benchmark`
+
+## 2026-07-03
+
 Base commit at execution time: `d5150c3`
 
 - `git status --short && git log -5 --oneline && cat fod_version.txt`
