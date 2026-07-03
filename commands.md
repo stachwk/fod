@@ -645,6 +645,27 @@ Base commit at execution time: `778a805` with uncommitted working-tree changes f
 - `git status --short`
 - `git add Makefile commands.md docs/performance.md rust_fuse/tests/data_blocks_conflict_benchmark.rs rust_hotpath/src/pg.rs scripts/perf/pg/explain_data_blocks_merge.sql && git commit -m "FOD 3.2.1: skip unchanged data block conflict updates"`
 
+Base commit at execution time: `76867aa`
+
+- `PROFILE_RUN_ID="data-blocks-conflict-noop-$(date -u +%Y%m%dT%H%M%SZ)"; DATA_BLOCKS_CONFLICT_ID="$PROFILE_RUN_ID"; printf '%s\n' "$PROFILE_RUN_ID" > /tmp/fod_data_blocks_conflict_noop_run_id; make profile-data-blocks-conflict-noop-dml PROFILE_RUN_ID="$PROFILE_RUN_ID" DATA_BLOCKS_CONFLICT_ID="$DATA_BLOCKS_CONFLICT_ID" PROFILE_DATA_BLOCKS_CONFLICT_NOOP_LOG=/tmp/fod-data-blocks-conflict-noop-current.log`
+- `sed -n '1,220p' scripts/perf/summarize_data_blocks_profile.py`
+- `sed -n '1,130p' BENCHMARKS.md`
+- `sed -n '1,36p' TODO.md`
+- `RUN_ID=$(cat /tmp/fod_data_blocks_conflict_noop_run_id); HOST=$(hostname -s 2>/dev/null || hostname); ART="artifacts/perf/$(git rev-parse --short HEAD)/${HOST}-${RUN_ID}"; python3 scripts/perf/summarize_data_blocks_profile.py --artifact-dir "$ART" --large-copy-log /tmp/fod-data-blocks-conflict-noop-current.log --pg-top "$ART/pg_top_statements-conflict-noop.txt" --wal-delta "$ART/pg_wal_delta-before-to-after.tsv" --table-dml-delta "$ART/pg_table_dml_delta-before-to-after.txt" --data-blocks-bloat "$ART/pg_data_blocks_bloat-conflict-noop.txt" --output docs/performance-data-blocks-conflict-noop-profile-2026-07-03.md --run-id "$RUN_ID" --host "$HOST" --conclusion 'The unchanged-block conflict filter avoided all data_blocks row rewrites for a 64 MiB same-payload overwrite: zero inserts, zero updates, zero dead tuples, and only minimal metadata WAL remained.' --next-candidate 'Keep the filter; next optimize the changed-payload full-overwrite case separately, likely through a data-object-level swap or another design that avoids non-HOT row rewrites without weakening correctness.'`
+- `sed -n '1,220p' docs/performance-data-blocks-conflict-noop-profile-2026-07-03.md`
+- `RUN_ID=$(cat /tmp/fod_data_blocks_conflict_noop_run_id); ART="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s 2>/dev/null || hostname)-${RUN_ID}"; rg -n "COPY fod_persist_block_stage|INSERT INTO data_blocks" "$ART/pg_top_statements-conflict-noop.txt" | head -n 10`
+- `git status --short`
+- `sed -n '1,240p' scripts/perf/pg/explain_data_blocks_merge.sql`
+- `rg -n "profile-pg-data-blocks-merge-explain|explain_data_blocks_merge" Makefile docs/performance.md docs/performance-baselines.md`
+- `RUN_ID="data-blocks-merge-filter-explain-$(date -u +%Y%m%dT%H%M%SZ)"; HOST=$(hostname -s 2>/dev/null || hostname); printf '%s\n' "$RUN_ID" > /tmp/fod_data_blocks_merge_filter_explain_run_id; make profile-env PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=merge-filter; make profile-pg-data-blocks-merge-explain PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=merge-filter`
+- `git rev-parse HEAD && cat /tmp/fod_data_blocks_conflict_noop_run_id && cat /tmp/fod_data_blocks_merge_filter_explain_run_id`
+- `RUN_ID=$(cat /tmp/fod_data_blocks_merge_filter_explain_run_id); ART="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s 2>/dev/null || hostname)-${RUN_ID}/pg_data_blocks_merge_explain-merge-filter.txt"; rg -n "Execution Time|Rows Removed by Conflict Filter|Tuples Inserted|Conflicting Tuples|Buffers:" "$ART"`
+- `git diff --check`
+- `git diff --stat`
+- `git status --short`
+- `sed -n '1,95p' BENCHMARKS.md && sed -n '18,26p' TODO.md && tail -12 conclusions.md`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance-data-blocks-conflict-noop-profile-2026-07-03.md && git commit -m "FOD 3.2.1: record unchanged data block conflict profile"`
+
 ## 2026-07-03
 
 Base commit at execution time: `d5c63e2`

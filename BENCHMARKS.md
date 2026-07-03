@@ -23,7 +23,44 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-03 from commit `1969674` and adds overwrite-only `data_blocks` conflict-update DML deltas.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-03 from commit `76867aa` and adds unchanged-block conflict filtering evidence for `data_blocks`.
+
+## 2026-07-03 Data Blocks Unchanged Conflict Filter Profile
+
+Collected from commit `76867aa765d9cee4406c522d37c3e0dd5ec812c8` (`FOD 3.2.1: skip unchanged data block conflict updates`) with the FOD version at `3.2.1`.
+
+Workload: `make profile-data-blocks-conflict-noop-dml` on local Docker PostgreSQL. The target first seeds a 64 MiB file, then snapshots DML/WAL around overwriting that same logical file with the same 64 MiB payload.
+
+Artifact summary: `docs/performance-data-blocks-conflict-noop-profile-2026-07-03.md`, run ID `data-blocks-conflict-noop-20260703T140759Z`.
+
+| Metric | Value |
+| --- | ---: |
+| same-payload overwrite elapsed_s | `2.585200` |
+| same-payload overwrite throughput_mib_s | `24.76` |
+| wal_bytes_delta | `1266` |
+| wal_records_delta | `16` |
+| `data_blocks_n_tup_ins_delta` | `0` |
+| `data_blocks_n_tup_upd_delta` | `0` |
+| `data_blocks_n_tup_hot_upd_delta` | `0` |
+| `data_blocks_non_hot_update_delta` | `0` |
+| `data_blocks_n_dead_tup_delta` | `0` |
+| `idx_data_blocks_object_order_idx_scan_delta` | `922` |
+| `idx_data_blocks_object_order_idx_tup_read_delta` | `32768` |
+| `idx_data_blocks_object_order_idx_tup_fetch_delta` | `32768` |
+
+Temp-table merge reproducer on the same commit, run ID `data-blocks-merge-filter-explain-20260703T140901Z`:
+
+| Reproducer step | Rows | Execution Time |
+| --- | ---: | ---: |
+| fresh insert | `16384 inserted, 0 conflicts` | `230.725 ms` |
+| identical conflict | `16384 conflicts, 16384 removed by conflict filter` | `378.997 ms` |
+| changed conflict | `16384 conflicts, 16384 updated` | `319.994 ms` |
+
+Interpretation:
+
+- The end-to-end same-payload overwrite produced no `data_blocks` inserts, updates, deletes, dead tuples, or relation-size growth.
+- The temp-table reproducer confirms the SQL filter itself: identical conflicts are removed by the `ON CONFLICT ... WHERE` filter and do not dirty/write target pages, while changed payloads still update rows.
+- The same-payload path still pays conflict lookup and payload comparison cost when it reaches SQL; optimizing changed-payload full overwrites remains a separate problem.
 
 ## 2026-07-03 Data Blocks Conflict Update Profile
 
