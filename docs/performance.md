@@ -46,6 +46,17 @@ make profile-pg-wal PROFILE_CAPTURE_LABEL=rollback
 
 `profile-pg-wal` records `pg_stat_wal` and then uses `pg_stat_checkpointer` when the PostgreSQL version exposes it. Older versions fall back to `pg_stat_bgwriter` and print that source in the output.
 
+For real `data_blocks` DML behavior, capture a before/after table/index snapshot around the workload:
+
+```bash
+make profile-pg-table-dml-snapshot PROFILE_CAPTURE_LABEL=before
+make test-large-copy-benchmark
+make profile-pg-table-dml-snapshot PROFILE_CAPTURE_LABEL=after
+make profile-pg-table-dml-delta
+```
+
+The DML delta records `n_tup_ins`, `n_tup_upd`, `n_tup_hot_upd`, `n_tup_del`, `n_dead_tup`, relation-size changes, and `idx_data_blocks_object_order` lookup counters. Use it before changing the `data_blocks` conflict merge, because it shows whether the live path is insert-heavy, HOT-update friendly, or doing non-HOT heap rewrites.
+
 `profile-pg-io` uses `pg_stat_io` and is optional because it is PostgreSQL-version dependent:
 
 ```bash

@@ -36,13 +36,16 @@ def parse_env(text: str) -> dict[str, str]:
     return result
 
 
-def parse_wal_delta(text: str) -> dict[str, str]:
+def parse_key_values(text: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for line in text.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 4 or parts[0] == "metric":
+        if "=" in line:
+            key, value = line.split("=", 1)
+            result[key.strip()] = value.strip()
             continue
-        result[parts[0]] = parts[3]
+        parts = line.split("\t")
+        if len(parts) == 4 and parts[0] != "metric":
+            result[parts[0]] = parts[3]
     return result
 
 
@@ -104,6 +107,7 @@ def main() -> int:
     parser.add_argument("--large-copy-log", required=True, type=Path)
     parser.add_argument("--pg-top", required=True, type=Path)
     parser.add_argument("--wal-delta", required=True, type=Path)
+    parser.add_argument("--table-dml-delta", type=Path)
     parser.add_argument("--data-blocks-bloat", required=True, type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--run-id")
@@ -118,7 +122,8 @@ def main() -> int:
     env = parse_env(read_text(args.artifact_dir / "env.txt"))
     log_text = read_text(args.large_copy_log)
     pg_top_text = read_text(args.pg_top)
-    wal = parse_wal_delta(read_text(args.wal_delta))
+    wal = parse_key_values(read_text(args.wal_delta))
+    dml = parse_key_values(read_text(args.table_dml_delta))
     bloat = bloat_snapshot(read_text(args.data_blocks_bloat))
     sql_rows = top_sql_rows(pg_top_text)
 
@@ -161,6 +166,19 @@ def main() -> int:
         f"- `buffers_checkpoint_delta`: `{wal.get('buffers_checkpoint_delta', 'n/a')}`",
         f"- `buffers_backend_delta`: `{wal.get('buffers_backend_delta', 'n/a')}`",
         f"- `buffers_backend_fsync_delta`: `{wal.get('buffers_backend_fsync_delta', 'n/a')}`",
+        "",
+        "## Table DML Delta",
+        "",
+        f"- `data_blocks_n_tup_ins_delta`: `{dml.get('data_blocks_n_tup_ins_delta', 'n/a')}`",
+        f"- `data_blocks_n_tup_upd_delta`: `{dml.get('data_blocks_n_tup_upd_delta', 'n/a')}`",
+        f"- `data_blocks_n_tup_hot_upd_delta`: `{dml.get('data_blocks_n_tup_hot_upd_delta', 'n/a')}`",
+        f"- `data_blocks_non_hot_update_delta`: `{dml.get('data_blocks_non_hot_update_delta', 'n/a')}`",
+        f"- `data_blocks_hot_update_ratio_percent`: `{dml.get('data_blocks_hot_update_ratio_percent', 'n/a')}`",
+        f"- `data_blocks_n_tup_del_delta`: `{dml.get('data_blocks_n_tup_del_delta', 'n/a')}`",
+        f"- `data_blocks_n_dead_tup_delta`: `{dml.get('data_blocks_n_dead_tup_delta', 'n/a')}`",
+        f"- `idx_data_blocks_object_order_idx_scan_delta`: `{dml.get('idx_data_blocks_object_order_idx_scan_delta', 'n/a')}`",
+        f"- `idx_data_blocks_object_order_idx_tup_read_delta`: `{dml.get('idx_data_blocks_object_order_idx_tup_read_delta', 'n/a')}`",
+        f"- `idx_data_blocks_object_order_idx_tup_fetch_delta`: `{dml.get('idx_data_blocks_object_order_idx_tup_fetch_delta', 'n/a')}`",
         "",
         "## Bloat / Churn Snapshot",
         "",

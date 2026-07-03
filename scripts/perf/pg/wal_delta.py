@@ -10,9 +10,10 @@
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import sys
+
+from metric_snapshot import delta_value, format_decimal, parse_snapshot
 
 
 DELTA_KEYS = [
@@ -35,33 +36,6 @@ DELTA_KEYS = [
     "buffers_backend_fsync",
     "buffers_alloc",
 ]
-
-
-def parse_snapshot(path: Path) -> dict[str, str]:
-    data: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        data[key.strip()] = value.strip()
-    return data
-
-
-def decimal_value(data: dict[str, str], key: str) -> Decimal:
-    raw = data.get(key, "0")
-    if raw == "":
-        return Decimal(0)
-    try:
-        return Decimal(raw)
-    except InvalidOperation as exc:
-        raise ValueError(f"{key} is not numeric: {raw!r}") from exc
-
-
-def format_decimal(value: Decimal) -> str:
-    if value == value.to_integral_value():
-        return str(int(value))
-    return format(value.normalize(), "f")
 
 
 def main(argv: list[str]) -> int:
@@ -95,7 +69,7 @@ def main(argv: list[str]) -> int:
     print("warning_bgwriter_stats_reset_changed=" + ("1" if before.get("bgwriter_stats_reset") != after.get("bgwriter_stats_reset") else "0"))
 
     for key in DELTA_KEYS:
-        delta = decimal_value(after, key) - decimal_value(before, key)
+        delta = delta_value(before, after, key)
         print(f"{key}_delta={format_decimal(delta)}")
 
     return 0

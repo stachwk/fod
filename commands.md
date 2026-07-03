@@ -620,6 +620,35 @@ Base commit at execution time: `c2ce42b`
 - `cargo check --manifest-path Cargo.toml -p fod-rust-hotpath`
 - `cargo check --manifest-path Cargo.toml -p fod-rust-fuse`
 - `make profile-pg-data-blocks-bloat`
+
+## 2026-07-03
+
+Base commit at execution time: `d5150c3`
+
+- `git status --short && git log -5 --oneline && cat fod_version.txt`
+- `sed -n '120,170p' Makefile && sed -n '1220,1285p' Makefile && sed -n '1410,1455p' Makefile`
+- `sed -n '1,220p' scripts/perf/pg/wal_delta.py && sed -n '1,180p' scripts/perf/pg/wal_snapshot.sql && rg -n "profile-pg|data-blocks|wal_delta|snapshot" Makefile scripts/perf docs README.md TODO.md conclusions.md`
+- `tail -n 80 commands.md && tail -n 50 conclusions.md && sed -n '1,80p' TODO.md`
+- `nl -ba Makefile | sed -n '130,165p'`
+- `nl -ba Makefile | sed -n '330,365p'`
+- `nl -ba Makefile | sed -n '1200,1270p'`
+- `nl -ba scripts/perf/summarize_data_blocks_profile.py | sed -n '1,220p'`
+- `nl -ba scripts/perf/pg/data_blocks_bloat.sql | sed -n '1,200p'`
+- `rg -n "^PYTHON|^PSQL|VENV_PYTHON" Makefile | head -n 30`
+- `rg -n "pg_stat_force_next_flush|table_dml|n_tup_hot|n_tup_ins|n_tup_upd" . -S`
+- `ls -la scripts/perf/pg && find scripts/perf -maxdepth 2 -type f | sort`
+- `nl -ba docs/performance.md | sed -n '1,90p'`
+- `python3 -m py_compile scripts/perf/pg/metric_snapshot.py scripts/perf/pg/wal_delta.py scripts/perf/pg/table_dml_delta.py scripts/perf/summarize_data_blocks_profile.py`
+- `git diff --check`
+- `make -n profile-pg-table-dml-snapshot PROFILE_CAPTURE_LABEL=before && make -n profile-pg-table-dml-delta`
+- `git diff --stat && git diff -- Makefile scripts/perf/pg/wal_delta.py scripts/perf/pg/table_dml_delta.py scripts/perf/pg/table_dml_snapshot.sql scripts/perf/summarize_data_blocks_profile.py docs/performance.md | sed -n '1,280p'`
+- `git status --short`
+- `python3 -m py_compile scripts/perf/pg/metric_snapshot.py scripts/perf/pg/wal_delta.py scripts/perf/pg/table_dml_delta.py scripts/perf/summarize_data_blocks_profile.py && git diff --check`
+- `make profile-pg-table-dml-snapshot PROFILE_RUN_ID=dml-snapshot-smoke-$(date -u +%Y%m%dT%H%M%SZ) PROFILE_HOST=$(hostname -s 2>/dev/null || hostname) PROFILE_CAPTURE_LABEL=smoke`
+- `make help | rg -n "profile-pg-table-dml|profile-pg-wal|profile-data-blocks-summary"`
+- `SNAP="$(find artifacts/perf/d5150c3 -path '*dml-snapshot-smoke-*' -name 'pg_table_dml_snapshot-smoke.txt' | sort | tail -n 1)"; make profile-pg-table-dml-delta PROFILE_TABLE_DML_BEFORE_FILE="$SNAP" PROFILE_TABLE_DML_AFTER_FILE="$SNAP" PROFILE_RUN_ID=dml-delta-smoke-$(date -u +%Y%m%dT%H%M%SZ) PROFILE_HOST=$(hostname -s 2>/dev/null || hostname)`
+- `tail -n 40 commands.md`
+- `date -Is && git rev-parse --short HEAD && git status --short`
 - `git status --short`
 - `git diff --check`
 - `git diff --stat`

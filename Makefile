@@ -145,6 +145,11 @@ PROFILE_WAL_AFTER_LABEL ?= after
 PROFILE_WAL_BEFORE_FILE ?= $(ARTIFACTS_DIR)/pg_wal_snapshot-$(PROFILE_WAL_BEFORE_LABEL).tsv
 PROFILE_WAL_AFTER_FILE ?= $(ARTIFACTS_DIR)/pg_wal_snapshot-$(PROFILE_WAL_AFTER_LABEL).tsv
 PROFILE_WAL_DELTA_FILE ?= $(ARTIFACTS_DIR)/pg_wal_delta-$(PROFILE_WAL_BEFORE_LABEL)-to-$(PROFILE_WAL_AFTER_LABEL).tsv
+PROFILE_TABLE_DML_BEFORE_LABEL ?= before
+PROFILE_TABLE_DML_AFTER_LABEL ?= after
+PROFILE_TABLE_DML_BEFORE_FILE ?= $(ARTIFACTS_DIR)/pg_table_dml_snapshot-$(PROFILE_TABLE_DML_BEFORE_LABEL).txt
+PROFILE_TABLE_DML_AFTER_FILE ?= $(ARTIFACTS_DIR)/pg_table_dml_snapshot-$(PROFILE_TABLE_DML_AFTER_LABEL).txt
+PROFILE_TABLE_DML_DELTA_FILE ?= $(ARTIFACTS_DIR)/pg_table_dml_delta-$(PROFILE_TABLE_DML_BEFORE_LABEL)-to-$(PROFILE_TABLE_DML_AFTER_LABEL).txt
 PROFILE_LARGE_COPY_LOG ?= /tmp/fod-data-blocks-current.log
 PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT ?= docs/performance-data-blocks-profile-$(shell date +%F).md
 PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION ?= Real-path data_blocks profile captured.
@@ -353,6 +358,8 @@ help:
 		'  make profile-perf-record - record perf samples around PROFILE_WORKLOAD' \
 		'  make profile-pg-wal-snapshot - capture machine-readable WAL/checkpointer counters' \
 		'  make profile-pg-wal-delta - compare PROFILE_WAL_BEFORE_LABEL and PROFILE_WAL_AFTER_LABEL snapshots' \
+		'  make profile-pg-table-dml-snapshot - capture data_blocks table/index DML counters' \
+		'  make profile-pg-table-dml-delta - compare table/index DML snapshots before/after a workload' \
 		'  make profile-data-blocks-summary - write a markdown summary from data_blocks profiling artifacts' \
 		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
@@ -1205,7 +1212,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1251,12 +1258,28 @@ profile-pg-wal-delta:
 	$(PYTHON) scripts/perf/pg/wal_delta.py "$$before" "$$after" > "$$out"; \
 	cat "$$out"
 
+profile-pg-table-dml-snapshot:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/table_dml_snapshot.sql > $(ARTIFACTS_DIR)/pg_table_dml_snapshot$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_table_dml_snapshot$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-table-dml-delta:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@before="$(PROFILE_TABLE_DML_BEFORE_FILE)"; \
+	after="$(PROFILE_TABLE_DML_AFTER_FILE)"; \
+	out="$(PROFILE_TABLE_DML_DELTA_FILE)"; \
+	test -f "$$before" || { echo "Missing before table DML snapshot: $$before" >&2; exit 2; }; \
+	test -f "$$after" || { echo "Missing after table DML snapshot: $$after" >&2; exit 2; }; \
+	$(PYTHON) scripts/perf/pg/table_dml_delta.py "$$before" "$$after" > "$$out"; \
+	cat "$$out"
+
 profile-data-blocks-summary:
 	$(PYTHON) scripts/perf/summarize_data_blocks_profile.py \
 		--artifact-dir "$(ARTIFACTS_DIR)" \
 		--large-copy-log "$(PROFILE_LARGE_COPY_LOG)" \
 		--pg-top "$(ARTIFACTS_DIR)/pg_top_statements$(PROFILE_CAPTURE_SUFFIX).txt" \
 		--wal-delta "$(PROFILE_WAL_DELTA_FILE)" \
+		--table-dml-delta "$(PROFILE_TABLE_DML_DELTA_FILE)" \
 		--data-blocks-bloat "$(ARTIFACTS_DIR)/pg_data_blocks_bloat$(PROFILE_CAPTURE_SUFFIX).txt" \
 		--output "$(PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT)" \
 		--run-id "$(PROFILE_RUN_ID)" \
