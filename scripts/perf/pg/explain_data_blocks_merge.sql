@@ -7,7 +7,9 @@
 --     FROM fod_persist_block_stage
 --     WHERE data IS NOT NULL
 --     ON CONFLICT (data_object_id, _order)
---     DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data;
+--     DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+--     WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
+--        OR data_blocks.data IS DISTINCT FROM EXCLUDED.data;
 --
 -- The runtime staging table is temporary and connection-local, so this script
 -- creates representative temporary tables and indexes instead. WAL numbers on
@@ -83,7 +85,9 @@ SELECT id_file, data_object_id, _order, data
 FROM fod_persist_block_stage
 WHERE data IS NOT NULL
 ON CONFLICT (data_object_id, _order)
-DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data;
+DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+WHERE fod_explain_data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
+   OR fod_explain_data_blocks.data IS DISTINCT FROM EXCLUDED.data;
 
 ANALYZE fod_explain_data_blocks;
 
@@ -95,7 +99,9 @@ SELECT id_file, data_object_id, _order, data
 FROM fod_persist_block_stage
 WHERE data IS NOT NULL
 ON CONFLICT (data_object_id, _order)
-DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data;
+DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+WHERE fod_explain_data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
+   OR fod_explain_data_blocks.data IS DISTINCT FROM EXCLUDED.data;
 
 TRUNCATE fod_persist_block_stage;
 
@@ -122,7 +128,9 @@ SELECT id_file, data_object_id, _order, data
 FROM fod_persist_block_stage
 WHERE data IS NOT NULL
 ON CONFLICT (data_object_id, _order)
-DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data;
+DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+WHERE fod_explain_data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
+   OR fod_explain_data_blocks.data IS DISTINCT FROM EXCLUDED.data;
 
 SELECT 'temporary target final count' AS section;
 

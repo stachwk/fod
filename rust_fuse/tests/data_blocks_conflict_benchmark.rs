@@ -79,6 +79,38 @@ fn verify_payload(file_path: &Path, expected: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_overwrite_benchmark(name: &str, marker: &[u8]) -> Result<(), String> {
+    let mounted = mounted_conflict_fs(name)?;
+    let (block_size, block_count, total) = payload_shape()?;
+    let overwrite_payload = payload(marker)?;
+    let (_, file_path) = workload_paths(&mounted.mountpoint);
+
+    if !file_path.exists() {
+        return Err(format!(
+            "missing seeded conflict file {}; run data_blocks_conflict_seed first with DATA_BLOCKS_CONFLICT_ID={}",
+            file_path.display(),
+            conflict_id()
+        ));
+    }
+
+    let elapsed = write_full_payload(&file_path, &overwrite_payload, false)?;
+    verify_payload(&file_path, &overwrite_payload)?;
+    let throughput_mib_s = if elapsed > 0.0 {
+        (total as f64 / 1024.0 / 1024.0) / elapsed
+    } else {
+        0.0
+    };
+
+    println!(
+        "OK {name} bytes={} id={} block_size={} block_count={} elapsed_s={elapsed:.6} throughput_mib_s={throughput_mib_s:.2}",
+        total,
+        conflict_id(),
+        block_size,
+        block_count,
+    );
+    Ok(())
+}
+
 #[test]
 fn data_blocks_conflict_seed() -> Result<(), String> {
     let mounted = mounted_conflict_fs("data-blocks-conflict-seed")?;
@@ -110,33 +142,16 @@ fn data_blocks_conflict_seed() -> Result<(), String> {
 
 #[test]
 fn data_blocks_conflict_overwrite_benchmark() -> Result<(), String> {
-    let mounted = mounted_conflict_fs("data-blocks-conflict-overwrite")?;
-    let (block_size, block_count, total) = payload_shape()?;
-    let overwrite_payload = payload(b"fod-data-blocks-conflict-overwrite-")?;
-    let (_, file_path) = workload_paths(&mounted.mountpoint);
+    run_overwrite_benchmark(
+        "data-blocks-conflict-overwrite",
+        b"fod-data-blocks-conflict-overwrite-",
+    )
+}
 
-    if !file_path.exists() {
-        return Err(format!(
-            "missing seeded conflict file {}; run data_blocks_conflict_seed first with DATA_BLOCKS_CONFLICT_ID={}",
-            file_path.display(),
-            conflict_id()
-        ));
-    }
-
-    let elapsed = write_full_payload(&file_path, &overwrite_payload, false)?;
-    verify_payload(&file_path, &overwrite_payload)?;
-    let throughput_mib_s = if elapsed > 0.0 {
-        (total as f64 / 1024.0 / 1024.0) / elapsed
-    } else {
-        0.0
-    };
-
-    println!(
-        "OK data-blocks-conflict-overwrite bytes={} id={} block_size={} block_count={} elapsed_s={elapsed:.6} throughput_mib_s={throughput_mib_s:.2}",
-        total,
-        conflict_id(),
-        block_size,
-        block_count,
-    );
-    Ok(())
+#[test]
+fn data_blocks_conflict_noop_overwrite_benchmark() -> Result<(), String> {
+    run_overwrite_benchmark(
+        "data-blocks-conflict-noop-overwrite",
+        b"fod-data-blocks-conflict-seed-",
+    )
 }

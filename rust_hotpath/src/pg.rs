@@ -1867,6 +1867,8 @@ unsafe fn merge_persist_block_stage_table(
         WHERE data IS NOT NULL
         ON CONFLICT (data_object_id, _order)
         DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+        WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
+           OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
         ",
         PERSIST_BLOCK_STAGE_TABLE
     ))
@@ -7541,6 +7543,8 @@ impl DbRepo {
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (data_object_id, _order)
             DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+            WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
+               OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -7550,6 +7554,8 @@ impl DbRepo {
             VALUES ($1, $2, $3, decode($4, 'hex'))
             ON CONFLICT (data_object_id, _order)
             DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+            WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
+               OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -7798,6 +7804,8 @@ impl DbRepo {
                     VALUES ($1, $2, $3, $4)
                     ON CONFLICT (data_object_id, _order)
                     DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+                    WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
+                       OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
                     ",
                 )
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -7807,6 +7815,8 @@ impl DbRepo {
                     VALUES ($1, $2, $3, decode($4, 'hex'))
                     ON CONFLICT (data_object_id, _order)
                     DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
+                    WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
+                       OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
                     ",
                 )
                 .map_err(|_| "SQL contains NUL byte".to_string())?;

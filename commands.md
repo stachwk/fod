@@ -623,6 +623,30 @@ Base commit at execution time: `c2ce42b`
 
 ## 2026-07-03
 
+Base commit at execution time: `778a805` with uncommitted working-tree changes for unchanged `data_blocks` conflict filtering.
+
+- `git status --short`
+- `git rev-parse --short HEAD && cat fod_version.txt`
+- `tail -80 commands.md`
+- `git diff --stat`
+- `git diff -- rust_hotpath/src/pg.rs rust_fuse/tests/data_blocks_conflict_benchmark.rs Makefile docs/performance.md scripts/perf/pg/explain_data_blocks_merge.sql | sed -n '1,260p'`
+- `PROFILE_RUN_ID="data-blocks-conflict-noop-smoke-$(date -u +%Y%m%dT%H%M%SZ)"; DATA_BLOCKS_CONFLICT_ID="$PROFILE_RUN_ID"; printf '%s\n' "$PROFILE_RUN_ID" > /tmp/fod_data_blocks_conflict_noop_smoke_run_id; make profile-data-blocks-conflict-noop-dml PROFILE_RUN_ID="$PROFILE_RUN_ID" DATA_BLOCKS_CONFLICT_ID="$DATA_BLOCKS_CONFLICT_ID" DATA_BLOCKS_CONFLICT_BLOCK_SIZE=1M DATA_BLOCKS_CONFLICT_BLOCK_COUNT=2 PROFILE_DATA_BLOCKS_CONFLICT_NOOP_LOG=/tmp/fod-data-blocks-conflict-noop-smoke.log`
+- `PROFILE_RUN_ID="data-blocks-conflict-changed-smoke-$(date -u +%Y%m%dT%H%M%SZ)"; DATA_BLOCKS_CONFLICT_ID="$PROFILE_RUN_ID"; printf '%s\n' "$PROFILE_RUN_ID" > /tmp/fod_data_blocks_conflict_changed_smoke_run_id; make profile-data-blocks-conflict-dml PROFILE_RUN_ID="$PROFILE_RUN_ID" DATA_BLOCKS_CONFLICT_ID="$DATA_BLOCKS_CONFLICT_ID" DATA_BLOCKS_CONFLICT_BLOCK_SIZE=1M DATA_BLOCKS_CONFLICT_BLOCK_COUNT=2 PROFILE_DATA_BLOCKS_CONFLICT_LOG=/tmp/fod-data-blocks-conflict-changed-smoke.log`
+- `cargo fmt --check`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-hotpath`
+- `cargo check --manifest-path Cargo.toml -p fod-rust-fuse`
+- `RUN_ID=$(cat /tmp/fod_data_blocks_conflict_noop_smoke_run_id); ART="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s 2>/dev/null || hostname)-${RUN_ID}"; printf 'ART=%s\n' "$ART"; sed -n '1,70p' "$ART/pg_table_dml_delta-before-to-after.txt"; sed -n '1,45p' "$ART/pg_wal_delta-before-to-after.tsv"; sed -n '1,35p' /tmp/fod-data-blocks-conflict-noop-smoke.log`
+- `RUN_ID=$(cat /tmp/fod_data_blocks_conflict_changed_smoke_run_id); ART="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s 2>/dev/null || hostname)-${RUN_ID}"; printf 'ART=%s\n' "$ART"; sed -n '1,70p' "$ART/pg_table_dml_delta-before-to-after.txt"; sed -n '1,45p' "$ART/pg_wal_delta-before-to-after.tsv"; sed -n '1,35p' /tmp/fod-data-blocks-conflict-changed-smoke.log`
+- `git diff --check && git status --short`
+- `tail -40 conclusions.md`
+- `rg -n "non-HOT|unchanged|conflict|data_blocks|server-side COPY|HOT|heap rewrite|swap" TODO.md docs/*.md BENCHMARKS.md | head -n 80`
+- `git diff --check`
+- `git diff --stat`
+- `git status --short`
+- `git add Makefile commands.md docs/performance.md rust_fuse/tests/data_blocks_conflict_benchmark.rs rust_hotpath/src/pg.rs scripts/perf/pg/explain_data_blocks_merge.sql && git commit -m "FOD 3.2.1: skip unchanged data block conflict updates"`
+
+## 2026-07-03
+
 Base commit at execution time: `d5c63e2`
 
 - `git status --short && git log -5 --oneline && cat fod_version.txt`

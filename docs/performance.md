@@ -67,6 +67,16 @@ make profile-data-blocks-conflict-dml \
 
 The target runs `test-data-blocks-conflict-seed`, captures DML/WAL snapshots, then runs `test-data-blocks-conflict-overwrite-benchmark` against the same logical file. The resulting table DML delta should show the update-only phase, including `n_tup_upd`, `n_tup_hot_upd`, non-HOT updates, dead-tuple growth, and `idx_data_blocks_object_order` activity.
 
+To verify that unchanged-block filtering avoids needless rewrites, use the same flow with a same-payload overwrite:
+
+```bash
+make profile-data-blocks-conflict-noop-dml \
+  PROFILE_RUN_ID=data-blocks-conflict-noop-$(date -u +%Y%m%dT%H%M%SZ) \
+  DATA_BLOCKS_CONFLICT_ID=conflict-noop-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+This target should keep `data_blocks_n_tup_upd_delta` and `data_blocks_n_dead_tup_delta` at zero when the staged block data is identical to the existing block rows.
+
 `profile-pg-io` uses `pg_stat_io` and is optional because it is PostgreSQL-version dependent:
 
 ```bash

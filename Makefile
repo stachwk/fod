@@ -103,6 +103,7 @@ BENCHMARK_TARGETS := \
 	test-truncate-release-profile \
 	test-large-copy-benchmark \
 	test-data-blocks-conflict-benchmark \
+	test-data-blocks-conflict-noop-benchmark \
 	test-large-file-multiblock-benchmark \
 	test-remount-durability-benchmark \
 	test-tree-scale \
@@ -156,6 +157,7 @@ PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT ?= docs/performance-data-blocks-profile-$(she
 PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION ?= Real-path data_blocks profile captured.
 PROFILE_DATA_BLOCKS_SUMMARY_NEXT ?= Keep runtime SQL unchanged until repeated local/QNAP data confirms the next bottleneck.
 PROFILE_DATA_BLOCKS_CONFLICT_LOG ?= /tmp/fod-data-blocks-conflict-current.log
+PROFILE_DATA_BLOCKS_CONFLICT_NOOP_LOG ?= /tmp/fod-data-blocks-conflict-noop-current.log
 DATA_BLOCKS_CONFLICT_ID ?= data-blocks-conflict-current
 DATA_BLOCKS_CONFLICT_BLOCK_SIZE ?= 4M
 DATA_BLOCKS_CONFLICT_BLOCK_COUNT ?= 16
@@ -366,6 +368,7 @@ help:
 		'  make profile-pg-table-dml-snapshot - capture data_blocks table/index DML counters' \
 		'  make profile-pg-table-dml-delta - compare table/index DML snapshots before/after a workload' \
 		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
+		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
 		'  make profile-data-blocks-summary - write a markdown summary from data_blocks profiling artifacts' \
 		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
@@ -476,6 +479,7 @@ help:
 		'  make test-rust-hotpath-missing-ranges - Rust helper parity tests for missing-range handling' \
 		'  make test-large-copy-benchmark - benchmark large copy_file_range transfers' \
 		'  make test-data-blocks-conflict-benchmark - benchmark overwrite conflict updates in data_blocks' \
+		'  make test-data-blocks-conflict-noop-benchmark - benchmark same-payload overwrite filtering in data_blocks' \
 		'  make test-large-file-multiblock-benchmark - benchmark large multi-block file writes' \
 		'  make test-remount-durability-benchmark - benchmark data survival across remounts' \
 		'  make test-tree-scale - benchmark getattr/readdir on a larger tree' \
@@ -1062,7 +1066,13 @@ test-data-blocks-conflict-seed: init
 test-data-blocks-conflict-overwrite-benchmark: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_overwrite_benchmark --offline -- --nocapture
 
+test-data-blocks-conflict-noop-overwrite-benchmark: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_noop_overwrite_benchmark --offline -- --nocapture
+
 test-data-blocks-conflict-benchmark: test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark
+	@:
+
+test-data-blocks-conflict-noop-benchmark: test-data-blocks-conflict-seed test-data-blocks-conflict-noop-overwrite-benchmark
 	@:
 
 test-large-file-multiblock-benchmark: init
@@ -1228,7 +1238,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-conflict-dml
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1316,6 +1326,20 @@ profile-data-blocks-conflict-dml:
 	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
 	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict profile-pg-top
 	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict profile-pg-data-blocks-bloat
+
+profile-data-blocks-conflict-noop-dml:
+	@$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-seed
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-env
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-reset
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-wal-snapshot
+	@bash -o pipefail -c '$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-noop-overwrite-benchmark 2>&1 | tee "$(PROFILE_DATA_BLOCKS_CONFLICT_NOOP_LOG)"'
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-table-dml-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-wal-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict-noop profile-pg-top
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict-noop profile-pg-data-blocks-bloat
 
 profile-pg-io:
 	@mkdir -p $(ARTIFACTS_DIR)
