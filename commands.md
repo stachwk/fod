@@ -123,6 +123,52 @@ Base commit at execution time: `64e3bdf`
 - `cat fod_version.txt`
 - `git add Makefile TODO.md commands.md conclusions.md docs/performance.md scripts/perf/pg/table_dml_delta.py scripts/perf/pg/table_dml_snapshot.sql scripts/perf/pg/top_statements_io_wal.sql`
 - `git commit -m "FOD 3.2.1: add storage DML and statement IO profiling"`
+
+Base commit at execution time: `adeaa35`
+
+- `git status --short`
+- `git rev-parse --short HEAD && cat fod_version.txt`
+- `rg -n "copy-buffer|COPY_BUFFER|profile-data-blocks|merge-explain|fillfactor|data_blocks.*explain|profile-pg-top-io-wal|QNAP|qnap" Makefile scripts/perf docs TODO.md BENCHMARKS.md -S`
+- `tail -80 commands.md`
+- `sed -n '120,210p' Makefile`
+- `sed -n '1240,1595p' Makefile`
+- `sed -n '1,260p' scripts/perf/pg/explain_data_blocks_merge.sql`
+- `sed -n '1,260p' scripts/perf/pg/data_blocks_bloat.sql && sed -n '1,220p' scripts/perf/pg/wal_delta.py`
+- `sed -n '1,220p' scripts/perf/summarize_data_blocks_profile.py`
+- `sed -n '1,200p' scripts/perf/pg/metric_snapshot.py`
+- `rg -n "FOD_PERSIST_COPY_SEND_BUFFER_BYTES|copy_put_data|OK large-copy-benchmark|test-large-copy-benchmark" rust_fuse tests Makefile -S`
+- `sed -n '980,1045p' Makefile && sed -n '1,220p' rust_fuse/tests/large_copy_benchmark.rs`
+- `sed -n '145,175p' Makefile`
+- `sed -n '365,386p' Makefile`
+- `sed -n '1248,1375p' Makefile`
+- `sed -n '1558,1580p' Makefile`
+- `make -n profile-data-blocks-copy-buffer-matrix PROFILE_RUN_ID=matrix-dry PROFILE_COPY_BUFFER_SIZES='default 1048576'`
+- `make -n profile-pg-data-blocks-merge-fillfactor-explain PROFILE_RUN_ID=fillfactor-dry DATA_BLOCKS_EXPLAIN_FILLFACTORS='100 90'`
+- `git diff --check`
+- `make profile-pg-data-blocks-merge-fillfactor-explain-one PROFILE_RUN_ID=fillfactor-smoke PROFILE_CAPTURE_LABEL=smoke DATA_BLOCKS_EXPLAIN_FILLFACTOR=90 DATA_BLOCKS_EXPLAIN_STAGE_ROWS=16 DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES=128`
+- `RUN_ID="data-blocks-fillfactor-$(date -u +%Y%m%dT%H%M%SZ)"; printf '%s\n' "$RUN_ID" > /tmp/fod_fillfactor_run_id; make profile-pg-data-blocks-merge-fillfactor-explain PROFILE_RUN_ID="$RUN_ID" DATA_BLOCKS_EXPLAIN_FILLFACTORS='100 90 75'`
+- `RUN_ID="copy-buffer-matrix-$(date -u +%Y%m%dT%H%M%SZ)"; printf '%s\n' "$RUN_ID" > /tmp/fod_copy_buffer_matrix_run_id; make profile-data-blocks-copy-buffer-matrix PROFILE_RUN_ID="$RUN_ID" PROFILE_COPY_BUFFER_SIZES='default 262144 1048576 4194304'`
+- `make qnap-smoke`
+- `ip route get 192.168.1.11`
+- `timeout 5 bash -c '</dev/tcp/192.168.1.11/2376'`
+- `timeout 5 bash -c '</dev/tcp/192.168.1.11/5432'`
+- `cat /tmp/fod_copy_buffer_matrix_run_id /tmp/fod_fillfactor_run_id`
+- `RUN=$(cat /tmp/fod_copy_buffer_matrix_run_id); for buffer in default 262144 1048576 4194304; do dir="artifacts/perf/adeaa35/lt7300-${RUN}-local-buffer-${buffer}"; log="/tmp/fod-copy-buffer-local-${buffer}-${RUN}.log"; elapsed=$(rg -o 'elapsed_s=[0-9.]+' "$log" | tail -1 | cut -d= -f2); throughput=$(rg -o 'throughput_mib_s=[0-9.]+' "$log" | tail -1 | cut -d= -f2); copy_count=$(rg 'pg.copy_put_data.aggregate' "$log" | awk -F'count=' '{print $2}' | awk '{sum+=$1} END {print sum+0}'); copy_client_s=$(rg 'pg.copy_put_data.aggregate' "$log" | awk -F'seconds=' '{print $2}' | awk '{sum+=$1} END {printf "%.6f", sum}'); wal_bytes=$(rg '^wal_bytes_delta=' "$dir/pg_wal_delta-before-to-after.tsv" | cut -d= -f2); wal_buffers=$(rg '^wal_buffers_full_delta=' "$dir/pg_wal_delta-before-to-after.tsv" | cut -d= -f2); inserts=$(rg '^data_blocks_n_tup_ins_delta=' "$dir/pg_table_dml_delta-before-to-after.txt" | cut -d= -f2); updates=$(rg '^data_blocks_n_tup_upd_delta=' "$dir/pg_table_dml_delta-before-to-after.txt" | cut -d= -f2); dead=$(rg '^data_blocks_n_dead_tup_delta=' "$dir/pg_table_dml_delta-before-to-after.txt" | cut -d= -f2); copy_ms=$(awk -F'|' '/COPY fod_persist_block_stage/ {gsub(/^[ \t]+|[ \t]+$/, "", $3); print $3; exit}' "$dir/pg_top_io_wal-buffer-${buffer}.txt"); merge_ms=$(awk -F'|' '/INSERT INTO data_blocks/ {gsub(/^[ \t]+|[ \t]+$/, "", $3); sum += $3} END {printf "%.3f", sum}' "$dir/pg_top_io_wal-buffer-${buffer}.txt"); printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$buffer" "$elapsed" "$throughput" "$copy_count" "$copy_client_s" "$copy_ms" "$merge_ms" "$wal_bytes" "$wal_buffers" "$inserts" "$updates/$dead"; done`
+- `RUN=$(cat /tmp/fod_fillfactor_run_id); for ff in 100 90 75; do file="artifacts/perf/adeaa35/lt7300-${RUN}/pg_data_blocks_merge_fillfactor_${ff}-fillfactor-${ff}.txt"; times=$(awk '/Execution Time:/ {printf "%s%s", sep, $3; sep="|"}' "$file"); stats=$(awk '/temp stats after changed conflict/ {flag=1; next} flag && /^[[:space:]]*[0-9]+[[:space:]]*\|/ {gsub(/[[:space:]]+/, "", $0); print; exit}' "$file"); sizes=$(awk '/^[[:space:]]*16384[[:space:]]*\|/ && /kB/ {gsub(/^[ \t]+|[ \t]+$/, "", $0); print; exit}' "$file"); before=$(awk '/real_data_blocks_rows_before/{getline; getline; gsub(/^[ \t]+|[ \t]+$/, "", $0); print; exit}' "$file"); after=$(awk '/real_data_blocks_rows_after/{getline; getline; gsub(/^[ \t]+|[ \t]+$/, "", $0); print; exit}' "$file"); printf '%s|%s|%s|%s|%s|%s\n' "$ff" "$times" "$stats" "$sizes" "$before" "$after"; done`
+- `sed -n '1,50p' BENCHMARKS.md`
+- `sed -n '18,34p' TODO.md`
+- `tail -20 conclusions.md`
+- `git diff --check`
+- `make -n profile-pg-data-blocks-merge-fillfactor-explain PROFILE_RUN_ID=fillfactor-dry-final DATA_BLOCKS_EXPLAIN_FILLFACTORS='100 90'`
+- `make -n profile-data-blocks-copy-buffer-matrix PROFILE_RUN_ID=matrix-dry-final PROFILE_COPY_BUFFER_SIZES='default 1048576'`
+- `git status --short`
+- `git diff --check`
+- `git diff --stat`
+- `git diff -- Makefile scripts/perf/pg/explain_data_blocks_merge_fillfactor.sql docs/performance.md TODO.md BENCHMARKS.md conclusions.md | sed -n '1,260p'`
+- `cat fod_version.txt`
+- `git add BENCHMARKS.md Makefile TODO.md commands.md conclusions.md docs/performance.md scripts/perf/pg/explain_data_blocks_merge_fillfactor.sql`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: add data block copy matrix profiling"`
 - `sed -n '2140,2195p' rust_runtime/src/lib.rs`
 - `sed -n '2195,2245p' rust_runtime/src/lib.rs`
 - `sed -n '1960,2020p' rust_runtime/src/lib.rs`

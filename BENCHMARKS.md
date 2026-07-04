@@ -23,7 +23,97 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-04 from commit `60658e8` and adds repeated full-overwrite data-object swap cleanup evidence for `data_blocks`.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-04 from commit `adeaa35` and adds local COPY-buffer matrix plus safe fillfactor clone evidence for `data_blocks`.
+
+## 2026-07-04 Data Blocks COPY Buffer Matrix And Fillfactor Clone
+
+Collected from commit `adeaa35` (`FOD 3.2.1: add storage DML and statement IO profiling`). The working tree also contained uncommitted profiling-target additions for this run; those additions only orchestrate diagnostics and do not change runtime SQL.
+
+### Local COPY Buffer Matrix
+
+Command:
+
+```bash
+make profile-data-blocks-copy-buffer-matrix \
+  PROFILE_RUN_ID=copy-buffer-matrix-20260704T081308Z \
+  PROFILE_COPY_BUFFER_SIZES='default 262144 1048576 4194304'
+```
+
+Workload: local Docker PostgreSQL, real `test-large-copy-benchmark`, 64 MiB payload (`4M * 16`), with storage DML delta, WAL delta, `pg_stat_statements` IO/WAL, and bloat snapshots around each buffer run.
+
+| buffer bytes | elapsed_s | MiB/s | COPY sends | client COPY send seconds | server COPY total_exec_ms | data_blocks merge total_exec_ms | wal_bytes_delta | wal_buffers_full_delta | data_blocks inserts | data_blocks updates/dead |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| default | `3.882610` | `16.48` | `130` | `0.045381` | `1243.342` | `1255.802` | `12881058` | `260` | `32768` | `0/0` |
+| `262144` | `3.779636` | `16.93` | `512` | `0.039839` | `1197.572` | `1248.430` | `13059541` | `124` | `32768` | `0/0` |
+| `1048576` | `3.782537` | `16.92` | `130` | `0.043842` | `1234.466` | `1175.511` | `12858595` | `130` | `32768` | `0/0` |
+| `4194304` | `3.870289` | `16.54` | `34` | `0.051633` | `1213.832` | `1202.329` | `12864209` | `204` | `32768` | `0/0` |
+
+Artifacts:
+
+- `artifacts/perf/adeaa35/lt7300-copy-buffer-matrix-20260704T081308Z-local-buffer-default`
+- `artifacts/perf/adeaa35/lt7300-copy-buffer-matrix-20260704T081308Z-local-buffer-262144`
+- `artifacts/perf/adeaa35/lt7300-copy-buffer-matrix-20260704T081308Z-local-buffer-1048576`
+- `artifacts/perf/adeaa35/lt7300-copy-buffer-matrix-20260704T081308Z-local-buffer-4194304`
+
+Conclusions:
+
+- The local spread is small. `262144` and `1048576` were fastest in this single pass, but not by enough to justify changing the default.
+- The new DML delta confirms this large-copy path is insert-heavy in `data_blocks`: each run inserted `32768` rows and produced `0` `data_blocks` updates and `0` new dead tuples in the measured window.
+- The per-statement report keeps separating client COPY send behavior from server-side work: fewer client sends at `4194304` did not produce a throughput win, so server-side COPY plus merge remains the main area to analyze.
+- Keep `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` as diagnostic. Do not change its default from this single local pass.
+
+### QNAP COPY Buffer Matrix
+
+Attempted command:
+
+```bash
+make qnap-smoke
+```
+
+Result: blocked before the matrix could run. The QNAP endpoint was unreachable from this host:
+
+```text
+192.168.1.11:2376 -> No route to host
+192.168.1.11:5432 -> No route to host
+```
+
+The local route lookup still selected `wlo1`:
+
+```text
+192.168.1.11 dev wlo1 src 192.168.1.116
+```
+
+Conclusion: repeat `QNAP=1 make profile-data-blocks-copy-buffer-matrix` only after the laptop is on the correct network or LAN path and both Docker TLS `2376` and PostgreSQL `5432` are reachable.
+
+### Fillfactor Clone EXPLAIN
+
+Command:
+
+```bash
+make profile-pg-data-blocks-merge-fillfactor-explain \
+  PROFILE_RUN_ID=data-blocks-fillfactor-20260704T081254Z \
+  DATA_BLOCKS_EXPLAIN_FILLFACTORS='100 90 75'
+```
+
+Workload: temporary clone tables only, 16k staged rows, 4 KiB payload per row. The script checked real `fod.data_blocks` count before and after every run; it remained `16384 -> 16384`.
+
+| heap fillfactor | fresh insert ms | identical conflict ms | changed conflict ms | changed updates | HOT updates | temp heap size | temp total size |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `100` | `244.091` | `412.155` | `357.399` | `16384` | `0` | `3240 kB` | `4920 kB` |
+| `90` | `243.004` | `404.545` | `307.077` | `16384` | `1800` | `3400 kB` | `5064 kB` |
+| `75` | `236.696` | `419.949` | `298.556` | `16384` | `5380` | `3592 kB` | `5224 kB` |
+
+Artifacts:
+
+- `artifacts/perf/adeaa35/lt7300-data-blocks-fillfactor-20260704T081254Z/pg_data_blocks_merge_fillfactor_100-fillfactor-100.txt`
+- `artifacts/perf/adeaa35/lt7300-data-blocks-fillfactor-20260704T081254Z/pg_data_blocks_merge_fillfactor_90-fillfactor-90.txt`
+- `artifacts/perf/adeaa35/lt7300-data-blocks-fillfactor-20260704T081254Z/pg_data_blocks_merge_fillfactor_75-fillfactor-75.txt`
+
+Conclusions:
+
+- The safe clone confirms fillfactor can make changed-payload conflict updates HOT-capable on a temp clone, but lower fillfactor grows the heap/total relation size.
+- This does not justify changing real `fod.data_blocks` yet. The current runtime already avoids changed-payload full-overwrite non-HOT updates through data-object swap, so fillfactor is only a future option for workloads that still perform conflict updates.
+- Any real-table fillfactor change needs a separate migration design, repeated local/QNAP runs, and correctness tests before it is considered.
 
 ## 2026-07-04 Data Blocks Repeated Full-Overwrite Cleanup Profile
 

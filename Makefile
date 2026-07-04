@@ -160,11 +160,21 @@ PROFILE_DATA_BLOCKS_CONFLICT_LOG ?= /tmp/fod-data-blocks-conflict-current.log
 PROFILE_DATA_BLOCKS_CONFLICT_NOOP_LOG ?= /tmp/fod-data-blocks-conflict-noop-current.log
 PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG ?= /tmp/fod-data-blocks-swap-repeat-current.log
 PROFILE_DATA_BLOCKS_SWAP_REPEAT ?= 5
+PROFILE_COPY_BUFFER_SIZES ?= default 262144 1048576 4194304
+PROFILE_COPY_BUFFER_BYTES ?= default
+PROFILE_COPY_BUFFER_BLOCK_SIZE ?= 4M
+PROFILE_COPY_BUFFER_BLOCK_COUNT ?= 16
+PROFILE_COPY_BUFFER_LOG ?= /tmp/fod-copy-buffer-$(PROFILE_RUN_ID)-$(PROFILE_COPY_BUFFER_BYTES).log
 DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER ?=
 DATA_BLOCKS_CONFLICT_ID ?= data-blocks-conflict-current
 DATA_BLOCKS_CONFLICT_BLOCK_SIZE ?= 4M
 DATA_BLOCKS_CONFLICT_BLOCK_COUNT ?= 16
 DATA_OBJECT_GC_LIMIT ?= 1000000
+DATA_BLOCKS_EXPLAIN_FILLFACTORS ?= 100 90 75
+DATA_BLOCKS_EXPLAIN_FILLFACTOR ?= 100
+DATA_BLOCKS_EXPLAIN_INDEX_FILLFACTOR ?= 100
+DATA_BLOCKS_EXPLAIN_STAGE_ROWS ?= 16384
+DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES ?= 4096
 
 define RUN_POSTGRES_BENCHMARK_REPEAT
 	@set -eu; \
@@ -372,6 +382,7 @@ help:
 		'  make profile-pg-table-dml-snapshot - capture storage table/index DML counters' \
 		'  make profile-pg-table-dml-delta - compare storage table/index DML snapshots before/after a workload' \
 		'  make profile-pg-top-io-wal - capture pg_stat_statements with local buffers and per-statement WAL' \
+		'  make profile-data-blocks-copy-buffer-matrix - run large-copy matrix with DML/WAL/top-io-wal captures; set QNAP=1 for QNAP' \
 		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
 		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
 		'  make profile-data-blocks-swap-repeat-dml - profile repeated full-overwrite data-object swaps; set PROFILE_DATA_BLOCKS_SWAP_REPEAT=N' \
@@ -380,6 +391,7 @@ help:
 		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
 		'  make profile-pg-data-blocks-merge-explain - capture temp-table EXPLAIN for the current data_blocks merge shape' \
+		'  make profile-pg-data-blocks-merge-fillfactor-explain - capture temp-table EXPLAIN matrix for fillfactor variants' \
 		'  make profile-pg-data-blocks-bloat - capture real data_blocks table/index size and churn diagnostics' \
 		'  make profile-fuse-attach PROFILE_PID=<pid> - attach perf to a running fod-rust-fuse process' \
 		'  make mount      - mount FOD at $(MOUNTPOINT)' \
@@ -1245,7 +1257,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1329,6 +1341,40 @@ profile-data-blocks-summary:
 		--host "$(PROFILE_HOST)" \
 		--conclusion "$(PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION)" \
 		--next-candidate "$(PROFILE_DATA_BLOCKS_SUMMARY_NEXT)"
+
+profile-data-blocks-copy-buffer-run:
+	@test -n "$(PROFILE_COPY_BUFFER_BYTES)" || { echo "Set PROFILE_COPY_BUFFER_BYTES"; exit 2; }
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-env
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-reset
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-wal-snapshot
+	@set -eu; \
+	buffer="$(PROFILE_COPY_BUFFER_BYTES)"; \
+	if [ "$$buffer" = "default" ]; then \
+		buffer_env=""; \
+	else \
+		buffer_env="FOD_PERSIST_COPY_SEND_BUFFER_BYTES=$$buffer"; \
+	fi; \
+	printf 'FOD copy-buffer profile buffer=%s block_size=%s block_count=%s qnap=%s\n' "$$buffer" "$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" "$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" "$(QNAP)" | tee "$(PROFILE_COPY_BUFFER_LOG)"; \
+	bash -o pipefail -c "$$buffer_env FOD_PROFILE_IO=1 LARGE_COPY_BLOCK_SIZE='$(PROFILE_COPY_BUFFER_BLOCK_SIZE)' LARGE_COPY_BLOCK_COUNT='$(PROFILE_COPY_BUFFER_BLOCK_COUNT)' $(MAKE) --no-print-directory QNAP=$(QNAP) test-large-copy-benchmark 2>&1 | tee -a '$(PROFILE_COPY_BUFFER_LOG)'"
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-table-dml-delta
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-wal-snapshot
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=buffer-$(PROFILE_COPY_BUFFER_BYTES) profile-pg-top-io-wal
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=buffer-$(PROFILE_COPY_BUFFER_BYTES) profile-pg-data-blocks-bloat
+
+profile-data-blocks-copy-buffer-matrix:
+	@set -eu; \
+	base_run="$(PROFILE_RUN_ID)"; \
+	mode="local"; \
+	if [ "$(QNAP_ENABLED)" = "1" ]; then mode="qnap"; fi; \
+	for buffer in $(PROFILE_COPY_BUFFER_SIZES); do \
+		run_id="$${base_run}-$${mode}-buffer-$${buffer}"; \
+		log="/tmp/fod-copy-buffer-$${mode}-$${buffer}-$${base_run}.log"; \
+		printf '%s\n' "FOD copy-buffer matrix run mode=$$mode buffer=$$buffer run_id=$$run_id"; \
+		$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$$run_id" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_BYTES="$$buffer" PROFILE_COPY_BUFFER_LOG="$$log" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-run; \
+	done
 
 profile-data-blocks-conflict-dml:
 	@$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-seed
@@ -1557,7 +1603,7 @@ qnap-mount:
 clean:
 	rm -rf $(VENV_DIR)
 
-.PHONY: profile-pg-data-blocks-semantics profile-pg-data-blocks-merge-explain profile-pg-data-blocks-bloat
+.PHONY: profile-pg-data-blocks-semantics profile-pg-data-blocks-merge-explain profile-pg-data-blocks-merge-fillfactor-explain-one profile-pg-data-blocks-merge-fillfactor-explain profile-pg-data-blocks-bloat
 
 profile-pg-data-blocks-semantics:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1568,6 +1614,17 @@ profile-pg-data-blocks-merge-explain:
 	@mkdir -p $(ARTIFACTS_DIR)
 	$(PSQL) -f scripts/perf/pg/explain_data_blocks_merge.sql > $(ARTIFACTS_DIR)/pg_data_blocks_merge_explain$(PROFILE_CAPTURE_SUFFIX).txt
 	@cat $(ARTIFACTS_DIR)/pg_data_blocks_merge_explain$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-data-blocks-merge-fillfactor-explain-one:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -v fillfactor=$(DATA_BLOCKS_EXPLAIN_FILLFACTOR) -v index_fillfactor=$(DATA_BLOCKS_EXPLAIN_INDEX_FILLFACTOR) -v stage_rows=$(DATA_BLOCKS_EXPLAIN_STAGE_ROWS) -v payload_bytes=$(DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES) -f scripts/perf/pg/explain_data_blocks_merge_fillfactor.sql > $(ARTIFACTS_DIR)/pg_data_blocks_merge_fillfactor_$(DATA_BLOCKS_EXPLAIN_FILLFACTOR)$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_data_blocks_merge_fillfactor_$(DATA_BLOCKS_EXPLAIN_FILLFACTOR)$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-data-blocks-merge-fillfactor-explain:
+	@set -eu; \
+	for fillfactor in $(DATA_BLOCKS_EXPLAIN_FILLFACTORS); do \
+		$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=fillfactor-$$fillfactor DATA_BLOCKS_EXPLAIN_FILLFACTOR=$$fillfactor DATA_BLOCKS_EXPLAIN_INDEX_FILLFACTOR=$(DATA_BLOCKS_EXPLAIN_INDEX_FILLFACTOR) DATA_BLOCKS_EXPLAIN_STAGE_ROWS=$(DATA_BLOCKS_EXPLAIN_STAGE_ROWS) DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES=$(DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES) profile-pg-data-blocks-merge-fillfactor-explain-one; \
+	done
 
 profile-pg-data-blocks-bloat:
 	@mkdir -p $(ARTIFACTS_DIR)

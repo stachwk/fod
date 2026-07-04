@@ -109,6 +109,28 @@ make profile-pg-data-object-gc DATA_OBJECT_GC_LIMIT=1000000
 
 Do not treat deferred cleanup as a default until repeated local and remote runs show that moving delete work into object GC is better than immediate cleanup for the target workload.
 
+To collect the real large-copy baseline plus COPY send-buffer matrix with storage DML, WAL, top statement IO/WAL, and bloat captures, run:
+
+```bash
+make profile-data-blocks-copy-buffer-matrix
+```
+
+The default matrix covers the baseline `default` buffer plus `262144`, `1048576`, and `4194304` byte explicit send buffers. Use the same target against QNAP or another remote PostgreSQL profile with:
+
+```bash
+QNAP=1 make profile-data-blocks-copy-buffer-matrix
+```
+
+This target runs the real `test-large-copy-benchmark` path and writes one artifact directory per buffer under `artifacts/perf/<commit>/<host>-<run-id>-<mode>-buffer-<buffer>/`.
+
+To compare the current `data_blocks` merge shape across heap fillfactor variants without modifying real FOD data, run:
+
+```bash
+make profile-pg-data-blocks-merge-fillfactor-explain
+```
+
+The target uses temporary clone tables only. It checks the real `fod.data_blocks` row count before and after the reproducer, then runs EXPLAIN for fresh insert, identical-payload conflict, and changed-payload conflict. Override `DATA_BLOCKS_EXPLAIN_FILLFACTORS`, `DATA_BLOCKS_EXPLAIN_STAGE_ROWS`, or `DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES` when narrowing a specific hypothesis.
+
 `profile-pg-io` uses `pg_stat_io` and is optional because it is PostgreSQL-version dependent:
 
 ```bash
