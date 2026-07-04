@@ -165,6 +165,12 @@ PROFILE_COPY_BUFFER_BYTES ?= default
 PROFILE_COPY_BUFFER_BLOCK_SIZE ?= 4M
 PROFILE_COPY_BUFFER_BLOCK_COUNT ?= 16
 PROFILE_COPY_BUFFER_LOG ?= /tmp/fod-copy-buffer-$(PROFILE_RUN_ID)-$(PROFILE_COPY_BUFFER_BYTES).log
+PROFILE_INDEXER_ALLOC_TOOL ?= auto
+PROFILE_INDEXER_ARGS ?= --help
+PROFILE_INDEXER_TIME_BIN ?= /usr/bin/time
+PROFILE_INDEXER_ALLOC_LOG ?= $(ARTIFACTS_DIR)/indexer_alloc$(PROFILE_CAPTURE_SUFFIX).txt
+PROFILE_INDEXER_HEAPTRACK_PREFIX ?= $(ARTIFACTS_DIR)/heaptrack-indexer$(PROFILE_CAPTURE_SUFFIX)
+PROFILE_INDEXER_MASSIF_OUT ?= $(ARTIFACTS_DIR)/massif-indexer$(PROFILE_CAPTURE_SUFFIX).out
 DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER ?=
 DATA_BLOCKS_CONFLICT_ID ?= data-blocks-conflict-current
 DATA_BLOCKS_CONFLICT_BLOCK_SIZE ?= 4M
@@ -383,6 +389,7 @@ help:
 		'  make profile-pg-table-dml-delta - compare storage table/index DML snapshots before/after a workload' \
 		'  make profile-pg-top-io-wal - capture pg_stat_statements with local buffers and per-statement WAL' \
 		'  make profile-pg-metadata-top - capture high-call metadata lookup statements from pg_stat_statements' \
+		'  make profile-indexer-alloc - profile fod-indexer memory with time/heaptrack/massif; set PROFILE_INDEXER_ARGS="..."' \
 		'  make profile-data-blocks-copy-buffer-matrix - run large-copy matrix with DML/WAL/top-io-wal captures; set QNAP=1 for QNAP' \
 		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
 		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
@@ -1258,7 +1265,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-indexer-alloc profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1293,6 +1300,85 @@ profile-pg-metadata-top:
 	@mkdir -p $(ARTIFACTS_DIR)
 	$(PSQL) -f scripts/perf/pg/top_metadata_statements.sql > $(ARTIFACTS_DIR)/pg_top_metadata$(PROFILE_CAPTURE_SUFFIX).txt
 	@cat $(ARTIFACTS_DIR)/pg_top_metadata$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-indexer-alloc: build-debug profile-env
+	@mkdir -p $(ARTIFACTS_DIR)
+	@set +e; \
+	tool="$(PROFILE_INDEXER_ALLOC_TOOL)"; \
+	log="$(PROFILE_INDEXER_ALLOC_LOG)"; \
+	stdout="$${log}.stdout"; \
+	stderr="$${log}.stderr"; \
+	time_out="$${log}.time"; \
+	rm -f "$$log" "$$stdout" "$$stderr" "$$time_out"; \
+	if [ "$$tool" = "auto" ]; then \
+		if command -v heaptrack >/dev/null 2>&1; then \
+			tool="heaptrack"; \
+		elif command -v valgrind >/dev/null 2>&1; then \
+			tool="massif"; \
+		else \
+			tool="time"; \
+		fi; \
+	fi; \
+	{ \
+		echo "profile=indexer-alloc"; \
+		echo "date=$$(date -Is)"; \
+		echo "commit=$$(git rev-parse HEAD 2>/dev/null || true)"; \
+		echo "fod_version=$$(cat fod_version.txt 2>/dev/null || true)"; \
+		echo "tool=$$tool"; \
+		echo "args=$(PROFILE_INDEXER_ARGS)"; \
+		echo "artifact_dir=$(ARTIFACTS_DIR)"; \
+		echo "binary=$(FOD_INDEXER_DEBUG_BIN)"; \
+	} > "$$log"; \
+	case "$$tool" in \
+		time) \
+			if [ ! -x "$(PROFILE_INDEXER_TIME_BIN)" ]; then \
+				echo "Missing executable PROFILE_INDEXER_TIME_BIN=$(PROFILE_INDEXER_TIME_BIN)" >> "$$log"; \
+				status=127; \
+			else \
+				$(PROFILE_INDEXER_TIME_BIN) -v -o "$$time_out" \
+					env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+					$(FOD_INDEXER_DEBUG_BIN) $(PROFILE_INDEXER_ARGS) > "$$stdout" 2> "$$stderr"; \
+				status="$$?"; \
+			fi ;; \
+		heaptrack) \
+			if ! command -v heaptrack >/dev/null 2>&1; then \
+				echo "Missing heaptrack; set PROFILE_INDEXER_ALLOC_TOOL=time or install heaptrack." >> "$$log"; \
+				status=127; \
+			else \
+				heaptrack -o "$(PROFILE_INDEXER_HEAPTRACK_PREFIX)" -- \
+					env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+					$(FOD_INDEXER_DEBUG_BIN) $(PROFILE_INDEXER_ARGS) > "$$stdout" 2> "$$stderr"; \
+				status="$$?"; \
+				echo "heaptrack_prefix=$(PROFILE_INDEXER_HEAPTRACK_PREFIX)" >> "$$log"; \
+			fi ;; \
+		massif) \
+			if ! command -v valgrind >/dev/null 2>&1; then \
+				echo "Missing valgrind; set PROFILE_INDEXER_ALLOC_TOOL=time or install valgrind." >> "$$log"; \
+				status=127; \
+			else \
+				valgrind --tool=massif --massif-out-file="$(PROFILE_INDEXER_MASSIF_OUT)" \
+					env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+					$(FOD_INDEXER_DEBUG_BIN) $(PROFILE_INDEXER_ARGS) > "$$stdout" 2> "$$stderr"; \
+				status="$$?"; \
+				echo "massif_out=$(PROFILE_INDEXER_MASSIF_OUT)" >> "$$log"; \
+			fi ;; \
+		*) \
+			echo "Unknown PROFILE_INDEXER_ALLOC_TOOL=$$tool; use auto, time, heaptrack, or massif." >> "$$log"; \
+			status=2 ;; \
+	esac; \
+	{ \
+		echo "status=$$status"; \
+		echo "--- stdout ---"; \
+		cat "$$stdout" 2>/dev/null || true; \
+		echo "--- stderr ---"; \
+		cat "$$stderr" 2>/dev/null || true; \
+		if [ -f "$$time_out" ]; then \
+			echo "--- time -v ---"; \
+			cat "$$time_out"; \
+		fi; \
+	} >> "$$log"; \
+	cat "$$log"; \
+	exit "$$status"
 
 profile-pg-wal:
 	@mkdir -p $(ARTIFACTS_DIR)

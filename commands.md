@@ -1139,3 +1139,37 @@ Base commit at execution time: `0eb2d0e`
 - `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance-data-blocks-swap-profile-2026-07-03.md && git diff --cached --check`
 - `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance-data-blocks-swap-profile-2026-07-03.md && git diff --cached --check`
 - `git commit -m "FOD 3.2.1: record data block swap overwrite profile"`
+
+## 2026-07-04
+
+Base commit at execution time: `deabdf6`
+
+- `git status --short`
+- `git rev-parse --short HEAD && cat fod_version.txt`
+- `rg -n "\[ \]" TODO.md docs/*.md BENCHMARKS.md conclusions.md -S`
+- `tail -70 commands.md`
+- `rg -n "FOD_INDEXER_DEBUG_BIN|indexer|profile-indexer|PROFILE_INDEXER|build-debug|profile-pg|profile-data" Makefile docs/performance.md rust_indexer -S`
+- `sed -n '1,220p' Makefile`
+- `sed -n '1,220p' docs/performance.md`
+- `sed -n '1,80p' TODO.md`
+- `sed -n '1240,1545p' Makefile`
+- `sed -n '180,270p' docs/performance.md`
+- `tail -80 conclusions.md`
+- `tail -80 commands.md`
+- `sed -n '330,405p' Makefile`
+- `sed -n '1,140p' BENCHMARKS.md`
+- `date -Is && git rev-parse --short HEAD && git status --short`
+- `make -n profile-indexer-alloc PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS='--help' PROFILE_RUN_ID=indexer-alloc-dry-run`
+- `PROFILE_RUN_ID=indexer-alloc-smoke-$(date -u +%Y%m%dT%H%M%SZ) make profile-indexer-alloc PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS='--help'`
+- `git status --short`
+- `tail -60 BENCHMARKS.md`
+- `sed -n '1,160p' artifacts/perf/deabdf6/lt7300-indexer-alloc-smoke-20260704T083132Z/indexer_alloc.txt`
+- `git diff --check`
+- `make -n profile-indexer-alloc PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS='--help' PROFILE_RUN_ID=indexer-alloc-final-dry-run`
+- `git diff --stat`
+- `git diff -- Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md | sed -n '1,280p'`
+- `git status --short`
+- `git diff --check`
+- `cat fod_version.txt`
+- `git add Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md && git diff --cached --check`
+- `git commit -m "FOD 3.2.1: add indexer allocation profiling helper"`

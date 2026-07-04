@@ -25,6 +25,29 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-07-04 from commit `adeaa35` and adds local COPY-buffer matrix plus safe fillfactor clone evidence for `data_blocks`.
 
+## 2026-07-04 FOD Indexer Allocation Profile Harness Smoke
+
+Collected from commit `deabdf6` (`FOD 3.2.1: add metadata lookup profiling report`) before committing the profiling-helper change.
+
+Command:
+
+```bash
+PROFILE_RUN_ID=indexer-alloc-smoke-20260704T083132Z \
+make profile-indexer-alloc PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS='--help'
+```
+
+Result:
+
+- status: `0`
+- tool: `/usr/bin/time -v`
+- workload: `fod-indexer --help`
+- maximum resident set size: `8504 kB`
+- minor page faults: `875`
+- file system outputs: `8`
+- artifact: `artifacts/perf/deabdf6/lt7300-indexer-alloc-smoke-20260704T083132Z/indexer_alloc.txt`
+
+Conclusion: this is only a harness smoke for the allocation profiling target. It proves metadata, stdout/stderr, exit status, and RSS are captured, but it is not a representative allocation profile for `scan` or `hash`.
+
 ## 2026-07-04 Data Blocks COPY Buffer Matrix And Fillfactor Clone
 
 Collected from commit `adeaa35` (`FOD 3.2.1: add storage DML and statement IO profiling`). The working tree also contained uncommitted profiling-target additions for this run; those additions only orchestrate diagnostics and do not change runtime SQL.

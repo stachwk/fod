@@ -150,6 +150,26 @@ make profile-local-baseline PROFILE_WORKLOAD=test-fod-indexer-materialize-rollba
 
 The baseline target does not run `perf record` automatically. CPU profiling can need elevated permissions and can create large local artifacts, so it stays explicit.
 
+## Indexer Allocation Profiling
+
+Use the indexer allocation helper before changing `rust_indexer` buffer reuse or data structures:
+
+```bash
+make profile-indexer-alloc PROFILE_INDEXER_ARGS='--help'
+make profile-indexer-alloc PROFILE_INDEXER_ARGS='scan --source my_source'
+make profile-indexer-alloc PROFILE_INDEXER_ARGS='hash --source my_source --candidates-only'
+```
+
+The default `PROFILE_INDEXER_ALLOC_TOOL=auto` chooses `heaptrack` when available, then `valgrind --tool=massif`, and finally `/usr/bin/time -v`. Force a specific tool with:
+
+```bash
+make profile-indexer-alloc PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS='scan --source my_source'
+make profile-indexer-alloc PROFILE_INDEXER_ALLOC_TOOL=heaptrack PROFILE_INDEXER_ARGS='scan --source my_source'
+make profile-indexer-alloc PROFILE_INDEXER_ALLOC_TOOL=massif PROFILE_INDEXER_ARGS='scan --source my_source'
+```
+
+The target writes metadata, stdout, stderr, status, and tool output under `artifacts/perf/<commit>/<host>-<run-id>/`. Treat `--help` only as a smoke check for the profiling harness; allocation conclusions need a representative `scan` or `hash` workload.
+
 ## perf CPU Profiling
 
 Use `perf stat` for a low-friction repeated counter snapshot:
