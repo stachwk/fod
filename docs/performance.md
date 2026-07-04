@@ -31,6 +31,7 @@ Reset statement statistics, run a workload, then capture SQL and WAL/checkpointe
 make profile-pg-reset
 make test-fod-indexer-materialize-rollback
 make profile-pg-top
+make profile-pg-top-io-wal
 make profile-pg-wal
 make profile-pg-activity
 ```
@@ -44,6 +45,8 @@ make profile-pg-wal PROFILE_CAPTURE_LABEL=rollback
 
 `profile-pg-reset` and `profile-pg-top` require `pg_stat_statements`. If PostgreSQL reports that the extension must be loaded through `shared_preload_libraries`, restart the database with the existing project setting instead of ignoring the failure.
 
+`profile-pg-top-io-wal` uses the same extension but includes local buffer counters and per-statement WAL counters. Use it when separating server-side `COPY` into a temporary staging table from the target-table merge cost. PostgreSQL exposes `wal_records`, `wal_fpi`, and `wal_bytes` per statement there; `wal_buffers_full` remains a cluster-level counter from `pg_stat_wal`. This capture expects a PostgreSQL/`pg_stat_statements` version that exposes the local-buffer and WAL columns.
+
 `profile-pg-wal` records `pg_stat_wal` and then uses `pg_stat_checkpointer` when the PostgreSQL version exposes it. Older versions fall back to `pg_stat_bgwriter` and print that source in the output.
 
 For real `data_blocks` DML behavior, capture a before/after table/index snapshot around the workload:
@@ -55,7 +58,7 @@ make profile-pg-table-dml-snapshot PROFILE_CAPTURE_LABEL=after
 make profile-pg-table-dml-delta
 ```
 
-The DML delta records `n_tup_ins`, `n_tup_upd`, `n_tup_hot_upd`, `n_tup_del`, `n_dead_tup`, relation-size changes, and `idx_data_blocks_object_order` lookup counters. Use it before changing the `data_blocks` conflict merge, because it shows whether the live path is insert-heavy, HOT-update friendly, or doing non-HOT heap rewrites.
+The DML delta records `n_tup_ins`, `n_tup_upd`, `n_tup_hot_upd`, `n_tup_del`, `n_dead_tup`, relation-size changes, and index lookup counters for the storage tables involved in the block path: `data_blocks`, `copy_block_crc`, `files`, and `data_objects`. Use it before changing the `data_blocks` conflict merge, because it shows whether the live path is insert-heavy, HOT-update friendly, or doing non-HOT heap rewrites.
 
 To isolate real conflict-update behavior, seed the file first and snapshot only the overwrite phase:
 

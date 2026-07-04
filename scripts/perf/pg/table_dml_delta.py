@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute deltas between two data_blocks DML profiling snapshots."""
+"""Compute deltas between two storage-table DML profiling snapshots."""
 
 from __future__ import annotations
 
@@ -10,34 +10,66 @@ import sys
 from metric_snapshot import delta_value, format_decimal, parse_snapshot
 
 
+TABLES = [
+    "data_blocks",
+    "copy_block_crc",
+    "files",
+    "data_objects",
+]
+
+TABLE_METRICS = [
+    "seq_scan",
+    "seq_tup_read",
+    "idx_scan",
+    "idx_tup_fetch",
+    "n_tup_ins",
+    "n_tup_upd",
+    "n_tup_hot_upd",
+    "n_tup_newpage_upd",
+    "n_tup_del",
+    "n_live_tup",
+    "n_dead_tup",
+    "n_mod_since_analyze",
+    "n_ins_since_vacuum",
+    "vacuum_count",
+    "autovacuum_count",
+    "analyze_count",
+    "autoanalyze_count",
+]
+
+INDEXES = [
+    "idx_data_blocks_object_order",
+    "idx_data_blocks_data_object_id",
+    "idx_copy_block_crc_object_order",
+    "idx_copy_block_crc_data_object_id",
+]
+
+INDEX_METRICS = [
+    "idx_scan",
+    "idx_tup_read",
+    "idx_tup_fetch",
+]
+
+RELATIONS = [
+    "data_blocks",
+    "copy_block_crc",
+    "files",
+    "data_objects",
+    "idx_data_blocks_object_order",
+    "idx_data_blocks_data_object_id",
+    "idx_copy_block_crc_object_order",
+    "idx_copy_block_crc_data_object_id",
+]
+
+RELATION_METRICS = [
+    "relation_size_bytes",
+    "total_size_bytes",
+]
+
 DELTA_KEYS = [
-    "data_blocks_seq_scan",
-    "data_blocks_seq_tup_read",
-    "data_blocks_idx_scan",
-    "data_blocks_idx_tup_fetch",
-    "data_blocks_n_tup_ins",
-    "data_blocks_n_tup_upd",
-    "data_blocks_n_tup_hot_upd",
-    "data_blocks_n_tup_newpage_upd",
-    "data_blocks_n_tup_del",
-    "data_blocks_n_live_tup",
-    "data_blocks_n_dead_tup",
-    "data_blocks_n_mod_since_analyze",
-    "data_blocks_n_ins_since_vacuum",
-    "data_blocks_vacuum_count",
-    "data_blocks_autovacuum_count",
-    "data_blocks_analyze_count",
-    "data_blocks_autoanalyze_count",
-    "idx_data_blocks_object_order_idx_scan",
-    "idx_data_blocks_object_order_idx_tup_read",
-    "idx_data_blocks_object_order_idx_tup_fetch",
-    "idx_data_blocks_data_object_id_idx_scan",
-    "idx_data_blocks_data_object_id_idx_tup_read",
-    "idx_data_blocks_data_object_id_idx_tup_fetch",
-    "data_blocks_relation_size_bytes",
-    "data_blocks_total_size_bytes",
-    "idx_data_blocks_object_order_relation_size_bytes",
-    "idx_data_blocks_data_object_id_relation_size_bytes",
+    *(f"{table}_{metric}" for table in TABLES for metric in TABLE_METRICS),
+    *(f"{index}_{metric}" for index in INDEXES for metric in INDEX_METRICS),
+    *(f"{relation}_{metric}" for relation in RELATIONS for metric in RELATION_METRICS),
 ]
 
 

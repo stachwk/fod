@@ -78,6 +78,51 @@ Base commit at execution time: `1c6c87d`
 - `sed -n '1,180p' commands.md`
 - `sed -n '405,430p' README.md`
 - `sed -n '610,630p' README.md`
+
+Base commit at execution time: `64e3bdf`
+
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/747dd53e-71a5-43e5-af3d-52f877add325/pasted-text.txt`
+- `git status --short`
+- `git rev-parse --short HEAD && cat fod_version.txt`
+- `tail -80 commands.md`
+- `sed -n '261,520p' /home/wojtek/.codex/attachments/747dd53e-71a5-43e5-af3d-52f877add325/pasted-text.txt`
+- `sed -n '1,220p' scripts/perf/pg/top_statements.sql`
+- `rg -n "profile-pg-top|top_statements|profile-pg-table-dml|data_blocks_dml|table_dml|merge-explain|semantics" Makefile scripts/perf docs TODO.md BENCHMARKS.md -S`
+- `ls scripts/perf/pg && sed -n '1240,1320p' Makefile`
+- `PGPASSWORD="${POSTGRES_PASSWORD:-cichosza}" psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST:-127.0.0.1}" -p "${POSTGRES_PORT:-5432}" -U "${POSTGRES_USER:-foduser}" -d "${POSTGRES_DB:-foddbname}" -At -c "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='pg_stat_statements' ORDER BY ordinal_position;"`
+- `sed -n '1,260p' scripts/perf/pg/table_dml_snapshot.sql`
+- `sed -n '1,180p' scripts/perf/pg/table_dml_delta.py`
+- `sed -n '120,165p' Makefile && sed -n '360,385p' Makefile && sed -n '1260,1310p' Makefile`
+- `git status --short`
+- `sed -n '1,260p' scripts/perf/pg/table_dml_snapshot.sql`
+- `sed -n '1,220p' scripts/perf/pg/table_dml_delta.py`
+- `sed -n '1264,1285p' Makefile && sed -n '368,378p' Makefile`
+- `sed -n '1,120p' scripts/perf/pg/top_statements_io_wal.sql`
+- `python3 -m py_compile scripts/perf/pg/table_dml_delta.py`
+- `make -n profile-pg-top-io-wal PROFILE_RUN_ID=io-wal-smoke PROFILE_CAPTURE_LABEL=smoke`
+- `git diff --check`
+- `PROFILE_RUN_ID=dml-io-wal-smoke PROFILE_CAPTURE_LABEL=before make profile-pg-table-dml-snapshot`
+- `PROFILE_RUN_ID=dml-io-wal-smoke PROFILE_CAPTURE_LABEL=after make profile-pg-table-dml-snapshot && PROFILE_RUN_ID=dml-io-wal-smoke make profile-pg-table-dml-delta`
+- `make profile-pg-top-io-wal PROFILE_RUN_ID=dml-io-wal-smoke PROFILE_CAPTURE_LABEL=smoke`
+- `git status --short`
+- `tail -80 commands.md`
+- `tail -80 conclusions.md`
+- `tail -120 TODO.md`
+- `sed -n '1,120p' TODO.md`
+- `sed -n '1,160p' docs/performance.md`
+- `sed -n '1,80p' commands.md`
+- `date -Is`
+- `git diff --check`
+- `python3 -m py_compile scripts/perf/pg/table_dml_delta.py`
+- `git status --short`
+- `git diff --stat`
+- `git diff -- Makefile docs/performance.md TODO.md conclusions.md scripts/perf/pg/table_dml_delta.py scripts/perf/pg/table_dml_snapshot.sql`
+- `sed -n '1,160p' scripts/perf/pg/top_statements_io_wal.sql`
+- `git diff --check`
+- `git status --short`
+- `cat fod_version.txt`
+- `git add Makefile TODO.md commands.md conclusions.md docs/performance.md scripts/perf/pg/table_dml_delta.py scripts/perf/pg/table_dml_snapshot.sql scripts/perf/pg/top_statements_io_wal.sql`
+- `git commit -m "FOD 3.2.1: add storage DML and statement IO profiling"`
 - `sed -n '2140,2195p' rust_runtime/src/lib.rs`
 - `sed -n '2195,2245p' rust_runtime/src/lib.rs`
 - `sed -n '1960,2020p' rust_runtime/src/lib.rs`
