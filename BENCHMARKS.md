@@ -48,6 +48,43 @@ Result:
 
 Conclusion: this is only a harness smoke for the allocation profiling target. It proves metadata, stdout/stderr, exit status, and RSS are captured, but it is not a representative allocation profile for `scan` or `hash`.
 
+## 2026-07-04 FOD Indexer Synthetic Allocation Baseline
+
+Collected from commit `8d90a6e` (`FOD 3.2.1: add indexer allocation profiling helper`).
+
+Setup:
+
+```bash
+RUN_ID=indexer-alloc-synthetic-20260704T104340Z
+SOURCE=profile_alloc_20260704T104340Z
+SRC=/tmp/fod-indexer-alloc-src-indexer-alloc-synthetic-20260704T104340Z
+```
+
+The source tree contained 200 small `.txt` files, 50 small `.jpg` files, and 30 cache/hidden files intended to exercise the indexer path filters. The temporary source was removed from PostgreSQL and `/tmp` after profiling.
+
+Commands:
+
+```bash
+make init
+make profile-indexer-alloc PROFILE_RUN_ID="$RUN_ID" PROFILE_CAPTURE_LABEL=source-add PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS="source add --name $SOURCE --path $SRC --kind local"
+make profile-indexer-alloc PROFILE_RUN_ID="$RUN_ID" PROFILE_CAPTURE_LABEL=scan PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS="scan --source $SOURCE"
+make profile-indexer-alloc PROFILE_RUN_ID="$RUN_ID" PROFILE_CAPTURE_LABEL=hash PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS="hash --source $SOURCE --candidates-only"
+```
+
+| phase | status | files | elapsed | max RSS | minor faults | file outputs |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `source-add` | `0` | n/a | `0.03s` | `12820 kB` | `1031` | `8` |
+| `scan` | `0` | `250 scanned / 250 ok` | `0.10s` | `13104 kB` | `1063` | `16` |
+| `hash --candidates-only` | `0` | `250 partial hashed` | `0.05s` | `13628 kB` | `1187` | `16` |
+
+Artifacts:
+
+- `artifacts/perf/8d90a6e/lt7300-indexer-alloc-synthetic-20260704T104340Z/indexer_alloc-source-add.txt`
+- `artifacts/perf/8d90a6e/lt7300-indexer-alloc-synthetic-20260704T104340Z/indexer_alloc-scan.txt`
+- `artifacts/perf/8d90a6e/lt7300-indexer-alloc-synthetic-20260704T104340Z/indexer_alloc-hash.txt`
+
+Conclusion: the small local allocation baseline does not justify changing `rust_indexer` buffer reuse. `scan` stages rows in memory and `hash` uses bounded read buffers; the observed process RSS stayed below `14 MiB`. Larger real-source `heaptrack` or `massif` captures are still the right trigger for any future indexer memory optimization.
+
 ## 2026-07-04 Data Blocks COPY Buffer Matrix And Fillfactor Clone
 
 Collected from commit `adeaa35` (`FOD 3.2.1: add storage DML and statement IO profiling`). The working tree also contained uncommitted profiling-target additions for this run; those additions only orchestrate diagnostics and do not change runtime SQL.

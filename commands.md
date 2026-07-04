@@ -1173,3 +1173,24 @@ Base commit at execution time: `deabdf6`
 - `cat fod_version.txt`
 - `git add Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md && git diff --cached --check`
 - `git commit -m "FOD 3.2.1: add indexer allocation profiling helper"`
+
+Base commit at execution time: `8d90a6e`
+
+- `git status --short && git rev-parse --short HEAD && cat fod_version.txt`
+- `rg -n "\[ \]" TODO.md docs/*.md BENCHMARKS.md conclusions.md -S`
+- `rg -n "profile-indexer-alloc|test-fod-indexer-smoke|source add|scan --source|hash --source" Makefile docs/performance.md tests/integration -S`
+- `tail -80 commands.md`
+- `RUN_ID="indexer-alloc-synthetic-$(date -u +%Y%m%dT%H%M%SZ)"; SRC="/tmp/fod-indexer-alloc-src-$RUN_ID"; SOURCE="profile_alloc_$(date -u +%Y%m%dT%H%M%SZ)"; rm -rf "$SRC"; mkdir -p "$SRC/docs" "$SRC/images" "$SRC/cache/.hidden"; for i in $(seq 1 200); do printf 'document-%04d same payload for allocation profile\n' "$i" > "$SRC/docs/file-$i.txt"; done; for i in $(seq 1 50); do printf 'unique-%04d-%s\n' "$i" "$RUN_ID" > "$SRC/images/image-$i.jpg"; done; for i in $(seq 1 30); do printf 'cache-%04d\n' "$i" > "$SRC/cache/cache-$i.tmp"; done; printf '%s\n' "$RUN_ID" > /tmp/fod_indexer_alloc_run_id; printf '%s\n' "$SRC" > /tmp/fod_indexer_alloc_src; printf '%s\n' "$SOURCE" > /tmp/fod_indexer_alloc_source; printf 'RUN_ID=%s\nSRC=%s\nSOURCE=%s\n' "$RUN_ID" "$SRC" "$SOURCE"`
+- `make init`
+- `RUN_ID=$(cat /tmp/fod_indexer_alloc_run_id); SRC=$(cat /tmp/fod_indexer_alloc_src); SOURCE=$(cat /tmp/fod_indexer_alloc_source); make profile-indexer-alloc PROFILE_RUN_ID="$RUN_ID" PROFILE_CAPTURE_LABEL=source-add PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS="source add --name $SOURCE --path $SRC --kind local"; make profile-indexer-alloc PROFILE_RUN_ID="$RUN_ID" PROFILE_CAPTURE_LABEL=scan PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS="scan --source $SOURCE"; make profile-indexer-alloc PROFILE_RUN_ID="$RUN_ID" PROFILE_CAPTURE_LABEL=hash PROFILE_INDEXER_ALLOC_TOOL=time PROFILE_INDEXER_ARGS="hash --source $SOURCE --candidates-only"`
+- `SOURCE=$(cat /tmp/fod_indexer_alloc_source); SRC=$(cat /tmp/fod_indexer_alloc_src); make indexer INDEXER_ARGS="source remove --name $SOURCE"; rm -rf "$SRC"`
+- `sed -n '1,340p' rust_indexer/src/scan.rs`
+- `sed -n '1,280p' rust_indexer/src/hash.rs`
+- `rg -n "Vec<|String::|read_to|BufReader|buffer|chunk|metadata|WalkDir|filter" rust_indexer/src -S`
+- `ls -1 artifacts/perf/8d90a6e/lt7300-indexer-alloc-synthetic-20260704T104340Z && sed -n '1,120p' artifacts/perf/8d90a6e/lt7300-indexer-alloc-synthetic-20260704T104340Z/indexer_alloc-scan.txt && sed -n '1,120p' artifacts/perf/8d90a6e/lt7300-indexer-alloc-synthetic-20260704T104340Z/indexer_alloc-hash.txt`
+- `git diff --check`
+- `git status --short`
+- `git diff --stat`
+- `git diff -- TODO.md BENCHMARKS.md conclusions.md commands.md | sed -n '1,260p'`
+- `git add TODO.md BENCHMARKS.md conclusions.md commands.md && git diff --cached --check`
+- `git commit -m "FOD 3.2.1: record indexer allocation baseline"`
