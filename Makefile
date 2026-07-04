@@ -382,6 +382,7 @@ help:
 		'  make profile-pg-table-dml-snapshot - capture storage table/index DML counters' \
 		'  make profile-pg-table-dml-delta - compare storage table/index DML snapshots before/after a workload' \
 		'  make profile-pg-top-io-wal - capture pg_stat_statements with local buffers and per-statement WAL' \
+		'  make profile-pg-metadata-top - capture high-call metadata lookup statements from pg_stat_statements' \
 		'  make profile-data-blocks-copy-buffer-matrix - run large-copy matrix with DML/WAL/top-io-wal captures; set QNAP=1 for QNAP' \
 		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
 		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
@@ -1257,7 +1258,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1287,6 +1288,11 @@ profile-pg-top-io-wal:
 	@mkdir -p $(ARTIFACTS_DIR)
 	$(PSQL) -f scripts/perf/pg/top_statements_io_wal.sql > $(ARTIFACTS_DIR)/pg_top_io_wal$(PROFILE_CAPTURE_SUFFIX).txt
 	@cat $(ARTIFACTS_DIR)/pg_top_io_wal$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-metadata-top:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/top_metadata_statements.sql > $(ARTIFACTS_DIR)/pg_top_metadata$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_top_metadata$(PROFILE_CAPTURE_SUFFIX).txt
 
 profile-pg-wal:
 	@mkdir -p $(ARTIFACTS_DIR)

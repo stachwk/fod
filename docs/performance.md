@@ -32,6 +32,7 @@ make profile-pg-reset
 make test-fod-indexer-materialize-rollback
 make profile-pg-top
 make profile-pg-top-io-wal
+make profile-pg-metadata-top
 make profile-pg-wal
 make profile-pg-activity
 ```
@@ -46,6 +47,8 @@ make profile-pg-wal PROFILE_CAPTURE_LABEL=rollback
 `profile-pg-reset` and `profile-pg-top` require `pg_stat_statements`. If PostgreSQL reports that the extension must be loaded through `shared_preload_libraries`, restart the database with the existing project setting instead of ignoring the failure.
 
 `profile-pg-top-io-wal` uses the same extension but includes local buffer counters and per-statement WAL counters. Use it when separating server-side `COPY` into a temporary staging table from the target-table merge cost. PostgreSQL exposes `wal_records`, `wal_fpi`, and `wal_bytes` per statement there; `wal_buffers_full` remains a cluster-level counter from `pg_stat_wal`. This capture expects a PostgreSQL/`pg_stat_statements` version that exposes the local-buffer and WAL columns.
+
+`profile-pg-metadata-top` filters `pg_stat_statements` to high-call metadata and lookup paths, including path walking, child lookup, attr fetch, xattr, and block/extent lookups. Use it after a representative workload before changing prepared statement coverage or metadata caching.
 
 `profile-pg-wal` records `pg_stat_wal` and then uses `pg_stat_checkpointer` when the PostgreSQL version exposes it. Older versions fall back to `pg_stat_bgwriter` and print that source in the output.
 
@@ -241,6 +244,7 @@ QNAP=1 make profile-pg-wal
 ## Interpreting Results
 
 - High SQL total time: inspect query shape, indexes, prepared statement use, and connection reuse.
+- High metadata lookup time: run `make profile-pg-metadata-top` and compare `path_walk`, `child_lookup`, and `*_attrs` categories before adding new caching or prepared statements.
 - High WAL or checkpoint pressure: inspect write pattern, batch size, checkpoint behavior, and durability settings.
 - High context switches: inspect FUSE request flow, blocking points, and backpressure.
 - High read/write syscall count: inspect buffer sizing, batching, and short I/O.

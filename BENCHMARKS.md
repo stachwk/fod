@@ -115,6 +115,32 @@ Conclusions:
 - This does not justify changing real `fod.data_blocks` yet. The current runtime already avoids changed-payload full-overwrite non-HOT updates through data-object swap, so fillfactor is only a future option for workloads that still perform conflict updates.
 - Any real-table fillfactor change needs a separate migration design, repeated local/QNAP runs, and correctness tests before it is considered.
 
+### Metadata Lookup Review
+
+Collected from commit `48d132a` with the new metadata-only `pg_stat_statements` filter added in the working tree.
+
+Command:
+
+```bash
+make profile-pg-metadata-top \
+  PROFILE_RUN_ID=metadata-top-smoke \
+  PROFILE_CAPTURE_LABEL=smoke
+```
+
+The report used the current PostgreSQL statement statistics after the local COPY-buffer matrix above.
+
+| category | calls | total_exec_ms | mean_exec_ms | rows | wal_bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `path_walk` | `2076` | `92.234` | `0.044` | `2067` | `0` |
+| `child_lookup` | `2067` | `85.318` | `0.041` | `2062` | `0` |
+| `file_attrs` | `1033` | `20.072` | `0.019` | `1033` | `0` |
+| `special_file_metadata` | `1037` | `13.350` | `0.013` | `0` | `0` |
+| `xattr_value` | `1026` | `13.174` | `0.013` | `0` | `0` |
+
+Conclusion:
+
+- The high-call metadata path remains visible but secondary. The main lookup classes already map to prepared statements in `rust_hotpath/src/pg.rs`, so the next metadata change should be driven by a workload where this report becomes dominant, not by the current large-copy path.
+
 ## 2026-07-04 Data Blocks Repeated Full-Overwrite Cleanup Profile
 
 Collected from commit `60658e878c136728df023d08f9c88a88176cb824` (`FOD 3.2.1: fix deferred data object GC script`) with the FOD version at `3.2.1`.

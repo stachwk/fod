@@ -169,6 +169,34 @@ Base commit at execution time: `adeaa35`
 - `git add BENCHMARKS.md Makefile TODO.md commands.md conclusions.md docs/performance.md scripts/perf/pg/explain_data_blocks_merge_fillfactor.sql`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: add data block copy matrix profiling"`
+
+Base commit at execution time: `48d132a`
+
+- `git status --short`
+- `git rev-parse --short HEAD && cat fod_version.txt`
+- `sed -n '1,120p' TODO.md`
+- `tail -80 commands.md`
+- `rg -n "prepare_cached|prepare\\(|query\\(|query_one\\(|query_opt\\(|execute\\(|batch_execute|Client|Connection|Pool|postgres" rust_hotpath/src rust_fuse/src rust_runtime/src -S`
+- `sed -n '1,220p' rust_hotpath/src/pg.rs`
+- `rg -n "fn .*path|resolve|lookup|hardlink|symlink|directory|metadata|xattr|file_data_object|read_block|fetch_block|query_rows_text" rust_hotpath/src/pg.rs rust_fuse/src -S`
+- `rg -n "prepared|statement|metadata lookup|path lookup|child-entry|pg_stat_statements|queryid" docs TODO.md BENCHMARKS.md conclusions.md -S`
+- `sed -n '330,760p' rust_hotpath/src/pg.rs`
+- `sed -n '880,1135p' rust_hotpath/src/pg.rs`
+- `sed -n '2440,2635p' rust_hotpath/src/pg.rs`
+- `sed -n '3360,3565p' rust_hotpath/src/pg.rs`
+- `sed -n '24,58p' docs/performance.md`
+- `sed -n '232,252p' docs/performance.md`
+- `rg -n "High SQL|metadata lookup|prepared statement|pg-top" docs/performance.md`
+- `make -n profile-pg-metadata-top PROFILE_RUN_ID=metadata-top-smoke PROFILE_CAPTURE_LABEL=smoke`
+- `git diff --check`
+- `make profile-pg-metadata-top PROFILE_RUN_ID=metadata-top-smoke PROFILE_CAPTURE_LABEL=smoke`
+- `git diff --check`
+- `git diff --stat`
+- `git status --short`
+- `git diff -- Makefile scripts/perf/pg/top_metadata_statements.sql docs/performance.md TODO.md BENCHMARKS.md conclusions.md | sed -n '1,280p'`
+- `git add BENCHMARKS.md Makefile TODO.md commands.md conclusions.md docs/performance.md scripts/perf/pg/top_metadata_statements.sql`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: add metadata lookup profiling report"`
 - `sed -n '2140,2195p' rust_runtime/src/lib.rs`
 - `sed -n '2195,2245p' rust_runtime/src/lib.rs`
 - `sed -n '1960,2020p' rust_runtime/src/lib.rs`
