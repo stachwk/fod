@@ -1318,3 +1318,24 @@ Base commit at execution time: `ef0e782`
 - `git add Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: add copy-buffer matrix compare target"`
+
+Base commit at execution time: `a3076e1`
+
+- `git status --short && git rev-parse --short HEAD && cat fod_version.txt && date -Is`
+- `sed -n '28,38p' TODO.md`
+- `rg -n "profile-data-blocks-copy-buffer-matrix-compare|2026-07-05 COPY Buffer Compare" Makefile docs/performance.md BENCHMARKS.md TODO.md conclusions.md commands.md -S`
+- `RUN_ID=copy-buffer-matrix-$(date -u +%Y%m%dT%H%M%SZ); LOG=/tmp/fod-${RUN_ID}.log; bash -o pipefail -c "PROFILE_RUN_ID=${RUN_ID} PROFILE_COPY_BUFFER_INCLUDE_QNAP=auto make profile-data-blocks-copy-buffer-matrix-compare > '${LOG}' 2>&1"; status=$?; printf 'RUN_ID=%s\\nLOG=%s\\nSTATUS=%s\\n' "$RUN_ID" "$LOG" "$status"; tail -n 220 "$LOG"; exit "$status"`
+- `ls -1d artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-*`
+- `ls -1 /tmp/fod-copy-buffer-*copy-buffer-matrix-20260705T171509Z*.log /tmp/fod-copy-buffer-qnap-probe-copy-buffer-matrix-20260705T171509Z.log 2>/dev/null`
+- `rg -n "OK large-copy-benchmark|Skipping QNAP|QNAP smoke probe|FOD copy-buffer matrix run|STATUS|RUN_ID|No route|failed|error" /tmp/fod-copy-buffer-matrix-20260705T171509Z.log /tmp/fod-copy-buffer-*copy-buffer-matrix-20260705T171509Z*.log /tmp/fod-copy-buffer-qnap-probe-copy-buffer-matrix-20260705T171509Z.log 2>/dev/null`
+- `RUN_ID=copy-buffer-matrix-20260705T171509Z; COMMIT=a3076e1; for mode in local qnap; do for buffer in default 262144 1048576 4194304; do dir="artifacts/perf/${COMMIT}/lt7300-${RUN_ID}-${mode}-buffer-${buffer}"; log="/tmp/fod-copy-buffer-${mode}-${buffer}-${RUN_ID}.log"; dml="${dir}/pg_table_dml_delta-before-to-after.txt"; wal="${dir}/pg_wal_delta-before-to-after.tsv"; top="${dir}/pg_top_io_wal-buffer-${buffer}.txt"; ok_line=$(rg -o "OK large-copy-benchmark bytes=[0-9]+ elapsed_s=[0-9.]+ throughput_mib_s=[0-9.]+" "$log" || true); elapsed=$(printf '%s' "$ok_line" | sed -n 's/.*elapsed_s=\\([0-9.]*\\).*/\\1/p'); throughput=$(printf '%s' "$ok_line" | sed -n 's/.*throughput_mib_s=\\([0-9.]*\\).*/\\1/p'); get_metric() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1; }; ins=$(get_metric "$dml" data_blocks_n_tup_ins_delta); upd=$(get_metric "$dml" data_blocks_n_tup_upd_delta); hot=$(get_metric "$dml" data_blocks_n_tup_hot_upd_delta); del=$(get_metric "$dml" data_blocks_n_tup_del_delta); dead=$(get_metric "$dml" data_blocks_n_dead_tup_delta); rel=$(get_metric "$dml" data_blocks_relation_size_bytes_delta); idxscan=$(get_metric "$dml" idx_data_blocks_object_order_idx_scan_delta); walbytes=$(get_metric "$wal" wal_bytes_delta); walrecords=$(get_metric "$wal" wal_records_delta); walwrite=$(get_metric "$wal" wal_write_delta); walsync=$(get_metric "$wal" wal_sync_delta); checkpoints=$(get_metric "$wal" checkpoints_req_delta); copy_ms=$(awk -F'|' '/COPY fod_persist_block_stage/ {gsub(/^[ \\t]+|[ \\t]+$/, "", $3); print $3; exit}' "$top" 2>/dev/null); merge_ms=$(awk -F'|' '/INSERT INTO data_blocks/ {gsub(/^[ \\t]+|[ \\t]+$/, "", $3); sum += $3} END {if (sum != "") printf "%.3f", sum}' "$top" 2>/dev/null); printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$mode" "$buffer" "$elapsed" "$throughput" "$walbytes" "$walrecords" "$walwrite" "$walsync" "$checkpoints" "$ins" "$upd" "$hot" "$del" "$dead" "$rel" "$copy_ms" "$merge_ms"; done; done`
+- `sed -n '1,80p' /tmp/fod-copy-buffer-qnap-probe-copy-buffer-matrix-20260705T171509Z.log`
+- `find artifacts/perf/a3076e1 -maxdepth 1 -type d -name 'lt7300-copy-buffer-matrix-20260705T171509Z-*' | wc -l && du -sh artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-* | sort -h`
+- `rg -n "warning_.*changed=1|error|ERROR|failed|FATAL|No route|timeout" artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-* /tmp/fod-copy-buffer-matrix-20260705T171509Z.log /tmp/fod-copy-buffer-*copy-buffer-matrix-20260705T171509Z*.log -S`
+- `sed -n '1,75p' BENCHMARKS.md && tail -n 12 conclusions.md && tail -n 25 commands.md`
+- `git diff --check`
+- `git diff --stat`
+- `git diff -- BENCHMARKS.md TODO.md conclusions.md commands.md`
+- `git add BENCHMARKS.md TODO.md conclusions.md commands.md`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: record copy-buffer matrix baseline"`

@@ -23,7 +23,45 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
-- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-04 from commit `adeaa35` and adds local COPY-buffer matrix plus safe fillfactor clone evidence for `data_blocks`.
+- The latest PostgreSQL optimization comparison in this file was collected on 2026-07-05 from commit `a3076e1` and adds a fresh local/QNAP COPY-buffer matrix with DML, WAL, top statement IO/WAL, and bloat artifacts.
+
+## 2026-07-05 Local/QNAP COPY Buffer Matrix
+
+Collected from commit `a3076e1` (`FOD 3.2.1: add copy-buffer matrix compare target`).
+
+Command:
+
+```bash
+PROFILE_RUN_ID=copy-buffer-matrix-20260705T171509Z \
+PROFILE_COPY_BUFFER_INCLUDE_QNAP=auto \
+make profile-data-blocks-copy-buffer-matrix-compare
+```
+
+QNAP was reachable in this run. The smoke probe started the QNAP Docker PostgreSQL container through `DOCKER_HOST=tcp://192.168.1.11:2376` and `DOCKER_TLS_VERIFY=1`, then confirmed PostgreSQL readiness.
+
+| backend | buffer | elapsed | throughput | WAL bytes | WAL records | WAL write/sync | data_blocks ins/upd/del/dead | data_blocks relation growth | COPY exec ms | data_blocks merge exec ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| local | default | `3.481625s` | `18.38 MiB/s` | `13042036` | `165637` | `239/20` | `32768/0/0/0` | `3833856` | `1091.109` | `772.312` |
+| local | `262144` | `3.500098s` | `18.29 MiB/s` | `12952365` | `166376` | `93/19` | `32768/0/0/0` | `3833856` | `1089.599` | `731.900` |
+| local | `1048576` | `3.553295s` | `18.01 MiB/s` | `12845520` | `165625` | `108/18` | `32768/0/0/0` | `3833856` | `1143.632` | `771.468` |
+| local | `4194304` | `3.521974s` | `18.17 MiB/s` | `12851532` | `165632` | `113/18` | `32768/0/0/0` | `3833856` | `1163.857` | `791.817` |
+| QNAP | default | `25.970985s` | `2.46 MiB/s` | `13151107` | `166391` | `55/55` | `32768/0/0/0` | `3833856` | `4512.280` | `9660.060` |
+| QNAP | `262144` | `23.679487s` | `2.70 MiB/s` | `12856017` | `165664` | `40/40` | `32768/0/0/0` | `3833856` | `6479.871` | `6586.574` |
+| QNAP | `1048576` | `22.746579s` | `2.81 MiB/s` | `12946217` | `165743` | `45/45` | `32768/0/0/0` | `3833856` | `4432.111` | `6303.256` |
+| QNAP | `4194304` | `20.099939s` | `3.18 MiB/s` | `12941251` | `167091` | `40/40` | `32768/0/0/0` | `3842048` | `6762.207` | `5819.007` |
+
+Artifacts:
+
+- `artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-local-buffer-default`
+- `artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-local-buffer-262144`
+- `artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-local-buffer-1048576`
+- `artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-local-buffer-4194304`
+- `artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-qnap-buffer-default`
+- `artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-qnap-buffer-262144`
+- `artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-qnap-buffer-1048576`
+- `artifacts/perf/a3076e1/lt7300-copy-buffer-matrix-20260705T171509Z-qnap-buffer-4194304`
+
+Conclusion: the local backend stays in a narrow `18.01-18.38 MiB/s` band, so this run does not justify changing the local default send buffer. QNAP improves across this single matrix and `4194304` bytes is the best QNAP sample here (`3.18 MiB/s`, about `29%` over QNAP default), but one run is not enough to change the runtime default. The data_blocks path stayed insert-only in all eight runs: `32768` inserts, `0` updates, `0` deletes, and `0` new dead tuples.
 
 ## 2026-07-05 COPY Buffer Compare Target Smoke
 
