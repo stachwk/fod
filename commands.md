@@ -1194,3 +1194,33 @@ Base commit at execution time: `8d90a6e`
 - `git diff -- TODO.md BENCHMARKS.md conclusions.md commands.md | sed -n '1,260p'`
 - `git add TODO.md BENCHMARKS.md conclusions.md commands.md && git diff --cached --check`
 - `git commit -m "FOD 3.2.1: record indexer allocation baseline"`
+
+## 2026-07-05
+
+Base commit at execution time: `d55b555`
+
+- `git status --short && git rev-parse --short HEAD && cat fod_version.txt`
+- `rg -n "\[ \]|FUSE cache|timeout|max_background|profile-fuse|bpftrace|FOD_PROFILE_IO|fio-sequential" TODO.md docs/*.md BENCHMARKS.md conclusions.md Makefile tests -S`
+- `sed -n '1240,1545p' Makefile`
+- `tail -80 commands.md`
+- `ls -R scripts/perf && sed -n '1,200p' scripts/perf/bpftrace/syscalls_by_comm.bt && sed -n '1,200p' scripts/perf/bpftrace/read_size_hist.bt && sed -n '1,200p' scripts/perf/bpftrace/write_size_hist.bt`
+- `sed -n '1020,1050p' Makefile && sed -n '1,220p' tests/integration/test_fio_sequential_io.sh`
+- `sed -n '1,180p' tests/integration/fod_testlib.sh`
+- `sed -n '190,260p' docs/performance.md`
+- `make -n profile-fuse-sequential-io PROFILE_RUN_ID=fuse-dry-run`
+- `make -n profile-fuse-sudo-perf-stat PROFILE_RUN_ID=fuse-perf-dry-run PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace`
+- `make -n profile-fuse-sudo-bpftrace-syscalls PROFILE_RUN_ID=fuse-bpftrace-dry-run PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace PROFILE_SECONDS=12`
+- `git diff --check`
+- `PROFILE_RUN_ID=fuse-seq-$(date -u +%Y%m%dT%H%M%SZ) make profile-fuse-sequential-io`
+- `PROFILE_RUN_ID=fuse-perf-$(date -u +%Y%m%dT%H%M%SZ) make profile-fuse-sudo-perf-stat PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace`
+- `ls -1 artifacts/perf/d55b555/lt7300-fuse-seq-20260705T163713Z artifacts/perf/d55b555/lt7300-fuse-perf-* 2>/dev/null && sed -n '1,80p' artifacts/perf/d55b555/lt7300-fuse-seq-20260705T163713Z/fuse-test-fio-sequential-io-strace.txt && tail -80 artifacts/perf/d55b555/lt7300-fuse-seq-20260705T163713Z/fuse-test-fio-sequential-io-strace.txt`
+- `for f in artifacts/perf/d55b555/lt7300-fuse-perf-*/perf-stat-system-test-fio-sequential-io-strace-fuse.txt; do printf '=== %s ===\n' "$f"; sed -n '1,120p' "$f"; done`
+- `rg -n "fuse_read_total_us|fuse_write_total_us|repo_fetch_block_range_us|FOD strace profile summary|total \|" artifacts/perf/d55b555/lt7300-fuse-seq-20260705T163713Z/fuse-test-fio-sequential-io-strace.txt`
+- `git status --short`
+- `rg -n "fod_assert_contains" tests/integration/fod_testlib.sh && sed -n '180,260p' tests/integration/fod_testlib.sh`
+- `git diff --check`
+- `git status --short`
+- `git diff --stat`
+- `git diff -- Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md | sed -n '1,320p'`
+- `git add Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md && git diff --cached --check`
+- `git commit -m "FOD 3.2.1: add FUSE profiling wrappers"`

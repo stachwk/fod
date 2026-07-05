@@ -85,6 +85,43 @@ Artifacts:
 
 Conclusion: the small local allocation baseline does not justify changing `rust_indexer` buffer reuse. `scan` stages rows in memory and `hash` uses bounded read buffers; the observed process RSS stayed below `14 MiB`. Larger real-source `heaptrack` or `massif` captures are still the right trigger for any future indexer memory optimization.
 
+## 2026-07-05 FUSE Sequential I/O Profile Harness
+
+Collected from commit `d55b555` (`FOD 3.2.1: record indexer allocation baseline`) before committing the FUSE profile-helper change.
+
+Commands:
+
+```bash
+PROFILE_RUN_ID=fuse-seq-20260705T163713Z make profile-fuse-sequential-io
+PROFILE_RUN_ID=fuse-perf-20260705T163728Z make profile-fuse-sudo-perf-stat PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace
+```
+
+Workload: local Docker PostgreSQL, `test-fio-sequential-io-strace`, `FIO_FILE_SIZE=64k`, `FOD_PROFILE_IO=1`, `FOD_FOPEN_DIRECT_IO=1`, and `FOD_STRACE=1`.
+
+| path | write BW | read BW | fuse_read_total_us | fuse_write_total_us | strace total seconds | strace total calls |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| block | `7111 KiB/s` | `2065 KiB/s` | `27763` | `38954` | `0.050281` | `2932` |
+| extent | `7111 KiB/s` | `2207 KiB/s` | `27194` | `25915` | `0.062811` | `2668` |
+
+Dominant strace entries stayed in the expected short-smoke shape:
+
+- block: `wait4`, `futex`, `restart_syscall`, then smaller `write`, `sendto`, `poll`, and `recvfrom`.
+- extent: `wait4`, `futex`, `restart_syscall`, then smaller `write`, `sendto`, `poll`, and `recvfrom`.
+
+The sudo `perf stat` wrapper also completed with `workload_status=0` and `perf_status=0`:
+
+- `cpu-clock`: `42,387,038,738`
+- `context-switches`: `85,401`
+- `page-faults`: `122,290`
+- elapsed: `5.298488771s`
+
+Artifacts:
+
+- `artifacts/perf/d55b555/lt7300-fuse-seq-20260705T163713Z/fuse-test-fio-sequential-io-strace.txt`
+- `artifacts/perf/d55b555/lt7300-fuse-perf-20260705T163728Z/perf-stat-system-test-fio-sequential-io-strace-fuse.txt`
+
+Conclusion: the new FUSE profile wrappers work and can collect both `FOD_PROFILE_IO`/strace and sudo `perf stat` counters while the workload runs normally. This short 64 KiB smoke does not justify changing FUSE cache, timeout, or `max_background`; use larger sequential/mixed workloads through the same targets before tuning. The perf-wrapped run also printed a missing extent marker while exiting successfully, so the test-side marker handling needs a separate review before using that message as a hard signal.
+
 ## 2026-07-04 Data Blocks COPY Buffer Matrix And Fillfactor Clone
 
 Collected from commit `adeaa35` (`FOD 3.2.1: add storage DML and statement IO profiling`). The working tree also contained uncommitted profiling-target additions for this run; those additions only orchestrate diagnostics and do not change runtime SQL.

@@ -150,6 +150,32 @@ make profile-local-baseline PROFILE_WORKLOAD=test-fod-indexer-materialize-rollba
 
 The baseline target does not run `perf record` automatically. CPU profiling can need elevated permissions and can create large local artifacts, so it stays explicit.
 
+## FUSE Sequential I/O Profiling
+
+Use the FUSE profile wrapper when deciding whether to tune FUSE cache, kernel timeouts, request backpressure, or `max_background`:
+
+```bash
+make profile-fuse-sequential-io
+```
+
+The default workload is `test-fio-sequential-io-strace`. It captures the full workload output, including `FOD_PROFILE_IO` boundary summaries and strace syscall tables, under `artifacts/perf/<commit>/<host>-<run-id>/fuse-test-fio-sequential-io-strace.txt`.
+
+Override the workload only when comparing a specific FUSE path:
+
+```bash
+make profile-fuse-sequential-io PROFILE_FUSE_WORKLOAD=test-fio-mixed-io
+make profile-fuse-sequential-io PROFILE_FUSE_WORKLOAD=test-fio-random-mixed-io
+```
+
+Privileged observers stay opt-in and should not run the FOD workload itself as root:
+
+```bash
+make profile-fuse-sudo-perf-stat PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace
+make profile-fuse-sudo-bpftrace-syscalls PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace PROFILE_SECONDS=12
+```
+
+Use these captures before changing FUSE cache or timeout knobs. A single throughput number is not enough; compare boundary timings, syscall shape, and system counters together.
+
 ## Indexer Allocation Profiling
 
 Use the indexer allocation helper before changing `rust_indexer` buffer reuse or data structures:

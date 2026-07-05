@@ -171,6 +171,8 @@ PROFILE_INDEXER_TIME_BIN ?= /usr/bin/time
 PROFILE_INDEXER_ALLOC_LOG ?= $(ARTIFACTS_DIR)/indexer_alloc$(PROFILE_CAPTURE_SUFFIX).txt
 PROFILE_INDEXER_HEAPTRACK_PREFIX ?= $(ARTIFACTS_DIR)/heaptrack-indexer$(PROFILE_CAPTURE_SUFFIX)
 PROFILE_INDEXER_MASSIF_OUT ?= $(ARTIFACTS_DIR)/massif-indexer$(PROFILE_CAPTURE_SUFFIX).out
+PROFILE_FUSE_WORKLOAD ?= test-fio-sequential-io-strace
+PROFILE_FUSE_LOG ?= $(ARTIFACTS_DIR)/fuse-$(PROFILE_FUSE_WORKLOAD)$(PROFILE_CAPTURE_SUFFIX).txt
 DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER ?=
 DATA_BLOCKS_CONFLICT_ID ?= data-blocks-conflict-current
 DATA_BLOCKS_CONFLICT_BLOCK_SIZE ?= 4M
@@ -390,6 +392,9 @@ help:
 		'  make profile-pg-top-io-wal - capture pg_stat_statements with local buffers and per-statement WAL' \
 		'  make profile-pg-metadata-top - capture high-call metadata lookup statements from pg_stat_statements' \
 		'  make profile-indexer-alloc - profile fod-indexer memory with time/heaptrack/massif; set PROFILE_INDEXER_ARGS="..."' \
+		'  make profile-fuse-sequential-io - capture FOD_PROFILE_IO plus strace output for PROFILE_FUSE_WORKLOAD' \
+		'  make profile-fuse-sudo-perf-stat - run sudo perf system counters while PROFILE_FUSE_WORKLOAD runs as current user' \
+		'  make profile-fuse-sudo-bpftrace-syscalls - run sudo bpftrace syscall sampling while PROFILE_FUSE_WORKLOAD runs as current user' \
 		'  make profile-data-blocks-copy-buffer-matrix - run large-copy matrix with DML/WAL/top-io-wal captures; set QNAP=1 for QNAP' \
 		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
 		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
@@ -1265,7 +1270,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-indexer-alloc profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-indexer-alloc profile-fuse-sequential-io profile-fuse-sudo-perf-stat profile-fuse-sudo-bpftrace-syscalls profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1379,6 +1384,26 @@ profile-indexer-alloc: build-debug profile-env
 	} >> "$$log"; \
 	cat "$$log"; \
 	exit "$$status"
+
+profile-fuse-sequential-io: profile-env
+	@mkdir -p $(ARTIFACTS_DIR)
+	@{ \
+		echo "profile=fuse-sequential-io"; \
+		echo "date=$$(date -Is)"; \
+		echo "commit=$$(git rev-parse HEAD 2>/dev/null || true)"; \
+		echo "fod_version=$$(cat fod_version.txt 2>/dev/null || true)"; \
+		echo "workload=$(PROFILE_FUSE_WORKLOAD)"; \
+		echo "fuse_log=$(PROFILE_FUSE_LOG)"; \
+		echo "--- workload ---"; \
+	} > "$(PROFILE_FUSE_LOG)"
+	@bash -o pipefail -c 'FOD_PROFILE_IO=1 $(PROFILE_MAKE) --no-print-directory $(PROFILE_FUSE_WORKLOAD) 2>&1 | tee -a "$(PROFILE_FUSE_LOG)"'
+	@printf '%s\n' "Wrote $(PROFILE_FUSE_LOG)"
+
+profile-fuse-sudo-perf-stat:
+	@$(MAKE) --no-print-directory PROFILE_WORKLOAD=$(PROFILE_FUSE_WORKLOAD) PROFILE_CAPTURE_LABEL=$(if $(PROFILE_CAPTURE_LABEL),$(PROFILE_CAPTURE_LABEL),fuse) profile-sudo-perf-stat-system
+
+profile-fuse-sudo-bpftrace-syscalls:
+	@$(MAKE) --no-print-directory PROFILE_WORKLOAD=$(PROFILE_FUSE_WORKLOAD) PROFILE_CAPTURE_LABEL=$(if $(PROFILE_CAPTURE_LABEL),$(PROFILE_CAPTURE_LABEL),fuse) profile-sudo-bpftrace-syscalls-workload
 
 profile-pg-wal:
 	@mkdir -p $(ARTIFACTS_DIR)
