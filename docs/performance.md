@@ -124,6 +124,14 @@ The default matrix covers the baseline `default` buffer plus `262144`, `1048576`
 QNAP=1 make profile-data-blocks-copy-buffer-matrix
 ```
 
+To run the local matrix first and then run QNAP only when the QNAP smoke probe passes, use:
+
+```bash
+make profile-data-blocks-copy-buffer-matrix-compare
+```
+
+Set `PROFILE_COPY_BUFFER_INCLUDE_QNAP=0` for a local-only compare run, or `PROFILE_COPY_BUFFER_INCLUDE_QNAP=1` when QNAP must run and failures should fail the target instead of being skipped.
+
 This target runs the real `test-large-copy-benchmark` path and writes one artifact directory per buffer under `artifacts/perf/<commit>/<host>-<run-id>-<mode>-buffer-<buffer>/`.
 
 To compare the current `data_blocks` merge shape across heap fillfactor variants without modifying real FOD data, run:

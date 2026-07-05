@@ -25,6 +25,38 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-07-04 from commit `adeaa35` and adds local COPY-buffer matrix plus safe fillfactor clone evidence for `data_blocks`.
 
+## 2026-07-05 COPY Buffer Compare Target Smoke
+
+Collected from commit `ef0e782` (`FOD 3.2.1: add indexer parallel smoke to full suite`) before committing the compare-target change.
+
+Command:
+
+```bash
+PROFILE_RUN_ID=copy-buffer-compare-smoke-20260705T171117Z \
+PROFILE_COPY_BUFFER_INCLUDE_QNAP=0 \
+PROFILE_COPY_BUFFER_SIZES=default \
+PROFILE_COPY_BUFFER_BLOCK_SIZE=64k \
+PROFILE_COPY_BUFFER_BLOCK_COUNT=1 \
+make profile-data-blocks-copy-buffer-matrix-compare
+```
+
+Result:
+
+- status: `0`
+- mode: local only, QNAP skipped intentionally with `PROFILE_COPY_BUFFER_INCLUDE_QNAP=0`
+- workload: `test-large-copy-benchmark`
+- bytes: `65536`
+- elapsed: `0.014335s`
+- throughput: `4.36 MiB/s`
+- `data_blocks_n_tup_ins_delta`: `32`
+- `data_blocks_n_tup_upd_delta`: `0`
+- `data_blocks_n_tup_del_delta`: `0`
+- `data_blocks_n_dead_tup_delta`: `0`
+- `wal_bytes_delta`: `223978`
+- artifact directory: `artifacts/perf/ef0e782/lt7300-copy-buffer-compare-smoke-20260705T171117Z-local-buffer-default`
+
+Conclusion: this is a target-smoke validation only. It proves the compare entry point runs the local matrix path, captures DML/WAL/top-IO artifacts, and respects local-only QNAP skipping, but the tiny `64 KiB` workload is not a production COPY-buffer baseline.
+
 ## 2026-07-04 FOD Indexer Allocation Profile Harness Smoke
 
 Collected from commit `deabdf6` (`FOD 3.2.1: add metadata lookup profiling report`) before committing the profiling-helper change.

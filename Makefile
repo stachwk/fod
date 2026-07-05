@@ -165,6 +165,8 @@ PROFILE_COPY_BUFFER_BYTES ?= default
 PROFILE_COPY_BUFFER_BLOCK_SIZE ?= 4M
 PROFILE_COPY_BUFFER_BLOCK_COUNT ?= 16
 PROFILE_COPY_BUFFER_LOG ?= /tmp/fod-copy-buffer-$(PROFILE_RUN_ID)-$(PROFILE_COPY_BUFFER_BYTES).log
+PROFILE_COPY_BUFFER_INCLUDE_QNAP ?= auto
+PROFILE_COPY_BUFFER_QNAP_PROBE_LOG ?= /tmp/fod-copy-buffer-qnap-probe-$(PROFILE_RUN_ID).log
 PROFILE_INDEXER_ALLOC_TOOL ?= auto
 PROFILE_INDEXER_ARGS ?= --help
 PROFILE_INDEXER_TIME_BIN ?= /usr/bin/time
@@ -396,6 +398,7 @@ help:
 		'  make profile-fuse-sudo-perf-stat - run sudo perf system counters while PROFILE_FUSE_WORKLOAD runs as current user' \
 		'  make profile-fuse-sudo-bpftrace-syscalls - run sudo bpftrace syscall sampling while PROFILE_FUSE_WORKLOAD runs as current user' \
 		'  make profile-data-blocks-copy-buffer-matrix - run large-copy matrix with DML/WAL/top-io-wal captures; set QNAP=1 for QNAP' \
+		'  make profile-data-blocks-copy-buffer-matrix-compare - run local matrix and optional QNAP matrix; set PROFILE_COPY_BUFFER_INCLUDE_QNAP=0/1/auto' \
 		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
 		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
 		'  make profile-data-blocks-swap-repeat-dml - profile repeated full-overwrite data-object swaps; set PROFILE_DATA_BLOCKS_SWAP_REPEAT=N' \
@@ -1270,7 +1273,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-indexer-alloc profile-fuse-sequential-io profile-fuse-sudo-perf-stat profile-fuse-sudo-bpftrace-syscalls profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
+.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-indexer-alloc profile-fuse-sequential-io profile-fuse-sudo-perf-stat profile-fuse-sudo-bpftrace-syscalls profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-copy-buffer-matrix-local profile-data-blocks-copy-buffer-matrix-qnap profile-data-blocks-copy-buffer-matrix-compare profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1492,6 +1495,36 @@ profile-data-blocks-copy-buffer-matrix:
 		printf '%s\n' "FOD copy-buffer matrix run mode=$$mode buffer=$$buffer run_id=$$run_id"; \
 		$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$$run_id" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_BYTES="$$buffer" PROFILE_COPY_BUFFER_LOG="$$log" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-run; \
 	done
+
+profile-data-blocks-copy-buffer-matrix-local:
+	@$(MAKE) --no-print-directory QNAP=0 PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_SIZES="$(PROFILE_COPY_BUFFER_SIZES)" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-matrix
+
+profile-data-blocks-copy-buffer-matrix-qnap:
+	@$(MAKE) --no-print-directory QNAP=1 $(FOD_REMOTE_PG_ENV) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_SIZES="$(PROFILE_COPY_BUFFER_SIZES)" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-matrix
+
+profile-data-blocks-copy-buffer-matrix-compare:
+	@set -eu; \
+	include_qnap="$(PROFILE_COPY_BUFFER_INCLUDE_QNAP)"; \
+	case "$$include_qnap" in \
+		auto|0|1|true|false|yes|no|on|off) ;; \
+		*) echo "Unsupported PROFILE_COPY_BUFFER_INCLUDE_QNAP=$$include_qnap; use auto, 0, or 1" >&2; exit 2 ;; \
+	esac; \
+	printf '%s\n' "FOD copy-buffer compare run_id=$(PROFILE_RUN_ID) include_qnap=$$include_qnap"; \
+	$(MAKE) --no-print-directory PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_SIZES="$(PROFILE_COPY_BUFFER_SIZES)" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-matrix-local; \
+	case "$$include_qnap" in \
+		0|false|no|off) printf '%s\n' "Skipping QNAP copy-buffer matrix because PROFILE_COPY_BUFFER_INCLUDE_QNAP=$$include_qnap"; exit 0 ;; \
+	esac; \
+	if [ "$$include_qnap" = "auto" ]; then \
+		probe_log="$(PROFILE_COPY_BUFFER_QNAP_PROBE_LOG)"; \
+		if $(MAKE) --no-print-directory QNAP=1 $(FOD_REMOTE_PG_ENV) smoke >"$$probe_log" 2>&1; then \
+			printf '%s\n' "QNAP smoke probe passed; running QNAP copy-buffer matrix."; \
+		else \
+			printf '%s\n' "Skipping QNAP copy-buffer matrix because smoke probe failed; see $$probe_log"; \
+			cat "$$probe_log"; \
+			exit 0; \
+		fi; \
+	fi; \
+	$(MAKE) --no-print-directory PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_SIZES="$(PROFILE_COPY_BUFFER_SIZES)" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-matrix-qnap
 
 profile-data-blocks-conflict-dml:
 	@$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-seed

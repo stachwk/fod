@@ -1291,3 +1291,30 @@ Base commit at execution time: `79fa073`
 - `git add Makefile README.md TODO.md conclusions.md commands.md`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: add indexer parallel smoke to full suite"`
+
+Base commit at execution time: `ef0e782`
+
+- `git status --short && git rev-parse --short HEAD && cat fod_version.txt && date -Is`
+- `sed -n '1,50p' TODO.md`
+- `sed -n '120,180p' Makefile && sed -n '1380,1495p' Makefile`
+- `sed -n '110,135p' docs/performance.md && rg -n "copy-buffer|COPY buffer|profile-data-blocks-copy-buffer|baseline" Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md -S`
+- `rg -n "QNAP_ENABLED|QNAP\\?|FOD_REMOTE_PG_ENV|qnap-config|FOD_PG_HOST|192\\.168\\.1\\.11" Makefile fod_config.ini fod_config.example.ini docker-compose*.yml /home/wojtek/git/config -S`
+- `sed -n '1,120p' Makefile && sed -n '1640,1705p' Makefile`
+- `ls -la scripts/perf scripts/perf/pg && rg -n "copy-buffer|matrix|summary|benchmark" scripts/perf -S`
+- `sed -n '580,655p' Makefile`
+- `sed -n '1700,1725p' Makefile`
+- `sed -n '360,405p' Makefile`
+- `sed -n '155,175p' Makefile`
+- `sed -n '388,402p' Makefile`
+- `sed -n '1268,1276p' Makefile`
+- `sed -n '1460,1500p' Makefile`
+- `make -n PROFILE_COPY_BUFFER_INCLUDE_QNAP=0 PROFILE_COPY_BUFFER_SIZES=default PROFILE_COPY_BUFFER_BLOCK_SIZE=64k PROFILE_COPY_BUFFER_BLOCK_COUNT=1 profile-data-blocks-copy-buffer-matrix-compare`
+- `PROFILE_RUN_ID=copy-buffer-compare-smoke-$(date -u +%Y%m%dT%H%M%SZ) PROFILE_COPY_BUFFER_INCLUDE_QNAP=0 PROFILE_COPY_BUFFER_SIZES=default PROFILE_COPY_BUFFER_BLOCK_SIZE=64k PROFILE_COPY_BUFFER_BLOCK_COUNT=1 make profile-data-blocks-copy-buffer-matrix-compare`
+- `make help | rg "copy-buffer-matrix"`
+- `git diff --check`
+- `git diff --stat`
+- `git status --short`
+- `git diff -- Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md`
+- `git add Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: add copy-buffer matrix compare target"`
