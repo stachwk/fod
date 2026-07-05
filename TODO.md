@@ -11,7 +11,8 @@ Reading guide:
 
 - [x] Make Python test venv setup incremental with `requirements-test.txt` and `$(VENV_DIR)/.fod-venv.stamp`.
 - [x] Isolate fod-indexer integration smokes for parallel execution with per-test source names, temporary paths, scoped cleanup, and `test-fod-indexer-parallel-smoke`.
-- [ ] Consider adding `test-fod-indexer-parallel-smoke` to extended CI after it is stable on more than one host.
+- [x] Consider adding `test-fod-indexer-parallel-smoke` to extended CI after it is stable on more than one host.
+  - Historical note: `test-all-full` now uses `test-fod-indexer-parallel-smoke` instead of running the two component smokes only sequentially, so the extended suite exercises source-scoped indexer cleanup under concurrency without duplicating the same coverage.
 - [x] Add repeatable performance profiling capture infrastructure for environment fingerprints, PostgreSQL statistics, `perf`, and optional bpftrace helpers.
 - [x] Benchmark and optimize the SQL payload persistence path identified by the first local baseline: `COPY fod_persist_block_stage` plus `INSERT INTO data_blocks ... SELECT ... ON CONFLICT ...` dominated the 64 MiB `test-large-copy-benchmark` run.
   - Historical note: the first safe implementation batches binary COPY payload sends into 1 MiB client buffers for the `fod_persist_block_stage` block path. It keeps the same staging table, transaction, and replay-safe merge SQL. Local results on 2026-07-01 were mixed rather than a clear throughput win, so this should be treated as low-risk transport hardening; the server-side `COPY` plus `data_blocks` merge remains the dominant area for future SQL work.

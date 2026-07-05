@@ -607,7 +607,7 @@ What the tests cover:
 - `make test-tree-scale` benchmarks `getattr` and `readdir` on a larger seeded tree and reports `ls`/`find` timings.
 - `make test-flush-release-profile` checks that clean `flush()` / `release()` calls stay cheap and that a dirty flush persists exactly once.
 - `make test-write-flush-threshold` checks that a low write-flush threshold can push dirty data before close and that the buffer is no longer left dirty after the write.
-- `make test-all-full` extends `make test-all` with the standalone files/directories/metadata/symlink workflow checks, the shell `statfs/use_ino` smoke, the mount workflow smoke, both atime smoke profiles, and the throughput benchmarks.
+- `make test-all-full` extends `make test-all` with the standalone files/directories/metadata/symlink workflow checks, the shell `statfs/use_ino` smoke, the mount workflow smoke, both atime smoke profiles, and the fod-indexer smokes including the parallel plan/cleanup smoke.
 
 `make test-all` includes the xattr/SELinux/trusted/ACL check and the consolidated mount suite.
 Replica mounts can be forced with `--role replica`. Default `--role auto` detects replicas via `pg_is_in_recovery()` and mounts them read-only. Use `-o ro` if you want a read-only mount without switching the role to replica.

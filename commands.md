@@ -1267,3 +1267,27 @@ Base commit at execution time: `7ec2b84`
 - `git add tests/integration/fod_testlib.sh tests/integration/test_fio_sequential_io.sh tests/integration/test_fio_mixed_io.sh TODO.md conclusions.md commands.md`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: fix fio test cleanup error handling"`
+
+Base commit at execution time: `79fa073`
+
+- `git status --short && git rev-parse --short HEAD && cat fod_version.txt`
+- `sed -n '1,80p' TODO.md`
+- `rg -n "parallel-smoke|indexer-parallel|extended CI|postgres-benchmarks|COPY buffer|DML|WAL|bench" Makefile tests docs TODO.md BENCHMARKS.md -S`
+- `sed -n '740,810p' Makefile`
+- `sed -n '1120,1225p' Makefile`
+- `sed -n '1225,1305p' Makefile`
+- `rg -n "test-fod-indexer-parallel-smoke|test-all-full|extended CI|parallel smoke" README.md docs Makefile TODO.md conclusions.md -S`
+- `sed -n '590,620p' README.md`
+- `tail -n 30 commands.md`
+- `tail -n 20 conclusions.md`
+- `rg -n "^## 2026" conclusions.md`
+- `git rev-parse --short HEAD && date -Is`
+- `sed -n '608,614p' README.md && sed -n '1226,1232p' Makefile && sed -n '10,17p' TODO.md`
+- `sed -n '300,325p' conclusions.md`
+- `make test-fod-indexer-parallel-smoke`
+- `git diff --check`
+- `git diff --stat`
+- `git diff -- Makefile README.md TODO.md conclusions.md commands.md`
+- `git add Makefile README.md TODO.md conclusions.md commands.md`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: add indexer parallel smoke to full suite"`
