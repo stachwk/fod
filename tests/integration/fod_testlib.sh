@@ -10,7 +10,12 @@ fod_test_setup() {
   POSTGRES_USER="${POSTGRES_USER:-foduser}"
   POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-cichosza}"
   if [[ -z "${FOD_SCHEMA_ADMIN_PASSWORD:-}" ]]; then
-    FOD_SCHEMA_ADMIN_PASSWORD="fod-$(tr -dc 'A-Za-z0-9_' </dev/urandom | head -c 24)"
+    local random_suffix
+    random_suffix="$(tr -dc 'A-Za-z0-9_' </dev/urandom | head -c 24 || true)"
+    if [[ -z "${random_suffix}" ]]; then
+      random_suffix="$(date +%s%N)"
+    fi
+    FOD_SCHEMA_ADMIN_PASSWORD="fod-${random_suffix}"
   fi
   FOD_CONFIG="${FOD_CONFIG:-${ROOT}/fod_config.ini}"
   FOD_SELINUX="${FOD_SELINUX:-off}"
@@ -93,6 +98,10 @@ fod_strace_summary_to_markdown() {
 }
 
 fod_test_cleanup() {
+  local restore_errexit=0
+  if [[ "$-" == *e* ]]; then
+    restore_errexit=1
+  fi
   set +e
   if mountpoint -q "${MOUNTPOINT}"; then
     if command -v fusermount3 >/dev/null 2>&1; then
@@ -124,6 +133,9 @@ fod_test_cleanup() {
   FOD_PID=""
   FOD_STRACE_SUMMARY_FILE=""
   FOD_STRACE_LABEL=""
+  if (( restore_errexit )); then
+    set -e
+  fi
 }
 
 fod_trace_env_prefix() {

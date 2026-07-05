@@ -1224,3 +1224,46 @@ Base commit at execution time: `d55b555`
 - `git diff -- Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md | sed -n '1,320p'`
 - `git add Makefile docs/performance.md TODO.md BENCHMARKS.md conclusions.md commands.md && git diff --cached --check`
 - `git commit -m "FOD 3.2.1: add FUSE profiling wrappers"`
+
+Base commit at execution time: `7ec2b84`
+
+- `git status --short && git rev-parse --short HEAD && cat fod_version.txt`
+- `sed -n '1,280p' tests/integration/fod_testlib.sh && sed -n '1,180p' tests/integration/test_fio_sequential_io.sh`
+- `rg -n "fod_test_cleanup|trap cleanup EXIT|cleanup\\(\\)|set \\+e|set -e" tests/integration -S`
+- `rg -n "\\[ \\]" TODO.md docs/*.md BENCHMARKS.md conclusions.md -S`
+- `make test-fio-sequential-io-strace`
+- `rg -n "FOD extent PoC execution|extent PoC|enable_extents|FOD_ENABLE_EXTENTS|enable_extents" rust_fuse rust_hotpath rust_runtime tests Makefile -S`
+- `sed -n '180,260p' tests/integration/fod_testlib.sh`
+- `rg -n "FOD_ENABLE_EXTENTS|FOD_.*EXTENT|enable_extents" rust_runtime rust_fuse -S`
+- `git diff -- tests/integration/fod_testlib.sh TODO.md BENCHMARKS.md conclusions.md commands.md Makefile docs/performance.md | sed -n '1,220p'`
+- `sed -n '130,230p' rust_hotpath/src/persist_plan.rs && sed -n '140,340p' rust_fuse/src/write_buffer.rs`
+- `rg -n "workers_write_min_blocks|write_workers|enable_extents|persist_plan|PersistPlan::Extents|PersistPlan::Blocks" rust_fuse/src rust_hotpath/src -S`
+- `rg -n "FOD_WORKERS_WRITE_MIN_BLOCKS|workers_write_min_blocks|write_min_blocks" README.md fod_config.ini fod_config.example.ini rust_runtime/src/lib.rs tests -S`
+- `FOD_ENABLE_EXTENTS=1 target/debug/fod-config effective 2>/dev/null | rg -n "enable_extents|workers_write_min_blocks|workers_write|profile|write" || true`
+- `FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=0 FOD_STRACE=1 FIO_FILE_SIZE=64k sudo env POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=0 FOD_STRACE=1 FIO_FILE_SIZE=64k bash tests/integration/test_fio_sequential_io.sh`
+- `sudo env POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza FOD_SCHEMA_ADMIN_PASSWORD=fod-manual FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=0 FOD_STRACE=1 FIO_FILE_SIZE=64k bash tests/integration/test_fio_sequential_io.sh`
+- `sudo env POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza FOD_SCHEMA_ADMIN_PASSWORD=fod-manual FOD_PROFILE=extents FOD_ENABLE_EXTENTS=1 FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=0 FOD_STRACE=1 FIO_FILE_SIZE=64k bash tests/integration/test_fio_sequential_io.sh`
+- `target/debug/fod-config --help || true`
+- `FOD_ENABLE_EXTENTS=1 FOD_PROFILE=extents target/debug/fod-config show 2>&1 | sed -n '1,160p' || true`
+- `sed -n '1540,1690p' rust_runtime/src/lib.rs && sed -n '1160,1235p' rust_runtime/src/lib.rs`
+- `rg -n "enum.*Config|struct.*Config|fod-config|ConfigCommand|show" rust_mkfs rust_runtime -S`
+- `FOD_ENABLE_EXTENTS=1 FOD_PROFILE=extents target/debug/fod-config runtime-config 2>&1 | sed -n '1,220p'`
+- `sudo env POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza FOD_SCHEMA_ADMIN_PASSWORD=fod-manual FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=0 FOD_STRACE=1 FIO_FILE_SIZE=64k FIO_BLOCK_SIZE=64k bash tests/integration/test_fio_sequential_io.sh`
+- `nl -ba tests/integration/test_fio_sequential_io.sh | sed -n '78,100p'`
+- `nl -ba tests/integration/test_fio_mixed_io.sh | sed -n '66,84p'`
+- `make test-fio-sequential-io-strace`
+- `make test-fio-mixed-io`
+- `make test-fio-random-mixed-io`
+- `bash -c 'set -euo pipefail; source tests/integration/fod_testlib.sh; unset FOD_SCHEMA_ADMIN_PASSWORD; fod_test_setup "$PWD"; test -n "$FOD_SCHEMA_ADMIN_PASSWORD"; printf "%s\\n" "generated-password-ok"'`
+- `git diff -- tests/integration/fod_testlib.sh tests/integration/test_fio_sequential_io.sh tests/integration/test_fio_mixed_io.sh`
+- `make test-fio-sequential-io-strace`
+- `git status --short`
+- `git diff --stat`
+- `git diff -- tests/integration/fod_testlib.sh tests/integration/test_fio_sequential_io.sh tests/integration/test_fio_mixed_io.sh TODO.md conclusions.md commands.md`
+- `git diff --check`
+- `git status --short`
+- `git diff --stat`
+- `tail -n 45 commands.md`
+- `git add tests/integration/fod_testlib.sh tests/integration/test_fio_sequential_io.sh tests/integration/test_fio_mixed_io.sh TODO.md conclusions.md commands.md`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: fix fio test cleanup error handling"`

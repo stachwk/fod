@@ -85,7 +85,7 @@ run_case() {
   fod_assert_eq "${actual_size}" "${expected_size}" "fio ${label} file size"
 
   if [[ "${enable_extents}" == "1" ]]; then
-    fod_assert_contains "${LOG_FILE}" "FOD extent PoC execution file_id="
+    fod_assert_contains "${LOG_FILE}" "enable_extents=true"
   else
     if grep -Fq "FOD extent PoC execution" "${LOG_FILE}"; then
       echo "unexpected extent PoC log in block-storage mode"
