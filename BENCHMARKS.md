@@ -63,6 +63,32 @@ Artifacts:
 
 Conclusion: the local backend stays in a narrow `18.01-18.38 MiB/s` band, so this run does not justify changing the local default send buffer. QNAP improves across this single matrix and `4194304` bytes is the best QNAP sample here (`3.18 MiB/s`, about `29%` over QNAP default), but one run is not enough to change the runtime default. The data_blocks path stayed insert-only in all eight runs: `32768` inserts, `0` updates, `0` deletes, and `0` new dead tuples.
 
+## 2026-07-09 Local COPY Buffer Repeatability Smoke
+
+Collected from commit `bad53cc` (`FOD 3.2.1: record copy-buffer matrix baseline`).
+
+Command:
+
+```bash
+repeat=3
+for i in $(seq 1 "$repeat"); do
+  PROFILE_RUN_ID=copy-buffer-local-repeat-20260709T085827Z-run$i \
+  PROFILE_COPY_BUFFER_INCLUDE_QNAP=0 \
+  PROFILE_COPY_BUFFER_SIZES='default 4194304' \
+  make profile-data-blocks-copy-buffer-matrix-compare
+done
+```
+
+Observed local throughput across three repeats:
+
+| run | default | `4194304` |
+| --- | ---: | ---: |
+| 1 | `14.55 MiB/s` | `18.17 MiB/s` |
+| 2 | `18.43 MiB/s` | `17.48 MiB/s` |
+| 3 | `17.42 MiB/s` | `17.76 MiB/s` |
+
+Conclusion: the local repeat sample is still mixed and does not show a stable winner. The `4194304` buffer is slightly ahead in two of three repeats, but the spread overlaps the default result, so this is not enough to change the default or claim a durable local throughput gain. QNAP remains the deciding signal, and it was not reachable in the repeated attempt from this session.
+
 ## 2026-07-05 COPY Buffer Compare Target Smoke
 
 Collected from commit `ef0e782` (`FOD 3.2.1: add indexer parallel smoke to full suite`) before committing the compare-target change.

@@ -1339,3 +1339,20 @@ Base commit at execution time: `a3076e1`
 - `git add BENCHMARKS.md TODO.md conclusions.md commands.md`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: record copy-buffer matrix baseline"`
+
+Base commit at execution time: `bad53cc`
+
+- `set -euo pipefail; repeat=3; run_root="copy-buffer-repeat-$(date -u +%Y%m%dT%H%M%SZ)"; for i in $(seq 1 "$repeat"); do run_id="${run_root}-run${i}"; echo "RUN $i/$repeat: $run_id"; PROFILE_RUN_ID="$run_id" PROFILE_COPY_BUFFER_INCLUDE_QNAP=1 PROFILE_COPY_BUFFER_SIZES='default 4194304' make profile-data-blocks-copy-buffer-matrix-compare >/tmp/fod-${run_id}.log 2>&1; echo "done $run_id"; done`
+- `tail -n 120 /tmp/fod-copy-buffer-repeat-20260709T085747Z-run1.log`
+- `sed -n '1,120p' /tmp/fod-copy-buffer-repeat-20260709T085747Z-run1.log`
+- `rg -n "ERROR|failed|No route|permission|Unsupported|QNAP smoke probe|profile-data-blocks-copy-buffer-matrix-compare|profile-data-blocks-copy-buffer-matrix-qnap" /tmp/fod-copy-buffer-repeat-20260709T085747Z-run1.log -S`
+- `for run in 1 2 3; do for buffer in default 4194304; do log=/tmp/fod-copy-buffer-local-repeat-20260709T085827Z-run${run}.log; ok=$(rg -o 'OK large-copy-benchmark bytes=[0-9]+ elapsed_s=[0-9.]+ throughput_mib_s=[0-9.]+' "$log" || true); elapsed=$(printf '%s' "$ok" | sed -n 's/.*elapsed_s=\\([0-9.]*\\).*/\\1/p'); th=$(printf '%s' "$ok" | sed -n 's/.*throughput_mib_s=\\([0-9.]*\\).*/\\1/p'); printf '%s\\t%s\\t%s\\n' "$buffer" "$elapsed" "$th"; done; done`
+- `for run in 1 2 3; do for buffer in default 4194304; do echo "=== run${run} ${buffer} ==="; grep 'OK large-copy-benchmark' /tmp/fod-copy-buffer-local-repeat-20260709T085827Z-run${run}.log | sed -n '/bytes=67108864/p'; done; done`
+- `find artifacts/perf/bad53cc -maxdepth 2 -type f -name 'pg_top_io_wal-*.txt' | sed -n '1,12p'`
+- `for run in 1 2 3; do echo "=== run${run} ==="; rg -n 'FOD copy-buffer matrix run mode=local buffer=.*run_id=' /tmp/fod-copy-buffer-local-repeat-20260709T085827Z-run${run}.log; done`
+- `git diff --check`
+- `git diff --stat`
+- `git diff -- BENCHMARKS.md TODO.md conclusions.md commands.md`
+- `git add BENCHMARKS.md TODO.md conclusions.md commands.md`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: record copy-buffer repeatability smoke"`
