@@ -36,6 +36,11 @@ Reading guide:
   - Historical note: the fresh 2026-07-05 local/QNAP matrix on commit `a3076e1` completed all eight runs. Local stayed in a narrow `18.01-18.38 MiB/s` band, while QNAP improved from `2.46 MiB/s` at default to `3.18 MiB/s` at `4194304`. All runs were insert-only for `data_blocks` (`32768` inserts, `0` updates/deletes/dead tuples), so the run does not point to non-HOT update churn.
 - [ ] Before changing the default `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` for QNAP-like backends, repeat the QNAP COPY-buffer matrix enough times to distinguish a stable `4194304` benefit from network or Docker noise.
   - Historical note: the 2026-07-09 local repeat sample on commit `bad53cc` stayed mixed (`14.55/18.17`, `18.43/17.48`, `17.42/17.76` MiB/s for `default` vs `4194304`). The QNAP repetition still needs a clean run; in this session `192.168.1.11:5432` returned `No route to host`.
+- [ ] Deliver the `Storage Engine v2` project described in `docs/storage-engine-v2-plan.md`, preserving 4 KiB logical blocks and the default block path while making large sequential physical persistence bounded and opt-in.
+  - Phase A: add bounded extent planning and payload rows, then pass the local and QNAP benchmark gate.
+  - Phase B: add a sequential segment builder and direct segment persistence only after Phase A proves useful.
+  - Phase C: classify persistence semantics and add replay-confirmed, append-only persistence for new sequential objects.
+  - Phase D: decide from measured results whether an object segment manifest and chunk store are still needed.
 - [x] Build a safe EXPLAIN/fillfactor clone experiment for `data_blocks` merge variants without touching real `fod.data_blocks` runtime data.
   - Historical note: `profile-pg-data-blocks-merge-fillfactor-explain` uses temporary clone tables and confirmed real `fod.data_blocks` row count stayed unchanged. On the local 2026-07-04 run, heap fillfactor `100` produced `0` HOT updates for changed conflicts, `90` produced `1800`, and `75` produced `5380`, with larger temp relation sizes.
 - [x] Detect single-node vs read-only replica mode early and let runtime choose the appropriate lock strategy before mount. Handled in `rust_fuse/src/startup.rs` via `effective_read_only()` and `lock_settings(read_only)`.

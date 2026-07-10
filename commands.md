@@ -1356,3 +1356,21 @@ Base commit at execution time: `bad53cc`
 - `git add BENCHMARKS.md TODO.md conclusions.md commands.md`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: record copy-buffer repeatability smoke"`
+
+Base commit at execution time: `3055051`
+
+- `git status --short --branch`
+- `git rev-parse --short HEAD`
+- `cat fod_version.txt`
+- `rg -n "Extent|extent|enable_extents|EXTENT_TARGET|prepare_persist_extent_rows" rust_hotpath rust_fuse rust_runtime TODO.md conclusions.md docs Makefile`
+- `sed -n '1,260p' rust_hotpath/src/extent_plan.rs`
+- `sed -n '1,380p' rust_fuse/src/write_buffer.rs`
+- `sed -n '1,390p' rust_hotpath/src/persist_plan.rs`
+- `sed -n '1,240p' TODO.md`
+- `rg -n "COPY|data_blocks|extent|64 MiB|MiB/s|WAL|non-HOT|swap" BENCHMARKS.md conclusions.md docs/performance.md`
+- `sed -n '1,520p' docs/storage-engine-v2-plan.md`
+- `git diff --check`
+- `git diff --stat`
+- `git add docs/storage-engine-v2-plan.md TODO.md conclusions.md commands.md`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: document storage engine v2 direction"`
