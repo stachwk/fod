@@ -22,6 +22,69 @@ pub(crate) struct WriteState {
     pub(crate) blocks: BTreeMap<u64, Vec<u8>>,
 }
 
+fn build_persist_extent_rows_from_ranges(
+    state: &WriteState,
+    block_size: u64,
+    extents: &[(u64, u64)],
+) -> Result<Vec<PersistExtentRow>, String> {
+    let mut rows = Vec::with_capacity(extents.len());
+
+    for (start_block, end_block) in extents {
+        if start_block > end_block {
+            return Err(format!(
+                "invalid extent range {}..{}",
+                start_block, end_block
+            ));
+        }
+
+        let mut used_bytes = 0u64;
+        let mut segments = Vec::new();
+        for block_index in *start_block..=*end_block {
+            let block = state.blocks.get(&block_index).ok_or_else(|| {
+                format!("missing buffered block {block_index} for extent persistence")
+            })?;
+            let used_len = dirty_block_size(state.file_size, block_index, block_size);
+            if used_len == 0 {
+                continue;
+            }
+            let used_len = usize::try_from(used_len)
+                .map_err(|_| format!("block {block_index} used length is too large"))?;
+            if block.len() < used_len {
+                return Err(format!(
+                    "buffered block {block_index} is shorter than its used length"
+                ));
+            }
+            used_bytes = used_bytes
+                .checked_add(used_len as u64)
+                .ok_or_else(|| "extent payload size overflow".to_string())?;
+            segments.push((used_len, block.as_slice()));
+        }
+
+        if used_bytes == 0 {
+            continue;
+        }
+
+        let payload_capacity = usize::try_from(used_bytes)
+            .map_err(|_| "extent payload exceeds addressable memory".to_string())?;
+        let mut payload = Vec::with_capacity(payload_capacity);
+        for (used_len, block) in segments {
+            payload.extend_from_slice(&block[..used_len]);
+        }
+
+        rows.push(PersistExtentRow {
+            start_block: *start_block,
+            block_count: end_block
+                .checked_sub(*start_block)
+                .and_then(|count| count.checked_add(1))
+                .ok_or_else(|| "extent block count overflow".to_string())?,
+            used_bytes,
+            payload,
+        });
+    }
+
+    Ok(rows)
+}
+
 impl FodFuse {
     pub(crate) fn new_write_state(
         file_id: u64,
@@ -240,45 +303,36 @@ impl FodFuse {
         state: &WriteState,
         block_size: u64,
         extents: &[(u64, u64)],
-    ) -> Vec<PersistExtentRow> {
+    ) -> Result<Vec<PersistExtentRow>, libc::c_int> {
         let started = Instant::now();
-        let rows = extents
+        let rows = match build_persist_extent_rows_from_ranges(state, block_size, extents) {
+            Ok(rows) => rows,
+            Err(err) => {
+                warn!(
+                    "FOD extent payload preparation failed file_id={} err={}",
+                    state.file_id, err
+                );
+                self.record_prepare_persist_extent_rows_from_extent_ranges_elapsed(
+                    started.elapsed(),
+                );
+                return Err(EIO);
+            }
+        };
+        let peak_payload_bytes = rows
             .iter()
-            .filter_map(|(start_block, end_block)| {
-                let mut used_bytes = 0u64;
-                let mut segments = Vec::new();
-                for block_index in *start_block..=*end_block {
-                    let Some(block) = state.blocks.get(&block_index) else {
-                        return None;
-                    };
-                    let used_len = dirty_block_size(state.file_size, block_index, block_size);
-                    if used_len == 0 {
-                        continue;
-                    }
-                    let used_len = used_len as usize;
-                    used_bytes = used_bytes.saturating_add(used_len as u64);
-                    segments.push((block_index, used_len, block.as_slice()));
-                }
-
-                if used_bytes == 0 {
-                    return None;
-                }
-
-                let mut payload = Vec::with_capacity(used_bytes as usize);
-                for (_block_index, used_len, block) in segments {
-                    payload.extend_from_slice(&block[..used_len]);
-                }
-
-                Some(PersistExtentRow {
-                    start_block: *start_block,
-                    block_count: end_block.saturating_sub(*start_block).saturating_add(1),
-                    used_bytes,
-                    payload,
-                })
-            })
-            .collect::<Vec<_>>();
+            .map(|row| row.payload.len() as u64)
+            .max()
+            .unwrap_or(0);
+        self.record_prepare_persist_extent_rows_peak_payload_bytes(peak_payload_bytes);
         self.record_prepare_persist_extent_rows_from_extent_ranges_elapsed(started.elapsed());
-        rows
+        if peak_payload_bytes > self.extent_target_bytes {
+            warn!(
+                "FOD extent payload exceeds configured maximum file_id={} payload_bytes={} extent_target_bytes={}",
+                state.file_id, peak_payload_bytes, self.extent_target_bytes
+            );
+            return Err(EIO);
+        }
+        Ok(rows)
     }
 
     fn execute_persist_plan(
@@ -307,7 +361,7 @@ impl FodFuse {
                     state,
                     block_size,
                     &extents.into_ranges(),
-                );
+                )?;
                 debug!(
                     "FOD extent PoC execution file_id={} extent_rows={:?}",
                     state.file_id,
@@ -560,6 +614,7 @@ impl FodFuse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_hotpath::{plan_extent_poc, ExtentPoCMode, ExtentPoCSettings};
 
     #[test]
     fn load_write_block_from_repo_returns_zero_block_for_missing_row() {
@@ -573,5 +628,73 @@ mod tests {
         let err = FodFuse::load_write_block_from_repo(7, 2, 4, Err("boom".to_string()))
             .expect_err("database error should not be masked as zeroes");
         assert_eq!(err, EIO);
+    }
+
+    #[test]
+    fn bounded_extent_ranges_build_bounded_payload_rows() {
+        let block_size = 4096u64;
+        let block_count = 16_384u64;
+        let target_bytes = 1024 * 1024u64;
+        let dirty_blocks = (0..block_count).collect::<Vec<_>>();
+        let plan = plan_extent_poc(
+            ExtentPoCSettings {
+                enabled: true,
+                mode: ExtentPoCMode::SequentialOnly,
+            },
+            &dirty_blocks,
+            block_size,
+            target_bytes,
+            target_bytes,
+        )
+        .expect("bounded extent plan");
+        let state = WriteState {
+            file_id: 9,
+            file_size: block_count * block_size,
+            truncate_pending: true,
+            buffered_bytes: block_count * block_size,
+            load_error: false,
+            blocks: dirty_blocks
+                .iter()
+                .map(|block_index| (*block_index, vec![*block_index as u8; block_size as usize]))
+                .collect(),
+        };
+
+        let rows = build_persist_extent_rows_from_ranges(&state, block_size, &plan.into_ranges())
+            .expect("bounded extent rows");
+
+        assert_eq!(rows.len(), 64);
+        assert!(rows
+            .iter()
+            .all(|row| row.used_bytes == target_bytes && row.payload.len() as u64 <= target_bytes));
+        assert_eq!(rows.first().map(|row| row.start_block), Some(0));
+        assert_eq!(rows.last().map(|row| row.start_block), Some(16_128));
+    }
+
+    #[test]
+    fn bounded_extent_rows_preserve_partial_final_block() {
+        let block_size = 4096u64;
+        let state = WriteState {
+            file_id: 10,
+            file_size: 2 * block_size + 123,
+            truncate_pending: true,
+            buffered_bytes: 2 * block_size + 123,
+            load_error: false,
+            blocks: [
+                (0, vec![b'A'; block_size as usize]),
+                (1, vec![b'B'; block_size as usize]),
+                (2, vec![b'C'; block_size as usize]),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        let rows = build_persist_extent_rows_from_ranges(&state, block_size, &[(0, 1), (2, 2)])
+            .expect("partial final extent rows");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].used_bytes, 2 * block_size);
+        assert_eq!(rows[0].payload.len(), (2 * block_size) as usize);
+        assert_eq!(rows[1].used_bytes, 123);
+        assert_eq!(rows[1].payload, vec![b'C'; 123]);
     }
 }

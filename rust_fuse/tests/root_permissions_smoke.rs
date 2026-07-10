@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use support::{
     admp_trace_env_pairs, bootstrap_binary, conninfo_from_config, create_workspace,
-    mountpoint_ready, repo_root, tail_log, try_unmount, unique_suffix,
+    mountpoint_ready, repo_root, tail_log, unique_suffix,
 };
 
 struct MountedRootFs {
@@ -20,9 +20,36 @@ struct MountedRootFs {
     child: Child,
 }
 
+impl MountedRootFs {
+    fn unmount(&self) -> Result<(), String> {
+        if !mountpoint_ready(&self.mountpoint) {
+            return Ok(());
+        }
+
+        let mut command = if unsafe { libc::geteuid() } == 0 {
+            Command::new("umount")
+        } else {
+            let mut command = Command::new("sudo");
+            command.arg("-n").arg("umount");
+            command
+        };
+        let status = command
+            .arg(&self.mountpoint)
+            .status()
+            .map_err(|err| format!("root mount unmount failed: {err}"))?;
+        if !status.success() || mountpoint_ready(&self.mountpoint) {
+            return Err(format!(
+                "root mount remained active after unmount: {} status={status}",
+                self.mountpoint.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl Drop for MountedRootFs {
     fn drop(&mut self) {
-        try_unmount(&self.mountpoint);
+        let _ = self.unmount();
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = fs::remove_dir_all(&self.workspace);
@@ -215,6 +242,7 @@ fn root_mount_allows_nobody_to_list_and_write() -> Result<(), String> {
         return Err(format!("shared file missing nobody write: {contents:?}"));
     }
 
+    mounted.unmount()?;
     drop(mounted);
     Ok(())
 }

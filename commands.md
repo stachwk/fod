@@ -791,6 +791,13 @@ Base commit at execution time: `2659c1b`
 - `make test-persist-buffer-chunking`
 - `make test-unlink-after-write`
 - `make test-rust-hotpath-copy-dedupe`
+- `bash -n tests/integration/fod_testlib.sh`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `git diff --stat`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance.md docs/storage-engine-v2-plan.md rust_fuse/src/fs.rs rust_fuse/src/write_buffer.rs rust_fuse/tests/root_permissions_smoke.rs tests/integration/fod_testlib.sh`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: persist bounded extent payloads"`
 - `git diff --check`
 - `git diff --stat`
 - `git status --short`
@@ -1403,3 +1410,28 @@ Base commit at execution time: `3fe5590`
 - `git add README.md fod_config.example.ini fod_config.ini rust_fuse rust_hotpath rust_runtime tests/integration/test_runtime_profile.py TODO.md conclusions.md commands.md`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: add bounded extent planning"`
+
+Execution date: `2026-07-10`
+
+Base commit at execution time: `93f1ab9`
+
+- `cargo fmt --all`
+- `cargo test -p fod-rust-fuse --bin fod-rust-fuse`
+- `make test-copy-block-crc-table`
+- `make test-persist-buffer-chunking`
+- `make test-unlink-after-write`
+- `make test-remount-durability-benchmark`
+- `make test-fio-sequential-io`
+- `make test-fio-mixed-io`
+- `make test-fio-random-mixed-io`
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace > /tmp/fod-storage-v2-bounded-strace.log 2>&1`
+- `FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make test-fio-sequential-io > /tmp/fod-storage-v2-bounded-profile-4m.log 2>&1`
+- `docker exec fod-postgres psql -U foduser -d foddbname -AtF '|' -c "SET search_path TO fod,public; SELECT f.name, COUNT(*), MAX(OCTET_LENGTH(de.payload)), SUM(de.used_bytes) FROM data_extents de JOIN files f ON f.data_object_id = de.data_object_id GROUP BY f.id_file, f.name ORDER BY f.id_file DESC LIMIT 5"`
+- `cargo check --workspace`
+- `cargo test -p fod-rust-hotpath`
+- `cargo test -p fod-rust-fuse -- --skip primary_`
+- `cargo test -p fod-rust-fuse --test root_permissions_smoke`
+- `cargo test -p fod-rust-fuse --test lock_backend_smoke --no-run`
+- `sudo -n env HOME=/home/wojtek USER=wojtek LOGNAME=wojtek PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin target/debug/deps/lock_backend_smoke-513bfc054453dbef --test-threads=1`
+- `make test-rust-hotpath-copy-dedupe`

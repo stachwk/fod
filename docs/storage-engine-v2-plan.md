@@ -26,6 +26,13 @@ The extent path remains opt-in through `enable_extents = true` until correctness
 tests and repeated benchmarks prove that it is safe and useful. The block path
 must remain the default and must not read extent-only tuning values.
 
+Implementation status:
+
+- direction documented in commit `3fe5590`;
+- bounded planning and `extent_target_bytes` added in commit `93f1ab9`;
+- bounded payload-row enforcement and peak-payload profiling are implemented;
+- the repeated local/QNAP extent-size benchmark gate remains before Phase B.
+
 ## Current problem
 
 The block path splits a large sequential stream into 4 KiB allocations and

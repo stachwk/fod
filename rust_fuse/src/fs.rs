@@ -437,6 +437,7 @@ pub(crate) struct FodFuseProfileCounters {
     flush_write_state_us: AtomicU64,
     prepare_persist_rows_from_block_plan_us: AtomicU64,
     prepare_persist_extent_rows_from_extent_ranges_us: AtomicU64,
+    prepare_persist_extent_rows_peak_payload_bytes: AtomicU64,
     clear_read_cache_for_file_us: AtomicU64,
     store_recent_write_blocks_us: AtomicU64,
     reply_data_us: AtomicU64,
@@ -564,6 +565,11 @@ impl FodFuseProfileCounters {
         );
     }
 
+    pub(crate) fn record_prepare_persist_extent_rows_peak_payload_bytes(&self, bytes: u64) {
+        self.prepare_persist_extent_rows_peak_payload_bytes
+            .fetch_max(bytes, Ordering::Relaxed);
+    }
+
     pub(crate) fn record_clear_read_cache_for_file_elapsed(&self, elapsed: Duration) {
         Self::add(&self.clear_read_cache_for_file_us, elapsed);
     }
@@ -606,6 +612,10 @@ impl FodFuseProfileCounters {
                 > 0
             || self
                 .prepare_persist_extent_rows_from_extent_ranges_us
+                .load(Ordering::Relaxed)
+                > 0
+            || self
+                .prepare_persist_extent_rows_peak_payload_bytes
                 .load(Ordering::Relaxed)
                 > 0
             || self.clear_read_cache_for_file_us.load(Ordering::Relaxed) > 0
@@ -700,6 +710,11 @@ impl FodFuseProfileCounters {
             format!(
                 "prepare_persist_extent_rows_from_extent_ranges_us={}",
                 self.prepare_persist_extent_rows_from_extent_ranges_us
+                    .load(Ordering::Relaxed)
+            ),
+            format!(
+                "prepare_persist_extent_rows_peak_payload_bytes={}",
+                self.prepare_persist_extent_rows_peak_payload_bytes
                     .load(Ordering::Relaxed)
             ),
             format!(
@@ -943,6 +958,11 @@ impl FodFuse {
     ) {
         self.profile
             .record_prepare_persist_extent_rows_from_extent_ranges_elapsed(elapsed);
+    }
+
+    pub(crate) fn record_prepare_persist_extent_rows_peak_payload_bytes(&self, bytes: u64) {
+        self.profile
+            .record_prepare_persist_extent_rows_peak_payload_bytes(bytes);
     }
 
     pub(crate) fn record_clear_read_cache_for_file_elapsed(&self, elapsed: Duration) {
@@ -6260,7 +6280,7 @@ impl Filesystem for FodFuse {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_update_atime, AtimePolicy, WriteState};
+    use super::{should_update_atime, AtimePolicy, FodFuseProfileCounters, WriteState};
     use fuser::FileAttr;
     use fuser::FileType;
     use std::collections::BTreeMap;
@@ -6371,5 +6391,18 @@ mod tests {
         assert!(super::FodFuse::write_state_has_pending_changes(&buffered));
         assert!(super::FodFuse::write_state_has_pending_changes(&truncated));
         assert!(super::FodFuse::write_state_has_pending_changes(&blocked));
+    }
+
+    #[test]
+    fn extent_payload_profile_records_the_largest_payload() {
+        let counters = FodFuseProfileCounters::default();
+        counters.record_prepare_persist_extent_rows_peak_payload_bytes(1024 * 1024);
+        counters.record_prepare_persist_extent_rows_peak_payload_bytes(256 * 1024);
+
+        assert!(counters.has_activity());
+        assert!(counters
+            .snapshot_lines()
+            .iter()
+            .any(|line| line == "prepare_persist_extent_rows_peak_payload_bytes=1048576"));
     }
 }

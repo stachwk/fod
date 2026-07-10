@@ -25,6 +25,32 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-07-05 from commit `a3076e1` and adds a fresh local/QNAP COPY-buffer matrix with DML, WAL, top statement IO/WAL, and bloat artifacts.
 
+## 2026-07-10 Bounded Extent Execution Smoke
+
+Collected from a Storage Engine v2 worktree based on commit `93f1ab9` (`FOD 3.2.1: add bounded extent planning`). The pending change added bounded payload-row enforcement and peak-payload diagnostics.
+
+Commands:
+
+```bash
+FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make test-fio-sequential-io
+make test-fio-mixed-io
+make test-fio-random-mixed-io
+FOD_PROFILE_IO=1 make test-fio-sequential-io-strace
+```
+
+| workload | path | read | write | extent rows | largest extent payload |
+| --- | --- | ---: | ---: | ---: | ---: |
+| sequential 4 MiB | block | `100 MiB/s` | `4905 KiB/s` | `0` | `0` |
+| sequential 4 MiB | extent | `90.9 MiB/s` | `4597 KiB/s` | `4` | `1048576` bytes |
+| mixed rw 4 MiB | block | `1699 KiB/s` | `1808 KiB/s` | n/a | n/a |
+| mixed rw 4 MiB | extent preset | `824 KiB/s` | `877 KiB/s` | `4` observed after the run | `1048576` bytes |
+| random mixed 4 MiB | block | `1196 KiB/s` | `1273 KiB/s` | n/a | n/a |
+| random mixed 4 MiB | extent preset | `691 KiB/s` | `736 KiB/s` | `4` observed after the run | `1048576` bytes |
+
+The profiled sequential extent run reported `repo_persist_extents_us=30843`, `prepare_persist_extent_rows_from_extent_ranges_us=1916`, and `prepare_persist_extent_rows_peak_payload_bytes=1048576`. The PostgreSQL check returned `fio-extent-4M.bin|4|1048576|4194304`, confirming four physical rows, a 1 MiB maximum payload, and complete 4 MiB logical coverage.
+
+This is a correctness and diagnostics smoke, not the Phase A decision matrix. It is a single local run and therefore does not justify a default change. Mixed and random results continue to show why the extent path must remain opt-in until Phase B can distinguish sequential segment state from block overlays.
+
 ## 2026-07-05 Local/QNAP COPY Buffer Matrix
 
 Collected from commit `a3076e1` (`FOD 3.2.1: add copy-buffer matrix compare target`).

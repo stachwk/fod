@@ -118,7 +118,7 @@ fod_test_cleanup() {
   fi
   if [[ "${FOD_PROFILE_IO:-0}" =~ ^(1|true|True|yes|on)$ && -f "${LOG_FILE:-}" ]]; then
     echo "FOD boundary profile summary:"
-    grep -A8 -E "FOD boundary profile:" "${LOG_FILE}" || tail -n 20 "${LOG_FILE}" || true
+    grep -A40 -E "FOD boundary profile:" "${LOG_FILE}" || tail -n 40 "${LOG_FILE}" || true
   fi
   if [[ -n "${FOD_STRACE_SUMMARY_FILE:-}" && -f "${FOD_STRACE_SUMMARY_FILE}" ]]; then
     echo "FOD strace profile summary${FOD_STRACE_LABEL:+ (${FOD_STRACE_LABEL})}:"

@@ -168,6 +168,12 @@ make profile-fuse-sequential-io
 
 The default workload is `test-fio-sequential-io-strace`. It captures the full workload output, including `FOD_PROFILE_IO` boundary summaries and strace syscall tables, under `artifacts/perf/<commit>/<host>-<run-id>/fuse-test-fio-sequential-io-strace.txt`.
 
+Extent captures include `prepare_persist_extent_rows_peak_payload_bytes`. This is the largest single extent payload assembled during the run and must not exceed `FOD_EXTENT_TARGET_BYTES`. A direct-I/O smoke can report `0` when each small write is flushed before a full-file extent plan forms; use a buffered sequential case such as the following to validate the real bounded-extent path:
+
+```bash
+FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make test-fio-sequential-io
+```
+
 Override the workload only when comparing a specific FUSE path:
 
 ```bash
