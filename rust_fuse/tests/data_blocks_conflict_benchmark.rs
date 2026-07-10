@@ -7,9 +7,18 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use support::{checked_payload_len, parse_size_bytes, repeating_payload, MountedFs};
+
+static DEFAULT_CONFLICT_BENCHMARK_LOCK: Mutex<()> = Mutex::new(());
+
+fn has_explicit_conflict_id() -> bool {
+    env::var("DATA_BLOCKS_CONFLICT_ID")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+}
 
 fn conflict_id() -> String {
     env::var("DATA_BLOCKS_CONFLICT_ID")
@@ -88,12 +97,23 @@ fn verify_payload(file_path: &Path, expected: &[u8]) -> Result<(), String> {
 }
 
 fn run_overwrite_benchmark(name: &str, marker: &[u8]) -> Result<(), String> {
+    let _guard = DEFAULT_CONFLICT_BENCHMARK_LOCK
+        .lock()
+        .map_err(|_| "data_blocks conflict benchmark lock poisoned".to_string())?;
     let mounted = mounted_conflict_fs(name)?;
     let (block_size, block_count, total) = payload_shape()?;
     let overwrite_payload = payload(marker)?;
     let (_, file_path) = workload_paths(&mounted.mountpoint);
 
-    if !file_path.exists() {
+    if !file_path.exists() && !has_explicit_conflict_id() {
+        let (dir_path, _) = workload_paths(&mounted.mountpoint);
+        fs::create_dir_all(&dir_path).map_err(|err| format!("create_dir_all failed: {err}"))?;
+        write_full_payload(
+            &file_path,
+            &payload(b"fod-data-blocks-conflict-seed-")?,
+            true,
+        )?;
+    } else if !file_path.exists() {
         return Err(format!(
             "missing seeded conflict file {}; run data_blocks_conflict_seed first with DATA_BLOCKS_CONFLICT_ID={}",
             file_path.display(),
@@ -121,6 +141,9 @@ fn run_overwrite_benchmark(name: &str, marker: &[u8]) -> Result<(), String> {
 
 #[test]
 fn data_blocks_conflict_seed() -> Result<(), String> {
+    let _guard = DEFAULT_CONFLICT_BENCHMARK_LOCK
+        .lock()
+        .map_err(|_| "data_blocks conflict benchmark lock poisoned".to_string())?;
     let mounted = mounted_conflict_fs("data-blocks-conflict-seed")?;
     let (block_size, block_count, total) = payload_shape()?;
     let seed_payload = payload(b"fod-data-blocks-conflict-seed-")?;

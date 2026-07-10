@@ -261,6 +261,7 @@ lock_poll_interval_seconds = 0.05
 [fod.profile.extents]
 # Opt-in sequential-only extent PoC preset.
 enable_extents = true
+extent_target_bytes = 1048576
 ```
 
 ## First Run

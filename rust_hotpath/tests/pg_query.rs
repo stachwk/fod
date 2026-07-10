@@ -519,11 +519,11 @@ fn switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent
     )
     .map_err(|err| format!("switch extent-backed file to blocks: {err}"))?;
 
-    assert_eq!(
-        repo.file_data_object_id(extent_file_id)
-            .map_err(|err| format!("extent file data object id after block write: {err}"))?,
-        Some(extent_object_id)
-    );
+    let block_replacement_object_id = repo
+        .file_data_object_id(extent_file_id)
+        .map_err(|err| format!("extent file data object id after block write: {err}"))?
+        .ok_or_else(|| "missing replacement data object after block write".to_string())?;
+    assert_ne!(block_replacement_object_id, extent_object_id);
     assert_block_range_matches(
         &repo,
         extent_file_id,

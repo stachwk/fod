@@ -28,6 +28,7 @@ pub struct FuseStorageSettings {
     pub copy_dedupe_max_blocks: u64,
     pub copy_dedupe_crc_table: bool,
     pub enable_extents: bool,
+    pub extent_target_bytes: u64,
 }
 
 #[allow(dead_code)]
@@ -101,6 +102,7 @@ impl FodFuseSettings {
                 copy_dedupe_max_blocks: storage.copy_dedupe_max_blocks,
                 copy_dedupe_crc_table: storage.copy_dedupe_crc_table,
                 enable_extents: storage.enable_extents,
+                extent_target_bytes: storage.extent_target_bytes,
             },
             cache: FuseCacheSettings {
                 metadata_cache_ttl: cache.metadata_cache_ttl,
@@ -264,7 +266,7 @@ fn log_mount_status(
         security.selinux_rootcontext
     );
     info!(
-        "FOD storage block_size={} write_flush_threshold={} bytes max_fs_size_bytes={:?} pg_visible_path={:?} workers_read={} workers_read_min_blocks={} workers_write={} workers_write_min_blocks={} persist_buffer_chunk_blocks={} persist_block_transport={} data_object_swap_cleanup={} synchronous_commit={} copy_dedupe_enabled={} copy_dedupe_min_blocks={} copy_dedupe_max_blocks={} copy_dedupe_crc_table={} enable_extents={}",
+        "FOD storage block_size={} write_flush_threshold={} bytes max_fs_size_bytes={:?} pg_visible_path={:?} workers_read={} workers_read_min_blocks={} workers_write={} workers_write_min_blocks={} persist_buffer_chunk_blocks={} persist_block_transport={} data_object_swap_cleanup={} synchronous_commit={} copy_dedupe_enabled={} copy_dedupe_min_blocks={} copy_dedupe_max_blocks={} copy_dedupe_crc_table={} enable_extents={} extent_target_bytes={}",
         fs.block_size,
         storage.write_flush_threshold_bytes,
         storage.max_fs_size_bytes,
@@ -284,7 +286,8 @@ fn log_mount_status(
         storage.copy_dedupe_min_blocks,
         storage.copy_dedupe_max_blocks,
         storage.copy_dedupe_crc_table,
-        storage.enable_extents
+        storage.enable_extents,
+        storage.extent_target_bytes
     );
     info!("FOD mount options: {:?}", options);
     if env_var_truthy_with_legacy_alias("FOD_DEBUG_SNAPSHOT", false) {

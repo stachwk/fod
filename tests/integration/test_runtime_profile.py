@@ -239,13 +239,15 @@ def main() -> None:
             expected_storage_line = (
                 f'pg_visible_path=Some("{visible_dir.name}") workers_read=3 workers_read_min_blocks=16 '
                 "workers_write=5 workers_write_min_blocks=16 persist_buffer_chunk_blocks=64 "
-                "persist_block_transport=copy_binary_staging synchronous_commit=on copy_dedupe_enabled=false "
-                f"copy_dedupe_min_blocks=16 copy_dedupe_max_blocks=0 copy_dedupe_crc_table=false enable_extents=false"
+                "persist_block_transport=copy_binary_staging data_object_swap_cleanup=immediate synchronous_commit=on "
+                "copy_dedupe_enabled=false copy_dedupe_min_blocks=16 copy_dedupe_max_blocks=0 "
+                f"copy_dedupe_crc_table=false enable_extents=false extent_target_bytes=1048576"
                 if mount_profile == "metadata_heavy"
                 else f'pg_visible_path=Some("{visible_dir.name}") workers_read=3 workers_read_min_blocks=8 '
                 "workers_write=5 workers_write_min_blocks=8 persist_buffer_chunk_blocks=128 "
-                "persist_block_transport=copy_binary_staging synchronous_commit=on copy_dedupe_enabled=false "
-                f"copy_dedupe_min_blocks=16 copy_dedupe_max_blocks=0 copy_dedupe_crc_table=false enable_extents=true"
+                "persist_block_transport=copy_binary_staging data_object_swap_cleanup=immediate synchronous_commit=on "
+                "copy_dedupe_enabled=false copy_dedupe_min_blocks=16 copy_dedupe_max_blocks=0 "
+                f"copy_dedupe_crc_table=false enable_extents=true extent_target_bytes=1048576"
             )
             assert (
                 expected_cache_line

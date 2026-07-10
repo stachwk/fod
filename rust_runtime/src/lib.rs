@@ -18,6 +18,7 @@ pub const DEFAULT_METADATA_TTL: Duration = Duration::from_secs(1);
 pub const DEFAULT_STATFS_TTL: Duration = Duration::from_secs(2);
 pub const DEFAULT_LOCK_LEASE_TTL: Duration = Duration::from_secs(30);
 pub const DEFAULT_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
+pub const DEFAULT_EXTENT_TARGET_BYTES: u64 = 1024 * 1024;
 // Canonical FOD schema name. Keep it away from `public` so FOD objects do
 // not collide with unrelated application tables in the same database.
 pub const FOD_SCHEMA_NAME: &str = "fod";
@@ -409,6 +410,7 @@ pub struct RuntimeConfig {
     pub copy_dedupe_max_blocks: u64,
     pub copy_dedupe_crc_table: bool,
     pub enable_extents: bool,
+    pub extent_target_bytes: u64,
     pub selinux_context: Option<String>,
     pub selinux_fscontext: Option<String>,
     pub selinux_defcontext: Option<String>,
@@ -491,6 +493,7 @@ pub struct RuntimeStorageSettings {
     pub copy_dedupe_max_blocks: u64,
     pub copy_dedupe_crc_table: bool,
     pub enable_extents: bool,
+    pub extent_target_bytes: u64,
 }
 
 /// Runtime knobs that can be refreshed without remounting FOD.
@@ -867,7 +870,7 @@ enum RuntimeValueKind {
     Choice(&'static [&'static str]),
     U64 { allow_zero: bool },
     Duration { allow_zero: bool },
-    SizeBytes,
+    SizeBytes { allow_zero: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,9 +920,13 @@ where
         RuntimeValueKind::Duration { allow_zero } => {
             validate_duration_value(lookup, spec.key, allow_zero)
         }
-        RuntimeValueKind::SizeBytes => {
+        RuntimeValueKind::SizeBytes { allow_zero } => {
             if let Some(value) = lookup_value(lookup, spec.key) {
-                parse_size_bytes(&value).map_err(|err| format!("{}: {}", spec.key, err))?;
+                let parsed =
+                    parse_size_bytes(&value).map_err(|err| format!("{}: {}", spec.key, err))?;
+                if !allow_zero && parsed == 0 {
+                    return Err(format!("{} must be greater than zero", spec.key));
+                }
             }
             Ok(())
         }
@@ -1025,7 +1032,7 @@ const RUNTIME_VALUE_SPECS: &[RuntimeValueSpec] = &[
     ),
     RuntimeValueSpec::tuning_and_runtime_env(
         "write_flush_threshold_bytes",
-        RuntimeValueKind::SizeBytes,
+        RuntimeValueKind::SizeBytes { allow_zero: true },
     ),
     RuntimeValueSpec::tuning_and_runtime_env(
         "synchronous_commit",
@@ -1074,7 +1081,14 @@ const RUNTIME_VALUE_SPECS: &[RuntimeValueSpec] = &[
     ),
     RuntimeValueSpec::tuning_and_runtime_env("copy_dedupe_crc_table", RuntimeValueKind::Bool),
     RuntimeValueSpec::tuning_and_runtime_env("enable_extents", RuntimeValueKind::Bool),
-    RuntimeValueSpec::tuning_and_runtime_env("max_fs_size_bytes", RuntimeValueKind::SizeBytes),
+    RuntimeValueSpec::tuning_and_runtime_env(
+        "extent_target_bytes",
+        RuntimeValueKind::SizeBytes { allow_zero: false },
+    ),
+    RuntimeValueSpec::tuning_and_runtime_env(
+        "max_fs_size_bytes",
+        RuntimeValueKind::SizeBytes { allow_zero: true },
+    ),
 ];
 
 fn validate_runtime_tuning_lookup<F>(lookup: &F) -> Result<(), String>
@@ -1173,6 +1187,8 @@ impl RuntimeConfig {
         let copy_dedupe_max_blocks = lookup_u64(&lookup, "copy_dedupe_max_blocks", 0);
         let copy_dedupe_crc_table = lookup_bool(&lookup, "copy_dedupe_crc_table", false);
         let enable_extents = lookup_bool(&lookup, "enable_extents", false);
+        let extent_target_bytes =
+            lookup_size_u64(&lookup, "extent_target_bytes", DEFAULT_EXTENT_TARGET_BYTES);
         let selinux_context = lookup_optional_string(&lookup, "selinux_context");
         let selinux_fscontext = lookup_optional_string(&lookup, "selinux_fscontext");
         let selinux_defcontext = lookup_optional_string(&lookup, "selinux_defcontext");
@@ -1222,6 +1238,7 @@ impl RuntimeConfig {
             copy_dedupe_max_blocks,
             copy_dedupe_crc_table,
             enable_extents,
+            extent_target_bytes,
             selinux_context,
             selinux_fscontext,
             selinux_defcontext,
@@ -1327,6 +1344,7 @@ impl RuntimeConfig {
             copy_dedupe_max_blocks: self.copy_dedupe_max_blocks,
             copy_dedupe_crc_table: self.copy_dedupe_crc_table,
             enable_extents: self.enable_extents,
+            extent_target_bytes: self.extent_target_bytes,
         }
     }
 
@@ -1561,6 +1579,9 @@ impl RuntimeConfig {
             env_var_with_legacy_alias("FOD_ENABLE_EXTENTS"),
             self.enable_extents,
         );
+        self.extent_target_bytes = env_var_with_legacy_alias("FOD_EXTENT_TARGET_BYTES")
+            .and_then(|value| parse_size_bytes(&value).ok())
+            .unwrap_or(self.extent_target_bytes);
         self.selinux_context = env_var_with_legacy_alias("FOD_SELINUX_CONTEXT")
             .filter(|value| !value.trim().is_empty())
             .or(self.selinux_context.clone());
@@ -1672,6 +1693,7 @@ impl RuntimeConfig {
         set_u64("FOD_COPY_DEDUPE_MAX_BLOCKS", self.copy_dedupe_max_blocks);
         set_bool("FOD_COPY_DEDUPE_CRC_TABLE", self.copy_dedupe_crc_table);
         set_bool("FOD_ENABLE_EXTENTS", self.enable_extents);
+        set_u64("FOD_EXTENT_TARGET_BYTES", self.extent_target_bytes);
         set_opt_string("FOD_SELINUX_CONTEXT", self.selinux_context.as_ref());
         set_opt_string("FOD_SELINUX_FSCONTEXT", self.selinux_fscontext.as_ref());
         set_opt_string("FOD_SELINUX_DEFCONTEXT", self.selinux_defcontext.as_ref());
@@ -1819,6 +1841,11 @@ impl RuntimeConfig {
             self.copy_dedupe_crc_table,
         );
         set_map_bool(&mut runtime, "enable_extents", self.enable_extents);
+        set_map_u64(
+            &mut runtime,
+            "extent_target_bytes",
+            self.extent_target_bytes,
+        );
         set_map_opt_string(
             &mut runtime,
             "selinux_context",
@@ -1983,6 +2010,10 @@ mod tests {
         assert_eq!(
             runtime_env_var_name("data_object_swap_cleanup"),
             Some("FOD_DATA_OBJECT_SWAP_CLEANUP".to_string())
+        );
+        assert_eq!(
+            runtime_env_var_name("extent_target_bytes"),
+            Some("FOD_EXTENT_TARGET_BYTES".to_string())
         );
         assert_eq!(
             runtime_env_var_name("force_read_only"),
@@ -2223,6 +2254,7 @@ mod tests {
             "64MiB".to_string(),
         );
         runtime.insert("max_fs_size_bytes".to_string(), "10GiB".to_string());
+        runtime.insert("extent_target_bytes".to_string(), "1MiB".to_string());
         let config = RuntimeConfig::from_bootstrap(
             &runtime,
             &BootstrapOverrides {
@@ -2263,6 +2295,7 @@ mod tests {
         assert_eq!(config.synchronous_commit, "off");
         assert_eq!(config.write_flush_threshold_bytes, 64 * 1024 * 1024);
         assert_eq!(config.max_fs_size_bytes, Some(10 * 1024 * 1024 * 1024));
+        assert_eq!(config.extent_target_bytes, 1024 * 1024);
     }
 
     #[test]
@@ -2321,10 +2354,16 @@ mod tests {
         runtime.insert("lock_backend".to_string(), "postgres_lease".to_string());
         runtime.insert("atime_policy".to_string(), "relatime".to_string());
         runtime.insert("synchronous_commit".to_string(), "on".to_string());
+        runtime.insert("extent_target_bytes".to_string(), "1MiB".to_string());
         validate_runtime_tuning(&runtime).unwrap();
 
         runtime.insert("pool_max_connections".to_string(), "0".to_string());
         runtime.insert("persist_buffer_chunk_blocks".to_string(), "0".to_string());
+        assert!(validate_runtime_tuning(&runtime).is_err());
+
+        runtime.insert("pool_max_connections".to_string(), "10".to_string());
+        runtime.insert("persist_buffer_chunk_blocks".to_string(), "1".to_string());
+        runtime.insert("extent_target_bytes".to_string(), "0".to_string());
         assert!(validate_runtime_tuning(&runtime).is_err());
     }
 

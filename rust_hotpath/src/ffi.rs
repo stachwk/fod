@@ -4112,6 +4112,7 @@ pub extern "C" fn fod_persist_block_plan(
         };
         let plan = persist_block_plan(crate::persist_plan::PersistPlanInput {
             enable_extents: false,
+            extent_target_bytes: 0,
             file_size,
             block_size,
             truncate_pending: truncate_pending != 0,

@@ -1374,3 +1374,32 @@ Base commit at execution time: `3055051`
 - `git add docs/storage-engine-v2-plan.md TODO.md conclusions.md commands.md`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: document storage engine v2 direction"`
+
+Execution date: `2026-07-10`
+
+Base commit at execution time: `3fe5590`
+
+- `cargo fmt --all`
+- `cargo test -p fod-rust-hotpath`
+- `cargo test -p fod-rust-runtime`
+- `cargo check --workspace`
+- `make up`
+- `cargo test -p fod-rust-hotpath --test pg_query switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent -- --exact`
+- `cargo test -p fod-rust-hotpath`
+- `cargo test -p fod-rust-fuse --test data_blocks_conflict_benchmark`
+- `cargo test -p fod-rust-fuse --test large_file_multiblock_benchmark`
+- `cargo test -p fod-rust-fuse --test lock_backend_smoke --no-run`
+- `sudo -n env HOME=/home/wojtek USER=wojtek LOGNAME=wojtek PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin target/debug/deps/lock_backend_smoke-513bfc054453dbef --test-threads=1`
+- `cargo test -p fod-rust-fuse -- --skip primary_`
+- `make test-runtime-profile-extents`
+- `docker exec fod-postgres psql -U foduser -d foddbname -c CHECKPOINT`
+- `sudo -n umount /tmp/fod-rust-fuse-47148-1783711896453789506-root-permissions-47148-1783711896453776124/mount`
+- `cargo check --workspace`
+- `make test-runtime-config`
+- `make test-runtime-validation`
+- `make smoke`
+- `git diff --check`
+- `git diff --stat`
+- `git add README.md fod_config.example.ini fod_config.ini rust_fuse rust_hotpath rust_runtime tests/integration/test_runtime_profile.py TODO.md conclusions.md commands.md`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: add bounded extent planning"`

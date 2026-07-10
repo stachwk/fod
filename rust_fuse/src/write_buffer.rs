@@ -175,6 +175,7 @@ impl FodFuse {
         let dirty_blocks = state.blocks.keys().copied().collect::<Vec<_>>();
         let persist_plan = choose_persist_execution_plan(PersistPlanInput {
             enable_extents: self.enable_extents,
+            extent_target_bytes: self.extent_target_bytes,
             file_size: state.file_size,
             block_size,
             truncate_pending: state.truncate_pending,

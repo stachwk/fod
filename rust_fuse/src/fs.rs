@@ -734,6 +734,7 @@ pub struct FodFuse {
     pub lock_poll_interval: Duration,
     pub atime_policy: AtimePolicy,
     pub enable_extents: bool,
+    pub extent_target_bytes: u64,
     reloadable_runtime: Arc<RwLock<RuntimeReloadableSettings>>,
     pub read_only: bool,
     pub use_fuse_context: bool,
@@ -790,6 +791,7 @@ impl FodFuse {
             lock_poll_interval: locks.lock_poll_interval,
             atime_policy,
             enable_extents: storage.enable_extents,
+            extent_target_bytes: storage.extent_target_bytes,
             reloadable_runtime: Arc::new(RwLock::new(runtime.reloadable_settings())),
             read_only,
             use_fuse_context,
@@ -1195,7 +1197,7 @@ impl FodFuse {
             }
         }
         format!(
-            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, enable_extents={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, samples=[{}]}}",
+            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, enable_extents={}, extent_target_bytes={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, samples=[{}]}}",
             self.read_only,
             self.use_fuse_context,
             self.fopen_direct_io,
@@ -1219,6 +1221,7 @@ impl FodFuse {
             live.copy_dedupe_max_blocks,
             live.copy_dedupe_crc_table,
             self.enable_extents,
+            self.extent_target_bytes,
             self.selinux_enabled,
             self.acl_enabled,
             inode_count,

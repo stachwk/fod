@@ -527,6 +527,7 @@ mod tests {
         let dirty = [7, 3, 4, 10, 11, 11, 8];
         let plan = persist_block_plan(crate::persist_plan::PersistPlanInput {
             enable_extents: false,
+            extent_target_bytes: 0,
             file_size: 65_536,
             block_size: 4_096,
             truncate_pending: true,

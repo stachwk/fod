@@ -38,11 +38,12 @@ fn extent_poc_benchmark() -> Result<(), String> {
         let start = Instant::now();
 
         for _ in 0..iterations {
-            let plan = plan_extent_poc(settings, &blocks)
+            let plan = plan_extent_poc(settings, &blocks, 4096, 1024 * 1024, 1024 * 1024)
                 .ok_or_else(|| format!("extent PoC unexpectedly rejected {label}"))?;
-            if plan.extents.len() != 1 {
+            let expected_extents = bytes.div_ceil(1024 * 1024);
+            if plan.extents.len() != expected_extents {
                 return Err(format!(
-                    "expected one contiguous extent for {label}, got {}",
+                    "expected {expected_extents} bounded extents for {label}, got {}",
                     plan.extents.len()
                 ));
             }

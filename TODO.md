@@ -38,9 +38,11 @@ Reading guide:
   - Historical note: the 2026-07-09 local repeat sample on commit `bad53cc` stayed mixed (`14.55/18.17`, `18.43/17.48`, `17.42/17.76` MiB/s for `default` vs `4194304`). The QNAP repetition still needs a clean run; in this session `192.168.1.11:5432` returned `No route to host`.
 - [ ] Deliver the `Storage Engine v2` project described in `docs/storage-engine-v2-plan.md`, preserving 4 KiB logical blocks and the default block path while making large sequential physical persistence bounded and opt-in.
   - Phase A: add bounded extent planning and payload rows, then pass the local and QNAP benchmark gate.
+    - Progress: bounded planning and the startup-only `extent_target_bytes` setting are implemented with a 1 MiB default; bounded execution diagnostics and the benchmark gate remain.
   - Phase B: add a sequential segment builder and direct segment persistence only after Phase A proves useful.
   - Phase C: classify persistence semantics and add replay-confirmed, append-only persistence for new sequential objects.
   - Phase D: decide from measured results whether an object segment manifest and chunk store are still needed.
+- [ ] Revisit cleanup in `rust_fuse/tests/root_permissions_smoke.rs` when the full Cargo suite is run without root; the test can pass but leave its FUSE mount active because the final unmount needs elevated privileges.
 - [x] Build a safe EXPLAIN/fillfactor clone experiment for `data_blocks` merge variants without touching real `fod.data_blocks` runtime data.
   - Historical note: `profile-pg-data-blocks-merge-fillfactor-explain` uses temporary clone tables and confirmed real `fod.data_blocks` row count stayed unchanged. On the local 2026-07-04 run, heap fillfactor `100` produced `0` HOT updates for changed conflicts, `90` produced `1800`, and `75` produced `5380`, with larger temp relation sizes.
 - [x] Detect single-node vs read-only replica mode early and let runtime choose the appropriate lock strategy before mount. Handled in `rust_fuse/src/startup.rs` via `effective_read_only()` and `lock_settings(read_only)`.

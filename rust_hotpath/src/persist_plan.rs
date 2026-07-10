@@ -145,6 +145,7 @@ pub enum PersistPayloadPlan {
 #[derive(Debug, Clone, Copy)]
 pub struct PersistPlanInput<'a> {
     pub enable_extents: bool,
+    pub extent_target_bytes: u64,
     pub file_size: u64,
     pub block_size: u64,
     pub truncate_pending: bool,
@@ -194,13 +195,16 @@ pub fn choose_persist_plan(input: PersistPlanInput<'_>) -> PersistPlan {
             enabled: true,
             mode: ExtentPoCMode::SequentialOnly,
         };
-        if let Some(plan) = plan_extent_poc(settings, input.dirty_blocks) {
+        if let Some(plan) = plan_extent_poc(
+            settings,
+            input.dirty_blocks,
+            input.block_size,
+            input.extent_target_bytes,
+            input.extent_target_bytes,
+        ) {
             let total_blocks = block_count_for_length(input.file_size, input.block_size, false);
-            if let Some(extent) = plan.extents.first() {
-                if plan.extents.len() == 1
-                    && extent.start_block == 0
-                    && extent.end_block.saturating_add(1) == total_blocks
-                {
+            if let (Some(first), Some(last)) = (plan.extents.first(), plan.extents.last()) {
+                if first.start_block == 0 && last.end_block.saturating_add(1) == total_blocks {
                     return PersistPlan::Extents(plan);
                 }
             }
@@ -258,6 +262,7 @@ mod tests {
     fn choose_persist_plan_uses_extent_poc_only_when_enabled_and_sequential() {
         let input = PersistPlanInput {
             enable_extents: true,
+            extent_target_bytes: 1024 * 1024,
             file_size: 16_384,
             block_size: 4_096,
             truncate_pending: true,
@@ -300,6 +305,7 @@ mod tests {
     fn choose_persist_execution_plan_preserves_plan_shape() {
         let input = PersistPlanInput {
             enable_extents: true,
+            extent_target_bytes: 1024 * 1024,
             file_size: 16_384,
             block_size: 4_096,
             truncate_pending: true,
@@ -354,6 +360,44 @@ mod tests {
                 assert!(blocks.is_empty());
             }
             _ => panic!("expected truncate-only execution plan"),
+        }
+    }
+
+    #[test]
+    fn choose_persist_plan_bounds_full_file_extents() {
+        let dirty_blocks = (0..1024).collect::<Vec<_>>();
+        let input = PersistPlanInput {
+            enable_extents: true,
+            extent_target_bytes: 1024 * 1024,
+            file_size: 4 * 1024 * 1024,
+            block_size: 4096,
+            truncate_pending: true,
+            dirty_blocks: &dirty_blocks,
+        };
+
+        match choose_persist_plan(input) {
+            PersistPlan::Extents(plan) => assert_eq!(
+                plan.into_ranges(),
+                vec![(0, 255), (256, 511), (512, 767), (768, 1023)]
+            ),
+            PersistPlan::Blocks(_) => panic!("expected bounded extent plan"),
+        }
+    }
+
+    #[test]
+    fn disabled_extent_path_does_not_read_extent_target() {
+        let input = PersistPlanInput {
+            enable_extents: false,
+            extent_target_bytes: 0,
+            file_size: 8192,
+            block_size: 4096,
+            truncate_pending: true,
+            dirty_blocks: &[0, 1],
+        };
+
+        match choose_persist_plan(input) {
+            PersistPlan::Blocks(plan) => assert_eq!(plan, persist_block_plan(input)),
+            PersistPlan::Extents(_) => panic!("disabled extent path must use blocks"),
         }
     }
 }
