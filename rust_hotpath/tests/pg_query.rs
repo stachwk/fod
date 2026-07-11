@@ -265,6 +265,94 @@ fn append_only_extents_follow_immediate_and_deferred_cleanup() -> Result<(), Str
     Ok(())
 }
 
+#[test]
+fn source_adoption_preserves_other_empty_object_references() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
+    let block_size_u64 = block_size as u64;
+    let dir_id = repo.create_directory(
+        None,
+        &unique_name("rust_pg_adopt_empty_shared_dir"),
+        0o755,
+        1000,
+        1000,
+        &unique_name("adopt_empty_shared_dir_seed"),
+    )?;
+    let src_file_id = repo.create_file(
+        Some(dir_id),
+        &unique_name("rust_pg_adopt_empty_shared_src"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("adopt_empty_shared_src_seed"),
+    )?;
+    let survivor_file_id = repo.create_file(
+        Some(dir_id),
+        &unique_name("rust_pg_adopt_empty_shared_survivor"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("adopt_empty_shared_survivor_seed"),
+    )?;
+    let dst_file_id = repo.create_file(
+        Some(dir_id),
+        &unique_name("rust_pg_adopt_empty_shared_dst"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("adopt_empty_shared_dst_seed"),
+    )?;
+
+    let src_payload = repeated_block(b'Z', block_size);
+    let src_rows = [PersistBlockRow {
+        block_index: 0,
+        data: &src_payload,
+        used_len: block_size_u64,
+    }];
+    repo.persist_file_blocks(
+        src_file_id,
+        block_size_u64,
+        block_size_u64,
+        1,
+        false,
+        &src_rows,
+    )?;
+
+    let shared_empty_object_id = repo
+        .file_data_object_id(survivor_file_id)?
+        .ok_or_else(|| "missing shared empty object".to_string())?;
+    let replaced_dst_object_id = repo
+        .file_data_object_id(dst_file_id)?
+        .ok_or_else(|| "missing destination empty object".to_string())?;
+    repo.exec(&format!(
+        "UPDATE files SET data_object_id = {shared_empty_object_id} WHERE id_file = {dst_file_id}; \
+         UPDATE data_objects SET reference_count = 2 WHERE id_data_object = {shared_empty_object_id}; \
+         DELETE FROM data_objects WHERE id_data_object = {replaced_dst_object_id}"
+    ))?;
+
+    if !repo.adopt_source_data_object(src_file_id, dst_file_id)? {
+        return Err("expected whole source object adoption".to_string());
+    }
+    if repo.file_data_object_id(survivor_file_id)? != Some(shared_empty_object_id) {
+        return Err("adoption changed the surviving empty file object".to_string());
+    }
+    let empty_object_state = repo.query_scalar_text(&format!(
+        "SELECT COUNT(*)::text || ':' || COALESCE(MAX(reference_count), 0)::text FROM data_objects WHERE id_data_object = {shared_empty_object_id}"
+    ))?;
+    if empty_object_state.trim() != "1:1" {
+        return Err(format!(
+            "expected surviving empty object with one reference, got {empty_object_state}"
+        ));
+    }
+
+    repo.purge_primary_file(dst_file_id)?;
+    repo.purge_primary_file(src_file_id)?;
+    repo.purge_primary_file(survivor_file_id)?;
+    repo.delete_directory_entry(dir_id)?;
+    Ok(())
+}
+
 fn unique_name(prefix: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -668,11 +756,13 @@ fn switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent
 
     let extent_block0 = repeated_block(b'A', block_size);
     let extent_block1 = repeated_block(b'B', block_size);
-    let extent_block2 = repeated_block(b'C', block_size);
+    let extent_tail_len = block_size / 2 + 1;
+    let mut extent_block2 = vec![0; block_size];
+    extent_block2[..extent_tail_len].fill(b'C');
     let extent_payload = [
         extent_block0.clone(),
         extent_block1.clone(),
-        extent_block2.clone(),
+        extent_block2[..extent_tail_len].to_vec(),
     ]
     .concat();
     let extent_rows = vec![PersistExtentRow {
@@ -712,6 +802,42 @@ fn switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent
     }
     if table_row_count_for_file(&repo, "data_blocks", extent_file_id)? != 0 {
         return Err("extent-backed file should not have block rows".to_string());
+    }
+
+    let partial_block1 = repeated_block(b'P', block_size);
+    let partial_rows = [PersistBlockRow {
+        block_index: 1,
+        data: &partial_block1,
+        used_len: block_size_u64,
+    }];
+    repo.persist_file_blocks(
+        extent_file_id,
+        extent_payload.len() as u64,
+        block_size_u64,
+        3,
+        false,
+        &partial_rows,
+    )
+    .map_err(|err| format!("partially update extent-backed file: {err}"))?;
+
+    if repo.file_data_object_id(extent_file_id)? != Some(extent_object_id) {
+        return Err("partial block update should keep the unshared data object".to_string());
+    }
+    assert_block_range_matches(
+        &repo,
+        extent_file_id,
+        block_size_u64,
+        &[
+            (0, extent_block0.as_slice()),
+            (1, partial_block1.as_slice()),
+            (2, extent_block2.as_slice()),
+        ],
+    )?;
+    if table_row_count_for_file(&repo, "data_extents", extent_file_id)? != 0 {
+        return Err("partial block update should remove converted extent rows".to_string());
+    }
+    if table_row_count_for_file(&repo, "data_blocks", extent_file_id)? != 3 {
+        return Err("partial block update should preserve all three blocks".to_string());
     }
 
     let block_block0 = repeated_block(b'X', block_size);

@@ -8,12 +8,20 @@ use std::fs::{self, File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::time::Instant;
 
-use support::{checked_payload_len, parse_size_bytes, repeating_payload, unique_suffix, MountedFs};
+use support::{
+    checked_payload_len, db_repo, parse_size_bytes, repeating_payload, resolve_file_id,
+    unique_suffix, MountedFs,
+};
 
-fn copy_file_range_all(src: &File, dst: &File, mut len: usize) -> Result<usize, String> {
+fn copy_file_range_all(
+    src: &File,
+    dst: &File,
+    mut len: usize,
+    request_size: usize,
+) -> Result<usize, String> {
     let mut copied = 0usize;
     while len > 0 {
-        let chunk = len.min(4 * 1024 * 1024);
+        let chunk = len.min(request_size.max(1));
         let ret = unsafe {
             libc::copy_file_range(
                 src.as_raw_fd(),
@@ -60,6 +68,20 @@ fn large_copy_benchmark() -> Result<(), String> {
         b"fod-large-copy-",
         checked_payload_len(block_size, block_count)?,
     );
+    let request_size = match env::var("LARGE_COPY_REQUEST_SIZE") {
+        Ok(value) if value.trim().eq_ignore_ascii_case("full") => payload.len(),
+        Ok(value) => parse_size_bytes(&value)?,
+        Err(_) => 4 * 1024 * 1024,
+    };
+    let expect_shared_object = env::var("LARGE_COPY_EXPECT_SHARED_OBJECT")
+        .ok()
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+        .unwrap_or(false);
     let dir_path = mounted.mountpoint.join(format!("large-copy-{suffix}"));
     let src_path = dir_path.join("src.bin");
     let dst_path = dir_path.join("dst.bin");
@@ -76,7 +98,7 @@ fn large_copy_benchmark() -> Result<(), String> {
         .map_err(|err| format!("open dst failed: {err}"))?;
 
     let start = Instant::now();
-    let copied = copy_file_range_all(&src_fh, &dst_fh, payload.len())?;
+    let copied = copy_file_range_all(&src_fh, &dst_fh, payload.len(), request_size)?;
     if copied != payload.len() {
         return Err(format!(
             "copy_file_range copied {copied} of {}",
@@ -95,6 +117,28 @@ fn large_copy_benchmark() -> Result<(), String> {
     if read_back != payload {
         return Err("large copy payload mismatch".to_string());
     }
+    if expect_shared_object {
+        let repo = db_repo()?;
+        let src_file_id = resolve_file_id(&repo, &mounted.mountpoint, &src_path)?;
+        let dst_file_id = resolve_file_id(&repo, &mounted.mountpoint, &dst_path)?;
+        let src_object_id = repo
+            .file_data_object_id(src_file_id)?
+            .ok_or_else(|| "source data object is missing".to_string())?;
+        let dst_object_id = repo
+            .file_data_object_id(dst_file_id)?
+            .ok_or_else(|| "destination data object is missing".to_string())?;
+        if src_object_id != dst_object_id {
+            let copy_log = fs::read_to_string(&mounted.log_path)
+                .unwrap_or_default()
+                .lines()
+                .filter(|line| line.to_ascii_lowercase().contains("copy_file_range"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(format!(
+                "whole-file copy did not adopt source data object: src={src_object_id} dst={dst_object_id}\n{copy_log}"
+            ));
+        }
+    }
 
     let throughput_mib_s = if elapsed > 0.0 {
         (payload.len() as f64 / 1024.0 / 1024.0) / elapsed
@@ -102,8 +146,10 @@ fn large_copy_benchmark() -> Result<(), String> {
         0.0
     };
     println!(
-        "OK large-copy-benchmark bytes={} elapsed_s={elapsed:.6} throughput_mib_s={throughput_mib_s:.2}",
+        "OK large-copy-benchmark bytes={} request_size={} shared_object={} elapsed_s={elapsed:.6} throughput_mib_s={throughput_mib_s:.2}",
         payload.len(),
+        request_size,
+        expect_shared_object,
     );
 
     Ok(())

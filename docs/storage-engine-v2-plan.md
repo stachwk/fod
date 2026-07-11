@@ -46,8 +46,19 @@ Implementation status:
   payloads through one replay-confirmed append-only data-object transaction;
 - the append-only transaction passed disconnect replay, shared-object,
   hardlink, CRC, cleanup-policy, remount, and mounted FUSE regression coverage;
-- extents remain opt-in because repeated large-copy measurements still expose
-  source-side extent read amplification.
+- FUSE ABI 7.31 now exposes the implemented `copy_file_range` callback, and an
+  exact clean whole-file copy into an empty destination adopts the source data
+  object without copying payload rows;
+- chunked 4 MiB copy requests remain payload copies, but the corrected extent
+  path is both data-safe and faster than the block baseline in the repeated
+  local 64 MiB matrix;
+- Phase D is closed by `docs/adr/storage-object-segment-manifest.md`: a segment
+  manifest is deferred until a measured partial-clone, patch-amplification,
+  chunk-dedupe, snapshot, or compression workload requires it;
+- the payload ownership inventory is recorded in
+  `docs/storage-payload-ownership-inventory.md` before the schema migration
+  removes representative `id_file` columns;
+- extents remain opt-in because mixed and random workloads still regress.
 
 ## Original problem and remaining copy issue
 
@@ -64,11 +75,14 @@ segment payloads no longer coexist with a reconstructed 4 KiB block map. On a
 repository error, ownership is moved back into `SequentialSegmentState` before
 the FUSE operation returns `EIO`.
 
-The remaining issue has moved to the large-copy read side. The repeated local
-64 MiB copy profile still performs many extent-range reads before writing the
-destination, so direct segment persistence alone does not make that workload
-faster. This must be addressed before the new-object class is selected broadly
-for copy workloads.
+The earlier large-copy result came from a FUSE build that advertised ABI 7.17,
+so the kernel never dispatched `FUSE_COPY_FILE_RANGE` to the implemented
+callback. ABI 7.31 makes the callback reachable. An exact whole-file request
+now adopts the source data object, while chunked requests still read and write
+payload. The corrected three-run 64 MiB chunked matrix averaged `26.68 MiB/s`
+with 1 MiB extents versus `17.74 MiB/s` on blocks. Partial destination patches
+are made safe by converting existing extent rows to blocks inside the write
+transaction before applying the dirty range.
 
 ## Measured bottlenecks
 
@@ -286,7 +300,11 @@ Consequently Phase C is complete without changing the default storage path.
 
 ## Phase D: object segment manifest decision
 
-Do not implement a manifest automatically. Re-evaluate after Phases A-C.
+The decision is recorded in
+`docs/adr/storage-object-segment-manifest.md`: do not implement a manifest now.
+Whole-object adoption solves exact full copies without destination payload
+rows, and bounded extents plus safe extent-to-block conversion cover the
+current measured paths.
 
 If large extent rewrites, partial-overwrite amplification, duplicate payload
 storage, `copy_file_range` payload copies, or GC complexity remain material,
@@ -299,21 +317,23 @@ files
     -> payload_chunks
 ```
 
-The potential design allows copy-on-write segments, chunk reuse, aligned
+The deferred design allows copy-on-write segments, chunk reuse, aligned
 `copy_file_range`, chunk-level deduplication, compression, snapshots, and
-versioning. It should not be added if bounded extents and direct segment
-persistence already solve the measured bottleneck.
+versioning. Reopen it only after a real partial-copy, patch-amplification,
+dedupe, snapshot, compression, or GC workload proves that the current object
+model is insufficient.
 
 ## Storage ownership follow-up
 
-Payload ownership should eventually be centered on `data_object_id`, not
-`id_file`. Before any schema migration, inventory every use of
-`data_blocks.id_file`, `data_extents.id_file`, `copy_block_crc.id_file`, failed
-materialization cleanup, hardlink promotion, data-object swap, GC, and dedupe.
+Payload ownership is centered logically on `data_object_id`, but the schema
+still carries representative `id_file` columns. The complete inventory is in
+`docs/storage-payload-ownership-inventory.md` and covers payload persistence,
+failed materialization cleanup, purge, hardlink behavior, data-object swap,
+GC, dedupe, diagnostics, and schema constraints.
 
-The order is diagnostic inventory, removal of runtime dependence on `id_file`
-ownership, schema migration, then obsolete-field cleanup. Do not remove
-`id_file` without a migration and complete correctness coverage.
+The diagnostic inventory is complete. The next step is one explicit schema
+migration that removes runtime dependence and the obsolete columns together;
+do not leave a permanent dual-path compatibility branch.
 
 ## Verification gates
 
@@ -366,6 +386,11 @@ The planned delivery boundaries are:
 6. `FOD 3.2.1: persist sequential segments directly`
 7. `FOD 3.2.1: classify storage persistence operations`
 8. `FOD 3.2.1: add append-only sequential object persistence`
+
+Post-gate decisions and cleanup use separate commits:
+
+9. `FOD 3.2.1: optimize whole-object FUSE copies`
+10. `FOD 3.2.1: make data objects own payload rows`
 
 Manifest and ownership changes require separate decisions after measured
 results from the earlier phases.

@@ -1909,3 +1909,48 @@ Planner microbenchmark on the current hot-path dedupe helper:
   - `changed_bytes=0`
 
 The planner path is intentionally tiny, so the useful number is mostly the changed-range shape rather than the absolute MiB/s figure.
+
+## 2026-07-11 FUSE ABI 7.31 Copy Baseline
+
+Collected locally from the Storage Engine v2 worktree based on commit
+`16bf0f8`. The worktree enabled FUSE ABI 7.31, made exact clean whole-file
+copies adopt the source data object, and preserved chunked-copy data when an
+extent-backed destination downgraded to block storage.
+
+Commands:
+
+```bash
+PROFILE_RUN_ID=storage-whole-object-adoption-20260711T080000Z \
+PROFILE_STORAGE_EXTENT_REPEAT=3 \
+PROFILE_STORAGE_EXTENT_SIZES=1048576 \
+PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-object-adoption \
+make profile-storage-extent-size-matrix-local
+
+PROFILE_RUN_ID=storage-abi31-chunked-copy-fixed-20260711T090000Z \
+PROFILE_STORAGE_EXTENT_REPEAT=3 \
+PROFILE_STORAGE_EXTENT_SIZES=1048576 \
+PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-benchmark \
+make profile-storage-extent-size-matrix-local
+```
+
+Whole-object adoption, 64 MiB:
+
+| mode | samples | mean MiB/s | stdev | mean elapsed s | destination payload inserts | mean WAL bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| block source | 3 | 1219.23 | 49.32 | 0.052578 | 0 | 6492438.67 |
+| 1 MiB extent source | 3 | 1282.86 | 91.80 | 0.050159 | 0 | 1008317.67 |
+
+The insert and WAL counters include source creation. The destination shares the
+source `data_object_id` and adds no payload rows.
+
+Chunked 4 MiB requests, 64 MiB total:
+
+| mode | samples | mean MiB/s | stdev | min-max MiB/s | mean block inserts | mean extent inserts | mean WAL bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| block | 3 | 17.74 | 0.09 | 17.62-17.82 | 32768 | 0 | 13215098.33 |
+| 1 MiB extents | 3 | 26.68 | 3.03 | 22.39-28.84 | 16384 | 68 | 7709446.33 |
+
+The extent count includes 64 source rows and four destination rows created by
+the first chunk before the destination safely converts to block storage. This
+result supersedes the earlier large-copy measurements that unknowingly used
+the kernel's generic fallback because the daemon advertised only ABI 7.17.

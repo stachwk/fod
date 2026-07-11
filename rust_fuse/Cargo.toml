@@ -7,7 +7,7 @@ build = "build.rs"
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
-fuser = { version = "0.14", features = ["abi-7-11", "abi-7-17"] }
+fuser = { version = "0.14", features = ["abi-7-31"] }
 libc = "0.2"
 env_logger = "0.11"
 log = "0.4"

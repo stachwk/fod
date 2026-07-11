@@ -530,6 +530,7 @@ help:
 		'  make test-rust-hotpath-parallel-worker-count - Rust helper parity tests for shared worker counting' \
 		'  make test-rust-hotpath-missing-ranges - Rust helper parity tests for missing-range handling' \
 		'  make test-large-copy-benchmark - benchmark large copy_file_range transfers' \
+		'  make test-large-copy-object-adoption - verify one-request whole-file data-object adoption' \
 		'  make test-data-blocks-conflict-benchmark - benchmark overwrite conflict updates in data_blocks' \
 		'  make test-data-blocks-conflict-noop-benchmark - benchmark same-payload overwrite filtering in data_blocks' \
 		'  make test-large-file-multiblock-benchmark - benchmark large multi-block file writes' \
@@ -1111,6 +1112,11 @@ test-rust-pg-query: init
 
 test-large-copy-benchmark: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
+
+test-large-copy-object-adoption: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) LARGE_COPY_REQUEST_SIZE=full LARGE_COPY_EXPECT_SHARED_OBJECT=1 $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
+
+.PHONY: test-large-copy-object-adoption
 
 test-data-blocks-conflict-seed: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_seed --offline -- --nocapture

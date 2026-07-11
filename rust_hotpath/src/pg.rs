@@ -1234,7 +1234,9 @@ fn sql_is_read_only(sql: &CString) -> bool {
 
 fn sql_is_replayable_data_blocks_upsert(sql: &str) -> bool {
     sql.starts_with("INSERT INTO data_blocks ")
-        && sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data")
+        && (sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data")
+            || sql.contains("FROM data_extents de CROSS JOIN LATERAL generate_series")
+                && sql.contains("ON CONFLICT (data_object_id, _order) DO NOTHING"))
 }
 
 fn sql_is_replayable_copy_block_crc_upsert(sql: &str) -> bool {
@@ -2412,7 +2414,15 @@ impl PersistExtentRow {
     }
 
     pub fn block_bytes_arc(&self, block_index: u64, block_size: usize) -> Option<Arc<[u8]>> {
-        self.block_bytes_ref(block_index, block_size).map(Arc::from)
+        let bytes = self.block_bytes_ref(block_index, block_size)?;
+        if bytes.len() == block_size {
+            Some(Arc::from(bytes))
+        } else {
+            let mut padded = Vec::with_capacity(block_size);
+            padded.extend_from_slice(bytes);
+            padded.resize(block_size, 0);
+            Some(Arc::from(padded))
+        }
     }
 
     pub fn blocks(&self, block_size: usize) -> Vec<(u64, Vec<u8>)> {
@@ -3178,6 +3188,47 @@ impl DbRepo {
             .map_err(|_| "SQL contains NUL byte".to_string())?;
         let params = [data_object_id_text];
         exec_command_params(conn, &sql_delete_extents, &params)
+    }
+
+    unsafe fn convert_extent_rows_to_blocks_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+        data_object_id: u64,
+        block_size: u64,
+    ) -> Result<(), String> {
+        let sql = CString::new(
+            "
+            INSERT INTO data_blocks (id_file, data_object_id, _order, data)
+            SELECT
+                $1::integer,
+                de.data_object_id,
+                (de.start_block + offsets.block_offset)::integer,
+                substring(
+                    de.payload
+                    FROM (offsets.block_offset * $3::bigint + 1)::integer
+                    FOR $3::integer
+                )
+            FROM data_extents de
+            CROSS JOIN LATERAL generate_series(
+                0::bigint,
+                de.block_count - 1
+            ) AS offsets(block_offset)
+            WHERE de.data_object_id = $2::integer
+              AND offsets.block_offset * $3::bigint < de.used_bytes
+            ON CONFLICT (data_object_id, _order) DO NOTHING
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let data_object_id_text = CString::new(data_object_id.to_string())
+            .map_err(|_| "data object id contains NUL byte".to_string())?;
+        let block_size_text = CString::new(block_size.max(1).to_string())
+            .map_err(|_| "block size contains NUL byte".to_string())?;
+        let params = [&file_id_text, &data_object_id_text, &block_size_text];
+        exec_command_params(conn, &sql, &params)?;
+        self.delete_extent_rows_on_conn(conn, &data_object_id_text)
     }
 
     unsafe fn clear_extent_native_rows_on_conn(
@@ -7743,9 +7794,9 @@ impl DbRepo {
         let data_object_id = target.data_object_id;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
-        // Switching a file back to block storage must drop stale extent rows so
-        // extent-first reads cannot shadow the fresh block rows.
-        self.delete_extent_rows_on_conn(conn, &data_object_id_text)?;
+        // A partial block patch must preserve data outside the dirty range before
+        // extent-first reads are disabled for this object.
+        self.convert_extent_rows_to_blocks_on_conn(conn, file_id, data_object_id, block_size)?;
         if truncate_pending {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
@@ -7864,6 +7915,7 @@ impl DbRepo {
         let data_object_id = target.data_object_id;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
+        self.convert_extent_rows_to_blocks_on_conn(conn, file_id, data_object_id, block_size)?;
         if truncate_pending {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
@@ -8684,10 +8736,10 @@ impl DbRepo {
 
                     let params = [&dst_data_object_id];
                     let res = exec_params(conn, &sql_count_dst_references, &params)?;
-                    let dst_reference_count =
+                    let remaining_dst_references =
                         fetch_single_text(res)?.trim().parse::<u64>().unwrap_or(0);
 
-                    if dst_reference_count <= 1 {
+                    if remaining_dst_references == 0 {
                         let params = [&dst_data_object_id, &dst_file_id];
                         exec_command_params(conn, &sql_delete_data, &params)?;
                         exec_command_params(conn, &sql_delete_extents, &params)?;
@@ -10022,6 +10074,10 @@ mod tests {
             "INSERT INTO data_blocks (id_file, data_object_id, _order, data) SELECT $3, $2, _order, data FROM data_blocks WHERE data_object_id = $1",
         )
         .unwrap();
+        let extent_to_blocks_sql = std::ffi::CString::new(
+            "INSERT INTO data_blocks (id_file, data_object_id, _order, data) SELECT $1::integer, de.data_object_id, (de.start_block + offsets.block_offset)::integer, substring(de.payload FROM 1 FOR $3::integer) FROM data_extents de CROSS JOIN LATERAL generate_series(0::bigint, de.block_count - 1) AS offsets(block_offset) ON CONFLICT (data_object_id, _order) DO NOTHING",
+        )
+        .unwrap();
         let copy_block_crc_upsert_sql = std::ffi::CString::new(
             "INSERT INTO copy_block_crc (id_file, data_object_id, _order, crc32) SELECT id_file, data_object_id, _order, crc32 FROM staging_blocks ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, crc32 = EXCLUDED.crc32, updated_at = NOW()",
         )
@@ -10058,6 +10114,7 @@ mod tests {
         assert!(sql_is_replayable_command(&scan_run_insert_sql));
         assert!(sql_is_replayable_command(&import_plan_insert_sql));
         assert!(!sql_is_replayable_command(&data_blocks_copy_sql));
+        assert!(sql_is_replayable_command(&extent_to_blocks_sql));
         assert!(sql_is_replayable_command(&copy_block_crc_upsert_sql));
         assert!(!sql_is_replayable_command(&copy_block_crc_copy_sql));
         assert!(sql_is_replayable_command(&range_state_insert_sql));

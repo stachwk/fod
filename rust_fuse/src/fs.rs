@@ -2378,6 +2378,16 @@ impl FodFuse {
             }
             return Ok(0);
         };
+        let src_dirty = src_state
+            .as_ref()
+            .map(Self::write_state_has_pending_changes)
+            .unwrap_or(false);
+        let dst_dirty = dst_state
+            .as_ref()
+            .map(Self::write_state_has_pending_changes)
+            .unwrap_or(false);
+        let adopt_whole_object =
+            bounds.can_adopt_whole_object(src_size, dst_size, src_dirty, dst_dirty);
         let CopyRangeBounds {
             src_offset,
             dst_offset,
@@ -2391,22 +2401,7 @@ impl FodFuse {
         } = bounds;
         let dedupe_enabled = self.copy_dedupe_enabled_for_len(copy_len);
 
-        let src_dirty = src_state
-            .as_ref()
-            .map(Self::write_state_has_pending_changes)
-            .unwrap_or(false);
-        let dst_dirty = dst_state
-            .as_ref()
-            .map(Self::write_state_has_pending_changes)
-            .unwrap_or(false);
-        if dedupe_enabled
-            && src_offset == 0
-            && dst_offset == 0
-            && copy_len == src_size
-            && dst_size == 0
-            && !src_dirty
-            && !dst_dirty
-        {
+        if adopt_whole_object {
             match self.repo.adopt_source_data_object(src_file_id, dst_file_id) {
                 Ok(true) => {
                     if let Some(state) = dst_state.as_ref() {
@@ -5884,6 +5879,16 @@ impl Filesystem for FodFuse {
             self.reply_written_profiled(reply, 0);
             return;
         };
+        let src_dirty = src_state
+            .as_ref()
+            .map(Self::write_state_has_pending_changes)
+            .unwrap_or(false);
+        let dst_dirty = dst_state
+            .as_ref()
+            .map(Self::write_state_has_pending_changes)
+            .unwrap_or(false);
+        let adopt_whole_object =
+            bounds.can_adopt_whole_object(src_size, dst_size, src_dirty, dst_dirty);
         let CopyRangeBounds {
             src_offset,
             dst_offset,
@@ -5897,22 +5902,7 @@ impl Filesystem for FodFuse {
         } = bounds;
         let dedupe_enabled = self.copy_dedupe_enabled_for_len(copy_len);
 
-        let src_dirty = src_state
-            .as_ref()
-            .map(Self::write_state_has_pending_changes)
-            .unwrap_or(false);
-        let dst_dirty = dst_state
-            .as_ref()
-            .map(Self::write_state_has_pending_changes)
-            .unwrap_or(false);
-        if dedupe_enabled
-            && src_offset == 0
-            && dst_offset == 0
-            && copy_len == src_size
-            && dst_size == 0
-            && !src_dirty
-            && !dst_dirty
-        {
+        if adopt_whole_object {
             match self.repo.adopt_source_data_object(src_file_id, dst_file_id) {
                 Ok(true) => {
                     if let Some(state) = dst_state.as_ref() {

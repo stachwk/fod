@@ -14,6 +14,23 @@ pub(crate) struct CopyRangeBounds {
     pub(crate) dst_last_block: u64,
 }
 
+impl CopyRangeBounds {
+    pub(crate) fn can_adopt_whole_object(
+        self,
+        src_size: u64,
+        dst_size: u64,
+        src_dirty: bool,
+        dst_dirty: bool,
+    ) -> bool {
+        self.src_offset == 0
+            && self.dst_offset == 0
+            && self.copy_len == src_size
+            && dst_size == 0
+            && !src_dirty
+            && !dst_dirty
+    }
+}
+
 pub(crate) fn copy_range_bounds(
     block_size: u64,
     src_offset: u64,
@@ -129,6 +146,20 @@ mod tests {
         assert_eq!(bounds.src_last_block, 15);
         assert_eq!(bounds.dst_first_block, 3);
         assert_eq!(bounds.dst_last_block, 3);
+    }
+
+    #[test]
+    fn whole_object_adoption_requires_clean_full_copy_to_empty_destination() {
+        let bounds = copy_range_bounds(8, 0, 0, 128, 128).expect("expected bounds");
+        assert!(bounds.can_adopt_whole_object(128, 0, false, false));
+        assert!(!bounds.can_adopt_whole_object(128, 1, false, false));
+        assert!(!bounds.can_adopt_whole_object(128, 0, true, false));
+        assert!(!bounds.can_adopt_whole_object(128, 0, false, true));
+
+        let partial = copy_range_bounds(8, 0, 0, 64, 128).expect("expected bounds");
+        assert!(!partial.can_adopt_whole_object(128, 0, false, false));
+        let shifted = copy_range_bounds(8, 8, 0, 120, 128).expect("expected bounds");
+        assert!(!shifted.can_adopt_whole_object(128, 0, false, false));
     }
 
     #[test]

@@ -1427,6 +1427,41 @@ Base commit at execution time: `93f1ab9`
 - `make test-fio-random-mixed-io`
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
 
+## 2026-07-11 Storage Engine v2 Copy and Manifest Decision
+
+Base commit at execution time: `16bf0f8`
+
+- `git status --short --branch`
+- `git log -5 --oneline`
+- `cat fod_version.txt`
+- `rg -n "delete_extent_rows_on_conn|persist_file_blocks_copy_binary_staging_on_conn|persist_file_blocks_direct_on_conn|fetch_block_range_shared|sql_is_replayable_command" rust_hotpath/src/pg.rs rust_hotpath/tests/pg_query.rs`
+- `cargo fmt --all`
+- `cargo test -p fod-rust-hotpath --lib recognizes_replayable_command_sql_for_disconnect_retry`
+- `cargo test -p fod-rust-hotpath --test pg_query switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent -- --nocapture`
+- `FOD_PERSIST_BLOCK_TRANSPORT=binary_bytea cargo test -p fod-rust-hotpath --test pg_query switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent -- --nocapture`
+- `FOD_PERSIST_BLOCK_TRANSPORT=legacy_hex cargo test -p fod-rust-hotpath --test pg_query switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent -- --nocapture`
+- `cargo check --workspace`
+- `git diff --check`
+- `FOD_ENABLE_EXTENTS=1 make test-large-copy-benchmark`
+- `PROFILE_RUN_ID=storage-abi31-chunked-copy-fixed-20260711T090000Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-benchmark make profile-storage-extent-size-matrix-local`
+- `cargo test -p fod-rust-hotpath`
+- `cargo test -p fod-rust-fuse` (the four root-only lock tests correctly rejected the unprivileged process)
+- `make test-locking`
+- `sudo chown -R "$(id -u):$(id -g)" target`
+- `cargo test -p fod-rust-fuse -- --skip primary_`
+- `fusermount3 -u <two leaked parallel-test mountpoints>`
+- `make test-copy-block-crc-table test-remount-durability-benchmark test-persist-buffer-chunking test-unlink-after-write test-rust-hotpath-copy-dedupe`
+- `make test-fio-sequential-io`
+- `make test-fio-mixed-io`
+- `make test-fio-random-mixed-io`
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+- `rg -n "data_blocks|data_extents|copy_block_crc" rust_hotpath/src/pg.rs rust_indexer rust_fuse migrations scripts/perf/pg/data_blocks_semantics.sql --glob '*.rs' --glob '*.sql'`
+- `findmnt -rn -t fuse.fod,fuse -o TARGET,SOURCE`
+- `cargo fmt --all -- --check`
+- `cargo check --workspace`
+- `git diff --check`
+- `make test-copy-file-range test-large-copy-object-adoption`
+
 Execution date: `2026-07-11`
 
 Base commit at execution time: `42c5edf`
