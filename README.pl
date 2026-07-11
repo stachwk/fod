@@ -587,7 +587,7 @@ Co sprawdzają testy:
 - `make test-poll` sprawdza backendowy poll helper dla plików regularnych.
 - `make test-access-groups` sprawdza `access()` dla właściciela, grupy podstawowej i grup dodatkowych.
 - `make test-inode-model` sprawdza, że `st_ino` przeżywa rename i restart FOD dla katalogów, plików, hardlinków i symlinków.
-- Model inode używa trwałych `inode_seed`, a hot-path query są oparte o `UNION ALL` oraz indeksy na `hardlinks.id_file` i `data_blocks(id_file, _order)`.
+- Model inode używa trwałych `inode_seed`, a zapytania ścieżki krytycznej są oparte o `UNION ALL` oraz indeksy na `hardlinks.id_file` i `data_blocks(data_object_id, _order)`.
 - `make test-ownership-inheritance` sprawdza, że `chmod`/`chown` na katalogu z `setgid` powoduje dziedziczenie `gid` przez nowe dzieci, a `rename` zachowuje metadane źródła i `mkdir` propaguje `setgid` do nowych podkatalogów.
 - `make test-rename-root-conflict` sprawdza replace semantics dla plików i katalogów oraz edge-case'y dla `rename` na root.
 - `make test-statfs-use-ino` sprawdza, przez mały shell smoke, że inode widoczne na mountcie zgadzają się z backendem, a `statvfs()` zwraca te same wartości filesystemowe co backendowy helper `statfs()`.

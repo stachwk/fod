@@ -432,6 +432,8 @@ Base commit at execution time: `95e26b4`
 - `make test-fod-indexer-usability`
 - `make test-fod-indexer-plan-import-scope`
 - `make test-fod-indexer-cleanup-failed`
+- `make test-fod-indexer-smoke`
+- `make test-fod-indexer-materialize-rollback`
 - `make test-fod-indexer-json-output`
 - `make test-fod-indexer-smoke`
 - `POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza POSTGRES_PORT=5432 .venv/bin/python tests/integration/test_fod_indexer_source_kinds.py`
@@ -1426,6 +1428,48 @@ Base commit at execution time: `93f1ab9`
 - `make test-fio-mixed-io`
 - `make test-fio-random-mixed-io`
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+
+Execution date: `2026-07-11`
+
+Base commit at execution time: `a23bfbb`
+
+- `git status --short`
+- `git rev-parse --short HEAD`
+- `cat fod_version.txt`
+- `sed -n '280,380p' rust_mkfs/src/main.rs`
+- `sed -n '520,650p' rust_mkfs/src/main.rs`
+- `sed -n '1,620p' rust_mkfs/tests/schema_upgrade.rs`
+- `git diff -- migrations/base_schema.sql migrations/0017_data_object_payload_ownership.sql rust_mkfs/src/main.rs rust_mkfs/tests/schema_upgrade.rs`
+- `cargo fmt --all`
+- `make test-schema-upgrade` (first run exposed replay of migration 1 against a current schema after deleting only the version row)
+- `make test-schema-upgrade` (passed after strict latest-shape recovery and realistic version-1/version-16 fixtures)
+- `cargo test -p fod-rust-mkfs --test schema_upgrade --offline`
+- `cargo test -p fod-rust-hotpath --lib`
+- `cargo test -p fod-rust-indexer`
+- `cargo check --workspace`
+- `make test-rust-pg-query`
+- `POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza cargo test -p fod-rust-hotpath --test transactional_replay_smoke -- --test-threads=1`
+- `make test-fod-indexer-cleanup-failed`
+- `make test-copy-block-crc-table`
+- `make test-persist-buffer-chunking`
+- `make test-unlink-after-write`
+- `make test-hardlink`
+- `make test-remount-durability-benchmark`
+- `make test-copy-file-range`
+- `make test-large-copy-object-adoption`
+- `POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza cargo test -p fod-rust-hotpath -- --test-threads=1`
+- `POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza FOD_BOOTSTRAP_BIN=target/debug/fod-bootstrap cargo test -p fod-rust-fuse -- --skip primary_ --test-threads=1`
+- `make test-fio-sequential-io`
+- `make test-fio-mixed-io`
+- `make test-fio-random-mixed-io`
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+- `PROFILE_CAPTURE_LABEL=storage-ownership-v17 make profile-pg-data-blocks-semantics`
+- `PROFILE_CAPTURE_LABEL=storage-ownership-v17 make profile-pg-data-blocks-merge-explain`
+- `PROFILE_CAPTURE_LABEL=storage-ownership-v17 make profile-pg-data-blocks-merge-fillfactor-explain-one`
+- `findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-'`
+- `find target -xdev -user root -print -quit`
+- `cargo fmt --all -- --check`
+- `git diff --check`
 
 ## 2026-07-11 Storage Engine v2 Copy and Manifest Decision
 

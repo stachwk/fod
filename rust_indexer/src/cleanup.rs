@@ -149,35 +149,16 @@ fn collect_data_object_file_ids(repo: &DbRepo, data_object_id: u64) -> Result<Ve
 
 fn delete_data_object_rows(repo: &DbRepo, data_object_id: u64) -> Result<(), String> {
     repo.exec(&format!(
-        "DELETE FROM data_blocks WHERE data_object_id = {data_object_id}"
-    ))?;
-    repo.exec(&format!(
-        "DELETE FROM data_extents WHERE data_object_id = {data_object_id}"
-    ))?;
-    repo.exec(&format!(
-        "DELETE FROM copy_block_crc WHERE data_object_id = {data_object_id}"
-    ))?;
-    repo.exec(&format!(
         "DELETE FROM data_objects WHERE id_data_object = {data_object_id}"
     ))?;
     Ok(())
 }
 
-fn reassign_shared_data_object(
+fn update_shared_data_object_reference_count(
     repo: &DbRepo,
     data_object_id: u64,
-    survivor_file_id: u64,
     reference_count: u64,
 ) -> Result<(), String> {
-    repo.exec(&format!(
-        "UPDATE data_blocks SET id_file = {survivor_file_id} WHERE data_object_id = {data_object_id}"
-    ))?;
-    repo.exec(&format!(
-        "UPDATE data_extents SET id_file = {survivor_file_id} WHERE data_object_id = {data_object_id}"
-    ))?;
-    repo.exec(&format!(
-        "UPDATE copy_block_crc SET id_file = {survivor_file_id} WHERE data_object_id = {data_object_id}"
-    ))?;
     repo.exec(&format!(
         "
         UPDATE data_objects
@@ -231,6 +212,7 @@ pub fn cleanup_failed_materialization(
             let subtree_file_ids: BTreeSet<u64> =
                 file_rows.iter().map(|(file_id, _)| *file_id).collect();
             let mut file_ids_by_data_object: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+            let mut exclusive_data_object_ids = Vec::new();
 
             for (file_id, data_object_id) in &file_rows {
                 file_ids_by_data_object
@@ -247,7 +229,7 @@ pub fn cleanup_failed_materialization(
                     .collect();
 
                 if outside_file_ids.is_empty() {
-                    delete_data_object_rows(repo, data_object_id)?;
+                    exclusive_data_object_ids.push(data_object_id);
                     exclusive_data_objects_removed =
                         exclusive_data_objects_removed.saturating_add(1);
                     continue;
@@ -262,10 +244,9 @@ pub fn cleanup_failed_materialization(
                     survivor_file_id,
                     outside_file_ids.len()
                 );
-                reassign_shared_data_object(
+                update_shared_data_object_reference_count(
                     repo,
                     data_object_id,
-                    survivor_file_id,
                     outside_file_ids.len() as u64,
                 )?;
                 shared_data_objects_preserved = shared_data_objects_preserved.saturating_add(1);
@@ -273,6 +254,10 @@ pub fn cleanup_failed_materialization(
 
             for (file_id, _) in &file_rows {
                 repo.exec(&format!("DELETE FROM files WHERE id_file = {file_id}"))?;
+            }
+
+            for data_object_id in exclusive_data_object_ids {
+                delete_data_object_rows(repo, data_object_id)?;
             }
 
             for (directory_id, _) in &directory_rows {

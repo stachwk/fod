@@ -16,8 +16,18 @@ CREATE TABLE IF NOT EXISTS directories (
     creation_date TIMESTAMP NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS data_objects (
+    id_data_object SERIAL PRIMARY KEY,
+    file_size BIGINT NOT NULL DEFAULT 0,
+    content_hash BYTEA,
+    reference_count INTEGER NOT NULL DEFAULT 1,
+    creation_date TIMESTAMP NOT NULL DEFAULT NOW(),
+    modification_date TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS files (
     id_file SERIAL PRIMARY KEY,
+    data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object),
     id_directory INTEGER REFERENCES directories(id_directory),
     name VARCHAR(255) NOT NULL,
     size BIGINT NOT NULL,
@@ -67,15 +77,14 @@ CREATE TABLE IF NOT EXISTS symlinks (
 
 CREATE TABLE IF NOT EXISTS data_blocks (
     id_block SERIAL PRIMARY KEY,
-    id_file INTEGER NOT NULL REFERENCES files(id_file),
+    data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
     _order INTEGER NOT NULL,
     data BYTEA NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS data_extents (
     id_extent SERIAL PRIMARY KEY,
-    id_file INTEGER NOT NULL REFERENCES files(id_file),
-    data_object_id INTEGER NOT NULL,
+    data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
     start_block BIGINT NOT NULL,
     block_count BIGINT NOT NULL,
     used_bytes BIGINT NOT NULL,
@@ -147,7 +156,7 @@ WHERE NOT EXISTS (
     SELECT 1 FROM directories WHERE id_parent IS NULL AND name = '.Trash-1000'
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_data_blocks_file_order ON data_blocks (id_file, _order);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_data_blocks_object_order ON data_blocks (data_object_id, _order);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_data_extents_object_start ON data_extents (data_object_id, start_block);
 CREATE INDEX IF NOT EXISTS idx_data_extents_data_object_id ON data_extents (data_object_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_directories_root_name ON directories (name) WHERE id_parent IS NULL;
@@ -184,20 +193,11 @@ CREATE INDEX IF NOT EXISTS idx_lock_range_leases_resource ON lock_range_leases (
 CREATE INDEX IF NOT EXISTS idx_lock_range_leases_expires ON lock_range_leases (lease_expires_at);
 
 CREATE TABLE IF NOT EXISTS copy_block_crc (
-    id_file INTEGER NOT NULL REFERENCES files(id_file) ON DELETE CASCADE,
+    data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
     _order INTEGER NOT NULL,
     crc32 BIGINT NOT NULL,
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (id_file, _order)
-);
-
-CREATE TABLE IF NOT EXISTS data_objects (
-    id_data_object SERIAL PRIMARY KEY,
-    file_size BIGINT NOT NULL DEFAULT 0,
-    content_hash BYTEA,
-    reference_count INTEGER NOT NULL DEFAULT 1,
-    creation_date TIMESTAMP NOT NULL DEFAULT NOW(),
-    modification_date TIMESTAMP NOT NULL DEFAULT NOW()
+    PRIMARY KEY (data_object_id, _order)
 );
 
 CREATE TABLE IF NOT EXISTS data_object_request_tokens (
@@ -214,42 +214,6 @@ CREATE TABLE IF NOT EXISTS hardlink_promotion_request_tokens (
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-
-ALTER TABLE files
-    ADD COLUMN IF NOT EXISTS data_object_id INTEGER;
-
-ALTER TABLE data_blocks
-    ADD COLUMN IF NOT EXISTS data_object_id INTEGER;
-
-ALTER TABLE copy_block_crc
-    ADD COLUMN IF NOT EXISTS data_object_id INTEGER;
-
-INSERT INTO data_objects (id_data_object, file_size, content_hash, reference_count, creation_date, modification_date)
-SELECT id_file, size, NULL, 1, NOW(), NOW()
-FROM files
-WHERE data_object_id IS NULL
-ON CONFLICT (id_data_object) DO NOTHING;
-
-UPDATE files
-SET data_object_id = id_file
-WHERE data_object_id IS NULL;
-
-UPDATE data_blocks
-SET data_object_id = id_file
-WHERE data_object_id IS NULL;
-
-UPDATE copy_block_crc
-SET data_object_id = id_file
-WHERE data_object_id IS NULL;
-
-ALTER TABLE files
-    ALTER COLUMN data_object_id SET NOT NULL;
-
-ALTER TABLE data_blocks
-    ALTER COLUMN data_object_id SET NOT NULL;
-
-ALTER TABLE copy_block_crc
-    ALTER COLUMN data_object_id SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_files_data_object_id ON files (data_object_id);
 CREATE INDEX IF NOT EXISTS idx_data_blocks_data_object_id ON data_blocks (data_object_id);
@@ -360,15 +324,8 @@ CREATE INDEX IF NOT EXISTS idx_index_import_plan_entries_plan ON index_import_pl
 CREATE INDEX IF NOT EXISTS idx_index_import_plan_entries_duplicate_set ON index_import_plan_entries (id_duplicate_set);
 CREATE INDEX IF NOT EXISTS idx_copy_block_crc_data_object_id ON copy_block_crc (data_object_id);
 
-DROP INDEX IF EXISTS idx_data_blocks_file_order;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_data_blocks_object_order ON data_blocks (data_object_id, _order);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_copy_block_crc_object_order ON copy_block_crc (data_object_id, _order);
-
 CREATE UNIQUE INDEX IF NOT EXISTS idx_data_objects_file_size_content_hash
     ON data_objects (file_size, content_hash);
-
-ALTER TABLE copy_block_crc
-    DROP CONSTRAINT IF EXISTS copy_block_crc_pkey;
 
 CREATE TABLE IF NOT EXISTS client_sessions (
     session_id BIGSERIAL PRIMARY KEY,

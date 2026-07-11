@@ -33,14 +33,7 @@ fn repo_with_swap_cleanup(cleanup: DataObjectSwapCleanup) -> Result<DbRepo, Stri
 
 fn repo_with_runtime_config(mut runtime: RuntimeConfig) -> Result<DbRepo, String> {
     runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
-    let repo = DbRepo::with_runtime(&conninfo_from_env(), &runtime)?;
-    if repo.query_scalar_text(
-        "SELECT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE table_name = 'copy_block_crc' AND constraint_name = 'copy_block_crc_pkey')",
-    )? == "t"
-    {
-        repo.exec("ALTER TABLE copy_block_crc DROP CONSTRAINT copy_block_crc_pkey")?;
-    }
-    Ok(repo)
+    DbRepo::with_runtime(&conninfo_from_env(), &runtime)
 }
 
 #[test]

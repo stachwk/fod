@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 16;
-const MIGRATION_FILES: [&str; 16] = [
+const SCHEMA_VERSION: u64 = 17;
+const MIGRATION_FILES: [&str; 17] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -42,9 +42,10 @@ const MIGRATION_FILES: [&str; 16] = [
     "0014_indexer_request_tokens.sql",
     "0015_data_object_request_tokens.sql",
     "0016_hardlink_promotion_request_tokens.sql",
+    "0017_data_object_payload_ownership.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 16] = [
+const MIGRATION_DESCRIPTIONS: [&str; 17] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -61,6 +62,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 16] = [
     "Make indexer run creation replay-safe",
     "Add request tokens for data object creation",
     "Add request tokens for hardlink promotion replay",
+    "Make data objects own payload rows",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -194,6 +196,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0016_hardlink_promotion_request_tokens.sql"
         )),
+        17 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0017_data_object_payload_ownership.sql"
+        )),
         _ => "",
     }
 }
@@ -216,6 +222,7 @@ fn migration_description(version: u64) -> &'static str {
         14 => MIGRATION_DESCRIPTIONS[13],
         15 => MIGRATION_DESCRIPTIONS[14],
         16 => MIGRATION_DESCRIPTIONS[15],
+        17 => MIGRATION_DESCRIPTIONS[16],
         _ => "Migration",
     }
 }
@@ -238,6 +245,7 @@ fn migration_filename(version: u64) -> &'static str {
         14 => MIGRATION_FILES[13],
         15 => MIGRATION_FILES[14],
         16 => MIGRATION_FILES[15],
+        17 => MIGRATION_FILES[16],
         _ => "unknown.sql",
     }
 }
@@ -318,6 +326,104 @@ fn read_schema_version(conn: &DbConn) -> Result<Option<u64>, String> {
         "SELECT version FROM {} ORDER BY applied_at DESC LIMIT 1",
         quote_schema_qualified_ident(FOD_SCHEMA_NAME, "schema_version")
     ))
+}
+
+fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
+    conn.query_exists(
+        "SELECT
+            NOT EXISTS (
+                SELECT 1
+                FROM (VALUES
+                    ('directories'),
+                    ('data_objects'),
+                    ('files'),
+                    ('special_files'),
+                    ('hardlinks'),
+                    ('symlinks'),
+                    ('data_blocks'),
+                    ('data_extents'),
+                    ('config'),
+                    ('schema_version'),
+                    ('schema_admin'),
+                    ('journal'),
+                    ('xattrs'),
+                    ('lock_leases'),
+                    ('lock_range_leases'),
+                    ('copy_block_crc'),
+                    ('data_object_request_tokens'),
+                    ('hardlink_promotion_request_tokens'),
+                    ('index_sources'),
+                    ('index_scan_runs'),
+                    ('index_files'),
+                    ('index_file_hashes'),
+                    ('index_duplicate_sets'),
+                    ('index_import_plans'),
+                    ('index_import_plan_entries'),
+                    ('client_sessions'),
+                    ('client_session_owner_keys')
+                ) AS required_relations(name)
+                WHERE to_regclass(format('fod.%I', name)) IS NULL
+            )
+            AND to_regprocedure('fod.fod_prune_client_session_lock_leases()') IS NOT NULL
+            AND (
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_schema = 'fod'
+                  AND table_name IN ('files', 'data_blocks', 'data_extents', 'copy_block_crc')
+                  AND column_name = 'data_object_id'
+                  AND is_nullable = 'NO'
+            ) = 4
+            AND NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'fod'
+                  AND table_name IN ('data_blocks', 'data_extents', 'copy_block_crc')
+                  AND column_name = 'id_file'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'files_data_object_id_fkey'
+                  AND conrelid = 'fod.files'::regclass
+                  AND confrelid = 'fod.data_objects'::regclass
+                  AND contype = 'f'
+                  AND confdeltype = 'a'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'data_blocks_data_object_id_fkey'
+                  AND conrelid = 'fod.data_blocks'::regclass
+                  AND confrelid = 'fod.data_objects'::regclass
+                  AND contype = 'f'
+                  AND confdeltype = 'c'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'copy_block_crc_pkey'
+                  AND conrelid = 'fod.copy_block_crc'::regclass
+                  AND contype = 'p'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'data_extents_data_object_id_fkey'
+                  AND conrelid = 'fod.data_extents'::regclass
+                  AND confrelid = 'fod.data_objects'::regclass
+                  AND contype = 'f'
+                  AND confdeltype = 'c'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'copy_block_crc_data_object_id_fkey'
+                  AND conrelid = 'fod.copy_block_crc'::regclass
+                  AND confrelid = 'fod.data_objects'::regclass
+                  AND contype = 'f'
+                  AND confdeltype = 'c'
+            )",
+    )
 }
 
 fn schema_objects_exist(conn: &DbConn, schema: &str, prune_function: &str) -> Result<bool, String> {
@@ -579,7 +685,22 @@ fn main() {
                     std::process::exit(1);
                 }
             }
-            let start_version = current_version.unwrap_or(0);
+            let recovered_latest_shape = if current_version.is_none() {
+                match latest_schema_shape_matches(&conn) {
+                    Ok(matches) => matches,
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                false
+            };
+            let start_version = if recovered_latest_shape {
+                SCHEMA_VERSION
+            } else {
+                current_version.unwrap_or(0)
+            };
             for version in (start_version + 1)..=SCHEMA_VERSION {
                 if !migration_exists(version) {
                     eprintln!("Missing migration file for version {}", version);
@@ -609,6 +730,12 @@ fn main() {
             if current_version == Some(SCHEMA_VERSION) {
                 println!("Schema already at version {}.", SCHEMA_VERSION);
             } else {
+                if recovered_latest_shape {
+                    println!(
+                        "Schema version row was missing; recovered version {} from the verified schema shape.",
+                        SCHEMA_VERSION
+                    );
+                }
                 println!("Schema upgraded to version {}.", SCHEMA_VERSION);
             }
         }

@@ -1234,14 +1234,14 @@ fn sql_is_read_only(sql: &CString) -> bool {
 
 fn sql_is_replayable_data_blocks_upsert(sql: &str) -> bool {
     sql.starts_with("INSERT INTO data_blocks ")
-        && (sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data")
+        && (sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET data = EXCLUDED.data")
             || sql.contains("FROM data_extents de CROSS JOIN LATERAL generate_series")
                 && sql.contains("ON CONFLICT (data_object_id, _order) DO NOTHING"))
 }
 
 fn sql_is_replayable_copy_block_crc_upsert(sql: &str) -> bool {
     sql.starts_with("INSERT INTO copy_block_crc ")
-        && sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, crc32 = EXCLUDED.crc32, updated_at = NOW()")
+        && sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET crc32 = EXCLUDED.crc32, updated_at = NOW()")
 }
 
 fn sql_is_replayable_schema_ddl(sql: &str) -> bool {
@@ -1335,9 +1335,6 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
         )
         || sql.starts_with("UPDATE files SET size = ")
         || sql.starts_with("UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
-        || sql.starts_with("UPDATE data_blocks SET id_file = $2 WHERE data_object_id = $1")
-        || sql.starts_with("UPDATE data_extents SET id_file = $2 WHERE data_object_id = $1")
-        || sql.starts_with("UPDATE copy_block_crc SET id_file = $2 WHERE data_object_id = $1")
         || sql.starts_with("UPDATE files SET modification_date = NOW(), change_date = NOW() WHERE id_file = $1")
         || sql.starts_with("UPDATE directories SET modification_date = NOW(), change_date = NOW() WHERE id_directory = $1")
         || sql.starts_with("UPDATE symlinks SET modification_date = NOW(), change_date = NOW() WHERE id_symlink = $1")
@@ -1859,7 +1856,6 @@ fn append_copy_binary_header(out: &mut Vec<u8>) {
 
 fn append_persist_block_copy_binary_row(
     out: &mut Vec<u8>,
-    file_id: i64,
     data_object_id: i64,
     block: &PersistBlockRow<'_>,
     block_size: u64,
@@ -1875,8 +1871,7 @@ fn append_persist_block_copy_binary_row(
         None
     };
 
-    append_copy_binary_i16(out, 5);
-    append_copy_binary_i64_field(out, file_id);
+    append_copy_binary_i16(out, 4);
     append_copy_binary_i64_field(out, data_object_id);
     append_copy_binary_i64_field(out, block_index);
     if sparse {
@@ -1895,20 +1890,16 @@ fn append_persist_block_copy_binary_row(
 
 fn append_persist_copy_block_crc_copy_binary_row(
     out: &mut Vec<u8>,
-    file_id: i64,
     data_object_id: i64,
     block_index: i64,
     crc32: Option<i64>,
 ) -> Result<(), String> {
-    let file_id = i32::try_from(file_id)
-        .map_err(|_| "file id out of range for copy crc staging".to_string())?;
     let data_object_id = i32::try_from(data_object_id)
         .map_err(|_| "data object id out of range for copy crc staging".to_string())?;
     let block_index = i32::try_from(block_index)
         .map_err(|_| "block index out of range for copy crc staging".to_string())?;
 
-    append_copy_binary_i16(out, 4);
-    append_copy_binary_i32_field(out, file_id);
+    append_copy_binary_i16(out, 3);
     append_copy_binary_i32_field(out, data_object_id);
     append_copy_binary_i32_field(out, block_index);
     if let Some(crc32) = crc32 {
@@ -1922,12 +1913,9 @@ fn append_persist_copy_block_crc_copy_binary_row(
 
 fn append_persist_extent_copy_binary_row(
     out: &mut Vec<u8>,
-    file_id: i64,
     data_object_id: i64,
     extent: &PersistExtentRow,
 ) -> Result<(), String> {
-    let file_id = i32::try_from(file_id)
-        .map_err(|_| "file id out of range for extent copy staging".to_string())?;
     let data_object_id = i32::try_from(data_object_id)
         .map_err(|_| "data object id out of range for extent copy staging".to_string())?;
     let start_block = i64::try_from(extent.start_block)
@@ -1937,8 +1925,7 @@ fn append_persist_extent_copy_binary_row(
     let used_bytes = i64::try_from(extent.used_bytes)
         .map_err(|_| "extent used bytes out of range for copy staging".to_string())?;
 
-    append_copy_binary_i16(out, 6);
-    append_copy_binary_i32_field(out, file_id);
+    append_copy_binary_i16(out, 5);
     append_copy_binary_i32_field(out, data_object_id);
     append_copy_binary_i64_field(out, start_block);
     append_copy_binary_i64_field(out, block_count);
@@ -1949,7 +1936,7 @@ fn append_persist_extent_copy_binary_row(
 
 unsafe fn create_persist_block_stage_table(conn: *mut PGconn) -> Result<(), String> {
     let sql = CString::new(format!(
-        "CREATE TEMP TABLE IF NOT EXISTS {} (id_file BIGINT NOT NULL, data_object_id BIGINT NOT NULL, _order BIGINT NOT NULL, data BYTEA, crc32 BIGINT) ON COMMIT DROP; TRUNCATE {}",
+        "CREATE TEMP TABLE IF NOT EXISTS {} (data_object_id BIGINT NOT NULL, _order BIGINT NOT NULL, data BYTEA, crc32 BIGINT) ON COMMIT DROP; TRUNCATE {}",
         PERSIST_BLOCK_STAGE_TABLE, PERSIST_BLOCK_STAGE_TABLE
     ))
     .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -1962,14 +1949,13 @@ unsafe fn merge_persist_block_stage_table(
 ) -> Result<(), String> {
     let sql_insert_data = CString::new(format!(
         "
-        INSERT INTO data_blocks (id_file, data_object_id, _order, data)
-        SELECT id_file, data_object_id, _order, data
+        INSERT INTO data_blocks (data_object_id, _order, data)
+        SELECT data_object_id, _order, data
         FROM {}
         WHERE data IS NOT NULL
         ON CONFLICT (data_object_id, _order)
-        DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
-        WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
-           OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
+        DO UPDATE SET data = EXCLUDED.data
+        WHERE data_blocks.data IS DISTINCT FROM EXCLUDED.data
         ",
         PERSIST_BLOCK_STAGE_TABLE
     ))
@@ -1990,12 +1976,12 @@ unsafe fn merge_persist_block_stage_table(
     .map_err(|_| "SQL contains NUL byte".to_string())?;
     let sql_insert_crc = CString::new(format!(
         "
-        INSERT INTO copy_block_crc (id_file, data_object_id, _order, crc32)
-        SELECT id_file, data_object_id, _order, crc32
+        INSERT INTO copy_block_crc (data_object_id, _order, crc32)
+        SELECT data_object_id, _order, crc32
         FROM {}
         WHERE crc32 IS NOT NULL
         ON CONFLICT (data_object_id, _order)
-        DO UPDATE SET id_file = EXCLUDED.id_file, crc32 = EXCLUDED.crc32, updated_at = NOW()
+        DO UPDATE SET crc32 = EXCLUDED.crc32, updated_at = NOW()
         ",
         PERSIST_BLOCK_STAGE_TABLE
     ))
@@ -3022,7 +3008,6 @@ impl DbRepo {
         };
         self.persist_copy_block_crc_rows_for_data_object_on_conn(
             conn,
-            file_id,
             data_object_id,
             block_size,
             blocks,
@@ -3032,7 +3017,6 @@ impl DbRepo {
     unsafe fn persist_copy_block_crc_rows_for_data_object_on_conn<'a>(
         &self,
         conn: *mut PGconn,
-        file_id: u64,
         data_object_id: u64,
         block_size: u64,
         blocks: &[PersistBlockRow<'a>],
@@ -3043,10 +3027,10 @@ impl DbRepo {
         let block_size = block_size.max(1);
         let sql_upsert = CString::new(
             "
-            INSERT INTO copy_block_crc (id_file, data_object_id, _order, crc32)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO copy_block_crc (data_object_id, _order, crc32)
+            VALUES ($1, $2, $3)
             ON CONFLICT (data_object_id, _order)
-            DO UPDATE SET id_file = EXCLUDED.id_file, crc32 = EXCLUDED.crc32, updated_at = NOW()
+            DO UPDATE SET crc32 = EXCLUDED.crc32, updated_at = NOW()
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -3058,8 +3042,6 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        let file_id = CString::new(file_id.to_string())
-            .map_err(|_| "file id contains NUL byte".to_string())?;
         let data_object_id = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
         for block in blocks {
@@ -3073,7 +3055,7 @@ impl DbRepo {
                 } else {
                     let crc32 = CString::new(crc32_bytes(&normalized).to_string())
                         .map_err(|_| "crc32 contains NUL byte".to_string())?;
-                    let params = [&file_id, &data_object_id, &block_index, &crc32];
+                    let params = [&data_object_id, &block_index, &crc32];
                     exec_command_params(conn, &sql_upsert, &params)?;
                 }
             } else {
@@ -3087,7 +3069,6 @@ impl DbRepo {
     unsafe fn persist_copy_block_crc_extent_rows_on_conn(
         &self,
         conn: *mut PGconn,
-        file_id: u64,
         data_object_id: u64,
         block_size: u64,
         extents: &[PersistExtentRow],
@@ -3096,12 +3077,10 @@ impl DbRepo {
             return Ok(());
         }
         let block_size = block_size.max(1) as usize;
-        let file_id_i64 = i64::try_from(file_id)
-            .map_err(|_| "file id out of range for copy staging".to_string())?;
         let data_object_id_i64 = i64::try_from(data_object_id)
             .map_err(|_| "data object id out of range for copy staging".to_string())?;
         let copy_sql = CString::new(format!(
-            "COPY {} (id_file, data_object_id, _order, crc32) FROM STDIN BINARY",
+            "COPY {} (data_object_id, _order, crc32) FROM STDIN BINARY",
             "copy_block_crc"
         ))
         .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -3129,7 +3108,6 @@ impl DbRepo {
                 };
                 append_persist_copy_block_crc_copy_binary_row(
                     &mut copy_buffer,
-                    file_id_i64,
                     data_object_id_i64,
                     block_index_i64,
                     Some(crc32),
@@ -3144,16 +3122,13 @@ impl DbRepo {
     unsafe fn copy_extent_rows_on_conn(
         &self,
         conn: *mut PGconn,
-        file_id: u64,
         data_object_id: u64,
         extents: &[PersistExtentRow],
     ) -> Result<(), String> {
-        let file_id_i64 = i64::try_from(file_id)
-            .map_err(|_| "file id out of range for extent copy".to_string())?;
         let data_object_id_i64 = i64::try_from(data_object_id)
             .map_err(|_| "data object id out of range for extent copy".to_string())?;
         let copy_sql = CString::new(
-            "COPY data_extents (id_file, data_object_id, start_block, block_count, used_bytes, payload) FROM STDIN BINARY",
+            "COPY data_extents (data_object_id, start_block, block_count, used_bytes, payload) FROM STDIN BINARY",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let mut copy = CopyInSession::start(conn, &copy_sql)?;
@@ -3168,12 +3143,7 @@ impl DbRepo {
                 return Err("extent block count must be greater than zero".to_string());
             }
             copy_buffer.clear();
-            append_persist_extent_copy_binary_row(
-                &mut copy_buffer,
-                file_id_i64,
-                data_object_id_i64,
-                extent,
-            )?;
+            append_persist_extent_copy_binary_row(&mut copy_buffer, data_object_id_i64, extent)?;
             copy.send(&copy_buffer)?;
         }
         copy.finish()
@@ -3193,40 +3163,36 @@ impl DbRepo {
     unsafe fn convert_extent_rows_to_blocks_on_conn(
         &self,
         conn: *mut PGconn,
-        file_id: u64,
         data_object_id: u64,
         block_size: u64,
     ) -> Result<(), String> {
         let sql = CString::new(
             "
-            INSERT INTO data_blocks (id_file, data_object_id, _order, data)
+            INSERT INTO data_blocks (data_object_id, _order, data)
             SELECT
-                $1::integer,
                 de.data_object_id,
                 (de.start_block + offsets.block_offset)::integer,
                 substring(
                     de.payload
-                    FROM (offsets.block_offset * $3::bigint + 1)::integer
-                    FOR $3::integer
+                    FROM (offsets.block_offset * $2::bigint + 1)::integer
+                    FOR $2::integer
                 )
             FROM data_extents de
             CROSS JOIN LATERAL generate_series(
                 0::bigint,
                 de.block_count - 1
             ) AS offsets(block_offset)
-            WHERE de.data_object_id = $2::integer
-              AND offsets.block_offset * $3::bigint < de.used_bytes
+            WHERE de.data_object_id = $1::integer
+              AND offsets.block_offset * $2::bigint < de.used_bytes
             ON CONFLICT (data_object_id, _order) DO NOTHING
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let file_id_text = CString::new(file_id.to_string())
-            .map_err(|_| "file id contains NUL byte".to_string())?;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
         let block_size_text = CString::new(block_size.max(1).to_string())
             .map_err(|_| "block size contains NUL byte".to_string())?;
-        let params = [&file_id_text, &data_object_id_text, &block_size_text];
+        let params = [&data_object_id_text, &block_size_text];
         exec_command_params(conn, &sql, &params)?;
         self.delete_extent_rows_on_conn(conn, &data_object_id_text)
     }
@@ -3347,12 +3313,6 @@ impl DbRepo {
             "UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_data = CString::new("DELETE FROM data_blocks WHERE data_object_id = $1")
-            .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_extents = CString::new("DELETE FROM data_extents WHERE data_object_id = $1")
-            .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_crc = CString::new("DELETE FROM copy_block_crc WHERE data_object_id = $1")
-            .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_data_object =
             CString::new("DELETE FROM data_objects WHERE id_data_object = $1")
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -3382,9 +3342,6 @@ impl DbRepo {
             exec_command_params(conn, &sql_mark_old_object_unreferenced, &params)?;
         } else if replaced.old_reference_count <= 1 {
             let params = [&old_data_object_id];
-            exec_command_params(conn, &sql_delete_data, &params)?;
-            exec_command_params(conn, &sql_delete_extents, &params)?;
-            exec_command_params(conn, &sql_delete_crc, &params)?;
             exec_command_params(conn, &sql_delete_data_object, &params)?;
         } else {
             let params = [&old_data_object_id];
@@ -3408,8 +3365,8 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_copy_blocks = CString::new(
             "
-            INSERT INTO data_blocks (id_file, data_object_id, _order, data)
-            SELECT $3, $2, _order, data
+            INSERT INTO data_blocks (data_object_id, _order, data)
+            SELECT $2, _order, data
             FROM data_blocks
             WHERE data_object_id = $1
             ",
@@ -3418,14 +3375,13 @@ impl DbRepo {
         let sql_copy_extents = CString::new(
             "
             INSERT INTO data_extents (
-                id_file,
                 data_object_id,
                 start_block,
                 block_count,
                 used_bytes,
                 payload
             )
-            SELECT $3, $2, start_block, block_count, used_bytes, payload
+            SELECT $2, start_block, block_count, used_bytes, payload
             FROM data_extents
             WHERE data_object_id = $1
             ",
@@ -3433,8 +3389,8 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_copy_crc = CString::new(
             "
-            INSERT INTO copy_block_crc (id_file, data_object_id, _order, crc32)
-            SELECT $3, $2, _order, crc32
+            INSERT INTO copy_block_crc (data_object_id, _order, crc32)
+            SELECT $2, _order, crc32
             FROM copy_block_crc
             WHERE data_object_id = $1
             ",
@@ -3475,7 +3431,7 @@ impl DbRepo {
             let new_data_object_id_text = CString::new(new_data_object_id.to_string())
                 .map_err(|_| "data object id contains NUL byte".to_string())?;
 
-            let params = [&old_data_object_id, &new_data_object_id_text, &file_id];
+            let params = [&old_data_object_id, &new_data_object_id_text];
             exec_command_params(conn, &sql_copy_blocks, &params)?;
             exec_command_params(conn, &sql_copy_extents, &params)?;
             if maintain_copy_crc_table {
@@ -7796,7 +7752,7 @@ impl DbRepo {
             .map_err(|_| "data object id contains NUL byte".to_string())?;
         // A partial block patch must preserve data outside the dirty range before
         // extent-first reads are disabled for this object.
-        self.convert_extent_rows_to_blocks_on_conn(conn, file_id, data_object_id, block_size)?;
+        self.convert_extent_rows_to_blocks_on_conn(conn, data_object_id, block_size)?;
         if truncate_pending {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
@@ -7808,22 +7764,19 @@ impl DbRepo {
         if !blocks.is_empty() {
             create_persist_block_stage_table(conn)?;
             let copy_sql = CString::new(format!(
-                "COPY {} (id_file, data_object_id, _order, data, crc32) FROM STDIN BINARY",
+                "COPY {} (data_object_id, _order, data, crc32) FROM STDIN BINARY",
                 PERSIST_BLOCK_STAGE_TABLE
             ))
             .map_err(|_| "SQL contains NUL byte".to_string())?;
             let mut copy = CopyInSession::start(conn, &copy_sql)?;
             let mut copy_buffer = Vec::with_capacity(persist_copy_send_buffer_bytes());
             append_copy_binary_header(&mut copy_buffer);
-            let file_id_i64 = i64::try_from(file_id)
-                .map_err(|_| "file id out of range for copy staging".to_string())?;
             let data_object_id_i64 = i64::try_from(data_object_id)
                 .map_err(|_| "data object id out of range for copy staging".to_string())?;
             let block_size = block_size.max(1);
             for block in blocks {
                 append_persist_block_copy_binary_row(
                     &mut copy_buffer,
-                    file_id_i64,
                     data_object_id_i64,
                     block,
                     block_size,
@@ -7854,8 +7807,6 @@ impl DbRepo {
         let block_size = block_size.max(1);
         let total_blocks_text = CString::new(total_blocks.to_string())
             .map_err(|_| "total blocks contains NUL byte".to_string())?;
-        let file_id_text = CString::new(file_id.to_string())
-            .map_err(|_| "file id contains NUL byte".to_string())?;
         let sql_delete_tail = CString::new(
             "
             DELETE FROM data_blocks
@@ -7872,23 +7823,21 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_upsert_data_binary = CString::new(
             "
-            INSERT INTO data_blocks (id_file, data_object_id, _order, data)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO data_blocks (data_object_id, _order, data)
+            VALUES ($1, $2, $3)
             ON CONFLICT (data_object_id, _order)
-            DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
-            WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
-               OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
+            DO UPDATE SET data = EXCLUDED.data
+            WHERE data_blocks.data IS DISTINCT FROM EXCLUDED.data
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_upsert_data_hex = CString::new(
             "
-            INSERT INTO data_blocks (id_file, data_object_id, _order, data)
-            VALUES ($1, $2, $3, decode($4, 'hex'))
+            INSERT INTO data_blocks (data_object_id, _order, data)
+            VALUES ($1, $2, decode($3, 'hex'))
             ON CONFLICT (data_object_id, _order)
-            DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
-            WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
-               OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
+            DO UPDATE SET data = EXCLUDED.data
+            WHERE data_blocks.data IS DISTINCT FROM EXCLUDED.data
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -7915,7 +7864,7 @@ impl DbRepo {
         let data_object_id = target.data_object_id;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
-        self.convert_extent_rows_to_blocks_on_conn(conn, file_id, data_object_id, block_size)?;
+        self.convert_extent_rows_to_blocks_on_conn(conn, data_object_id, block_size)?;
         if truncate_pending {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
@@ -7934,7 +7883,6 @@ impl DbRepo {
                     match transport {
                         PersistBlockTransport::BinaryBytea => {
                             let params = [
-                                SqlParam::Text(&file_id_text),
                                 SqlParam::Text(&data_object_id_text),
                                 SqlParam::Text(&block_index_text),
                                 SqlParam::Binary(&normalized),
@@ -7949,7 +7897,6 @@ impl DbRepo {
                             let hex = CString::new(hex_encode_bytes(&normalized))
                                 .map_err(|_| "hex payload contains NUL byte".to_string())?;
                             let params = [
-                                SqlParam::Text(&file_id_text),
                                 SqlParam::Text(&data_object_id_text),
                                 SqlParam::Text(&block_index_text),
                                 SqlParam::Text(&hex),
@@ -7971,7 +7918,6 @@ impl DbRepo {
         if maintain_copy_crc_table {
             self.persist_copy_block_crc_rows_for_data_object_on_conn(
                 conn,
-                file_id,
                 data_object_id,
                 block_size,
                 blocks,
@@ -8051,15 +7997,13 @@ impl DbRepo {
             PersistBlockTransport::CopyBinaryStaging => {
                 create_persist_block_stage_table(conn)?;
                 let copy_sql = CString::new(format!(
-                    "COPY {} (id_file, data_object_id, _order, data, crc32) FROM STDIN BINARY",
+                    "COPY {} (data_object_id, _order, data, crc32) FROM STDIN BINARY",
                     PERSIST_BLOCK_STAGE_TABLE
                 ))
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 let mut copy = CopyInSession::start(conn, &copy_sql)?;
                 let mut copy_buffer = Vec::with_capacity(persist_copy_send_buffer_bytes());
                 append_copy_binary_header(&mut copy_buffer);
-                let file_id_i64 = i64::try_from(file_id)
-                    .map_err(|_| "file id out of range for copy staging".to_string())?;
                 let data_object_id_i64 = i64::try_from(data_object_id)
                     .map_err(|_| "data object id out of range for copy staging".to_string())?;
 
@@ -8090,7 +8034,6 @@ impl DbRepo {
                         for row in &chunk_rows {
                             append_persist_block_copy_binary_row(
                                 &mut copy_buffer,
-                                file_id_i64,
                                 data_object_id_i64,
                                 row,
                                 block_size,
@@ -8114,7 +8057,6 @@ impl DbRepo {
                     for row in &chunk_rows {
                         append_persist_block_copy_binary_row(
                             &mut copy_buffer,
-                            file_id_i64,
                             data_object_id_i64,
                             row,
                             block_size,
@@ -8143,27 +8085,23 @@ impl DbRepo {
                 merge_persist_block_stage_table(conn, maintain_copy_crc_table)?;
             }
             PersistBlockTransport::BinaryBytea | PersistBlockTransport::LegacyHex => {
-                let file_id_text = CString::new(file_id.to_string())
-                    .map_err(|_| "file id contains NUL byte".to_string())?;
                 let sql_upsert_data_binary = CString::new(
                     "
-                    INSERT INTO data_blocks (id_file, data_object_id, _order, data)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO data_blocks (data_object_id, _order, data)
+                    VALUES ($1, $2, $3)
                     ON CONFLICT (data_object_id, _order)
-                    DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
-                    WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
-                       OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
+                    DO UPDATE SET data = EXCLUDED.data
+                    WHERE data_blocks.data IS DISTINCT FROM EXCLUDED.data
                     ",
                 )
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 let sql_upsert_data_hex = CString::new(
                     "
-                    INSERT INTO data_blocks (id_file, data_object_id, _order, data)
-                    VALUES ($1, $2, $3, decode($4, 'hex'))
+                    INSERT INTO data_blocks (data_object_id, _order, data)
+                    VALUES ($1, $2, decode($3, 'hex'))
                     ON CONFLICT (data_object_id, _order)
-                    DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data
-                    WHERE data_blocks.id_file IS DISTINCT FROM EXCLUDED.id_file
-                       OR data_blocks.data IS DISTINCT FROM EXCLUDED.data
+                    DO UPDATE SET data = EXCLUDED.data
+                    WHERE data_blocks.data IS DISTINCT FROM EXCLUDED.data
                     ",
                 )
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -8207,7 +8145,6 @@ impl DbRepo {
                                 match self.persist_block_transport {
                                     PersistBlockTransport::BinaryBytea => {
                                         let params = [
-                                            SqlParam::Text(&file_id_text),
                                             SqlParam::Text(&data_object_id_text),
                                             SqlParam::Text(&block_index_text),
                                             SqlParam::Binary(&normalized),
@@ -8224,7 +8161,6 @@ impl DbRepo {
                                                 "hex payload contains NUL byte".to_string()
                                             })?;
                                         let params = [
-                                            SqlParam::Text(&file_id_text),
                                             SqlParam::Text(&data_object_id_text),
                                             SqlParam::Text(&block_index_text),
                                             SqlParam::Text(&hex),
@@ -8250,7 +8186,6 @@ impl DbRepo {
                         if maintain_copy_crc_table {
                             self.persist_copy_block_crc_rows_for_data_object_on_conn(
                                 conn,
-                                file_id,
                                 data_object_id,
                                 block_size,
                                 &chunk_rows,
@@ -8278,7 +8213,6 @@ impl DbRepo {
                             match self.persist_block_transport {
                                 PersistBlockTransport::BinaryBytea => {
                                     let params = [
-                                        SqlParam::Text(&file_id_text),
                                         SqlParam::Text(&data_object_id_text),
                                         SqlParam::Text(&block_index_text),
                                         SqlParam::Binary(&normalized),
@@ -8293,7 +8227,6 @@ impl DbRepo {
                                     let hex = CString::new(hex_encode_bytes(&normalized))
                                         .map_err(|_| "hex payload contains NUL byte".to_string())?;
                                     let params = [
-                                        SqlParam::Text(&file_id_text),
                                         SqlParam::Text(&data_object_id_text),
                                         SqlParam::Text(&block_index_text),
                                         SqlParam::Text(&hex),
@@ -8319,7 +8252,6 @@ impl DbRepo {
                     if maintain_copy_crc_table {
                         self.persist_copy_block_crc_rows_for_data_object_on_conn(
                             conn,
-                            file_id,
                             data_object_id,
                             block_size,
                             &chunk_rows,
@@ -8465,12 +8397,11 @@ impl DbRepo {
                     data_object_id,
                     maintain_copy_crc_table,
                 )?;
-                self.copy_extent_rows_on_conn(conn, file_id, data_object_id, extents)?;
+                self.copy_extent_rows_on_conn(conn, data_object_id, extents)?;
 
                 if maintain_copy_crc_table {
                     self.persist_copy_block_crc_extent_rows_on_conn(
                         conn,
-                        file_id,
                         data_object_id,
                         block_size,
                         extents,
@@ -8540,11 +8471,10 @@ impl DbRepo {
                         .ok_or_else(|| {
                             "file is missing for append-only extent persistence".to_string()
                         })?;
-                    self.copy_extent_rows_on_conn(conn, file_id, target.data_object_id, extents)?;
+                    self.copy_extent_rows_on_conn(conn, target.data_object_id, extents)?;
                     if maintain_copy_crc_table {
                         self.persist_copy_block_crc_extent_rows_on_conn(
                             conn,
-                            file_id,
                             target.data_object_id,
                             block_size,
                             extents,
@@ -8608,15 +8538,6 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_count_dst_references =
             CString::new("SELECT COUNT(*) FROM files WHERE data_object_id = $1")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_data =
-            CString::new("DELETE FROM data_blocks WHERE data_object_id = $1 OR id_file = $2")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_extents =
-            CString::new("DELETE FROM data_extents WHERE data_object_id = $1 OR id_file = $2")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_crc =
-            CString::new("DELETE FROM copy_block_crc WHERE data_object_id = $1 OR id_file = $2")
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_data_object =
             CString::new("DELETE FROM data_objects WHERE id_data_object = $1")
@@ -8740,10 +8661,6 @@ impl DbRepo {
                         fetch_single_text(res)?.trim().parse::<u64>().unwrap_or(0);
 
                     if remaining_dst_references == 0 {
-                        let params = [&dst_data_object_id, &dst_file_id];
-                        exec_command_params(conn, &sql_delete_data, &params)?;
-                        exec_command_params(conn, &sql_delete_extents, &params)?;
-                        exec_command_params(conn, &sql_delete_crc, &params)?;
                         let params = [&dst_data_object_id];
                         exec_command_params(conn, &sql_delete_data_object, &params)?;
                     } else {
@@ -8803,28 +8720,6 @@ impl DbRepo {
     pub fn purge_primary_file(&self, file_id: u64) -> Result<(), String> {
         let sql_lookup = CString::new("SELECT data_object_id FROM files WHERE id_file = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_data =
-            CString::new("DELETE FROM data_blocks WHERE data_object_id = $1 OR id_file = $2")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_extents =
-            CString::new("DELETE FROM data_extents WHERE data_object_id = $1 OR id_file = $2")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_crc =
-            CString::new("DELETE FROM copy_block_crc WHERE data_object_id = $1 OR id_file = $2")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_find_survivor = CString::new(
-            "SELECT id_file FROM files WHERE data_object_id = $1 AND id_file <> $2 ORDER BY id_file LIMIT 1",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_reassign_data_rows =
-            CString::new("UPDATE data_blocks SET id_file = $2 WHERE data_object_id = $1")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_reassign_extent_rows =
-            CString::new("UPDATE data_extents SET id_file = $2 WHERE data_object_id = $1")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_reassign_crc_rows =
-            CString::new("UPDATE copy_block_crc SET id_file = $2 WHERE data_object_id = $1")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_file = CString::new("DELETE FROM files WHERE id_file = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_data_object =
@@ -8879,37 +8774,16 @@ impl DbRepo {
                     let data_object_id = CString::new(data_object_id.to_string())
                         .map_err(|_| "data object id contains NUL byte".to_string())?;
                     if reference_count <= 1 {
-                        let params = [&data_object_id, &file_id];
-                        exec_command_params(conn, &sql_delete_data, &params)?;
-                        exec_command_params(conn, &sql_delete_extents, &params)?;
-                        exec_command_params(conn, &sql_delete_crc, &params)?;
+                        let params = [&file_id];
+                        exec_command_params(conn, &sql_delete_file, &params)?;
                         let params = [&data_object_id];
                         exec_command_params(conn, &sql_delete_data_object, &params)?;
                     } else {
-                        let survivor_file_id = {
-                            let params = [&data_object_id, &file_id];
-                            let res = exec_params(conn, &sql_find_survivor, &params)?;
-                            let text = fetch_single_text(res)?;
-                            if text.trim().is_empty() {
-                                return Err(
-                                    "missing surviving file for shared data object".to_string()
-                                );
-                            }
-                            text.trim()
-                                .parse::<u64>()
-                                .map_err(|_| "invalid file id value".to_string())?
-                        };
-                        let survivor_file_id = CString::new(survivor_file_id.to_string())
-                            .map_err(|_| "file id contains NUL byte".to_string())?;
-                        let params = [&data_object_id, &survivor_file_id];
-                        exec_command_params(conn, &sql_reassign_data_rows, &params)?;
-                        exec_command_params(conn, &sql_reassign_extent_rows, &params)?;
-                        exec_command_params(conn, &sql_reassign_crc_rows, &params)?;
                         let params = [&data_object_id];
                         exec_command_params(conn, &sql_touch_data_object, &params)?;
+                        let params = [&file_id];
+                        exec_command_params(conn, &sql_delete_file, &params)?;
                     }
-                    let params = [&file_id];
-                    exec_command_params(conn, &sql_delete_file, &params)?;
                     Ok(())
                 },
             )
@@ -10059,7 +9933,7 @@ mod tests {
         )
         .unwrap();
         let data_blocks_upsert_sql = std::ffi::CString::new(
-            "INSERT INTO data_blocks (id_file, data_object_id, _order, data) VALUES ($1, $2, $3, $4) ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, data = EXCLUDED.data",
+            "INSERT INTO data_blocks (data_object_id, _order, data) VALUES ($1, $2, $3) ON CONFLICT (data_object_id, _order) DO UPDATE SET data = EXCLUDED.data",
         )
         .unwrap();
         let scan_run_insert_sql = std::ffi::CString::new(
@@ -10071,19 +9945,19 @@ mod tests {
         )
         .unwrap();
         let data_blocks_copy_sql = std::ffi::CString::new(
-            "INSERT INTO data_blocks (id_file, data_object_id, _order, data) SELECT $3, $2, _order, data FROM data_blocks WHERE data_object_id = $1",
+            "INSERT INTO data_blocks (data_object_id, _order, data) SELECT $2, _order, data FROM data_blocks WHERE data_object_id = $1",
         )
         .unwrap();
         let extent_to_blocks_sql = std::ffi::CString::new(
-            "INSERT INTO data_blocks (id_file, data_object_id, _order, data) SELECT $1::integer, de.data_object_id, (de.start_block + offsets.block_offset)::integer, substring(de.payload FROM 1 FOR $3::integer) FROM data_extents de CROSS JOIN LATERAL generate_series(0::bigint, de.block_count - 1) AS offsets(block_offset) ON CONFLICT (data_object_id, _order) DO NOTHING",
+            "INSERT INTO data_blocks (data_object_id, _order, data) SELECT de.data_object_id, (de.start_block + offsets.block_offset)::integer, substring(de.payload FROM 1 FOR $2::integer) FROM data_extents de CROSS JOIN LATERAL generate_series(0::bigint, de.block_count - 1) AS offsets(block_offset) ON CONFLICT (data_object_id, _order) DO NOTHING",
         )
         .unwrap();
         let copy_block_crc_upsert_sql = std::ffi::CString::new(
-            "INSERT INTO copy_block_crc (id_file, data_object_id, _order, crc32) SELECT id_file, data_object_id, _order, crc32 FROM staging_blocks ON CONFLICT (data_object_id, _order) DO UPDATE SET id_file = EXCLUDED.id_file, crc32 = EXCLUDED.crc32, updated_at = NOW()",
+            "INSERT INTO copy_block_crc (data_object_id, _order, crc32) SELECT data_object_id, _order, crc32 FROM staging_blocks ON CONFLICT (data_object_id, _order) DO UPDATE SET crc32 = EXCLUDED.crc32, updated_at = NOW()",
         )
         .unwrap();
         let copy_block_crc_copy_sql = std::ffi::CString::new(
-            "INSERT INTO copy_block_crc (id_file, data_object_id, _order, crc32) SELECT $3, $2, _order, crc32 FROM copy_block_crc WHERE data_object_id = $1",
+            "INSERT INTO copy_block_crc (data_object_id, _order, crc32) SELECT $2, _order, crc32 FROM copy_block_crc WHERE data_object_id = $1",
         )
         .unwrap();
         let range_state_insert_sql = std::ffi::CString::new(
@@ -10253,7 +10127,7 @@ mod tests {
             data: b"abc",
             used_len: 2,
         };
-        append_persist_block_copy_binary_row(&mut out, 7, 11, &block, 4).unwrap();
+        append_persist_block_copy_binary_row(&mut out, 11, &block, 4).unwrap();
 
         let signature = &out[..COPY_BINARY_SIGNATURE.len()];
         assert_eq!(signature, COPY_BINARY_SIGNATURE);
@@ -10268,14 +10142,7 @@ mod tests {
 
         let field_count = i16::from_be_bytes(out[cursor..cursor + 2].try_into().unwrap());
         cursor += 2;
-        assert_eq!(field_count, 5);
-
-        let file_id_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        assert_eq!(file_id_len, 8);
-        let file_id = i64::from_be_bytes(out[cursor..cursor + 8].try_into().unwrap());
-        cursor += 8;
-        assert_eq!(file_id, 7);
+        assert_eq!(field_count, 4);
 
         let data_object_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
         cursor += 4;
@@ -10305,7 +10172,7 @@ mod tests {
     fn encodes_copy_block_crc_binary_rows_with_integer_fields() {
         let mut out = Vec::new();
         append_copy_binary_header(&mut out);
-        append_persist_copy_block_crc_copy_binary_row(&mut out, 7, 11, 3, Some(99)).unwrap();
+        append_persist_copy_block_crc_copy_binary_row(&mut out, 11, 3, Some(99)).unwrap();
 
         let signature = &out[..COPY_BINARY_SIGNATURE.len()];
         assert_eq!(signature, COPY_BINARY_SIGNATURE);
@@ -10320,14 +10187,7 @@ mod tests {
 
         let field_count = i16::from_be_bytes(out[cursor..cursor + 2].try_into().unwrap());
         cursor += 2;
-        assert_eq!(field_count, 4);
-
-        let file_id_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        assert_eq!(file_id_len, 4);
-        let file_id = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        assert_eq!(file_id, 7);
+        assert_eq!(field_count, 3);
 
         let data_object_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
         cursor += 4;

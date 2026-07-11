@@ -12,7 +12,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 16;
+const SCHEMA_VERSION: u64 = 17;
+const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../migrations/0001_base.sql"
+));
+const LEGACY_BLOCK_OBJECT_ID: u64 = 1_700_000_001;
+const LEGACY_EXTENT_OBJECT_ID: u64 = 1_700_000_002;
+const CASCADE_OBJECT_ID: u64 = 1_700_000_003;
 
 fn conninfo_from_env() -> String {
     let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -110,6 +117,184 @@ fn schema_exists(conn: &DbConn, schema: &str) -> Result<bool, String> {
     ))
 }
 
+fn assert_latest_payload_schema(conn: &DbConn) {
+    let matches = conn
+        .query_exists(
+            "SELECT
+                (
+                    SELECT COUNT(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = 'fod'
+                      AND table_name IN ('files', 'data_blocks', 'data_extents', 'copy_block_crc')
+                      AND column_name = 'data_object_id'
+                      AND is_nullable = 'NO'
+                ) = 4
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'fod'
+                      AND table_name IN ('data_blocks', 'data_extents', 'copy_block_crc')
+                      AND column_name = 'id_file'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'files_data_object_id_fkey'
+                      AND conrelid = 'fod.files'::regclass
+                      AND confrelid = 'fod.data_objects'::regclass
+                      AND contype = 'f'
+                      AND confdeltype = 'a'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'data_blocks_data_object_id_fkey'
+                      AND conrelid = 'fod.data_blocks'::regclass
+                      AND confrelid = 'fod.data_objects'::regclass
+                      AND contype = 'f'
+                      AND confdeltype = 'c'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'data_extents_data_object_id_fkey'
+                      AND conrelid = 'fod.data_extents'::regclass
+                      AND confrelid = 'fod.data_objects'::regclass
+                      AND contype = 'f'
+                      AND confdeltype = 'c'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'copy_block_crc_data_object_id_fkey'
+                      AND conrelid = 'fod.copy_block_crc'::regclass
+                      AND confrelid = 'fod.data_objects'::regclass
+                      AND contype = 'f'
+                      AND confdeltype = 'c'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'copy_block_crc_pkey'
+                      AND conrelid = 'fod.copy_block_crc'::regclass
+                      AND contype = 'p'
+                )",
+        )
+        .expect("inspect payload ownership schema");
+    assert!(matches, "payload tables must be owned by data objects");
+}
+
+fn prepare_version_16_payload_fixture(conn: &DbConn) {
+    conn.exec(&format!(
+        "SET search_path TO fod, public;
+         INSERT INTO data_objects
+             (id_data_object, file_size, content_hash, reference_count, creation_date, modification_date)
+         VALUES
+             ({LEGACY_BLOCK_OBJECT_ID}, 12, NULL, 1, NOW(), NOW()),
+             ({LEGACY_EXTENT_OBJECT_ID}, 13, NULL, 1, NOW(), NOW());
+         INSERT INTO files
+             (id_file, data_object_id, id_directory, name, size, mode, uid, gid, inode_seed,
+              modification_date, access_date, change_date, creation_date)
+         VALUES
+             ({LEGACY_BLOCK_OBJECT_ID}, {LEGACY_BLOCK_OBJECT_ID}, NULL,
+              'migration-17-block', 12, '644', 0, 0, 'migration-17-block',
+              NOW(), NOW(), NOW(), NOW()),
+             ({LEGACY_EXTENT_OBJECT_ID}, {LEGACY_EXTENT_OBJECT_ID}, NULL,
+              'migration-17-extent', 13, '644', 0, 0, 'migration-17-extent',
+              NOW(), NOW(), NOW(), NOW());
+         INSERT INTO data_blocks (data_object_id, _order, data)
+         VALUES ({LEGACY_BLOCK_OBJECT_ID}, 0, convert_to('legacy-block', 'UTF8'));
+         INSERT INTO data_extents
+             (data_object_id, start_block, block_count, used_bytes, payload)
+         VALUES ({LEGACY_EXTENT_OBJECT_ID}, 0, 1, 13, convert_to('legacy-extent', 'UTF8'));
+         INSERT INTO copy_block_crc (data_object_id, _order, crc32)
+         VALUES ({LEGACY_BLOCK_OBJECT_ID}, 0, 12345);
+
+         ALTER TABLE files DROP CONSTRAINT files_data_object_id_fkey;
+         ALTER TABLE data_blocks DROP CONSTRAINT data_blocks_data_object_id_fkey;
+         ALTER TABLE data_extents DROP CONSTRAINT data_extents_data_object_id_fkey;
+         ALTER TABLE copy_block_crc DROP CONSTRAINT copy_block_crc_data_object_id_fkey;
+
+         ALTER TABLE data_blocks ADD COLUMN id_file INTEGER;
+         ALTER TABLE data_extents ADD COLUMN id_file INTEGER;
+         ALTER TABLE copy_block_crc ADD COLUMN id_file INTEGER;
+         UPDATE data_blocks SET id_file = {LEGACY_BLOCK_OBJECT_ID};
+         UPDATE data_extents SET id_file = {LEGACY_EXTENT_OBJECT_ID};
+         UPDATE copy_block_crc SET id_file = {LEGACY_BLOCK_OBJECT_ID};
+         ALTER TABLE data_blocks ALTER COLUMN id_file SET NOT NULL;
+         ALTER TABLE data_extents ALTER COLUMN id_file SET NOT NULL;
+         ALTER TABLE copy_block_crc ALTER COLUMN id_file SET NOT NULL;
+         ALTER TABLE data_blocks
+             ADD CONSTRAINT data_blocks_id_file_fkey
+             FOREIGN KEY (id_file) REFERENCES files(id_file);
+         ALTER TABLE data_extents
+             ADD CONSTRAINT data_extents_id_file_fkey
+             FOREIGN KEY (id_file) REFERENCES files(id_file);
+         ALTER TABLE copy_block_crc
+             ADD CONSTRAINT copy_block_crc_id_file_fkey
+             FOREIGN KEY (id_file) REFERENCES files(id_file) ON DELETE CASCADE;
+         ALTER TABLE copy_block_crc DROP CONSTRAINT copy_block_crc_pkey;
+         CREATE UNIQUE INDEX idx_copy_block_crc_object_order
+             ON copy_block_crc (data_object_id, _order);
+         UPDATE schema_version SET version = 16, applied_at = NOW();"
+    ))
+    .expect("prepare schema version 16 payload fixture");
+}
+
+fn assert_legacy_payload_rows_preserved(conn: &DbConn) {
+    let preserved = conn
+        .query_exists(&format!(
+            "SELECT
+                EXISTS (
+                    SELECT 1 FROM fod.data_blocks
+                    WHERE data_object_id = {LEGACY_BLOCK_OBJECT_ID}
+                      AND _order = 0
+                      AND data = convert_to('legacy-block', 'UTF8')
+                )
+                AND EXISTS (
+                    SELECT 1 FROM fod.data_extents
+                    WHERE data_object_id = {LEGACY_EXTENT_OBJECT_ID}
+                      AND start_block = 0
+                      AND block_count = 1
+                      AND used_bytes = 13
+                      AND payload = convert_to('legacy-extent', 'UTF8')
+                )
+                AND EXISTS (
+                    SELECT 1 FROM fod.copy_block_crc
+                    WHERE data_object_id = {LEGACY_BLOCK_OBJECT_ID}
+                      AND _order = 0
+                      AND crc32 = 12345
+                )"
+        ))
+        .expect("inspect migrated payload rows");
+    assert!(preserved, "migration 17 must preserve payload rows");
+}
+
+fn assert_payload_delete_cascades(conn: &DbConn) {
+    conn.exec(&format!(
+        "SET search_path TO fod, public;
+         INSERT INTO data_objects
+             (id_data_object, file_size, content_hash, reference_count, creation_date, modification_date)
+         VALUES ({CASCADE_OBJECT_ID}, 1, NULL, 0, NOW(), NOW());
+         INSERT INTO data_blocks (data_object_id, _order, data)
+         VALUES ({CASCADE_OBJECT_ID}, 7, decode('01', 'hex'));
+         INSERT INTO data_extents
+             (data_object_id, start_block, block_count, used_bytes, payload)
+         VALUES ({CASCADE_OBJECT_ID}, 7, 1, 1, decode('01', 'hex'));
+         INSERT INTO copy_block_crc (data_object_id, _order, crc32)
+         VALUES ({CASCADE_OBJECT_ID}, 7, 1);
+         DELETE FROM data_objects WHERE id_data_object = {CASCADE_OBJECT_ID};"
+    ))
+    .expect("delete payload-owning object");
+    let rows_remain = conn
+        .query_exists(&format!(
+            "SELECT
+                EXISTS (SELECT 1 FROM fod.data_blocks WHERE data_object_id = {CASCADE_OBJECT_ID})
+                OR EXISTS (SELECT 1 FROM fod.data_extents WHERE data_object_id = {CASCADE_OBJECT_ID})
+                OR EXISTS (SELECT 1 FROM fod.copy_block_crc WHERE data_object_id = {CASCADE_OBJECT_ID})"
+        ))
+        .expect("inspect cascading payload delete");
+    assert!(
+        !rows_remain,
+        "deleting a data object must cascade its payload"
+    );
+}
+
 #[test]
 fn schema_upgrade_non_destructive_password_protected() {
     let _guard = env_guard();
@@ -193,6 +378,7 @@ fn schema_upgrade_non_destructive_password_protected() {
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
+    assert_latest_payload_schema(&conn);
 
     let admin_count = conn
         .query_scalar_u64("SELECT COUNT(*) FROM schema_admin WHERE id = 1")
@@ -233,6 +419,13 @@ fn schema_upgrade_non_destructive_password_protected() {
     );
     assert_password_source(&String::from_utf8_lossy(&upgrade_result.stdout), "cli");
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
+    assert!(
+        String::from_utf8_lossy(&upgrade_result.stdout).contains(
+            "Schema version row was missing; recovered version 17 from the verified schema shape."
+        ),
+        "{}",
+        String::from_utf8_lossy(&upgrade_result.stdout)
+    );
 
     assert!(table_exists(&conn, "public", &guard_table).expect("table_exists"));
     let guard_note = conn
@@ -249,6 +442,7 @@ fn schema_upgrade_non_destructive_password_protected() {
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
+    assert_latest_payload_schema(&conn);
 
     let clean_missing_secret = run_mkfs("clean", &[], &envs);
     assert_ne!(clean_missing_secret.status.code(), Some(0));
@@ -326,6 +520,7 @@ fn schema_upgrade_non_destructive_password_protected() {
         schema_exists(&conn, "fod").expect("fod schema_exists after init"),
         "fod schema should be recreated by init"
     );
+    assert_latest_payload_schema(&conn);
 
     let upgrade_after_clean = run_mkfs(
         "upgrade",
@@ -340,12 +535,7 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_password_source(&String::from_utf8_lossy(&upgrade_after_clean.stdout), "cli");
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_after_clean.stdout));
 
-    conn.exec(&format!(
-        "UPDATE {} SET version = {}",
-        DbConn::quote_identifier("schema_version"),
-        SCHEMA_VERSION - 1
-    ))
-    .expect("downgrade schema version");
+    prepare_version_16_payload_fixture(&conn);
 
     let upgrade_result = run_mkfs(
         "upgrade",
@@ -359,13 +549,16 @@ fn schema_upgrade_non_destructive_password_protected() {
     );
     assert_password_source(&String::from_utf8_lossy(&upgrade_result.stdout), "cli");
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
+    assert_latest_payload_schema(&conn);
+    assert_legacy_payload_rows_preserved(&conn);
+    assert_payload_delete_cascades(&conn);
 
-    conn.exec("DELETE FROM schema_admin")
-        .expect("delete schema_admin");
-    conn.exec("DELETE FROM lock_range_leases")
-        .expect("delete lock_range_leases");
-    conn.exec("UPDATE schema_version SET version = 1")
-        .expect("downgrade to v1");
+    conn.exec("DROP SCHEMA IF EXISTS fod CASCADE")
+        .expect("drop schema before version-one upgrade");
+    conn.exec(VERSION_ONE_SCHEMA_SQL)
+        .expect("create version-one schema");
+    conn.exec("INSERT INTO fod.schema_version (version, applied_at) VALUES (1, NOW())")
+        .expect("record version-one schema");
 
     let upgrade_result = run_mkfs(
         "upgrade",
@@ -385,6 +578,7 @@ fn schema_upgrade_non_destructive_password_protected() {
         String::from_utf8_lossy(&upgrade_result.stdout)
     );
 
+    assert_latest_payload_schema(&conn);
     assert!(table_exists(&conn, "fod", "schema_admin").expect("schema_admin exists"));
     assert!(table_exists(&conn, "fod", "lock_range_leases").expect("lock_range_leases exists"));
     let version = conn
@@ -459,10 +653,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 16",
+        "FOD schema version: 17",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 16",
+        "Latest migration version: 17",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -482,6 +676,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0014: 0014_indexer_request_tokens.sql",
         "0015: 0015_data_object_request_tokens.sql",
         "0016: 0016_hardlink_promotion_request_tokens.sql",
+        "0017: 0017_data_object_payload_ownership.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -500,10 +695,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 16",
+        "Latest migration version: 17",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017",
     ] {
         assert!(
             status_without_version.contains(needle),

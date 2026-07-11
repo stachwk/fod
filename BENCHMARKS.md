@@ -1954,3 +1954,53 @@ The extent count includes 64 source rows and four destination rows created by
 the first chunk before the destination safely converts to block storage. This
 result supersedes the earlier large-copy measurements that unknowingly used
 the kernel's generic fallback because the daemon advertised only ABI 7.17.
+
+## 2026-07-11 Payload Ownership Version 17 Gate
+
+Collected locally from the schema-version-17 ownership worktree based on
+commit `a23bfbb`. These are single-run correctness baselines while the pending
+worktree removes representative payload `id_file` columns; they are not a
+reason to change storage defaults.
+
+Commands:
+
+```bash
+make test-large-copy-object-adoption
+make test-remount-durability-benchmark
+make test-fio-sequential-io
+make test-fio-mixed-io
+make test-fio-random-mixed-io
+FOD_PROFILE_IO=1 make test-fio-sequential-io-strace
+PROFILE_CAPTURE_LABEL=storage-ownership-v17 make profile-pg-data-blocks-semantics
+PROFILE_CAPTURE_LABEL=storage-ownership-v17 make profile-pg-data-blocks-merge-explain
+PROFILE_CAPTURE_LABEL=storage-ownership-v17 make profile-pg-data-blocks-merge-fillfactor-explain-one
+```
+
+Mounted fio results:
+
+| workload | path | read | write |
+| --- | --- | ---: | ---: |
+| sequential 64 KiB | block | `9143 KiB/s` | `3556 KiB/s` |
+| sequential 64 KiB | extent | `8000 KiB/s` | `2560 KiB/s` |
+| mixed rw 4 MiB | block | `1612 KiB/s` | `1716 KiB/s` |
+| mixed rw 4 MiB | extent preset | `776 KiB/s` | `826 KiB/s` |
+| random mixed 4 MiB | block | `1196 KiB/s` | `1273 KiB/s` |
+| random mixed 4 MiB | extent preset | `677 KiB/s` | `721 KiB/s` |
+
+The profiled direct-I/O sequential run reported
+`repo_persist_blocks_us=16683` for blocks and
+`repo_persist_extents_us=9357` for one 64 KiB extent. The extent path entered
+segment mode once, had zero downgrades, prepared one 65536-byte payload in
+`5 us`, and completed the required strace capture.
+
+Whole-object adoption copied 64 MiB at `5068.61 MiB/s` in `0.012627 s` and
+confirmed that the destination shared the source object. The remount durability
+smoke completed its 64 KiB round trip in `1.019797 s`.
+
+The object-ownership diagnostic found `0` orphan files, blocks, extents, and
+CRC rows; `0` reference-count mismatches; and `0` hybrid block/extent objects.
+Two unreferenced objects came from the deferred-cleanup tests and remained
+eligible for object GC. The current object-keyed merge reproducer completed a
+fresh 16384-row insert in `224.411 ms`, filtered an identical conflict set in
+`365.851 ms`, and updated the changed conflict set in `349.311 ms`, while the
+real `fod.data_blocks` count stayed unchanged.

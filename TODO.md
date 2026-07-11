@@ -37,7 +37,7 @@ Reading guide:
 - [ ] Before changing the default `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` for QNAP-like backends, repeat the QNAP COPY-buffer matrix enough times to distinguish a stable `4194304` benefit from network or Docker noise.
   - Historical note: the 2026-07-09 local repeat sample on commit `bad53cc` stayed mixed (`14.55/18.17`, `18.43/17.48`, `17.42/17.76` MiB/s for `default` vs `4194304`). The QNAP repetition still needs a clean run; in this session `192.168.1.11:5432` returned `No route to host`.
 - [ ] Isolate the Cargo target directory used by `make test-locking` under `sudo`, then recheck the privileged test workflow. The 2026-07-11 local gate left root-owned files in the workspace `target/` directory and required an explicit ownership repair; revisit this independently from storage work.
-- [ ] Deliver the `Storage Engine v2` project described in `docs/storage-engine-v2-plan.md`, preserving 4 KiB logical blocks and the default block path while making large sequential physical persistence bounded and opt-in.
+- [x] Deliver the `Storage Engine v2` project described in `docs/storage-engine-v2-plan.md`, preserving 4 KiB logical blocks and the default block path while making large sequential physical persistence bounded and opt-in.
   - Phase A: add bounded extent planning and payload rows, then pass the local and QNAP benchmark gate.
     - Completed: bounded planning, bounded payload rows, the startup-only `extent_target_bytes` setting, and peak-payload diagnostics are implemented with a 1 MiB default. Three-run local and QNAP 64 MiB matrices passed, as did the all-workload local smoke. Extents remain opt-in because mixed/random and fio write still regress.
   - Phase B: add a sequential segment builder and direct segment persistence only after Phase A proves useful.
@@ -50,7 +50,7 @@ Reading guide:
     - Correctness gate: body-disconnect and commit-disconnect replay, shared-object detach, hardlink preservation, full overwrite, CRC rows, immediate/deferred cleanup, remount durability, and the complete storage/FUSE regression gate passed locally on 2026-07-11.
     - Measured gate: the repeated 64 MiB large-file run averaged `94.55 MiB/s` on append-only extents versus `46.39 MiB/s` on blocks, with 64 physical extent rows and about `1.03 MB` mean WAL. The later ABI 7.31 copy measurements supersede the earlier fallback-path copy result. Extents remain opt-in because mixed/random workloads still regress.
   - Phase D: completed. `docs/adr/storage-object-segment-manifest.md` defers a manifest because exact whole-file copies now adopt the source object and corrected chunked extent copies outperform blocks locally. Reopen only for a measured partial-clone, patch-amplification, chunk-dedupe, snapshot, compression, or GC requirement.
-  - Ownership cleanup: the diagnostic inventory is complete in `docs/storage-payload-ownership-inventory.md`; remove representative payload-table `id_file` columns through one schema migration and update runtime/indexer cleanup without retaining a dual-path fallback.
+  - Ownership cleanup: completed in schema version 17. `data_blocks`, `data_extents`, and `copy_block_crc` are owned only by `data_object_id`, object deletion cascades to payload rows, and runtime/indexer cleanup no longer rewrites representative file IDs. The base schema and upgrades from versions 1 and 16 reach the same final shape without a dual-path fallback.
 - [x] Revisit cleanup in `rust_fuse/tests/root_permissions_smoke.rs` when the full Cargo suite is run without root.
   - Historical note: root-mounted test filesystems now use an explicit `sudo -n umount` from an unprivileged test process, verify that the mount disappeared, and retain the same operation as a `Drop` fallback. The full unprivileged FUSE suite no longer leaves this mount active.
 - [x] Build a safe EXPLAIN/fillfactor clone experiment for `data_blocks` merge variants without touching real `fod.data_blocks` runtime data.
@@ -160,7 +160,7 @@ Reading guide:
 - [x] Uporzadkuj safety i retry tylko tam, gdzie sa jeszcze luki. Read-only i idempotentne operacje maja zostac bounded-retry friendly, ale nie dokladaj pelnego replay nieidempotentnych transakcji bez osobnego projektu.
   - Historical note: the bounded replay envelope is now stabilized around read-only SQL, idempotent command SQL, and the replay-safe transactional wrappers already listed below. The remaining ambiguous-commit work stays in `docs/transactional-replay-project.md` instead of widening the current retry envelope in place.
 - [x] Dopięcie `persist_file_extents_native(..., maintain_copy_crc_table = true)` do poprawnego binary COPY dla `copy_block_crc`.
-  - Historical note: `copy_block_crc` extent persistence now encodes `id_file`, `data_object_id`, and `_order` as `INTEGER` fields in PostgreSQL binary COPY, matching the table schema. The extent replay smoke now runs with `maintain_copy_crc_table = true` and passes.
+  - Historical note: the original implementation encoded both representative `id_file` and owning `data_object_id`. Schema version 17 removed `id_file`; the current binary COPY encodes `data_object_id` and `_order` as PostgreSQL `INTEGER` fields and `crc32` as `BIGINT`. The extent replay smoke with `maintain_copy_crc_table = true` passes.
 - [x] Nie wracaj do implementacji podstawowego pipeline jako nowego zadania. `scan`, `hash`, `duplicate detection`, `plan-import`, `materialize` i `cleanup` traktuj jako juz dostarczone; dalsza praca ma byc wokol granic, adapterow i hardeningu.
   - Historical note: the base indexer pipeline is already delivered, so the remaining work stays around adapter boundaries, hardening, and integration polish instead of re-implementing `scan` / `hash` / `plan-import` / `materialize`.
 
@@ -335,9 +335,9 @@ Why this matters:
 - [x] Add block-delta persistence so unchanged blocks are not rewritten on every flush.
 - [x] Profile the remaining hot paths (`getattr`, `readdir`, `persist_buffer`) and add only the indexes that move the benchmark. Added directory-parent indexes and confirmed the block-order index is used on `data_blocks`.
 - [x] Capture a live throughput baseline for different write sizes on a mounted FOD instance. The measured values are recorded in [`BENCHMARKS.md`](BENCHMARKS.md).
-- [x] Add schema versioning so the schema can be repaired in a controlled way instead of relying only on `init` to recreate the database. Current version is `3`, exposed via `schema_version`, exported by `mkfs.fod.py status`, and checked by `make test-schema-upgrade` and `make test-schema-status`; `init` is now idempotent and non-destructive.
+- [x] Add schema versioning so the schema can be repaired in a controlled way instead of relying only on `init` to recreate the database. The historical first tracked version was `3`; the Rust `mkfs.fod status` command now exports the current migration manifest through version 17, and `make test-schema-upgrade` / `make test-schema-status` verify non-destructive init, upgrades, version-row recovery, and schema-admin protection.
 - [x] Add named runtime profiles for production-style tuning in `fod_config.ini`. Current profiles include `bulk_write` and `metadata_heavy`, selected with `FOD_PROFILE`.
-- [x] Add optional PostgreSQL TLS connection parameters (`sslmode`, `sslrootcert`, `sslcert`, `sslkey`) in `fod_pg_tls.py`, and move client cert/key generation to `mkfs.fod.py` for `init` and `upgrade`.
+- [x] Add optional PostgreSQL TLS connection parameters (`sslmode`, `sslrootcert`, `sslcert`, `sslkey`) and client certificate/key generation to the Rust runtime and `mkfs.fod` implementation for `init` and `upgrade`.
 - [x] Add a regression test for the flush/release dirty gate so clean closes stay cheap and dirty data is persisted exactly once. Added `make test-flush-release-profile`.
 - [x] Try skipping the tail-delete optimization for normal growth writes. Rejected: the change regressed small-write throughput, so it was reverted.
 - [x] Why it was rejected: the added bookkeeping outweighed the saved `DELETE`; see the historical benchmark notes in [`BENCHMARKS.md`](BENCHMARKS.md) if you need the exact comparison.
@@ -439,14 +439,14 @@ These changes are already merged into the codebase and should be kept:
 - a dedicated read-cache benchmark can compare `FOD_READ_CACHE_BLOCKS=256` vs `1024` on sequential scans.
 - metadata cache TTLs are configurable in `fod_config.ini` (`metadata_cache_ttl_seconds`, `statfs_cache_ttl_seconds`), and `getattr()` / `readdir()` / `statfs()` use short-lived caches with invalidation on mutating operations.
 - metadata cache payloads are now split by type, so attribute and directory-entry state no longer share one cache payload layout.
-- schema versioning is explicit: `mkfs.fod.py` writes `schema_version = 3`, `mkfs.fod.py status` exports the current version and migration manifest, `init` is idempotent and non-destructive, and `make test-schema-upgrade` / `make test-schema-status` verify that `upgrade` can repair missing schema state, restore the current version, and enforce the schema-admin secret for later `init` / `upgrade` / `clean` calls on an existing database.
+- schema versioning is explicit: Rust `mkfs.fod` writes the current `schema_version`, `status` exports the version and migration manifest through version 17, and `make test-schema-upgrade` / `make test-schema-status` verify fresh initialization, upgrades from versions 1 and 16, strict recovery of a missing version row, and schema-admin enforcement.
 - runtime profiles are explicit: `FOD_PROFILE=bulk_write` and `FOD_PROFILE=metadata_heavy` override the base `[fod]` tuning values from `fod_config.ini`.
 - `make test-all-full` extends `make test-all` with workflow checks for files/directories/metadata/symlink, shell statfs/use_ino, mount workflow, atime smoke, and throughput
 - `make test-tree-scale` benchmarks `getattr`/`readdir` on a larger seeded tree
 - stable inode model based on durable `inode_seed` values for directories, files, and symlinks
 - ownership inheritance for setgid parent directories, including `mkdir` and `rename` edge cases
 - `bmap` as a logical mapping for regular files and hardlinks
-- hot-path indexes: `hardlinks.id_file`, `directories.id_parent`, `files.id_directory`, `hardlinks.id_directory`, `symlinks.id_parent`, and `data_blocks(id_file, _order)`
+- hot-path indexes: `hardlinks.id_file`, `directories.id_parent`, `files.id_directory`, `hardlinks.id_directory`, `symlinks.id_parent`, and `data_blocks(data_object_id, _order)`
 - `st_blocks` heuristic for directories and small files
 - `st_nlink` for directories and root counted only from subdirectories
 - `poll` as a backend helper for regular files
@@ -528,7 +528,7 @@ Status: active design direction, but the main decisions below are already taken.
 ### Operational
 
 - `LICENSE` is already set to MIT.
-- PostgreSQL TLS is optional: `sslmode=require` gives encryption, and `mkfs.fod.py --generate-client-tls-pair` can create a local client cert/key pair for certificate-auth setups during `init` or `upgrade`.
+- PostgreSQL TLS is optional: `sslmode=require` gives encryption, and Rust `mkfs.fod --generate-client-tls-pair` can create a local client cert/key pair for certificate-auth setups during `init` or `upgrade`.
 - FOD expects transactional PostgreSQL connections with `autocommit` disabled; `read committed` is sufficient for the current lock and metadata flows.
 - Detect single-node vs read-only replica mode early and let the runtime pick an appropriate lock strategy for each case; `postgres_lease` stays the default production backend for writable primary mounts, and the Rust smoke suite already checks two primary mounts plus a replica against the same PostgreSQL database.
 - Writable primary mounts now also maintain a `client_sessions` heartbeat row in PostgreSQL. If future cleanup or recovery logic grows around that session state, keep it TTL-driven, host-agnostic, and covered by multi-mount tests.

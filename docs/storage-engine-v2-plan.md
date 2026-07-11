@@ -58,6 +58,9 @@ Implementation status:
 - the payload ownership inventory is recorded in
   `docs/storage-payload-ownership-inventory.md` before the schema migration
   removes representative `id_file` columns;
+- schema version 17 now makes `data_object_id` the exclusive payload owner,
+  removes representative `id_file` columns from all payload tables, and uses
+  object-level cascading deletion in the runtime and indexer cleanup paths;
 - extents remain opt-in because mixed and random workloads still regress.
 
 ## Original problem and remaining copy issue
@@ -323,17 +326,21 @@ versioning. Reopen it only after a real partial-copy, patch-amplification,
 dedupe, snapshot, compression, or GC workload proves that the current object
 model is insufficient.
 
-## Storage ownership follow-up
+## Storage ownership completion
 
-Payload ownership is centered logically on `data_object_id`, but the schema
-still carries representative `id_file` columns. The complete inventory is in
-`docs/storage-payload-ownership-inventory.md` and covers payload persistence,
-failed materialization cleanup, purge, hardlink behavior, data-object swap,
-GC, dedupe, diagnostics, and schema constraints.
+Schema version 17 completes the ownership follow-up described in
+`docs/storage-payload-ownership-inventory.md`. The fresh schema and the upgrade
+path now use only `data_object_id` in `data_blocks`, `data_extents`, and
+`copy_block_crc`. Each payload table has an `ON DELETE CASCADE` foreign key to
+`data_objects`, while `files.data_object_id` remains a non-cascading reference
+that prevents deletion of an object still attached to a file.
 
-The diagnostic inventory is complete. The next step is one explicit schema
-migration that removes runtime dependence and the obsolete columns together;
-do not leave a permanent dual-path compatibility branch.
+The migration verifies object references under an exclusive table lock,
+removes the representative file columns in one transaction, and restores the
+object-keyed CRC primary key. Runtime persistence, shared-object detach,
+full-object adoption, file purge, object GC, and failed materialization cleanup
+no longer reassign payload rows to a representative file. There is no runtime
+compatibility branch for the removed schema.
 
 ## Verification gates
 
