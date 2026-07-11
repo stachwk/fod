@@ -54,7 +54,7 @@ run_case() {
   fod_test_init_schema
   fod_test_start_mount "${MOUNTPOINT}"
 
-  local file="${MOUNTPOINT}/fio-${label}-${file_size_slug}.bin"
+  local file="${MOUNTPOINT}/fio-${label}-${file_size_slug}-${BASHPID}.bin"
 
   fio \
     --name="seq-write-${label}" \
@@ -86,14 +86,20 @@ run_case() {
 
   if [[ "${enable_extents}" == "1" ]]; then
     fod_assert_contains "${LOG_FILE}" "enable_extents=true"
+    fod_assert_contains "${LOG_FILE}" "FOD sequential segment state entered"
   else
     if grep -Fq "FOD extent PoC execution" "${LOG_FILE}"; then
       echo "unexpected extent PoC log in block-storage mode"
       return 1
     fi
+    if grep -Fq "FOD sequential segment state entered" "${LOG_FILE}"; then
+      echo "unexpected sequential segment state in block-storage mode"
+      return 1
+    fi
   fi
 
   echo "OK fio/sequential ${label} extents=${enable_extents} size=${expected_size} block_size=${block_size}"
+  rm -f "${file}"
   fod_test_cleanup
 }
 

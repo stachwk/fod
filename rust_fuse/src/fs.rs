@@ -2267,7 +2267,7 @@ impl FodFuse {
                 state.truncate_pending = true;
                 state.buffered_bytes = 0;
                 state.load_error = false;
-                state.blocks.clear();
+                state.clear_payload();
                 if let Err(errno) = self.flush_write_state(&mut state) {
                     self.log_request_error(req_id, op, errno, format!("fh_out={} flush", fh_out));
                     return Err(errno);
@@ -6281,6 +6281,7 @@ impl Filesystem for FodFuse {
 #[cfg(test)]
 mod tests {
     use super::{should_update_atime, AtimePolicy, FodFuseProfileCounters, WriteState};
+    use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::FileAttr;
     use fuser::FileType;
     use std::collections::BTreeMap;
@@ -6368,7 +6369,7 @@ mod tests {
             truncate_pending: false,
             buffered_bytes: 0,
             load_error: false,
-            blocks: BTreeMap::new(),
+            payload: WritePayloadState::default(),
         };
         let buffered = WriteState {
             buffered_bytes: 16,
@@ -6379,11 +6380,13 @@ mod tests {
             ..clean.clone()
         };
         let blocked = WriteState {
-            blocks: {
-                let mut blocks = BTreeMap::new();
-                blocks.insert(0, vec![1, 2, 3, 4]);
-                blocks
-            },
+            payload: WritePayloadState::BlockOverlay(BlockWriteState {
+                blocks: {
+                    let mut blocks = BTreeMap::new();
+                    blocks.insert(0, vec![1, 2, 3, 4]);
+                    blocks
+                },
+            }),
             ..clean
         };
 

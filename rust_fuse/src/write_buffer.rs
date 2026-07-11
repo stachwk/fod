@@ -2,6 +2,7 @@
 // Licensed under BSL 1.1
 
 use crate::fs::FodFuse;
+use crate::write_payload::{SequentialSegmentState, WritePayloadState};
 use libc::EIO;
 use log::{debug, warn};
 use rust_hotpath::pg::{PersistBlockRow, PersistExtentRow};
@@ -9,7 +10,6 @@ use rust_hotpath::{
     choose_persist_execution_plan, dirty_block_size, PersistBlockPlanEntry, PersistExecutionPlan,
     PersistPayloadPlan, PersistPlanInput,
 };
-use std::collections::BTreeMap;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -19,7 +19,29 @@ pub(crate) struct WriteState {
     pub(crate) truncate_pending: bool,
     pub(crate) buffered_bytes: u64,
     pub(crate) load_error: bool,
-    pub(crate) blocks: BTreeMap<u64, Vec<u8>>,
+    pub(crate) payload: WritePayloadState,
+}
+
+impl WriteState {
+    fn blocks(&self) -> &std::collections::BTreeMap<u64, Vec<u8>> {
+        self.payload
+            .as_blocks()
+            .expect("write payload must be a block overlay")
+    }
+
+    fn blocks_mut(&mut self) -> &mut std::collections::BTreeMap<u64, Vec<u8>> {
+        self.payload
+            .as_blocks_mut()
+            .expect("write payload must be a block overlay")
+    }
+
+    fn ensure_block_overlay(&mut self, block_size: u64) {
+        self.payload.ensure_block_overlay(block_size);
+    }
+
+    pub(crate) fn clear_payload(&mut self) {
+        self.payload.clear();
+    }
 }
 
 fn build_persist_extent_rows_from_ranges(
@@ -40,7 +62,7 @@ fn build_persist_extent_rows_from_ranges(
         let mut used_bytes = 0u64;
         let mut segments = Vec::new();
         for block_index in *start_block..=*end_block {
-            let block = state.blocks.get(&block_index).ok_or_else(|| {
+            let block = state.blocks().get(&block_index).ok_or_else(|| {
                 format!("missing buffered block {block_index} for extent persistence")
             })?;
             let used_len = dirty_block_size(state.file_size, block_index, block_size);
@@ -97,7 +119,7 @@ impl FodFuse {
             truncate_pending,
             buffered_bytes: 0,
             load_error: false,
-            blocks: BTreeMap::new(),
+            payload: WritePayloadState::default(),
         }
     }
 
@@ -106,7 +128,7 @@ impl FodFuse {
         state: &mut WriteState,
         block_index: u64,
     ) -> Result<Vec<u8>, libc::c_int> {
-        if let Some(block) = state.blocks.get(&block_index) {
+        if let Some(block) = state.blocks().get(&block_index) {
             return Ok(block.clone());
         }
         if let Some(block) = self.recent_write_block(state.file_id, block_index) {
@@ -159,6 +181,41 @@ impl FodFuse {
         let original_file_size = state.file_size;
 
         let end = offset.saturating_add(data.len() as u64);
+
+        if let Some(sequential) = state.payload.as_sequential_mut() {
+            if sequential.append(offset, data, self.extent_target_bytes) {
+                state.file_size = state.file_size.max(end);
+                self.clear_read_cache_for_file(state.file_id);
+                self.record_update_write_buffer_elapsed(started.elapsed());
+                return Ok(());
+            }
+            debug!(
+                "FOD sequential segment state downgraded file_id={} expected_offset={} write_offset={}",
+                state.file_id, sequential.next_offset, offset
+            );
+            state.ensure_block_overlay(block_size);
+        } else if self.enable_extents
+            && state.payload.is_empty()
+            && original_file_size == 0
+            && offset == 0
+        {
+            let mut sequential = SequentialSegmentState::new(0);
+            if sequential.append(offset, data, self.extent_target_bytes) {
+                debug!(
+                    "FOD sequential segment state entered file_id={} target_bytes={} segment_count={}",
+                    state.file_id,
+                    self.extent_target_bytes,
+                    sequential.segment_count()
+                );
+                state.payload = WritePayloadState::SequentialSegments(sequential);
+                state.file_size = end;
+                self.clear_read_cache_for_file(state.file_id);
+                self.record_update_write_buffer_elapsed(started.elapsed());
+                return Ok(());
+            }
+        }
+
+        state.ensure_block_overlay(block_size);
         if end > state.file_size {
             state.file_size = end;
         }
@@ -194,7 +251,7 @@ impl FodFuse {
                 let mut block = if full_block_write {
                     // Full overwrites do not need to clone the previous block.
                     data[src_cursor..src_end].to_vec()
-                } else if let Some(existing_block) = state.blocks.get(&block_index) {
+                } else if let Some(existing_block) = state.blocks().get(&block_index) {
                     // Already buffered data has priority.
                     existing_block.clone()
                 } else if brand_new_block && block_slice_start == 0 {
@@ -214,7 +271,7 @@ impl FodFuse {
                 block[block_slice_start..block_slice_end]
                     .copy_from_slice(&data[src_cursor..src_end]);
 
-                state.blocks.insert(block_index, block);
+                state.blocks_mut().insert(block_index, block);
                 src_cursor = src_end;
             }
 
@@ -235,7 +292,10 @@ impl FodFuse {
             return Err(EIO);
         }
         let block_size = self.block_size.max(1);
-        let dirty_blocks = state.blocks.keys().copied().collect::<Vec<_>>();
+        // Phase B1 keeps the existing persistence path intact. Direct segment
+        // persistence is introduced only after the state transition is proven.
+        state.ensure_block_overlay(block_size);
+        let dirty_blocks = state.blocks().keys().copied().collect::<Vec<_>>();
         let persist_plan = choose_persist_execution_plan(PersistPlanInput {
             enable_extents: self.enable_extents,
             extent_target_bytes: self.extent_target_bytes,
@@ -248,7 +308,7 @@ impl FodFuse {
             self.record_flush_write_state_elapsed(started.elapsed());
             return Err(errno);
         }
-        let flushed_blocks = std::mem::take(&mut state.blocks);
+        let flushed_blocks = state.payload.take_blocks();
         self.store_recent_write_blocks(
             state.file_id,
             state.file_size,
@@ -274,7 +334,7 @@ impl FodFuse {
         if used_len == 0 {
             return None;
         }
-        let block = state.blocks.get(&block_index)?;
+        let block = state.blocks().get(&block_index)?;
         Some(PersistBlockRow {
             block_index,
             data: block.as_slice(),
@@ -394,6 +454,9 @@ impl FodFuse {
             return Ok(Vec::new());
         }
         let end_offset = offset.saturating_add(size).min(state.file_size);
+        if let Some(sequential) = state.payload.as_sequential() {
+            return sequential.read_range(offset, end_offset).ok_or(EIO);
+        }
         let mut output = vec![0u8; (end_offset - offset) as usize];
         let first_block = offset / block_size;
         let last_block = (end_offset.saturating_sub(1)) / block_size;
@@ -478,7 +541,7 @@ impl FodFuse {
         state.truncate_pending
             || state.buffered_bytes > 0
             || state.load_error
-            || !state.blocks.is_empty()
+            || !state.payload.is_empty()
     }
 
     pub(crate) fn write_flush_threshold_reached(&self, buffered_bytes: u64) -> bool {
@@ -576,19 +639,22 @@ impl FodFuse {
 
     pub(crate) fn merge_write_state_into(
         target: &mut WriteState,
-        source: WriteState,
+        mut source: WriteState,
         block_size: u64,
     ) {
         // Zachowujemy efekt wczesniejszych zapisow z innych fh.
         // Potem aktualny write() naklada swoje dane na zmergowany blok.
         let block_size = block_size.max(1);
+        target.ensure_block_overlay(block_size);
+        source.ensure_block_overlay(block_size);
 
         if source.truncate_pending {
             target.truncate_pending = true;
             target.file_size = source.file_size;
+            let target_file_size = target.file_size;
             target
-                .blocks
-                .retain(|block_index, _| block_index.saturating_mul(block_size) < target.file_size);
+                .blocks_mut()
+                .retain(|block_index, _| block_index.saturating_mul(block_size) < target_file_size);
         } else if source.file_size > target.file_size {
             target.file_size = source.file_size;
         }
@@ -596,8 +662,8 @@ impl FodFuse {
         target.buffered_bytes = target.buffered_bytes.saturating_add(source.buffered_bytes);
         target.load_error |= source.load_error;
 
-        for (block_index, block) in source.blocks {
-            target.blocks.insert(block_index, block);
+        for (block_index, block) in source.payload.take_blocks() {
+            target.blocks_mut().insert(block_index, block);
         }
     }
 
@@ -653,10 +719,14 @@ mod tests {
             truncate_pending: true,
             buffered_bytes: block_count * block_size,
             load_error: false,
-            blocks: dirty_blocks
-                .iter()
-                .map(|block_index| (*block_index, vec![*block_index as u8; block_size as usize]))
-                .collect(),
+            payload: WritePayloadState::BlockOverlay(crate::write_payload::BlockWriteState {
+                blocks: dirty_blocks
+                    .iter()
+                    .map(|block_index| {
+                        (*block_index, vec![*block_index as u8; block_size as usize])
+                    })
+                    .collect(),
+            }),
         };
 
         let rows = build_persist_extent_rows_from_ranges(&state, block_size, &plan.into_ranges())
@@ -679,13 +749,15 @@ mod tests {
             truncate_pending: true,
             buffered_bytes: 2 * block_size + 123,
             load_error: false,
-            blocks: [
-                (0, vec![b'A'; block_size as usize]),
-                (1, vec![b'B'; block_size as usize]),
-                (2, vec![b'C'; block_size as usize]),
-            ]
-            .into_iter()
-            .collect(),
+            payload: WritePayloadState::BlockOverlay(crate::write_payload::BlockWriteState {
+                blocks: [
+                    (0, vec![b'A'; block_size as usize]),
+                    (1, vec![b'B'; block_size as usize]),
+                    (2, vec![b'C'; block_size as usize]),
+                ]
+                .into_iter()
+                .collect(),
+            }),
         };
 
         let rows = build_persist_extent_rows_from_ranges(&state, block_size, &[(0, 1), (2, 2)])

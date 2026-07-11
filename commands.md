@@ -1473,3 +1473,34 @@ Base commit at execution time: `38af786`
 - `git add BENCHMARKS.md Makefile TODO.md commands.md conclusions.md docs/performance.md docs/storage-engine-v2-plan.md rust_fuse/tests/support.rs scripts/perf/pg/storage_extent_snapshot.sql scripts/perf/pg/table_dml_delta.py scripts/perf/pg/table_dml_snapshot.sql scripts/perf/summarize_storage_extent_matrix.py tests/integration/test_fio_mixed_io.sh tests/integration/test_fio_sequential_io.sh`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: record bounded extent benchmark matrix"`
+
+Execution date: `2026-07-11`
+
+Base commit at execution time: `1246b83`
+
+- `git status --short --branch`
+- `cat fod_version.txt`
+- `rg -n "WritePayloadState|SequentialSegment|BlockOverlay|segment manifest|append-only|extent_target_bytes|BoundedExtentPlanner|PersistPlan::Extents|prepare_persist_extent|persist_file_extents|data_extents" rust_fuse rust_hotpath rust_runtime README.md docs TODO.md`
+- `cargo fmt --all`
+- `cargo test -p fod-rust-fuse --bin fod-rust-fuse`
+- `cargo fmt --all -- --check`
+- `cargo check --workspace`
+- `FIO_CASES=extent FOD_PROFILE_IO=1 make test-fio-sequential-io` (first run correctly failed because a fixed-name file from an earlier test triggered unchanged-write skipping)
+- `FIO_CASES=extent FOD_PROFILE_IO=1 make test-fio-sequential-io` (passed after per-process test-file isolation)
+- `FIO_CASES=block make test-fio-sequential-io`
+- `make test-fio-mixed-io`
+- `make test-fio-random-mixed-io`
+- `make test-copy-block-crc-table`
+- `make test-persist-buffer-chunking`
+- `make test-unlink-after-write`
+- `make test-remount-durability-benchmark`
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+- `cargo test -p fod-rust-hotpath`
+- `cargo test -p fod-rust-fuse -- --skip primary_`
+- `findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-'`
+- `cargo fmt --all -- --check`
+- `cargo check --workspace`
+- `git diff --check`
+- `git add TODO.md commands.md conclusions.md docs/storage-engine-v2-plan.md rust_fuse/src/fs.rs rust_fuse/src/main.rs rust_fuse/src/write_buffer.rs rust_fuse/src/write_payload.rs tests/integration/test_fio_sequential_io.sh`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: add sequential segment write state"`

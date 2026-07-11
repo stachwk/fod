@@ -41,6 +41,7 @@ Reading guide:
     - Completed: bounded planning, bounded payload rows, the startup-only `extent_target_bytes` setting, and peak-payload diagnostics are implemented with a 1 MiB default. Three-run local and QNAP 64 MiB matrices passed, as did the all-workload local smoke. Extents remain opt-in because mixed/random and fio write still regress.
   - Phase B: add a sequential segment builder and direct segment persistence only after Phase A proves useful.
     - Gate status: local and QNAP evidence is positive for bounded extents, so Phase B may start without changing the default storage path. Keep 1 MiB as the balanced opt-in default; QNAP's best isolated throughput at 256 KiB does not justify a backend-specific default.
+    - Progress: `WritePayloadState`, `BlockOverlay`, and bounded `SequentialSegmentState` are implemented for new empty-file writes from offset zero. Gaps, backward writes, existing-file writes, and merged handle state use the block overlay. Direct segment persistence and its counters remain the next step.
   - Phase C: classify persistence semantics and add replay-confirmed, append-only persistence for new sequential objects.
   - Phase D: decide from measured results whether an object segment manifest and chunk store are still needed.
 - [x] Revisit cleanup in `rust_fuse/tests/root_permissions_smoke.rs` when the full Cargo suite is run without root.

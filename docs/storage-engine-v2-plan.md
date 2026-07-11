@@ -35,23 +35,29 @@ Implementation status:
 - the repeated local and QNAP extent-size matrices passed for the 64 MiB core
   workload;
 - Phase A is complete and Phase B may begin while extents remain opt-in and the
-  block path remains the default.
+  block path remains the default;
+- Phase B1 now buffers new empty-file writes from offset zero in a bounded
+  `SequentialSegmentState`, with gaps, backward writes, existing-file writes,
+  and state merging downgraded to `BlockOverlay`.
 
-## Current problem
+## Original problem and remaining memory issue
 
 The block path splits a large sequential stream into 4 KiB allocations and
-persists thousands of PostgreSQL rows. The current extent proof of concept
-avoids those physical rows, but it coalesces a full contiguous file into one
-extent and rebuilds one payload `Vec` proportional to the whole file. A 64 MiB
-write can therefore become one 64 MiB `PersistExtentRow`.
+persists thousands of PostgreSQL rows. Before Phase A, the extent proof of
+concept avoided those physical rows but coalesced a full contiguous file into
+one extent and rebuilt one payload `Vec` proportional to the whole file. A
+64 MiB write could therefore become one 64 MiB `PersistExtentRow`.
 
-That shape is not suitable as a general physical representation:
+Phase A bounds each physical extent payload. Phase B1 also buffers eligible
+new-file writes as bounded segments, but it deliberately converts them back to
+the block overlay before persistence. Direct segment persistence remains the
+next step. Until then, the remaining shape is not suitable as the final
+physical representation because:
 
-- peak payload memory grows with file size;
-- a large `BYTEA` is tied to the whole contiguous range;
+- the compatibility conversion still allocates 4 KiB block vectors at flush;
+- the bounded segment payloads and converted blocks coexist briefly;
 - future patching, GC, and read assembly have no bounded physical unit;
-- the current write state still creates 4 KiB block vectors before rebuilding
-  the extent payload.
+- the direct segment path still needs measured replay and failure behavior.
 
 ## Measured bottlenecks
 
@@ -89,13 +95,13 @@ This path owns partial writes, random writes, sparse writes, mixed writes,
 truncate behavior, CRC behavior, and the current safe fallback. Storage Engine
 v2 must not weaken those semantics.
 
-### Extent proof of concept
+### Bounded extent path
 
 ```text
 full contiguous dirty block set
-    -> one coalesced extent
-    -> one rebuilt payload Vec
-    -> PersistExtentRow
+    -> bounded extent plan
+    -> bounded payload Vec values
+    -> PersistExtentRow values
     -> data_extents
 ```
 
@@ -163,6 +169,12 @@ do not need to win because they retain the block fallback.
 ## Phase B: sequential segment builder
 
 Phase B starts only after Phase A passes its benchmark gate.
+
+Phase B1 is implemented as a state boundary only. Eligible new empty-file
+writes enter `SequentialSegmentState`; unsupported writes and merges downgrade
+to `BlockOverlay`. Flush still performs a compatibility downgrade before using
+the existing block/extent persistence planner. This preserves behavior while
+the direct segment persistence transaction is developed separately.
 
 Introduce an internal write-payload state without changing the FUSE API:
 

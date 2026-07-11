@@ -6,6 +6,7 @@ mod fs;
 mod read_cache;
 mod startup;
 mod write_buffer;
+mod write_payload;
 
 use clap::Parser;
 use fod_rust_runtime::{env_var_with_legacy_alias, RuntimeConfig};
