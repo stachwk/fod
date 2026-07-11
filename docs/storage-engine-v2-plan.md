@@ -41,7 +41,13 @@ Implementation status:
   and state merging downgraded to `BlockOverlay`;
 - Phase B2 moves eligible bounded segment buffers directly into
   `PersistExtentRow`, restores them after a failed repository call, and records
-  segment-mode diagnostics without changing the default block path.
+  segment-mode diagnostics without changing the default block path;
+- Phase C classifies persistence semantics and routes eligible full sequential
+  payloads through one replay-confirmed append-only data-object transaction;
+- the append-only transaction passed disconnect replay, shared-object,
+  hardlink, CRC, cleanup-policy, remount, and mounted FUSE regression coverage;
+- extents remain opt-in because repeated large-copy measurements still expose
+  source-side extent read amplification.
 
 ## Original problem and remaining copy issue
 
@@ -224,9 +230,10 @@ The 2026-07-11 local gate based on commit `f0e0a1c` showed:
   `18.50 MiB/s` on blocks, despite only `18 us` of segment preparation.
 
 Phase B therefore closes the payload-rebuild bottleneck, but not the copy read
-amplification. Extents remain opt-in. Phase C may add semantic classification,
-but the large-copy class must not be widened until range-oriented extent reads
-or data-object adoption remove the repeated fetch cost.
+amplification. Extents remain opt-in. Phase C adds semantic classification and
+append-only persistence, but the large-copy class must not be widened until
+range-oriented extent reads or data-object adoption remove the repeated fetch
+cost.
 
 ## Phase C: append-only new-object persistence
 
@@ -247,24 +254,35 @@ ordinary block/extent payloads as `ExistingObjectPatch`, and a pending truncate
 without payload as `TruncateOnly`. Runtime debug logs expose
 `persist_write_class=<class>` so integration profiles verify the real choice.
 
-This stage deliberately does not change repository behavior. All three classes
-still execute the Phase B persistence calls until the append-only transaction
-is introduced in the next commit.
-
-`NewObjectSequential` may create a new data object, insert bounded payload rows
-without generic conflict updates, attach or swap ownership atomically, adjust
-reference counts, and clean up the old object according to policy.
+`NewObjectSequential` creates a new data object, inserts bounded payload rows
+without generic conflict updates, attaches or swaps ownership atomically,
+adjusts reference counts, and cleans up the old object according to policy.
 
 `ExistingObjectPatch` retains the safe block staging/merge path and its CRC and
 partial-write semantics. `TruncateOnly` remains a separate metadata/storage
 boundary.
 
-The append-only transaction must use the existing
-`transactional_replay_confirmed()` infrastructure and durable outcome
-confirmation. It must not introduce an independent retry model. Required
-coverage includes body and commit disconnects, retry confirmation, shared data
-objects, hardlinks, full overwrite, remount durability, and immediate/deferred
-cleanup.
+The append-only transaction now uses the existing
+`transactional_replay_confirmed()` infrastructure and a durable request token.
+It creates a replacement `data_object`, streams bounded rows directly to
+`data_extents`, optionally creates block CRC rows, swaps `files.data_object_id`,
+updates reference counts, and applies immediate or deferred cleanup in one
+transaction. A lost commit acknowledgement is confirmed by joining the request
+token to the target file's currently attached object; a body disconnect rolls
+back and replays through the existing bounded mechanism.
+
+Coverage now includes body and commit disconnects, durable retry confirmation,
+shared data objects, hardlinks, full overwrite, CRC maintenance, remount
+durability, and immediate/deferred cleanup. The full 2026-07-11 local gate
+passed.
+
+The repeated 64 MiB large-file profile based on commit `42c5edf` measured
+`94.55 MiB/s` for append-only 1 MiB extents versus `46.39 MiB/s` for blocks,
+with 64 extent inserts, bounded payloads, and about `1.03 MB` mean WAL. The
+matching large-copy profile measured `12.14 MiB/s` for extents versus
+`16.07 MiB/s` for blocks. SQL profiles continue to attribute the copy
+regression to repeated extent reads, not append-only payload persistence.
+Consequently Phase C is complete without changing the default storage path.
 
 ## Phase D: object segment manifest decision
 

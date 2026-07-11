@@ -91,6 +91,7 @@ run_case() {
     fod_assert_contains "${LOG_FILE}" "write_state_mode=sequential_segment"
     fod_assert_contains "${LOG_FILE}" "persist_write_class=new_object_sequential"
     fod_assert_contains "${LOG_FILE}" "FOD direct segment persistence"
+    fod_assert_contains "${LOG_FILE}" "FOD append-only sequential object persisted"
   else
     if grep -Fq "FOD extent PoC execution" "${LOG_FILE}"; then
       echo "unexpected extent PoC log in block-storage mode"
@@ -102,6 +103,10 @@ run_case() {
     fi
     if grep -Fq "FOD direct segment persistence" "${LOG_FILE}"; then
       echo "unexpected direct segment persistence in block-storage mode"
+      return 1
+    fi
+    if grep -Fq "FOD append-only sequential object persisted" "${LOG_FILE}"; then
+      echo "unexpected append-only object persistence in block-storage mode"
       return 1
     fi
     fod_assert_contains "${LOG_FILE}" "FOD write_state_mode=block"

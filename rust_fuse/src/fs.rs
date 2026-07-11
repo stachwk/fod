@@ -1159,6 +1159,28 @@ impl FodFuse {
         result
     }
 
+    pub(crate) fn persist_new_object_extents_profiled(
+        &self,
+        file_id: u64,
+        file_size: u64,
+        block_size: u64,
+        total_blocks: u64,
+        extents: &[PersistExtentRow],
+        maintain_copy_crc_table: bool,
+    ) -> Result<u64, String> {
+        let started = Instant::now();
+        let result = self.repo.persist_new_object_extents(
+            file_id,
+            file_size,
+            block_size,
+            total_blocks,
+            extents,
+            maintain_copy_crc_table,
+        );
+        self.record_repo_persist_extents_elapsed(started.elapsed());
+        result
+    }
+
     fn reply_data_profiled(&self, reply: ReplyData, data: &[u8]) {
         let started = Instant::now();
         reply.data(data);

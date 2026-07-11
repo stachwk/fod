@@ -2,7 +2,7 @@
 // Licensed under BSL 1.1
 
 use fod_rust_hotpath::pg::{DbRepo, PersistBlockRow, PersistExtentRow};
-use fod_rust_runtime::RuntimeConfig;
+use fod_rust_runtime::{DataObjectSwapCleanup, RuntimeConfig};
 use std::env;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,7 +22,16 @@ fn conninfo_from_env() -> String {
 }
 
 fn repo_with_runtime() -> Result<DbRepo, String> {
+    repo_with_runtime_config(RuntimeConfig::from_env()?)
+}
+
+fn repo_with_swap_cleanup(cleanup: DataObjectSwapCleanup) -> Result<DbRepo, String> {
     let mut runtime = RuntimeConfig::from_env()?;
+    runtime.data_object_swap_cleanup = cleanup;
+    repo_with_runtime_config(runtime)
+}
+
+fn repo_with_runtime_config(mut runtime: RuntimeConfig) -> Result<DbRepo, String> {
     runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
     let repo = DbRepo::with_runtime(&conninfo_from_env(), &runtime)?;
     if repo.query_scalar_text(
@@ -32,6 +41,228 @@ fn repo_with_runtime() -> Result<DbRepo, String> {
         repo.exec("ALTER TABLE copy_block_crc DROP CONSTRAINT copy_block_crc_pkey")?;
     }
     Ok(repo)
+}
+
+#[test]
+fn append_only_extents_detach_shared_object_and_preserve_hardlink() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_swap_cleanup(DataObjectSwapCleanup::Immediate)?;
+    let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
+    let block_size_u64 = block_size as u64;
+
+    let dirname = unique_name("rust_pg_append_shared_dir");
+    let dir_id = repo.create_directory(
+        None,
+        &dirname,
+        0o755,
+        1000,
+        1000,
+        &unique_name("append_shared_dir_seed"),
+    )?;
+    let src_file_id = repo.create_file(
+        Some(dir_id),
+        &unique_name("rust_pg_append_shared_src"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("append_shared_src_seed"),
+    )?;
+    let dst_file_id = repo.create_file(
+        Some(dir_id),
+        &unique_name("rust_pg_append_shared_dst"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("append_shared_dst_seed"),
+    )?;
+
+    let old_payload = repeated_block(b'A', block_size);
+    let old_rows = [PersistBlockRow {
+        block_index: 0,
+        data: &old_payload,
+        used_len: block_size_u64,
+    }];
+    repo.persist_file_blocks(
+        src_file_id,
+        block_size_u64,
+        block_size_u64,
+        1,
+        false,
+        &old_rows,
+    )?;
+    if !repo.adopt_source_data_object(src_file_id, dst_file_id)? {
+        return Err("expected destination to adopt source data object".to_string());
+    }
+    let shared_data_object_id = repo
+        .file_data_object_id(src_file_id)?
+        .ok_or_else(|| "missing shared data object".to_string())?;
+
+    let hardlink_id = repo.create_hardlink(
+        dst_file_id,
+        Some(dir_id),
+        &unique_name("rust_pg_append_shared_hardlink"),
+        1000,
+        1000,
+    )?;
+    if repo.get_hardlink_file_id(hardlink_id)? != Some(dst_file_id) {
+        return Err("hardlink no longer resolves to the destination file".to_string());
+    }
+
+    let new_block0 = repeated_block(b'B', block_size);
+    let new_block1 = repeated_block(b'C', block_size);
+    let new_payload = [new_block0.clone(), new_block1.clone()].concat();
+    let extent_rows = [PersistExtentRow {
+        start_block: 0,
+        block_count: 2,
+        used_bytes: new_payload.len() as u64,
+        payload: new_payload,
+    }];
+    let new_data_object_id = repo.persist_new_object_extents(
+        dst_file_id,
+        2 * block_size_u64,
+        block_size_u64,
+        2,
+        &extent_rows,
+        true,
+    )?;
+
+    if new_data_object_id == shared_data_object_id
+        || repo.file_data_object_id(dst_file_id)? != Some(new_data_object_id)
+        || repo.file_data_object_id(src_file_id)? != Some(shared_data_object_id)
+    {
+        return Err("append-only write did not detach the shared object".to_string());
+    }
+    assert_block_range_matches(
+        &repo,
+        src_file_id,
+        block_size_u64,
+        &[(0, old_payload.as_slice())],
+    )?;
+    assert_block_range_matches(
+        &repo,
+        dst_file_id,
+        block_size_u64,
+        &[(0, new_block0.as_slice()), (1, new_block1.as_slice())],
+    )?;
+
+    let shared_reference_count = repo.query_scalar_text(&format!(
+        "SELECT reference_count FROM data_objects WHERE id_data_object = {shared_data_object_id}"
+    ))?;
+    if shared_reference_count.trim() != "1" {
+        return Err(format!(
+            "expected one remaining shared reference, got {shared_reference_count}"
+        ));
+    }
+    let crc_rows = repo.query_scalar_text(&format!(
+        "SELECT COUNT(*) FROM copy_block_crc WHERE data_object_id = {new_data_object_id}"
+    ))?;
+    if crc_rows.trim() != "2" {
+        return Err(format!("expected two append-only CRC rows, got {crc_rows}"));
+    }
+
+    repo.delete_hardlink_entry(hardlink_id)?;
+    repo.purge_primary_file(dst_file_id)?;
+    repo.purge_primary_file(src_file_id)?;
+    repo.delete_directory_entry(dir_id)?;
+    Ok(())
+}
+
+#[test]
+fn append_only_extents_follow_immediate_and_deferred_cleanup() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+
+    for cleanup in [
+        DataObjectSwapCleanup::Immediate,
+        DataObjectSwapCleanup::Deferred,
+    ] {
+        let repo = repo_with_swap_cleanup(cleanup)?;
+        let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
+        let block_size_u64 = block_size as u64;
+        let dirname = unique_name("rust_pg_append_cleanup_dir");
+        let dir_id = repo.create_directory(
+            None,
+            &dirname,
+            0o755,
+            1000,
+            1000,
+            &unique_name("append_cleanup_dir_seed"),
+        )?;
+        let file_id = repo.create_file(
+            Some(dir_id),
+            &unique_name("rust_pg_append_cleanup_file"),
+            0o644,
+            1000,
+            1000,
+            &unique_name("append_cleanup_file_seed"),
+        )?;
+
+        let old_payload = repeated_block(b'D', block_size);
+        let old_rows = [PersistBlockRow {
+            block_index: 0,
+            data: &old_payload,
+            used_len: block_size_u64,
+        }];
+        repo.persist_file_blocks(file_id, block_size_u64, block_size_u64, 1, false, &old_rows)?;
+        let old_data_object_id = repo
+            .file_data_object_id(file_id)?
+            .ok_or_else(|| "missing old data object".to_string())?;
+
+        let new_payload = repeated_block(b'E', block_size);
+        let extent_rows = [PersistExtentRow {
+            start_block: 0,
+            block_count: 1,
+            used_bytes: block_size_u64,
+            payload: new_payload.clone(),
+        }];
+        let new_data_object_id = repo.persist_new_object_extents(
+            file_id,
+            block_size_u64,
+            block_size_u64,
+            1,
+            &extent_rows,
+            false,
+        )?;
+        if new_data_object_id == old_data_object_id {
+            return Err("append-only write reused the old data object".to_string());
+        }
+
+        let old_object = repo.query_scalar_text(&format!(
+            "SELECT COUNT(*) FROM data_objects WHERE id_data_object = {old_data_object_id}"
+        ))?;
+        match cleanup {
+            DataObjectSwapCleanup::Immediate if old_object.trim() != "0" => {
+                return Err("immediate cleanup retained the old object".to_string());
+            }
+            DataObjectSwapCleanup::Deferred if old_object.trim() != "1" => {
+                return Err("deferred cleanup removed the old object".to_string());
+            }
+            DataObjectSwapCleanup::Deferred => {
+                let old_reference_count = repo.query_scalar_text(&format!(
+                    "SELECT reference_count FROM data_objects WHERE id_data_object = {old_data_object_id}"
+                ))?;
+                if old_reference_count.trim() != "0" {
+                    return Err("deferred old object is still referenced".to_string());
+                }
+            }
+            _ => {}
+        }
+        assert_block_range_matches(
+            &repo,
+            file_id,
+            block_size_u64,
+            &[(0, new_payload.as_slice())],
+        )?;
+
+        repo.purge_primary_file(file_id)?;
+        if cleanup == DataObjectSwapCleanup::Deferred {
+            repo.exec(&format!(
+                "DELETE FROM data_blocks WHERE data_object_id = {old_data_object_id}; DELETE FROM data_extents WHERE data_object_id = {old_data_object_id}; DELETE FROM copy_block_crc WHERE data_object_id = {old_data_object_id}; DELETE FROM data_objects WHERE id_data_object = {old_data_object_id}"
+            ))?;
+        }
+        repo.delete_directory_entry(dir_id)?;
+    }
+
+    Ok(())
 }
 
 fn unique_name(prefix: &str) -> String {

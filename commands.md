@@ -1426,6 +1426,55 @@ Base commit at execution time: `93f1ab9`
 - `make test-fio-mixed-io`
 - `make test-fio-random-mixed-io`
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+
+Execution date: `2026-07-11`
+
+Base commit at execution time: `42c5edf`
+
+- `git status --short --branch && git log -5 --oneline && cat fod_version.txt`
+- `ps -ef | rg 'storage-append-only-copy|profile-storage-extent|test-large-copy-benchmark|make'`
+- `find artifacts/perf/42c5edf -maxdepth 1 -type f -name '*storage-append-only-*' -printf '%f\\n' | sort`
+- `sed -n '1,1040p' /home/wojtek/.codex/attachments/c68fffdd-2e2f-436c-ad7a-c13fac268a9e/pasted-text.txt`
+- `git diff --stat`
+- `git diff --check`
+- `cargo fmt --all`
+- `cargo check --workspace`
+- `cargo test -p fod-rust-hotpath --lib`
+- `cargo test -p fod-rust-hotpath --test pg_query append_only_extents -- --nocapture`
+- `cargo test -p fod-rust-hotpath --test transactional_replay_smoke append_only_extent_persist -- --nocapture`
+- `FIO_CASES=extent FOD_PROFILE_IO=1 make test-fio-sequential-io`
+- `FOD_ENABLE_EXTENTS=1 make test-remount-durability-benchmark`
+- `make test-fio-sequential-io`
+- `FOD_ENABLE_EXTENTS=1 make test-hardlink`
+- `PROFILE_RUN_ID=storage-append-only-core-20260711T073350Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=storage-append-only-copy-20260711T073430Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-benchmark make profile-storage-extent-size-matrix-local`
+- `sed -n '1,260p' artifacts/perf/42c5edf/lt7300-storage-append-only-core-20260711T073350Z-storage-extent-summary.md`
+- `sed -n '1,280p' artifacts/perf/42c5edf/lt7300-storage-append-only-copy-20260711T073430Z-storage-extent-summary.md`
+- `rg -n 'data_object_request_tokens|data_extents|data_object_write_target_on_conn|finish_data_object_write_on_conn|transactional_replay_confirmed' rust_hotpath migrations`
+- `cargo fmt --all -- --check`
+- `cargo check --workspace`
+- `cargo test -p fod-rust-hotpath`
+- `cargo test -p fod-rust-fuse -- --skip primary_`
+- `make test-copy-block-crc-table`
+- `make test-remount-durability-benchmark`
+- `FOD_ENABLE_EXTENTS=1 make test-remount-durability-benchmark`
+- `make test-persist-buffer-chunking`
+- `make test-unlink-after-write`
+- `make test-rust-hotpath-copy-dedupe`
+- `make test-fio-sequential-io`
+- `make test-fio-mixed-io`
+- `make test-fio-random-mixed-io`
+- `FOD_ENABLE_EXTENTS=1 make test-hardlink`
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-'`
+- `rg -n 'does not change repository behavior|introduced in the next commit|Next implementation: dispatch|Phase C may add' TODO.md docs/storage-engine-v2-plan.md conclusions.md`
+- `cat fod_version.txt`
+- `git status --short`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/storage-engine-v2-plan.md rust_fuse/src/fs.rs rust_fuse/src/write_buffer.rs rust_hotpath/src/pg.rs rust_hotpath/tests/pg_query.rs rust_hotpath/tests/transactional_replay_smoke.rs tests/integration/test_fio_sequential_io.sh`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: add append-only sequential object persistence"`
 - `cargo fmt --all -- --check`
 - `bash -n tests/integration/test_fio_sequential_io.sh`
 - `.venv/bin/python -m py_compile scripts/perf/summarize_storage_extent_matrix.py`

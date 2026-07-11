@@ -966,3 +966,96 @@ fn transactional_commit_disconnect_is_replayed_for_extent_persist() {
         .delete_directory_entry(parent_id)
         .expect("cleanup parent directory");
 }
+
+fn run_append_only_extent_replay(drop_marker: &str, drop_delay: Duration) {
+    let direct_repo = repo_from_conninfo(&direct_conninfo());
+    let parent_name = unique_name("transactional_append_extents_parent");
+    let parent_seed = unique_name("transactional_append_extents_parent_seed");
+    let parent_id = direct_repo
+        .create_directory(None, &parent_name, 0o755, 1000, 1000, &parent_seed)
+        .expect("create append-only parent directory");
+    let file_id = direct_repo
+        .create_file(
+            Some(parent_id),
+            &unique_name("transactional_append_extents_file"),
+            0o644,
+            1000,
+            1000,
+            &unique_name("transactional_append_extents_seed"),
+        )
+        .expect("create append-only target file");
+    let old_data_object_id = direct_repo
+        .file_data_object_id(file_id)
+        .expect("query old data object")
+        .expect("missing old data object");
+
+    let block_size = 4u64;
+    let block0 = vec![b'Q'; block_size as usize];
+    let block1 = vec![b'R'; block_size as usize];
+    let payload = [block0.clone(), block1.clone()].concat();
+    let extents = [PersistExtentRow {
+        start_block: 0,
+        block_count: 2,
+        used_bytes: payload.len() as u64,
+        payload,
+    }];
+
+    let proxy = QueryDropProxy::start(drop_marker, drop_delay).expect("start append-only proxy");
+    let repo = repo_from_conninfo(&proxy.conninfo());
+    let new_data_object_id = repo
+        .persist_new_object_extents(file_id, 2 * block_size, block_size, 2, &extents, true)
+        .expect("persist append-only extents with replay confirmation");
+
+    assert_eq!(proxy.drop_hits(), 1);
+    assert!(proxy.match_hits() >= 2);
+    assert_ne!(new_data_object_id, old_data_object_id);
+    assert_eq!(
+        direct_repo
+            .file_data_object_id(file_id)
+            .expect("query current data object"),
+        Some(new_data_object_id)
+    );
+    assert_eq!(
+        direct_repo
+            .fetch_block_range(file_id, 0, 1, block_size)
+            .expect("fetch replayed append-only extents"),
+        vec![(0, block0), (1, block1)]
+    );
+    assert_eq!(
+        direct_repo
+            .query_scalar_text(&format!(
+                "SELECT COUNT(*) FROM data_object_request_tokens WHERE id_data_object = {new_data_object_id}"
+            ))
+            .expect("count append-only request tokens")
+            .trim(),
+        "1"
+    );
+    assert_eq!(
+        direct_repo
+            .query_scalar_text(&format!(
+                "SELECT COUNT(*) FROM data_objects WHERE id_data_object = {old_data_object_id}"
+            ))
+            .expect("count old append-only object")
+            .trim(),
+        "0"
+    );
+
+    direct_repo
+        .purge_primary_file(file_id)
+        .expect("cleanup append-only file");
+    direct_repo
+        .delete_directory_entry(parent_id)
+        .expect("cleanup append-only parent");
+}
+
+#[test]
+fn transactional_body_disconnect_is_replayed_for_append_only_extent_persist() {
+    let _guard = test_guard();
+    run_append_only_extent_replay("COPY data_extents", Duration::ZERO);
+}
+
+#[test]
+fn transactional_commit_disconnect_is_confirmed_for_append_only_extent_persist() {
+    let _guard = test_guard();
+    run_append_only_extent_replay("COMMIT", Duration::from_millis(50));
+}

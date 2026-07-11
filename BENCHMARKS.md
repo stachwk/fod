@@ -160,6 +160,55 @@ Artifacts:
 - `artifacts/perf/f0e0a1c/lt7300-storage-segment-direct-core-20260711T065722Z-storage-extent-summary.md`
 - `artifacts/perf/f0e0a1c/lt7300-storage-segment-direct-copy-20260711T065838Z-storage-extent-summary.md`
 
+## 2026-07-11 Append-Only Sequential Object Persistence
+
+Collected from a Storage Engine v2 worktree based on commit `42c5edf`
+(`FOD 3.2.1: classify storage persistence operations`). The pending change
+routed complete direct-segment payloads through a replay-confirmed replacement
+data-object transaction instead of mutating the previous object's extent rows.
+
+Commands:
+
+```bash
+PROFILE_RUN_ID=storage-append-only-core-20260711T073350Z \
+PROFILE_STORAGE_EXTENT_REPEAT=3 \
+PROFILE_STORAGE_EXTENT_SIZES=1048576 \
+PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark \
+make profile-storage-extent-size-matrix-local
+
+PROFILE_RUN_ID=storage-append-only-copy-20260711T073430Z \
+PROFILE_STORAGE_EXTENT_REPEAT=3 \
+PROFILE_STORAGE_EXTENT_SIZES=1048576 \
+PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-benchmark \
+make profile-storage-extent-size-matrix-local
+```
+
+| workload | path | throughput mean | stdev | elapsed mean | segment preparation | physical inserts | WAL bytes mean | max RSS mean |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 MiB large-file | block | `46.39 MiB/s` | `1.44` | `1.381007s` | `0 us` | `16384 data_blocks` | `7411301` | `137665 KiB` |
+| 64 MiB large-file | append-only 1 MiB extents | `94.55 MiB/s` | `5.61` | `0.679384s` | `14.33 us` | `64 data_extents` | `1026872` | `141652 KiB` |
+| 64 MiB large-copy | block | `16.07 MiB/s` | `0.82` | `3.992818s` | `0 us` | `32768 data_blocks` | `13415473` | `137733 KiB` |
+| 64 MiB large-copy | append-only 1 MiB extents | `12.14 MiB/s` | `0.81` | `5.291845s` | `18.67 us` | `128 data_extents` | `1910705` | `137676 KiB` |
+
+The append-only large-file path remains roughly twice as fast as the block
+path, writes 256 times fewer physical payload rows, and keeps each payload at
+the configured 1 MiB bound. Compared with the preceding direct-segment sample
+(`98.81 MiB/s`), two append-only runs remained near `97-100 MiB/s`, while one
+noisy `86.75 MiB/s` run lowered the mean; mean WAL increased by about 15% from
+the preceding extent sample but remained about seven times below the block
+path.
+
+Large-copy remains a negative result. The append-only destination transaction
+does not remove the repeated source extent reads, so the workload is about 24%
+slower than blocks despite low segment preparation cost and much lower WAL.
+Keep extents opt-in and address range-oriented extent reads or direct object
+adoption before considering a broader large-copy selection policy.
+
+Artifacts:
+
+- `artifacts/perf/42c5edf/lt7300-storage-append-only-core-20260711T073350Z-storage-extent-summary.md`
+- `artifacts/perf/42c5edf/lt7300-storage-append-only-copy-20260711T073430Z-storage-extent-summary.md`
+
 ## 2026-07-05 Local/QNAP COPY Buffer Matrix
 
 Collected from commit `a3076e1` (`FOD 3.2.1: add copy-buffer matrix compare target`).

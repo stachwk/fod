@@ -1756,6 +1756,51 @@ fn persist_blocks_cover_full_file(
     true
 }
 
+fn persist_extents_cover_full_file(
+    file_size: u64,
+    block_size: u64,
+    total_blocks: u64,
+    extents: &[PersistExtentRow],
+) -> bool {
+    if file_size == 0 || extents.is_empty() {
+        return false;
+    }
+
+    let block_size = block_size.max(1);
+    let expected_total_blocks = 1 + (file_size - 1) / block_size;
+    if total_blocks != expected_total_blocks {
+        return false;
+    }
+
+    let mut expected_start_block = 0u64;
+    for extent in extents {
+        if extent.start_block != expected_start_block || extent.block_count == 0 {
+            return false;
+        }
+        let Some(end_block) = extent.start_block.checked_add(extent.block_count) else {
+            return false;
+        };
+        if end_block > expected_total_blocks {
+            return false;
+        }
+        let Some(start_offset) = extent.start_block.checked_mul(block_size) else {
+            return false;
+        };
+        let Some(end_offset) = end_block.checked_mul(block_size) else {
+            return false;
+        };
+        let expected_used_bytes = file_size.min(end_offset).saturating_sub(start_offset);
+        if extent.used_bytes != expected_used_bytes
+            || usize::try_from(extent.used_bytes).ok() != Some(extent.payload.len())
+        {
+            return false;
+        }
+        expected_start_block = end_block;
+    }
+
+    expected_start_block == expected_total_blocks
+}
+
 fn append_copy_binary_i16(out: &mut Vec<u8>, value: i16) {
     out.extend_from_slice(&value.to_be_bytes());
 }
@@ -3084,6 +3129,44 @@ impl DbRepo {
         copy.send(&copy_buffer)?;
         copy.finish()?;
         Ok(())
+    }
+
+    unsafe fn copy_extent_rows_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+        data_object_id: u64,
+        extents: &[PersistExtentRow],
+    ) -> Result<(), String> {
+        let file_id_i64 = i64::try_from(file_id)
+            .map_err(|_| "file id out of range for extent copy".to_string())?;
+        let data_object_id_i64 = i64::try_from(data_object_id)
+            .map_err(|_| "data object id out of range for extent copy".to_string())?;
+        let copy_sql = CString::new(
+            "COPY data_extents (id_file, data_object_id, start_block, block_count, used_bytes, payload) FROM STDIN BINARY",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let mut copy = CopyInSession::start(conn, &copy_sql)?;
+        let mut copy_buffer = Vec::with_capacity(128);
+        append_copy_binary_header(&mut copy_buffer);
+        copy.send(&copy_buffer)?;
+        for extent in extents {
+            if extent.payload.len() != extent.used_bytes as usize {
+                return Err("extent payload length does not match used_bytes".to_string());
+            }
+            if extent.block_count == 0 {
+                return Err("extent block count must be greater than zero".to_string());
+            }
+            copy_buffer.clear();
+            append_persist_extent_copy_binary_row(
+                &mut copy_buffer,
+                file_id_i64,
+                data_object_id_i64,
+                extent,
+            )?;
+            copy.send(&copy_buffer)?;
+        }
+        copy.finish()
     }
 
     unsafe fn delete_extent_rows_on_conn(
@@ -8330,36 +8413,7 @@ impl DbRepo {
                     data_object_id,
                     maintain_copy_crc_table,
                 )?;
-
-                let file_id_i64 = i64::try_from(file_id)
-                    .map_err(|_| "file id out of range for extent copy".to_string())?;
-                let data_object_id_i64 = i64::try_from(data_object_id)
-                    .map_err(|_| "data object id out of range for extent copy".to_string())?;
-                let copy_sql = CString::new(
-                    "COPY data_extents (id_file, data_object_id, start_block, block_count, used_bytes, payload) FROM STDIN BINARY",
-                )
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-                let mut copy = CopyInSession::start(conn, &copy_sql)?;
-                let mut copy_buffer = Vec::with_capacity(128);
-                append_copy_binary_header(&mut copy_buffer);
-                copy.send(&copy_buffer)?;
-                for extent in extents {
-                    if extent.payload.len() != extent.used_bytes as usize {
-                        return Err("extent payload length does not match used_bytes".to_string());
-                    }
-                    if extent.block_count == 0 {
-                        continue;
-                    }
-                    copy_buffer.clear();
-                    append_persist_extent_copy_binary_row(
-                        &mut copy_buffer,
-                        file_id_i64,
-                        data_object_id_i64,
-                        extent,
-                    )?;
-                    copy.send(&copy_buffer)?;
-                }
-                copy.finish()?;
+                self.copy_extent_rows_on_conn(conn, file_id, data_object_id, extents)?;
 
                 if maintain_copy_crc_table {
                     self.persist_copy_block_crc_extent_rows_on_conn(
@@ -8374,6 +8428,92 @@ impl DbRepo {
                 self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
                 Ok(())
             })
+        })
+    }
+
+    pub fn persist_new_object_extents(
+        &self,
+        file_id: u64,
+        file_size: u64,
+        block_size: u64,
+        total_blocks: u64,
+        extents: &[PersistExtentRow],
+        maintain_copy_crc_table: bool,
+    ) -> Result<u64, String> {
+        if !persist_extents_cover_full_file(file_size, block_size, total_blocks, extents) {
+            return Err(
+                "append-only extent persistence requires exact full-file coverage".to_string(),
+            );
+        }
+
+        let request_token = CString::new(generate_request_token("sequential-object-persist"))
+            .map_err(|_| "request token contains NUL byte".to_string())?;
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let sql_lookup_request_token = CString::new(
+            "SELECT COALESCE((SELECT t.id_data_object::text FROM data_object_request_tokens t JOIN files f ON f.data_object_id = t.id_data_object WHERE t.request_token = $1 AND f.id_file = $2 LIMIT 1), '')",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_store_request_token = CString::new(
+            "INSERT INTO data_object_request_tokens (request_token, id_data_object, created_at, updated_at) \
+             VALUES ($1, $2, NOW(), NOW()) \
+             ON CONFLICT (request_token) DO UPDATE SET updated_at = NOW() \
+             RETURNING id_data_object",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replay_confirmed(
+                conn,
+                |conn| {
+                    let params = [&request_token, &file_id_text];
+                    let res = exec_params(conn, &sql_lookup_request_token, &params)?;
+                    match fetch_single_text_option(res)? {
+                        Some(value) => value
+                            .parse::<u64>()
+                            .map(Some)
+                            .map_err(|_| "invalid sequential persist request token".to_string()),
+                        None => Ok(None),
+                    }
+                },
+                |conn| {
+                    let target = self
+                        .data_object_write_target_on_conn(
+                            conn,
+                            file_id,
+                            file_size,
+                            true,
+                            maintain_copy_crc_table,
+                        )?
+                        .ok_or_else(|| {
+                            "file is missing for append-only extent persistence".to_string()
+                        })?;
+                    self.copy_extent_rows_on_conn(conn, file_id, target.data_object_id, extents)?;
+                    if maintain_copy_crc_table {
+                        self.persist_copy_block_crc_extent_rows_on_conn(
+                            conn,
+                            file_id,
+                            target.data_object_id,
+                            block_size,
+                            extents,
+                        )?;
+                    }
+                    self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
+
+                    let data_object_id = CString::new(target.data_object_id.to_string())
+                        .map_err(|_| "data object id contains NUL byte".to_string())?;
+                    let params = [&request_token, &data_object_id];
+                    let res = exec_params(conn, &sql_store_request_token, &params)?;
+                    let stored_data_object_id = fetch_single_text(res)?
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|_| "invalid stored sequential persist token".to_string())?;
+                    if stored_data_object_id != target.data_object_id {
+                        return Err("sequential persist token mapped to another object".to_string());
+                    }
+                    Ok(target.data_object_id)
+                },
+            )
         })
     }
 
@@ -9812,6 +9952,34 @@ mod tests {
         let tuning = ConnectionTuning::default();
         let tuned = apply_connection_tuning("host=localhost dbname=fod", &tuning).unwrap();
         assert_eq!(tuned, "host=localhost dbname=fod");
+    }
+
+    #[test]
+    fn append_only_extents_require_exact_full_file_coverage() {
+        let rows = vec![
+            PersistExtentRow {
+                start_block: 0,
+                block_count: 2,
+                used_bytes: 8,
+                payload: vec![b'A'; 8],
+            },
+            PersistExtentRow {
+                start_block: 2,
+                block_count: 1,
+                used_bytes: 2,
+                payload: vec![b'B'; 2],
+            },
+        ];
+        assert!(persist_extents_cover_full_file(10, 4, 3, &rows));
+        assert!(!persist_extents_cover_full_file(10, 4, 2, &rows));
+
+        let mut gapped = rows.clone();
+        gapped[1].start_block = 3;
+        assert!(!persist_extents_cover_full_file(10, 4, 3, &gapped));
+
+        let mut short_payload = rows;
+        short_payload[1].payload.pop();
+        assert!(!persist_extents_cover_full_file(10, 4, 3, &short_payload));
     }
 
     #[test]

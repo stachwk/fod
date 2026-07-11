@@ -460,24 +460,30 @@ impl FodFuse {
             rows.iter().map(|row| row.used_bytes).sum::<u64>()
         );
         let live = self.reloadable_runtime();
-        if let Err(err) = self.persist_file_extents_profiled(
+        let new_data_object_id = match self.persist_new_object_extents_profiled(
             state.file_id,
             state.file_size,
             block_size,
             plan.total_blocks,
-            state.truncate_pending,
             &rows,
             live.copy_dedupe_crc_table,
         ) {
-            state
-                .payload
-                .restore_sequential(sequential_state_from_persist_rows(rows, block_size));
-            warn!(
-                "FOD direct segment persistence failed file_id={} err={}",
-                state.file_id, err
-            );
-            return Err(EIO);
-        }
+            Ok(data_object_id) => data_object_id,
+            Err(err) => {
+                state
+                    .payload
+                    .restore_sequential(sequential_state_from_persist_rows(rows, block_size));
+                warn!(
+                    "FOD direct segment persistence failed file_id={} err={}",
+                    state.file_id, err
+                );
+                return Err(EIO);
+            }
+        };
+        debug!(
+            "FOD append-only sequential object persisted file_id={} data_object_id={}",
+            state.file_id, new_data_object_id
+        );
 
         Ok(true)
     }
