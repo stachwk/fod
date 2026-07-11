@@ -129,10 +129,44 @@ pub enum PersistPlan {
     Extents(ExtentPlanOutput),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistWriteClass {
+    NewObjectSequential,
+    ExistingObjectPatch,
+    TruncateOnly,
+}
+
+impl PersistWriteClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NewObjectSequential => "new_object_sequential",
+            Self::ExistingObjectPatch => "existing_object_patch",
+            Self::TruncateOnly => "truncate_only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersistWriteClassInput {
+    pub new_object_sequential: bool,
+    pub truncate_pending: bool,
+    pub has_payload: bool,
+}
+
+pub fn classify_persist_write(input: PersistWriteClassInput) -> PersistWriteClass {
+    if input.new_object_sequential && input.has_payload {
+        PersistWriteClass::NewObjectSequential
+    } else if input.truncate_pending && !input.has_payload {
+        PersistWriteClass::TruncateOnly
+    } else {
+        PersistWriteClass::ExistingObjectPatch
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistExecutionPlan {
     pub total_blocks: u64,
-    pub truncate_only: bool,
+    pub write_class: PersistWriteClass,
     pub payload: PersistPayloadPlan,
 }
 
@@ -313,16 +347,30 @@ pub fn choose_persist_plan(input: PersistPlanInput<'_>) -> PersistPlan {
 
 pub fn choose_persist_execution_plan(input: PersistPlanInput<'_>) -> PersistExecutionPlan {
     match choose_persist_plan(input) {
-        PersistPlan::Blocks(plan) => PersistExecutionPlan {
-            total_blocks: plan.total_blocks,
-            truncate_only: plan.truncate_only,
-            payload: PersistPayloadPlan::Blocks(plan.blocks),
-        },
-        PersistPlan::Extents(plan) => PersistExecutionPlan {
-            total_blocks: block_count_for_length(input.file_size, input.block_size, false),
-            truncate_only: input.truncate_pending && input.dirty_blocks.is_empty(),
-            payload: PersistPayloadPlan::Extents(plan),
-        },
+        PersistPlan::Blocks(plan) => {
+            let write_class = classify_persist_write(PersistWriteClassInput {
+                new_object_sequential: false,
+                truncate_pending: input.truncate_pending,
+                has_payload: !plan.blocks.is_empty(),
+            });
+            PersistExecutionPlan {
+                total_blocks: plan.total_blocks,
+                write_class,
+                payload: PersistPayloadPlan::Blocks(plan.blocks),
+            }
+        }
+        PersistPlan::Extents(plan) => {
+            let write_class = classify_persist_write(PersistWriteClassInput {
+                new_object_sequential: false,
+                truncate_pending: input.truncate_pending,
+                has_payload: !plan.extents.is_empty(),
+            });
+            PersistExecutionPlan {
+                total_blocks: block_count_for_length(input.file_size, input.block_size, false),
+                write_class,
+                payload: PersistPayloadPlan::Extents(plan),
+            }
+        }
     }
 }
 
@@ -412,11 +460,11 @@ mod tests {
         match choose_persist_execution_plan(input) {
             PersistExecutionPlan {
                 total_blocks,
-                truncate_only,
+                write_class,
                 payload: PersistPayloadPlan::Extents(plan),
             } => {
                 assert_eq!(total_blocks, 4);
-                assert!(!truncate_only);
+                assert_eq!(write_class, PersistWriteClass::ExistingObjectPatch);
                 assert_eq!(plan.into_ranges(), vec![(0, 3)]);
             }
             _ => panic!("expected extent execution plan"),
@@ -430,11 +478,11 @@ mod tests {
         match choose_persist_execution_plan(block_input) {
             PersistExecutionPlan {
                 total_blocks,
-                truncate_only,
+                write_class,
                 payload: PersistPayloadPlan::Blocks(blocks),
             } => {
                 assert_eq!(total_blocks, 4);
-                assert!(!truncate_only);
+                assert_eq!(write_class, PersistWriteClass::ExistingObjectPatch);
                 assert_eq!(blocks, persist_block_plan(block_input).blocks);
             }
             _ => panic!("expected block execution plan"),
@@ -449,15 +497,43 @@ mod tests {
         match choose_persist_execution_plan(truncate_only_input) {
             PersistExecutionPlan {
                 total_blocks,
-                truncate_only,
+                write_class,
                 payload: PersistPayloadPlan::Blocks(blocks),
             } => {
                 assert_eq!(total_blocks, 4);
-                assert!(truncate_only);
+                assert_eq!(write_class, PersistWriteClass::TruncateOnly);
                 assert!(blocks.is_empty());
             }
             _ => panic!("expected truncate-only execution plan"),
         }
+    }
+
+    #[test]
+    fn persist_write_classification_separates_storage_semantics() {
+        assert_eq!(
+            classify_persist_write(PersistWriteClassInput {
+                new_object_sequential: true,
+                truncate_pending: true,
+                has_payload: true,
+            }),
+            PersistWriteClass::NewObjectSequential
+        );
+        assert_eq!(
+            classify_persist_write(PersistWriteClassInput {
+                new_object_sequential: false,
+                truncate_pending: false,
+                has_payload: true,
+            }),
+            PersistWriteClass::ExistingObjectPatch
+        );
+        assert_eq!(
+            classify_persist_write(PersistWriteClassInput {
+                new_object_sequential: false,
+                truncate_pending: true,
+                has_payload: false,
+            }),
+            PersistWriteClass::TruncateOnly
+        );
     }
 
     #[test]

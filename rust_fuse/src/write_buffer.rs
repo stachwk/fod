@@ -7,9 +7,10 @@ use libc::EIO;
 use log::{debug, warn};
 use rust_hotpath::pg::{PersistBlockRow, PersistExtentRow};
 use rust_hotpath::{
-    choose_persist_execution_plan, dirty_block_size, plan_sequential_segment_persist,
-    PersistBlockPlanEntry, PersistExecutionPlan, PersistPayloadPlan, PersistPlanInput,
-    PersistSegmentInput, PersistSegmentPlan,
+    choose_persist_execution_plan, classify_persist_write, dirty_block_size,
+    plan_sequential_segment_persist, PersistBlockPlanEntry, PersistExecutionPlan,
+    PersistPayloadPlan, PersistPlanInput, PersistSegmentInput, PersistSegmentPlan,
+    PersistWriteClass, PersistWriteClassInput,
 };
 use std::time::Instant;
 
@@ -444,9 +445,16 @@ impl FodFuse {
         self.record_prepare_persist_extent_rows_peak_payload_bytes(peak_payload_bytes);
         self.record_segment_count(rows.len() as u64);
         self.record_prepare_persist_segment_rows_elapsed(prepare_started.elapsed());
+        let write_class = classify_persist_write(PersistWriteClassInput {
+            new_object_sequential: true,
+            truncate_pending: state.truncate_pending,
+            has_payload: !rows.is_empty(),
+        });
+        debug_assert_eq!(write_class, PersistWriteClass::NewObjectSequential);
 
         debug!(
-            "FOD direct segment persistence write_state_mode=sequential_segment file_id={} segment_count={} payload_bytes={}",
+            "FOD direct segment persistence write_state_mode=sequential_segment persist_write_class={} file_id={} segment_count={} payload_bytes={}",
+            write_class.as_str(),
             state.file_id,
             rows.len(),
             rows.iter().map(|row| row.used_bytes).sum::<u64>()
@@ -551,6 +559,12 @@ impl FodFuse {
         execution_plan: PersistExecutionPlan,
     ) -> Result<(), libc::c_int> {
         let live = self.reloadable_runtime();
+        debug!(
+            "FOD persist_write_class={} file_id={} truncate_pending={}",
+            execution_plan.write_class.as_str(),
+            state.file_id,
+            state.truncate_pending
+        );
         match execution_plan.payload {
             PersistPayloadPlan::Blocks(blocks) => {
                 let rows = self.prepare_persist_rows_from_block_plan(state, &blocks);

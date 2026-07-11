@@ -240,6 +240,17 @@ enum PersistWriteClass {
 }
 ```
 
+The classification boundary is implemented. `PersistExecutionPlan` now carries
+`PersistWriteClass` instead of an indirect execution-only `truncate_only`
+flag. Direct sequential segments are classified as `NewObjectSequential`,
+ordinary block/extent payloads as `ExistingObjectPatch`, and a pending truncate
+without payload as `TruncateOnly`. Runtime debug logs expose
+`persist_write_class=<class>` so integration profiles verify the real choice.
+
+This stage deliberately does not change repository behavior. All three classes
+still execute the Phase B persistence calls until the append-only transaction
+is introduced in the next commit.
+
 `NewObjectSequential` may create a new data object, insert bounded payload rows
 without generic conflict updates, attach or swap ownership atomically, adjust
 reference counts, and clean up the old object according to policy.

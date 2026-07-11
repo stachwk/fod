@@ -1436,6 +1436,42 @@ Base commit at execution time: `93f1ab9`
 - `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance.md docs/storage-engine-v2-plan.md rust_fuse/src/fs.rs rust_fuse/src/read_cache.rs rust_fuse/src/write_buffer.rs rust_fuse/src/write_payload.rs rust_hotpath/src/persist_plan.rs scripts/perf/summarize_storage_extent_matrix.py tests/integration/test_fio_sequential_io.sh`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: persist sequential segments directly"`
+
+Execution date: `2026-07-11`
+
+Base commit at execution time: `a7fcd5a`
+
+- `git status --short --branch`
+- `sed -n '1,380p' rust_hotpath/src/persist_plan.rs`
+- `rg -n "truncate_only|PersistExecutionPlan|PersistPayloadPlan|PersistPlanInput|choose_persist_execution_plan" . --glob '!target/**' --glob '!artifacts/**'`
+- `rg -n "data_object_swap|detach_shared_data_object|create_data_object|NewObject|full overwrite|truncate_pending" rust_fuse/src rust_hotpath/src`
+- `rg -n "new_write_state\\(" rust_fuse/src/fs.rs rust_fuse/src/write_buffer.rs`
+- `cargo fmt --all`
+- `cargo test -p fod-rust-hotpath --lib`
+- `cargo test -p fod-rust-fuse --bin fod-rust-fuse`
+- `cargo check --workspace`
+- `bash -n tests/integration/test_fio_sequential_io.sh`
+- `git diff --check`
+- `make test-fio-sequential-io`
+- `cargo test -p fod-rust-hotpath`
+- `cargo test -p fod-rust-fuse -- --skip primary_`
+- `findmnt -rn -t fuse,fuse.fod,fuse3`
+- `make test-copy-block-crc-table`
+- `make test-remount-durability-benchmark`
+- `make test-persist-buffer-chunking`
+- `make test-unlink-after-write`
+- `make test-rust-hotpath-copy-dedupe`
+- `make test-fio-mixed-io`
+- `make test-fio-random-mixed-io`
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `git status --short`
+- `git diff --stat`
+- `cat fod_version.txt`
+- `git add TODO.md commands.md conclusions.md docs/performance.md docs/storage-engine-v2-plan.md rust_fuse/src/write_buffer.rs rust_hotpath/src/persist_plan.rs tests/integration/test_fio_sequential_io.sh`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: classify storage persistence operations"`
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace > /tmp/fod-storage-v2-bounded-strace.log 2>&1`
 - `FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make test-fio-sequential-io > /tmp/fod-storage-v2-bounded-profile-4m.log 2>&1`
 - `docker exec fod-postgres psql -U foduser -d foddbname -AtF '|' -c "SET search_path TO fod,public; SELECT f.name, COUNT(*), MAX(OCTET_LENGTH(de.payload)), SUM(de.used_bytes) FROM data_extents de JOIN files f ON f.data_object_id = de.data_object_id GROUP BY f.id_file, f.name ORDER BY f.id_file DESC LIMIT 5"`

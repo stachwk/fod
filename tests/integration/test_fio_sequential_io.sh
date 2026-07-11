@@ -89,6 +89,7 @@ run_case() {
     fod_assert_contains "${LOG_FILE}" "enable_extents=true"
     fod_assert_contains "${LOG_FILE}" "FOD sequential segment state entered"
     fod_assert_contains "${LOG_FILE}" "write_state_mode=sequential_segment"
+    fod_assert_contains "${LOG_FILE}" "persist_write_class=new_object_sequential"
     fod_assert_contains "${LOG_FILE}" "FOD direct segment persistence"
   else
     if grep -Fq "FOD extent PoC execution" "${LOG_FILE}"; then
@@ -104,6 +105,7 @@ run_case() {
       return 1
     fi
     fod_assert_contains "${LOG_FILE}" "FOD write_state_mode=block"
+    fod_assert_contains "${LOG_FILE}" "persist_write_class=existing_object_patch"
   fi
 
   echo "OK fio/sequential ${label} extents=${enable_extents} size=${expected_size} block_size=${block_size}"
