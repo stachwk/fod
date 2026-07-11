@@ -38,8 +38,9 @@ Reading guide:
   - Historical note: the 2026-07-09 local repeat sample on commit `bad53cc` stayed mixed (`14.55/18.17`, `18.43/17.48`, `17.42/17.76` MiB/s for `default` vs `4194304`). The QNAP repetition still needs a clean run; in this session `192.168.1.11:5432` returned `No route to host`.
 - [ ] Deliver the `Storage Engine v2` project described in `docs/storage-engine-v2-plan.md`, preserving 4 KiB logical blocks and the default block path while making large sequential physical persistence bounded and opt-in.
   - Phase A: add bounded extent planning and payload rows, then pass the local and QNAP benchmark gate.
-    - Progress: bounded planning, bounded payload rows, the startup-only `extent_target_bytes` setting, and peak-payload diagnostics are implemented with a 1 MiB default; the repeated benchmark gate remains.
+    - Completed: bounded planning, bounded payload rows, the startup-only `extent_target_bytes` setting, and peak-payload diagnostics are implemented with a 1 MiB default. Three-run local and QNAP 64 MiB matrices passed, as did the all-workload local smoke. Extents remain opt-in because mixed/random and fio write still regress.
   - Phase B: add a sequential segment builder and direct segment persistence only after Phase A proves useful.
+    - Gate status: local and QNAP evidence is positive for bounded extents, so Phase B may start without changing the default storage path. Keep 1 MiB as the balanced opt-in default; QNAP's best isolated throughput at 256 KiB does not justify a backend-specific default.
   - Phase C: classify persistence semantics and add replay-confirmed, append-only persistence for new sequential objects.
   - Phase D: decide from measured results whether an object segment manifest and chunk store are still needed.
 - [x] Revisit cleanup in `rust_fuse/tests/root_permissions_smoke.rs` when the full Cargo suite is run without root.

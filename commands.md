@@ -791,6 +791,7 @@ Base commit at execution time: `2659c1b`
 - `make test-persist-buffer-chunking`
 - `make test-unlink-after-write`
 - `make test-rust-hotpath-copy-dedupe`
+
 - `bash -n tests/integration/fod_testlib.sh`
 - `cargo fmt --all -- --check`
 - `git diff --check`
@@ -1435,3 +1436,40 @@ Base commit at execution time: `93f1ab9`
 - `cargo test -p fod-rust-fuse --test lock_backend_smoke --no-run`
 - `sudo -n env HOME=/home/wojtek USER=wojtek LOGNAME=wojtek PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin target/debug/deps/lock_backend_smoke-513bfc054453dbef --test-threads=1`
 - `make test-rust-hotpath-copy-dedupe`
+
+Execution date: `2026-07-10`
+
+Base commit at execution time: `38af786`
+
+- `bash -n tests/integration/test_fio_sequential_io.sh tests/integration/test_fio_mixed_io.sh`
+- `FIO_CASES=block make test-fio-sequential-io`
+- `FIO_CASES=extent FOD_EXTENT_TARGET_BYTES=65536 make test-fio-mixed-io`
+- `PROFILE_RUN_ID=storage-extent-smoke-20260710 PROFILE_STORAGE_EXTENT_REPEAT=1 PROFILE_STORAGE_EXTENT_SIZES=65536 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_SIZE=64K PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_COUNT=1 make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=storage-extent-smoke2-20260710 PROFILE_STORAGE_EXTENT_REPEAT=1 PROFILE_STORAGE_EXTENT_SIZES=65536 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_SIZE=64K PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_COUNT=1 make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=storage-extent-core-20260710T201100Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=storage-extent-full-smoke-20260710T201500Z PROFILE_STORAGE_EXTENT_REPEAT=1 PROFILE_STORAGE_EXTENT_FIO_FILE_SIZE=4M PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_COUNT=4 PROFILE_STORAGE_EXTENT_LARGE_COPY_BLOCK_COUNT=4 make profile-storage-extent-size-matrix-local`
+- `make qnap-smoke`
+- `PROFILE_RUN_ID=storage-extent-qnap-smoke-20260710 PROFILE_STORAGE_EXTENT_REPEAT=1 PROFILE_STORAGE_EXTENT_SIZES=65536 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_SIZE=64K PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_COUNT=1 make profile-storage-extent-size-matrix-qnap`
+- `PROFILE_RUN_ID=storage-extent-qnap-core-20260710T202500Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark make profile-storage-extent-size-matrix-qnap`
+- `.venv/bin/python scripts/perf/summarize_storage_extent_matrix.py --artifact-root artifacts/perf/38af786 --run-prefix storage-extent-core-20260710T201100Z --output artifacts/perf/38af786/lt7300-storage-extent-core-20260710T201100Z-storage-extent-summary.md`
+- `.venv/bin/python scripts/perf/summarize_storage_extent_matrix.py --artifact-root artifacts/perf/38af786 --run-prefix storage-extent-full-smoke-20260710T201500Z --output artifacts/perf/38af786/lt7300-storage-extent-full-smoke-20260710T201500Z-storage-extent-summary.md`
+- `.venv/bin/python scripts/perf/summarize_storage_extent_matrix.py --artifact-root artifacts/perf/38af786 --run-prefix storage-extent-qnap-core-20260710T202500Z --output artifacts/perf/38af786/lt7300-storage-extent-qnap-core-20260710T202500Z-storage-extent-summary.md`
+
+Execution date: `2026-07-11`
+
+Base commit at execution time: `38af786`
+
+- `.venv/bin/python -m py_compile scripts/perf/summarize_storage_extent_matrix.py scripts/perf/pg/table_dml_delta.py`
+- `bash -n tests/integration/test_fio_sequential_io.sh tests/integration/test_fio_mixed_io.sh`
+- `cargo fmt --all -- --check`
+- `make help | rg 'profile-storage-extent-size-(matrix|run)'`
+- `git diff --check`
+- `cargo check --workspace`
+- `make test-fio-sequential-io`
+- `cat fod_version.txt`
+- `git status --short`
+- `git diff --stat`
+- `git diff --check`
+- `git add BENCHMARKS.md Makefile TODO.md commands.md conclusions.md docs/performance.md docs/storage-engine-v2-plan.md rust_fuse/tests/support.rs scripts/perf/pg/storage_extent_snapshot.sql scripts/perf/pg/table_dml_delta.py scripts/perf/pg/table_dml_snapshot.sql scripts/perf/summarize_storage_extent_matrix.py tests/integration/test_fio_mixed_io.sh tests/integration/test_fio_sequential_io.sh`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: record bounded extent benchmark matrix"`

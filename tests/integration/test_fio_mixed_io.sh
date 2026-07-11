@@ -86,5 +86,19 @@ run_case() {
 
 trap cleanup EXIT
 
-run_case block 0
-run_case extent 1
+case "${FIO_CASES:-both}" in
+  both)
+    run_case block 0
+    run_case extent 1
+    ;;
+  block)
+    run_case block 0
+    ;;
+  extent)
+    run_case extent 1
+    ;;
+  *)
+    echo "Unsupported FIO_CASES=${FIO_CASES}; use both, block, or extent" >&2
+    exit 2
+    ;;
+esac

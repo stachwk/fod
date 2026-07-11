@@ -190,6 +190,32 @@ make profile-fuse-sudo-bpftrace-syscalls PROFILE_FUSE_WORKLOAD=test-fio-sequenti
 
 Use these captures before changing FUSE cache or timeout knobs. A single throughput number is not enough; compare boundary timings, syscall shape, and system counters together.
 
+## Storage Extent Size Matrix
+
+Run the repeated Storage Engine v2 matrix on local PostgreSQL:
+
+```bash
+PROFILE_RUN_ID=storage-extent-$(date -u +%Y%m%dT%H%M%SZ) \
+make profile-storage-extent-size-matrix-local
+```
+
+The default run compares the block path with 64 KiB, 256 KiB, 1 MiB, and 4 MiB extent targets, repeats each sample three times, and runs large-file, large-copy, sequential fio, mixed fio, random-mixed fio, and remount-durability workloads. Each sample captures environment data, workload output, maximum RSS, `FOD_PROFILE_IO`, PostgreSQL DML/WAL deltas, top SQL IO/WAL, and block/extent relation sizes. A Markdown summary is written under `artifacts/perf/<commit>/`.
+
+Use a smaller workload list for a focused repeated core comparison:
+
+```bash
+PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark \
+make profile-storage-extent-size-matrix-local
+```
+
+Run the same profile against the configured QNAP backend with:
+
+```bash
+make profile-storage-extent-size-matrix-qnap
+```
+
+Do not compare a first sample that compiled test binaries inside the measured command. The matrix prebuilds debug binaries and FUSE test executables before starting `/usr/bin/time` so maximum RSS and elapsed workload data exclude compilation.
+
 ## Indexer Allocation Profiling
 
 Use the indexer allocation helper before changing `rust_indexer` buffer reuse or data structures:

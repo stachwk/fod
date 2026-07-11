@@ -167,6 +167,20 @@ PROFILE_COPY_BUFFER_BLOCK_COUNT ?= 16
 PROFILE_COPY_BUFFER_LOG ?= /tmp/fod-copy-buffer-$(PROFILE_RUN_ID)-$(PROFILE_COPY_BUFFER_BYTES).log
 PROFILE_COPY_BUFFER_INCLUDE_QNAP ?= auto
 PROFILE_COPY_BUFFER_QNAP_PROBE_LOG ?= /tmp/fod-copy-buffer-qnap-probe-$(PROFILE_RUN_ID).log
+PROFILE_STORAGE_EXTENT_SIZES ?= 65536 262144 1048576 4194304
+PROFILE_STORAGE_EXTENT_REPEAT ?= 3
+PROFILE_STORAGE_EXTENT_MODE ?= block
+PROFILE_STORAGE_EXTENT_TARGET_BYTES ?= 1048576
+PROFILE_STORAGE_EXTENT_WORKLOADS ?= test-large-file-multiblock-benchmark test-large-copy-benchmark test-fio-sequential-io test-fio-mixed-io test-fio-random-mixed-io test-remount-durability-benchmark
+PROFILE_STORAGE_EXTENT_LOG ?= $(ARTIFACTS_DIR)/storage-extent-workloads.log
+PROFILE_STORAGE_EXTENT_TIME_BIN ?= /usr/bin/time
+PROFILE_STORAGE_EXTENT_FIO_FILE_SIZE ?= 64M
+PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_SIZE ?= 4M
+PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_COUNT ?= 16
+PROFILE_STORAGE_EXTENT_LARGE_COPY_BLOCK_SIZE ?= 4M
+PROFILE_STORAGE_EXTENT_LARGE_COPY_BLOCK_COUNT ?= 16
+PROFILE_STORAGE_EXTENT_ARTIFACT_ROOT ?= artifacts/perf/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+PROFILE_STORAGE_EXTENT_SUMMARY_OUTPUT ?= $(PROFILE_STORAGE_EXTENT_ARTIFACT_ROOT)/$(PROFILE_HOST)-$(PROFILE_RUN_ID)-storage-extent-summary.md
 PROFILE_INDEXER_ALLOC_TOOL ?= auto
 PROFILE_INDEXER_ARGS ?= --help
 PROFILE_INDEXER_TIME_BIN ?= /usr/bin/time
@@ -315,7 +329,7 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke
+.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-rust-hotpath install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-extent-poc-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke profile-storage-extent-size-run profile-storage-extent-size-matrix profile-storage-extent-size-matrix-local profile-storage-extent-size-matrix-qnap
 
 help:
 	@printf '%s\n' \
@@ -399,6 +413,9 @@ help:
 		'  make profile-fuse-sudo-bpftrace-syscalls - run sudo bpftrace syscall sampling while PROFILE_FUSE_WORKLOAD runs as current user' \
 		'  make profile-data-blocks-copy-buffer-matrix - run large-copy matrix with DML/WAL/top-io-wal captures; set QNAP=1 for QNAP' \
 		'  make profile-data-blocks-copy-buffer-matrix-compare - run local matrix and optional QNAP matrix; set PROFILE_COPY_BUFFER_INCLUDE_QNAP=0/1/auto' \
+		'  make profile-storage-extent-size-matrix - run repeated block/64K/256K/1M/4M storage profiles on the selected backend' \
+		'  make profile-storage-extent-size-matrix-local - run the repeated bounded-extent matrix on local PostgreSQL' \
+		'  make profile-storage-extent-size-matrix-qnap - run the repeated bounded-extent matrix on QNAP PostgreSQL' \
 		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
 		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
 		'  make profile-data-blocks-swap-repeat-dml - profile repeated full-overwrite data-object swaps; set PROFILE_DATA_BLOCKS_SWAP_REPEAT=N' \
@@ -1525,6 +1542,77 @@ profile-data-blocks-copy-buffer-matrix-compare:
 		fi; \
 	fi; \
 	$(MAKE) --no-print-directory PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_SIZES="$(PROFILE_COPY_BUFFER_SIZES)" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-matrix-qnap
+
+profile-storage-extent-size-run:
+	@case "$(PROFILE_STORAGE_EXTENT_MODE)" in block|extent) ;; *) echo "Unsupported PROFILE_STORAGE_EXTENT_MODE=$(PROFILE_STORAGE_EXTENT_MODE); use block or extent" >&2; exit 2 ;; esac
+	@test -x "$(PROFILE_STORAGE_EXTENT_TIME_BIN)" || { echo "Missing executable PROFILE_STORAGE_EXTENT_TIME_BIN=$(PROFILE_STORAGE_EXTENT_TIME_BIN)" >&2; exit 2; }
+	@mkdir -p "$(ARTIFACTS_DIR)"
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" profile-env
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" profile-pg-reset
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_CAPTURE_LABEL=before profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_CAPTURE_LABEL=before profile-pg-wal-snapshot
+	@: > "$(PROFILE_STORAGE_EXTENT_LOG)"
+	@set -eu; \
+	mode="$(PROFILE_STORAGE_EXTENT_MODE)"; \
+	target="$(PROFILE_STORAGE_EXTENT_TARGET_BYTES)"; \
+	if [ "$$mode" = "block" ]; then enabled=0; fio_case=block; else enabled=1; fio_case=extent; fi; \
+	printf 'FOD storage extent profile mode=%s target_bytes=%s workloads=%s qnap=%s\n' "$$mode" "$$target" "$(PROFILE_STORAGE_EXTENT_WORKLOADS)" "$(QNAP)" | tee -a "$(PROFILE_STORAGE_EXTENT_LOG)"; \
+	for workload in $(PROFILE_STORAGE_EXTENT_WORKLOADS); do \
+		printf '\nWORKLOAD_BEGIN name=%s mode=%s target_bytes=%s\n' "$$workload" "$$mode" "$$target" | tee -a "$(PROFILE_STORAGE_EXTENT_LOG)"; \
+		"$(PROFILE_STORAGE_EXTENT_TIME_BIN)" -v env \
+			FOD_ENABLE_EXTENTS="$$enabled" \
+			FOD_EXTENT_TARGET_BYTES="$$target" \
+			FOD_PROFILE_IO=1 \
+			FIO_CASES="$$fio_case" \
+			FIO_FILE_SIZE="$(PROFILE_STORAGE_EXTENT_FIO_FILE_SIZE)" \
+			LARGE_FILE_CHUNK_SIZE="$(PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_SIZE)" \
+			LARGE_FILE_CHUNK_COUNT="$(PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_COUNT)" \
+			LARGE_COPY_BLOCK_SIZE="$(PROFILE_STORAGE_EXTENT_LARGE_COPY_BLOCK_SIZE)" \
+			LARGE_COPY_BLOCK_COUNT="$(PROFILE_STORAGE_EXTENT_LARGE_COPY_BLOCK_COUNT)" \
+			$(MAKE) --no-print-directory QNAP=$(QNAP) "$$workload" >> "$(PROFILE_STORAGE_EXTENT_LOG)" 2>&1; \
+		printf 'WORKLOAD_END name=%s mode=%s target_bytes=%s\n' "$$workload" "$$mode" "$$target" | tee -a "$(PROFILE_STORAGE_EXTENT_LOG)"; \
+	done
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_CAPTURE_LABEL=after profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" profile-pg-table-dml-delta
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_CAPTURE_LABEL=after profile-pg-wal-snapshot
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" profile-pg-wal-delta
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_CAPTURE_LABEL=storage-extent profile-pg-top-io-wal
+	@$(PSQL) -f scripts/perf/pg/storage_extent_snapshot.sql > "$(ARTIFACTS_DIR)/storage-extent-snapshot.txt"
+	@cat "$(ARTIFACTS_DIR)/storage-extent-snapshot.txt"
+
+profile-storage-extent-size-matrix:
+	@$(MAKE) --no-print-directory build-debug
+	@$(CARGO_TEST_FUSE) --no-run --offline
+	@set -eu; \
+	repeat="$(PROFILE_STORAGE_EXTENT_REPEAT)"; \
+	case "$$repeat" in ''|*[!0-9]*) echo "PROFILE_STORAGE_EXTENT_REPEAT must be a positive integer, got: $$repeat" >&2; exit 2 ;; esac; \
+	if [ "$$repeat" -lt 1 ]; then echo "PROFILE_STORAGE_EXTENT_REPEAT must be at least 1" >&2; exit 2; fi; \
+	backend=local; \
+	if [ "$(QNAP_ENABLED)" = "1" ]; then backend=qnap; fi; \
+	base_run="$(PROFILE_RUN_ID)"; \
+	i=1; \
+	while [ "$$i" -le "$$repeat" ]; do \
+		run_id="$${base_run}-$${backend}-repeat-$${i}-block"; \
+		printf '%s\n' "FOD storage extent matrix repeat=$$i/$$repeat mode=block run_id=$$run_id"; \
+		$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$$run_id" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_STORAGE_EXTENT_MODE=block PROFILE_STORAGE_EXTENT_TARGET_BYTES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS="$(PROFILE_STORAGE_EXTENT_WORKLOADS)" profile-storage-extent-size-run; \
+		for target in $(PROFILE_STORAGE_EXTENT_SIZES); do \
+			run_id="$${base_run}-$${backend}-repeat-$${i}-extent-$${target}"; \
+			printf '%s\n' "FOD storage extent matrix repeat=$$i/$$repeat mode=extent target_bytes=$$target run_id=$$run_id"; \
+			$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$$run_id" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_STORAGE_EXTENT_MODE=extent PROFILE_STORAGE_EXTENT_TARGET_BYTES="$$target" PROFILE_STORAGE_EXTENT_WORKLOADS="$(PROFILE_STORAGE_EXTENT_WORKLOADS)" profile-storage-extent-size-run; \
+		done; \
+		i=$$((i + 1)); \
+	done; \
+	$(PYTHON) scripts/perf/summarize_storage_extent_matrix.py \
+		--artifact-root "$(PROFILE_STORAGE_EXTENT_ARTIFACT_ROOT)" \
+		--run-prefix "$$base_run" \
+		--output "$(PROFILE_STORAGE_EXTENT_SUMMARY_OUTPUT)"; \
+	cat "$(PROFILE_STORAGE_EXTENT_SUMMARY_OUTPUT)"
+
+profile-storage-extent-size-matrix-local:
+	@$(MAKE) --no-print-directory QNAP=0 PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_STORAGE_EXTENT_REPEAT="$(PROFILE_STORAGE_EXTENT_REPEAT)" PROFILE_STORAGE_EXTENT_SIZES="$(PROFILE_STORAGE_EXTENT_SIZES)" PROFILE_STORAGE_EXTENT_WORKLOADS="$(PROFILE_STORAGE_EXTENT_WORKLOADS)" profile-storage-extent-size-matrix
+
+profile-storage-extent-size-matrix-qnap:
+	@$(MAKE) --no-print-directory QNAP=1 $(FOD_REMOTE_PG_ENV) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_STORAGE_EXTENT_REPEAT="$(PROFILE_STORAGE_EXTENT_REPEAT)" PROFILE_STORAGE_EXTENT_SIZES="$(PROFILE_STORAGE_EXTENT_SIZES)" PROFILE_STORAGE_EXTENT_WORKLOADS="$(PROFILE_STORAGE_EXTENT_WORKLOADS)" profile-storage-extent-size-matrix
 
 profile-data-blocks-conflict-dml:
 	@$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-seed

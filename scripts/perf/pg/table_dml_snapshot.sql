@@ -27,6 +27,7 @@ WHERE datname = current_database();
 WITH table_names(relname) AS (
     VALUES
         ('data_blocks'),
+        ('data_extents'),
         ('copy_block_crc'),
         ('files'),
         ('data_objects')
@@ -67,6 +68,8 @@ WITH index_names(indexrelname) AS (
     VALUES
         ('idx_data_blocks_object_order'),
         ('idx_data_blocks_data_object_id'),
+        ('idx_data_extents_object_start'),
+        ('idx_data_extents_data_object_id'),
         ('idx_copy_block_crc_object_order'),
         ('idx_copy_block_crc_data_object_id')
 ),
@@ -93,11 +96,14 @@ ORDER BY indexrelname, metric;
 WITH relation_names(relname) AS (
     VALUES
         ('data_blocks'),
+        ('data_extents'),
         ('copy_block_crc'),
         ('files'),
         ('data_objects'),
         ('idx_data_blocks_object_order'),
         ('idx_data_blocks_data_object_id'),
+        ('idx_data_extents_object_start'),
+        ('idx_data_extents_data_object_id'),
         ('idx_copy_block_crc_object_order'),
         ('idx_copy_block_crc_data_object_id')
 ),
@@ -119,11 +125,14 @@ ORDER BY relname;
 WITH relation_names(relname) AS (
     VALUES
         ('data_blocks'),
+        ('data_extents'),
         ('copy_block_crc'),
         ('files'),
         ('data_objects'),
         ('idx_data_blocks_object_order'),
         ('idx_data_blocks_data_object_id'),
+        ('idx_data_extents_object_start'),
+        ('idx_data_extents_data_object_id'),
         ('idx_copy_block_crc_object_order'),
         ('idx_copy_block_crc_data_object_id')
 ),

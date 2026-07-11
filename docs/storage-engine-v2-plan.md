@@ -30,8 +30,12 @@ Implementation status:
 
 - direction documented in commit `3fe5590`;
 - bounded planning and `extent_target_bytes` added in commit `93f1ab9`;
-- bounded payload-row enforcement and peak-payload profiling are implemented;
-- the repeated local/QNAP extent-size benchmark gate remains before Phase B.
+- bounded payload-row enforcement and peak-payload profiling added in commit
+  `38af786`;
+- the repeated local and QNAP extent-size matrices passed for the 64 MiB core
+  workload;
+- Phase A is complete and Phase B may begin while extents remain opt-in and the
+  block path remains the default.
 
 ## Current problem
 

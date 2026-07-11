@@ -51,6 +51,79 @@ The profiled sequential extent run reported `repo_persist_extents_us=30843`, `pr
 
 This is a correctness and diagnostics smoke, not the Phase A decision matrix. It is a single local run and therefore does not justify a default change. Mixed and random results continue to show why the extent path must remain opt-in until Phase B can distinguish sequential segment state from block overlays.
 
+## 2026-07-10 Storage Engine v2 Bounded Extent Matrix
+
+Collected from a worktree based on commit `38af786` (`FOD 3.2.1: persist bounded extent payloads`). The matrix runner and summary generator were pending in the measured worktree.
+
+Repeated core command:
+
+```bash
+PROFILE_RUN_ID=storage-extent-core-20260710T201100Z \
+PROFILE_STORAGE_EXTENT_REPEAT=3 \
+PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark \
+make profile-storage-extent-size-matrix-local
+```
+
+Workload: local Docker PostgreSQL, 64 MiB sequential multi-block write/readback (`4M * 16`), three independent samples per storage mode, with compilation completed before `/usr/bin/time` measurement.
+
+| mode | target | throughput mean | stdev | min-max | elapsed mean | physical inserts | peak payload | max RSS mean | WAL bytes mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| block | n/a | `52.82 MiB/s` | `1.63` | `50.68-54.65` | `1.212869s` | `16384 data_blocks` | `0` | `137612 KiB` | `7325238` |
+| extent | `64 KiB` | `87.67 MiB/s` | `10.15` | `73.35-95.77` | `0.740795s` | `1024 data_extents` | `65536` | `137681 KiB` | `1303234` |
+| extent | `256 KiB` | `94.66 MiB/s` | `2.05` | `92.75-97.51` | `0.676405s` | `256 data_extents` | `262144` | `137689 KiB` | `966427` |
+| extent | `1 MiB` | `94.51 MiB/s` | `1.73` | `92.79-96.87` | `0.677414s` | `64 data_extents` | `1048576` | `137756 KiB` | `898442` |
+| extent | `4 MiB` | `91.70 MiB/s` | `2.93` | `89.10-95.79` | `0.698601s` | `16 data_extents` | `4194304` | `137755 KiB` | `854096` |
+
+Repeated QNAP command:
+
+```bash
+PROFILE_RUN_ID=storage-extent-qnap-core-20260710T202500Z \
+PROFILE_STORAGE_EXTENT_REPEAT=3 \
+PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark \
+make profile-storage-extent-size-matrix-qnap
+```
+
+Workload: QNAP Docker PostgreSQL over the configured remote connection, the same 64 MiB sequential multi-block write/readback (`4M * 16`), and three independent samples per storage mode.
+
+| mode | target | throughput mean | stdev | min-max | elapsed mean | physical inserts | peak payload | max RSS mean | WAL bytes mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| block | n/a | `10.56 MiB/s` | `1.39` | `8.60-11.61` | `6.179208s` | `16384 data_blocks` | `0` | `137781 KiB` | `7317404` |
+| extent | `64 KiB` | `19.31 MiB/s` | `1.49` | `17.48-21.14` | `3.334079s` | `1024 data_extents` | `65536` | `137612 KiB` | `1139425` |
+| extent | `256 KiB` | `24.70 MiB/s` | `1.89` | `22.49-27.11` | `2.606442s` | `256 data_extents` | `262144` | `137640 KiB` | `1162674` |
+| extent | `1 MiB` | `21.20 MiB/s` | `1.02` | `19.75-21.95` | `3.027129s` | `64 data_extents` | `1048576` | `137740 KiB` | `928921` |
+| extent | `4 MiB` | `23.13 MiB/s` | `0.86` | `21.95-23.98` | `2.770675s` | `16 data_extents` | `4194304` | `137708 KiB` | `913952` |
+
+Full-workload smoke command:
+
+```bash
+PROFILE_RUN_ID=storage-extent-full-smoke-20260710T201500Z \
+PROFILE_STORAGE_EXTENT_REPEAT=1 \
+PROFILE_STORAGE_EXTENT_FIO_FILE_SIZE=4M \
+PROFILE_STORAGE_EXTENT_LARGE_FILE_CHUNK_COUNT=4 \
+PROFILE_STORAGE_EXTENT_LARGE_COPY_BLOCK_COUNT=4 \
+make profile-storage-extent-size-matrix-local
+```
+
+Selected one-run results:
+
+| workload | block | 64 KiB | 256 KiB | 1 MiB | 4 MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| large-file 16 MiB | `44.28 MiB/s` | `92.46` | `91.30` | `89.94` | `88.29` |
+| large-copy 16 MiB | `22.69 MiB/s` | `17.14` | `26.64` | `27.39` | `25.12` |
+| sequential fio read | `21811 KiB/s` | `28877` | `28058` | `24986` | `26214` |
+| sequential fio write | `1690 KiB/s` | `763` | `753` | `607` | `616` |
+| mixed fio read/write | `1318/1403 KiB/s` | `677/721` | `662/704` | `662/704` | `628/668` |
+| random-mixed fio read/write | `947/1008 KiB/s` | `485/516` | `481/512` | `389/414` | `405/431` |
+| remount elapsed | `1.020880s` | `1.015313` | `1.018730` | `1.021011` | `1.020046` |
+
+Artifacts:
+
+- `artifacts/perf/38af786/lt7300-storage-extent-core-20260710T201100Z-storage-extent-summary.md`
+- `artifacts/perf/38af786/lt7300-storage-extent-full-smoke-20260710T201500Z-storage-extent-summary.md`
+- `artifacts/perf/38af786/lt7300-storage-extent-qnap-core-20260710T202500Z-storage-extent-summary.md`
+
+Conclusion: Phase A passed its repeated local and QNAP gate. Bounded extents approximately doubled the repeated 64 MiB large-file throughput and reduced physical row count by 16x to 1024x without increasing overall RSS. On QNAP, even the slowest extent sample (`17.48 MiB/s`) stayed above the fastest block sample (`11.61 MiB/s`), while mean WAL fell from about `7.32 MB` to `0.91-1.16 MB`. The unchanged RSS shows why Phase B is still needed: `WriteState` continues to hold 4 KiB block vectors before rebuilding bounded payloads. The full local smoke also shows that the current extent selection is not suitable for mixed/random or fio write patterns. Keep the block path as the default, keep `extent_target_bytes=1 MiB` as the balanced opt-in value, and proceed to the sequential segment builder without broadening extent selection.
+
 ## 2026-07-05 Local/QNAP COPY Buffer Matrix
 
 Collected from commit `a3076e1` (`FOD 3.2.1: add copy-buffer matrix compare target`).

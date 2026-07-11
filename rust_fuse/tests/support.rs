@@ -340,11 +340,22 @@ fn print_profile_io_summaries_if_enabled(log_path: &Path) {
         return;
     };
 
-    for line in contents
-        .lines()
-        .filter(|line| should_print_profile_io_line(line))
-    {
-        eprintln!("{line}");
+    let mut boundary_profile = false;
+    for line in contents.lines() {
+        if line.contains("FOD boundary profile:") {
+            boundary_profile = true;
+            eprintln!("{line}");
+            continue;
+        }
+        if boundary_profile && line.contains("INFO -   ") {
+            eprintln!("{line}");
+            continue;
+        }
+        boundary_profile = false;
+
+        if should_print_profile_io_line(line) {
+            eprintln!("{line}");
+        }
     }
 }
 
