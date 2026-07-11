@@ -1426,6 +1426,16 @@ Base commit at execution time: `93f1ab9`
 - `make test-fio-mixed-io`
 - `make test-fio-random-mixed-io`
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+- `cargo fmt --all -- --check`
+- `bash -n tests/integration/test_fio_sequential_io.sh`
+- `.venv/bin/python -m py_compile scripts/perf/summarize_storage_extent_matrix.py`
+- `git diff --check`
+- `git status --short`
+- `git diff --stat`
+- `git diff -- TODO.md docs/storage-engine-v2-plan.md docs/performance.md BENCHMARKS.md conclusions.md tests/integration/test_fio_sequential_io.sh`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/performance.md docs/storage-engine-v2-plan.md rust_fuse/src/fs.rs rust_fuse/src/read_cache.rs rust_fuse/src/write_buffer.rs rust_fuse/src/write_payload.rs rust_hotpath/src/persist_plan.rs scripts/perf/summarize_storage_extent_matrix.py tests/integration/test_fio_sequential_io.sh`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: persist sequential segments directly"`
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace > /tmp/fod-storage-v2-bounded-strace.log 2>&1`
 - `FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make test-fio-sequential-io > /tmp/fod-storage-v2-bounded-profile-4m.log 2>&1`
 - `docker exec fod-postgres psql -U foduser -d foddbname -AtF '|' -c "SET search_path TO fod,public; SELECT f.name, COUNT(*), MAX(OCTET_LENGTH(de.payload)), SUM(de.used_bytes) FROM data_extents de JOIN files f ON f.data_object_id = de.data_object_id GROUP BY f.id_file, f.name ORDER BY f.id_file DESC LIMIT 5"`
@@ -1504,3 +1514,53 @@ Base commit at execution time: `1246b83`
 - `git add TODO.md commands.md conclusions.md docs/storage-engine-v2-plan.md rust_fuse/src/fs.rs rust_fuse/src/main.rs rust_fuse/src/write_buffer.rs rust_fuse/src/write_payload.rs tests/integration/test_fio_sequential_io.sh`
 - `git diff --cached --check`
 - `git commit -m "FOD 3.2.1: add sequential segment write state"`
+
+Execution date: `2026-07-11`
+
+Base commit at execution time: `f0e0a1c`
+
+- `git status --short && git log -5 --oneline && git diff --stat && rg -n "Phase B|Etap 5|segment|large-copy|extent" TODO.md docs/storage-engine-v2-plan.md docs/performance.md BENCHMARKS.md conclusions.md | head -240`
+- `sed -n '1,115p' TODO.md`
+- `sed -n '1,340p' docs/storage-engine-v2-plan.md`
+- `sed -n '1,235p' docs/performance.md`
+- `sed -n '1,145p' BENCHMARKS.md`
+- `tail -60 conclusions.md`
+- `tail -100 commands.md`
+- `git diff -- rust_hotpath/src/persist_plan.rs rust_fuse/src/write_payload.rs rust_fuse/src/write_buffer.rs rust_fuse/src/read_cache.rs rust_fuse/src/fs.rs tests/integration/test_fio_sequential_io.sh scripts/perf/summarize_storage_extent_matrix.py`
+- `sed -n '1,260p' /home/wojtek/.codex/attachments/c68fffdd-2e2f-436c-ad7a-c13fac268a9e/pasted-text.txt`
+- `sed -n '260,620p' /home/wojtek/.codex/attachments/c68fffdd-2e2f-436c-ad7a-c13fac268a9e/pasted-text.txt`
+- `sed -n '620,980p' /home/wojtek/.codex/attachments/c68fffdd-2e2f-436c-ad7a-c13fac268a9e/pasted-text.txt`
+- `rg -n "flush_write_state\\(|write_states|clear_payload\\(" rust_fuse/src`
+- `rg -n "fn persist_file_extents|persist_file_extents_profiled|persist_file_blocks_profiled" rust_fuse/src rust_hotpath/src`
+- `PROFILE_RUN_ID=storage-segment-direct-core-20260711T065722Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=storage-segment-direct-copy-20260711T065838Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-benchmark make profile-storage-extent-size-matrix-local`
+- `cat artifacts/perf/f0e0a1c/lt7300-storage-segment-direct-core-20260711T065722Z-storage-extent-summary.md`
+- `cat artifacts/perf/f0e0a1c/lt7300-storage-segment-direct-copy-20260711T065838Z-storage-extent-summary.md`
+- `cargo fmt --all`
+- `cargo test -p fod-rust-hotpath --lib`
+- `cargo test -p fod-rust-fuse --bin fod-rust-fuse`
+- `bash -n tests/integration/test_fio_sequential_io.sh`
+- `.venv/bin/python -m py_compile scripts/perf/summarize_storage_extent_matrix.py`
+- `FIO_CASES=extent FOD_PROFILE_IO=1 make test-fio-sequential-io`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `cat fod_version.txt`
+- `cargo check --workspace`
+- `cargo test -p fod-rust-hotpath`
+- `cargo test -p fod-rust-fuse -- --skip primary_`
+- `findmnt -rn -t fuse,fuse.fod,fuse3`
+- `make test-copy-block-crc-table`
+- `make test-remount-durability-benchmark`
+- `make test-persist-buffer-chunking`
+- `make test-unlink-after-write`
+- `make test-rust-hotpath-copy-dedupe`
+- `make test-fio-sequential-io` (first final-gate run failed because the new structured mode assertion did not account for the field position)
+- `FIO_CASES=extent FOD_PROFILE_IO=1 make test-fio-sequential-io` (diagnostic runs confirmed direct persistence and exposed the assertion/timing issue)
+- `strings target/debug/fod-rust-fuse | rg "write_state_mode|direct segment persistence"`
+- `rg -n "fod_test_cleanup|LOG_FILE|KEEP" tests/integration/fod_testlib.sh`
+- `stat -c '%y %n' rust_fuse/src/write_buffer.rs target/debug/fod-rust-fuse target/.fod-debug-build.stamp`
+- `rg -n "test-fio-sequential-io|build-debug|FOD_RUST_INPUTS" Makefile`
+- `make test-fio-sequential-io` (passed after `fsync_on_close` and the structured-field assertion fix)
+- `make test-fio-mixed-io`
+- `make test-fio-random-mixed-io`
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`

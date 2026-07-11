@@ -38,9 +38,12 @@ Implementation status:
   block path remains the default;
 - Phase B1 now buffers new empty-file writes from offset zero in a bounded
   `SequentialSegmentState`, with gaps, backward writes, existing-file writes,
-  and state merging downgraded to `BlockOverlay`.
+  and state merging downgraded to `BlockOverlay`;
+- Phase B2 moves eligible bounded segment buffers directly into
+  `PersistExtentRow`, restores them after a failed repository call, and records
+  segment-mode diagnostics without changing the default block path.
 
-## Original problem and remaining memory issue
+## Original problem and remaining copy issue
 
 The block path splits a large sequential stream into 4 KiB allocations and
 persists thousands of PostgreSQL rows. Before Phase A, the extent proof of
@@ -48,16 +51,18 @@ concept avoided those physical rows but coalesced a full contiguous file into
 one extent and rebuilt one payload `Vec` proportional to the whole file. A
 64 MiB write could therefore become one 64 MiB `PersistExtentRow`.
 
-Phase A bounds each physical extent payload. Phase B1 also buffers eligible
-new-file writes as bounded segments, but it deliberately converts them back to
-the block overlay before persistence. Direct segment persistence remains the
-next step. Until then, the remaining shape is not suitable as the final
-physical representation because:
+Phase A bounds each physical extent payload. Phase B1 buffers eligible new-file
+writes as bounded segments. Phase B2 removes the compatibility conversion at
+flush: owned segment vectors now become extent rows directly, so bounded
+segment payloads no longer coexist with a reconstructed 4 KiB block map. On a
+repository error, ownership is moved back into `SequentialSegmentState` before
+the FUSE operation returns `EIO`.
 
-- the compatibility conversion still allocates 4 KiB block vectors at flush;
-- the bounded segment payloads and converted blocks coexist briefly;
-- future patching, GC, and read assembly have no bounded physical unit;
-- the direct segment path still needs measured replay and failure behavior.
+The remaining issue has moved to the large-copy read side. The repeated local
+64 MiB copy profile still performs many extent-range reads before writing the
+destination, so direct segment persistence alone does not make that workload
+faster. This must be addressed before the new-object class is selected broadly
+for copy workloads.
 
 ## Measured bottlenecks
 
@@ -170,11 +175,12 @@ do not need to win because they retain the block fallback.
 
 Phase B starts only after Phase A passes its benchmark gate.
 
-Phase B1 is implemented as a state boundary only. Eligible new empty-file
-writes enter `SequentialSegmentState`; unsupported writes and merges downgrade
-to `BlockOverlay`. Flush still performs a compatibility downgrade before using
-the existing block/extent persistence planner. This preserves behavior while
-the direct segment persistence transaction is developed separately.
+Phase B1 introduced the state boundary. Eligible new empty-file writes enter
+`SequentialSegmentState`; unsupported writes and merges downgrade to
+`BlockOverlay`. Phase B2 now validates complete bounded segment coverage with
+`PersistSegmentPlan` and moves the owned payload vectors directly into the
+existing replay-safe extent transaction. No 4 KiB block map is rebuilt on this
+path.
 
 Introduce an internal write-payload state without changing the FUSE API:
 
@@ -205,6 +211,22 @@ Profile segment-mode entries, downgrades, payload bytes, segment count, payload
 preparation CPU, memory copies, and maximum RSS. Phase B succeeds only when the
 real large-copy path shows a measurable reduction in preparation cost or memory
 pressure without correctness regressions.
+
+The 2026-07-11 local gate based on commit `f0e0a1c` showed:
+
+- 64 MiB large-file extent throughput of `98.81 MiB/s`, compared with the
+  earlier bounded-extent baseline of `94.51 MiB/s`;
+- segment-row preparation averaging `12.33 us`, compared with roughly `32 ms`
+  for block-to-extent payload rebuilding;
+- one segment-mode entry, zero downgrades, 64 bounded 1 MiB segments, and no
+  block-row inserts per run;
+- 64 MiB large-copy throughput of `14.07 MiB/s` on extents versus
+  `18.50 MiB/s` on blocks, despite only `18 us` of segment preparation.
+
+Phase B therefore closes the payload-rebuild bottleneck, but not the copy read
+amplification. Extents remain opt-in. Phase C may add semantic classification,
+but the large-copy class must not be widened until range-oriented extent reads
+or data-object adoption remove the repeated fetch cost.
 
 ## Phase C: append-only new-object persistence
 

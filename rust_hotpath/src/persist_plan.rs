@@ -136,6 +136,103 @@ pub struct PersistExecutionPlan {
     pub payload: PersistPayloadPlan,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersistSegmentInput {
+    pub start_offset: u64,
+    pub payload_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersistSegmentPlanEntry {
+    pub start_block: u64,
+    pub block_count: u64,
+    pub used_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistSegmentPlan {
+    pub total_blocks: u64,
+    pub entries: Vec<PersistSegmentPlanEntry>,
+}
+
+pub fn plan_sequential_segment_persist(
+    file_size: u64,
+    block_size: u64,
+    max_segment_bytes: u64,
+    segments: &[PersistSegmentInput],
+) -> Result<PersistSegmentPlan, String> {
+    if block_size == 0 {
+        return Err("segment persistence requires a non-zero block size".to_string());
+    }
+    if max_segment_bytes < block_size {
+        return Err("segment persistence maximum is smaller than one block".to_string());
+    }
+    if file_size == 0 {
+        return if segments.is_empty() {
+            Ok(PersistSegmentPlan {
+                total_blocks: 0,
+                entries: Vec::new(),
+            })
+        } else {
+            Err("empty file cannot have segment payloads".to_string())
+        };
+    }
+    if segments.is_empty() {
+        return Err("non-empty file requires segment payloads".to_string());
+    }
+
+    let total_blocks = block_count_for_length(file_size, block_size, false);
+    let mut expected_offset = 0u64;
+    let mut entries = Vec::with_capacity(segments.len());
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.payload_bytes == 0 {
+            return Err(format!("segment {index} has an empty payload"));
+        }
+        if segment.payload_bytes > max_segment_bytes {
+            return Err(format!("segment {index} exceeds the configured maximum"));
+        }
+        if segment.start_offset != expected_offset {
+            return Err(format!(
+                "segment {index} starts at {} instead of {}",
+                segment.start_offset, expected_offset
+            ));
+        }
+        if segment.start_offset % block_size != 0 {
+            return Err(format!("segment {index} start is not block-aligned"));
+        }
+        let segment_end = segment
+            .start_offset
+            .checked_add(segment.payload_bytes)
+            .ok_or_else(|| format!("segment {index} end offset overflows"))?;
+        if segment_end > file_size {
+            return Err(format!("segment {index} exceeds file size"));
+        }
+        if index + 1 < segments.len() && segment.payload_bytes % block_size != 0 {
+            return Err(format!(
+                "segment {index} has a non-aligned non-final payload"
+            ));
+        }
+        let block_count = block_count_for_length(segment.payload_bytes, block_size, false);
+        entries.push(PersistSegmentPlanEntry {
+            start_block: segment.start_offset / block_size,
+            block_count,
+            used_bytes: segment.payload_bytes,
+        });
+        expected_offset = segment_end;
+    }
+
+    if expected_offset != file_size {
+        return Err(format!(
+            "segment coverage ends at {expected_offset} instead of file size {file_size}"
+        ));
+    }
+
+    Ok(PersistSegmentPlan {
+        total_blocks,
+        entries,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersistPayloadPlan {
     Blocks(Vec<PersistBlockPlanEntry>),
@@ -399,5 +496,108 @@ mod tests {
             PersistPlan::Blocks(plan) => assert_eq!(plan, persist_block_plan(input)),
             PersistPlan::Extents(_) => panic!("disabled extent path must use blocks"),
         }
+    }
+
+    #[test]
+    fn sequential_segment_plan_accepts_bounded_full_coverage() {
+        let plan = plan_sequential_segment_persist(
+            10_000,
+            4096,
+            8192,
+            &[
+                PersistSegmentInput {
+                    start_offset: 0,
+                    payload_bytes: 8192,
+                },
+                PersistSegmentInput {
+                    start_offset: 8192,
+                    payload_bytes: 1808,
+                },
+            ],
+        )
+        .expect("valid sequential segment plan");
+
+        assert_eq!(plan.total_blocks, 3);
+        assert_eq!(
+            plan.entries,
+            vec![
+                PersistSegmentPlanEntry {
+                    start_block: 0,
+                    block_count: 2,
+                    used_bytes: 8192,
+                },
+                PersistSegmentPlanEntry {
+                    start_block: 2,
+                    block_count: 1,
+                    used_bytes: 1808,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn sequential_segment_plan_rejects_gaps_and_unaligned_segments() {
+        let gap = plan_sequential_segment_persist(
+            8192,
+            4096,
+            4096,
+            &[
+                PersistSegmentInput {
+                    start_offset: 0,
+                    payload_bytes: 4096,
+                },
+                PersistSegmentInput {
+                    start_offset: 5000,
+                    payload_bytes: 3192,
+                },
+            ],
+        )
+        .expect_err("gap must be rejected");
+        assert!(gap.contains("starts at"));
+
+        let unaligned = plan_sequential_segment_persist(
+            8192,
+            4096,
+            8192,
+            &[
+                PersistSegmentInput {
+                    start_offset: 0,
+                    payload_bytes: 4000,
+                },
+                PersistSegmentInput {
+                    start_offset: 4000,
+                    payload_bytes: 4192,
+                },
+            ],
+        )
+        .expect_err("unaligned non-final segment must be rejected");
+        assert!(unaligned.contains("non-aligned non-final"));
+    }
+
+    #[test]
+    fn sequential_segment_plan_rejects_oversized_or_incomplete_payloads() {
+        let oversized = plan_sequential_segment_persist(
+            8192,
+            4096,
+            4096,
+            &[PersistSegmentInput {
+                start_offset: 0,
+                payload_bytes: 8192,
+            }],
+        )
+        .expect_err("oversized segment must be rejected");
+        assert!(oversized.contains("exceeds the configured maximum"));
+
+        let incomplete = plan_sequential_segment_persist(
+            8192,
+            4096,
+            8192,
+            &[PersistSegmentInput {
+                start_offset: 0,
+                payload_bytes: 4096,
+            }],
+        )
+        .expect_err("incomplete coverage must be rejected");
+        assert!(incomplete.contains("coverage ends"));
     }
 }

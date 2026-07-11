@@ -438,6 +438,11 @@ pub(crate) struct FodFuseProfileCounters {
     prepare_persist_rows_from_block_plan_us: AtomicU64,
     prepare_persist_extent_rows_from_extent_ranges_us: AtomicU64,
     prepare_persist_extent_rows_peak_payload_bytes: AtomicU64,
+    prepare_persist_segment_rows_us: AtomicU64,
+    segment_mode_entries: AtomicU64,
+    segment_mode_downgrades: AtomicU64,
+    segment_payload_bytes: AtomicU64,
+    segment_count: AtomicU64,
     clear_read_cache_for_file_us: AtomicU64,
     store_recent_write_blocks_us: AtomicU64,
     reply_data_us: AtomicU64,
@@ -570,6 +575,27 @@ impl FodFuseProfileCounters {
             .fetch_max(bytes, Ordering::Relaxed);
     }
 
+    pub(crate) fn record_prepare_persist_segment_rows_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.prepare_persist_segment_rows_us, elapsed);
+    }
+
+    pub(crate) fn record_segment_mode_entry(&self) {
+        self.segment_mode_entries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_segment_mode_downgrade(&self) {
+        self.segment_mode_downgrades.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_segment_payload_bytes(&self, bytes: u64) {
+        self.segment_payload_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_segment_count(&self, count: u64) {
+        self.segment_count.fetch_add(count, Ordering::Relaxed);
+    }
+
     pub(crate) fn record_clear_read_cache_for_file_elapsed(&self, elapsed: Duration) {
         Self::add(&self.clear_read_cache_for_file_us, elapsed);
     }
@@ -618,6 +644,11 @@ impl FodFuseProfileCounters {
                 .prepare_persist_extent_rows_peak_payload_bytes
                 .load(Ordering::Relaxed)
                 > 0
+            || self.prepare_persist_segment_rows_us.load(Ordering::Relaxed) > 0
+            || self.segment_mode_entries.load(Ordering::Relaxed) > 0
+            || self.segment_mode_downgrades.load(Ordering::Relaxed) > 0
+            || self.segment_payload_bytes.load(Ordering::Relaxed) > 0
+            || self.segment_count.load(Ordering::Relaxed) > 0
             || self.clear_read_cache_for_file_us.load(Ordering::Relaxed) > 0
             || self.store_recent_write_blocks_us.load(Ordering::Relaxed) > 0
             || self.reply_data_us.load(Ordering::Relaxed) > 0
@@ -716,6 +747,26 @@ impl FodFuseProfileCounters {
                 "prepare_persist_extent_rows_peak_payload_bytes={}",
                 self.prepare_persist_extent_rows_peak_payload_bytes
                     .load(Ordering::Relaxed)
+            ),
+            format!(
+                "prepare_persist_segment_rows_us={}",
+                self.prepare_persist_segment_rows_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "segment_mode_entries={}",
+                self.segment_mode_entries.load(Ordering::Relaxed)
+            ),
+            format!(
+                "segment_mode_downgrades={}",
+                self.segment_mode_downgrades.load(Ordering::Relaxed)
+            ),
+            format!(
+                "segment_payload_bytes={}",
+                self.segment_payload_bytes.load(Ordering::Relaxed)
+            ),
+            format!(
+                "segment_count={}",
+                self.segment_count.load(Ordering::Relaxed)
             ),
             format!(
                 "clear_read_cache_for_file_us={}",
@@ -963,6 +1014,27 @@ impl FodFuse {
     pub(crate) fn record_prepare_persist_extent_rows_peak_payload_bytes(&self, bytes: u64) {
         self.profile
             .record_prepare_persist_extent_rows_peak_payload_bytes(bytes);
+    }
+
+    pub(crate) fn record_prepare_persist_segment_rows_elapsed(&self, elapsed: Duration) {
+        self.profile
+            .record_prepare_persist_segment_rows_elapsed(elapsed);
+    }
+
+    pub(crate) fn record_segment_mode_entry(&self) {
+        self.profile.record_segment_mode_entry();
+    }
+
+    pub(crate) fn record_segment_mode_downgrade(&self) {
+        self.profile.record_segment_mode_downgrade();
+    }
+
+    pub(crate) fn record_segment_payload_bytes(&self, bytes: u64) {
+        self.profile.record_segment_payload_bytes(bytes);
+    }
+
+    pub(crate) fn record_segment_count(&self, count: u64) {
+        self.profile.record_segment_count(count);
     }
 
     pub(crate) fn record_clear_read_cache_for_file_elapsed(&self, elapsed: Duration) {
@@ -5598,7 +5670,7 @@ impl Filesystem for FodFuse {
         state.file_id = file_id;
         for (_sibling_fh, sibling_state) in sibling_states.iter() {
             let sibling_state = self.clone_write_state_profiled(sibling_state);
-            Self::merge_write_state_into(&mut state, sibling_state, self.block_size);
+            self.merge_write_state_into(&mut state, sibling_state, self.block_size);
         }
         if let Err(errno) = self.update_write_buffer(&mut state, offset, data) {
             self.log_request_error(req_id, "write", errno, format!("fh={} update", fh));
@@ -6407,5 +6479,26 @@ mod tests {
             .snapshot_lines()
             .iter()
             .any(|line| line == "prepare_persist_extent_rows_peak_payload_bytes=1048576"));
+    }
+
+    #[test]
+    fn segment_profile_records_entries_downgrades_payload_and_rows() {
+        let counters = FodFuseProfileCounters::default();
+        counters.record_segment_mode_entry();
+        counters.record_segment_mode_downgrade();
+        counters.record_segment_payload_bytes(64 * 1024);
+        counters.record_segment_count(4);
+        counters.record_prepare_persist_segment_rows_elapsed(Duration::from_micros(17));
+
+        let lines = counters.snapshot_lines();
+        assert!(lines.iter().any(|line| line == "segment_mode_entries=1"));
+        assert!(lines.iter().any(|line| line == "segment_mode_downgrades=1"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "segment_payload_bytes=65536"));
+        assert!(lines.iter().any(|line| line == "segment_count=4"));
+        assert!(lines
+            .iter()
+            .any(|line| line == "prepare_persist_segment_rows_us=17"));
     }
 }

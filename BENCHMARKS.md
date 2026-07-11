@@ -124,6 +124,42 @@ Artifacts:
 
 Conclusion: Phase A passed its repeated local and QNAP gate. Bounded extents approximately doubled the repeated 64 MiB large-file throughput and reduced physical row count by 16x to 1024x without increasing overall RSS. On QNAP, even the slowest extent sample (`17.48 MiB/s`) stayed above the fastest block sample (`11.61 MiB/s`), while mean WAL fell from about `7.32 MB` to `0.91-1.16 MB`. The unchanged RSS shows why Phase B is still needed: `WriteState` continues to hold 4 KiB block vectors before rebuilding bounded payloads. The full local smoke also shows that the current extent selection is not suitable for mixed/random or fio write patterns. Keep the block path as the default, keep `extent_target_bytes=1 MiB` as the balanced opt-in value, and proceed to the sequential segment builder without broadening extent selection.
 
+## 2026-07-11 Direct Sequential Segment Persistence
+
+Collected from a Storage Engine v2 worktree based on commit `f0e0a1c` (`FOD 3.2.1: add sequential segment write state`). The pending change moved bounded segment payloads directly into native extent rows and added segment-mode profiling.
+
+Commands:
+
+```bash
+PROFILE_RUN_ID=storage-segment-direct-core-20260711T065722Z \
+PROFILE_STORAGE_EXTENT_REPEAT=3 \
+PROFILE_STORAGE_EXTENT_SIZES=1048576 \
+PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark \
+make profile-storage-extent-size-matrix-local
+
+PROFILE_RUN_ID=storage-segment-direct-copy-20260711T065838Z \
+PROFILE_STORAGE_EXTENT_REPEAT=3 \
+PROFILE_STORAGE_EXTENT_SIZES=1048576 \
+PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-benchmark \
+make profile-storage-extent-size-matrix-local
+```
+
+| workload | path | throughput mean | elapsed mean | segment preparation | segment entries/downgrades | physical inserts | WAL bytes mean | max RSS mean |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 MiB large-file | block | `49.03 MiB/s` | `1.305976s` | `0 us` | `0/0` | `16384 data_blocks` | `7355280` | `137680 KiB` |
+| 64 MiB large-file | direct 1 MiB segments | `98.81 MiB/s` | `0.647826s` | `12.33 us` | `1/0` | `64 data_extents` | `889684` | `141736 KiB` |
+| 64 MiB large-copy | block | `18.50 MiB/s` | `3.459414s` | `0 us` | `0/0` | `32768 data_blocks` | `12938304` | `143685 KiB` |
+| 64 MiB large-copy | direct 1 MiB segments | `14.07 MiB/s` | `4.549553s` | `18 us` | `2/0` | `128 data_extents` | `1709398` | `137741 KiB` |
+
+The direct large-file result is about `4.5%` faster than the earlier 1 MiB bounded-extent baseline (`94.51 MiB/s`) and removes the approximately `32 ms` block-to-extent preparation step; preparation is now just descriptor validation plus ownership moves. The isolated high RSS sample (`149848 KiB`) makes the three-run large-file RSS mean noisy, while the other two direct samples remain close to the block baseline.
+
+Large-copy is a negative result: direct segment preparation is only `18 us`, but the extent run is about `24%` slower than the block run. SQL profiling points to repeated extent reads while copying rather than payload rebuilding. This closes the Phase B payload-preparation bottleneck, but extents remain opt-in and large-copy must not be routed broadly through the future new-object class until the read amplification is removed.
+
+Artifacts:
+
+- `artifacts/perf/f0e0a1c/lt7300-storage-segment-direct-core-20260711T065722Z-storage-extent-summary.md`
+- `artifacts/perf/f0e0a1c/lt7300-storage-segment-direct-copy-20260711T065838Z-storage-extent-summary.md`
+
 ## 2026-07-05 Local/QNAP COPY Buffer Matrix
 
 Collected from commit `a3076e1` (`FOD 3.2.1: add copy-buffer matrix compare target`).

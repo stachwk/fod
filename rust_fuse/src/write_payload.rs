@@ -84,6 +84,44 @@ impl SequentialSegmentState {
         self.segments.len() + usize::from(!self.current.is_empty())
     }
 
+    pub(crate) fn segment_descriptors(&self) -> Vec<(u64, u64)> {
+        let mut descriptors = self
+            .segments
+            .iter()
+            .map(|segment| (segment.start_offset, segment.payload.len() as u64))
+            .collect::<Vec<_>>();
+        if !self.current.is_empty() {
+            descriptors.push((self.current_start_offset(), self.current.len() as u64));
+        }
+        descriptors
+    }
+
+    pub(crate) fn into_segments(mut self) -> Vec<PendingSegment> {
+        self.finish_current();
+        self.segments
+    }
+
+    pub(crate) fn from_segments(segments: Vec<PendingSegment>) -> Self {
+        let start_offset = segments
+            .first()
+            .map(|segment| segment.start_offset)
+            .unwrap_or(0);
+        let next_offset = segments
+            .last()
+            .map(|segment| {
+                segment
+                    .start_offset
+                    .saturating_add(segment.payload.len() as u64)
+            })
+            .unwrap_or(start_offset);
+        Self {
+            start_offset,
+            next_offset,
+            segments,
+            current: Vec::new(),
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.payload_bytes() == 0
     }
@@ -255,6 +293,20 @@ impl WritePayloadState {
             Self::SequentialSegments(_) => unreachable!("payload must be downgraded first"),
         }
     }
+
+    pub(crate) fn take_sequential(&mut self) -> Option<SequentialSegmentState> {
+        if !matches!(self, Self::SequentialSegments(_)) {
+            return None;
+        }
+        match std::mem::take(self) {
+            Self::SequentialSegments(state) => Some(state),
+            Self::BlockOverlay(_) => unreachable!(),
+        }
+    }
+
+    pub(crate) fn restore_sequential(&mut self, state: SequentialSegmentState) {
+        *self = Self::SequentialSegments(state);
+    }
 }
 
 #[cfg(test)]
@@ -305,5 +357,15 @@ mod tests {
         assert_eq!(block_state.blocks[&0], b"abcd");
         assert_eq!(block_state.blocks[&1], b"efgh");
         assert_eq!(block_state.blocks[&2], b"ij\0\0");
+    }
+
+    #[test]
+    fn sequential_state_roundtrips_owned_segments_after_failure() {
+        let mut state = SequentialSegmentState::new(0);
+        assert!(state.append(0, b"abcdefghij", 4));
+
+        let restored = SequentialSegmentState::from_segments(state.into_segments());
+        assert_eq!(restored.segment_descriptors(), vec![(0, 4), (4, 4), (8, 2)]);
+        assert_eq!(restored.read_range(0, 10), Some(b"abcdefghij".to_vec()));
     }
 }

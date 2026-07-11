@@ -34,7 +34,12 @@ class WorkloadResult:
     write_bw: str = ""
     peak_payload_bytes: int = 0
     prepare_extent_us: int = 0
+    prepare_segment_us: int = 0
     repo_persist_extents_us: int = 0
+    segment_mode_entries: int = 0
+    segment_mode_downgrades: int = 0
+    segment_payload_bytes: int = 0
+    segment_count: int = 0
     max_rss_kib: int = 0
 
 
@@ -98,8 +103,18 @@ def parse_workloads(path: Path) -> list[WorkloadResult]:
                 current.peak_payload_bytes = max(current.peak_payload_bytes, value)
             elif key == "prepare_persist_extent_rows_from_extent_ranges_us":
                 current.prepare_extent_us += value
+            elif key == "prepare_persist_segment_rows_us":
+                current.prepare_segment_us += value
             elif key == "repo_persist_extents_us":
                 current.repo_persist_extents_us += value
+            elif key == "segment_mode_entries":
+                current.segment_mode_entries += value
+            elif key == "segment_mode_downgrades":
+                current.segment_mode_downgrades += value
+            elif key == "segment_payload_bytes":
+                current.segment_payload_bytes += value
+            elif key == "segment_count":
+                current.segment_count += value
             continue
         max_rss = MAX_RSS.match(line)
         if max_rss:
@@ -177,8 +192,8 @@ def render(runs: list[RunResult], run_prefix: str) -> str:
         "",
         "## Aggregate",
         "",
-        "| backend | mode | target bytes | workload | samples | throughput mean MiB/s | throughput stdev | throughput min | throughput max | read mean KiB/s | write mean KiB/s | elapsed mean s | peak payload bytes | max RSS mean KiB | run block inserts mean | run extent inserts mean | run WAL bytes mean |",
-        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| backend | mode | target bytes | workload | samples | throughput mean MiB/s | throughput stdev | throughput min | throughput max | read mean KiB/s | write mean KiB/s | elapsed mean s | peak payload bytes | segment entries mean | segment downgrades mean | segment payload bytes mean | segment count mean | prepare segment mean us | max RSS mean KiB | run block inserts mean | run extent inserts mean | run WAL bytes mean |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     grouped: dict[tuple[str, str, int, str], list[tuple[RunResult, WorkloadResult]]] = (
         defaultdict(list)
@@ -215,6 +230,17 @@ def render(runs: list[RunResult], run_prefix: str) -> str:
             if (parsed := bandwidth_kib_s(workload.write_bw)) is not None
         ]
         rss = [float(workload.max_rss_kib) for _, workload in samples]
+        segment_entries = [float(workload.segment_mode_entries) for _, workload in samples]
+        segment_downgrades = [
+            float(workload.segment_mode_downgrades) for _, workload in samples
+        ]
+        segment_payload_bytes = [
+            float(workload.segment_payload_bytes) for _, workload in samples
+        ]
+        segment_count = [float(workload.segment_count) for _, workload in samples]
+        prepare_segment_us = [
+            float(workload.prepare_segment_us) for _, workload in samples
+        ]
         block_inserts = [
             parsed
             for run, _ in samples
@@ -250,6 +276,11 @@ def render(runs: list[RunResult], run_prefix: str) -> str:
                     format_mean(write_bw),
                     format_mean(elapsed, 6),
                     str(peak_payload),
+                    format_mean(segment_entries),
+                    format_mean(segment_downgrades),
+                    format_mean(segment_payload_bytes),
+                    format_mean(segment_count),
+                    format_mean(prepare_segment_us),
                     format_mean(rss),
                     format_mean(block_inserts),
                     format_mean(extent_inserts),
@@ -264,8 +295,8 @@ def render(runs: list[RunResult], run_prefix: str) -> str:
             "",
             "## Raw runs",
             "",
-            "| backend | repeat | mode | target bytes | workload | elapsed s | throughput MiB/s | read bw | write bw | peak payload bytes | prepare extent us | persist extents us | max RSS KiB | run block inserts | run extent inserts | run WAL bytes |",
-        "| --- | ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| backend | repeat | mode | target bytes | workload | elapsed s | throughput MiB/s | read bw | write bw | peak payload bytes | prepare extent us | prepare segment us | persist extents us | segment entries | segment downgrades | segment payload bytes | segment count | max RSS KiB | run block inserts | run extent inserts | run WAL bytes |",
+            "| --- | ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for run in runs:
@@ -285,7 +316,12 @@ def render(runs: list[RunResult], run_prefix: str) -> str:
                         workload.write_bw,
                         str(workload.peak_payload_bytes),
                         str(workload.prepare_extent_us),
+                        str(workload.prepare_segment_us),
                         str(workload.repo_persist_extents_us),
+                        str(workload.segment_mode_entries),
+                        str(workload.segment_mode_downgrades),
+                        str(workload.segment_payload_bytes),
+                        str(workload.segment_count),
                         str(workload.max_rss_kib),
                         value(run.dml, "data_blocks_n_tup_ins_delta"),
                         value(run.dml, "data_extents_n_tup_ins_delta"),

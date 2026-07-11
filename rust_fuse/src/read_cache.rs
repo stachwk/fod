@@ -297,6 +297,18 @@ impl FodFuse {
         self.record_store_recent_write_blocks_elapsed(started.elapsed());
     }
 
+    pub(crate) fn clear_recent_write_blocks_for_file(&self, file_id: u64) {
+        let started = Instant::now();
+        let result = self.recent_write_blocks.lock();
+        self.record_recent_write_blocks_lock_elapsed(started.elapsed());
+        if let Ok(mut guard) = result {
+            guard.retain(|(cached_file_id, _), _| *cached_file_id != file_id);
+            self.recent_write_blocks_len
+                .store(guard.len() as u64, Ordering::Relaxed);
+        }
+        self.record_store_recent_write_blocks_elapsed(started.elapsed());
+    }
+
     pub(crate) fn clear_read_cache_for_file(&self, file_id: u64) {
         let started = Instant::now();
         let result = self.read_block_cache.lock();

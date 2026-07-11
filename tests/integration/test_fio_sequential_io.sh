@@ -66,6 +66,7 @@ run_case() {
     --numjobs=1 \
     --group_reporting=1 \
     --direct=0 \
+    --fsync_on_close=1 \
     --buffer_pattern=0x5a \
     --output-format=normal
 
@@ -87,6 +88,8 @@ run_case() {
   if [[ "${enable_extents}" == "1" ]]; then
     fod_assert_contains "${LOG_FILE}" "enable_extents=true"
     fod_assert_contains "${LOG_FILE}" "FOD sequential segment state entered"
+    fod_assert_contains "${LOG_FILE}" "write_state_mode=sequential_segment"
+    fod_assert_contains "${LOG_FILE}" "FOD direct segment persistence"
   else
     if grep -Fq "FOD extent PoC execution" "${LOG_FILE}"; then
       echo "unexpected extent PoC log in block-storage mode"
@@ -96,6 +99,11 @@ run_case() {
       echo "unexpected sequential segment state in block-storage mode"
       return 1
     fi
+    if grep -Fq "FOD direct segment persistence" "${LOG_FILE}"; then
+      echo "unexpected direct segment persistence in block-storage mode"
+      return 1
+    fi
+    fod_assert_contains "${LOG_FILE}" "FOD write_state_mode=block"
   fi
 
   echo "OK fio/sequential ${label} extents=${enable_extents} size=${expected_size} block_size=${block_size}"
