@@ -41,7 +41,8 @@ Reading guide:
   - [x] Inventory current FUSE 7.31 behavior, the Rust/C boundary, actual FFI consumers, direct `libpq` symbols, and schema-v17 storage contracts in `docs/compatibility-contracts.md`.
   - [x] Define and enforce Rust 1.85 as the verified minimum toolchain while retaining Edition 2021; workspace packages inherit the minimum, the SELinux/ACL image is pinned to `rust:1.85-bookworm`, and the stored CI definition selects the same version.
   - [ ] Decide whether `.github/workflows/ci.yml_` is intentionally disabled; Rust 1.85 is configured in it, but GitHub Actions will not run a workflow whose filename does not end in `.yml` or `.yaml`.
-  - [ ] Record the current `fuser 0.14` / ABI 7.31 correctness and performance baseline.
+  - [x] Record the current `fuser 0.14` / ABI 7.31 correctness and performance baseline.
+    - Historical note: `docs/fuse-abi-7-31-current-baseline.md` records three-run local block/extent measurements for exact and chunked copy, sequential storage, sequential/mixed/random fio, and remount durability on commit `7d9ed83`. It also freezes callback counts, SQL/WAL shape, object-sharing checks, partial extent conversion, and zero-orphan/reference/hybrid invariants for the later `fuser 0.17` comparison.
   - [ ] Upgrade `fuser` from 0.14 to 0.17 for functional parity before enabling any new capabilities.
   - [ ] Report the available subset of negotiated FUSE protocol limits and capabilities without forking `fuser` only for diagnostics.
   - [ ] Repeat the ABI 7.31 workload matrix after the upgrade and retain the migration only if correctness and storage ownership invariants remain intact.

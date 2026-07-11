@@ -1467,6 +1467,43 @@ Base commit at execution time: `a23bfbb`
 - `PROFILE_CAPTURE_LABEL=storage-ownership-v17 make profile-pg-data-blocks-merge-explain`
 - `PROFILE_CAPTURE_LABEL=storage-ownership-v17 make profile-pg-data-blocks-merge-fillfactor-explain-one`
 - `findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-'`
+
+Execution date: `2026-07-11`
+
+Measured production base commit at execution time:
+`7d9ed837bec69670501c78262c08723fde5d5f48`
+
+- `PROFILE_RUN_ID=fuse-abi731-callback-smoke-20260711T120000Z PROFILE_STORAGE_EXTENT_REPEAT=1 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-object-adoption PROFILE_STORAGE_EXTENT_LARGE_COPY_BLOCK_SIZE=64K PROFILE_STORAGE_EXTENT_LARGE_COPY_BLOCK_COUNT=1 make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuse-abi731-exact-20260711T193000Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-object-adoption make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuse-abi731-chunked-20260711T193500Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-benchmark make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuse-abi731-sequential-20260711T194000Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuse-abi731-fio-sequential-20260711T194500Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-fio-sequential-io PROFILE_STORAGE_EXTENT_FIO_FILE_SIZE=64M make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuse-abi731-fio-mixed-20260711T195000Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-fio-mixed-io PROFILE_STORAGE_EXTENT_FIO_FILE_SIZE=64M make profile-storage-extent-size-matrix-local` (excluded because the fixed test filename made repeated runs reuse payload)
+- `PROFILE_RUN_ID=fuse-abi731-fio-mixed-isolated-20260711T200000Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-fio-mixed-io PROFILE_STORAGE_EXTENT_FIO_FILE_SIZE=64M make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuse-abi731-fio-random-mixed-20260711T201000Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-fio-random-mixed-io PROFILE_STORAGE_EXTENT_FIO_FILE_SIZE=64M make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuse-abi731-remount-20260711T202000Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-remount-durability-benchmark make profile-storage-extent-size-matrix-local`
+- `cargo test -p fod-rust-hotpath --test pg_query switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent -- --exact --nocapture`
+- `PROFILE_RUN_ID=fuse-abi731-strace-20260711T203000Z PROFILE_CAPTURE_LABEL=abi731 make profile-fuse-sequential-io`
+- `psql -X -v ON_ERROR_STOP=1 -f scripts/perf/pg/data_blocks_semantics.sql`
+- `psql -X -v ON_ERROR_STOP=1` with the exact-copy object/reference/layout diagnostic saved as `artifacts/perf/7d9ed83/lt7300-fuse-abi731-final-20260711T202500Z/whole-object-adoption-objects.txt`
+- `cargo fmt --all -- --check`
+- `bash -n tests/integration/fod_testlib.sh tests/integration/test_fio_mixed_io.sh`
+- `python3 -m py_compile scripts/perf/summarize_storage_extent_matrix.py`
+- `git diff --check`
+- `findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-'`
+- `cargo test -p fod-rust-fuse --test large_copy_benchmark --no-run --offline`
+- `python3` Markdown table-width validation for `BENCHMARKS.md` and `docs/fuse-abi-7-31-current-baseline.md`
+- `python3 scripts/perf/summarize_storage_extent_matrix.py --artifact-root artifacts/perf/7d9ed83 --run-prefix fuse-abi731-fio-mixed-isolated-20260711T200000Z --output /tmp/fod-fuse-abi731-summary-check.md`
+- `cmp /tmp/fod-fuse-abi731-summary-check.md artifacts/perf/7d9ed83/lt7300-fuse-abi731-fio-mixed-isolated-20260711T200000Z-storage-extent-summary.md`
+- `cargo test -p fod-rust-hotpath --test pg_query switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent -- --exact --nocapture`
+- `FOD_PROFILE_IO=1 LARGE_COPY_BLOCK_SIZE=64K LARGE_COPY_BLOCK_COUNT=1 make test-large-copy-object-adoption`
+- `PGPASSWORD=cichosza PGOPTIONS='-c search_path=fod,public' psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U foduser -d foddbname -f scripts/perf/pg/data_blocks_semantics.sql`
+- `find target -xdev ! -user "$(id -u)" -print -quit`
+- `git status --short --branch`
+- `git diff --check`
+- `git add BENCHMARKS.md TODO.md commands.md conclusions.md docs/compatibility-contracts.md docs/fuse-abi-7-31-current-baseline.md rust_fuse/tests/support.rs scripts/perf/summarize_storage_extent_matrix.py tests/integration/fod_testlib.sh tests/integration/test_fio_mixed_io.sh`
+- `git diff --cached --check`
+- `git commit -m "FOD 3.2.1: record current FUSE ABI 7.31 baseline"`
 - `find target -xdev -user root -print -quit`
 - `cargo fmt --all -- --check`
 - `git diff --check`

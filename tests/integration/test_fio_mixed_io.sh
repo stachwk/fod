@@ -46,7 +46,7 @@ run_case() {
   fod_test_init_schema
   fod_test_start_mount "${MOUNTPOINT}"
 
-  local file="${MOUNTPOINT}/fio-mixed-${label}-${rw_mode_slug}-${file_size_slug}.bin"
+  local file="${MOUNTPOINT}/fio-mixed-${label}-${rw_mode_slug}-${file_size_slug}-${BASHPID}.bin"
   local fio_args=(
     --name="mix-${label}"
     --filename="${file}"
@@ -81,6 +81,7 @@ run_case() {
   fi
 
   echo "OK fio/mixed ${label} rw=${rw_mode} extents=${enable_extents} size=${expected_size} block_size=${block_size}"
+  rm -f "${file}"
   fod_test_cleanup
 }
 

@@ -24,6 +24,48 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-07-05 from commit `a3076e1` and adds a fresh local/QNAP COPY-buffer matrix with DML, WAL, top statement IO/WAL, and bloat artifacts.
+- The current FUSE migration reference was collected locally on 2026-07-11 from commit `7d9ed83` with `fuser 0.14`, ABI 7.31, schema v17, and three samples per block/1 MiB extent mode.
+
+## 2026-07-11 Current FUSE ABI 7.31 Baseline
+
+Measured production base commit: `7d9ed837bec69670501c78262c08723fde5d5f48`
+(`FOD 3.2.1: define Rust toolchain baseline`). The runtime code was clean at
+that commit; pending measurement-only changes added unique callback counts and
+isolated repeated fio filenames. Full methodology, SQL evidence, acceptance
+criteria, and local artifact paths are in
+`docs/fuse-abi-7-31-current-baseline.md`.
+
+Environment: `lt7300`, Linux 6.17.0-40-generic, libfuse3 3.17.4,
+`fuser 0.14` with ABI 7.31, Rust 1.85.1, local PostgreSQL 16.14, debug/test
+binaries. Each accepted row is the mean of three runs.
+
+| workload | layout | result | FUSE read/write/copy calls | WAL bytes |
+| --- | --- | ---: | --- | ---: |
+| Exact 64 MiB object adoption | blocks | `8050.38 MiB/s` | `512 / 64 / 1` | `6413672` |
+| Exact 64 MiB object adoption | 1 MiB extents | `9979.55 MiB/s` | `512 / 64 / 1` | `853568` |
+| Chunked 64 MiB copy, 4 MiB requests | blocks | `19.05 MiB/s` | `512 / 64 / 16` | `13084834` |
+| Chunked 64 MiB copy, 4 MiB requests | 1 MiB extents | `31.66 MiB/s` | `512 / 64 / 16` | `7477992` |
+| Sequential 64 MiB write/readback | blocks | `54.66 MiB/s` | `512 / 64 / 0` | `7242445` |
+| Sequential 64 MiB write/readback | 1 MiB extents | `113.01 MiB/s` | `512 / 64 / 0` | `1202592` |
+
+| fio workload | blocks read/write KiB/s | 1 MiB extents read/write KiB/s | calls per layout |
+| --- | ---: | ---: | --- |
+| Sequential 64 MiB | `116053 / 4033` | `40209 / 3878` | `260 read / 16384 write` |
+| Mixed 64 MiB | `1480 / 1491` | `643 / 648` | `26 read / 24608 write` |
+| Random mixed 64 MiB | `1043 / 1051` | `537 / 541` | `8160 read / 24608 write` |
+
+Exact destinations added no payload rows: all six measured source objects had
+two file references, `reference_count = 2`, and only one physical layout. The
+final database diagnostic reported zero orphan payload rows, unreferenced
+objects, reference-count mismatches, and hybrid block/extent objects. The
+partial extent patch and block/extent remount gates passed.
+
+The first mixed-fio attempt reused a fixed filename, so later repeats measured
+an existing payload. It is excluded. The accepted isolated series uses a
+process-specific filename and produced the expected 24608 write callbacks in
+every sample. Extents remain opt-in because their lower row/WAL cost and strong
+dedicated sequential result do not offset the measured fio read and mixed-I/O
+regressions.
 
 ## 2026-07-10 Bounded Extent Execution Smoke
 

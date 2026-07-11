@@ -48,6 +48,8 @@ Inventory base commit: `54668b10a640aedb518bc9942a01700a65a45a44`
 - A chunked copy uses the payload-copy path. The current correctness path also
   converts an extent-backed destination before applying a partial block patch,
   preventing a hybrid block/extent object.
+- The measured correctness, callback, SQL, WAL, and throughput reference for
+  the migration is frozen in `docs/fuse-abi-7-31-current-baseline.md`.
 
 The move to `fuser 0.17` must explicitly choose its libfuse feature. Unlike
 `fuser 0.14`, the selected `fuser 0.17` release has no default features, so a

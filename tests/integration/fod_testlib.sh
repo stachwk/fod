@@ -117,6 +117,12 @@ fod_test_cleanup() {
     wait "${FOD_PID}" >/dev/null 2>&1 || true
   fi
   if [[ "${FOD_PROFILE_IO:-0}" =~ ^(1|true|True|yes|on)$ && -f "${LOG_FILE:-}" ]]; then
+    local read_calls write_calls copy_file_range_calls
+    read_calls="$(grep -oE 'FOD req=[0-9]+ op=read( |$)' "${LOG_FILE}" | sort -u | wc -l | tr -d ' ')"
+    write_calls="$(grep -oE 'FOD req=[0-9]+ op=write( |$)' "${LOG_FILE}" | sort -u | wc -l | tr -d ' ')"
+    copy_file_range_calls="$(grep -oE 'FOD req=[0-9]+ op=copy_file_range( |$)' "${LOG_FILE}" | sort -u | wc -l | tr -d ' ')"
+    printf 'FOD callback counts: read=%s write=%s copy_file_range=%s\n' \
+      "${read_calls}" "${write_calls}" "${copy_file_range_calls}"
     echo "FOD boundary profile summary:"
     grep -A40 -E "FOD boundary profile:" "${LOG_FILE}" || tail -n 40 "${LOG_FILE}" || true
   fi

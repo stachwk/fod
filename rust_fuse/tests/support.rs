@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -331,6 +331,21 @@ fn should_print_profile_io_line(line: &str) -> bool {
             || line.contains("pg.copy_get_result"))
 }
 
+fn callback_request_count(contents: &str, operation: &str) -> usize {
+    let operation_marker = format!("op={operation} ");
+    contents
+        .lines()
+        .filter_map(|line| {
+            let request = line.split_once("FOD req=")?.1;
+            let (request_id, suffix) = request.split_once(' ')?;
+            suffix
+                .starts_with(&operation_marker)
+                .then(|| request_id.to_string())
+        })
+        .collect::<HashSet<_>>()
+        .len()
+}
+
 fn print_profile_io_summaries_if_enabled(log_path: &Path) {
     if !env_var_truthy("FOD_PROFILE_IO") {
         return;
@@ -339,6 +354,13 @@ fn print_profile_io_summaries_if_enabled(log_path: &Path) {
     let Ok(contents) = fs::read_to_string(log_path) else {
         return;
     };
+
+    eprintln!(
+        "FOD callback counts: read={} write={} copy_file_range={}",
+        callback_request_count(&contents, "read"),
+        callback_request_count(&contents, "write"),
+        callback_request_count(&contents, "copy_file_range"),
+    );
 
     let mut boundary_profile = false;
     for line in contents.lines() {
