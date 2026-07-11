@@ -1728,3 +1728,37 @@ Base commit at execution time: `f0e0a1c`
 - `make test-fio-mixed-io`
 - `make test-fio-random-mixed-io`
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+
+Execution date: `2026-07-11`
+
+Base commit at execution time: `54668b1`
+
+- `git status --short --branch`
+- `git rev-parse HEAD`
+- `cat fod_version.txt`
+- `sed -n '1,1380p' /home/wojtek/.codex/attachments/2eb7d65d-2bbd-4417-8a96-b85eef3d6c4a/pasted-text.txt`
+- `find docker -maxdepth 3 -type f -print | sort`
+- `sed -n '1,260p' docker/selinux-acl/Dockerfile`
+- `sed -n '1,260p' .github/workflows/ci.yml_`
+- `for f in Cargo.toml rust_*/Cargo.toml; do sed -n '1,140p' "$f"; done`
+- `rg -n "Rust|rustc|cargo|toolchain|fuser|FUSE ABI|ABI 7.31|compatib|libpq|cdylib|hotpath" README.md README.pl TODO.md docs .github Makefile`
+- `cargo info fuser@0.14.0`
+- `cargo info fuser@0.17.0`
+- `rustc --version --verbose`
+- `cargo --version --verbose`
+- `cargo metadata --no-deps --format-version 1`
+- `ldd target/debug/fod-rust-fuse`
+- `readelf -d target/debug/libfod_rust_hotpath.so`
+- `nm -D --defined-only target/debug/libfod_rust_hotpath.so`
+- `dpkg-query -W libfuse3-4 libfuse3-dev libpq5 libpq-dev`
+- `pg_config --version`
+- `psql --version`
+- `make --no-print-directory postgres-config-show`
+- `PGPASSWORD=cichosza psql -h 127.0.0.1 -p 5432 -U foduser -d foddbname -Atqc "SELECT current_setting('server_version_num'), version();"`
+- `rg -n "#[unsafe(no_mangle)]|extern \"C\"|repr(C)|fod_free_|fod_rust_pg_repo_(new|free)" rust_hotpath/src/ffi.rs rust_hotpath/src/pg.rs rust_mkfs/src/pg.rs`
+- `rg -n "libfod|fod_rust_pg_repo_|fod_copy_plan|fod_free_bytes|dlopen|dlsym|CDLL|LoadLibrary" --glob '!target/**' .`
+- `find . -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.c' -o -name '*.cpp' -o -name '*.pxd' -o -name '*.pyi' \) -not -path './target/*' -print`
+- `rg -n "F_GETLK|F_SETLK|bmap|setattr|copy_file_range|FICLONE|FIONREAD|poll" tests rust_fuse/tests Makefile`
+- `rg -n "schema version|CURRENT_SCHEMA_VERSION|data_object_id|hybrid|orphan payload|reference_count|data_blocks|data_extents" rust_mkfs rust_hotpath rust_fuse scripts/perf/pg docs`
+- `perl -ne 'if (/impl Filesystem for FodFuse/) {$in=1} if ($in && /^\s*fn\s+([a-zA-Z0-9_]+)/) { last if $1 eq "file_attr"; print "$1\n" }' rust_fuse/src/fs.rs | wc -l`
+- `git diff --check`

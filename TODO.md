@@ -37,6 +37,18 @@ Reading guide:
 - [ ] Before changing the default `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` for QNAP-like backends, repeat the QNAP COPY-buffer matrix enough times to distinguish a stable `4194304` benefit from network or Docker noise.
   - Historical note: the 2026-07-09 local repeat sample on commit `bad53cc` stayed mixed (`14.55/18.17`, `18.43/17.48`, `17.42/17.76` MiB/s for `default` vs `4194304`). The QNAP repetition still needs a clean run; in this session `192.168.1.11:5432` returned `No route to host`.
 - [ ] Isolate the Cargo target directory used by `make test-locking` under `sudo`, then recheck the privileged test workflow. The 2026-07-11 local gate left root-owned files in the workspace `target/` directory and required an explicit ownership repair; revisit this independently from storage work.
+- [ ] Deliver the Compatibility and FUSE Modernization project without reopening the completed Storage Engine v2 implementation.
+  - [x] Inventory current FUSE 7.31 behavior, the Rust/C boundary, actual FFI consumers, direct `libpq` symbols, and schema-v17 storage contracts in `docs/compatibility-contracts.md`.
+  - [ ] Define and enforce the verified minimum Rust toolchain while retaining Edition 2021.
+  - [ ] Record the current `fuser 0.14` / ABI 7.31 correctness and performance baseline.
+  - [ ] Upgrade `fuser` from 0.14 to 0.17 for functional parity before enabling any new capabilities.
+  - [ ] Report the available subset of negotiated FUSE protocol limits and capabilities without forking `fuser` only for diagnostics.
+  - [ ] Repeat the ABI 7.31 workload matrix after the upgrade and retain the migration only if correctness and storage ownership invariants remain intact.
+  - [ ] Inventory protocol 7.32-7.40 capabilities, then test useful capabilities one at a time with an explicit semantic contract and benchmark.
+  - [ ] Decide whether the hotpath `cdylib` remains internal or becomes a versioned public ABI based on real consumers; before any public ABI, replace the unstable `Vec<u8>` pointer/length free contract and keep repository handles opaque.
+  - [ ] Add `libpq` client/server runtime version diagnostics without replacing the current PostgreSQL architecture.
+  - [ ] Write the storage-format versioning ADR before adding any new format marker or schema column.
+  - [ ] Aggregate existing compatibility diagnostics only after the individual boundaries expose trustworthy data.
 - [x] Deliver the `Storage Engine v2` project described in `docs/storage-engine-v2-plan.md`, preserving 4 KiB logical blocks and the default block path while making large sequential physical persistence bounded and opt-in.
   - Phase A: add bounded extent planning and payload rows, then pass the local and QNAP benchmark gate.
     - Completed: bounded planning, bounded payload rows, the startup-only `extent_target_bytes` setting, and peak-payload diagnostics are implemented with a 1 MiB default. Three-run local and QNAP 64 MiB matrices passed, as did the all-workload local smoke. Extents remain opt-in because mixed/random and fio write still regress.
