@@ -156,7 +156,7 @@ For step-by-step local verification profiles, see [zasady_sprawdzen.md](zasady_s
 
 ## Requirements
 
-- Rust toolchain (`cargo`)
+- Rust 1.85 or newer with Cargo; all workspace crates remain on Edition 2021
 - PostgreSQL
 - FUSE support on the host
 - `openssl` if you want FOD to auto-generate a PostgreSQL TLS client cert/key pair

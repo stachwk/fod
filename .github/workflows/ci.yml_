@@ -12,6 +12,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.85"
   FOD_MKFS_PACKAGE: fod-rust-mkfs
   FOD_FUSE_PACKAGE: fod-rust-fuse
   FOD_HOTPATH_PACKAGE: fod-rust-hotpath
@@ -31,6 +32,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Rust toolchain baseline
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${RUST_VERSION}" --profile minimal
+          rustup default "${RUST_VERSION}"
+          rustc --version
+          cargo --version
 
       - name: Install system dependencies
         run: |
@@ -55,9 +64,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-${{ env.RUST_VERSION }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-rust-${{ env.RUST_VERSION }}-cargo-
 
       - name: Build Rust workspace
         run: cargo build --workspace --locked
@@ -87,6 +96,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Select Rust toolchain baseline
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${RUST_VERSION}" --profile minimal
+          rustup default "${RUST_VERSION}"
+          rustc --version
+          cargo --version
+
       - name: Install system dependencies
         run: |
           set -euo pipefail
@@ -110,9 +127,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-${{ env.RUST_VERSION }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-rust-${{ env.RUST_VERSION }}-cargo-
 
       - name: Prepare PostgreSQL
         run: make up
@@ -143,6 +160,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Rust toolchain baseline
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${RUST_VERSION}" --profile minimal
+          rustup default "${RUST_VERSION}"
+          rustc --version
+          cargo --version
 
       - uses: actions/setup-python@v5
         with:
@@ -182,9 +207,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-rust-${{ env.RUST_VERSION }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-rust-${{ env.RUST_VERSION }}-cargo-
 
       - name: Prepare PostgreSQL
         run: make up

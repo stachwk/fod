@@ -8,6 +8,27 @@ Inventory date: `2026-07-11`
 
 Inventory base commit: `54668b10a640aedb518bc9942a01700a65a45a44`
 
+## Rust Toolchain Boundary
+
+- Every workspace package declares a minimum Rust version of 1.85 through
+  `[workspace.package]` inheritance.
+- All crates remain on Edition 2021. The compiler baseline does not require an
+  Edition 2024 migration.
+- `fuser 0.17.0`, selected for the next phase, declares Rust 1.85 as its minimum
+  supported version.
+- The inventory host uses `rustc 1.85.1` and Cargo 1.85.1.
+- The SELinux/ACL lab image is based on `rust:1.85-bookworm`.
+- The repository CI definition selects Rust 1.85 explicitly and includes the
+  version in Cargo cache keys. The file is currently named
+  `.github/workflows/ci.yml_`, so GitHub Actions will not discover it until the
+  repository deliberately restores a `.yml` or `.yaml` filename.
+- No `rust-toolchain.toml` is required. Cargo package metadata enforces the
+  minimum for development, debug, release, and profiling builds while allowing
+  newer compatible toolchains.
+- Distribution packages are acceptable only when both `rustc` and Cargo satisfy
+  the 1.85 minimum; installation documentation must not imply that every distro
+  package version is sufficient.
+
 ## FUSE Boundary
 
 ### Build and Runtime
@@ -164,7 +185,7 @@ declared supported range. Runtime reporting of `PQlibVersion()` and
 | Boundary | Current | Planned |
 | --- | --- | --- |
 | FUSE | `fuser 0.14` / ABI 7.31 | `fuser 0.17` / protocol up to 7.40, followed by verified negotiation diagnostics |
-| Rust toolchain | Implicit | Explicit minimum compatible with `fuser 0.17` and supported build environments |
+| Rust toolchain | Minimum 1.85, Edition 2021 | Keep explicit minimum aligned with dependencies and build environments |
 | Hotpath C ABI | Unclassified exports; no external consumer found | Inventory-based internal/public decision before changing or freezing symbols |
 | libpq runtime | Dynamically linked | Runtime client/server version reporting and a tested-version contract |
 | DB schema | Version 17 | Normal migration contract; no compatibility-only schema change |

@@ -158,7 +158,7 @@ Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasa
 
 ## Wymagania
 
-- Rust toolchain (`cargo`)
+- Rust 1.85 lub nowszy wraz z Cargo; wszystkie crate'y workspace pozostają na Edition 2021
 - PostgreSQL
 - wsparcie FUSE na hoście
 - `openssl`, jeśli FOD ma automatycznie generować parę certyfikat/klucz TLS dla PostgreSQL

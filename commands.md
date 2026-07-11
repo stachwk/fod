@@ -1762,3 +1762,31 @@ Base commit at execution time: `54668b1`
 - `rg -n "schema version|CURRENT_SCHEMA_VERSION|data_object_id|hybrid|orphan payload|reference_count|data_blocks|data_extents" rust_mkfs rust_hotpath rust_fuse scripts/perf/pg docs`
 - `perl -ne 'if (/impl Filesystem for FodFuse/) {$in=1} if ($in && /^\s*fn\s+([a-zA-Z0-9_]+)/) { last if $1 eq "file_attr"; print "$1\n" }' rust_fuse/src/fs.rs | wc -l`
 - `git diff --check`
+
+Execution date: `2026-07-11`
+
+Base commit at execution time: `f4cfa87`
+
+- `cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name,.rust_version,.edition] | @tsv'`
+- `rg -n '^  [a-zA-Z0-9_-]+:$|uses: actions/checkout|cargo (build|test|check)|make ' .github/workflows/ci.yml_`
+- `rg -n '^build-debug:|profile\.release|release-lto|profiling|cargo build|CARGO_BUILD|CARGO_TEST' Makefile`
+- `rg -n 'UBUNTU_BUILD_DEPS|REDHAT_BUILD_DEPS' Makefile`
+- `rg -n "DOCKER_HOST|QNAP|fod|container|port" /home/wojtek/git/config --glob '!**/.git/**'`
+- `docker context show`
+- `docker manifest inspect rust:1.85-bookworm`
+- `cargo fmt --all -- --check`
+- `cargo check --workspace`
+- `cargo test --workspace` (all tests before `lock_backend_smoke` passed; the four lock tests correctly refused to run without root)
+- `cargo test --workspace -- --skip primary_`
+- `sudo -n env POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza FOD_BOOTSTRAP_BIN="$PWD/target/debug/fod-bootstrap" "$PWD/target/debug/deps/lock_backend_smoke-0beb9e10983a7721" --nocapture --test-threads=1`
+- `find target -xdev ! -user "$(id -u)" -print -quit`
+- `cargo build --workspace --profile release --locked`
+- `cargo build --workspace --profile profiling --locked`
+- `docker build --pull=false -t fod-rust-toolchain-baseline:3.2.1 -f docker/selinux-acl/Dockerfile .`
+- `docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp/fod-home -e CARGO_HOME=/tmp/fod-home/.cargo -e CARGO_TARGET_DIR=/tmp/fod-target -v "$PWD:/workspace/fod:ro" -w /workspace/fod fod-rust-toolchain-baseline:3.2.1 bash -lc 'rustc --version; cargo --version; cargo check --workspace --locked'` (failed because the login shell replaced the image `PATH`)
+- `docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp/fod-home -e CARGO_HOME=/tmp/fod-home/.cargo -e CARGO_TARGET_DIR=/tmp/fod-target -v "$PWD:/workspace/fod:ro" -w /workspace/fod fod-rust-toolchain-baseline:3.2.1 bash -c 'rustc --version; cargo --version; cargo check --workspace --locked'`
+- `docker image rm fod-rust-toolchain-baseline:3.2.1`
+- `cargo test -p fod-rust-hotpath --lib ffi::tests::exports_purge_primary_file -- --exact`
+- `cargo test -p fod-rust-hotpath --test pg_query promote_hardlink_to_primary_preserves_the_remaining_path -- --exact`
+- `git diff --check`
+- `findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-'`
