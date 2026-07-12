@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use fuser::{mount2, MountOption};
+use fuser::{mount2, Config, MountOption, SessionACL};
 use log::info;
 use rust_hotpath::pg::{DbRepo, StartupSnapshot};
 use std::path::{Path, PathBuf};
@@ -137,10 +137,7 @@ impl FodFuseSettings {
     }
 }
 
-fn mount_options(
-    mount: &RuntimeMountSettings,
-    security: &RuntimeSecuritySettings,
-) -> Vec<MountOption> {
+fn mount_config(mount: &RuntimeMountSettings, security: &RuntimeSecuritySettings) -> Config {
     let mut options = vec![
         MountOption::FSName("fod".to_string()),
         MountOption::AutoUnmount,
@@ -148,9 +145,12 @@ fn mount_options(
     if mount.default_permissions {
         options.push(MountOption::DefaultPermissions);
     }
-    if env_var_truthy_with_legacy_alias("FOD_ALLOW_OTHER", false) {
-        options.push(MountOption::AllowOther);
-    }
+    let acl = if env_var_truthy_with_legacy_alias("FOD_ALLOW_OTHER", false) {
+        SessionACL::All
+    } else {
+        // libfuse3 requires allow_other for auto_unmount; fuser keeps access owner/root-only.
+        SessionACL::RootAndOwner
+    };
     if mount.lazytime {
         options.push(MountOption::CUSTOM("lazytime".to_string()));
     }
@@ -193,7 +193,10 @@ fn mount_options(
     if mount.fuse_writeback_cache {
         options.push(MountOption::CUSTOM("writeback_cache".to_string()));
     }
-    options
+    let mut config = Config::default();
+    config.mount_options = options;
+    config.acl = acl;
+    config
 }
 
 fn log_mount_status(
@@ -206,7 +209,7 @@ fn log_mount_status(
     storage: &RuntimeStorageSettings,
     fs: &FodFuse,
     snapshot: &StartupSnapshot,
-    options: &[MountOption],
+    config: &Config,
 ) {
     info!("FOD mount startup status");
     info!(
@@ -289,7 +292,10 @@ fn log_mount_status(
         storage.enable_extents,
         storage.extent_target_bytes
     );
-    info!("FOD mount options: {:?}", options);
+    info!(
+        "FOD mount options: {:?} acl={:?}",
+        config.mount_options, config.acl
+    );
     if env_var_truthy_with_legacy_alias("FOD_DEBUG_SNAPSHOT", false) {
         info!("FOD debug snapshot: {}", fs.debug_snapshot());
     }
@@ -333,9 +339,9 @@ pub fn mount_fuse(
     fs.start_runtime_reload(runtime)
         .map_err(|err| format!("failed to start runtime reload: {err}"))?;
 
-    let options = mount_options(&mount, &security);
+    let config = mount_config(&mount, &security);
     log_mount_status(
-        mountpoint, &core, &mount, &security, &lock, &cache, &storage, &fs, snapshot, &options,
+        mountpoint, &core, &mount, &security, &lock, &cache, &storage, &fs, snapshot, &config,
     );
     info!("FOD mounting filesystem at {}", mountpoint.display());
     println!(
@@ -343,5 +349,5 @@ pub fn mount_fuse(
         mountpoint.display()
     );
 
-    mount2(fs, mountpoint, &options).map_err(|err| format!("mount failed: {:?}", err))
+    mount2(fs, mountpoint, &config).map_err(|err| format!("mount failed: {:?}", err))
 }

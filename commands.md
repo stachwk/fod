@@ -1468,6 +1468,40 @@ Base commit at execution time: `a23bfbb`
 - `PROFILE_CAPTURE_LABEL=storage-ownership-v17 make profile-pg-data-blocks-merge-fillfactor-explain-one`
 - `findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-'`
 
+Execution date: `2026-07-12`
+
+Base commit at execution time: `0c48865`
+
+- `cargo info fuser@0.17.0`
+- source comparison of local Cargo registry `fuser-0.14.0` and `fuser-0.17.0` for features, `Filesystem`, `KernelConfig`, mount `Config`, replies, typed handles, flags, and session lifecycle
+- `cargo update -p fuser --precise 0.17.0`
+- `cargo check -p fod-rust-fuse` (initial compiler-guided API inventory, then passed after adaptation)
+- `cargo fmt --all`
+- `cargo check --workspace`
+- `cargo test -p fod-rust-fuse --no-run --offline`
+- `FOD_PROFILE_IO=1 LARGE_COPY_BLOCK_SIZE=64K LARGE_COPY_BLOCK_COUNT=1 make test-large-copy-object-adoption`
+- `cargo tree -p fod-rust-fuse -e features`
+- `ldd target/debug/fod-rust-fuse`
+- `cargo test --workspace -- --skip primary_`
+- `cargo test -p fod-rust-hotpath --lib ffi::tests::exports_purge_primary_file -- --exact`
+- `cargo test -p fod-rust-hotpath --test pg_query promote_hardlink_to_primary_preserves_the_remaining_path -- --exact`
+- `sudo -n env POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza FOD_BOOTSTRAP_BIN="$PWD/target/debug/fod-bootstrap" "$PWD/target/debug/deps/lock_backend_smoke-953adbd9a82068e2" --nocapture --test-threads=1`
+- `make test-mount-suite test-ioctl test-poll test-access-groups test-copy-file-range test-hardlink test-lseek`
+- `make test-copy-block-crc-table test-persist-buffer-chunking test-unlink-after-write test-remount-durability-benchmark test-large-copy-object-adoption test-large-copy-benchmark`
+- `cargo test -p fod-rust-hotpath --test pg_query switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent -- --exact --nocapture`
+- `make test-fio-sequential-io test-fio-mixed-io test-fio-random-mixed-io`
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace`
+- `PGPASSWORD=cichosza PGOPTIONS='-c search_path=fod,public' psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U foduser -d foddbname -f scripts/perf/pg/data_blocks_semantics.sql`
+- `findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-'`
+- `find target -xdev ! -user "$(id -u)" -print -quit`
+- `cargo build --workspace --profile release --locked`
+- `cargo build --workspace --profile profiling --locked`
+- `git diff --check`
+- `git status --short --branch && git diff --check && git diff --stat && printf 'VERSION=' && cat fod_version.txt && git log -3 --oneline`
+- `rg -n -C 8 "0c48865|cargo build --workspace --profile release|upgrade fuser to 0.17" commands.md`
+- `git diff -- rust_fuse/Cargo.toml rust_fuse/src/startup.rs docs/compatibility-contracts.md TODO.md conclusions.md && git diff --numstat && git diff --check`
+- `git commit -m "FOD 3.2.1: upgrade fuser to 0.17"`
+
 Execution date: `2026-07-11`
 
 Measured production base commit at execution time:

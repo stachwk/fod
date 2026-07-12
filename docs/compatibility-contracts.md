@@ -1,12 +1,12 @@
 # FOD Compatibility Contracts
 
-This document records the current compatibility boundaries of FOD 3.2.1 before
-the planned `fuser` upgrade. It describes verified repository and runtime state,
+This document records the current compatibility boundaries of FOD 3.2.1 after
+the `fuser 0.17` migration. It describes verified repository and runtime state,
 not the historical migration path.
 
-Inventory date: `2026-07-11`
+Inventory date: `2026-07-12`
 
-Inventory base commit: `54668b10a640aedb518bc9942a01700a65a45a44`
+Last clean base before the migration: `0c48865`
 
 ## Rust Toolchain Boundary
 
@@ -14,7 +14,7 @@ Inventory base commit: `54668b10a640aedb518bc9942a01700a65a45a44`
   `[workspace.package]` inheritance.
 - All crates remain on Edition 2021. The compiler baseline does not require an
   Edition 2024 migration.
-- `fuser 0.17.0`, selected for the next phase, declares Rust 1.85 as its minimum
+- `fuser 0.17.0` declares Rust 1.85 as its minimum
   supported version.
 - The inventory host uses `rustc 1.85.1` and Cargo 1.85.1.
 - The SELinux/ACL lab image is based on `rust:1.85-bookworm`.
@@ -33,11 +33,11 @@ Inventory base commit: `54668b10a640aedb518bc9942a01700a65a45a44`
 
 ### Build and Runtime
 
-- `rust_fuse/Cargo.toml` selects `fuser = 0.14` with `abi-7-31`.
-- The current dependency still enables the `fuser 0.14` default `libfuse`
-  feature. The built `fod-rust-fuse` executable dynamically links
-  `libfuse3.so.4` on the inventory host.
-- The compiled userspace protocol maximum is FUSE ABI 7.31. The current FOD
+- `rust_fuse/Cargo.toml` selects `fuser = 0.17` with `abi-7-40` and an explicit
+  `libfuse3` feature.
+- The built `fod-rust-fuse` executable dynamically links `libfuse3.so.4` on the
+  inventory host; no libfuse2 or pure-Rust mount fallback is selected.
+- The compiled userspace protocol maximum is FUSE ABI 7.40. The current FOD
   startup path does not expose the kernel or negotiated protocol version as a
   structured diagnostic.
 - `FodFuse::init()` requests `FUSE_POSIX_LOCKS` and `FUSE_FLOCK_LOCKS`. It does
@@ -50,11 +50,13 @@ Inventory base commit: `54668b10a640aedb518bc9942a01700a65a45a44`
   preventing a hybrid block/extent object.
 - The measured correctness, callback, SQL, WAL, and throughput reference for
   the migration is frozen in `docs/fuse-abi-7-31-current-baseline.md`.
+- After the dependency migration, mounted exact and chunked copies, remount,
+  locking, ioctl, poll, metadata, namespace, and fio gates retain their prior
+  behavior. The repeated performance comparison is recorded separately.
 
-The move to `fuser 0.17` must explicitly choose its libfuse feature. Unlike
-`fuser 0.14`, the selected `fuser 0.17` release has no default features, so a
-dependency-only update would silently change the session backend if the feature
-selection were not reviewed.
+Unlike `fuser 0.14`, `fuser 0.17` has no default mount feature. FOD therefore
+selects `libfuse3` explicitly so dependency updates cannot silently switch the
+session backend.
 
 ### Callback Inventory
 
@@ -68,7 +70,7 @@ handlers are listed as implemented.
 | Implemented and exercised | `lookup`, `getattr`, `readdir`, `readlink`, `statfs`, `setxattr`, `getxattr`, `listxattr`, `removexattr`, `access`, `poll`, `open`, `getlk`, `setlk`, `flush`, `read`, `release`, `setattr`, `mkdir`, `unlink`, `rmdir`, `rename`, `create`, `write`, `copy_file_range`, `mknod`, `symlink`, `link` | Mount, metadata, permission, xattr, poll, multi-mount locking, persistence, namespace, copy, special-node, and link suites exercise these handlers. Exact and chunked copy paths have dedicated mounted tests. |
 | Implemented but weakly tested | `init`, `ioctl`, `bmap` | Mount success exercises `init`, but accepted capabilities and negotiated limits are not asserted. The mounted `ioctl` test covers `FIONREAD` and the host-dependent `FICLONE` result; `FIGETBSZ`, inode flags, `fsxattr`, `FICLONERANGE`, and all error shapes are not covered end to end. No mounted `bmap` consumer was found. |
 | Not explicitly implemented | `destroy`, `forget`, `batch_forget`, `fsync`, `opendir`, `readdirplus`, `releasedir`, `fsyncdir`, `fallocate`, `lseek`; macOS-only `setvolname`, `exchange`, `getxtimes` | FOD inherits the `fuser` defaults. Existing `fsync`, `fallocate`, and `lseek` syscall-level tests do not make these explicit FOD callback implementations. |
-| Available only after the `fuser` upgrade | No additional high-level `Filesystem` method was found in the `fuser 0.17` trait compared with 0.14. Post-7.31 protocol flags include surfaces such as `FOPEN_NOFLUSH`, `FOPEN_PARALLEL_DIRECT_WRITES`, `FUSE_INIT_EXT`, `FUSE_DIRECT_IO_ALLOW_MMAP`, and `FUSE_PASSTHROUGH`. | Availability in the crate or protocol is not evidence that the kernel negotiated a flag or that FOD can enable it safely. `SYNCFS`, `STATX`, and `TMPFILE` are not exposed as new methods in the inspected `fuser 0.17` high-level trait and require a separate API inventory. |
+| Available in the upgraded protocol surface but not enabled by FOD | No additional high-level `Filesystem` method was found in the `fuser 0.17` trait compared with 0.14. Post-7.31 protocol flags include surfaces such as `FOPEN_NOFLUSH`, `FOPEN_PARALLEL_DIRECT_WRITES`, `FUSE_INIT_EXT`, `FUSE_DIRECT_IO_ALLOW_MMAP`, and `FUSE_PASSTHROUGH`. | Availability in the crate or protocol is not evidence that the kernel negotiated a flag or that FOD can enable it safely. `SYNCFS`, `STATX`, and `TMPFILE` are not exposed as new methods in the inspected `fuser 0.17` high-level trait and require a separate API inventory. |
 
 ## Rust and C Boundary
 
@@ -186,7 +188,7 @@ declared supported range. Runtime reporting of `PQlibVersion()` and
 
 | Boundary | Current | Planned |
 | --- | --- | --- |
-| FUSE | `fuser 0.14` / ABI 7.31 | `fuser 0.17` / protocol up to 7.40, followed by verified negotiation diagnostics |
+| FUSE | `fuser 0.17` / protocol maximum 7.40 / explicit libfuse3 | Verified negotiated-protocol and capability diagnostics, then isolated capability experiments |
 | Rust toolchain | Minimum 1.85, Edition 2021 | Keep explicit minimum aligned with dependencies and build environments |
 | Hotpath C ABI | Unclassified exports; no external consumer found | Inventory-based internal/public decision before changing or freezing symbols |
 | libpq runtime | Dynamically linked | Runtime client/server version reporting and a tested-version contract |

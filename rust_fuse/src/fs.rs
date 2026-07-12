@@ -2,11 +2,12 @@
 // Licensed under BSL 1.1
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use fuser::consts::{FUSE_FLOCK_LOCKS, FUSE_POSIX_LOCKS};
 use fuser::{
-    FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyOpen, ReplyPoll,
-    ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow,
+    AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
+    Filesystem, FopenFlags, Generation, INodeNo, InitFlags, IoctlFlags, KernelConfig, LockOwner,
+    OpenFlags, PollEvents, PollFlags, PollNotifier, RenameFlags, ReplyAttr, ReplyBmap, ReplyCreate,
+    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyOpen, ReplyPoll,
+    ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use libc::{EIO, ENOENT, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
@@ -47,11 +48,11 @@ const IOCTL_FS_IOC_FSGETXATTR: u32 = libc::_IOR::<[u8; IOCTL_FSXATTR_BYTES]>('X'
 const IOCTL_FS_IOC_FSSETXATTR: u32 = libc::_IOW::<[u8; IOCTL_FSXATTR_BYTES]>('X' as u32, 32) as u32;
 const IOCTL_FSXATTR_BYTES: usize = 28;
 
-// FOPEN_DIRECT_IO = 1 << 0.
-// Uzywamy lokalnej stalej, zeby nie zalezec od eksportu tej stalej przez wersje fuser.
-// Bez direct_io kernel moze buforowac zapisy miedzy uchwytami i test multi_open
-// widzi potem zera zamiast danych zapisanych przez pierwszy fh.
-const FOD_FOPEN_DIRECT_IO: u32 = 1;
+macro_rules! fuse_reply_error {
+    ($reply:expr, $errno:expr) => {
+        $reply.error(Errno::from_i32($errno))
+    };
+}
 
 #[derive(Debug, Clone)]
 struct ParsedAttrs {
@@ -1678,7 +1679,7 @@ impl FodFuse {
         groups
     }
 
-    fn request_identity(&self, req: &Request<'_>) -> SubjectIdentity {
+    fn request_identity(&self, req: &Request) -> SubjectIdentity {
         if !self.use_fuse_context {
             return Self::process_identity();
         }
@@ -2295,7 +2296,7 @@ impl FodFuse {
         }
     }
 
-    fn ioctl_clone_source_path(req: &Request<'_>, src_fd: i64) -> Result<String, libc::c_int> {
+    fn ioctl_clone_source_path(req: &Request, src_fd: i64) -> Result<String, libc::c_int> {
         if src_fd < 0 {
             return Err(libc::EINVAL);
         }
@@ -2305,7 +2306,7 @@ impl FodFuse {
     }
 
     fn copy_range_from_states(
-        &mut self,
+        &self,
         req_id: u64,
         op: &'static str,
         src_file_id: u64,
@@ -2749,7 +2750,7 @@ impl FodFuse {
             let inode_seed = fields[8].clone();
             let inode = self.stable_inode(&obj_type, &inode_seed, raw_inode);
             FileAttr {
-                ino: inode,
+                ino: INodeNo(inode),
                 size: target.len() as u64,
                 blocks: self.block_count(target.len() as u64, "symlink"),
                 atime: Self::parse_time(&acc_date),
@@ -2826,7 +2827,7 @@ impl FodFuse {
                 _ => 1,
             };
             FileAttr {
-                ino: inode,
+                ino: INodeNo(inode),
                 size,
                 blocks: self.block_count(size, &obj_type),
                 atime: Self::parse_time(&acc_date),
@@ -2868,7 +2869,7 @@ impl FodFuse {
         let process_identity = Self::process_identity();
         ParsedAttrs {
             file_attr: FileAttr {
-                ino: ROOT_INO,
+                ino: INodeNo::ROOT,
                 size: 0,
                 blocks: self.block_count(0, "dir"),
                 atime: now,
@@ -2970,14 +2971,14 @@ impl FodFuse {
         }
     }
 
-    fn fopen_flags(&self) -> u32 {
+    fn fopen_flags(&self) -> FopenFlags {
         // Domyslnie nie wymuszamy direct_io.
         // direct_io jest trybem diagnostycznym/zgodnosciowym, bo potrafi mocno spowolnic
         // sekwencyjny zapis malymi blokami przez ominiecie cache/writeback kernela.
         if self.fopen_direct_io {
-            FOD_FOPEN_DIRECT_IO
+            FopenFlags::FOPEN_DIRECT_IO
         } else {
-            0
+            FopenFlags::empty()
         }
     }
 
@@ -3117,12 +3118,13 @@ impl Drop for FodFuse {
 }
 
 impl Filesystem for FodFuse {
-    fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
-        let _ = config.add_capabilities(FUSE_POSIX_LOCKS | FUSE_FLOCK_LOCKS);
+    fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> std::io::Result<()> {
+        let _ = config.add_capabilities(InitFlags::FUSE_POSIX_LOCKS | InitFlags::FUSE_FLOCK_LOCKS);
         Ok(())
     }
 
-    fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+        let parent = parent.0;
         let req_id = self.next_request_id();
         let Some(parent_path) = self.path_for_inode(parent) else {
             self.log_request_error(
@@ -3131,7 +3133,7 @@ impl Filesystem for FodFuse {
                 ENOENT,
                 format!("parent={} name={}", parent, name.to_string_lossy()),
             );
-            reply.error(ENOENT);
+            fuse_reply_error!(reply, ENOENT);
             return;
         };
         let child_path = Self::join_path(&parent_path, name);
@@ -3142,37 +3144,43 @@ impl Filesystem for FodFuse {
         );
         match self.lookup_path(&child_path) {
             Ok(Some(attrs)) => {
-                self.register_path(&child_path, attrs.file_attr.ino);
-                reply.entry(&self.metadata_cache_ttl_live(), &attrs.file_attr, 0);
+                self.register_path(&child_path, attrs.file_attr.ino.0);
+                reply.entry(
+                    &self.metadata_cache_ttl_live(),
+                    &attrs.file_attr,
+                    Generation(0),
+                );
             }
-            Ok(None) => reply.error(ENOENT),
-            Err(errno) => reply.error(errno),
+            Ok(None) => fuse_reply_error!(reply, ENOENT),
+            Err(errno) => fuse_reply_error!(reply, errno),
         }
     }
 
-    fn getattr(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyAttr) {
+    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+        let ino = ino.0;
         let req_id = self.next_request_id();
         self.log_request_start(req_id, "getattr", format!("ino={}", ino));
         match self.entry_attrs_for_ino(ino) {
             Ok((path, attrs)) => {
-                self.register_path(&path, attrs.file_attr.ino);
+                self.register_path(&path, attrs.file_attr.ino.0);
                 reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
             }
             Err(errno) => {
                 self.log_request_error(req_id, "getattr", errno, format!("ino={}", ino));
-                reply.error(errno)
+                fuse_reply_error!(reply, errno)
             }
         }
     }
 
     fn readdir(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
         mut reply: ReplyDirectory,
     ) {
+        let ino = ino.0;
         let req_id = self.next_request_id();
         let path = if ino == ROOT_INO {
             "/".to_string()
@@ -3186,7 +3194,7 @@ impl Filesystem for FodFuse {
                         ENOENT,
                         format!("ino={} offset={}", ino, offset),
                     );
-                    reply.error(ENOENT);
+                    fuse_reply_error!(reply, ENOENT);
                     return;
                 }
             }
@@ -3224,7 +3232,7 @@ impl Filesystem for FodFuse {
                 return;
             }
             Err(_) => {
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         };
@@ -3232,7 +3240,7 @@ impl Filesystem for FodFuse {
         debug!("FOD readdir path={} entries={}", path, entries.len());
         let mut next_offset = 1i64;
         if offset == 0 {
-            let _ = reply.add(ino, 1, FileType::Directory, ".");
+            let _ = reply.add(INodeNo(ino), 1, FileType::Directory, ".");
             let parent_ino = if ino == ROOT_INO {
                 ROOT_INO
             } else {
@@ -3242,16 +3250,16 @@ impl Filesystem for FodFuse {
                     .unwrap_or("/");
                 self.inode_for_path(parent_path).unwrap_or(ROOT_INO)
             };
-            let _ = reply.add(parent_ino, 2, FileType::Directory, "..");
+            let _ = reply.add(INodeNo(parent_ino), 2, FileType::Directory, "..");
             next_offset = 2;
         }
         for (index, name) in entries.into_iter().enumerate().skip(offset.max(0) as usize) {
             let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
             match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {
-                    self.register_path(&child_path, attrs.file_attr.ino);
+                    self.register_path(&child_path, attrs.file_attr.ino.0);
                     let kind = attrs.file_attr.kind;
-                    let added = reply.add(attrs.file_attr.ino, (index + 3) as i64, kind, name);
+                    let added = reply.add(attrs.file_attr.ino, (index + 3) as u64, kind, name);
                     if added {
                         break;
                     }
@@ -3269,12 +3277,13 @@ impl Filesystem for FodFuse {
         reply.ok();
     }
 
-    fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
+    fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
+        let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
         let path = match self.path_for_inode(ino) {
             Some(path) => path,
             None => {
-                reply.error(ENOENT);
+                fuse_reply_error!(reply, ENOENT);
                 return;
             }
         };
@@ -3284,7 +3293,7 @@ impl Filesystem for FodFuse {
                     let symlink_id = match resolved.entry_id {
                         Some(value) => value,
                         None => {
-                            reply.error(ENOENT);
+                            fuse_reply_error!(reply, ENOENT);
                             return;
                         }
                     };
@@ -3295,18 +3304,18 @@ impl Filesystem for FodFuse {
                             }
                             self.reply_data_profiled(reply, target.as_bytes())
                         }
-                        Ok(None) => reply.error(ENOENT),
-                        Err(_) => reply.error(EIO),
+                        Ok(None) => fuse_reply_error!(reply, ENOENT),
+                        Err(_) => fuse_reply_error!(reply, EIO),
                     }
                 } else {
-                    reply.error(ENOENT);
+                    fuse_reply_error!(reply, ENOENT);
                 }
             }
-            Err(_) => reply.error(EIO),
+            Err(_) => fuse_reply_error!(reply, EIO),
         }
     }
 
-    fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
+    fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
         let snapshot = self.cached_statfs_snapshot();
         let total_blocks = self
             .statfs_capacity_bytes()
@@ -3338,27 +3347,28 @@ impl Filesystem for FodFuse {
     }
 
     fn setxattr(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
         name: &OsStr,
         value: &[u8],
         flags: i32,
         position: u32,
         reply: ReplyEmpty,
     ) {
+        let ino = ino.0;
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         if position != 0 {
-            reply.error(libc::EOPNOTSUPP);
+            fuse_reply_error!(reply, libc::EOPNOTSUPP);
             return;
         }
         let path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3375,7 +3385,7 @@ impl Filesystem for FodFuse {
                 "FOD security.selinux xattr rejected because SELinux support is disabled path={}",
                 path
             );
-            reply.error(libc::EOPNOTSUPP);
+            fuse_reply_error!(reply, libc::EOPNOTSUPP);
             return;
         }
         if !self.acl_enabled && name == "system.posix_acl_access" {
@@ -3383,17 +3393,17 @@ impl Filesystem for FodFuse {
                 "FOD system.posix_acl_access xattr rejected because ACL support is disabled path={}",
                 path
             );
-            reply.error(libc::EOPNOTSUPP);
+            fuse_reply_error!(reply, libc::EOPNOTSUPP);
             return;
         }
         let owner = match self.xattr_owner_for_path(&path) {
             Ok(Some(owner)) => owner,
             Ok(None) => {
-                reply.error(ENOENT);
+                fuse_reply_error!(reply, ENOENT);
                 return;
             }
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3405,7 +3415,7 @@ impl Filesystem for FodFuse {
                 .flatten()
                 .is_some()
             {
-                reply.error(libc::EEXIST);
+                fuse_reply_error!(reply, libc::EEXIST);
                 return;
             }
         }
@@ -3417,7 +3427,7 @@ impl Filesystem for FodFuse {
                 .flatten()
                 .is_none()
             {
-                reply.error(libc::ENODATA);
+                fuse_reply_error!(reply, libc::ENODATA);
                 return;
             }
         }
@@ -3431,24 +3441,18 @@ impl Filesystem for FodFuse {
             }
             Err(_) => {
                 warn!("FOD setxattr failed path={} name={}", path, name);
-                reply.error(EIO)
+                fuse_reply_error!(reply, EIO)
             }
         }
     }
 
-    fn getxattr(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        name: &OsStr,
-        size: u32,
-        reply: ReplyXattr,
-    ) {
+    fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
+        let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
         let path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3459,28 +3463,29 @@ impl Filesystem for FodFuse {
                 if size == 0 {
                     reply.size(value.len() as u32);
                 } else if size < value.len() as u32 {
-                    reply.error(libc::ERANGE);
+                    fuse_reply_error!(reply, libc::ERANGE);
                 } else {
                     self.reply_xattr_profiled(reply, &value);
                 }
             }
             Ok(None) => {
                 debug!("FOD getxattr missing path={} name={}", path, name);
-                reply.error(libc::ENODATA)
+                fuse_reply_error!(reply, libc::ENODATA)
             }
             Err(_) => {
                 warn!("FOD getxattr failed path={} name={}", path, name);
-                reply.error(EIO)
+                fuse_reply_error!(reply, EIO)
             }
         }
     }
 
-    fn listxattr(&mut self, _req: &Request<'_>, ino: u64, size: u32, reply: ReplyXattr) {
+    fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+        let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
         let path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3491,7 +3496,7 @@ impl Filesystem for FodFuse {
                 return;
             }
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3509,38 +3514,39 @@ impl Filesystem for FodFuse {
                 if size == 0 {
                     reply.size(payload.len() as u32);
                 } else if size < payload.len() as u32 {
-                    reply.error(libc::ERANGE);
+                    fuse_reply_error!(reply, libc::ERANGE);
                 } else {
                     self.reply_xattr_profiled(reply, &payload);
                 }
             }
             Err(_) => {
                 warn!("FOD listxattr failed path={}", path);
-                reply.error(EIO)
+                fuse_reply_error!(reply, EIO)
             }
         }
     }
 
-    fn removexattr(&mut self, _req: &Request<'_>, ino: u64, name: &OsStr, reply: ReplyEmpty) {
+    fn removexattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let ino = ino.0;
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let owner = match self.xattr_owner_for_path(&path) {
             Ok(Some(owner)) => owner,
             Ok(None) => {
-                reply.error(ENOENT);
+                fuse_reply_error!(reply, ENOENT);
                 return;
             }
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3553,21 +3559,23 @@ impl Filesystem for FodFuse {
             }
             Ok(_) => {
                 debug!("FOD removexattr missing path={} name={}", path, name);
-                reply.error(libc::ENODATA)
+                fuse_reply_error!(reply, libc::ENODATA)
             }
             Err(_) => {
                 warn!("FOD removexattr failed path={} name={}", path, name);
-                reply.error(EIO)
+                fuse_reply_error!(reply, EIO)
             }
         }
     }
 
-    fn access(&mut self, req: &Request<'_>, ino: u64, mask: i32, reply: ReplyEmpty) {
+    fn access(&self, req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
+        let ino = ino.0;
+        let mask = mask.bits();
         let subject = self.request_identity(req);
         let (path, attrs) = match self.entry_attrs_for_ino(ino) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3579,33 +3587,35 @@ impl Filesystem for FodFuse {
             }
             Ok(false) => {
                 debug!("FOD access denied path={} mask={:#x}", path, mask);
-                reply.error(libc::EACCES)
+                fuse_reply_error!(reply, libc::EACCES)
             }
             Err(errno) => {
                 warn!(
                     "FOD access check failed path={} mask={:#x} errno={}",
                     path, mask, errno
                 );
-                reply.error(errno)
+                fuse_reply_error!(reply, errno)
             }
         }
     }
 
     fn ioctl(
-        &mut self,
-        req: &Request<'_>,
-        ino: u64,
-        fh: u64,
-        _flags: u32,
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        _flags: IoctlFlags,
         cmd: u32,
         in_data: &[u8],
         out_size: u32,
         reply: ReplyIoctl,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
         let (path, attrs) = match self.entry_attrs_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3637,7 +3647,7 @@ impl Filesystem for FodFuse {
                 let requested_flags = match Self::ioctl_flags_value(in_data) {
                     Ok(value) => value,
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
@@ -3650,7 +3660,7 @@ impl Filesystem for FodFuse {
                         "FOD FS_IOC_SETFLAGS rejected path={} requested_flags={:#x}: inode flags are not persisted yet",
                         path, requested_flags
                     );
-                    reply.error(libc::EOPNOTSUPP);
+                    fuse_reply_error!(reply, libc::EOPNOTSUPP);
                     return;
                 }
                 reply.ioctl(0, &[]);
@@ -3668,7 +3678,7 @@ impl Filesystem for FodFuse {
                     match Self::ioctl_fsxattr_values(in_data) {
                         Ok(values) => values,
                         Err(errno) => {
-                            reply.error(errno);
+                            fuse_reply_error!(reply, errno);
                             return;
                         }
                     };
@@ -3687,7 +3697,7 @@ impl Filesystem for FodFuse {
                         "FOD FS_IOC_FSSETXATTR rejected path={} xflags={:#x} extsize={} nextents={} projid={} cowextsize={}: fsxattr is not persisted yet",
                         path, xflags, extsize, nextents, projid, cowextsize
                     );
-                    reply.error(libc::EOPNOTSUPP);
+                    fuse_reply_error!(reply, libc::EOPNOTSUPP);
                     return;
                 }
                 reply.ioctl(0, &[]);
@@ -3702,7 +3712,7 @@ impl Filesystem for FodFuse {
                     path, fh, cmd, size
                 );
                 if attrs.file_attr.kind != FileType::RegularFile {
-                    reply.error(ENOTTY);
+                    fuse_reply_error!(reply, ENOTTY);
                     return;
                 }
                 let available = size.min(u32::MAX as u64) as u32;
@@ -3710,65 +3720,65 @@ impl Filesystem for FodFuse {
             }
             value if value == libc::FICLONE as u32 => {
                 if attrs.file_attr.kind != FileType::RegularFile {
-                    reply.error(ENOTTY);
+                    fuse_reply_error!(reply, ENOTTY);
                     return;
                 }
                 let src_fd = match Self::ioctl_ficlone_source_fd(in_data) {
                     Ok(value) => value,
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
                 let src_path = match Self::ioctl_clone_source_path(req, src_fd) {
                     Ok(value) => value,
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
                 let src_file_id = match self.file_id_for_path(&src_path) {
                     Ok(Some(value)) => value,
                     Ok(None) => {
-                        reply.error(libc::EXDEV);
+                        fuse_reply_error!(reply, libc::EXDEV);
                         return;
                     }
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
                 let dst_file_id = match self.file_id_for_handle(fh, ino) {
                     Ok(Some(value)) => value,
                     Ok(None) => {
-                        reply.error(ENOENT);
+                        fuse_reply_error!(reply, ENOENT);
                         return;
                     }
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
                 if src_file_id == dst_file_id {
-                    reply.error(libc::EINVAL);
+                    fuse_reply_error!(reply, libc::EINVAL);
                     return;
                 }
                 if let Err(errno) =
                     self.flush_pending_write_states_for_file_except(src_file_id, u64::MAX)
                 {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 if let Err(errno) = self.flush_pending_write_states_for_file_except(dst_file_id, fh)
                 {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 let dst_state = self.write_state_for_handle(fh);
                 let src_size = match self.file_size_for_file_id_or_errno(src_file_id) {
                     Ok(value) => value,
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
@@ -3795,70 +3805,70 @@ impl Filesystem for FodFuse {
                     true,
                 ) {
                     Ok(_) => reply.ioctl(0, &[]),
-                    Err(errno) => reply.error(errno),
+                    Err(errno) => fuse_reply_error!(reply, errno),
                 }
             }
             value if value == libc::FICLONERANGE as u32 => {
                 if attrs.file_attr.kind != FileType::RegularFile {
-                    reply.error(ENOTTY);
+                    fuse_reply_error!(reply, ENOTTY);
                     return;
                 }
                 let args = match Self::ioctl_ficlonerange_args(in_data) {
                     Ok(value) => value,
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
                 let src_path = match Self::ioctl_clone_source_path(req, args.src_fd) {
                     Ok(value) => value,
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
                 let src_file_id = match self.file_id_for_path(&src_path) {
                     Ok(Some(value)) => value,
                     Ok(None) => {
-                        reply.error(libc::EXDEV);
+                        fuse_reply_error!(reply, libc::EXDEV);
                         return;
                     }
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
                 let dst_file_id = match self.file_id_for_handle(fh, ino) {
                     Ok(Some(value)) => value,
                     Ok(None) => {
-                        reply.error(ENOENT);
+                        fuse_reply_error!(reply, ENOENT);
                         return;
                     }
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
                 if src_file_id == dst_file_id {
-                    reply.error(libc::EINVAL);
+                    fuse_reply_error!(reply, libc::EINVAL);
                     return;
                 }
                 if let Err(errno) =
                     self.flush_pending_write_states_for_file_except(src_file_id, u64::MAX)
                 {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 if let Err(errno) = self.flush_pending_write_states_for_file_except(dst_file_id, fh)
                 {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 let dst_state = self.write_state_for_handle(fh);
                 let src_size = match self.file_size_for_file_id_or_errno(src_file_id) {
                     Ok(value) => value,
                     Err(errno) => {
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
@@ -3898,32 +3908,34 @@ impl Filesystem for FodFuse {
                     false,
                 ) {
                     Ok(_) => reply.ioctl(0, &[]),
-                    Err(errno) => reply.error(errno),
+                    Err(errno) => fuse_reply_error!(reply, errno),
                 }
             }
-            _ => reply.error(ENOTTY),
+            _ => fuse_reply_error!(reply, ENOTTY),
         }
     }
 
     fn poll(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        fh: u64,
-        _kh: u64,
-        _events: u32,
-        _flags: u32,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        _ph: PollNotifier,
+        _events: PollEvents,
+        _flags: PollFlags,
         reply: ReplyPoll,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
         let (path, attrs) = match self.entry_attrs_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         if attrs.file_attr.kind != FileType::RegularFile {
-            reply.error(ENOTTY);
+            fuse_reply_error!(reply, ENOTTY);
             return;
         }
         let size = self
@@ -3941,10 +3953,12 @@ impl Filesystem for FodFuse {
             "FOD poll path={} fh={} size={} revents={:#x}",
             path, fh, size, revents
         );
-        reply.poll(revents);
+        reply.poll(PollEvents::from_bits_retain(revents));
     }
 
-    fn open(&mut self, req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+        let ino = ino.0;
+        let flags = flags.0;
         let req_id = self.next_request_id();
         let subject = self.request_identity(req);
         let (path, attrs) = match self.entry_attrs_for_ino(ino) {
@@ -3956,7 +3970,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("ino={} flags={:#x}", ino, flags),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3968,11 +3982,11 @@ impl Filesystem for FodFuse {
         let file_id = match self.file_id_for_path(&path) {
             Ok(Some(value)) => value,
             Ok(None) => {
-                reply.error(ENOENT);
+                fuse_reply_error!(reply, ENOENT);
                 return;
             }
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -3992,7 +4006,7 @@ impl Filesystem for FodFuse {
                 libc::EACCES,
                 format!("path={} denied_by_acl flags={:#x}", path, flags),
             );
-            reply.error(libc::EACCES);
+            fuse_reply_error!(reply, libc::EACCES);
             return;
         }
         if self.read_only && (flags & libc::O_ACCMODE) != libc::O_RDONLY {
@@ -4002,43 +4016,45 @@ impl Filesystem for FodFuse {
                 libc::EROFS,
                 format!("path={} read_only flags={:#x}", path, flags),
             );
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let writable = (flags & libc::O_ACCMODE) != libc::O_RDONLY;
         let fh = self.create_handle_for_file(path, Some(file_id), flags);
         debug!("FOD open granted fh={} writable={}", fh, writable);
-        reply.opened(fh, self.fopen_flags());
+        reply.opened(FileHandle(fh), self.fopen_flags());
     }
 
     fn getlk(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        lock_owner: u64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        lock_owner: LockOwner,
         start: u64,
         end: u64,
         typ: i32,
         _pid: u32,
         reply: ReplyLock,
     ) {
+        let ino = ino.0;
+        let lock_owner = lock_owner.0;
         let path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let kind = match self.repo.resolve_path(&path) {
             Ok(resolved) => resolved.kind.unwrap_or_default(),
             Err(_) => {
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         };
         if kind != "file" && kind != "hardlink" {
-            reply.error(ENOENT);
+            fuse_reply_error!(reply, ENOENT);
             return;
         }
         let owner = lock_owner;
@@ -4053,14 +4069,14 @@ impl Filesystem for FodFuse {
                     "FOD getlk resource key failed path={} errno={}",
                     path, errno
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let records = match self.load_lock_records_for_key(&resource_key) {
             Ok(records) => records,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -4090,11 +4106,11 @@ impl Filesystem for FodFuse {
     }
 
     fn setlk(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        _fh: u64,
-        lock_owner: u64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        lock_owner: LockOwner,
         start: u64,
         end: u64,
         typ: i32,
@@ -4102,10 +4118,12 @@ impl Filesystem for FodFuse {
         sleep_flag: bool,
         reply: ReplyEmpty,
     ) {
+        let ino = ino.0;
+        let lock_owner = lock_owner.0;
         let path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -4113,12 +4131,12 @@ impl Filesystem for FodFuse {
             Ok(resolved) => resolved.kind.unwrap_or_default(),
             Err(err) => {
                 warn!("FOD setlk resolve_path failed path={} err={}", path, err);
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         };
         if kind != "file" && kind != "hardlink" {
-            reply.error(ENOENT);
+            fuse_reply_error!(reply, ENOENT);
             return;
         }
         let resource_key = match self.resource_key_for_lock(&path) {
@@ -4128,7 +4146,7 @@ impl Filesystem for FodFuse {
                     "FOD setlk resource key failed path={} errno={}",
                     path, errno
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -4142,7 +4160,7 @@ impl Filesystem for FodFuse {
             let mut records = match self.load_lock_records_for_key(&resource_key) {
                 Ok(records) => records,
                 Err(errno) => {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             };
@@ -4151,7 +4169,7 @@ impl Filesystem for FodFuse {
                     || !Self::range_overlaps(start, Some(end), record.start, record.end)
             });
             if let Err(errno) = self.persist_lock_records_for_key(&resource_key, owner, &records) {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
             self.refresh_local_lock_owner_state(owner);
@@ -4164,7 +4182,7 @@ impl Filesystem for FodFuse {
                 "FOD setlk denied in read_only mode path={} owner={}",
                 path, owner
             );
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
 
@@ -4172,7 +4190,7 @@ impl Filesystem for FodFuse {
             let mut records = match self.load_lock_records_for_key(&resource_key) {
                 Ok(records) => records,
                 Err(errno) => {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             };
@@ -4193,7 +4211,7 @@ impl Filesystem for FodFuse {
                 if let Err(errno) =
                     self.persist_lock_records_for_key(&resource_key, owner, &records)
                 {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 self.refresh_local_lock_owner_state(owner);
@@ -4209,7 +4227,7 @@ impl Filesystem for FodFuse {
                     "FOD setlk would block path={} owner={} typ={}",
                     path, owner, typ
                 );
-                reply.error(libc::EWOULDBLOCK);
+                fuse_reply_error!(reply, libc::EWOULDBLOCK);
                 return;
             }
             debug!(
@@ -4220,15 +4238,16 @@ impl Filesystem for FodFuse {
         }
     }
 
-    fn bmap(&mut self, _req: &Request<'_>, ino: u64, blocksize: u32, idx: u64, reply: ReplyBmap) {
+    fn bmap(&self, _req: &Request, ino: INodeNo, blocksize: u32, idx: u64, reply: ReplyBmap) {
+        let ino = ino.0;
         if blocksize == 0 {
-            reply.error(libc::EINVAL);
+            fuse_reply_error!(reply, libc::EINVAL);
             return;
         }
         let (path, attrs) = match self.entry_attrs_for_ino(ino) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -4244,27 +4263,29 @@ impl Filesystem for FodFuse {
             path, ino, blocksize, idx, logical_blocks
         );
         if idx >= logical_blocks {
-            reply.error(libc::EINVAL);
+            fuse_reply_error!(reply, libc::EINVAL);
             return;
         }
         reply.bmap(idx);
     }
 
     fn flush(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        lock_owner: u64,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        lock_owner: LockOwner,
         reply: ReplyEmpty,
     ) {
+        let fh = fh.0;
+        let lock_owner = lock_owner.0;
         let _write_profile = self.start_fuse_write_profile();
         debug!(
             "FOD flush fh={} lock_owner={} read_only={}",
             fh, lock_owner, self.read_only
         );
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         self.register_local_lock_owner(lock_owner);
@@ -4280,7 +4301,7 @@ impl Filesystem for FodFuse {
         }
         if let Err(errno) = self.flush_write_state(&mut state) {
             warn!("FOD flush failed fh={} errno={}", fh, errno);
-            reply.error(errno);
+            fuse_reply_error!(reply, errno);
             return;
         }
         if Self::write_state_has_pending_changes(&state) {
@@ -4311,16 +4332,18 @@ impl Filesystem for FodFuse {
     }
 
     fn read(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
         let req_id = self.next_request_id();
         let _read_profile = self.start_fuse_read_profile();
         let file_id = match self.file_id_for_handle_or_errno(fh, ino) {
@@ -4332,7 +4355,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("ino={} fh={} offset={} size={}", ino, fh, offset, size),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -4351,10 +4374,9 @@ impl Filesystem for FodFuse {
                 errno,
                 format!("file_id={} flush pending sibling fh states", file_id),
             );
-            reply.error(errno);
+            fuse_reply_error!(reply, errno);
             return;
         }
-        let offset = offset.max(0) as u64;
         let size = size as u64;
         let current_attrs = match self.entry_attrs_for_ino(ino) {
             Ok((path, attrs)) => Some((path, attrs.file_attr)),
@@ -4373,7 +4395,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("fh={} read_from_write_state", fh),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             };
@@ -4394,7 +4416,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("file_id={} file_size", file_id),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             },
@@ -4483,21 +4505,23 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("file_id={} read_block_map", file_id),
                 );
-                reply.error(errno)
+                fuse_reply_error!(reply, errno)
             }
         }
     }
 
     fn release(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        _flags: i32,
-        lock_owner: Option<u64>,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _flags: OpenFlags,
+        lock_owner: Option<LockOwner>,
         _flush: bool,
         reply: ReplyEmpty,
     ) {
+        let fh = fh.0;
+        let lock_owner = lock_owner.map(|owner| owner.0);
         let _write_profile = self.start_fuse_write_profile();
         debug!(
             "FOD release fh={} flags={:#x} lock_owner={:?} flush={} read_only={}",
@@ -4563,9 +4587,9 @@ impl Filesystem for FodFuse {
     }
 
     fn setattr(
-        &mut self,
-        req: &Request<'_>,
-        ino: u64,
+        &self,
+        req: &Request,
+        ino: INodeNo,
         mode: Option<u32>,
         uid: Option<u32>,
         gid: Option<u32>,
@@ -4573,30 +4597,32 @@ impl Filesystem for FodFuse {
         atime: Option<TimeOrNow>,
         mtime: Option<TimeOrNow>,
         _ctime: Option<SystemTime>,
-        fh: Option<u64>,
+        fh: Option<FileHandle>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
-        _flags: Option<u32>,
+        _flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
+        let ino = ino.0;
+        let fh = fh.map(|handle| handle.0);
         let subject = self.request_identity(req);
         let _write_profile = size.is_some().then(|| self.start_fuse_write_profile());
         if self.read_only && size.is_some() {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let (path, current_attrs) = match self.entry_attrs_for_ino(ino) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let (kind, entry_id) = match self.resolved_entry_for_path(&path) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -4605,17 +4631,17 @@ impl Filesystem for FodFuse {
 
         if let Some(new_size) = size {
             if kind == "dir" {
-                reply.error(libc::EISDIR);
+                fuse_reply_error!(reply, libc::EISDIR);
                 return;
             }
             let file_id = match self.file_id_for_path(&path) {
                 Ok(Some(value)) => value,
                 Ok(None) => {
-                    reply.error(ENOENT);
+                    fuse_reply_error!(reply, ENOENT);
                     return;
                 }
                 Err(errno) => {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             };
@@ -4627,7 +4653,7 @@ impl Filesystem for FodFuse {
                 state.file_size = new_size;
                 state.truncate_pending = true;
                 if let Err(errno) = self.flush_write_state(&mut state) {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 if Self::write_state_has_pending_changes(&state) {
@@ -4638,7 +4664,7 @@ impl Filesystem for FodFuse {
             } else {
                 let mut state = Self::new_write_state(file_id, new_size, true);
                 if let Err(errno) = self.flush_write_state(&mut state) {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             }
@@ -4646,7 +4672,7 @@ impl Filesystem for FodFuse {
 
         if let Some(new_mode) = mode {
             if !Self::can_modify_mode(&subject, &current_attrs) {
-                reply.error(libc::EPERM);
+                fuse_reply_error!(reply, libc::EPERM);
                 return;
             }
             let mode_text = format!("{:o}", new_mode & 0o7777);
@@ -4655,11 +4681,11 @@ impl Filesystem for FodFuse {
                     let file_id = match self.file_id_for_path(&path) {
                         Ok(Some(value)) => value,
                         Ok(None) => {
-                            reply.error(ENOENT);
+                            fuse_reply_error!(reply, ENOENT);
                             return;
                         }
                         Err(errno) => {
-                            reply.error(errno);
+                            fuse_reply_error!(reply, errno);
                             return;
                         }
                     };
@@ -4673,14 +4699,14 @@ impl Filesystem for FodFuse {
                 _ => Ok(()),
             };
             if result.is_err() {
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         }
 
         if uid.is_some() || gid.is_some() {
             if !Self::can_change_owner(&subject, &current_attrs, uid, gid) {
-                reply.error(libc::EPERM);
+                fuse_reply_error!(reply, libc::EPERM);
                 return;
             }
             let new_uid = uid.unwrap_or(subject.uid);
@@ -4695,11 +4721,11 @@ impl Filesystem for FodFuse {
                     let file_id = match self.file_id_for_path(&path) {
                         Ok(Some(value)) => value,
                         Ok(None) => {
-                            reply.error(ENOENT);
+                            fuse_reply_error!(reply, ENOENT);
                             return;
                         }
                         Err(errno) => {
-                            reply.error(errno);
+                            fuse_reply_error!(reply, errno);
                             return;
                         }
                     };
@@ -4722,7 +4748,7 @@ impl Filesystem for FodFuse {
                 _ => Ok(()),
             };
             if result.is_err() {
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         }
@@ -4743,8 +4769,8 @@ impl Filesystem for FodFuse {
                     Ok(Some(attrs)) => {
                         reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr)
                     }
-                    Ok(None) => reply.error(ENOENT),
-                    Err(errno) => reply.error(errno),
+                    Ok(None) => fuse_reply_error!(reply, ENOENT),
+                    Err(errno) => fuse_reply_error!(reply, errno),
                 }
                 return;
             }
@@ -4757,11 +4783,11 @@ impl Filesystem for FodFuse {
                     let file_id = match self.file_id_for_path(&path) {
                         Ok(Some(value)) => value,
                         Ok(None) => {
-                            reply.error(ENOENT);
+                            fuse_reply_error!(reply, ENOENT);
                             return;
                         }
                         Err(errno) => {
-                            reply.error(errno);
+                            fuse_reply_error!(reply, errno);
                             return;
                         }
                     };
@@ -4782,31 +4808,32 @@ impl Filesystem for FodFuse {
                 _ => Ok(()),
             };
             if result.is_err() {
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         }
 
         match self.lookup_path(&path) {
             Ok(Some(attrs)) => reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr),
-            Ok(None) => reply.error(ENOENT),
-            Err(errno) => reply.error(errno),
+            Ok(None) => fuse_reply_error!(reply, ENOENT),
+            Err(errno) => fuse_reply_error!(reply, errno),
         }
     }
 
     fn mkdir(
-        &mut self,
-        req: &Request<'_>,
-        parent: u64,
+        &self,
+        req: &Request,
+        parent: INodeNo,
         name: &OsStr,
         mode: u32,
         umask: u32,
         reply: ReplyEntry,
     ) {
+        let parent = parent.0;
         let req_id = self.next_request_id();
         let subject = self.request_identity(req);
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let parent_path = match self.entry_path_for_ino(parent) {
@@ -4818,19 +4845,19 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("parent={} name={}", parent, name.to_string_lossy()),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let child_path = Self::join_path(&parent_path, name);
         if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            reply.error(libc::EEXIST);
+            fuse_reply_error!(reply, libc::EEXIST);
             return;
         }
         let parent_id = match self.parent_entry_id_for_inode(parent) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -4866,26 +4893,31 @@ impl Filesystem for FodFuse {
                 self.invalidate_statfs_cache();
                 match self.lookup_path(&child_path) {
                     Ok(Some(attrs)) => {
-                        self.register_path(&child_path, attrs.file_attr.ino);
+                        self.register_path(&child_path, attrs.file_attr.ino.0);
                         debug!(
                             "FOD req={} op=mkdir created path={} directory_id={}",
                             req_id, child_path, directory_id
                         );
-                        reply.entry(&self.metadata_cache_ttl_live(), &attrs.file_attr, 0);
+                        reply.entry(
+                            &self.metadata_cache_ttl_live(),
+                            &attrs.file_attr,
+                            Generation(0),
+                        );
                     }
-                    Ok(None) => reply.error(EIO),
-                    Err(errno) => reply.error(errno),
+                    Ok(None) => fuse_reply_error!(reply, EIO),
+                    Err(errno) => fuse_reply_error!(reply, errno),
                 }
             }
-            Err(_) => reply.error(EIO),
+            Err(_) => fuse_reply_error!(reply, EIO),
         }
     }
 
-    fn unlink(&mut self, req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+    fn unlink(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let parent = parent.0;
         let req_id = self.next_request_id();
         let subject = self.request_identity(req);
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let parent_path = match self.entry_path_for_ino(parent) {
@@ -4897,7 +4929,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("parent={} name={}", parent, name.to_string_lossy()),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -4910,7 +4942,7 @@ impl Filesystem for FodFuse {
         let (kind, entry_id) = match self.resolved_entry_for_path(&child_path) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -4925,7 +4957,7 @@ impl Filesystem for FodFuse {
                             ENOENT,
                             format!("child={} missing file id", child_path),
                         );
-                        reply.error(ENOENT);
+                        fuse_reply_error!(reply, ENOENT);
                         return;
                     }
                     Err(errno) => {
@@ -4935,7 +4967,7 @@ impl Filesystem for FodFuse {
                             errno,
                             format!("child={}", child_path),
                         );
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                 };
@@ -4948,7 +4980,7 @@ impl Filesystem for FodFuse {
                             EIO,
                             format!("child={} lookup", child_path),
                         );
-                        reply.error(EIO);
+                        fuse_reply_error!(reply, EIO);
                         return;
                     }
                 };
@@ -4959,7 +4991,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("child={} sticky bit", child_path),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 self.remove_primary_file_or_promote_hardlink(file_id)
@@ -4974,7 +5006,7 @@ impl Filesystem for FodFuse {
                             EIO,
                             format!("child={} lookup", child_path),
                         );
-                        reply.error(EIO);
+                        fuse_reply_error!(reply, EIO);
                         return;
                     }
                 };
@@ -4985,7 +5017,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("child={} sticky bit", child_path),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 match entry_id {
@@ -5003,7 +5035,7 @@ impl Filesystem for FodFuse {
                             EIO,
                             format!("child={} lookup", child_path),
                         );
-                        reply.error(EIO);
+                        fuse_reply_error!(reply, EIO);
                         return;
                     }
                 };
@@ -5014,7 +5046,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("child={} sticky bit", child_path),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 match entry_id {
@@ -5029,7 +5061,7 @@ impl Filesystem for FodFuse {
                     libc::EISDIR,
                     format!("child={} dir", child_path),
                 );
-                reply.error(libc::EISDIR);
+                fuse_reply_error!(reply, libc::EISDIR);
                 return;
             }
             _ => {
@@ -5039,7 +5071,7 @@ impl Filesystem for FodFuse {
                     ENOENT,
                     format!("child={} missing", child_path),
                 );
-                reply.error(ENOENT);
+                fuse_reply_error!(reply, ENOENT);
                 return;
             }
         };
@@ -5066,16 +5098,17 @@ impl Filesystem for FodFuse {
                     EIO,
                     format!("child={} delete", child_path),
                 );
-                reply.error(EIO)
+                fuse_reply_error!(reply, EIO)
             }
         }
     }
 
-    fn rmdir(&mut self, req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+    fn rmdir(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let parent = parent.0;
         let req_id = self.next_request_id();
         let subject = self.request_identity(req);
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let parent_path = match self.entry_path_for_ino(parent) {
@@ -5087,7 +5120,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("parent={} name={}", parent, name.to_string_lossy()),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5100,7 +5133,7 @@ impl Filesystem for FodFuse {
         let (kind, entry_id) = match self.resolved_entry_for_path(&child_path) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5111,7 +5144,7 @@ impl Filesystem for FodFuse {
                 libc::ENOTDIR,
                 format!("child={} kind={:?}", child_path, kind),
             );
-            reply.error(libc::ENOTDIR);
+            fuse_reply_error!(reply, libc::ENOTDIR);
             return;
         }
         let entry_attrs = match self.lookup_path(&child_path) {
@@ -5123,7 +5156,7 @@ impl Filesystem for FodFuse {
                     EIO,
                     format!("child={} lookup", child_path),
                 );
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         };
@@ -5134,7 +5167,7 @@ impl Filesystem for FodFuse {
                 errno,
                 format!("child={} sticky bit", child_path),
             );
-            reply.error(errno);
+            fuse_reply_error!(reply, errno);
             return;
         }
         match self.repo.list_directory_entries_blob(&child_path) {
@@ -5145,7 +5178,7 @@ impl Filesystem for FodFuse {
                     libc::ENOTEMPTY,
                     format!("child={} not empty", child_path),
                 );
-                reply.error(libc::ENOTEMPTY);
+                fuse_reply_error!(reply, libc::ENOTEMPTY);
                 return;
             }
             Err(_) => {
@@ -5155,7 +5188,7 @@ impl Filesystem for FodFuse {
                     EIO,
                     format!("child={} list entries", child_path),
                 );
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
             _ => {}
@@ -5186,7 +5219,7 @@ impl Filesystem for FodFuse {
                         EIO,
                         format!("child={} delete", child_path),
                     );
-                    reply.error(EIO)
+                    fuse_reply_error!(reply, EIO)
                 }
             },
             None => {
@@ -5196,25 +5229,27 @@ impl Filesystem for FodFuse {
                     ENOENT,
                     format!("child={} missing directory id", child_path),
                 );
-                reply.error(ENOENT)
+                fuse_reply_error!(reply, ENOENT)
             }
         }
     }
 
     fn rename(
-        &mut self,
-        req: &Request<'_>,
-        parent: u64,
+        &self,
+        req: &Request,
+        parent: INodeNo,
         name: &OsStr,
-        newparent: u64,
+        newparent: INodeNo,
         newname: &OsStr,
-        _flags: u32,
+        _flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
+        let parent = parent.0;
+        let newparent = newparent.0;
         let req_id = self.next_request_id();
         let subject = self.request_identity(req);
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let old_parent_path = match self.entry_path_for_ino(parent) {
@@ -5226,7 +5261,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("parent={} name={}", parent, name.to_string_lossy()),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5243,7 +5278,7 @@ impl Filesystem for FodFuse {
                         newname.to_string_lossy()
                     ),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5266,7 +5301,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("old_path={} resolve", old_path),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5279,7 +5314,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("newparent={} parent_id", newparent),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5287,7 +5322,7 @@ impl Filesystem for FodFuse {
         let source_attrs = self.lookup_path(&old_path).ok().flatten();
         let old_ino = source_attrs
             .as_ref()
-            .map(|attrs| attrs.file_attr.ino)
+            .map(|attrs| attrs.file_attr.ino.0)
             .unwrap_or(ROOT_INO);
         if let Some(source_attrs) = source_attrs.as_ref() {
             if let Err(errno) =
@@ -5299,7 +5334,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("old_path={} sticky bit", old_path),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         }
@@ -5313,7 +5348,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("new_path={} resolve", new_path),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             };
@@ -5332,7 +5367,7 @@ impl Filesystem for FodFuse {
                                 errno,
                                 format!("new_path={} sticky bit", new_path),
                             );
-                            reply.error(errno);
+                            fuse_reply_error!(reply, errno);
                             return;
                         }
                     }
@@ -5341,7 +5376,7 @@ impl Filesystem for FodFuse {
                     "file" => match self.file_id_for_path(&new_path) {
                         Ok(Some(file_id)) => self.remove_primary_file_or_promote_hardlink(file_id),
                         Ok(None) => Err("missing file id".to_string()),
-                        Err(errno) => return reply.error(errno),
+                        Err(errno) => return fuse_reply_error!(reply, errno),
                     },
                     "hardlink" => match existing.1 {
                         Some(hardlink_id) => self.repo.delete_hardlink_entry(hardlink_id),
@@ -5367,7 +5402,7 @@ impl Filesystem for FodFuse {
                                 libc::EISDIR,
                                 format!("new_path={} existing dir", new_path),
                             );
-                            reply.error(libc::EISDIR);
+                            fuse_reply_error!(reply, libc::EISDIR);
                             return;
                         }
                     },
@@ -5377,7 +5412,7 @@ impl Filesystem for FodFuse {
                     if matches!(existing_kind, "dir") && matches!(kind.as_deref(), Some("dir")) {
                         if let Some(directory_id) = existing.1 {
                             if let Ok(count) = self.repo.count_directory_children(directory_id) {
-                                reply.error(if count == 0 { EIO } else { ENOTEMPTY });
+                                fuse_reply_error!(reply, if count == 0 { EIO } else { ENOTEMPTY });
                                 return;
                             }
                         }
@@ -5388,7 +5423,7 @@ impl Filesystem for FodFuse {
                         EIO,
                         format!("new_path={} removal failed", new_path),
                     );
-                    reply.error(EIO);
+                    fuse_reply_error!(reply, EIO);
                     return;
                 }
                 self.remove_cached_path(&new_path);
@@ -5408,7 +5443,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("old_path={} file id", old_path),
                     );
-                    return reply.error(errno);
+                    return fuse_reply_error!(reply, errno);
                 }
             },
             Some("hardlink") => match entry_id {
@@ -5458,25 +5493,26 @@ impl Filesystem for FodFuse {
                     EIO,
                     format!("old_path={} new_path={}", old_path, new_path),
                 );
-                reply.error(EIO)
+                fuse_reply_error!(reply, EIO)
             }
         }
     }
 
     fn create(
-        &mut self,
-        req: &Request<'_>,
-        parent: u64,
+        &self,
+        req: &Request,
+        parent: INodeNo,
         name: &OsStr,
         mode: u32,
         umask: u32,
         flags: i32,
         reply: ReplyCreate,
     ) {
+        let parent = parent.0;
         let req_id = self.next_request_id();
         let subject = self.request_identity(req);
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let parent_path = match self.entry_path_for_ino(parent) {
@@ -5488,7 +5524,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("parent={} name={}", parent, name.to_string_lossy()),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5502,13 +5538,13 @@ impl Filesystem for FodFuse {
             ),
         );
         if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            reply.error(libc::EEXIST);
+            fuse_reply_error!(reply, libc::EEXIST);
             return;
         }
         let parent_id = match self.parent_entry_id_for_inode(parent) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5526,7 +5562,7 @@ impl Filesystem for FodFuse {
         ) {
             Ok(file_id) => file_id,
             Err(_) => {
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         };
@@ -5534,7 +5570,7 @@ impl Filesystem for FodFuse {
         let fh = self.create_handle_for_file(child_path.clone(), Some(file_id), flags);
         match self.lookup_path(&child_path) {
             Ok(Some(attrs)) => {
-                self.register_path(&child_path, attrs.file_attr.ino);
+                self.register_path(&child_path, attrs.file_attr.ino.0);
                 let _ = self.append_journal_event(
                     subject.uid,
                     "create",
@@ -5550,32 +5586,34 @@ impl Filesystem for FodFuse {
                 reply.created(
                     &self.metadata_cache_ttl_live(),
                     &attrs.file_attr,
-                    0,
-                    fh,
+                    Generation(0),
+                    FileHandle(fh),
                     self.fopen_flags(),
                 );
             }
-            Ok(None) => reply.error(EIO),
-            Err(errno) => reply.error(errno),
+            Ok(None) => fuse_reply_error!(reply, EIO),
+            Err(errno) => fuse_reply_error!(reply, errno),
         }
     }
 
     fn write(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         data: &[u8],
-        _write_flags: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _write_flags: WriteFlags,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
+        let ino = ino.0;
+        let fh = fh.0;
         let req_id = self.next_request_id();
         let _write_profile = self.start_fuse_write_profile();
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let file_id = match self.file_id_for_handle_or_errno(fh, ino) {
@@ -5587,11 +5625,10 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("ino={} fh={} offset={} len={}", ino, fh, offset, data.len()),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        let offset = offset.max(0) as u64;
         self.log_request_start(
             req_id,
             "write",
@@ -5617,7 +5654,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("file_id={} take pending sibling fh states", file_id),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5640,7 +5677,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("ino={} fh={} attrs", ino, fh),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             }
@@ -5691,7 +5728,7 @@ impl Filesystem for FodFuse {
         }
         if let Err(errno) = self.update_write_buffer(&mut state, offset, data) {
             self.log_request_error(req_id, "write", errno, format!("fh={} update", fh));
-            reply.error(errno);
+            fuse_reply_error!(reply, errno);
             return;
         }
         state.buffered_bytes = state.buffered_bytes.saturating_add(data.len() as u64);
@@ -5719,7 +5756,7 @@ impl Filesystem for FodFuse {
                     self.update_write_state(sibling_fh, sibling_state);
                 }
                 self.log_request_error(req_id, "write", errno, format!("fh={} flush", fh));
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
 
@@ -5755,26 +5792,26 @@ impl Filesystem for FodFuse {
     }
 
     fn copy_file_range(
-        &mut self,
-        _req: &Request<'_>,
-        ino_in: u64,
-        fh_in: u64,
-        offset_in: i64,
-        ino_out: u64,
-        fh_out: u64,
-        offset_out: i64,
+        &self,
+        _req: &Request,
+        ino_in: INodeNo,
+        fh_in: FileHandle,
+        offset_in: u64,
+        ino_out: INodeNo,
+        fh_out: FileHandle,
+        offset_out: u64,
         len: u64,
-        _flags: u32,
+        _flags: CopyFileRangeFlags,
         reply: ReplyWrite,
     ) {
+        let ino_in = ino_in.0;
+        let fh_in = fh_in.0;
+        let ino_out = ino_out.0;
+        let fh_out = fh_out.0;
         let req_id = self.next_request_id();
         let _write_profile = self.start_fuse_write_profile();
         if self.read_only {
-            reply.error(libc::EROFS);
-            return;
-        }
-        if offset_in < 0 || offset_out < 0 {
-            reply.error(libc::EINVAL);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         if len == 0 {
@@ -5798,7 +5835,7 @@ impl Filesystem for FodFuse {
                     ENOENT,
                     format!("src ino={} fh={}", ino_in, fh_in),
                 );
-                reply.error(ENOENT);
+                fuse_reply_error!(reply, ENOENT);
                 return;
             }
             Err(errno) => {
@@ -5808,7 +5845,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("src ino={} fh={}", ino_in, fh_in),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5821,7 +5858,7 @@ impl Filesystem for FodFuse {
                     ENOENT,
                     format!("dst ino={} fh={}", ino_out, fh_out),
                 );
-                reply.error(ENOENT);
+                fuse_reply_error!(reply, ENOENT);
                 return;
             }
             Err(errno) => {
@@ -5831,7 +5868,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("dst ino={} fh={}", ino_out, fh_out),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -5849,7 +5886,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("dst_file_id={} size", dst_file_id),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             }
@@ -5866,13 +5903,13 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("src_file_id={} size", src_file_id),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             }
         };
-        let src_offset = offset_in as u64;
-        let dst_offset = offset_out as u64;
+        let src_offset = offset_in;
+        let dst_offset = offset_out;
         let Some(bounds) =
             copy_range_bounds(self.block_size, src_offset, dst_offset, len, src_size)
         else {
@@ -5928,7 +5965,7 @@ impl Filesystem for FodFuse {
                             src_file_id, dst_file_id
                         ),
                     );
-                    reply.error(EIO);
+                    fuse_reply_error!(reply, EIO);
                     return;
                 }
             }
@@ -5945,7 +5982,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("src_file_id={} load_write_state", src_file_id),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             }
@@ -5966,7 +6003,7 @@ impl Filesystem for FodFuse {
                         EIO,
                         format!("src_file_id={} assemble", src_file_id),
                     );
-                    reply.error(EIO);
+                    fuse_reply_error!(reply, EIO);
                     return;
                 }
             }
@@ -6017,7 +6054,7 @@ impl Filesystem for FodFuse {
                         EIO,
                         format!("dst_file_id={} assemble", dst_file_id),
                     );
-                    reply.error(EIO);
+                    fuse_reply_error!(reply, EIO);
                     return;
                 }
             };
@@ -6032,7 +6069,7 @@ impl Filesystem for FodFuse {
                             errno,
                             format!("fh_out={} flush", fh_out),
                         );
-                        reply.error(errno);
+                        fuse_reply_error!(reply, errno);
                         return;
                     }
                     self.update_write_state(fh_out, state);
@@ -6060,7 +6097,7 @@ impl Filesystem for FodFuse {
                         errno,
                         format!("fh_out={} update_write_buffer", fh_out),
                     );
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
                 state.buffered_bytes = state
@@ -6074,7 +6111,7 @@ impl Filesystem for FodFuse {
                     errno,
                     format!("fh_out={} flush", fh_out),
                 );
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
             self.update_write_state(fh_out, state);
@@ -6093,7 +6130,7 @@ impl Filesystem for FodFuse {
                 errno,
                 format!("fh_out={} update_write_buffer", fh_out),
             );
-            reply.error(errno);
+            fuse_reply_error!(reply, errno);
             return;
         }
         state.buffered_bytes = state.buffered_bytes.saturating_add(data.len() as u64);
@@ -6104,7 +6141,7 @@ impl Filesystem for FodFuse {
                 errno,
                 format!("fh_out={} flush", fh_out),
             );
-            reply.error(errno);
+            fuse_reply_error!(reply, errno);
             return;
         }
         self.update_write_state(fh_out, state);
@@ -6116,18 +6153,19 @@ impl Filesystem for FodFuse {
     }
 
     fn mknod(
-        &mut self,
-        req: &Request<'_>,
-        parent: u64,
+        &self,
+        req: &Request,
+        parent: INodeNo,
         name: &OsStr,
         mode: u32,
         umask: u32,
         rdev: u32,
         reply: ReplyEntry,
     ) {
+        let parent = parent.0;
         let subject = self.request_identity(req);
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let file_type = mode & libc::S_IFMT as u32;
@@ -6135,19 +6173,19 @@ impl Filesystem for FodFuse {
             let parent_path = match self.entry_path_for_ino(parent) {
                 Ok(path) => path,
                 Err(errno) => {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             };
             let child_path = Self::join_path(&parent_path, name);
             if let Ok(Some(_)) = self.lookup_path(&child_path) {
-                reply.error(libc::EEXIST);
+                fuse_reply_error!(reply, libc::EEXIST);
                 return;
             }
             let parent_id = match self.parent_entry_id_for_inode(parent) {
                 Ok(value) => value,
                 Err(errno) => {
-                    reply.error(errno);
+                    fuse_reply_error!(reply, errno);
                     return;
                 }
             };
@@ -6165,33 +6203,37 @@ impl Filesystem for FodFuse {
             ) {
                 Ok(_) => match self.lookup_path(&child_path) {
                     Ok(Some(attrs)) => {
-                        self.register_path(&child_path, attrs.file_attr.ino);
+                        self.register_path(&child_path, attrs.file_attr.ino.0);
                         self.invalidate_statfs_cache();
-                        reply.entry(&self.metadata_cache_ttl_live(), &attrs.file_attr, 0);
+                        reply.entry(
+                            &self.metadata_cache_ttl_live(),
+                            &attrs.file_attr,
+                            Generation(0),
+                        );
                     }
-                    Ok(None) => reply.error(EIO),
-                    Err(errno) => reply.error(errno),
+                    Ok(None) => fuse_reply_error!(reply, EIO),
+                    Err(errno) => fuse_reply_error!(reply, errno),
                 },
-                Err(_) => reply.error(EIO),
+                Err(_) => fuse_reply_error!(reply, EIO),
             }
             return;
         }
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let child_path = Self::join_path(&parent_path, name);
         if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            reply.error(libc::EEXIST);
+            fuse_reply_error!(reply, libc::EEXIST);
             return;
         }
         let parent_id = match self.parent_entry_id_for_inode(parent) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -6206,7 +6248,7 @@ impl Filesystem for FodFuse {
         } else if file_type == libc::S_IFBLK as u32 {
             "block"
         } else {
-            reply.error(libc::EINVAL);
+            fuse_reply_error!(reply, libc::EINVAL);
             return;
         };
         match self.repo.create_special_file(
@@ -6222,50 +6264,55 @@ impl Filesystem for FodFuse {
         ) {
             Ok(_) => {}
             Err(_) => {
-                reply.error(EIO);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         };
         match self.lookup_path(&child_path) {
             Ok(Some(attrs)) => {
-                self.register_path(&child_path, attrs.file_attr.ino);
+                self.register_path(&child_path, attrs.file_attr.ino.0);
                 self.invalidate_statfs_cache();
-                reply.entry(&self.metadata_cache_ttl_live(), &attrs.file_attr, 0);
+                reply.entry(
+                    &self.metadata_cache_ttl_live(),
+                    &attrs.file_attr,
+                    Generation(0),
+                );
             }
-            Ok(None) => reply.error(EIO),
-            Err(errno) => reply.error(errno),
+            Ok(None) => fuse_reply_error!(reply, EIO),
+            Err(errno) => fuse_reply_error!(reply, errno),
         }
     }
 
     fn symlink(
-        &mut self,
-        req: &Request<'_>,
-        parent: u64,
+        &self,
+        req: &Request,
+        parent: INodeNo,
         link_name: &OsStr,
         target: &Path,
         reply: ReplyEntry,
     ) {
+        let parent = parent.0;
         let subject = self.request_identity(req);
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let child_path = Self::join_path(&parent_path, link_name);
         if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            reply.error(libc::EEXIST);
+            fuse_reply_error!(reply, libc::EEXIST);
             return;
         }
         let parent_id = match self.parent_entry_id_for_inode(parent) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -6280,64 +6327,70 @@ impl Filesystem for FodFuse {
         ) {
             Ok(_) => match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {
-                    self.register_path(&child_path, attrs.file_attr.ino);
+                    self.register_path(&child_path, attrs.file_attr.ino.0);
                     self.invalidate_statfs_cache();
-                    reply.entry(&self.metadata_cache_ttl_live(), &attrs.file_attr, 0);
+                    reply.entry(
+                        &self.metadata_cache_ttl_live(),
+                        &attrs.file_attr,
+                        Generation(0),
+                    );
                 }
-                Ok(None) => reply.error(EIO),
-                Err(errno) => reply.error(errno),
+                Ok(None) => fuse_reply_error!(reply, EIO),
+                Err(errno) => fuse_reply_error!(reply, errno),
             },
-            Err(_) => reply.error(EIO),
+            Err(_) => fuse_reply_error!(reply, EIO),
         }
     }
 
     fn link(
-        &mut self,
-        req: &Request<'_>,
-        ino: u64,
-        newparent: u64,
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        newparent: INodeNo,
         newname: &OsStr,
         reply: ReplyEntry,
     ) {
+        let ino = ino.0;
+        let newparent = newparent.0;
         let subject = self.request_identity(req);
         if self.read_only {
-            reply.error(libc::EROFS);
+            fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         let source_path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let source_file_id = match self.file_id_for_path(&source_path) {
             Ok(Some(value)) => value,
             Ok(None) => {
-                reply.error(ENOENT);
+                fuse_reply_error!(reply, ENOENT);
                 return;
             }
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let new_parent_path = match self.entry_path_for_ino(newparent) {
             Ok(path) => path,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
         let child_path = Self::join_path(&new_parent_path, newname);
         if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            reply.error(libc::EEXIST);
+            fuse_reply_error!(reply, libc::EEXIST);
             return;
         }
         let new_parent_id = match self.parent_entry_id_for_inode(newparent) {
             Ok(value) => value,
             Err(errno) => {
-                reply.error(errno);
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
@@ -6350,14 +6403,18 @@ impl Filesystem for FodFuse {
         ) {
             Ok(_) => match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {
-                    self.register_path(&child_path, attrs.file_attr.ino);
+                    self.register_path(&child_path, attrs.file_attr.ino.0);
                     self.invalidate_statfs_cache();
-                    reply.entry(&self.metadata_cache_ttl_live(), &attrs.file_attr, 0);
+                    reply.entry(
+                        &self.metadata_cache_ttl_live(),
+                        &attrs.file_attr,
+                        Generation(0),
+                    );
                 }
-                Ok(None) => reply.error(EIO),
-                Err(errno) => reply.error(errno),
+                Ok(None) => fuse_reply_error!(reply, EIO),
+                Err(errno) => fuse_reply_error!(reply, errno),
             },
-            Err(_) => reply.error(EIO),
+            Err(_) => fuse_reply_error!(reply, EIO),
         }
     }
 }
@@ -6366,15 +6423,14 @@ impl Filesystem for FodFuse {
 mod tests {
     use super::{should_update_atime, AtimePolicy, FodFuseProfileCounters, WriteState};
     use crate::write_payload::{BlockWriteState, WritePayloadState};
-    use fuser::FileAttr;
-    use fuser::FileType;
+    use fuser::{FileAttr, FileType, INodeNo};
     use std::collections::BTreeMap;
     use std::time::{Duration, SystemTime};
 
     fn file_attr(kind: FileType, atime_age_secs: u64, mtime_age_secs: u64) -> FileAttr {
         let now = SystemTime::now();
         FileAttr {
-            ino: 1,
+            ino: INodeNo::ROOT,
             size: 0,
             blocks: 0,
             atime: now - Duration::from_secs(atime_age_secs),
