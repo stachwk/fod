@@ -24,7 +24,37 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-07-05 from commit `a3076e1` and adds a fresh local/QNAP COPY-buffer matrix with DML, WAL, top statement IO/WAL, and bloat artifacts.
-- The current FUSE migration reference was collected locally on 2026-07-11 from commit `7d9ed83` with `fuser 0.14`, ABI 7.31, schema v17, and three samples per block/1 MiB extent mode.
+- The current FUSE migration comparison was collected locally on 2026-07-12 from commit `522b1b5` with `fuser 0.17.0`, negotiated protocol 7.40, schema v17, and three samples per block/1 MiB extent mode; the frozen pre-migration reference remains commit `7d9ed83`.
+
+## 2026-07-12 fuser 0.17 Migration Baseline
+
+Measured commit: `522b1b51e4ddd1d2deffe7e32084ce3ffb6f3547`
+(`FOD 3.2.1: report negotiated FUSE capabilities`). The comparison baseline
+is commit `7d9ed837bec69670501c78262c08723fde5d5f48`. Full methodology,
+noise-repeat decisions, WAL/DML evidence, and artifact paths are in
+`docs/fuser-0-17-migration-baseline.md`.
+
+| workload | layout | ABI 7.31 | fuser 0.17 | FUSE read/write/copy calls |
+| --- | --- | ---: | ---: | --- |
+| Exact 64 MiB object adoption | blocks | `8050.38 MiB/s` | `8012.34 MiB/s` | `512 / 64 / 1` |
+| Exact 64 MiB object adoption | 1 MiB extents | `9979.55 MiB/s` | `10234.49 MiB/s` | `512 / 64 / 1` |
+| Chunked 64 MiB copy | blocks | `19.05 MiB/s` | `18.44 MiB/s` | `512 / 64 / 16` |
+| Chunked 64 MiB copy | 1 MiB extents | `31.66 MiB/s` | `32.13 MiB/s` | `512 / 64 / 16` |
+| Sequential 64 MiB | blocks | `54.66 MiB/s` | `58.18 MiB/s` | `512 / 64 / 0` |
+| Sequential 64 MiB | 1 MiB extents | `113.01 MiB/s` | `123.61 MiB/s` | `512 / 64 / 0` |
+
+| fio workload | ABI 7.31 blocks read/write KiB/s | fuser 0.17 blocks | ABI 7.31 extents | fuser 0.17 extents |
+| --- | ---: | ---: | ---: | ---: |
+| Sequential | `116053 / 4033` | `122880 / 4086` | `40209 / 3878` | `47514 / 4425` |
+| Mixed | `1480 / 1491` | `1565 / 1577` | `643 / 648` | `765 / 771` |
+| Random mixed | `1043 / 1051` | `1070 / 1079` | `537 / 541` | `625 / 630` |
+
+The migration retains exact whole-object adoption, 16-call chunked copy,
+partial extent conversion, and block/extent remount durability. Final checks
+reported zero orphan payload rows, unreferenced objects, reference-count
+mismatches, and hybrid objects. Two initially noisy microbenchmarks were
+repeated; the accepted repeat series did not confirm a persistent regression.
+Extents remain opt-in, and no post-7.31 capability is enabled by this result.
 
 ## 2026-07-11 Current FUSE ABI 7.31 Baseline
 

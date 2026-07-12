@@ -1470,6 +1470,34 @@ Base commit at execution time: `a23bfbb`
 
 Execution date: `2026-07-12`
 
+Measured commit at execution time:
+`522b1b51e4ddd1d2deffe7e32084ce3ffb6f3547`
+
+- `git log --oneline --left-right origin/main...main`
+- focused reads of `docs/fuse-abi-7-31-current-baseline.md`, the storage extent matrix Makefile targets, `scripts/perf/summarize_storage_extent_matrix.py`, and the old baseline artifacts
+- `PROFILE_RUN_ID=fuser017-exact-20260712T074000Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-object-adoption make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuser017-chunked-20260712T074200Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-benchmark make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuser017-sequential-20260712T074300Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuser017-fio-sequential-20260712T074400Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-fio-sequential-io make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuser017-fio-mixed-20260712T074600Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-fio-mixed-io make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuser017-fio-random-mixed-20260712T075100Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-fio-random-mixed-io make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuser017-remount-20260712T075800Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-remount-durability-benchmark make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuser017-exact-repeat-20260712T080000Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-copy-object-adoption make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuser017-sequential-repeat-20260712T080100Z PROFILE_STORAGE_EXTENT_REPEAT=3 PROFILE_STORAGE_EXTENT_SIZES=1048576 PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark make profile-storage-extent-size-matrix-local`
+- `PROFILE_RUN_ID=fuser017-strace-20260712T080200Z PROFILE_CAPTURE_LABEL=fuser017 make profile-fuse-sequential-io`
+- `cargo test -p fod-rust-hotpath --test pg_query --locked switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent -- --exact --nocapture`
+- `PGPASSWORD=cichosza PGOPTIONS='-c search_path=fod,public' psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U foduser -d foddbname -f scripts/perf/pg/data_blocks_semantics.sql` (saved under the `fuser017-final-20260712T080300Z` artifact directory)
+- `psql -X -v ON_ERROR_STOP=1` with the 64 MiB exact-copy object/reference/layout diagnostic saved as `artifacts/perf/522b1b5/lt7300-fuser017-final-20260712T080300Z/whole-object-adoption-objects.txt`
+- aggregate comparisons of all new and ABI 7.31 storage-extent summary artifacts
+- strace summary comparison between the ABI 7.31 and fuser 0.17 artifacts
+- `uname -r`, `dpkg-query -W libfuse3-4`, `rustc --version`, and `cargo --version`
+- focused review of `BENCHMARKS.md`, `TODO.md`, `docs/fuser-0-17-migration-baseline.md`, and the recorded artifact summaries
+- `awk` validation that every consecutive Markdown table row has the same column count in `BENCHMARKS.md` and `docs/fuser-0-17-migration-baseline.md`
+- `git diff --check && git status --short --branch && git diff --stat`
+- `git diff --check && git diff -- BENCHMARKS.md TODO.md conclusions.md && sed -n '1465,1515p' commands.md && cat fod_version.txt`
+
+Execution date: `2026-07-12`
+
 Base commit at execution time: `dd67984`
 
 - `git status --short --branch && git diff --check && git diff --stat && printf 'VERSION=' && cat fod_version.txt && git log -3 --oneline`
