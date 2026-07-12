@@ -4,9 +4,9 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
-    Filesystem, FopenFlags, Generation, INodeNo, InitFlags, IoctlFlags, KernelConfig, LockOwner,
-    OpenFlags, PollEvents, PollFlags, PollNotifier, RenameFlags, ReplyAttr, ReplyBmap, ReplyCreate,
-    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyOpen, ReplyPoll,
+    Filesystem, FopenFlags, Generation, INodeNo, IoctlFlags, KernelConfig, LockOwner, OpenFlags,
+    PollEvents, PollFlags, PollNotifier, RenameFlags, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData,
+    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyOpen, ReplyPoll,
     ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use libc::{EIO, ENOENT, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
@@ -30,6 +30,7 @@ use fod_rust_runtime::{
 };
 pub use fod_rust_runtime::{AtimePolicy, LockBackend};
 
+use crate::compatibility::FuseCompatibilitySnapshot;
 use crate::copy_plan::{copy_range_bounds, pack_copy_skip_unchanged_runs, CopyRangeBounds};
 use crate::read_cache::{ReadBlockCache, ReadSequenceState};
 use crate::startup::FodFuseSettings;
@@ -3119,7 +3120,7 @@ impl Drop for FodFuse {
 
 impl Filesystem for FodFuse {
     fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> std::io::Result<()> {
-        let _ = config.add_capabilities(InitFlags::FUSE_POSIX_LOCKS | InitFlags::FUSE_FLOCK_LOCKS);
+        FuseCompatibilitySnapshot::configure(config)?.log();
         Ok(())
     }
 

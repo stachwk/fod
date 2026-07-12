@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
+mod compatibility;
 mod copy_plan;
 mod fs;
 mod read_cache;

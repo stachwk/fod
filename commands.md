@@ -1470,6 +1470,28 @@ Base commit at execution time: `a23bfbb`
 
 Execution date: `2026-07-12`
 
+Base commit at execution time: `dd67984`
+
+- `git status --short --branch && git diff --check && git diff --stat && printf 'VERSION=' && cat fod_version.txt && git log -3 --oneline`
+- `sed -n '1,1240p' /home/wojtek/.codex/attachments/2eb7d65d-2bbd-4417-8a96-b85eef3d6c4a/pasted-text.txt` (read in four bounded ranges)
+- `rg -n "fn init|KernelConfig|InitFlags|env_logger|log_mount_status|FOD FUSE|compatib|capture_output|Command::new|stderr" rust_fuse/src rust_fuse/tests tests/integration`
+- `sed -n '1,90p' rust_fuse/src/main.rs` and focused reads of `rust_fuse/src/fs.rs`, `rust_fuse/tests/support.rs`, `tests/integration/test_runtime_profile.py`, and `rust_fuse/tests/mount_smoke.rs`
+- `rg` and focused source reads of the local `fuser-0.17.0` registry source for `KernelConfig`, `Version`, `InitFlags`, protocol maximum, default flags, and handshake behavior
+- `tail -n 45 commands.md`
+- `rg -n "InitFlags" rust_fuse/src/fs.rs rust_fuse/src -g '*.rs'`
+- `cargo fmt --all && cargo test -p fod-rust-fuse --bin fod-rust-fuse compatibility::tests --locked && cargo check --workspace --locked`
+- `make build-debug && cargo test -p fod-rust-fuse --test mount_smoke reports_negotiated_fuse_compatibility --exact --nocapture --locked` (test command rejected the misplaced `--exact`; build succeeded)
+- `cargo test -p fod-rust-fuse --test mount_smoke --locked reports_negotiated_fuse_compatibility -- --exact --nocapture`
+- `find /tmp -maxdepth 3 -type f -name '*.log' -mmin -10 -print | sort | tail -n 30` (diagnostic search encountered unrelated protected temporary directories)
+- `cargo fmt --all && cargo test -p fod-rust-fuse --test mount_smoke --locked reports_negotiated_fuse_compatibility -- --exact --nocapture`
+- `rg -n -A 18 '^test-mount-suite:' Makefile && git diff --check && git diff --stat`
+- `cargo fmt --all -- --check && cargo test -p fod-rust-fuse --bin fod-rust-fuse --locked && cargo test -p fod-rust-fuse --test mount_smoke --locked -- --nocapture`
+- `make test-mount-suite`
+- `git status --short --branch && git diff --check && git diff --stat && findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-' || true && find target -xdev ! -user "$(id -u)" -print -quit`
+- `git diff --check && git diff -- rust_fuse/Cargo.toml rust_fuse/src/main.rs rust_fuse/src/fs.rs rust_fuse/tests/mount_smoke.rs docs/compatibility-contracts.md TODO.md conclusions.md && sed -n '1,260p' rust_fuse/src/compatibility.rs`
+
+Execution date: `2026-07-12`
+
 Base commit at execution time: `0c48865`
 
 - `cargo info fuser@0.17.0`

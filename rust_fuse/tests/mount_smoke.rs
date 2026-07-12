@@ -23,6 +23,37 @@ fn metadata_times(path: &Path) -> Result<(i64, i64, i64, i64), String> {
 }
 
 #[test]
+fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
+    let mounted = MountedFs::start("fuse-compatibility")?;
+    let log = mounted.log_tail(200);
+    let compatibility_line = log
+        .lines()
+        .find(|line| line.contains("FOD FUSE compatibility:"))
+        .ok_or_else(|| format!("missing FUSE compatibility log line\n{log}"))?;
+    println!("{compatibility_line}");
+    let required_fields = [
+        "FOD FUSE compatibility:",
+        "fuser=0.17.0",
+        "userspace_protocol_max=7.40",
+        "kernel_protocol=",
+        "negotiated_protocol=",
+        "available_capabilities=",
+        "fod_requested_capabilities=[POSIX_LOCKS,FLOCK_LOCKS]",
+        "fod_enabled_capabilities=",
+        "max_write=unavailable",
+        "max_readahead=unavailable",
+        "max_background=unavailable",
+        "congestion_threshold=unavailable",
+    ];
+    for field in required_fields {
+        if !log.contains(field) {
+            return Err(format!("missing FUSE compatibility field {field:?}\n{log}"));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn write_noop() -> Result<(), String> {
     let mounted = MountedFs::start("write-noop")?;
     let suffix = unique_suffix();

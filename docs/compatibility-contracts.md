@@ -37,11 +37,12 @@ Last clean base before the migration: `0c48865`
   `libfuse3` feature.
 - The built `fod-rust-fuse` executable dynamically links `libfuse3.so.4` on the
   inventory host; no libfuse2 or pure-Rust mount fallback is selected.
-- The compiled userspace protocol maximum is FUSE ABI 7.40. The current FOD
-  startup path does not expose the kernel or negotiated protocol version as a
-  structured diagnostic.
+- The compiled userspace protocol maximum is FUSE ABI 7.40. The FOD init log
+  reports the fuser version, userspace maximum, kernel protocol, effective
+  negotiated protocol, kernel-available capabilities, and the capabilities
+  requested and enabled by FOD.
 - `FodFuse::init()` requests `FUSE_POSIX_LOCKS` and `FUSE_FLOCK_LOCKS`. It does
-  not currently report whether each requested capability was accepted.
+  report whether each requested capability was available and enabled.
 - Native `copy_file_range` reaches the FOD callback under ABI 7.31.
 - An exact clean whole-file copy into an empty destination adopts the source
   `data_object_id`; it does not duplicate payload rows.
@@ -53,6 +54,25 @@ Last clean base before the migration: `0c48865`
 - After the dependency migration, mounted exact and chunked copies, remount,
   locking, ioctl, poll, metadata, namespace, and fio gates retain their prior
   behavior. The repeated performance comparison is recorded separately.
+
+### Negotiation Diagnostics
+
+- The dependency is pinned to `fuser 0.17.0`, and the reported userspace
+  protocol maximum is 7.40.
+- `KernelConfig::kernel_abi()` and `KernelConfig::capabilities()` provide the
+  kernel protocol and kernel-advertised capability set. FOD reports the
+  effective protocol as the lower of the kernel protocol and the compiled
+  userspace maximum.
+- FOD requests `FUSE_POSIX_LOCKS` and `FUSE_FLOCK_LOCKS` independently from the
+  available set and reports any unsupported subset instead of discarding the
+  result from `add_capabilities()`.
+- The public fuser API does not expose getters for the final `max_write`,
+  `max_readahead`, `max_background`, or `congestion_threshold` values. FOD
+  reports these fields as `unavailable`; it does not infer private state or
+  carry a local fuser fork only for diagnostics.
+- On the 2026-07-12 validation host, the kernel advertised protocol 7.44, FOD
+  negotiated 7.40, and both requested lock capabilities were available and
+  enabled. The mounted test verifies the structured fields on every run.
 
 Unlike `fuser 0.14`, `fuser 0.17` has no default mount feature. FOD therefore
 selects `libfuse3` explicitly so dependency updates cannot silently switch the
@@ -67,8 +87,8 @@ handlers are listed as implemented.
 
 | Status | Callbacks | Evidence and limits |
 | --- | --- | --- |
-| Implemented and exercised | `lookup`, `getattr`, `readdir`, `readlink`, `statfs`, `setxattr`, `getxattr`, `listxattr`, `removexattr`, `access`, `poll`, `open`, `getlk`, `setlk`, `flush`, `read`, `release`, `setattr`, `mkdir`, `unlink`, `rmdir`, `rename`, `create`, `write`, `copy_file_range`, `mknod`, `symlink`, `link` | Mount, metadata, permission, xattr, poll, multi-mount locking, persistence, namespace, copy, special-node, and link suites exercise these handlers. Exact and chunked copy paths have dedicated mounted tests. |
-| Implemented but weakly tested | `init`, `ioctl`, `bmap` | Mount success exercises `init`, but accepted capabilities and negotiated limits are not asserted. The mounted `ioctl` test covers `FIONREAD` and the host-dependent `FICLONE` result; `FIGETBSZ`, inode flags, `fsxattr`, `FICLONERANGE`, and all error shapes are not covered end to end. No mounted `bmap` consumer was found. |
+| Implemented and exercised | `init`, `lookup`, `getattr`, `readdir`, `readlink`, `statfs`, `setxattr`, `getxattr`, `listxattr`, `removexattr`, `access`, `poll`, `open`, `getlk`, `setlk`, `flush`, `read`, `release`, `setattr`, `mkdir`, `unlink`, `rmdir`, `rename`, `create`, `write`, `copy_file_range`, `mknod`, `symlink`, `link` | Mount, negotiated compatibility, metadata, permission, xattr, poll, multi-mount locking, persistence, namespace, copy, special-node, and link suites exercise these handlers. Exact and chunked copy paths have dedicated mounted tests. |
+| Implemented but weakly tested | `ioctl`, `bmap` | The mounted `ioctl` test covers `FIONREAD` and the host-dependent `FICLONE` result; `FIGETBSZ`, inode flags, `fsxattr`, `FICLONERANGE`, and all error shapes are not covered end to end. No mounted `bmap` consumer was found. |
 | Not explicitly implemented | `destroy`, `forget`, `batch_forget`, `fsync`, `opendir`, `readdirplus`, `releasedir`, `fsyncdir`, `fallocate`, `lseek`; macOS-only `setvolname`, `exchange`, `getxtimes` | FOD inherits the `fuser` defaults. Existing `fsync`, `fallocate`, and `lseek` syscall-level tests do not make these explicit FOD callback implementations. |
 | Available in the upgraded protocol surface but not enabled by FOD | No additional high-level `Filesystem` method was found in the `fuser 0.17` trait compared with 0.14. Post-7.31 protocol flags include surfaces such as `FOPEN_NOFLUSH`, `FOPEN_PARALLEL_DIRECT_WRITES`, `FUSE_INIT_EXT`, `FUSE_DIRECT_IO_ALLOW_MMAP`, and `FUSE_PASSTHROUGH`. | Availability in the crate or protocol is not evidence that the kernel negotiated a flag or that FOD can enable it safely. `SYNCFS`, `STATX`, and `TMPFILE` are not exposed as new methods in the inspected `fuser 0.17` high-level trait and require a separate API inventory. |
 
