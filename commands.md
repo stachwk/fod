@@ -1494,7 +1494,24 @@ Measured commit at execution time:
 - focused review of `BENCHMARKS.md`, `TODO.md`, `docs/fuser-0-17-migration-baseline.md`, and the recorded artifact summaries
 - `awk` validation that every consecutive Markdown table row has the same column count in `BENCHMARKS.md` and `docs/fuser-0-17-migration-baseline.md`
 - `git diff --check && git status --short --branch && git diff --stat`
+
+Execution date: `2026-07-12`
+
+Base commit at execution time: `cbee716`
+
+- focused reads of `/usr/include/linux/fuse.h` for the 7.32-7.40 changelog, opcodes, init flags, and open flags
+- `rg` and focused reads of local `fuser-0.17.0` sources for `KernelConfig`, `INIT_EXT/flags2`, `FopenFlags`, unknown-opcode handling, session workers, passthrough APIs, and the `Filesystem` trait
+- focused reads of FOD `open`, `create`, `flush`, `release`, `fopen_flags`, mount configuration, and `WriteState` synchronization paths
 - `git diff --check && git diff -- BENCHMARKS.md TODO.md conclusions.md && sed -n '1465,1515p' commands.md && cat fod_version.txt`
+
+Execution date: `2026-07-12`
+
+Base commit at execution time: `cbee716`
+
+- focused reads of `/usr/include/linux/fuse.h` for the 7.32-7.40 changelog, opcodes, init flags, and open flags
+- `rg` and focused reads of local `fuser-0.17.0` sources for `KernelConfig`, `INIT_EXT/flags2`, `FopenFlags`, unknown-opcode handling, session workers, passthrough APIs, and the `Filesystem` trait
+- focused reads of FOD `open`, `create`, `flush`, `release`, `fopen_flags`, mount configuration, and `WriteState` synchronization paths
+
 
 Execution date: `2026-07-12`
 

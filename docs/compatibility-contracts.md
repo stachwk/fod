@@ -54,6 +54,9 @@ Last clean base before the migration: `0c48865`
 - After the dependency migration, mounted exact and chunked copies, remount,
   locking, ioctl, poll, metadata, namespace, and fio gates retain their prior
   behavior. The repeated performance comparison is recorded separately.
+- Post-7.31 protocol surfaces, API gaps, risks, and decisions are classified in
+  `docs/fuse-protocol-7-32-7-40-capabilities.md`; none is enabled merely because
+  the runtime negotiated protocol 7.40.
 
 ### Negotiation Diagnostics
 
