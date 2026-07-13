@@ -1,0 +1,166 @@
+name: Apply FOD statfs reporting fix
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out clean fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix-statfs-reporting-run
+          fetch-depth: 0
+
+      - name: Correct statfs units and inode headroom
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          fs_path = Path('rust_fuse/src/fs.rs')
+          fs_text = fs_path.read_text()
+          old = '''    fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
+              let snapshot = self.cached_statfs_snapshot();
+              let total_blocks = self
+                  .statfs_capacity_bytes()
+                  .map(|bytes| (bytes + self.block_size.saturating_sub(1)) / self.block_size)
+                  .unwrap_or(snapshot.blocks);
+              let used_blocks = snapshot.blocks.min(total_blocks);
+              let free_blocks = total_blocks.saturating_sub(used_blocks);
+              debug!(
+                  "FOD statfs blocks={} used_blocks={} files={} dirs={} total_data_size={} block_size={} max_fs_size_bytes={:?} pg_visible_path={:?}",
+                  total_blocks,
+                  used_blocks,
+                  snapshot.files,
+                  snapshot.dirs,
+                  snapshot.total_data_size,
+                  self.block_size,
+                  self.max_fs_size_bytes,
+                  self.pg_visible_path.as_deref().map(|path| path.display().to_string())
+              );
+              reply.statfs(
+                  total_blocks,
+                  free_blocks,
+                  free_blocks,
+                  snapshot.files + snapshot.dirs,
+                  0,
+                  self.block_size as u32,
+                  self.block_size as u32,
+                  255,
+              );
+          }
+          '''
+          new = '''    fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
+              const STATFS_FREE_INODE_HEADROOM: u64 = 1_000_000;
+              const STATFS_NAME_MAX: u32 = 255;
+
+              let snapshot = self.cached_statfs_snapshot();
+              let total_blocks = self
+                  .statfs_capacity_bytes()
+                  .map(|bytes| (bytes + self.block_size.saturating_sub(1)) / self.block_size)
+                  .unwrap_or(snapshot.blocks);
+              let used_blocks = snapshot.blocks.min(total_blocks);
+              let free_blocks = total_blocks.saturating_sub(used_blocks);
+              let used_inodes = snapshot.files.saturating_add(snapshot.dirs);
+              // PostgreSQL-backed FOD has no fixed inode pool. Report a stable virtual
+              // headroom so callers do not interpret f_ffree=0 as inode exhaustion.
+              let free_inodes = STATFS_FREE_INODE_HEADROOM;
+              let total_inodes = used_inodes.saturating_add(free_inodes);
+              debug!(
+                  "FOD statfs blocks={} used_blocks={} files={} dirs={} total_inodes={} free_inodes={} total_data_size={} block_size={} max_fs_size_bytes={:?} pg_visible_path={:?}",
+                  total_blocks,
+                  used_blocks,
+                  snapshot.files,
+                  snapshot.dirs,
+                  total_inodes,
+                  free_inodes,
+                  snapshot.total_data_size,
+                  self.block_size,
+                  self.max_fs_size_bytes,
+                  self.pg_visible_path.as_deref().map(|path| path.display().to_string())
+              );
+              reply.statfs(
+                  total_blocks,
+                  free_blocks,
+                  free_blocks,
+                  total_inodes,
+                  free_inodes,
+                  self.block_size as u32,
+                  STATFS_NAME_MAX,
+                  self.block_size as u32,
+              );
+          }
+          '''
+          if fs_text.count(old) != 1:
+              raise SystemExit('expected exactly one legacy statfs implementation')
+          fs_path.write_text(fs_text.replace(old, new, 1))
+
+          test_path = Path('tests/integration/test_df.sh')
+          test_text = test_path.read_text()
+          anchor = '''df -Ph "${MOUNTPOINT}" > /tmp/fod-df.ph
+          df -Phi "${MOUNTPOINT}" > /tmp/fod-df.phi
+          '''
+          replacement = '''read -r fs_block_size fs_fragment_size fs_blocks fs_free_blocks fs_inodes fs_free_inodes < <(
+            stat -f -c '%s %S %b %f %c %d' "${MOUNTPOINT}"
+          )
+
+          if [[ "${fs_fragment_size}" -ne "${fs_block_size}" ]]; then
+            printf 'unexpected statfs fragment size: bsize=%s frsize=%s\n' \\
+              "${fs_block_size}" "${fs_fragment_size}" >&2
+            exit 1
+          fi
+
+          if [[ "${fs_free_inodes}" -le 0 || "${fs_inodes}" -le "${fs_free_inodes}" ]]; then
+            printf 'unexpected statfs inode capacity: files=%s ffree=%s\n' \\
+              "${fs_inodes}" "${fs_free_inodes}" >&2
+            exit 1
+          fi
+
+          df -Ph "${MOUNTPOINT}" > /tmp/fod-df.ph
+          df -Phi "${MOUNTPOINT}" > /tmp/fod-df.phi
+          '''
+          if test_text.count(anchor) != 1:
+              raise SystemExit('expected exactly one df capture anchor')
+          test_path.write_text(test_text.replace(anchor, replacement, 1))
+
+          docs_path = Path('docs/space-accounting.md')
+          docs_text = docs_path.read_text()
+          docs_anchor = '''`df` reads FUSE `statfs` values. FOD calculates used filesystem bytes from the payload stored in `data_blocks` and `data_extents`. Each stored row is counted once, even when its data object is referenced by multiple files.
+          '''
+          docs_replacement = docs_anchor + '''
+          FOD reports both `f_bsize` and `f_frsize` as the configured FOD block size and reports `f_namemax` as 255. PostgreSQL-backed FOD has no fixed inode pool, so `f_files` is the current used inode count plus a virtual headroom of 1,000,000 and `f_ffree` is that headroom. This prevents tools from treating the filesystem as inode-full while preserving the current used count.
+          '''
+          if docs_text.count(docs_anchor) != 1:
+              raise SystemExit('expected exactly one space-accounting statfs paragraph')
+          docs_path.write_text(docs_text.replace(docs_anchor, docs_replacement, 1))
+
+          todo_path = Path('TODO.md')
+          todo_text = todo_path.read_text()
+          todo_anchor = '''  - Implementation note (2026-07-13): `FileAttr.blocks` now uses the mandatory POSIX 512-byte unit instead of the FOD storage block size, which removes the approximately eightfold `du` under-reporting seen with a 4 KiB FOD block size. `df` intentionally remains unique physical payload accounting over `data_blocks` and `data_extents`; mounted validation of the reported production case remains pending.
+          '''
+          todo_replacement = '''  - Implementation note (2026-07-13): `FileAttr.blocks` now uses the mandatory POSIX 512-byte unit instead of the FOD storage block size, which removes the approximately eightfold `du` under-reporting seen with a 4 KiB FOD block size. Mounted validation confirmed that `du --apparent-size` matches logical bytes and normal `du` matches corrected `st_blocks`.
+            The same validation exposed two `statfs` defects: `f_namemax` and `f_frsize` were swapped, causing `df` byte totals to be scaled by 255 instead of the FOD block size, and `f_ffree=0` falsely reported 100% inode use. Both are now covered by the `test-df` regression; final PostgreSQL payload comparison remains pending.
+          '''
+          if todo_text.count(todo_anchor) != 1:
+              raise SystemExit('expected exactly one accounting implementation note')
+          todo_path.write_text(todo_text.replace(todo_anchor, todo_replacement, 1))
+          PY
+
+          cargo fmt --all
+
+      - name: Remove temporary trigger files and commit
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-space-accounting-fix.yml .statfs-fix-trigger
+          git add rust_fuse/src/fs.rs tests/integration/test_df.sh docs/space-accounting.md TODO.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "FOD 3.2.1: correct statfs units and inode reporting"
+          git push origin HEAD:fix-statfs-reporting-run
