@@ -97,51 +97,52 @@ handlers are listed as implemented.
 
 ## Rust and C Boundary
 
-### Current Surface
+### Decision
 
-- `fod-rust-hotpath` builds both `rlib` and `cdylib` crate types.
-- `rust_hotpath/src/ffi.rs` contains 116 `#[unsafe(no_mangle)] extern "C"`
-  exports and 20 `#[repr(C)]` structures. The built shared object exposes the
-  same 116 `fod_*` dynamic symbols.
-- The shared object is installed as `/usr/local/lib/libfod-2.so`.
-- No C header, C/C++ source consumer, `dlopen`/`dlsym` consumer, Python
-  `ctypes.CDLL` consumer, or linker reference to `libfod-2.so` exists in this
-  repository.
-- Rust workspace code consumes the hotpath through the Rust `rlib`. A subset of
-  exported functions is called directly by Rust unit tests, which does not test
-  dynamic C ABI compatibility.
+The `2026-07-13` host and repository audit on commit `e32853b` found no real
+dynamic consumer of the hotpath shared object:
 
-### Consumer Classification
+- `fod-rust-fuse` and `fod-rust-indexer` depend on `fod-rust-hotpath` through
+  Cargo and use its Rust `rlib` interface.
+- No inspected FOD binary had a dynamic dependency on `libfod-2.so` or
+  `libfod_rust_hotpath.so`.
+- No running process mapped either library name.
+- No public C header existed in the repository or `/usr/local/include`.
+- The two apparent `ctypes.CDLL` references loaded libc with `CDLL(None)` for
+  `syncfs()` and `statx()` probes; they did not load the hotpath library.
+- The direct calls to `fod_copy_dedupe()` and `fod_free_ranges()` came from a
+  Rust test linked against the crate, not from a dynamic ABI consumer.
 
-| Class | Current finding |
-| --- | --- |
-| External public ABI | None found in the repository. No external consumer has been identified. |
-| Internal compatibility API | The repository handle and planner exports are candidates, but no dynamic consumer was found. The installed shared object is therefore an internal compatibility artifact, not a proven public ABI. |
-| Test-only or legacy exports | A subset of planner/free functions is invoked directly from Rust tests. The broad repository export set remains from the former FFI boundary, but the active runtime uses Rust APIs directly. |
-| Unused exports | Source inspection cannot prove use outside the repository. Within this repository, most dynamic exports have no consumer other than their definitions. Runtime tracing would be required before removal if an out-of-tree consumer is later identified. |
+`fod-rust-hotpath` therefore builds only as an internal `rlib`. The root install
+workflow installs the FOD Rust executables and mount helper but no longer builds
+or installs `/usr/local/lib/libfod-2.so`.
 
-### Ownership Contract and Risks
+A copy left in `/usr/local/lib/libfod-2.so` by an older installation is a legacy
+orphan, not a supported runtime dependency. It may be removed after confirming
+that no out-of-tree local software depends on it; the FOD install target does
+not delete system files implicitly.
 
-- Input byte ranges use pointer-plus-length pairs. A non-zero length requires a
-  non-null pointer.
-- Repository handles are created by `fod_rust_pg_repo_new()` and destroyed by
-  `fod_rust_pg_repo_free()`.
-- Output arrays are paired with `fod_free_copy_segments()`, `fod_free_ranges()`,
-  `fod_free_persist_blocks()`, `fod_free_persist_crc_rows()`, or
-  `fod_free_read_blocks()`.
-- Byte outputs are paired with `fod_free_bytes()`.
-- `DbfsPgRepo` is marked `#[repr(C)]` but embeds the internal Rust `DbRepo`
-  layout. It must be treated as an opaque handle if a public ABI is ever
-  defined; its layout is not a stable C contract.
-- `bytes_to_raw()` forgets a `Vec<u8>` without preserving its capacity, while
-  `fod_free_bytes()` reconstructs it with `capacity = len`. Rust does not
-  guarantee that an arbitrary vector has `capacity == len`. This allocator
-  contract must be corrected or replaced before the byte-output ABI can be
-  called public and stable.
+### Internal FFI Source
 
-No `FOD_HOTPATH_ABI_VERSION` is defined in this phase. Freezing the current
-accidental export set would preserve internal layouts and ownership risks
-without evidence of an external consumer.
+`rust_hotpath/src/ffi.rs` remains internal implementation and test code. Its
+`extern "C"` declarations, `#[repr(C)]` structures, symbol names, status values,
+layouts, and allocation helpers are not a versioned or supported public ABI.
+
+The pre-decision audit observed 116 `fod_*` dynamic exports and 20 C-layout
+structures when the crate was built as a `cdylib`. It also confirmed why that
+accidental surface must not be frozen:
+
+- `DbfsPgRepo` embeds the internal Rust `DbRepo`; any future public handle must
+  be opaque.
+- byte outputs can originate from a forgotten `Vec<u8>`, while
+  `fod_free_bytes()` reconstructs allocation metadata from pointer and length;
+  a future ABI must preserve the real allocation metadata.
+- there is no ABI version query, generated C header, SONAME compatibility
+  policy, or cross-version consumer test.
+
+If a real external consumer appears later, it should receive a deliberately
+versioned ABI boundary rather than re-enabling the current crate-wide `cdylib`
+surface.
 
 ## libpq Boundary
 

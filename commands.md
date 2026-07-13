@@ -1497,6 +1497,25 @@ Measured commit at execution time:
 
 Execution date: `2026-07-13`
 
+Base commit at execution time: `e32853b`
+
+- `python3 audit_hotpath_abi.py --output /tmp/fod-hotpath-abi-audit.json`
+- audit result: 116 exported `fod_*` symbols in the pre-decision shared object; Cargo consumers were `fod-rust-fuse` and `fod-rust-indexer`
+- audit result: zero FOD binary dynamic dependencies, zero active process mappings, and zero public headers
+- focused audit inspection showed that both dynamic-loader matches were `ctypes.CDLL(None)` libc calls in `test_post_731_capability_fallbacks.py`
+- focused audit inspection showed that all four apparent source consumers were in `rust_hotpath/tests/copy_dedupe_benchmark.rs` and used the Rust crate directly
+- `python3 apply_hotpath_internal_rlib_patch.py --dry-run`
+- `python3 apply_hotpath_internal_rlib_patch.py`
+- `cargo fmt --all -- --check`
+- `cargo check --workspace --locked`
+- `cargo test -p fod-rust-hotpath --lib --locked`
+- fresh isolated `CARGO_TARGET_DIR` release build of `fod-rust-hotpath --lib`; an `rlib` was produced and no hotpath `.so`, `.dylib`, or `.dll` was produced
+- `cargo tree --workspace -i fod-rust-hotpath --locked`
+- `make -n install-on-root`; output contained no `install-rust-hotpath`, `libfod-2.so`, or shared hotpath installation
+- `git diff --check`
+
+Execution date: `2026-07-13`
+
 Base commit at execution time: `aa77738`
 
 - `python3 apply_post731_fuse_probe_patch.py --dry-run`
