@@ -52,13 +52,32 @@ libfuse3 low-level implementation would be a separate architectural decision.
 | 7.38 | supplementary create group and expire-only invalidation | `CREATE_SUPP_GROUP` and `HAS_EXPIRE_ONLY` advertised | FOD resolves process groups itself and does not use expire-only notifications; leave disabled |
 | 7.40 | `FUSE_NO_EXPORT_SUPPORT`, `FUSE_HAS_RESEND` | Both advertised | Inventory as possible correctness signaling only; no performance value and no request-resend contract exposed to FOD |
 
+## Mounted Fallback Probe
+
+On `2026-07-13`, the mounted probe
+`tests/integration/test_post_731_capability_fallbacks.py` ran against commit
+`aa77738` on kernel `6.17.0-40-generic`. FOD negotiated protocol 7.40 and
+requested only its existing `POSIX_LOCKS` and `FLOCK_LOCKS`; the probe enabled
+no capability.
+
+| Syscall surface | Mounted result | Interpretation |
+| --- | --- | --- |
+| `syncfs()` | Returned success | This records the client/kernel-visible result only. Because fuser 0.17 exposes no `Filesystem::syncfs` callback, it does not establish a FOD-wide durability boundary or prove how dirty handles and PostgreSQL failures are ordered. |
+| `open(..., O_TMPFILE | O_RDWR)` | Failed with `ENOTSUP` (`errno 95`) | The unsupported result is the safe current behavior. No unnamed object was created and the directory namespace remained unchanged. |
+| `statx()` | Returned success; inode, size, mode, uid, gid, and link count matched `os.stat()` | The host supplied truthful basic metadata through its available fallback path. This does not mean FOD implements `FUSE_STATX`, requested-mask semantics, birth time, or future statx-only attributes. |
+
+The probe also confirmed that the known file contents remained intact and the
+test directory contained only the named file. No result justifies requesting a
+new init flag or returning a new open flag.
+
 ## Experiment Order
 
 No new production capability is justified by this inventory. The controlled
 follow-up order is:
 
-1. Probe actual `SYNCFS`, `TMPFILE`, and `STATX` syscall behavior against the
-   mounted daemon and record whether the kernel falls back after `ENOSYS`.
+1. Retain the mounted fallback probe as a regression check: `syncfs()` and
+   `statx()` must remain truthful client-visible operations, while `O_TMPFILE`
+   must remain clearly unsupported until an unnamed-object contract exists.
 2. Keep `FOPEN_NOFLUSH` disabled until FOD can preserve close-time persistence
    errors without the flush callback; only then run the close/remount matrix.
 3. Treat `FOPEN_PARALLEL_DIRECT_WRITES` as dependent on a separate multi-thread

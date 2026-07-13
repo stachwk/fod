@@ -941,6 +941,9 @@ test-mknod: init
 test-lseek: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_lseek.py
 
+test-post-731-capability-fallbacks: init
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POST731_PROBE_OUTPUT=$(FOD_POST731_PROBE_OUTPUT) $(VENV_PYTHON) tests/integration/test_post_731_capability_fallbacks.py
+
 test-poll: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_poll.py
 

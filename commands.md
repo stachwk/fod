@@ -1495,6 +1495,19 @@ Measured commit at execution time:
 - `awk` validation that every consecutive Markdown table row has the same column count in `BENCHMARKS.md` and `docs/fuser-0-17-migration-baseline.md`
 - `git diff --check && git status --short --branch && git diff --stat`
 
+Execution date: `2026-07-13`
+
+Base commit at execution time: `aa77738`
+
+- `python3 apply_post731_fuse_probe_patch.py --dry-run`
+- `python3 apply_post731_fuse_probe_patch.py`
+- `python3 -m py_compile tests/integration/test_post_731_capability_fallbacks.py`
+- `make -n test-post-731-capability-fallbacks`
+- initial `make test-post-731-capability-fallbacks` attempt failed before the test because the repository-local `.venv/bin/python` did not exist
+- `FOD_POST731_PROBE_OUTPUT="$OUT" make VENV_PYTHON="$HOME/.venv/bin/python" test-post-731-capability-fallbacks`
+- mounted result on kernel `6.17.0-40-generic`: `syncfs=success`, `tmpfile=ENOTSUP`, `statx=success`, metadata match, clean namespace, intact known file, overall `PASS`
+- FOD compatibility log: kernel protocol 7.44, negotiated protocol 7.40, requested/enabled capabilities limited to `POSIX_LOCKS` and `FLOCK_LOCKS`
+
 Execution date: `2026-07-12`
 
 Base commit at execution time: `cbee716`
