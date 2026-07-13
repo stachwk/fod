@@ -2852,8 +2852,13 @@ impl FodFuse {
         if kind == "dir" {
             return 1;
         }
-        let block_size = self.block_size.max(1);
-        1 + size.saturating_sub(1) / block_size
+        if size == 0 {
+            return 0;
+        }
+        // POSIX st_blocks is always expressed in 512-byte units. It is
+        // independent of the FOD storage block size exposed as st_blksize.
+        const STAT_BLOCK_BYTES: u64 = 512;
+        1 + size.saturating_sub(1) / STAT_BLOCK_BYTES
     }
 
     fn lookup_path(&self, path: &str) -> Result<Option<ParsedAttrs>, libc::c_int> {
