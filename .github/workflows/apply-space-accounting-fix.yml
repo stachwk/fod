@@ -1,9 +1,6 @@
 name: Apply FOD space accounting fix
 
 on:
-  push:
-    branches:
-      - fix-space-accounting
   pull_request:
     branches:
       - main
@@ -26,33 +23,37 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           fs_path = Path("rust_fuse/src/fs.rs")
           fs_text = fs_path.read_text()
-          old = '''    fn block_count(&self, size: u64, kind: &str) -> u64 {
-              if kind == "dir" {
-                  return 1;
-              }
-              let block_size = self.block_size.max(1);
-              1 + size.saturating_sub(1) / block_size
-          }
-          '''
-          new = '''    fn block_count(&self, size: u64, kind: &str) -> u64 {
-              if kind == "dir" {
-                  return 1;
-              }
-              if size == 0 {
-                  return 0;
-              }
-              // POSIX st_blocks is always expressed in 512-byte units. It is
-              // independent of the FOD storage block size exposed as st_blksize.
-              const STAT_BLOCK_BYTES: u64 = 512;
-              1 + size.saturating_sub(1) / STAT_BLOCK_BYTES
-          }
-          '''
-          if fs_text.count(old) != 1:
-              raise SystemExit("expected exactly one legacy block_count implementation")
-          fs_path.write_text(fs_text.replace(old, new, 1))
+          pattern = re.compile(
+              r'    fn block_count\(&self, size: u64, kind: &str\) -> u64 \{\n'
+              r'        if kind == "dir" \{\n'
+              r'            return 1;\n'
+              r'        \}\n'
+              r'        let block_size = self\.block_size\.max\(1\);\n'
+              r'        1 \+ size\.saturating_sub\(1\) / block_size\n'
+              r'    \}\n'
+          )
+          replacement = (
+              '    fn block_count(&self, size: u64, kind: &str) -> u64 {\n'
+              '        if kind == "dir" {\n'
+              '            return 1;\n'
+              '        }\n'
+              '        if size == 0 {\n'
+              '            return 0;\n'
+              '        }\n'
+              '        // POSIX st_blocks is always expressed in 512-byte units. It is\n'
+              '        // independent of the FOD storage block size exposed as st_blksize.\n'
+              '        const STAT_BLOCK_BYTES: u64 = 512;\n'
+              '        1 + size.saturating_sub(1) / STAT_BLOCK_BYTES\n'
+              '    }\n'
+          )
+          fs_text, replacements = pattern.subn(replacement, fs_text, count=1)
+          if replacements != 1:
+              raise SystemExit(f"expected one legacy block_count implementation, got {replacements}")
+          fs_path.write_text(fs_text)
 
           todo_path = Path("TODO.md")
           todo_text = todo_path.read_text()
