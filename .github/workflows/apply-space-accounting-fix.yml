@@ -1,9 +1,9 @@
 name: Apply FOD statfs reporting fix
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - fix-statfs-reporting-run
 
 permissions:
   contents: write
