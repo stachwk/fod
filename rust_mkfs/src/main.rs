@@ -798,8 +798,31 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let postgres_versions = match conn.postgres_version_diagnostics() {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("PostgreSQL runtime diagnostics unavailable: {}", err);
+                    std::process::exit(1);
+                }
+            };
             let ready = fod_exists && current_version == Some(latest_version) && secret_present;
             println!("FOD version: {}", FOD_VERSION_LABEL);
+            println!(
+                "PostgreSQL libpq runtime: {} ({})",
+                postgres_versions.libpq_version, postgres_versions.libpq_version_num
+            );
+            println!(
+                "PostgreSQL server runtime: {} ({})",
+                postgres_versions.server_version, postgres_versions.server_version_num
+            );
+            println!(
+                "PostgreSQL client/server major relation: {}",
+                postgres_versions.major_relation
+            );
+            println!(
+                "PostgreSQL client/server compatibility: {}",
+                postgres_versions.compatibility_label()
+            );
             println!("FOD schema name: {}", FOD_SCHEMA_NAME);
             println!(
                 "FOD schema version: {}",

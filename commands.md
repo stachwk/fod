@@ -1953,3 +1953,22 @@ Base commit at execution time: `f4cfa87`
 - `cargo test -p fod-rust-hotpath --test pg_query promote_hardlink_to_primary_preserves_the_remaining_path -- --exact`
 - `git diff --check`
 - `findmnt -rn -t fuse,fuse.fod,fuse3 | rg '/tmp/fod-'`
+
+Execution date: `2026-07-13`
+
+Base commit at execution time: `ac59793`
+
+- `python3 apply_libpq_runtime_diagnostics.py --dry-run`
+- `python3 apply_libpq_runtime_diagnostics.py`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `cargo check --workspace --locked`
+- `cargo test -p fod-rust-runtime --locked`
+- `cargo test -p fod-rust-hotpath --lib --locked`
+- `cargo test -p fod-rust-mkfs --locked`
+- `make test-schema-status`
+- `make test-version`
+- `git diff --check`
+- runtime smoke: `make --no-print-directory postgres-config-show`
+- runtime smoke: run `mkfs.fod status` with the resolved FOD connection environment and verify `PostgreSQL libpq runtime`, `PostgreSQL server runtime`, `PostgreSQL client/server major relation`, and `PostgreSQL client/server compatibility`
+- mounted smoke: verify one `FOD PostgreSQL diagnostics:` line in the FUSE startup log

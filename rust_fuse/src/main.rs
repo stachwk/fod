@@ -59,6 +59,21 @@ fn main() {
         eprintln!("fod-rust-fuse: failed to open PostgreSQL repo: {err}");
         std::process::exit(1);
     });
+    match repo.postgres_version_diagnostics() {
+        Ok(postgres_versions) => log::info!(
+            "FOD PostgreSQL diagnostics: libpq={} ({}) server={} ({}) major_relation={} compatibility={}",
+            postgres_versions.libpq_version,
+            postgres_versions.libpq_version_num,
+            postgres_versions.server_version,
+            postgres_versions.server_version_num,
+            postgres_versions.major_relation,
+            postgres_versions.compatibility_label()
+        ),
+        Err(err) => log::warn!(
+            "FOD PostgreSQL diagnostics unavailable; continuing with normal startup checks: {}",
+            err
+        ),
+    }
     log::debug!("FOD reading startup snapshot");
     let snapshot = repo.startup_snapshot().unwrap_or_else(|err| {
         eprintln!("fod-rust-fuse: failed to read startup snapshot: {err}");

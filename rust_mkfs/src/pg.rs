@@ -4,7 +4,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 
-use fod_rust_runtime::FOD_SEARCH_PATH;
+use fod_rust_runtime::{PostgresVersionDiagnostics, FOD_SEARCH_PATH};
 
 #[repr(C)]
 struct PGconn {
@@ -25,6 +25,11 @@ unsafe extern "C" {
     fn PQconnectdb(conninfo: *const c_char) -> *mut PGconn;
     fn PQstatus(conn: *const PGconn) -> c_int;
     fn PQerrorMessage(conn: *const PGconn) -> *const c_char;
+    // This shared module is also compiled by binaries and tests
+    // that do not expose the schema-status diagnostics.
+    #[allow(dead_code)]
+    fn PQlibVersion() -> c_int;
+    fn PQserverVersion(conn: *const PGconn) -> c_int;
     fn PQexec(conn: *mut PGconn, command: *const c_char) -> *mut PGresult;
     fn PQresultStatus(res: *const PGresult) -> c_int;
     fn PQntuples(res: *const PGresult) -> c_int;
@@ -100,6 +105,32 @@ impl DbConn {
                 _ => Err(conn_error(self.conn)),
             }
         }
+    }
+
+    // This module is reused by fod-change and standalone tests;
+    // only the schema-status binary consumes this method.
+    #[allow(dead_code)]
+    pub fn postgres_version_diagnostics(&self) -> Result<PostgresVersionDiagnostics, String> {
+        let (libpq_version_num, server_version_num) =
+            unsafe { (PQlibVersion(), PQserverVersion(self.conn)) };
+
+        if libpq_version_num <= 0 {
+            return Err("libpq runtime version is unavailable".to_string());
+        }
+        if server_version_num <= 0 {
+            return Err("PostgreSQL server runtime version is unavailable".to_string());
+        }
+
+        let server_version = self
+            .query_scalar_text("SHOW server_version")?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "PostgreSQL server version string is empty".to_string())?;
+
+        Ok(PostgresVersionDiagnostics::new(
+            libpq_version_num,
+            server_version_num,
+            server_version,
+        ))
     }
 
     pub fn exec(&self, sql: &str) -> Result<(), String> {

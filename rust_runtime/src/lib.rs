@@ -26,6 +26,78 @@ pub const FOD_SEARCH_PATH: &str = "fod";
 // Version is sourced from ../fod_version.txt via rust_runtime/build.rs.
 pub const FOD_VERSION_LABEL: &str = env!("FOD_VERSION_LABEL");
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostgresVersionDiagnostics {
+    pub libpq_version_num: i32,
+    pub libpq_version: String,
+    pub server_version_num: i32,
+    pub server_version: String,
+    pub major_relation: String,
+}
+
+impl PostgresVersionDiagnostics {
+    pub fn new(
+        libpq_version_num: i32,
+        server_version_num: i32,
+        server_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            libpq_version_num,
+            libpq_version: format_postgres_version_number(libpq_version_num),
+            server_version_num,
+            server_version: server_version.into(),
+            major_relation: postgres_client_server_major_relation(
+                libpq_version_num,
+                server_version_num,
+            )
+            .to_string(),
+        }
+    }
+
+    pub fn compatibility_label(&self) -> &'static str {
+        "connected"
+    }
+}
+
+pub fn postgres_version_major(version_num: i32) -> Option<i32> {
+    if version_num <= 0 {
+        return None;
+    }
+    let major = version_num / 10_000;
+    (major > 0).then_some(major)
+}
+
+pub fn format_postgres_version_number(version_num: i32) -> String {
+    if version_num <= 0 {
+        return "unknown".to_string();
+    }
+
+    let major = version_num / 10_000;
+    if version_num >= 100_000 {
+        let minor = version_num % 10_000;
+        format!("{major}.{minor}")
+    } else {
+        let minor = (version_num / 100) % 100;
+        let patch = version_num % 100;
+        format!("{major}.{minor}.{patch}")
+    }
+}
+
+pub fn postgres_client_server_major_relation(
+    libpq_version_num: i32,
+    server_version_num: i32,
+) -> &'static str {
+    match (
+        postgres_version_major(libpq_version_num),
+        postgres_version_major(server_version_num),
+    ) {
+        (Some(client), Some(server)) if client == server => "same-major",
+        (Some(client), Some(server)) if client > server => "client-newer",
+        (Some(_), Some(_)) => "client-older",
+        _ => "unknown",
+    }
+}
+
 static NEXT_REQUEST_TOKEN: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2381,5 +2453,52 @@ mod tests {
         assert_eq!(FOD_SEARCH_PATH, "fod");
         assert_ne!(FOD_SCHEMA_NAME, "public");
         assert_ne!(FOD_SEARCH_PATH, "public");
+    }
+}
+
+#[cfg(test)]
+mod postgres_version_diagnostics_tests {
+    use super::{
+        format_postgres_version_number, postgres_client_server_major_relation,
+        postgres_version_major, PostgresVersionDiagnostics,
+    };
+
+    #[test]
+    fn formats_postgresql_10_and_newer_version_numbers() {
+        assert_eq!(format_postgres_version_number(170010), "17.10");
+        assert_eq!(format_postgres_version_number(160014), "16.14");
+        assert_eq!(postgres_version_major(170010), Some(17));
+    }
+
+    #[test]
+    fn formats_pre_10_version_numbers() {
+        assert_eq!(format_postgres_version_number(90624), "9.6.24");
+        assert_eq!(postgres_version_major(90624), Some(9));
+    }
+
+    #[test]
+    fn classifies_major_version_relation_without_declaring_support() {
+        assert_eq!(
+            postgres_client_server_major_relation(170010, 160014),
+            "client-newer"
+        );
+        assert_eq!(
+            postgres_client_server_major_relation(160014, 160014),
+            "same-major"
+        );
+        assert_eq!(
+            postgres_client_server_major_relation(150013, 160014),
+            "client-older"
+        );
+        assert_eq!(postgres_client_server_major_relation(0, 160014), "unknown");
+    }
+
+    #[test]
+    fn builds_connected_runtime_diagnostics() {
+        let diagnostics = PostgresVersionDiagnostics::new(170010, 160014, "16.14 (Ubuntu)");
+        assert_eq!(diagnostics.libpq_version, "17.10");
+        assert_eq!(diagnostics.server_version, "16.14 (Ubuntu)");
+        assert_eq!(diagnostics.major_relation, "client-newer");
+        assert_eq!(diagnostics.compatibility_label(), "connected");
     }
 }

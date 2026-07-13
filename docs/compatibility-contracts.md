@@ -155,6 +155,8 @@ Both PostgreSQL implementations use manually declared, dynamically linked
 PQconnectdb
 PQstatus
 PQerrorMessage
+PQlibVersion
+PQserverVersion
 PQexec
 PQprepare
 PQexecPrepared
@@ -179,6 +181,8 @@ PQfinish
 PQconnectdb
 PQstatus
 PQerrorMessage
+PQlibVersion
+PQserverVersion
 PQexec
 PQresultStatus
 PQntuples
@@ -188,10 +192,25 @@ PQclear
 PQfinish
 ```
 
-The inventory host links `libpq.so.5` from PostgreSQL client 17.10. The local
-test server reports PostgreSQL 16.14. These are observed versions, not yet a
-declared supported range. Runtime reporting of `PQlibVersion()` and
-`PQserverVersion()` remains a later compatibility task.
+Both bindings now declare `PQlibVersion()` and `PQserverVersion()`.
+
+`mkfs.fod status` reports:
+
+- the runtime `libpq` version number and normalized version label;
+- the runtime PostgreSQL server version number;
+- the server's `SHOW server_version` string;
+- the client/server major-version relation;
+- compatibility as `connected`, meaning that the current connection succeeded.
+
+`fod-rust-fuse` records the same diagnostic once during startup through the
+existing `DbRepo` connection pool. A diagnostic lookup failure is logged as a
+warning and does not itself block the mount; the normal startup snapshot remains
+the operational gate.
+
+The earlier inventory host linked `libpq.so.5` from PostgreSQL client 17.10
+against PostgreSQL server 16.14. Those values remain observations, not a
+declared support range. `same-major`, `client-newer`, and `client-older` are
+descriptive labels only and do not accept or reject a connection.
 
 ## PostgreSQL and Storage Contract
 
@@ -215,6 +234,6 @@ declared supported range. Runtime reporting of `PQlibVersion()` and
 | FUSE | `fuser 0.17` / protocol maximum 7.40 / explicit libfuse3 | Verified negotiated-protocol and capability diagnostics, then isolated capability experiments |
 | Rust toolchain | Minimum 1.85, Edition 2021 | Keep explicit minimum aligned with dependencies and build environments |
 | Hotpath C ABI | Unclassified exports; no external consumer found | Inventory-based internal/public decision before changing or freezing symbols |
-| libpq runtime | Dynamically linked | Runtime client/server version reporting and a tested-version contract |
+| libpq runtime | Dynamically linked; runtime client/server diagnostics exposed | Keep observed versions separate from any future tested support range |
 | DB schema | Version 17 | Normal migration contract; no compatibility-only schema change |
 | Physical layout | Blocks plus opt-in extents | No new format in the FUSE modernization phase |

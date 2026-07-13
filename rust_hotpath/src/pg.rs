@@ -6,8 +6,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, request_token as generate_request_token,
-    DataObjectSwapCleanup, PersistBlockTransport, RuntimeConfig, RuntimeStorageSettings,
-    FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
+    DataObjectSwapCleanup, PersistBlockTransport, PostgresVersionDiagnostics, RuntimeConfig,
+    RuntimeStorageSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -220,6 +220,8 @@ unsafe extern "C" {
     fn PQconnectdb(conninfo: *const c_char) -> *mut PGconn;
     fn PQstatus(conn: *const PGconn) -> c_int;
     fn PQerrorMessage(conn: *const PGconn) -> *const c_char;
+    fn PQlibVersion() -> c_int;
+    fn PQserverVersion(conn: *const PGconn) -> c_int;
     fn PQexec(conn: *mut PGconn, command: *const c_char) -> *mut PGresult;
     fn PQprepare(
         conn: *mut PGconn,
@@ -299,6 +301,33 @@ fn result_error(res: *const PGresult) -> String {
             }
         }
     }
+}
+
+unsafe fn postgres_version_diagnostics_on_conn(
+    conn: *mut PGconn,
+) -> Result<PostgresVersionDiagnostics, String> {
+    let libpq_version_num = PQlibVersion();
+    if libpq_version_num <= 0 {
+        return Err("libpq runtime version is unavailable".to_string());
+    }
+
+    let server_version_num = PQserverVersion(conn);
+    if server_version_num <= 0 {
+        return Err("PostgreSQL server runtime version is unavailable".to_string());
+    }
+
+    let sql =
+        CString::new("SHOW server_version").map_err(|_| "SQL contains NUL byte".to_string())?;
+    let server_version = query_scalar_text_on_conn(conn, &sql)?;
+    if server_version.trim().is_empty() {
+        return Err("PostgreSQL server version string is empty".to_string());
+    }
+
+    Ok(PostgresVersionDiagnostics::new(
+        libpq_version_num,
+        server_version_num,
+        server_version,
+    ))
 }
 
 fn error_is_unique_violation(err: &str) -> bool {
@@ -2664,6 +2693,10 @@ impl DbRepo {
         F: FnMut(*mut PGconn) -> Result<T, String>,
     {
         self.with_connection(ConnectionLane::Control, f)
+    }
+
+    pub fn postgres_version_diagnostics(&self) -> Result<PostgresVersionDiagnostics, String> {
+        self.with_control_connection(|conn| unsafe { postgres_version_diagnostics_on_conn(conn) })
     }
 
     fn confirm_unique_violation<T, F>(&self, err: String, confirm: F) -> Result<T, String>

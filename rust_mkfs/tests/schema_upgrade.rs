@@ -94,6 +94,29 @@ fn assert_upgrade_message(output: &str) {
     panic!("{output}");
 }
 
+fn assert_postgres_runtime_diagnostics(output: &str) {
+    for needle in [
+        "PostgreSQL libpq runtime: ",
+        "PostgreSQL server runtime: ",
+        "PostgreSQL client/server major relation: ",
+        "PostgreSQL client/server compatibility: connected",
+    ] {
+        assert!(
+            output.contains(needle),
+            "missing PostgreSQL diagnostic {needle:?}\n\n{output}"
+        );
+    }
+
+    assert!(
+        ["same-major", "client-newer", "client-older"]
+            .iter()
+            .any(|relation| output.contains(&format!(
+                "PostgreSQL client/server major relation: {relation}"
+            ))),
+        "unexpected PostgreSQL client/server major relation\n\n{output}"
+    );
+}
+
 fn assert_password_source(output: &str, source: &str) {
     let expected = format!(
         "Schema admin password source: {} (no prompt needed)",
@@ -649,6 +672,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
 
     let status_after_init =
         String::from_utf8(run_mkfs("status", &[], &envs).stdout).expect("status output");
+    assert_postgres_runtime_diagnostics(&status_after_init);
     for needle in [
         "FOD version: FOD ",
         "FOD schema name: fod",
@@ -688,6 +712,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         .expect("delete schema_version");
     let status_without_version =
         String::from_utf8(run_mkfs("status", &[], &envs).stdout).expect("status output");
+    assert_postgres_runtime_diagnostics(&status_without_version);
     for needle in [
         "FOD version: FOD ",
         "FOD schema name: fod",
