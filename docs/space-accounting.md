@@ -17,13 +17,13 @@ Empty regular files report zero blocks. Directory entries retain a minimal non-z
 
 `df` reads FUSE `statfs` values. FOD calculates used filesystem bytes from the payload stored in `data_blocks` and `data_extents`. Each stored row is counted once, even when its data object is referenced by multiple files.
 
-Consequently, the following relationship is expected and is not by itself corruption:
+There is no universal equality or ordering between `df` and the sum reported by `du`:
 
-```text
-physical payload reported by df <= summed per-file logical allocation reported by du
-```
+- shared or deduplicated data objects can make filesystem-wide payload usage smaller than the summed per-file logical allocation;
+- padded storage blocks or extents can make stored payload usage larger than the logical allocation of very small or partial files;
+- sparse logical ranges can increase `st_size` without requiring an equivalent stored payload.
 
-A large difference may be caused by shared or deduplicated data objects, sparse logical ranges, or files whose logical length is larger than their stored payload.
+A difference between `ls`, `du`, and `df` is therefore not by itself corruption. The values must be interpreted according to the logical per-file and unique filesystem-wide contracts above.
 
 ## Diagnostic capture
 
