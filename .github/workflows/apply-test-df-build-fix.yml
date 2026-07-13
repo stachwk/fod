@@ -1,0 +1,48 @@
+name: Apply test-df build dependency fix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Make test-df build and select current debug binaries
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('Makefile')
+          text = path.read_text()
+          old_target = 'test-df: venv up\n'
+          new_target = 'test-df: build-debug venv up\n'
+          if text.count(old_target) != 1:
+              raise SystemExit('expected exactly one test-df target')
+          text = text.replace(old_target, new_target, 1)
+
+          old_recipe = '\tPOSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_df.sh\n'
+          new_recipe = '\tFOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_DEBUG_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_df.sh\n'
+          if text.count(old_recipe) != 1:
+              raise SystemExit('expected exactly one test-df recipe')
+          path.write_text(text.replace(old_recipe, new_recipe, 1))
+          PY
+
+      - name: Remove one-shot workflow and commit
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-test-df-build-fix.yml
+          git add Makefile
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "FOD 3.2.1: build current binaries for df regression"
+          git push origin HEAD:main
