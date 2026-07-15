@@ -3322,6 +3322,9 @@ impl Filesystem for FodFuse {
     }
 
     fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
+        const STATFS_FREE_INODE_HEADROOM: u64 = 1_000_000;
+        const STATFS_NAME_MAX: u32 = 255;
+
         let snapshot = self.cached_statfs_snapshot();
         let total_blocks = self
             .statfs_capacity_bytes()
@@ -3329,12 +3332,19 @@ impl Filesystem for FodFuse {
             .unwrap_or(snapshot.blocks);
         let used_blocks = snapshot.blocks.min(total_blocks);
         let free_blocks = total_blocks.saturating_sub(used_blocks);
+        let used_inodes = snapshot.files.saturating_add(snapshot.dirs);
+        // PostgreSQL-backed FOD has no fixed inode pool. Report stable virtual
+        // headroom so callers do not interpret f_ffree=0 as inode exhaustion.
+        let free_inodes = STATFS_FREE_INODE_HEADROOM;
+        let total_inodes = used_inodes.saturating_add(free_inodes);
         debug!(
-            "FOD statfs blocks={} used_blocks={} files={} dirs={} total_data_size={} block_size={} max_fs_size_bytes={:?} pg_visible_path={:?}",
+            "FOD statfs blocks={} used_blocks={} files={} dirs={} total_inodes={} free_inodes={} total_data_size={} block_size={} max_fs_size_bytes={:?} pg_visible_path={:?}",
             total_blocks,
             used_blocks,
             snapshot.files,
             snapshot.dirs,
+            total_inodes,
+            free_inodes,
             snapshot.total_data_size,
             self.block_size,
             self.max_fs_size_bytes,
@@ -3344,11 +3354,11 @@ impl Filesystem for FodFuse {
             total_blocks,
             free_blocks,
             free_blocks,
-            snapshot.files + snapshot.dirs,
-            0,
+            total_inodes,
+            free_inodes,
             self.block_size as u32,
+            STATFS_NAME_MAX,
             self.block_size as u32,
-            255,
         );
     }
 

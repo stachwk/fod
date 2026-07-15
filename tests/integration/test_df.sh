@@ -59,6 +59,28 @@ do
   fi
 done
 
+read -r fs_bsize fs_frsize fs_blocks fs_free_blocks fs_inodes fs_free_inodes fs_name_max < <(
+  stat -f -c '%s %S %b %f %c %d %l' "${MOUNTPOINT}"
+)
+
+if [[ "${fs_bsize}" -ne "${fs_frsize}" ]]; then
+  printf 'unexpected statfs block sizes: bsize=%s frsize=%s\n' \
+    "${fs_bsize}" "${fs_frsize}" >&2
+  exit 1
+fi
+
+if [[ "${fs_name_max}" -ne 255 ]]; then
+  printf 'unexpected statfs name length: got=%s expected=255\n' \
+    "${fs_name_max}" >&2
+  exit 1
+fi
+
+if [[ "${fs_free_inodes}" -le 0 || "${fs_inodes}" -le "${fs_free_inodes}" ]]; then
+  printf 'unexpected statfs inode capacity: inodes=%s ifree=%s\n' \
+    "${fs_inodes}" "${fs_free_inodes}" >&2
+  exit 1
+fi
+
 df -Ph "${MOUNTPOINT}" > /tmp/fod-df.ph
 df -Phi "${MOUNTPOINT}" > /tmp/fod-df.phi
 
@@ -85,7 +107,11 @@ awk -v mount="${MOUNTPOINT}" '
       print "missing df -Phi fields"
       exit 1
     }
+    if ($5 == "100%") {
+      print "df -Phi falsely reports inode exhaustion"
+      exit 1
+    }
   }
 ' /tmp/fod-df.phi
 
-echo "OK df/Ph/Phi and POSIX st_blocks accounting"
+echo "OK df/Ph/Phi, statfs fields, inode headroom, and POSIX st_blocks accounting"
