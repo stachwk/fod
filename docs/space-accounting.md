@@ -15,15 +15,15 @@ Empty regular files report zero blocks. Directory entries retain a minimal non-z
 
 ## Filesystem-wide values
 
-`df` reads FUSE `statfs` values. FOD calculates used filesystem bytes from the payload stored in `data_blocks` and `data_extents`. Each stored row is counted once, even when its data object is referenced by multiple files.
+`df` reads FUSE `statfs` values. FOD calculates used filesystem bytes from the payload actually stored in `data_blocks` and `data_extents`. Missing rows for sparse or zero-only logical ranges do not consume stored payload bytes. Each stored row is counted once, including when one data object is referenced by more than one filesystem entry.
 
 There is no universal equality or ordering between `df` and the sum reported by `du`:
 
-- shared or deduplicated data objects can make filesystem-wide payload usage smaller than the summed per-file logical allocation;
-- padded storage blocks or extents can make stored payload usage larger than the logical allocation of very small or partial files;
-- sparse logical ranges can increase `st_size` without requiring an equivalent stored payload.
+- sparse or zero-only logical ranges can increase `st_size` and per-file logical allocation without requiring equivalent stored payload;
+- one stored data object may be referenced by more than one filesystem entry without duplicating its payload;
+- padded storage blocks or extents can make stored payload usage larger than the logical allocation of very small or partial files.
 
-A difference between `ls`, `du`, and `df` is therefore not by itself corruption. The values must be interpreted according to the logical per-file and unique filesystem-wide contracts above.
+A difference between `ls`, `du`, and `df` is therefore not by itself corruption. The values must be interpreted according to the logical per-file and stored filesystem-wide contracts above. The term `stored payload` does not imply content deduplication; it means the bytes physically present in FOD's PostgreSQL payload tables.
 
 ## Diagnostic capture
 
@@ -33,4 +33,4 @@ Run the repository helper against a mounted FOD filesystem:
 scripts/fod-space-accounting.sh /path/to/fod/mount
 ```
 
-The report includes byte-precise `df`, allocated and apparent `du`, and per-file `stat` values. When a PostgreSQL connection is available through standard `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` variables, it also reports logical file totals and unique block/extent payload totals.
+The report includes byte-precise `df`, allocated and apparent `du`, and per-file `stat` values. When a PostgreSQL connection is available through standard `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD` variables, it also reports logical file totals and stored block/extent payload totals.

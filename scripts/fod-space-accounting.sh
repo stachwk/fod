@@ -57,11 +57,11 @@ if command -v psql >/dev/null 2>&1 && [[ -n "${PGDATABASE:-}" ]]; then
     psql -X -v ON_ERROR_STOP=1 -At -F $'\t' <<SQL
 SELECT 'logical_file_bytes', COALESCE(SUM(size), 0)::bigint
 FROM ${SCHEMA_NAME}.files;
-SELECT 'unique_block_payload_bytes', COALESCE(SUM(octet_length(data)), 0)::bigint
+SELECT 'stored_block_payload_bytes', COALESCE(SUM(octet_length(data)), 0)::bigint
 FROM ${SCHEMA_NAME}.data_blocks;
-SELECT 'unique_extent_payload_bytes', COALESCE(SUM(octet_length(payload)), 0)::bigint
+SELECT 'stored_extent_payload_bytes', COALESCE(SUM(octet_length(payload)), 0)::bigint
 FROM ${SCHEMA_NAME}.data_extents;
-SELECT 'unique_payload_bytes',
+SELECT 'stored_payload_bytes',
        (SELECT COALESCE(SUM(octet_length(data)), 0) FROM ${SCHEMA_NAME}.data_blocks)
        +
        (SELECT COALESCE(SUM(octet_length(payload)), 0) FROM ${SCHEMA_NAME}.data_extents);
