@@ -98,6 +98,209 @@ fn payload_capacity_reservations_serialize_across_repositories() -> Result<(), S
 }
 
 #[test]
+fn expired_payload_capacity_reservation_is_renewed_before_persistence() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
+    let block_size_u64 = block_size as u64;
+    let original_limit = repo
+        .query_config_value("max_fs_size_bytes")?
+        .ok_or_else(|| "missing max_fs_size_bytes config".to_string())?;
+    let used_bytes = persisted_payload_bytes(&repo)?;
+    let dir_id = repo.create_directory(
+        None,
+        &unique_name("rust_pg_reservation_renew_dir"),
+        0o755,
+        1000,
+        1000,
+        &unique_name("reservation_renew_dir_seed"),
+    )?;
+    let file_id = repo.create_file(
+        Some(dir_id),
+        &unique_name("rust_pg_reservation_renew_file"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("reservation_renew_file_seed"),
+    )?;
+
+    repo.exec("DELETE FROM payload_capacity_reservations")?;
+    repo.exec(&format!(
+        "UPDATE config SET value = {} WHERE key = 'max_fs_size_bytes'",
+        used_bytes.saturating_add(block_size_u64)
+    ))?;
+
+    let result = (|| {
+        let token = repo
+            .reserve_payload_capacity(block_size_u64)?
+            .ok_or_else(|| "expected payload capacity reservation".to_string())?;
+        repo.exec(&format!(
+            "UPDATE payload_capacity_reservations \
+             SET expires_at = NOW() - INTERVAL '1 second' \
+             WHERE request_token = '{token}'"
+        ))?;
+
+        let payload = repeated_block(b'R', block_size);
+        let rows = [PersistBlockRow {
+            block_index: 0,
+            data: &payload,
+            used_len: block_size_u64,
+        }];
+        repo.persist_file_blocks_with_crc_flag_and_reservation(
+            file_id,
+            block_size_u64,
+            block_size_u64,
+            1,
+            false,
+            &rows,
+            true,
+            Some(&token),
+        )?;
+
+        let active_count = repo.query_scalar_text(&format!(
+            "SELECT COUNT(*) FROM payload_capacity_reservations \
+             WHERE request_token = '{token}' AND expires_at > NOW()"
+        ))?;
+        if active_count.trim() != "1" {
+            return Err("expired payload reservation was not renewed".to_string());
+        }
+        assert_block_range_matches(&repo, file_id, block_size_u64, &[(0, payload.as_slice())])?;
+        repo.release_payload_capacity_reservation(&token)
+    })();
+
+    let cleanup_result = repo
+        .exec("DELETE FROM payload_capacity_reservations")
+        .and_then(|_| repo.purge_primary_file(file_id))
+        .and_then(|_| repo.delete_directory_entry(dir_id))
+        .and_then(|_| {
+            repo.exec(&format!(
+                "UPDATE config SET value = {} WHERE key = 'max_fs_size_bytes'",
+                original_limit
+            ))
+        });
+    result.and(cleanup_result)
+}
+
+#[test]
+fn expired_payload_capacity_reservation_cannot_reclaim_committed_capacity() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
+    let block_size_u64 = block_size as u64;
+    let original_limit = repo
+        .query_config_value("max_fs_size_bytes")?
+        .ok_or_else(|| "missing max_fs_size_bytes config".to_string())?;
+    let used_bytes = persisted_payload_bytes(&repo)?;
+    let dir_id = repo.create_directory(
+        None,
+        &unique_name("rust_pg_reservation_reclaim_dir"),
+        0o755,
+        1000,
+        1000,
+        &unique_name("reservation_reclaim_dir_seed"),
+    )?;
+    let reserved_file_id = repo.create_file(
+        Some(dir_id),
+        &unique_name("rust_pg_reservation_reclaim_reserved"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("reservation_reclaim_reserved_seed"),
+    )?;
+    let competing_file_id = repo.create_file(
+        Some(dir_id),
+        &unique_name("rust_pg_reservation_reclaim_competing"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("reservation_reclaim_competing_seed"),
+    )?;
+
+    repo.exec("DELETE FROM payload_capacity_reservations")?;
+    repo.exec(&format!(
+        "UPDATE config SET value = {} WHERE key = 'max_fs_size_bytes'",
+        used_bytes.saturating_add(block_size_u64)
+    ))?;
+
+    let result = (|| {
+        let token = repo
+            .reserve_payload_capacity(block_size_u64)?
+            .ok_or_else(|| "expected payload capacity reservation".to_string())?;
+        repo.exec(&format!(
+            "UPDATE payload_capacity_reservations \
+             SET expires_at = NOW() - INTERVAL '1 second' \
+             WHERE request_token = '{token}'"
+        ))?;
+
+        let competing_payload = repeated_block(b'C', block_size);
+        let competing_rows = [PersistBlockRow {
+            block_index: 0,
+            data: &competing_payload,
+            used_len: block_size_u64,
+        }];
+        repo.persist_file_blocks(
+            competing_file_id,
+            block_size_u64,
+            block_size_u64,
+            1,
+            false,
+            &competing_rows,
+        )?;
+
+        let reserved_payload = repeated_block(b'X', block_size);
+        let reserved_rows = [PersistBlockRow {
+            block_index: 0,
+            data: &reserved_payload,
+            used_len: block_size_u64,
+        }];
+        let rejected = repo.persist_file_blocks_with_crc_flag_and_reservation(
+            reserved_file_id,
+            block_size_u64,
+            block_size_u64,
+            1,
+            false,
+            &reserved_rows,
+            true,
+            Some(&token),
+        );
+        if !matches!(
+            rejected,
+            Err(ref err) if err.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX)
+        ) {
+            return Err(format!(
+                "expired reservation should receive ENOSPC after capacity is committed: {rejected:?}"
+            ));
+        }
+
+        let reserved_state = repo.query_scalar_text(&format!(
+            "SELECT size::text || ':' || \
+                (SELECT COUNT(*)::text FROM data_blocks \
+                 WHERE data_object_id = files.data_object_id) \
+             FROM files WHERE id_file = {reserved_file_id}"
+        ))?;
+        if reserved_state.trim() != "0:0" {
+            return Err(format!(
+                "rejected reservation changed destination state: {reserved_state}"
+            ));
+        }
+        repo.release_payload_capacity_reservation(&token)
+    })();
+
+    let cleanup_result = repo
+        .exec("DELETE FROM payload_capacity_reservations")
+        .and_then(|_| repo.purge_primary_file(reserved_file_id))
+        .and_then(|_| repo.purge_primary_file(competing_file_id))
+        .and_then(|_| repo.delete_directory_entry(dir_id))
+        .and_then(|_| {
+            repo.exec(&format!(
+                "UPDATE config SET value = {} WHERE key = 'max_fs_size_bytes'",
+                original_limit
+            ))
+        });
+    result.and(cleanup_result)
+}
+
+#[test]
 fn append_only_extents_detach_shared_object_and_preserve_hardlink() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_swap_cleanup(DataObjectSwapCleanup::Immediate)?;
@@ -417,6 +620,19 @@ fn unique_name(prefix: &str) -> String {
 
 fn repeated_block(byte: u8, block_size: usize) -> Vec<u8> {
     vec![byte; block_size]
+}
+
+fn persisted_payload_bytes(repo: &DbRepo) -> Result<u64, String> {
+    repo.query_scalar_text(
+        "SELECT (\
+            (SELECT COUNT(*)::bigint FROM data_blocks) \
+                * (SELECT value FROM config WHERE key = 'block_size') \
+            + COALESCE((SELECT SUM(used_bytes)::bigint FROM data_extents), 0)\
+         )::text",
+    )?
+    .trim()
+    .parse::<u64>()
+    .map_err(|_| "invalid payload usage".to_string())
 }
 
 fn table_row_count_for_file(repo: &DbRepo, table: &str, file_id: u64) -> Result<u64, String> {

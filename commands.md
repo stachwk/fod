@@ -1998,6 +1998,30 @@ Base commit at execution time: `597ed2e`
 
 Execution date: `2026-07-18`
 
+Base commit at execution time: `3e9c1c0`
+
+- `git status --short --branch`
+- `cat fod_version.txt`
+- `rg -n '^\\s*- \\[ \\]|TODO|otwart|pozosta' TODO.md docs/*.md conclusions.md`
+- `git log -8 --oneline`
+- `rg -n "payload_capacity_reserv|reserve_payload|refresh_payload|copy.*reserv|ENOSPC" rust_hotpath rust_fuse tests Makefile`
+- `sed -n '1,115p' rust_hotpath/tests/pg_query.rs`
+- `sed -n '8380,8735p' rust_hotpath/src/pg.rs`
+- `cargo fmt --all`
+- `git diff --check` (passed)
+- `cargo check --workspace` (passed)
+- `make test-rust-pg-query` (first run: `14` passed, renewal assertion failed because it assumed one textual PostgreSQL boolean representation; persistence and the reclaimed-capacity rejection passed)
+- `cargo fmt --all`
+- `git diff --check` (passed)
+- `make test-rust-pg-query` (passed: `15` tests)
+- `make test-version` (passed: `7` tests for `3.2.14`)
+- `cargo test -p fod-rust-hotpath --lib` (passed: `80` tests)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
+- `cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name, .version] | @tsv'` (all five workspace packages report `3.2.14`)
+
+Execution date: `2026-07-18`
+
 Base commit at execution time: `0b789ce`
 
 - `cargo fmt --all`
