@@ -6013,6 +6013,9 @@ impl Filesystem for FodFuse {
                         state.file_size = src_size;
                         self.update_write_state(fh_out, state);
                     }
+                    self.clear_read_cache_for_file(dst_file_id);
+                    self.clear_recent_write_blocks_for_file(dst_file_id);
+                    self.invalidate_statfs_cache();
                     debug!(
                         "FOD req={} op=copy_file_range adopted source data object src_file_id={} dst_file_id={} len={}",
                         req_id, src_file_id, dst_file_id, copy_len

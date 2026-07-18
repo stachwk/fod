@@ -2018,6 +2018,24 @@ Base commit at execution time: `0f95348`
 - `cargo fmt --all -- --check` (passed)
 - `git diff --check` (passed)
 - `make test-version` (`7` passed for `3.2.8`)
+
+Execution date: `2026-07-18`
+
+Base commit at execution time: `f8d83c5`
+
+- `rg -n "cached_statfs|statfs_cache|invalidate.*statfs|statfs_snapshot" rust_fuse/src rust_hotpath/src rust_runtime/src`
+- audit FUSE mutation callbacks around `flush`, `setattr`, `unlink`, `copy_file_range`, create operations, and `invalidate_statfs_cache`
+- `cargo fmt --all`
+- `cargo check --workspace` (passed and regenerated Cargo package versions in `Cargo.lock`)
+- `make test-copy-file-range` (passed)
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
+- `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
+- `LARGE_COPY_BLOCK_SIZE=4K LARGE_COPY_BLOCK_COUNT=16 make test-large-copy-benchmark` (passed; chunked path, `10.60 MiB/s`)
+- `LARGE_COPY_BLOCK_SIZE=4K LARGE_COPY_BLOCK_COUNT=16 make test-large-copy-object-adoption` (passed; `shared_object=true`, `7.13 MiB/s`)
+- `make test-version` (`7` passed for `3.2.9`)
+- `cargo check --workspace --locked` (passed)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
 - `make test-metadata-cache` (passed)
 - `PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=foddbname PGUSER=foduser PGPASSWORD=... scripts/fod-space-accounting.sh /tmp/fod-space-accounting-review` (payload-column bytes `359133184`; payload-relation bytes `493273088`)
 
