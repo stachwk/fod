@@ -62,6 +62,8 @@ FOD_CHANGE_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-change
 FOD_FUSE_DEBUG_BIN := $(RUST_FUSE_TARGET_DIR)/debug/fod-rust-fuse
 FOD_INDEXER_DEBUG_BIN := $(RUST_INDEXER_TARGET_DIR)/debug/fod-indexer
 FOD_DEBUG_BUILD_STAMP := target/.fod-debug-build.stamp
+FOD_LOCKING_TARGET_DIR ?= $(CURDIR)/target/test-locking
+FOD_LOCKING_BUILD_JSON ?= $(FOD_LOCKING_TARGET_DIR)/lock_backend_smoke-build.json
 FOD_RUST_INPUT_ROOTS := Cargo.toml Cargo.lock fod_version.txt rust_mkfs rust_fuse rust_hotpath rust_runtime rust_indexer migrations
 FOD_RUST_INPUTS := $(shell find $(FOD_RUST_INPUT_ROOTS) -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' -o -name '*.sql' -o -name '*.txt' \) 2>/dev/null)
 
@@ -883,7 +885,12 @@ test-xattr: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_xattr.py
 
 test-locking: init
-	sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test lock_backend_smoke -- --nocapture
+	mkdir -p $(FOD_LOCKING_TARGET_DIR)
+	CARGO_TARGET_DIR=$(FOD_LOCKING_TARGET_DIR) $(CARGO_TEST_FUSE) --test lock_backend_smoke --no-run --message-format=json > $(FOD_LOCKING_BUILD_JSON)
+	@test_bin="$$($(PYTHON) -c 'import json, sys; print(*[message["executable"] for message in map(json.loads, sys.stdin) if message.get("reason") == "compiler-artifact" and message.get("target", {}).get("name") == "lock_backend_smoke" and message.get("executable")], sep="\n")' < $(FOD_LOCKING_BUILD_JSON) | tail -n 1)"; \
+		test -n "$$test_bin"; \
+		test -x "$$test_bin"; \
+		sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) "$$test_bin" --nocapture
 
 test-pg-lock-manager: init
 	$(CARGO_TEST_HOTPATH) --test lock_manager

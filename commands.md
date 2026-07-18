@@ -2001,6 +2001,23 @@ Base commit at execution time: `597ed2e`
 - `make test-version` (`7` passed for `3.2.7`)
 - reversible local quota smoke: read the current `fod.config.max_fs_size_bytes`, set it to `1`, run `FIO_CASES=block make test-fio-sequential-io`, require `ENOSPC`, and restore the original value in an EXIT trap (passed; restored `10737418240`)
 - reversible local quota rollback smoke: compare PostgreSQL block/extent payload totals before and after the rejected write (passed; `359133184` bytes before and after)
+
+Execution date: `2026-07-18`
+
+Base commit at execution time: `0f95348`
+
+- `git status --short --branch`
+- `git log --oneline -5`
+- `rg -n '^[- ]*\\[ \\]' TODO.md docs/*.md docs/**/*.md`
+- `rg -n "test-locking|lock_backend_smoke|CARGO_TARGET_DIR|sudo.*cargo|sudo.*target" Makefile tests docs TODO.md`
+- `make -n test-locking` (confirmed that Cargo runs without `sudo` and only the finished test executable is privileged)
+- `cargo check --workspace` (passed and regenerated Cargo package versions in `Cargo.lock`)
+- `make test-locking` (`4` passed)
+- `find target -xdev ! -user "$(id -u)" -print | wc -l` (reported `0`)
+- `find target/test-locking -xdev -printf '%u\\n' | sort | uniq -c` (all `1571` entries belonged to `wojtek`)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
+- `make test-version` (`7` passed for `3.2.8`)
 - `make test-metadata-cache` (passed)
 - `PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=foddbname PGUSER=foduser PGPASSWORD=... scripts/fod-space-accounting.sh /tmp/fod-space-accounting-review` (payload-column bytes `359133184`; payload-relation bytes `493273088`)
 
