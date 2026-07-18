@@ -57,14 +57,18 @@ if command -v psql >/dev/null 2>&1 && [[ -n "${PGDATABASE:-}" ]]; then
     psql -X -v ON_ERROR_STOP=1 -At -F $'\t' <<SQL
 SELECT 'logical_file_bytes', COALESCE(SUM(size), 0)::bigint
 FROM ${SCHEMA_NAME}.files;
-SELECT 'stored_block_payload_bytes', COALESCE(SUM(octet_length(data)), 0)::bigint
+SELECT 'block_payload_column_bytes', COALESCE(SUM(octet_length(data)), 0)::bigint
 FROM ${SCHEMA_NAME}.data_blocks;
-SELECT 'stored_extent_payload_bytes', COALESCE(SUM(octet_length(payload)), 0)::bigint
+SELECT 'extent_payload_column_bytes', COALESCE(SUM(octet_length(payload)), 0)::bigint
 FROM ${SCHEMA_NAME}.data_extents;
-SELECT 'stored_payload_bytes',
+SELECT 'payload_column_bytes',
        (SELECT COALESCE(SUM(octet_length(data)), 0) FROM ${SCHEMA_NAME}.data_blocks)
        +
        (SELECT COALESCE(SUM(octet_length(payload)), 0) FROM ${SCHEMA_NAME}.data_extents);
+SELECT 'payload_relation_bytes',
+       pg_total_relation_size('${SCHEMA_NAME}.data_blocks'::regclass)
+       +
+       pg_total_relation_size('${SCHEMA_NAME}.data_extents'::regclass);
 SELECT 'file_rows', COUNT(*)::bigint FROM ${SCHEMA_NAME}.files;
 SELECT 'distinct_data_objects', COUNT(DISTINCT data_object_id)::bigint
 FROM ${SCHEMA_NAME}.files

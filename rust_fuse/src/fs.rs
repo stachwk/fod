@@ -64,9 +64,16 @@ struct ParsedAttrs {
 struct StatfsSnapshot {
     files: u64,
     dirs: u64,
+    symlinks: u64,
     total_data_size: u64,
     blocks: u64,
     loaded_at: SystemTime,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StatfsCapacity {
+    total_bytes: u64,
+    available_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -1354,16 +1361,17 @@ impl FodFuse {
         )
     }
 
-    fn current_statfs_snapshot(&self) -> StatfsSnapshot {
-        let (files, dirs, total_data_size) = self.repo.statfs_snapshot().unwrap_or((0, 0, 0));
+    fn current_statfs_snapshot(&self) -> Result<StatfsSnapshot, String> {
+        let (files, dirs, symlinks, total_data_size) = self.repo.statfs_snapshot()?;
         let blocks = (total_data_size + self.block_size.saturating_sub(1)) / self.block_size;
-        StatfsSnapshot {
+        Ok(StatfsSnapshot {
             files,
             dirs,
+            symlinks,
             total_data_size,
             blocks,
             loaded_at: SystemTime::now(),
-        }
+        })
     }
 
     pub(crate) fn invalidate_statfs_cache(&self) {
@@ -1373,7 +1381,7 @@ impl FodFuse {
     }
 
     #[cfg(unix)]
-    fn statvfs_total_bytes(path: &Path) -> Result<u64, String> {
+    fn statvfs_capacity(path: &Path) -> Result<StatfsCapacity, String> {
         use std::ffi::CString;
         use std::mem::MaybeUninit;
 
@@ -1385,28 +1393,39 @@ impl FodFuse {
             return Err(format!("statvfs failed for {}", path.display()));
         }
         let stats = unsafe { stats.assume_init() };
-        Ok((stats.f_frsize as u64).saturating_mul(stats.f_blocks as u64))
+        let fragment_size = stats.f_frsize as u64;
+        Ok(StatfsCapacity {
+            total_bytes: fragment_size.saturating_mul(stats.f_blocks as u64),
+            available_bytes: fragment_size.saturating_mul(stats.f_bavail as u64),
+        })
     }
 
     #[cfg(not(unix))]
-    fn statvfs_total_bytes(_path: &Path) -> Result<u64, String> {
+    fn statvfs_capacity(_path: &Path) -> Result<StatfsCapacity, String> {
         Err("statvfs is unavailable on this platform".to_string())
     }
 
-    fn statfs_capacity_bytes(&self) -> Option<u64> {
-        let visible_total = self
+    fn statfs_capacity(&self) -> Result<Option<StatfsCapacity>, String> {
+        let visible = self
             .pg_visible_path
             .as_ref()
-            .and_then(|path| Self::statvfs_total_bytes(path).ok());
-        match (self.max_fs_size_bytes, visible_total) {
-            (Some(requested), Some(visible)) => Some(requested.min(visible)),
-            (Some(requested), None) => Some(requested),
+            .map(|path| Self::statvfs_capacity(path))
+            .transpose()?;
+        Ok(match (self.max_fs_size_bytes, visible) {
+            (Some(requested), Some(visible)) => Some(StatfsCapacity {
+                total_bytes: requested.min(visible.total_bytes),
+                available_bytes: visible.available_bytes,
+            }),
+            (Some(requested), None) => Some(StatfsCapacity {
+                total_bytes: requested,
+                available_bytes: requested,
+            }),
             (None, Some(visible)) => Some(visible),
             (None, None) => None,
-        }
+        })
     }
 
-    fn cached_statfs_snapshot(&self) -> StatfsSnapshot {
+    fn cached_statfs_snapshot(&self) -> Result<StatfsSnapshot, String> {
         let ttl = self.statfs_cache_ttl_live();
         if ttl.is_zero() {
             return self.current_statfs_snapshot();
@@ -1416,19 +1435,19 @@ impl FodFuse {
             if let Some(snapshot) = guard.as_ref() {
                 if let Ok(age) = snapshot.loaded_at.elapsed() {
                     if age <= ttl {
-                        return snapshot.clone();
+                        return Ok(snapshot.clone());
                     }
                 } else {
-                    return snapshot.clone();
+                    return Ok(snapshot.clone());
                 }
             }
         }
 
-        let snapshot = self.current_statfs_snapshot();
+        let snapshot = self.current_statfs_snapshot()?;
         if let Ok(mut guard) = self.statfs_cache.lock() {
             *guard = Some(snapshot.clone());
         }
-        snapshot
+        Ok(snapshot)
     }
 
     fn normalize_path(path: &str) -> String {
@@ -2768,7 +2787,7 @@ impl FodFuse {
                 blksize: self.block_size as u32,
             }
         } else {
-            if fields.len() < 10 {
+            if fields.len() < 11 {
                 return Err(EIO);
             }
             let raw_inode = fields[1].parse::<u64>().map_err(|_| EIO)?;
@@ -2780,6 +2799,7 @@ impl FodFuse {
             let uid = fields[7].parse::<u32>().unwrap_or(process_identity.uid);
             let gid = fields[8].parse::<u32>().unwrap_or(process_identity.gid);
             let inode_seed = fields[9].clone();
+            let allocated_bytes = fields[10].parse::<u64>().map_err(|_| EIO)?;
             let mut kind = if obj_type == "dir" {
                 FileType::Directory
             } else {
@@ -2830,7 +2850,7 @@ impl FodFuse {
             FileAttr {
                 ino: INodeNo(inode),
                 size,
-                blocks: self.block_count(size, &obj_type),
+                blocks: self.block_count(allocated_bytes, &obj_type),
                 atime: Self::parse_time(&acc_date),
                 mtime: Self::parse_time(&mod_date),
                 ctime: Self::parse_time(&chg_date),
@@ -2848,17 +2868,17 @@ impl FodFuse {
         Ok(Some(ParsedAttrs { file_attr }))
     }
 
-    fn block_count(&self, size: u64, kind: &str) -> u64 {
+    fn block_count(&self, allocated_bytes: u64, kind: &str) -> u64 {
         if kind == "dir" {
             return 1;
         }
-        if size == 0 {
+        if allocated_bytes == 0 {
             return 0;
         }
         // POSIX st_blocks is always expressed in 512-byte units. It is
         // independent of the FOD storage block size exposed as st_blksize.
         const STAT_BLOCK_BYTES: u64 = 512;
-        1 + size.saturating_sub(1) / STAT_BLOCK_BYTES
+        1 + allocated_bytes.saturating_sub(1) / STAT_BLOCK_BYTES
     }
 
     fn lookup_path(&self, path: &str) -> Result<Option<ParsedAttrs>, libc::c_int> {
@@ -3325,24 +3345,46 @@ impl Filesystem for FodFuse {
         const STATFS_FREE_INODE_HEADROOM: u64 = 1_000_000;
         const STATFS_NAME_MAX: u32 = 255;
 
-        let snapshot = self.cached_statfs_snapshot();
-        let total_blocks = self
-            .statfs_capacity_bytes()
-            .map(|bytes| (bytes + self.block_size.saturating_sub(1)) / self.block_size)
+        let snapshot = match self.cached_statfs_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                warn!("FOD statfs snapshot failed err={}", err);
+                fuse_reply_error!(reply, EIO);
+                return;
+            }
+        };
+        let capacity = match self.statfs_capacity() {
+            Ok(capacity) => capacity,
+            Err(err) => {
+                warn!("FOD statfs capacity failed err={}", err);
+                fuse_reply_error!(reply, EIO);
+                return;
+            }
+        };
+        let total_blocks = capacity
+            .map(|capacity| capacity.total_bytes / self.block_size)
             .unwrap_or(snapshot.blocks);
         let used_blocks = snapshot.blocks.min(total_blocks);
-        let free_blocks = total_blocks.saturating_sub(used_blocks);
-        let used_inodes = snapshot.files.saturating_add(snapshot.dirs);
+        let capacity_free_blocks = total_blocks.saturating_sub(used_blocks);
+        let available_blocks = capacity
+            .map(|capacity| capacity.available_bytes / self.block_size)
+            .unwrap_or(capacity_free_blocks);
+        let free_blocks = capacity_free_blocks.min(available_blocks);
+        let used_inodes = snapshot
+            .files
+            .saturating_add(snapshot.dirs)
+            .saturating_add(snapshot.symlinks);
         // PostgreSQL-backed FOD has no fixed inode pool. Report stable virtual
         // headroom so callers do not interpret f_ffree=0 as inode exhaustion.
         let free_inodes = STATFS_FREE_INODE_HEADROOM;
         let total_inodes = used_inodes.saturating_add(free_inodes);
         debug!(
-            "FOD statfs blocks={} used_blocks={} files={} dirs={} total_inodes={} free_inodes={} total_data_size={} block_size={} max_fs_size_bytes={:?} pg_visible_path={:?}",
+            "FOD statfs blocks={} used_blocks={} files={} dirs={} symlinks={} total_inodes={} free_inodes={} total_data_size={} block_size={} max_fs_size_bytes={:?} pg_visible_path={:?}",
             total_blocks,
             used_blocks,
             snapshot.files,
             snapshot.dirs,
+            snapshot.symlinks,
             total_inodes,
             free_inodes,
             snapshot.total_data_size,

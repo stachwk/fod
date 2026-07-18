@@ -649,19 +649,64 @@ impl PreparedStatement {
                 "
             }
             PreparedStatement::FetchPathAttrsBlobFile => {
-                "SELECT id_file, size, mode, modification_date, access_date, change_date, uid, gid, inode_seed FROM files WHERE id_file = $1"
+                "
+                SELECT
+                    f.id_file,
+                    f.size,
+                    f.mode,
+                    f.modification_date,
+                    f.access_date,
+                    f.change_date,
+                    f.uid,
+                    f.gid,
+                    f.inode_seed,
+                    (
+                        SELECT COUNT(*) * (SELECT value FROM config WHERE key = 'block_size')
+                        FROM data_blocks db
+                        WHERE db.data_object_id = f.data_object_id
+                    ) + (
+                        SELECT COALESCE(SUM(de.used_bytes), 0)
+                        FROM data_extents de
+                        WHERE de.data_object_id = f.data_object_id
+                    )
+                FROM files f
+                WHERE f.id_file = $1
+                "
             }
             PreparedStatement::FetchPathAttrsBlobDir => {
-                "SELECT id_directory, 0, mode, modification_date, access_date, change_date, uid, gid, inode_seed FROM directories WHERE id_directory = $1"
+                "SELECT id_directory, 0, mode, modification_date, access_date, change_date, uid, gid, inode_seed, 0 FROM directories WHERE id_directory = $1"
             }
             PreparedStatement::FetchPathAttrsBlobSymlink => {
                 "SELECT id_symlink, target, modification_date, access_date, change_date, uid, gid, inode_seed FROM symlinks WHERE id_symlink = $1"
             }
             PreparedStatement::FetchPathAttrsBlobHardlink => {
-                "SELECT id_hardlink, files.size, files.mode, files.modification_date, files.access_date, files.change_date, files.uid, files.gid, files.inode_seed FROM hardlinks JOIN files ON hardlinks.id_file = files.id_file WHERE hardlinks.id_hardlink = $1"
+                "
+                SELECT
+                    h.id_hardlink,
+                    f.size,
+                    f.mode,
+                    f.modification_date,
+                    f.access_date,
+                    f.change_date,
+                    f.uid,
+                    f.gid,
+                    f.inode_seed,
+                    (
+                        SELECT COUNT(*) * (SELECT value FROM config WHERE key = 'block_size')
+                        FROM data_blocks db
+                        WHERE db.data_object_id = f.data_object_id
+                    ) + (
+                        SELECT COALESCE(SUM(de.used_bytes), 0)
+                        FROM data_extents de
+                        WHERE de.data_object_id = f.data_object_id
+                    )
+                FROM hardlinks h
+                JOIN files f ON h.id_file = f.id_file
+                WHERE h.id_hardlink = $1
+                "
             }
             PreparedStatement::StatfsSnapshot => {
-                "SELECT (SELECT COUNT(*) FROM files)::text, (SELECT COUNT(*) FROM directories)::text, ((SELECT COALESCE(SUM(LENGTH(data)), 0) FROM data_blocks) + (SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM data_extents))::text"
+                "SELECT (SELECT COUNT(*) FROM files)::text, (SELECT COUNT(*) FROM directories)::text, (SELECT COUNT(*) FROM symlinks)::text, (((SELECT COUNT(*) FROM data_blocks) * (SELECT value FROM config WHERE key = 'block_size')) + (SELECT COALESCE(SUM(used_bytes), 0) FROM data_extents))::text"
             }
             PreparedStatement::LoadSymlinkTarget => {
                 "SELECT target FROM symlinks WHERE id_symlink = $1"
@@ -9066,11 +9111,11 @@ impl DbRepo {
         })
     }
 
-    pub fn statfs_snapshot(&self) -> Result<(u64, u64, u64), String> {
+    pub fn statfs_snapshot(&self) -> Result<(u64, u64, u64, u64), String> {
         self.with_cached_connection(|conn| unsafe {
             let res = exec_prepared_params(conn, PreparedStatement::StatfsSnapshot, &[])?;
             let values = fetch_first_row_texts(res)?;
-            if values.len() < 3 {
+            if values.len() < 4 {
                 return Err("invalid statfs snapshot".to_string());
             }
             let files = values[0]
@@ -9081,11 +9126,15 @@ impl DbRepo {
                 .trim()
                 .parse::<u64>()
                 .map_err(|_| "invalid directory count".to_string())?;
-            let total_data_size = values[2]
+            let symlinks = values[2]
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid symlink count".to_string())?;
+            let total_data_size = values[3]
                 .trim()
                 .parse::<u64>()
                 .map_err(|_| "invalid total data size".to_string())?;
-            Ok((files, dirs, total_data_size))
+            Ok((files, dirs, symlinks, total_data_size))
         })
     }
 

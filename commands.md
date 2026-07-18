@@ -1972,3 +1972,28 @@ Base commit at execution time: `ac59793`
 - runtime smoke: `make --no-print-directory postgres-config-show`
 - runtime smoke: run `mkfs.fod status` with the resolved FOD connection environment and verify `PostgreSQL libpq runtime`, `PostgreSQL server runtime`, `PostgreSQL client/server major relation`, and `PostgreSQL client/server compatibility`
 - mounted smoke: verify one `FOD PostgreSQL diagnostics:` line in the FUSE startup log
+
+Execution date: `2026-07-18`
+
+Base commit at execution time: `597ed2e`
+
+- `git status --short --branch`
+- `git log --oneline --decorate -12`
+- `git diff --find-renames a31f8ca..HEAD -- rust_fuse/src/fs.rs tests/integration/test_df.sh Makefile scripts/fod-space-accounting.sh docs/space-accounting.md TODO.md`
+- `rg -n "StatfsSnapshot|cached_statfs|statfs_capacity_bytes|total_data_size|block_count" rust_fuse/src rust_runtime/src rust_hotpath/src`
+- `rg -n "max_fs_size_bytes|pg_visible_path|statfs_cache" fod_config.ini fod_config.example.ini rust_runtime rust_fuse README.md docs tests`
+- `rg -n "CREATE TABLE.*files|CREATE TABLE.*data_blocks|statfs_snapshot|SUM\\(size\\)" rust_hotpath migrations scripts tests`
+- `rg -n "max_fs_size_bytes|statfs_capacity|ENOSPC|capacity" rust_fuse/src rust_hotpath/src`
+- `rg -n "fn (persist|flush|write)|persist_buffer|persist_blocks|persist_extents|update_file_size|max_fs_size" rust_fuse/src/fs.rs rust_fuse/src/write_buffer.rs rust_hotpath/src/pg.rs`
+- `cargo fmt --all`
+- `git diff --check`
+- `bash -n tests/integration/test_df.sh scripts/fod-space-accounting.sh`
+- `cargo check --workspace --locked`
+- `make test-df` (first expanded run passed; the first repeated run exposed a stale symlink and failed with `EEXIST`; the idempotency fix and both subsequent runs passed)
+- `cargo test -p fod-rust-hotpath --lib --locked` (`80` passed)
+- `cargo test -p fod-rust-fuse --lib --locked` (expected command-shape failure: this package has no library target)
+- `cargo test -p fod-rust-fuse --bin fod-rust-fuse --locked` (`27` passed)
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
+- `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
+- `make test-metadata-cache` (passed)
+- `PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=foddbname PGUSER=foduser PGPASSWORD=... scripts/fod-space-accounting.sh /tmp/fod-space-accounting-review` (payload-column bytes `359133184`; payload-relation bytes `493273088`)
