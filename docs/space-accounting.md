@@ -23,7 +23,7 @@ When `pg_visible_path` is configured, free blocks are additionally capped by the
 
 Every transaction that creates or replaces block or extent payload takes the same PostgreSQL transaction-scoped advisory lock, calculates the post-write persisted payload total, and commits only when that total does not exceed the limit. This serializes quota decisions across independent FOD mounts using the same database. Exceeding the limit rolls back the complete payload transaction and is returned through FUSE as `ENOSPC`.
 
-Copy operations that must create payload reserve their rounded target capacity in PostgreSQL before reading or modifying the destination. Active reservations participate in the same quota total, so concurrent copy jobs cannot all claim the same free capacity. The reservation is released after the copy succeeds or fails; stale reservations expire after one hour as crash recovery. Exact whole-object adoption does not reserve capacity because it reuses an existing data object without creating payload rows.
+Copy operations that must create payload reserve their rounded target capacity in PostgreSQL before reading or modifying the destination. Active reservations participate in the same quota total and temporarily reduce the free blocks reported by `statfs`, so concurrent copy jobs cannot all claim the same free capacity. The reservation is released after the copy succeeds or fails; stale reservations expire after one hour as crash recovery. Exact whole-object adoption does not reserve capacity because it reuses an existing data object without creating payload rows.
 
 There is no universal equality or ordering between `df` and the sum reported by `du`:
 

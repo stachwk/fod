@@ -74,6 +74,7 @@ struct StatfsSnapshot {
     dirs: u64,
     symlinks: u64,
     total_data_size: u64,
+    reserved_data_size: u64,
     blocks: u64,
     loaded_at: SystemTime,
 }
@@ -1407,13 +1408,17 @@ impl FodFuse {
     }
 
     fn current_statfs_snapshot(&self) -> Result<StatfsSnapshot, String> {
-        let (files, dirs, symlinks, total_data_size) = self.repo.statfs_snapshot()?;
-        let blocks = (total_data_size + self.block_size.saturating_sub(1)) / self.block_size;
+        let (files, dirs, symlinks, total_data_size, reserved_data_size) =
+            self.repo.statfs_snapshot()?;
+        let accounted_data_size = total_data_size.saturating_add(reserved_data_size);
+        let blocks =
+            accounted_data_size.saturating_add(self.block_size.saturating_sub(1)) / self.block_size;
         Ok(StatfsSnapshot {
             files,
             dirs,
             symlinks,
             total_data_size,
+            reserved_data_size,
             blocks,
             loaded_at: SystemTime::now(),
         })
@@ -3462,7 +3467,7 @@ impl Filesystem for FodFuse {
         let free_inodes = STATFS_FREE_INODE_HEADROOM;
         let total_inodes = used_inodes.saturating_add(free_inodes);
         debug!(
-            "FOD statfs blocks={} used_blocks={} files={} dirs={} symlinks={} total_inodes={} free_inodes={} total_data_size={} block_size={} max_fs_size_bytes={:?} pg_visible_path={:?}",
+            "FOD statfs blocks={} used_blocks={} files={} dirs={} symlinks={} total_inodes={} free_inodes={} total_data_size={} reserved_data_size={} block_size={} max_fs_size_bytes={:?} pg_visible_path={:?}",
             total_blocks,
             used_blocks,
             snapshot.files,
@@ -3471,6 +3476,7 @@ impl Filesystem for FodFuse {
             total_inodes,
             free_inodes,
             snapshot.total_data_size,
+            snapshot.reserved_data_size,
             self.block_size,
             self.max_fs_size_bytes,
             self.pg_visible_path.as_deref().map(|path| path.display().to_string())

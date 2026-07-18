@@ -2001,6 +2001,21 @@ Base commit at execution time: `597ed2e`
 
 Execution date: `2026-07-18`
 
+Base commit at execution time: `1550e9b`
+
+- `cargo fmt --all`
+- `git diff --check` (passed)
+- `cargo check --workspace` (passed)
+- `make test-version` (`7` passed)
+- `make test-df` (passed)
+- `FOD_STATFS_CACHE_TTL_SECONDS=0 .venv/bin/python - <<'PY' ... PY` (mounted reservation probe passed; `32768` reserved bytes reduced `f_bavail` by exactly eight 4096-byte blocks)
+- `cargo test -p fod-rust-hotpath --lib` (`80` passed)
+- `cargo test -p fod-rust-fuse --bin fod-rust-fuse` (`27` passed)
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
+- `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
+
+Execution date: `2026-07-18`
+
 Base commit at execution time: `a35d301`
 
 - `cargo fmt --all`
