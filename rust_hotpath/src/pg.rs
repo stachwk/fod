@@ -1394,6 +1394,9 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
         || sql.starts_with("UPDATE index_scan_runs SET finished_at = NOW(), status = ")
         || sql.starts_with("UPDATE index_import_plans SET status = ")
         || sql.starts_with("UPDATE index_files SET source_changed = TRUE, updated_at = NOW() WHERE id_file = ")
+        || sql.starts_with(
+            "UPDATE payload_capacity_reservations SET expires_at = NOW() + INTERVAL '1 hour' WHERE request_token = $1",
+        )
         || sql_is_replayable_data_blocks_upsert(&sql)
         || sql_is_replayable_copy_block_crc_upsert(&sql)
         || sql_is_replayable_schema_ddl(&sql)
@@ -8450,7 +8453,11 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
-                self.validate_payload_reservation_on_conn(conn, capacity_reservation_token)?;
+                self.refresh_payload_reservation_on_conn(
+                    conn,
+                    quota_bytes,
+                    capacity_reservation_token,
+                )?;
                 match self.persist_block_transport {
                     PersistBlockTransport::CopyBinaryStaging => self
                         .persist_file_blocks_copy_binary_staging_on_conn(
@@ -8523,26 +8530,49 @@ impl DbRepo {
             .map_err(|_| "invalid persisted and reserved payload byte count".to_string())
     }
 
-    unsafe fn validate_payload_reservation_on_conn(
+    unsafe fn refresh_payload_reservation_on_conn(
         &self,
         conn: *mut PGconn,
+        quota_bytes: Option<u64>,
         request_token: Option<&str>,
     ) -> Result<(), String> {
         let Some(request_token) = request_token else {
             return Ok(());
         };
+        let request_token_text = request_token;
         let request_token = CString::new(request_token)
             .map_err(|_| "capacity reservation token contains NUL byte".to_string())?;
         let sql = CString::new(
             "SELECT reserved_bytes::text FROM payload_capacity_reservations \
-             WHERE request_token = $1 AND expires_at > NOW()",
+             WHERE request_token = $1",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let res = exec_params(conn, &sql, &[&request_token])?;
-        if fetch_single_text_option(res)?.is_none() {
-            return Err("payload capacity reservation is missing or expired".to_string());
+        let reserved_bytes = fetch_single_text_option(res)?
+            .ok_or_else(|| "payload capacity reservation is missing".to_string())?
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| "invalid payload capacity reservation".to_string())?;
+        if let Some(quota_bytes) = quota_bytes {
+            let committed_and_reserved =
+                self.persisted_and_reserved_payload_bytes_on_conn(conn, Some(request_token_text))?;
+            if committed_and_reserved.saturating_add(reserved_bytes) > quota_bytes {
+                return Err(format!(
+                    "{} copy reservation refresh requires {} reserved bytes, {} bytes are already committed or reserved, limit is {} bytes",
+                    STORAGE_QUOTA_EXCEEDED_PREFIX,
+                    reserved_bytes,
+                    committed_and_reserved,
+                    quota_bytes
+                ));
+            }
         }
-        Ok(())
+        let sql_refresh = CString::new(
+            "UPDATE payload_capacity_reservations \
+             SET expires_at = NOW() + INTERVAL '1 hour' \
+             WHERE request_token = $1",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        exec_command_params(conn, &sql_refresh, &[&request_token])
     }
 
     unsafe fn enforce_payload_quota_on_conn(
@@ -8669,7 +8699,11 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
-                self.validate_payload_reservation_on_conn(conn, capacity_reservation_token)?;
+                self.refresh_payload_reservation_on_conn(
+                    conn,
+                    quota_bytes,
+                    capacity_reservation_token,
+                )?;
                 let data_object_id = match self.detach_shared_data_object_on_conn(
                     conn,
                     file_id,

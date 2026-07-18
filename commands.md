@@ -1998,6 +1998,20 @@ Base commit at execution time: `597ed2e`
 
 Execution date: `2026-07-18`
 
+Base commit at execution time: `0b789ce`
+
+- `cargo fmt --all`
+- `git diff --check` (passed)
+- `cargo check --workspace` (passed)
+- `make test-version` (`7` passed)
+- `cargo test -p fod-rust-hotpath --lib` (`80` passed)
+- `make test-copy-file-range` (passed)
+- `cargo test -p fod-rust-fuse --bin fod-rust-fuse` (`27` passed)
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
+- `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
+
+Execution date: `2026-07-18`
+
 Base commit at execution time: `e3fb13e`
 
 - `cargo fmt --all`
