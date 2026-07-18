@@ -706,7 +706,7 @@ impl PreparedStatement {
                 "
             }
             PreparedStatement::StatfsSnapshot => {
-                "SELECT (SELECT COUNT(*) FROM files)::text, (SELECT COUNT(*) FROM directories)::text, (SELECT COUNT(*) FROM symlinks)::text, (((SELECT COUNT(*) FROM data_blocks) * (SELECT value FROM config WHERE key = 'block_size')) + (SELECT COALESCE(SUM(used_bytes), 0) FROM data_extents))::text, (SELECT COALESCE(SUM(reserved_bytes), 0) FROM payload_capacity_reservations WHERE expires_at > NOW())::text"
+                "SELECT (SELECT COUNT(*) FROM files)::text, (SELECT COUNT(*) FROM directories)::text, (SELECT COUNT(*) FROM symlinks)::text, (((SELECT COUNT(*) FROM data_blocks) * (SELECT value FROM config WHERE key = 'block_size')) + (SELECT COALESCE(SUM(used_bytes), 0) FROM data_extents))::text, (SELECT COALESCE(SUM(reserved_bytes), 0) FROM payload_capacity_reservations WHERE expires_at > NOW())::text, COALESCE((SELECT value FROM config WHERE key = 'max_fs_size_bytes'), 0)::text"
             }
             PreparedStatement::LoadSymlinkTarget => {
                 "SELECT target FROM symlinks WHERE id_symlink = $1"
@@ -9322,11 +9322,11 @@ impl DbRepo {
         })
     }
 
-    pub fn statfs_snapshot(&self) -> Result<(u64, u64, u64, u64, u64), String> {
+    pub fn statfs_snapshot(&self) -> Result<(u64, u64, u64, u64, u64, Option<u64>), String> {
         self.with_cached_connection(|conn| unsafe {
             let res = exec_prepared_params(conn, PreparedStatement::StatfsSnapshot, &[])?;
             let values = fetch_first_row_texts(res)?;
-            if values.len() < 5 {
+            if values.len() < 6 {
                 return Err("invalid statfs snapshot".to_string());
             }
             let files = values[0]
@@ -9349,7 +9349,18 @@ impl DbRepo {
                 .trim()
                 .parse::<u64>()
                 .map_err(|_| "invalid reserved data size".to_string())?;
-            Ok((files, dirs, symlinks, total_data_size, reserved_data_size))
+            let max_fs_size_bytes = values[5]
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid max filesystem size".to_string())?;
+            Ok((
+                files,
+                dirs,
+                symlinks,
+                total_data_size,
+                reserved_data_size,
+                (max_fs_size_bytes > 0).then_some(max_fs_size_bytes),
+            ))
         })
     }
 

@@ -19,7 +19,7 @@ Empty regular files report zero blocks. Directory entries retain a minimal non-z
 
 When `pg_visible_path` is configured, free blocks are additionally capped by the host filesystem's `f_bavail` value. An error while reading PostgreSQL accounting data or the configured visible path is returned as an I/O error instead of being presented as an empty filesystem.
 
-`max_fs_size_bytes` is both the reported `statfs` capacity ceiling and a transactional PostgreSQL payload quota. The canonical limit is the `config.max_fs_size_bytes` row created by `mkfs.fod`; a value of zero disables the quota.
+`max_fs_size_bytes` is both the reported `statfs` capacity ceiling and a transactional PostgreSQL payload quota. The canonical limit is the `config.max_fs_size_bytes` row created by `mkfs.fod`; a value of zero disables the quota. Each refreshed `statfs` snapshot reads this canonical row together with persisted usage and active reservations, so a running mount does not retain a stale startup limit.
 
 Every transaction that creates or replaces block or extent payload takes the same PostgreSQL transaction-scoped advisory lock, calculates the post-write persisted payload total, and commits only when that total does not exceed the limit. This serializes quota decisions across independent FOD mounts using the same database. Exceeding the limit rolls back the complete payload transaction and is returned through FUSE as `ENOSPC`.
 

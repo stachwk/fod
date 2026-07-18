@@ -75,6 +75,7 @@ struct StatfsSnapshot {
     symlinks: u64,
     total_data_size: u64,
     reserved_data_size: u64,
+    max_fs_size_bytes: Option<u64>,
     blocks: u64,
     loaded_at: SystemTime,
 }
@@ -841,7 +842,6 @@ pub struct FodFuse {
     pub repo: DbRepo,
     pub block_size: u64,
     pub write_flush_threshold_bytes: u64,
-    pub max_fs_size_bytes: Option<u64>,
     pub pg_visible_path: Option<PathBuf>,
     pub lock_backend: LockBackend,
     pub lock_lease_ttl: Duration,
@@ -898,7 +898,6 @@ impl FodFuse {
             repo,
             block_size: storage.block_size.max(1),
             write_flush_threshold_bytes: storage.write_flush_threshold_bytes,
-            max_fs_size_bytes: storage.max_fs_size_bytes.filter(|value| *value > 0),
             pg_visible_path: storage.pg_visible_path,
             lock_backend: locks.lock_backend,
             lock_lease_ttl: locks.lock_lease_ttl,
@@ -1408,7 +1407,7 @@ impl FodFuse {
     }
 
     fn current_statfs_snapshot(&self) -> Result<StatfsSnapshot, String> {
-        let (files, dirs, symlinks, total_data_size, reserved_data_size) =
+        let (files, dirs, symlinks, total_data_size, reserved_data_size, max_fs_size_bytes) =
             self.repo.statfs_snapshot()?;
         let accounted_data_size = total_data_size.saturating_add(reserved_data_size);
         let blocks =
@@ -1419,6 +1418,7 @@ impl FodFuse {
             symlinks,
             total_data_size,
             reserved_data_size,
+            max_fs_size_bytes,
             blocks,
             loaded_at: SystemTime::now(),
         })
@@ -1455,13 +1455,16 @@ impl FodFuse {
         Err("statvfs is unavailable on this platform".to_string())
     }
 
-    fn statfs_capacity(&self) -> Result<Option<StatfsCapacity>, String> {
+    fn statfs_capacity(
+        &self,
+        max_fs_size_bytes: Option<u64>,
+    ) -> Result<Option<StatfsCapacity>, String> {
         let visible = self
             .pg_visible_path
             .as_ref()
             .map(|path| Self::statvfs_capacity(path))
             .transpose()?;
-        Ok(match (self.max_fs_size_bytes, visible) {
+        Ok(match (max_fs_size_bytes, visible) {
             (Some(requested), Some(visible)) => Some(StatfsCapacity {
                 total_bytes: requested.min(visible.total_bytes),
                 available_bytes: visible.available_bytes,
@@ -3441,7 +3444,7 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let capacity = match self.statfs_capacity() {
+        let capacity = match self.statfs_capacity(snapshot.max_fs_size_bytes) {
             Ok(capacity) => capacity,
             Err(err) => {
                 warn!("FOD statfs capacity failed err={}", err);
@@ -3478,7 +3481,7 @@ impl Filesystem for FodFuse {
             snapshot.total_data_size,
             snapshot.reserved_data_size,
             self.block_size,
-            self.max_fs_size_bytes,
+            snapshot.max_fs_size_bytes,
             self.pg_visible_path.as_deref().map(|path| path.display().to_string())
         );
         reply.statfs(
