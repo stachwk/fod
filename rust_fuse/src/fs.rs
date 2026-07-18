@@ -9,10 +9,10 @@ use fuser::{
     ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyOpen, ReplyPoll,
     ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
-use libc::{EIO, ENOENT, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
+use libc::{EIO, ENOENT, ENOSPC, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
-use rust_hotpath::pg::{DbRepo, PersistBlockRow, PersistExtentRow};
+use rust_hotpath::pg::{DbRepo, PersistBlockRow, PersistExtentRow, STORAGE_QUOTA_EXCEEDED_PREFIX};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::ffi::OsStr;
@@ -48,6 +48,14 @@ const IOCTL_FIGETBSZ: u32 = 2;
 const IOCTL_FS_IOC_FSGETXATTR: u32 = libc::_IOR::<[u8; IOCTL_FSXATTR_BYTES]>('X' as u32, 31) as u32;
 const IOCTL_FS_IOC_FSSETXATTR: u32 = libc::_IOW::<[u8; IOCTL_FSXATTR_BYTES]>('X' as u32, 32) as u32;
 const IOCTL_FSXATTR_BYTES: usize = 28;
+
+pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
+    if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
+        ENOSPC
+    } else {
+        EIO
+    }
+}
 
 macro_rules! fuse_reply_error {
     ($reply:expr, $errno:expr) => {

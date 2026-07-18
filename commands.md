@@ -1995,6 +1995,12 @@ Base commit at execution time: `597ed2e`
 - `cargo test -p fod-rust-fuse --bin fod-rust-fuse --locked` (`27` passed)
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
 - `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
+- `cargo check --workspace --locked` (expected pre-regeneration failure after changing workspace version)
+- `cargo check --workspace` (passed and regenerated Cargo package versions in `Cargo.lock`)
+- `cargo test -p fod-rust-fuse --bin fod-rust-fuse` (`27` passed)
+- `make test-version` (`7` passed for `3.2.7`)
+- reversible local quota smoke: read the current `fod.config.max_fs_size_bytes`, set it to `1`, run `FIO_CASES=block make test-fio-sequential-io`, require `ENOSPC`, and restore the original value in an EXIT trap (passed; restored `10737418240`)
+- reversible local quota rollback smoke: compare PostgreSQL block/extent payload totals before and after the rejected write (passed; `359133184` bytes before and after)
 - `make test-metadata-cache` (passed)
 - `PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=foddbname PGUSER=foduser PGPASSWORD=... scripts/fod-space-accounting.sh /tmp/fod-space-accounting-review` (payload-column bytes `359133184`; payload-relation bytes `493273088`)
 
@@ -2009,3 +2015,19 @@ Base commit at execution time: `18344d3`
 - `cargo check --workspace` (passed and regenerated Cargo package versions in `Cargo.lock`)
 - `make test-version` (`7` passed)
 - `cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name, .version] | @tsv'` (all five packages report `3.2.6`)
+
+Execution date: `2026-07-18`
+
+Base commit at execution time: `81eec1a`
+
+- `git status --short --branch`
+- `rg -n "data_blocks|data_extents|persist_file_blocks|persist_file_extents|persist_new_object_extents|transactional_replay" rust_hotpath/src/pg.rs rust_fuse/src`
+- `rg -n "max_fs_size_bytes|ENOSPC|statfs" rust_mkfs/src rust_hotpath/src rust_fuse/src tests TODO.md docs/space-accounting.md`
+- `cargo fmt --all -- --check` (reported one formatting difference)
+- `cargo fmt --all`
+- `cargo check --workspace` (passed)
+- `cargo test -p fod-rust-hotpath --lib` (`80` passed)
+- `cargo test -p fod-rust-fuse --lib` (expected command-shape failure: this package has no library target)
+- `cargo test -p fod-rust-fuse --no-run` (passed)
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
+- `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)

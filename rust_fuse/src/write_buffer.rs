@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use crate::fs::FodFuse;
+use crate::fs::{persist_error_errno, FodFuse};
 use crate::write_payload::{PendingSegment, SequentialSegmentState, WritePayloadState};
 use libc::EIO;
 use log::{debug, warn};
@@ -470,6 +470,7 @@ impl FodFuse {
         ) {
             Ok(data_object_id) => data_object_id,
             Err(err) => {
+                let errno = persist_error_errno(&err);
                 state
                     .payload
                     .restore_sequential(sequential_state_from_persist_rows(rows, block_size));
@@ -477,7 +478,7 @@ impl FodFuse {
                     "FOD direct segment persistence failed file_id={} err={}",
                     state.file_id, err
                 );
-                return Err(EIO);
+                return Err(errno);
             }
         };
         debug!(
@@ -583,7 +584,7 @@ impl FodFuse {
                     &rows,
                     live.copy_dedupe_crc_table,
                 )
-                .map_err(|_| EIO)
+                .map_err(|err| persist_error_errno(&err))
             }
             PersistPayloadPlan::Extents(extents) => {
                 let rows = self.prepare_persist_extent_rows_from_extent_ranges(
@@ -607,7 +608,7 @@ impl FodFuse {
                     &rows,
                     live.copy_dedupe_crc_table,
                 )
-                .map_err(|_| EIO)
+                .map_err(|err| persist_error_errno(&err))
             }
         }
     }

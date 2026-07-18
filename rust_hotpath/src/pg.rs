@@ -2364,6 +2364,8 @@ pub struct PersistExtentRow {
     pub payload: Vec<u8>,
 }
 
+pub const STORAGE_QUOTA_EXCEEDED_PREFIX: &str = "FOD_ENOSPC:";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexSourceStageRow {
     pub name: String,
@@ -8371,6 +8373,7 @@ impl DbRepo {
     ) -> Result<(), String> {
         self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
+                let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
                 self.persist_file_blocks_streaming_on_conn(
                     conn,
                     file_id,
@@ -8381,7 +8384,8 @@ impl DbRepo {
                     path,
                     expected_hash,
                     maintain_copy_crc_table,
-                )
+                )?;
+                self.enforce_payload_quota_on_conn(conn, quota_bytes)
             })
         })
     }
@@ -8417,32 +8421,81 @@ impl DbRepo {
         maintain_copy_crc_table: bool,
     ) -> Result<(), String> {
         self.with_cached_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| match self.persist_block_transport {
-                PersistBlockTransport::CopyBinaryStaging => self
-                    .persist_file_blocks_copy_binary_staging_on_conn(
-                        conn,
-                        file_id,
-                        file_size,
-                        block_size,
-                        total_blocks,
-                        truncate_pending,
-                        blocks,
-                        maintain_copy_crc_table,
-                    ),
-                PersistBlockTransport::BinaryBytea | PersistBlockTransport::LegacyHex => self
-                    .persist_file_blocks_direct_on_conn(
-                        conn,
-                        file_id,
-                        file_size,
-                        block_size,
-                        total_blocks,
-                        truncate_pending,
-                        blocks,
-                        maintain_copy_crc_table,
-                        self.persist_block_transport,
-                    ),
+            transactional_replayable(conn, |conn| {
+                let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
+                match self.persist_block_transport {
+                    PersistBlockTransport::CopyBinaryStaging => self
+                        .persist_file_blocks_copy_binary_staging_on_conn(
+                            conn,
+                            file_id,
+                            file_size,
+                            block_size,
+                            total_blocks,
+                            truncate_pending,
+                            blocks,
+                            maintain_copy_crc_table,
+                        ),
+                    PersistBlockTransport::BinaryBytea | PersistBlockTransport::LegacyHex => self
+                        .persist_file_blocks_direct_on_conn(
+                            conn,
+                            file_id,
+                            file_size,
+                            block_size,
+                            total_blocks,
+                            truncate_pending,
+                            blocks,
+                            maintain_copy_crc_table,
+                            self.persist_block_transport,
+                        ),
+                }?;
+                self.enforce_payload_quota_on_conn(conn, quota_bytes)
             })
         })
+    }
+
+    unsafe fn lock_payload_quota_on_conn(&self, conn: *mut PGconn) -> Result<Option<u64>, String> {
+        let sql_lock = CString::new("SELECT pg_advisory_xact_lock(4607812, 1)")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        query_scalar_text_on_conn(conn, &sql_lock)?;
+
+        let sql_limit =
+            CString::new("SELECT value::text FROM config WHERE key = 'max_fs_size_bytes'")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let value = query_scalar_text_on_conn(conn, &sql_limit)?;
+        let limit = value
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| "invalid config.max_fs_size_bytes value".to_string())?;
+        Ok((limit > 0).then_some(limit))
+    }
+
+    unsafe fn enforce_payload_quota_on_conn(
+        &self,
+        conn: *mut PGconn,
+        quota_bytes: Option<u64>,
+    ) -> Result<(), String> {
+        let Some(quota_bytes) = quota_bytes else {
+            return Ok(());
+        };
+        let sql_used = CString::new(
+            "SELECT (\
+                COALESCE((SELECT COUNT(*)::numeric FROM data_blocks), 0) \
+                    * (SELECT value::numeric FROM config WHERE key = 'block_size') \
+                + COALESCE((SELECT SUM(used_bytes)::numeric FROM data_extents), 0)\
+             )::text",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let used_bytes = query_scalar_text_on_conn(conn, &sql_used)?
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| "invalid persisted payload byte count".to_string())?;
+        if used_bytes > quota_bytes {
+            return Err(format!(
+                "{} persisted payload would use {} bytes, limit is {} bytes",
+                STORAGE_QUOTA_EXCEEDED_PREFIX, used_bytes, quota_bytes
+            ));
+        }
+        Ok(())
     }
 
     pub fn persist_file_extents_with_crc_flag(
@@ -8461,6 +8514,7 @@ impl DbRepo {
 
         self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
+                let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
                 let data_object_id = match self.detach_shared_data_object_on_conn(
                     conn,
                     file_id,
@@ -8487,7 +8541,7 @@ impl DbRepo {
                 }
 
                 self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
-                Ok(())
+                self.enforce_payload_quota_on_conn(conn, quota_bytes)
             })
         })
     }
@@ -8538,6 +8592,7 @@ impl DbRepo {
                     }
                 },
                 |conn| {
+                    let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
                     let target = self
                         .data_object_write_target_on_conn(
                             conn,
@@ -8571,6 +8626,7 @@ impl DbRepo {
                     if stored_data_object_id != target.data_object_id {
                         return Err("sequential persist token mapped to another object".to_string());
                     }
+                    self.enforce_payload_quota_on_conn(conn, quota_bytes)?;
                     Ok(target.data_object_id)
                 },
             )
