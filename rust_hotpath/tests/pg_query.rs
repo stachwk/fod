@@ -102,6 +102,82 @@ fn expired_payload_capacity_reservation_is_renewed_before_persistence() -> Resul
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
     let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
+    for storage in [ReservationStorage::Block, ReservationStorage::Extent] {
+        verify_expired_reservation_renewal(&repo, block_size, storage)?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ReservationStorage {
+    Block,
+    Extent,
+}
+
+impl ReservationStorage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Extent => "extent",
+        }
+    }
+}
+
+fn persist_reservation_payload(
+    repo: &DbRepo,
+    file_id: u64,
+    block_size: usize,
+    marker: u8,
+    storage: ReservationStorage,
+    reservation_token: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let block_size_u64 = block_size as u64;
+    let payload = repeated_block(marker, block_size);
+    match storage {
+        ReservationStorage::Block => {
+            let rows = [PersistBlockRow {
+                block_index: 0,
+                data: &payload,
+                used_len: block_size_u64,
+            }];
+            repo.persist_file_blocks_with_crc_flag_and_reservation(
+                file_id,
+                block_size_u64,
+                block_size_u64,
+                1,
+                false,
+                &rows,
+                true,
+                reservation_token,
+            )?;
+        }
+        ReservationStorage::Extent => {
+            let rows = [PersistExtentRow {
+                start_block: 0,
+                block_count: 1,
+                used_bytes: block_size_u64,
+                payload: payload.clone(),
+            }];
+            repo.persist_file_extents_with_crc_flag_and_reservation(
+                file_id,
+                block_size_u64,
+                block_size_u64,
+                1,
+                false,
+                &rows,
+                true,
+                reservation_token,
+            )?;
+        }
+    }
+    Ok(payload)
+}
+
+fn verify_expired_reservation_renewal(
+    repo: &DbRepo,
+    block_size: usize,
+    storage: ReservationStorage,
+) -> Result<(), String> {
     let block_size_u64 = block_size as u64;
     let original_limit = repo
         .query_config_value("max_fs_size_bytes")?
@@ -109,7 +185,10 @@ fn expired_payload_capacity_reservation_is_renewed_before_persistence() -> Resul
     let used_bytes = persisted_payload_bytes(&repo)?;
     let dir_id = repo.create_directory(
         None,
-        &unique_name("rust_pg_reservation_renew_dir"),
+        &unique_name(&format!(
+            "rust_pg_reservation_renew_{}_dir",
+            storage.label()
+        )),
         0o755,
         1000,
         1000,
@@ -117,7 +196,10 @@ fn expired_payload_capacity_reservation_is_renewed_before_persistence() -> Resul
     )?;
     let file_id = repo.create_file(
         Some(dir_id),
-        &unique_name("rust_pg_reservation_renew_file"),
+        &unique_name(&format!(
+            "rust_pg_reservation_renew_{}_file",
+            storage.label()
+        )),
         0o644,
         1000,
         1000,
@@ -140,22 +222,8 @@ fn expired_payload_capacity_reservation_is_renewed_before_persistence() -> Resul
              WHERE request_token = '{token}'"
         ))?;
 
-        let payload = repeated_block(b'R', block_size);
-        let rows = [PersistBlockRow {
-            block_index: 0,
-            data: &payload,
-            used_len: block_size_u64,
-        }];
-        repo.persist_file_blocks_with_crc_flag_and_reservation(
-            file_id,
-            block_size_u64,
-            block_size_u64,
-            1,
-            false,
-            &rows,
-            true,
-            Some(&token),
-        )?;
+        let payload =
+            persist_reservation_payload(repo, file_id, block_size, b'R', storage, Some(&token))?;
 
         let active_count = repo.query_scalar_text(&format!(
             "SELECT COUNT(*) FROM payload_capacity_reservations \
@@ -186,6 +254,17 @@ fn expired_payload_capacity_reservation_cannot_reclaim_committed_capacity() -> R
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
     let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
+    for storage in [ReservationStorage::Block, ReservationStorage::Extent] {
+        verify_expired_reservation_rejection(&repo, block_size, storage)?;
+    }
+    Ok(())
+}
+
+fn verify_expired_reservation_rejection(
+    repo: &DbRepo,
+    block_size: usize,
+    storage: ReservationStorage,
+) -> Result<(), String> {
     let block_size_u64 = block_size as u64;
     let original_limit = repo
         .query_config_value("max_fs_size_bytes")?
@@ -193,7 +272,10 @@ fn expired_payload_capacity_reservation_cannot_reclaim_committed_capacity() -> R
     let used_bytes = persisted_payload_bytes(&repo)?;
     let dir_id = repo.create_directory(
         None,
-        &unique_name("rust_pg_reservation_reclaim_dir"),
+        &unique_name(&format!(
+            "rust_pg_reservation_reclaim_{}_dir",
+            storage.label()
+        )),
         0o755,
         1000,
         1000,
@@ -201,7 +283,10 @@ fn expired_payload_capacity_reservation_cannot_reclaim_committed_capacity() -> R
     )?;
     let reserved_file_id = repo.create_file(
         Some(dir_id),
-        &unique_name("rust_pg_reservation_reclaim_reserved"),
+        &unique_name(&format!(
+            "rust_pg_reservation_reclaim_{}_reserved",
+            storage.label()
+        )),
         0o644,
         1000,
         1000,
@@ -209,7 +294,10 @@ fn expired_payload_capacity_reservation_cannot_reclaim_committed_capacity() -> R
     )?;
     let competing_file_id = repo.create_file(
         Some(dir_id),
-        &unique_name("rust_pg_reservation_reclaim_competing"),
+        &unique_name(&format!(
+            "rust_pg_reservation_reclaim_{}_competing",
+            storage.label()
+        )),
         0o644,
         1000,
         1000,
@@ -232,35 +320,14 @@ fn expired_payload_capacity_reservation_cannot_reclaim_committed_capacity() -> R
              WHERE request_token = '{token}'"
         ))?;
 
-        let competing_payload = repeated_block(b'C', block_size);
-        let competing_rows = [PersistBlockRow {
-            block_index: 0,
-            data: &competing_payload,
-            used_len: block_size_u64,
-        }];
-        repo.persist_file_blocks(
-            competing_file_id,
-            block_size_u64,
-            block_size_u64,
-            1,
-            false,
-            &competing_rows,
-        )?;
+        persist_reservation_payload(repo, competing_file_id, block_size, b'C', storage, None)?;
 
-        let reserved_payload = repeated_block(b'X', block_size);
-        let reserved_rows = [PersistBlockRow {
-            block_index: 0,
-            data: &reserved_payload,
-            used_len: block_size_u64,
-        }];
-        let rejected = repo.persist_file_blocks_with_crc_flag_and_reservation(
+        let rejected = persist_reservation_payload(
+            repo,
             reserved_file_id,
-            block_size_u64,
-            block_size_u64,
-            1,
-            false,
-            &reserved_rows,
-            true,
+            block_size,
+            b'X',
+            storage,
             Some(&token),
         );
         if !matches!(
@@ -274,8 +341,10 @@ fn expired_payload_capacity_reservation_cannot_reclaim_committed_capacity() -> R
 
         let reserved_state = repo.query_scalar_text(&format!(
             "SELECT size::text || ':' || \
-                (SELECT COUNT(*)::text FROM data_blocks \
-                 WHERE data_object_id = files.data_object_id) \
+                ((SELECT COUNT(*) FROM data_blocks \
+                  WHERE data_object_id = files.data_object_id) + \
+                 (SELECT COUNT(*) FROM data_extents \
+                  WHERE data_object_id = files.data_object_id))::text \
              FROM files WHERE id_file = {reserved_file_id}"
         ))?;
         if reserved_state.trim() != "0:0" {

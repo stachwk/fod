@@ -4,7 +4,7 @@
 
 # FOD
 
-[![CI](https://github.com/stachwk/fod/actions/workflows/ci.yml/badge.svg)](https://github.com/stachwk/fod/actions/workflows/ci.yml) [Roadmap](ROADMAP.md) [Benchmarks](BENCHMARKS.md)
+[Roadmap](ROADMAP.md) [Benchmarks](BENCHMARKS.md)
 
 FOD (Filesystem On DataBaseEngine) is a PostgreSQL-backed filesystem exposed through FUSE. It is designed to behave like a practical Linux filesystem, with predictable metadata, working directory semantics, advisory locking, ACL-aware access checks, and a test suite that exercises the hot paths end to end.
 
@@ -113,32 +113,20 @@ FOD is source-available software licensed under Business Source License 1.1 (BSL
 - The Rust runtime keeps separate cached write and control-plane connections, so heartbeat and lease maintenance do not have to wait behind a long flush.
 - Expired writable primary sessions are cleaned up by PostgreSQL itself: deleting a dead `client_sessions` row fires a trigger that reaps the session's lock leases and range leases by `session_id`.
 - Fresh installs use `migrations/base_schema.sql`, while `migrations/` keeps the numbered upgrade path from older schema states and the explicit `mkfs.fod status` export.
-- The current FOD version comes from the root Cargo workspace package version and is surfaced by the Rust `fod-config` helper; both `fod-bootstrap --version` and `mkfs.fod --version` print the same value. Cargo crate versions inherit that workspace version.
+- The current FOD version comes from `fod_version.txt`; the root Cargo workspace package version must stay aligned with it. The Rust `fod-config` helper, `fod-bootstrap --version`, and `mkfs.fod --version` all surface the same value.
 - The canonical FOD storage schema is `fod` on purpose: it keeps FOD tables out of `public` so other applications in the same database do not collide with FOD objects. In other words, `fod = canonical FOD storage schema`. A future `fod.schema_name` knob could support multiple FOD instances in one database, but the current runtime is intentionally fixed to `fod`.
 - Performance work is merged, and the current benchmark baselines are recorded in `BENCHMARKS.md`.
 - The Rust hot-path now lives in the Rust backend and shared hot-path library, covering the planner, changed-run packing, persist padding, read assembly, logical resize planning for `truncate()`/`fallocate()`, and the first repository lookups/mutations. Changed-copy dedupe stays opt-in because it can slow copy-heavy workloads down substantially.
 - The local Docker Compose stack preloads `pg_stat_statements`, and `make enable-pg-stat-statements` can create the extension in the local database when the DB user has permission. That keeps query analysis and runtime profiling available in the local stack without making FOD init depend on extension privileges.
 - `TODO.md` serves as a decisions-and-notes log rather than an active implementation backlog.
 
-## CI Coverage
+## Test Coverage
 
-The GitHub Actions workflow runs a small compile job plus a curated test matrix:
-
-| Job | What it does |
-| --- | --- |
-| `compile` | Byte-compiles the core modules and the current integration-test entry points. |
-| `workflow runtime` | Forces JavaScript actions onto Node 24 ahead of the GitHub default switch. |
-| `test-runtime-config` | Verifies runtime config parsing and resolved tuning values. |
-| `test-runtime-validation` | Verifies invalid runtime tuning values fail fast. |
-| `test-runtime-profile` | Verifies named runtime profiles. |
-| `test-schema-upgrade` | Verifies non-destructive schema init, version repair, and schema-admin secret protection. |
-| `test-schema-status` | Verifies schema status export and the documented migration manifest. |
-| `test-postgresql-requirements` | Verifies the minimum PostgreSQL version and connection capacity. |
-| `test-metadata-cache` | Verifies the short-TTL metadata and `statfs` cache behavior. |
-| `test-pg-lock-manager` | Verifies the PostgreSQL-backed lock backend, TTL / heartbeat behavior, and the multi-host smoke coverage. |
-| `test-read-ahead-sequence` | Verifies sequential read-ahead behavior. |
-| `test-block-read` | Verifies block-range reads instead of whole-file reads. |
-| `test-flush-release-profile` | Verifies flush/release profiling behavior. |
+The repository currently has no active GitHub Actions workflow. Validation is
+run explicitly through Makefile targets; `make test-all` is the main local
+regression gate and `make test-all-full` adds the broader mounted and indexer
+coverage. A future automated workflow must be introduced explicitly rather
+than inferred from an inactive file.
 
 For step-by-step local verification profiles, see [zasady_sprawdzen.md](zasady_sprawdzen.md).
 
@@ -153,7 +141,7 @@ Every commit increments the FOD patch version and synchronizes `fod_version.txt`
 - `FICLONE` remains experimental and may still be blocked before userspace on some stacks, so reflinks are not a production promise yet.
 - Special device node metadata is stored, but direct special-node execution semantics are still not a general-purpose focus.
 - FOD is still early-stage, so APIs, benchmarks, and performance defaults may still evolve.
-- `make test-all` is the main regression target; mount-heavy workflows are covered, but CI is still focused on a curated subset that is stable in automation.
+- `make test-all` is the main regression target; mount-heavy workflows are covered locally, but no automated GitHub Actions gate is currently enabled.
 - Schema upgrades are currently conservative: `init` applies the fresh-install base schema, `upgrade` repairs missing schema state and restores the current version, and the repo keeps the numbered migration files for older databases.
 - FOD normalizes timestamps through a UTC PostgreSQL session and UTC-aware conversions in the Rust runtime so local timezone differences do not shift metadata. The UTC session setup is initialized once per physical pooled connection, not on every filesystem operation, and the database creation defaults are not relied on.
 - Recovery is limited to retrying transient disconnects on the read/write hot path; FOD keeps in-memory dirty state and caches across reconnects, but it does not yet implement full replay of arbitrary in-flight SQL work and it only retries the bounded reconnect path.

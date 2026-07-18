@@ -5,7 +5,7 @@
 
 # FOD
 
-[![CI](https://github.com/stachwk/fod/actions/workflows/ci.yml/badge.svg)](https://github.com/stachwk/fod/actions/workflows/ci.yml) [Roadmap](ROADMAP.md) [Benchmarks](BENCHMARKS.md)
+[Roadmap](ROADMAP.md) [Benchmarks](BENCHMARKS.md)
 
 FOD (Filesystem On DataBaseEngine) to filesystem oparty o PostgreSQL, wystawiany przez FUSE. Ma zachowywać się jak praktyczny filesystem Linuksa: z przewidywalnymi metadanymi, sensowną semantyką katalogów, advisory locking, access checkami świadomymi ACL oraz testami, które sprawdzają realne ścieżki wykonania od końca do końca.
 
@@ -122,25 +122,13 @@ FOD to oprogramowanie source-available licencjonowane na warunkach Business Sour
 - Lokalny stack Docker Compose preloaduje `pg_stat_statements`, a `make enable-pg-stat-statements` może utworzyć extension w lokalnej bazie, jeśli użytkownik DB ma do tego uprawnienia. Dzięki temu analiza zapytań i profilowanie runtime są dostępne w lokalnym stacku, ale inicjalizacja FOD nie zależy od uprawnień do tworzenia extension.
 - `TODO.md` służy teraz jako log decyzji i notatek, a nie aktywny backlog implementacyjny.
 
-## Pokrycie CI
+## Pokrycie testami
 
-Workflow GitHub Actions uruchamia krótki job kompilacyjny oraz wybrany matrix testów:
-
-| Job | Co robi |
-| --- | --- |
-| `compile` | Byte-compiluje moduły core oraz obecne entry pointy testowe. |
-| `workflow runtime` | Wymusza Node 24 dla akcji JavaScript przed domyślną zmianą GitHuba. |
-| `test-runtime-config` | Sprawdza parsowanie runtime config i wynikowe wartości strojenia. |
-| `test-runtime-validation` | Sprawdza, że błędne wartości runtime fail-fast odrzucają start. |
-| `test-runtime-profile` | Sprawdza nazwane profile runtime. |
-| `test-schema-upgrade` | Sprawdza bezpieczne `init` schematu, naprawę wersji i ochronę sekretu administracyjnego schematu. |
-| `test-schema-status` | Sprawdza eksport statusu schematu i udokumentowany manifest migracji. |
-| `test-postgresql-requirements` | Sprawdza minimalną wersję PostgreSQL i pojemność połączeń. |
-| `test-metadata-cache` | Sprawdza krótki TTL cache metadanych i `statfs`. |
-| `test-pg-lock-manager` | Sprawdza PostgreSQL-backed lock backend, zachowanie TTL / heartbeat i multi-host smoke coverage. |
-| `test-read-ahead-sequence` | Sprawdza sekwencyjny read-ahead. |
-| `test-block-read` | Sprawdza odczyt zakresowy bloków zamiast pełnego pliku. |
-| `test-flush-release-profile` | Sprawdza zachowanie profilowania `flush/release`. |
+Repozytorium nie ma obecnie aktywnego workflow GitHub Actions. Walidacja jest
+uruchamiana jawnie przez targety Makefile: `make test-all` jest główną lokalną
+bramką regresji, a `make test-all-full` dodaje szersze testy mounta i indexera.
+Przyszły workflow automatyczny musi zostać dodany i włączony jawnie, zamiast
+wynikać z nieaktywnego pliku.
 
 Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasady_sprawdzen.md).
 
@@ -151,7 +139,7 @@ Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasa
 - `FICLONE` nadal jest eksperymentalny i na niektórych stackach może zostać ucięty przed userspace, więc reflinki nie są jeszcze obietnicą produkcyjną.
 - Metadane specjalnych urządzeń są zapisywane, ale pełna semantyka uruchamiania takich node'ów nie jest głównym celem projektu.
 - FOD jest nadal na wczesnym etapie, więc API, benchmarki i domyślne ustawienia wydajności mogą się jeszcze zmieniać.
-- `make test-all` jest głównym targetem regresji; workflow mounta są pokryte, ale CI skupia się na wybranym zestawie stabilnym w automatyzacji.
+- `make test-all` jest głównym targetem regresji; workflow mounta są pokryte lokalnie, ale automatyczna bramka GitHub Actions nie jest obecnie włączona.
 - Upgrade schematu jest na razie zachowawczy: `init` stosuje base schema dla świeżej instalacji, `upgrade` naprawia brakujący stan schematu i przywraca bieżącą wersję, a repo nadal trzyma numerowane pliki migracji dla starszych baz.
 - FOD normalizuje timestampy przez sesję PostgreSQL ustawioną na UTC oraz konwersje w Rustowym runtime, więc lokalne różnice stref czasowych nie przesuwają metadanych. Ustawienie UTC jest inicjalizowane raz na fizyczne połączenie z puli, a nie przy każdej operacji filesystemu, i nie opiera się na domyślnych ustawieniach tworzenia bazy.
 - Recovery jest ograniczone do ponawiania przejściowych disconnectów w gorącej ścieżce odczytu/zapisu; FOD trzyma stan dirty i cache w pamięci procesu, ale nie robi jeszcze pełnego replay dowolnych trwających operacji SQL i tylko ponawia ograniczoną ścieżkę reconnectu.

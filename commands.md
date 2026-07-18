@@ -2022,6 +2022,38 @@ Base commit at execution time: `3e9c1c0`
 
 Execution date: `2026-07-18`
 
+Base commit at execution time: `5a5b470`
+
+- `git status --short --branch`
+- `cat fod_version.txt`
+- `ls -la .github/workflows`
+- `rg -n "quota|max_fs_size|ENOSPC|two.mount|two_mount|statfs|df|du|sparse|extent" tests/integration rust_fuse/tests Makefile`
+- `rg -n "storage.format|schema version|format version|ADR|adr" docs README.md README.pl TODO.md`
+- review `tests/integration/test_df.sh`, `tests/integration/test_copy_file_range.py`, `tests/integration/fod_mount.py`, `rust_fuse/tests/support.rs`, and the quota persistence methods
+- review current schema version 18 migration manifest and `docs/adr/storage-object-segment-manifest.md`
+- `cargo fmt --all`
+- `bash -n tests/integration/test_df.sh` (passed)
+- `.venv/bin/python -m py_compile tests/integration/test_two_mount_quota.py` (passed)
+- `git diff --check` (passed)
+- `cargo check --workspace` (passed)
+- `make test-rust-pg-query` (passed: `15` tests; expired reservation renewal and reclaim rejection covered both block and extent persistence)
+- `make test-two-mount-quota` (passed: two PostgreSQL advisory-lock waiters, one 4096-byte commit, one `ENOSPC`)
+- `make test-df` (passed before and after remount: `1163264` persisted bytes, one shared data object, `65536` attributed `du` bytes per shared file)
+- post-test PostgreSQL cleanup query (`max_fs_size_bytes=10737418240`, `reservations=0`, `test_file_leftovers=0`)
+- post-test `findmnt` check (no FOD quota/df test mounts remained)
+- `cargo fmt --all -- --check` (passed)
+- `bash -n tests/integration/test_df.sh` (passed)
+- `.venv/bin/python -m py_compile tests/integration/test_two_mount_quota.py` (passed)
+- `git diff --check` (passed)
+- `make test-version` (passed: `7` tests for `3.2.15`)
+- `cargo test -p fod-rust-hotpath --lib` (passed: `80` tests)
+- `.venv/bin/python -m py_compile tests/integration/test_two_mount_quota.py` (passed after failure-path cleanup hardening)
+- `make test-two-mount-quota` (second run passed: two waiters, one 4096-byte commit, one `ENOSPC`)
+- `git diff --check` (passed)
+- final format, shell syntax, Python compilation, version `3.2.15`, Cargo metadata, removed-workflow, diff, and worktree-state checks (passed)
+
+Execution date: `2026-07-18`
+
 Base commit at execution time: `0b789ce`
 
 - `cargo fmt --all`

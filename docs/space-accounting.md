@@ -11,6 +11,11 @@ FOD exposes two different accounting views because file data is stored in Postgr
 
 FOD reports per-file `st_blocks` from the payload rows referenced by the file's data object, rounded up to 512 bytes. Sparse and zero-only ranges without payload rows do not contribute blocks. Multiple independent files referencing one shared data object each expose that object's allocation, while hardlinks retain one inode and are normally counted once by `du`.
 
+This per-file allocation is attributed, not exclusive. If two independent
+files reference one data object, `du` can report the full object allocation for
+both files even though PostgreSQL stores one payload. Summing per-file `du`
+therefore may double-count shared objects by design.
+
 Empty regular files report zero blocks. Directory entries retain a minimal non-zero block count.
 
 ## Filesystem-wide values
@@ -32,6 +37,12 @@ There is no universal equality or ordering between `df` and the sum reported by 
 - padded storage blocks or extents can make stored payload usage larger than the logical allocation of very small or partial files.
 
 A difference between `ls`, `du`, and `df` is therefore not by itself corruption. Persisted payload bytes are application-level accounting and are not the physical PostgreSQL footprint: TOAST compression, tuple metadata, indexes, dead tuples, and relation free space can make the on-disk relation size different.
+
+The mounted accounting regression verifies this contract before and after a
+remount: sparse logical ranges remain larger than their attributed allocation,
+an exact whole-file copy retains one shared data object, each shared file
+reports attributed allocation, and filesystem-wide used blocks equal unique
+PostgreSQL payload plus active reservations rounded to the FOD block size.
 
 ## Diagnostic capture
 

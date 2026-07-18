@@ -1,8 +1,9 @@
 # FOD Compatibility Contracts
 
-This document records the current compatibility boundaries of FOD 3.2.1 after
-the `fuser 0.17` migration. It describes verified repository and runtime state,
-not the historical migration path.
+This document records the current compatibility boundaries after the
+`fuser 0.17` migration. It describes verified repository and runtime state,
+not the historical migration path. The release version remains sourced from
+`fod_version.txt` rather than duplicated here.
 
 Inventory date: `2026-07-12`
 
@@ -18,10 +19,10 @@ Last clean base before the migration: `0c48865`
   supported version.
 - The inventory host uses `rustc 1.85.1` and Cargo 1.85.1.
 - The SELinux/ACL lab image is based on `rust:1.85-bookworm`.
-- The repository CI definition selects Rust 1.85 explicitly and includes the
-  version in Cargo cache keys. The file is currently named
-  `.github/workflows/ci.yml_`, so GitHub Actions will not discover it until the
-  repository deliberately restores a `.yml` or `.yaml` filename.
+- The repository currently has no active GitHub Actions definition. The
+  compiler minimum is enforced by Cargo package metadata and local/container
+  validation; a future automated workflow must select Rust 1.85 or newer
+  explicitly.
 - No `rust-toolchain.toml` is required. Cargo package metadata enforces the
   minimum for development, debug, release, and profiling builds while allowing
   newer compatible toolchains.
