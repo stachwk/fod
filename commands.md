@@ -1997,3 +1997,15 @@ Base commit at execution time: `597ed2e`
 - `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
 - `make test-metadata-cache` (passed)
 - `PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=foddbname PGUSER=foduser PGPASSWORD=... scripts/fod-space-accounting.sh /tmp/fod-space-accounting-review` (payload-column bytes `359133184`; payload-relation bytes `493273088`)
+
+Execution date: `2026-07-18`
+
+Base commit at execution time: `18344d3`
+
+- `rg -n "fod_version|wersj|version.*commit|commit.*version|X\\.Y\\.Z" README.md README.pl TODO.md docs conclusions.md commands.md zasady_sprawdzen.md`
+- `sed -n '100,130p' README.pl`
+- `sed -n '1,25p' Cargo.toml`
+- `rg -n "^test-version:|test_version|fod_version" Makefile tests rust_runtime/build.rs`
+- `cargo check --workspace` (passed and regenerated Cargo package versions in `Cargo.lock`)
+- `make test-version` (`7` passed)
+- `cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name, .version] | @tsv'` (all five packages report `3.2.6`)

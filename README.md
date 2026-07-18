@@ -142,6 +142,10 @@ The GitHub Actions workflow runs a small compile job plus a curated test matrix:
 
 For step-by-step local verification profiles, see [zasady_sprawdzen.md](zasady_sprawdzen.md).
 
+### Development versioning
+
+Every commit increments the FOD patch version and synchronizes `fod_version.txt`, Cargo workspace metadata, and the commit subject. The complete rule is documented in [`docs/versioning.md`](docs/versioning.md).
+
 ## Known Limits
 
 - Full SELinux mount-label policy is intentionally out of scope; FOD keeps SELinux as xattr-backed metadata plus runtime gating.
