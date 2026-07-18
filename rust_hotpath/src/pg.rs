@@ -1373,6 +1373,10 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
             && sql.contains(
                 "ON CONFLICT (request_token) DO UPDATE SET did_grant = EXCLUDED.did_grant, updated_at = NOW() RETURNING did_grant",
             )
+        || sql.starts_with("INSERT INTO payload_capacity_reservations ")
+            && sql.contains(
+                "ON CONFLICT (request_token) DO UPDATE SET reserved_bytes = EXCLUDED.reserved_bytes, expires_at = EXCLUDED.expires_at",
+            )
         || sql.starts_with("INSERT INTO index_sources ")
             && sql.contains("ON CONFLICT (name) DO UPDATE SET kind = EXCLUDED.kind, root_path = EXCLUDED.root_path, updated_at = NOW()")
         || sql.starts_with("INSERT INTO index_files ")
@@ -8385,7 +8389,7 @@ impl DbRepo {
                     expected_hash,
                     maintain_copy_crc_table,
                 )?;
-                self.enforce_payload_quota_on_conn(conn, quota_bytes)
+                self.enforce_payload_quota_on_conn(conn, quota_bytes, None)
             })
         })
     }
@@ -8420,9 +8424,33 @@ impl DbRepo {
         blocks: &[PersistBlockRow],
         maintain_copy_crc_table: bool,
     ) -> Result<(), String> {
+        self.persist_file_blocks_with_crc_flag_and_reservation(
+            file_id,
+            file_size,
+            block_size,
+            total_blocks,
+            truncate_pending,
+            blocks,
+            maintain_copy_crc_table,
+            None,
+        )
+    }
+
+    pub fn persist_file_blocks_with_crc_flag_and_reservation(
+        &self,
+        file_id: u64,
+        file_size: u64,
+        block_size: u64,
+        total_blocks: u64,
+        truncate_pending: bool,
+        blocks: &[PersistBlockRow],
+        maintain_copy_crc_table: bool,
+        capacity_reservation_token: Option<&str>,
+    ) -> Result<(), String> {
         self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
+                self.validate_payload_reservation_on_conn(conn, capacity_reservation_token)?;
                 match self.persist_block_transport {
                     PersistBlockTransport::CopyBinaryStaging => self
                         .persist_file_blocks_copy_binary_staging_on_conn(
@@ -8448,7 +8476,7 @@ impl DbRepo {
                             self.persist_block_transport,
                         ),
                 }?;
-                self.enforce_payload_quota_on_conn(conn, quota_bytes)
+                self.enforce_payload_quota_on_conn(conn, quota_bytes, capacity_reservation_token)
             })
         })
     }
@@ -8469,26 +8497,65 @@ impl DbRepo {
         Ok((limit > 0).then_some(limit))
     }
 
-    unsafe fn enforce_payload_quota_on_conn(
+    unsafe fn persisted_and_reserved_payload_bytes_on_conn(
         &self,
         conn: *mut PGconn,
-        quota_bytes: Option<u64>,
-    ) -> Result<(), String> {
-        let Some(quota_bytes) = quota_bytes else {
-            return Ok(());
-        };
+        excluded_reservation_token: Option<&str>,
+    ) -> Result<u64, String> {
+        let excluded_reservation_token = CString::new(excluded_reservation_token.unwrap_or(""))
+            .map_err(|_| "capacity reservation token contains NUL byte".to_string())?;
         let sql_used = CString::new(
             "SELECT (\
                 COALESCE((SELECT COUNT(*)::numeric FROM data_blocks), 0) \
                     * (SELECT value::numeric FROM config WHERE key = 'block_size') \
-                + COALESCE((SELECT SUM(used_bytes)::numeric FROM data_extents), 0)\
+                + COALESCE((SELECT SUM(used_bytes)::numeric FROM data_extents), 0) \
+                + COALESCE((SELECT SUM(reserved_bytes)::numeric \
+                            FROM payload_capacity_reservations \
+                            WHERE expires_at > NOW() \
+                              AND ($1 = '' OR request_token <> $1)), 0)\
              )::text",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let used_bytes = query_scalar_text_on_conn(conn, &sql_used)?
+        let res = exec_params(conn, &sql_used, &[&excluded_reservation_token])?;
+        fetch_single_text(res)?
             .trim()
             .parse::<u64>()
-            .map_err(|_| "invalid persisted payload byte count".to_string())?;
+            .map_err(|_| "invalid persisted and reserved payload byte count".to_string())
+    }
+
+    unsafe fn validate_payload_reservation_on_conn(
+        &self,
+        conn: *mut PGconn,
+        request_token: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(request_token) = request_token else {
+            return Ok(());
+        };
+        let request_token = CString::new(request_token)
+            .map_err(|_| "capacity reservation token contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "SELECT reserved_bytes::text FROM payload_capacity_reservations \
+             WHERE request_token = $1 AND expires_at > NOW()",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let res = exec_params(conn, &sql, &[&request_token])?;
+        if fetch_single_text_option(res)?.is_none() {
+            return Err("payload capacity reservation is missing or expired".to_string());
+        }
+        Ok(())
+    }
+
+    unsafe fn enforce_payload_quota_on_conn(
+        &self,
+        conn: *mut PGconn,
+        quota_bytes: Option<u64>,
+        excluded_reservation_token: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(quota_bytes) = quota_bytes else {
+            return Ok(());
+        };
+        let used_bytes =
+            self.persisted_and_reserved_payload_bytes_on_conn(conn, excluded_reservation_token)?;
         if used_bytes > quota_bytes {
             return Err(format!(
                 "{} persisted payload would use {} bytes, limit is {} bytes",
@@ -8496,6 +8563,70 @@ impl DbRepo {
             ));
         }
         Ok(())
+    }
+
+    pub fn reserve_payload_capacity(&self, reserved_bytes: u64) -> Result<Option<String>, String> {
+        if reserved_bytes == 0 {
+            return Ok(None);
+        }
+        let request_token = generate_request_token("payload-capacity");
+        let request_token_param = CString::new(request_token.as_str())
+            .map_err(|_| "capacity reservation token contains NUL byte".to_string())?;
+        let reserved_bytes_param = CString::new(reserved_bytes.to_string())
+            .map_err(|_| "reserved byte count contains NUL byte".to_string())?;
+        let sql_delete_expired =
+            CString::new("DELETE FROM payload_capacity_reservations WHERE expires_at <= NOW()")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_insert = CString::new(
+            "INSERT INTO payload_capacity_reservations \
+                (request_token, reserved_bytes, created_at, expires_at) \
+             VALUES ($1, $2, NOW(), NOW() + INTERVAL '1 hour') \
+             ON CONFLICT (request_token) DO UPDATE SET \
+                reserved_bytes = EXCLUDED.reserved_bytes, \
+                expires_at = EXCLUDED.expires_at",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
+                if quota_bytes.is_none() {
+                    return Ok(None);
+                }
+                exec_command(conn, &sql_delete_expired)?;
+                let committed_and_reserved =
+                    self.persisted_and_reserved_payload_bytes_on_conn(conn, None)?;
+                let quota_bytes = quota_bytes.unwrap_or(0);
+                if committed_and_reserved.saturating_add(reserved_bytes) > quota_bytes {
+                    return Err(format!(
+                        "{} copy requires {} reserved bytes, {} bytes are already committed or reserved, limit is {} bytes",
+                        STORAGE_QUOTA_EXCEEDED_PREFIX,
+                        reserved_bytes,
+                        committed_and_reserved,
+                        quota_bytes
+                    ));
+                }
+                exec_command_params(
+                    conn,
+                    &sql_insert,
+                    &[&request_token_param, &reserved_bytes_param],
+                )?;
+                Ok(Some(request_token.clone()))
+            })
+        })
+    }
+
+    pub fn release_payload_capacity_reservation(&self, request_token: &str) -> Result<(), String> {
+        let request_token = CString::new(request_token)
+            .map_err(|_| "capacity reservation token contains NUL byte".to_string())?;
+        let sql =
+            CString::new("DELETE FROM payload_capacity_reservations WHERE request_token = $1")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                exec_command_params(conn, &sql, &[&request_token])
+            })
+        })
     }
 
     pub fn persist_file_extents_with_crc_flag(
@@ -8508,6 +8639,29 @@ impl DbRepo {
         extents: &[PersistExtentRow],
         maintain_copy_crc_table: bool,
     ) -> Result<(), String> {
+        self.persist_file_extents_with_crc_flag_and_reservation(
+            file_id,
+            file_size,
+            block_size,
+            _total_blocks,
+            _truncate_pending,
+            extents,
+            maintain_copy_crc_table,
+            None,
+        )
+    }
+
+    pub fn persist_file_extents_with_crc_flag_and_reservation(
+        &self,
+        file_id: u64,
+        file_size: u64,
+        block_size: u64,
+        _total_blocks: u64,
+        _truncate_pending: bool,
+        extents: &[PersistExtentRow],
+        maintain_copy_crc_table: bool,
+        capacity_reservation_token: Option<&str>,
+    ) -> Result<(), String> {
         if extents.is_empty() {
             return Ok(());
         }
@@ -8515,6 +8669,7 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
+                self.validate_payload_reservation_on_conn(conn, capacity_reservation_token)?;
                 let data_object_id = match self.detach_shared_data_object_on_conn(
                     conn,
                     file_id,
@@ -8541,7 +8696,7 @@ impl DbRepo {
                 }
 
                 self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
-                self.enforce_payload_quota_on_conn(conn, quota_bytes)
+                self.enforce_payload_quota_on_conn(conn, quota_bytes, capacity_reservation_token)
             })
         })
     }
@@ -8626,7 +8781,7 @@ impl DbRepo {
                     if stored_data_object_id != target.data_object_id {
                         return Err("sequential persist token mapped to another object".to_string());
                     }
-                    self.enforce_payload_quota_on_conn(conn, quota_bytes)?;
+                    self.enforce_payload_quota_on_conn(conn, quota_bytes, None)?;
                     Ok(target.data_object_id)
                 },
             )
@@ -10082,6 +10237,10 @@ mod tests {
             "INSERT INTO index_import_plans (created_at, updated_at, status, request_token, dry_run, source_filter) VALUES (NOW(), NOW(), 'dry_run_running', 'plan:1:2:3', TRUE, NULL) ON CONFLICT (request_token) DO UPDATE SET status = EXCLUDED.status, dry_run = EXCLUDED.dry_run, source_filter = EXCLUDED.source_filter, updated_at = NOW() RETURNING id_import_plan",
         )
         .unwrap();
+        let capacity_reservation_insert_sql = std::ffi::CString::new(
+            "INSERT INTO payload_capacity_reservations (request_token, reserved_bytes, created_at, expires_at) VALUES ($1, $2, NOW(), NOW() + INTERVAL '1 hour') ON CONFLICT (request_token) DO UPDATE SET reserved_bytes = EXCLUDED.reserved_bytes, expires_at = EXCLUDED.expires_at",
+        )
+        .unwrap();
         let data_blocks_copy_sql = std::ffi::CString::new(
             "INSERT INTO data_blocks (data_object_id, _order, data) SELECT $2, _order, data FROM data_blocks WHERE data_object_id = $1",
         )
@@ -10125,6 +10284,7 @@ mod tests {
         assert!(sql_is_replayable_command(&data_blocks_upsert_sql));
         assert!(sql_is_replayable_command(&scan_run_insert_sql));
         assert!(sql_is_replayable_command(&import_plan_insert_sql));
+        assert!(sql_is_replayable_command(&capacity_reservation_insert_sql));
         assert!(!sql_is_replayable_command(&data_blocks_copy_sql));
         assert!(sql_is_replayable_command(&extent_to_blocks_sql));
         assert!(sql_is_replayable_command(&copy_block_crc_upsert_sql));

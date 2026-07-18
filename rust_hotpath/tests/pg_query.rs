@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use fod_rust_hotpath::pg::{DbRepo, PersistBlockRow, PersistExtentRow};
+use fod_rust_hotpath::pg::{
+    DbRepo, PersistBlockRow, PersistExtentRow, STORAGE_QUOTA_EXCEEDED_PREFIX,
+};
 use fod_rust_runtime::{DataObjectSwapCleanup, RuntimeConfig};
 use std::env;
 use std::sync::Mutex;
@@ -34,6 +36,65 @@ fn repo_with_swap_cleanup(cleanup: DataObjectSwapCleanup) -> Result<DbRepo, Stri
 fn repo_with_runtime_config(mut runtime: RuntimeConfig) -> Result<DbRepo, String> {
     runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
     DbRepo::with_runtime(&conninfo_from_env(), &runtime)
+}
+
+#[test]
+fn payload_capacity_reservations_serialize_across_repositories() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo_a = repo_with_runtime()?;
+    let repo_b = repo_with_runtime()?;
+    let original_limit = repo_a
+        .query_config_value("max_fs_size_bytes")?
+        .ok_or_else(|| "missing max_fs_size_bytes config".to_string())?;
+    let used_bytes = repo_a
+        .query_scalar_text(
+            "SELECT (\
+                (SELECT COUNT(*)::bigint FROM data_blocks) \
+                    * (SELECT value FROM config WHERE key = 'block_size') \
+                + COALESCE((SELECT SUM(used_bytes)::bigint FROM data_extents), 0)\
+             )::text",
+        )?
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| "invalid payload usage".to_string())?;
+
+    repo_a.exec("DELETE FROM payload_capacity_reservations")?;
+    repo_a.exec(&format!(
+        "UPDATE config SET value = {} WHERE key = 'max_fs_size_bytes'",
+        used_bytes.saturating_add(4096)
+    ))?;
+
+    let result = (|| {
+        let token_a = repo_a
+            .reserve_payload_capacity(4096)?
+            .ok_or_else(|| "expected first capacity reservation".to_string())?;
+        let second = repo_b.reserve_payload_capacity(1);
+        if !matches!(
+            second,
+            Err(ref err) if err.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX)
+        ) {
+            return Err(format!(
+                "second repository should receive ENOSPC while reservation is active: {second:?}"
+            ));
+        }
+        repo_a.release_payload_capacity_reservation(&token_a)?;
+
+        let token_b = repo_b
+            .reserve_payload_capacity(1)?
+            .ok_or_else(|| "expected reservation after release".to_string())?;
+        repo_b.release_payload_capacity_reservation(&token_b)?;
+        Ok(())
+    })();
+
+    let cleanup_result = repo_a
+        .exec("DELETE FROM payload_capacity_reservations")
+        .and_then(|_| {
+            repo_a.exec(&format!(
+                "UPDATE config SET value = {} WHERE key = 'max_fs_size_bytes'",
+                original_limit
+            ))
+        });
+    result.and(cleanup_result)
 }
 
 #[test]

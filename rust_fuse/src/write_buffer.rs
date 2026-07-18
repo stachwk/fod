@@ -342,12 +342,24 @@ impl FodFuse {
     }
 
     pub(crate) fn flush_write_state(&self, state: &mut WriteState) -> Result<(), libc::c_int> {
+        self.flush_write_state_with_capacity_reservation(state, None)
+    }
+
+    pub(crate) fn flush_write_state_with_capacity_reservation(
+        &self,
+        state: &mut WriteState,
+        capacity_reservation_token: Option<&str>,
+    ) -> Result<(), libc::c_int> {
         let started = Instant::now();
         if state.load_error {
             self.record_flush_write_state_elapsed(started.elapsed());
             return Err(EIO);
         }
         let block_size = self.block_size.max(1);
+        if capacity_reservation_token.is_some() && state.payload.as_sequential().is_some() {
+            self.record_flush_write_state_elapsed(started.elapsed());
+            return Err(EIO);
+        }
         let direct_segment_persisted = match self.try_persist_sequential_segments(state, block_size)
         {
             Ok(persisted) => persisted,
@@ -374,7 +386,12 @@ impl FodFuse {
                 truncate_pending: state.truncate_pending,
                 dirty_blocks: &dirty_blocks,
             });
-            if let Err(errno) = self.execute_persist_plan(state, block_size, persist_plan) {
+            if let Err(errno) = self.execute_persist_plan(
+                state,
+                block_size,
+                persist_plan,
+                capacity_reservation_token,
+            ) {
                 self.record_flush_write_state_elapsed(started.elapsed());
                 return Err(errno);
             }
@@ -564,6 +581,7 @@ impl FodFuse {
         state: &WriteState,
         block_size: u64,
         execution_plan: PersistExecutionPlan,
+        capacity_reservation_token: Option<&str>,
     ) -> Result<(), libc::c_int> {
         let live = self.reloadable_runtime();
         debug!(
@@ -583,6 +601,7 @@ impl FodFuse {
                     state.truncate_pending,
                     &rows,
                     live.copy_dedupe_crc_table,
+                    capacity_reservation_token,
                 )
                 .map_err(|err| persist_error_errno(&err))
             }
@@ -607,6 +626,7 @@ impl FodFuse {
                     state.truncate_pending,
                     &rows,
                     live.copy_dedupe_crc_table,
+                    capacity_reservation_token,
                 )
                 .map_err(|err| persist_error_errno(&err))
             }

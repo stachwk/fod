@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 17;
-const MIGRATION_FILES: [&str; 17] = [
+const SCHEMA_VERSION: u64 = 18;
+const MIGRATION_FILES: [&str; 18] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -43,9 +43,10 @@ const MIGRATION_FILES: [&str; 17] = [
     "0015_data_object_request_tokens.sql",
     "0016_hardlink_promotion_request_tokens.sql",
     "0017_data_object_payload_ownership.sql",
+    "0018_payload_capacity_reservations.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 17] = [
+const MIGRATION_DESCRIPTIONS: [&str; 18] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -63,6 +64,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 17] = [
     "Add request tokens for data object creation",
     "Add request tokens for hardlink promotion replay",
     "Make data objects own payload rows",
+    "Add transactional payload capacity reservations",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -200,6 +202,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0017_data_object_payload_ownership.sql"
         )),
+        18 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0018_payload_capacity_reservations.sql"
+        )),
         _ => "",
     }
 }
@@ -223,6 +229,7 @@ fn migration_description(version: u64) -> &'static str {
         15 => MIGRATION_DESCRIPTIONS[14],
         16 => MIGRATION_DESCRIPTIONS[15],
         17 => MIGRATION_DESCRIPTIONS[16],
+        18 => MIGRATION_DESCRIPTIONS[17],
         _ => "Migration",
     }
 }
@@ -246,6 +253,7 @@ fn migration_filename(version: u64) -> &'static str {
         15 => MIGRATION_FILES[14],
         16 => MIGRATION_FILES[15],
         17 => MIGRATION_FILES[16],
+        18 => MIGRATION_FILES[17],
         _ => "unknown.sql",
     }
 }
@@ -352,6 +360,7 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                     ('copy_block_crc'),
                     ('data_object_request_tokens'),
                     ('hardlink_promotion_request_tokens'),
+                    ('payload_capacity_reservations'),
                     ('index_sources'),
                     ('index_scan_runs'),
                     ('index_files'),

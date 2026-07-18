@@ -1995,6 +1995,25 @@ Base commit at execution time: `597ed2e`
 - `cargo test -p fod-rust-fuse --bin fod-rust-fuse --locked` (`27` passed)
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
 - `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
+- `cargo test -p fod-rust-hotpath --lib` (`80` passed)
+- `cargo test -p fod-rust-fuse --bin fod-rust-fuse` (`27` passed)
+- `cargo test -p fod-rust-hotpath --test pg_query -- --nocapture` (`13` passed)
+
+Execution date: `2026-07-18`
+
+Base commit at execution time: `a35d301`
+
+- `cargo fmt --all`
+- `cargo check --workspace` (passed)
+- `cargo test -p fod-rust-hotpath recognizes_replayable_command_sql_for_disconnect_retry -- --nocapture` (passed)
+- `cargo test -p fod-rust-mkfs --test schema_upgrade -- --nocapture` (`3` passed)
+- `make reset` (recreated the empty local test database after migration tests left `fod.config` empty)
+- `cargo test -p fod-rust-hotpath --test pg_query payload_capacity_reservations_serialize_across_repositories -- --nocapture` (passed)
+- `make test-copy-file-range` (passed after verifying pre-copy `ENOSPC`, unchanged destination data, and no leaked reservation)
+- `cargo check --workspace` (passed after version update to `3.2.10`)
+- `make test-version` (`7` passed)
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
+- `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
 - `cargo check --workspace --locked` (expected pre-regeneration failure after changing workspace version)
 - `cargo check --workspace` (passed and regenerated Cargo package versions in `Cargo.lock`)
 - `cargo test -p fod-rust-fuse --bin fod-rust-fuse` (`27` passed)

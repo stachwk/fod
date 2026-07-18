@@ -84,6 +84,37 @@ struct StatfsCapacity {
     available_bytes: u64,
 }
 
+struct PayloadCapacityReservation<'a> {
+    repo: &'a DbRepo,
+    token: Option<String>,
+}
+
+impl<'a> PayloadCapacityReservation<'a> {
+    fn reserve(repo: &'a DbRepo, bytes: u64) -> Result<Self, String> {
+        Ok(Self {
+            repo,
+            token: repo.reserve_payload_capacity(bytes)?,
+        })
+    }
+
+    fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+}
+
+impl Drop for PayloadCapacityReservation<'_> {
+    fn drop(&mut self) {
+        if let Some(token) = self.token.take() {
+            if let Err(err) = self.repo.release_payload_capacity_reservation(&token) {
+                warn!(
+                    "FOD payload capacity reservation cleanup failed token={} err={}",
+                    token, err
+                );
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PosixLockRecord {
     owner: u64,
@@ -1137,9 +1168,10 @@ impl FodFuse {
         truncate_pending: bool,
         blocks: &[PersistBlockRow<'a>],
         maintain_copy_crc_table: bool,
+        capacity_reservation_token: Option<&str>,
     ) -> Result<(), String> {
         let started = Instant::now();
-        let result = self.repo.persist_file_blocks_with_crc_flag(
+        let result = self.repo.persist_file_blocks_with_crc_flag_and_reservation(
             file_id,
             file_size,
             block_size,
@@ -1147,6 +1179,7 @@ impl FodFuse {
             truncate_pending,
             blocks,
             maintain_copy_crc_table,
+            capacity_reservation_token,
         );
         self.record_repo_persist_blocks_elapsed(started.elapsed());
         result
@@ -1161,17 +1194,21 @@ impl FodFuse {
         truncate_pending: bool,
         extents: &[PersistExtentRow],
         maintain_copy_crc_table: bool,
+        capacity_reservation_token: Option<&str>,
     ) -> Result<(), String> {
         let started = Instant::now();
-        let result = self.repo.persist_file_extents_native(
-            file_id,
-            file_size,
-            block_size,
-            total_blocks,
-            truncate_pending,
-            extents,
-            maintain_copy_crc_table,
-        );
+        let result = self
+            .repo
+            .persist_file_extents_with_crc_flag_and_reservation(
+                file_id,
+                file_size,
+                block_size,
+                total_blocks,
+                truncate_pending,
+                extents,
+                maintain_copy_crc_table,
+                capacity_reservation_token,
+            );
         self.record_repo_persist_extents_elapsed(started.elapsed());
         result
     }
@@ -2422,7 +2459,7 @@ impl FodFuse {
             dst_offset,
             copy_len,
             src_end_offset,
-            dst_end_offset: _,
+            dst_end_offset,
             src_first_block,
             src_last_block,
             dst_first_block,
@@ -2438,6 +2475,9 @@ impl FodFuse {
                         state.file_size = src_size;
                         self.update_write_state(fh_out, state);
                     }
+                    self.clear_read_cache_for_file(dst_file_id);
+                    self.clear_recent_write_blocks_for_file(dst_file_id);
+                    self.invalidate_statfs_cache();
                     debug!(
                         "FOD req={} op={} adopted source data object src_file_id={} dst_file_id={} len={}",
                         req_id, op, src_file_id, dst_file_id, copy_len
@@ -2459,6 +2499,30 @@ impl FodFuse {
                 }
             }
         }
+
+        let target_file_size = dst_size.max(dst_end_offset);
+        let reservation_bytes = target_file_size
+            .saturating_add(self.block_size.saturating_sub(1))
+            .checked_div(self.block_size.max(1))
+            .unwrap_or(0)
+            .saturating_mul(self.block_size.max(1));
+        let capacity_reservation =
+            match PayloadCapacityReservation::reserve(&self.repo, reservation_bytes) {
+                Ok(reservation) => reservation,
+                Err(err) => {
+                    let errno = persist_error_errno(&err);
+                    self.log_request_error(
+                        req_id,
+                        op,
+                        errno,
+                        format!(
+                            "dst_file_id={} reserve_bytes={} err={}",
+                            dst_file_id, reservation_bytes, err
+                        ),
+                    );
+                    return Err(errno);
+                }
+            };
 
         let data = if let Some(state) = src_state.as_ref() {
             let mut state = self.clone_write_state_profiled(state);
@@ -2549,7 +2613,10 @@ impl FodFuse {
                 if truncate_destination && target_end != current_size {
                     state.file_size = target_end;
                     state.truncate_pending = true;
-                    if let Err(errno) = self.flush_write_state(&mut state) {
+                    if let Err(errno) = self.flush_write_state_with_capacity_reservation(
+                        &mut state,
+                        capacity_reservation.token(),
+                    ) {
                         self.log_request_error(
                             req_id,
                             op,
@@ -2565,7 +2632,10 @@ impl FodFuse {
                     );
                 } else if target_end > current_size {
                     state.file_size = target_end;
-                    if let Err(errno) = self.flush_write_state(&mut state) {
+                    if let Err(errno) = self.flush_write_state_with_capacity_reservation(
+                        &mut state,
+                        capacity_reservation.token(),
+                    ) {
                         self.log_request_error(
                             req_id,
                             op,
@@ -2607,7 +2677,10 @@ impl FodFuse {
             if truncate_destination {
                 state.truncate_pending = true;
             }
-            if let Err(errno) = self.flush_write_state(&mut state) {
+            if let Err(errno) = self.flush_write_state_with_capacity_reservation(
+                &mut state,
+                capacity_reservation.token(),
+            ) {
                 self.log_request_error(req_id, op, errno, format!("fh_out={} flush", fh_out));
                 return Err(errno);
             }
@@ -2632,7 +2705,9 @@ impl FodFuse {
         if truncate_destination {
             state.truncate_pending = true;
         }
-        if let Err(errno) = self.flush_write_state(&mut state) {
+        if let Err(errno) = self
+            .flush_write_state_with_capacity_reservation(&mut state, capacity_reservation.token())
+        {
             self.log_request_error(req_id, op, errno, format!("fh_out={} flush", fh_out));
             return Err(errno);
         }
@@ -5997,7 +6072,7 @@ impl Filesystem for FodFuse {
             dst_offset,
             copy_len,
             src_end_offset,
-            dst_end_offset: _,
+            dst_end_offset,
             src_first_block,
             src_last_block,
             dst_first_block,
@@ -6039,6 +6114,31 @@ impl Filesystem for FodFuse {
                 }
             }
         }
+
+        let target_file_size = dst_size.max(dst_end_offset);
+        let reservation_bytes = target_file_size
+            .saturating_add(self.block_size.saturating_sub(1))
+            .checked_div(self.block_size.max(1))
+            .unwrap_or(0)
+            .saturating_mul(self.block_size.max(1));
+        let capacity_reservation =
+            match PayloadCapacityReservation::reserve(&self.repo, reservation_bytes) {
+                Ok(reservation) => reservation,
+                Err(err) => {
+                    let errno = persist_error_errno(&err);
+                    self.log_request_error(
+                        req_id,
+                        "copy_file_range",
+                        errno,
+                        format!(
+                            "dst_file_id={} reserve_bytes={} err={}",
+                            dst_file_id, reservation_bytes, err
+                        ),
+                    );
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            };
 
         let data = if let Some(state) = src_state.as_ref() {
             let mut state = self.clone_write_state_profiled(state);
@@ -6131,7 +6231,10 @@ impl Filesystem for FodFuse {
             if runs.is_empty() {
                 if target_end > current_size {
                     state.file_size = target_end;
-                    if let Err(errno) = self.flush_write_state(&mut state) {
+                    if let Err(errno) = self.flush_write_state_with_capacity_reservation(
+                        &mut state,
+                        capacity_reservation.token(),
+                    ) {
                         self.log_request_error(
                             req_id,
                             "copy_file_range",
@@ -6173,7 +6276,10 @@ impl Filesystem for FodFuse {
                     .buffered_bytes
                     .saturating_add(run_payload.len() as u64);
             }
-            if let Err(errno) = self.flush_write_state(&mut state) {
+            if let Err(errno) = self.flush_write_state_with_capacity_reservation(
+                &mut state,
+                capacity_reservation.token(),
+            ) {
                 self.log_request_error(
                     req_id,
                     "copy_file_range",
@@ -6203,7 +6309,9 @@ impl Filesystem for FodFuse {
             return;
         }
         state.buffered_bytes = state.buffered_bytes.saturating_add(data.len() as u64);
-        if let Err(errno) = self.flush_write_state(&mut state) {
+        if let Err(errno) = self
+            .flush_write_state_with_capacity_reservation(&mut state, capacity_reservation.token())
+        {
             self.log_request_error(
                 req_id,
                 "copy_file_range",
