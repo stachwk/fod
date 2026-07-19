@@ -16,9 +16,7 @@ mod source_registry;
 
 use crate::model::IndexSource;
 use cli::{Cli, Commands, PlanCommands, ReportCommands, SourceCommands, SourceKind};
-use output::{
-    print_json, IndexerCapabilitiesOutput, SourceListOutput, SourceMutationOutput,
-};
+use output::{print_json, IndexerCapabilitiesOutput, SourceListOutput, SourceMutationOutput};
 use std::path::Path;
 
 fn main() {
