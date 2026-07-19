@@ -1,0 +1,68 @@
+name: One-shot FOD indexer read API verification
+
+on:
+  push:
+    branches:
+      - work/fod-3.2.17-indexer-read-api
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/fod-3.2.17-indexer-read-api
+          fetch-depth: 0
+
+      - name: Select Rust 1.85
+        run: |
+          rustup toolchain install 1.85 --profile minimal
+          rustup default 1.85
+          rustc --version
+          cargo --version
+
+      - name: Verify formatting and workspace
+        run: |
+          cargo fmt --all -- --check
+          cargo check --workspace --locked
+          cargo test --locked -p fod-rust-indexer
+
+      - name: Verify offline capabilities JSON
+        run: |
+          tmp_config="$(mktemp -d)"
+          output="$(XDG_CONFIG_HOME="$tmp_config" FOD_CONFIG_PATH=/definitely/missing/fod_config.ini cargo run --locked -q -p fod-rust-indexer -- --output json capabilities)"
+          printf '%s\n' "$output" > /tmp/fod-indexer-capabilities.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path('/tmp/fod-indexer-capabilities.json').read_text())
+          assert data['schema_version'] == 1
+          assert data['producer']['name'] == 'fod-indexer'
+          assert data['required_database_schema_version'] == 18
+          commands = {item['command']: item for item in data['commands']}
+          assert commands['capabilities']['read_only'] is True
+          assert commands['report duplicates']['read_only'] is False
+          assert commands['plan list']['status'] == 'planned-p0'
+          assert commands['file list|search|show']['pagination'] == 'keyset-cursor'
+          PY
+
+      - name: Record result and remove one-shot workflow
+        run: |
+          mkdir -p .work-ci
+          cat > .work-ci/fod-indexer-read-api.txt <<EOF
+          result=passed
+          verified_commit=${GITHUB_SHA}
+          rust=1.85
+          checks=cargo-fmt,cargo-check-workspace-locked,cargo-test-indexer,offline-capabilities-json
+          EOF
+          rm .github/workflows/work-fod-indexer-read-api.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .work-ci/fod-indexer-read-api.txt .github/workflows/work-fod-indexer-read-api.yml
+          git commit -m "Record FOD indexer read API verification"
+          git push origin HEAD:work/fod-3.2.17-indexer-read-api
