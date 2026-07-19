@@ -18,32 +18,25 @@ materialization behavior.
 - [x] Document the bounded retry boundary.
 - [x] Keep text extraction, classification, embeddings, OCR, and other AI work
   outside the shared indexing core.
-
-The delivered foundation does not yet provide a complete read-only catalogue
-API. The remaining items below are open.
-
-## P0: capabilities and response versioning
-
 - [x] Add `fod-indexer capabilities` with producer version, API schema version,
   available and planned commands, filters, sort order, pagination, limits, and
   consistency.
 - [x] Add `schema_version` and `producer` to JSON responses without moving the
   existing payload fields.
-- [ ] Add regression coverage to the normal local test suite after the branch
-  implementation passes `cargo test -p fod-rust-indexer` and
-  `cargo check --workspace --locked`.
+- [x] Cover capability, plan-list, file-list, file-search, file-show, row parsing,
+  filter normalization, and range validation in the local Rust test suite.
 
 See [`fod-indexer-read-api.md`](fod-indexer-read-api.md).
 
-## P0: list stored import plans
+## Delivered P0: list stored import plans
 
-Add a strictly read-only command such as:
+The strictly read-only command is available:
 
 ```text
 fod-indexer plan list --limit N [--cursor CURSOR] [--status STATUS]
 ```
 
-The response should contain:
+It returns:
 
 ```text
 schema_version
@@ -57,12 +50,12 @@ items:
   updated_at
   entry_count
 next_cursor
-total, when cheap
+total
 ```
 
-The command must not create, refresh, or modify plans.
+The command does not create, refresh, or modify plans.
 
-## P0: list existing duplicate sets without rebuild
+## Open P0: list existing duplicate sets without rebuild
 
 The current no-id `report duplicates` path rebuilds derived duplicate metadata.
 Add a command such as:
@@ -74,9 +67,9 @@ fod-indexer duplicate-set list --limit N [--cursor CURSOR]
 It must only read existing duplicate rows. `msfind` must not call scan, hash, or
 a duplicate rebuild to discover valid set ids.
 
-## P0: list or search the whole file index
+## Delivered P0: list or search the whole file index
 
-Add strictly read-only commands that return stable indexed-file records:
+The following strictly read-only commands are available:
 
 ```text
 fod-indexer file list ...
@@ -84,7 +77,7 @@ fod-indexer file search ...
 fod-indexer file show --id ID
 ```
 
-The response should include:
+List and search responses include:
 
 ```text
 schema_version
@@ -92,11 +85,13 @@ producer
 consistency: live
 items
 next_cursor
-total, when cheap
-sort
+total
+sort: file_id ASC
 ```
 
-Each item should contain fields already owned by FOD:
+`file show` returns the same record shape below one `item` field.
+
+Each record contains fields owned by FOD:
 
 ```text
 file_id
@@ -110,22 +105,26 @@ name
 extension
 size
 mtime_ns
+inode
+device
 file_kind
 scan_status
 source_changed
 hash_algorithm
-full_hash
+full_hash_hex
 hash_status
 scan_run_id
+created_at
+updated_at
 ```
 
-Required filters include name/path, source, extension, file kind, scan status,
-hash status, size range, modification-time range, and deterministic keyset
-pagination.
+Available search filters include query text, path, basename, source, extension,
+file kind, scan status, hash status, size range, modification-time range, limit,
+and deterministic keyset cursor pagination.
 
-Do not claim a frozen `snapshot_id` until the database stores immutable catalogue
-snapshots. The first contract is explicitly a live view ordered by stable
-`file_id`.
+The first contract is explicitly a live view ordered by stable `file_id`; it does
+not claim a frozen `snapshot_id`. MIME, extracted text, extractor versions, OCR,
+embeddings, and AI metadata remain owned by `msfind`.
 
 ## P1: revalidated source-byte read
 
@@ -138,7 +137,7 @@ index tables merely to satisfy this command.
 
 ## Constraints
 
-- All new catalogue and plan-list operations are strictly read-only.
+- All catalogue and plan-list operations are strictly read-only.
 - `msfind` does not call `scan`, `hash`, `clean`, `materialize`, or refreshing
   duplicate reports while serving read-only queries.
 - FOD does not depend on `msfind` code.

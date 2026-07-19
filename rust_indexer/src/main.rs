@@ -16,7 +16,7 @@ mod source;
 mod source_registry;
 
 use crate::model::IndexSource;
-use cli::{Cli, Commands, PlanCommands, ReportCommands, SourceCommands, SourceKind};
+use cli::{Cli, Commands, FileCommands, PlanCommands, ReportCommands, SourceCommands, SourceKind};
 use output::{print_json, SourceListOutput, SourceMutationOutput};
 use std::path::Path;
 
@@ -46,6 +46,81 @@ fn run() -> Result<(), String> {
 
     match cli.command {
         Commands::Capabilities => unreachable!("capabilities returns before opening PostgreSQL"),
+        Commands::File { command } => match command {
+            FileCommands::List {
+                limit,
+                cursor,
+                source,
+                file_kind,
+                scan_status,
+                hash_status,
+            } => {
+                let files = read_api::load_file_list(
+                    &repo,
+                    limit,
+                    cursor,
+                    source.as_deref(),
+                    file_kind.as_deref(),
+                    scan_status.as_deref(),
+                    hash_status.as_deref(),
+                )?;
+                if output.is_json() {
+                    print_json(&files)?;
+                } else {
+                    println!("{}", files.human_readable());
+                }
+                Ok(())
+            }
+            FileCommands::Search {
+                query,
+                path,
+                name,
+                source,
+                extension,
+                file_kind,
+                scan_status,
+                hash_status,
+                min_size,
+                max_size,
+                mtime_from,
+                mtime_to,
+                limit,
+                cursor,
+            } => {
+                let files = read_api::search_files(
+                    &repo,
+                    limit,
+                    cursor,
+                    query.as_deref(),
+                    path.as_deref(),
+                    name.as_deref(),
+                    source.as_deref(),
+                    extension.as_deref(),
+                    file_kind.as_deref(),
+                    scan_status.as_deref(),
+                    hash_status.as_deref(),
+                    min_size,
+                    max_size,
+                    mtime_from,
+                    mtime_to,
+                )?;
+                if output.is_json() {
+                    print_json(&files)?;
+                } else {
+                    println!("{}", files.human_readable());
+                }
+                Ok(())
+            }
+            FileCommands::Show { id } => {
+                let file = read_api::show_file(&repo, id)?;
+                if output.is_json() {
+                    print_json(&file)?;
+                } else {
+                    println!("{}", file.human_readable());
+                }
+                Ok(())
+            }
+        },
         Commands::Source { command } => match command {
             SourceCommands::Add { name, path, kind } => {
                 let source = source_registry::register_source(&repo, name.as_deref(), &path, kind)?;

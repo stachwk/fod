@@ -8,8 +8,8 @@ use std::ffi::OsString;
     name = "fod-indexer",
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
-    long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to inspect its machine-readable capabilities, register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
+    long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to inspect its machine-readable capabilities, query the read-only file catalogue, register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
+    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer file list --limit 100\n  fod-indexer file search report --extension pdf --limit 25\n  fod-indexer file show --id 42\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -33,6 +33,14 @@ pub enum Commands {
         long_about = "Print the versioned fod-indexer capability document.\n\nThe command is read-only, does not require PostgreSQL, and distinguishes currently available read-only commands from commands that rebuild derived state and from planned read-only APIs. JSON output includes the stable API schema version and producer version."
     )]
     Capabilities,
+    #[command(
+        about = "Query indexed file records.",
+        long_about = "List, search, or show the current read-only index file catalogue.\n\nThese commands query existing PostgreSQL index rows only. They do not scan sources, hash files, rebuild duplicate sets, create plans, or materialize data. Results use stable file ids and deterministic keyset pagination over a live catalogue view."
+    )]
+    File {
+        #[command(subcommand)]
+        command: FileCommands,
+    },
     #[command(
         about = "Manage sources.",
         long_about = "Register, browse, list, or remove source adapters so fod-indexer can inspect roots before scan and materialize steps.\n\nThe current implementation keeps all supported source kinds on the shared path-backed flow and exposes their policy and capability profile explicitly, so future direct crawlers can be added without changing the basic registration contract. If --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion. Registered sources are stored with their kind, policy, capability profile, and canonical root path in PostgreSQL."
@@ -114,6 +122,70 @@ pub enum Commands {
         source: String,
         #[arg(long, default_value_t = false)]
         dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum FileCommands {
+    #[command(
+        about = "List indexed files.",
+        long_about = "List existing indexed file records in ascending file-id order.\n\nThe command is strictly read-only and uses keyset pagination. Optional exact filters limit the catalogue by source name, file kind, scan status, or hash status. Pass next_cursor as --cursor to continue."
+    )]
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<u64>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        file_kind: Option<String>,
+        #[arg(long)]
+        scan_status: Option<String>,
+        #[arg(long)]
+        hash_status: Option<String>,
+    },
+    #[command(
+        about = "Search indexed files.",
+        long_about = "Search existing indexed file records without scanning or modifying sources.\n\nThe optional positional QUERY searches path and source name. Additional filters cover path, basename, source, extension, file kind, scan status, hash status, size range, and modification-time range. At least one search filter is required. Results use file-id keyset pagination."
+    )]
+    Search {
+        #[arg(help = "Case-insensitive text contained in indexed path or source name.")]
+        query: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        extension: Option<String>,
+        #[arg(long)]
+        file_kind: Option<String>,
+        #[arg(long)]
+        scan_status: Option<String>,
+        #[arg(long)]
+        hash_status: Option<String>,
+        #[arg(long)]
+        min_size: Option<u64>,
+        #[arg(long)]
+        max_size: Option<u64>,
+        #[arg(long)]
+        mtime_from: Option<i64>,
+        #[arg(long)]
+        mtime_to: Option<i64>,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<u64>,
+    },
+    #[command(
+        about = "Show one indexed file.",
+        long_about = "Show one existing indexed file record by its stable file id.\n\nThe command joins source and optional hash metadata but does not read file content or modify index state."
+    )]
+    Show {
+        #[arg(long)]
+        id: u64,
     },
 }
 
@@ -299,7 +371,9 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
                 idx += 1;
             }
             "scan" | "hash" | "plan-import" | "clean" | "materialize" => return Some(idx),
-            "capabilities" | "source" | "report" | "plan" | "cleanup-failed" => return None,
+            "capabilities" | "file" | "source" | "report" | "plan" | "cleanup-failed" => {
+                return None
+            }
             _ if token.starts_with('-') => {
                 idx += 1;
             }
@@ -382,6 +456,96 @@ mod tests {
                 assert_eq!(status.as_deref(), Some("dry_run_completed"));
             }
             _ => panic!("expected plan list command"),
+        }
+    }
+
+    #[test]
+    fn parses_file_list_filters() {
+        let cli = Cli::try_parse_from([
+            "fod-indexer",
+            "file",
+            "list",
+            "--limit",
+            "25",
+            "--cursor",
+            "42",
+            "--source",
+            "lt7300_Documents",
+            "--scan-status",
+            "ok",
+        ])
+        .expect("file list command should parse");
+        match cli.command {
+            Commands::File {
+                command:
+                    FileCommands::List {
+                        limit,
+                        cursor,
+                        source,
+                        scan_status,
+                        ..
+                    },
+            } => {
+                assert_eq!(limit, 25);
+                assert_eq!(cursor, Some(42));
+                assert_eq!(source.as_deref(), Some("lt7300_Documents"));
+                assert_eq!(scan_status.as_deref(), Some("ok"));
+            }
+            _ => panic!("expected file list command"),
+        }
+    }
+
+    #[test]
+    fn parses_file_search_filters() {
+        let cli = Cli::try_parse_from([
+            "fod-indexer",
+            "--output",
+            "json",
+            "file",
+            "search",
+            "report",
+            "--extension",
+            "pdf",
+            "--min-size",
+            "100",
+            "--max-size",
+            "10000",
+            "--limit",
+            "10",
+        ])
+        .expect("file search command should parse");
+        assert_eq!(cli.output, OutputFormat::Json);
+        match cli.command {
+            Commands::File {
+                command:
+                    FileCommands::Search {
+                        query,
+                        extension,
+                        min_size,
+                        max_size,
+                        limit,
+                        ..
+                    },
+            } => {
+                assert_eq!(query.as_deref(), Some("report"));
+                assert_eq!(extension.as_deref(), Some("pdf"));
+                assert_eq!(min_size, Some(100));
+                assert_eq!(max_size, Some(10_000));
+                assert_eq!(limit, 10);
+            }
+            _ => panic!("expected file search command"),
+        }
+    }
+
+    #[test]
+    fn parses_file_show_id() {
+        let cli = Cli::try_parse_from(["fod-indexer", "file", "show", "--id", "17"])
+            .expect("file show command should parse");
+        match cli.command {
+            Commands::File {
+                command: FileCommands::Show { id },
+            } => assert_eq!(id, 17),
+            _ => panic!("expected file show command"),
         }
     }
 

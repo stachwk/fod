@@ -37,7 +37,7 @@ at the top level:
   "schema_version": 1,
   "producer": {
     "name": "fod-indexer",
-    "version": "3.2.x"
+    "version": "FOD 3.2.x"
   }
 }
 ```
@@ -85,6 +85,15 @@ Reads registered sources or browses a filesystem root. Supported filters are
 `--kind` and `--path`. Registered sources are ordered by kind, name, and source
 id; browsed directories are ordered by path.
 
+### `plan list`
+
+```text
+fod-indexer plan list --limit N [--cursor CURSOR] [--status STATUS]
+```
+
+Lists stored plans without creating, refreshing, or modifying them. Results use
+`plan_id DESC` keyset pagination.
+
 ### `plan show --id ID`
 
 Reads one stored import plan. It does not run scan, hash, or planning again.
@@ -92,6 +101,67 @@ Reads one stored import plan. It does not run scan, hash, or planning again.
 ### `report duplicates --id ID`
 
 Reads one existing duplicate set. It does not rebuild duplicate metadata.
+
+### `file list`
+
+```text
+fod-indexer file list [--limit N] [--cursor CURSOR]
+    [--source SOURCE]
+    [--file-kind KIND]
+    [--scan-status STATUS]
+    [--hash-status STATUS]
+```
+
+Lists existing file records in stable `file_id ASC` order. The returned
+`next_cursor` is the last visible `file_id` when another page exists.
+
+### `file search`
+
+```text
+fod-indexer file search [QUERY]
+    [--path TEXT]
+    [--name TEXT]
+    [--source SOURCE]
+    [--extension EXT]
+    [--file-kind KIND]
+    [--scan-status STATUS]
+    [--hash-status STATUS]
+    [--min-size BYTES]
+    [--max-size BYTES]
+    [--mtime-from NS]
+    [--mtime-to NS]
+    [--limit N]
+    [--cursor CURSOR]
+```
+
+Searches existing index rows without scanning or modifying sources. At least one
+search filter is required. `QUERY` performs a case-insensitive match against the
+indexed relative path and source name. `--path` and `--name` are
+case-insensitive containment filters; source, kind, and status filters are exact.
+The extension may be passed as `pdf` or `.pdf` and is normalized to lowercase.
+
+### `file show --id ID`
+
+Reads one file record by stable `file_id`. It joins source metadata and optional
+hash metadata but does not read file contents.
+
+File catalogue records expose fields owned by FOD:
+
+- stable `file_id`,
+- source id, name, kind, and root,
+- relative `path` and derived full `source_path`,
+- filename and extension derived from the path,
+- size, modification time, inode, and device when available,
+- file kind and scan status,
+- source-changed status,
+- hash algorithm, full hash, and hash status when available,
+- scan-run provenance,
+- record creation and update timestamps.
+
+The file catalogue consistency model is explicitly `live`. FOD does not claim a
+frozen `snapshot_id` until the database stores immutable catalogue snapshots.
+MIME, extracted text, OCR state, extractor versions, embeddings, and AI metadata
+remain outside `fod-indexer`.
 
 ## Command that is not strictly read-only
 
@@ -107,45 +177,6 @@ should not call it when it requires a no-write contract.
 
 A future `duplicate-set list` command will read existing rows without rebuilding
 them.
-
-## Planned P0 commands
-
-### Import-plan listing
-
-```text
-fod-indexer plan list --limit N [--cursor CURSOR] [--status STATUS]
-```
-
-The command will be read-only and return plan id, status, source filter, dry-run
-flag, timestamps, entry count, a deterministic cursor, and a total only when it
-is cheap.
-
-### File catalogue queries
-
-```text
-fod-indexer file list ...
-fod-indexer file search ...
-fod-indexer file show --id ID
-```
-
-The first version will expose fields already owned by FOD:
-
-- stable `file_id`,
-- source id, name, kind, and root,
-- relative and full source paths,
-- filename and extension derived from the path,
-- size and modification time,
-- file kind and scan status,
-- source-changed status,
-- hash algorithm, full hash, and hash status when available,
-- scan-run provenance.
-
-Planned filters include source, path, name, extension, file kind, scan status,
-hash status, size range, modification-time range, cursor, and limit.
-
-Pagination will be deterministic keyset pagination. Until the schema stores
-immutable catalogue snapshots, the consistency model is explicitly `live`, not
-a frozen `snapshot_id` contract.
 
 ## Planned P1 source-byte read
 

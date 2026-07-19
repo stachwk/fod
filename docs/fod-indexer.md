@@ -27,7 +27,7 @@ The current implementation supports filesystem-backed source adapters. The adapt
 
 ## Shared Core
 
-`fod-indexer` is the shared indexing core for FOD. It owns source registration, scanning, hashing, duplicate detection, import planning, materialization, and cleanup for external sources.
+`fod-indexer` is the shared indexing core for FOD. It owns source registration, scanning, hashing, duplicate detection, import planning, materialization, cleanup, and read-only catalogue access for external sources.
 
 `msfind` should reuse this same core instead of growing a separate indexing pipeline. If `msfind` needs new indexing behavior, that behavior should land in `fod-indexer` first and then be exposed through the existing source and capability model.
 
@@ -58,6 +58,9 @@ If a future source kind cannot be represented as a local path, mount, or export 
 Supported actions:
 
 - `fod-indexer capabilities`,
+- `fod-indexer file list [--limit <n>] [--cursor <id>]`,
+- `fod-indexer file search [query] [filters...]`,
+- `fod-indexer file show --id <id>`,
 - `fod-indexer source add [--name <name>] --path <path> --kind local|smb|qnap|adb|github`,
 - `fod-indexer source list [--kind <kind>]`,
 - `fod-indexer source list --path <path> [--kind <kind>]`,
@@ -67,6 +70,7 @@ Supported actions:
 - `fod-indexer report duplicates`,
 - `fod-indexer report duplicates --id <id>`,
 - `fod-indexer plan-import --dry-run`,
+- `fod-indexer plan list [--limit <n>] [--cursor <id>] [--status <status>]`,
 - `fod-indexer plan show --id <id>`,
 - `fod-indexer clean --source <name> --dry-run`,
 - `fod-indexer materialize --source <name>`,
@@ -96,9 +100,19 @@ fod-indexer --output json capabilities
 
 It declares producer and API versions, the required FOD database schema, currently available commands, planned commands, filters, sort order, pagination, limits, consistency, and whether a command is strictly read-only.
 
+The file catalogue commands read existing rows from `index_files`, `index_sources`, and optional `index_file_hashes` only:
+
+```bash
+fod-indexer --output json file list --limit 100
+fod-indexer --output json file search report --extension pdf
+fod-indexer --output json file show --id 42
+```
+
+`file list` and `file search` return a live view ordered by `file_id ASC`, with deterministic keyset pagination through `next_cursor`. `file search` supports path, name, source, extension, file-kind, scan-status, hash-status, size-range, and modification-time filters. `file show` returns one record by stable file id. These commands do not scan, hash, rebuild duplicate sets, create plans, read source contents, or modify index state.
+
 The no-id `fod-indexer report duplicates` command is not strictly read-only because it rebuilds derived duplicate-set metadata. `fod-indexer report duplicates --id <id>` only reads an existing set. Consumers such as `msfind` must use the explicit read-only commands and must not copy index SQL.
 
-The detailed contract and planned `plan list`, `duplicate-set list`, `file list/search/show`, and revalidated byte-range read are recorded in [`fod-indexer-read-api.md`](fod-indexer-read-api.md).
+The detailed contract, the still-planned `duplicate-set list`, and the revalidated byte-range read are recorded in [`fod-indexer-read-api.md`](fod-indexer-read-api.md).
 
 ## Snapshot export
 
