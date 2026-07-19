@@ -10,6 +10,7 @@ mod model;
 mod output;
 mod plan;
 mod progress;
+mod read_api;
 mod scan;
 mod source;
 mod source_registry;
@@ -29,10 +30,22 @@ fn main() {
 fn run() -> Result<(), String> {
     let cli = Cli::parse_with_source_aliases();
     let output = cli.output;
+
+    if matches!(&cli.command, Commands::Capabilities) {
+        let capabilities = read_api::capabilities_output();
+        if output.is_json() {
+            print_json(&capabilities)?;
+        } else {
+            println!("{}", capabilities.human_readable());
+        }
+        return Ok(());
+    }
+
     config::initialize_indexer_settings()?;
     let repo = db::open_repo(cli.conninfo.as_deref())?;
 
     match cli.command {
+        Commands::Capabilities => unreachable!("capabilities returns before opening PostgreSQL"),
         Commands::Source { command } => match command {
             SourceCommands::Add { name, path, kind } => {
                 let source = source_registry::register_source(&repo, name.as_deref(), &path, kind)?;
@@ -225,6 +238,20 @@ fn run() -> Result<(), String> {
             }
         },
         Commands::Plan { command } => match command {
+            PlanCommands::List {
+                limit,
+                cursor,
+                status,
+            } => {
+                let plans =
+                    read_api::load_import_plan_list(&repo, limit, cursor, status.as_deref())?;
+                if output.is_json() {
+                    print_json(&plans)?;
+                } else {
+                    println!("{}", plans.human_readable());
+                }
+                Ok(())
+            }
             PlanCommands::Show { id } => {
                 let snapshot = plan::load_import_plan_snapshot(&repo, id)?;
                 if output.is_json() {

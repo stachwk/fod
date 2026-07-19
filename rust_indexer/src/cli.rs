@@ -8,8 +8,8 @@ use std::ffi::OsString;
     name = "fod-indexer",
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
-    long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
+    long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to inspect its machine-readable capabilities, register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
+    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -28,6 +28,11 @@ impl Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Commands {
+    #[command(
+        about = "Describe the fod-indexer integration contract.",
+        long_about = "Print the versioned fod-indexer capability document.\n\nThe command is read-only, does not require PostgreSQL, and distinguishes currently available read-only commands from commands that rebuild derived state and from planned read-only APIs. JSON output includes the stable API schema version and producer version."
+    )]
+    Capabilities,
     #[command(
         about = "Manage sources.",
         long_about = "Register, browse, list, or remove source adapters so fod-indexer can inspect roots before scan and materialize steps.\n\nThe current implementation keeps all supported source kinds on the shared path-backed flow and exposes their policy and capability profile explicitly, so future direct crawlers can be added without changing the basic registration contract. If --name is omitted, fod-indexer uses a kind-aware naming heuristic with the current hostname as the final fallback. Use --name to override that suggestion. Registered sources are stored with their kind, policy, capability profile, and canonical root path in PostgreSQL."
@@ -56,7 +61,7 @@ pub enum Commands {
     },
     #[command(
         about = "Report duplicate groups.",
-        long_about = "Show the duplicate groups discovered from the current hash state.\n\nThe report is built from the deduplicated hash tables and focuses on confirmed duplicate sets. Zero-size duplicate groups are skipped so cache and lock noise do not dominate the report; they remain in the hash tables and import planning."
+        long_about = "Show the duplicate groups discovered from the current hash state.\n\nThe report is built from the deduplicated hash tables and focuses on confirmed duplicate sets. Zero-size duplicate groups are skipped so cache and lock noise do not dominate the report; they remain in the hash tables and import planning. The no-id form rebuilds derived duplicate metadata before returning; use --id for a read-only lookup of an existing set."
     )]
     Report {
         #[command(subcommand)]
@@ -64,7 +69,7 @@ pub enum Commands {
     },
     #[command(
         about = "Inspect stored import plans.",
-        long_about = "Inspect a stored import plan without rerunning the pipeline.\n\nUse plan show --id <id> to export the recorded plan snapshot, including the summary counts and plan entries. This stays on the read side of the contract and does not rebuild the plan."
+        long_about = "List or inspect stored import plans without rerunning the pipeline.\n\nUse plan list for deterministic read-only pagination over existing plans or plan show --id <id> to export one recorded plan snapshot. Neither command runs scan, hash, or import planning."
     )]
     Plan {
         #[command(subcommand)]
@@ -173,7 +178,7 @@ pub enum SourceCommands {
 pub enum ReportCommands {
     #[command(
         about = "Show duplicate files.",
-        long_about = "Print the duplicate groups currently known to the indexer.\n\nUse --id <id> to export an already stored duplicate-set snapshot without rebuilding the live duplicate tables."
+        long_about = "Print the duplicate groups currently known to the indexer.\n\nUse --id <id> to export an already stored duplicate-set snapshot without rebuilding the live duplicate tables. Without --id, the command refreshes derived duplicate metadata before producing the report and is not part of the strictly read-only API."
     )]
     Duplicates {
         #[arg(long, default_value_t = 100)]
@@ -185,6 +190,18 @@ pub enum ReportCommands {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum PlanCommands {
+    #[command(
+        about = "List stored import plans.",
+        long_about = "List existing import plans without creating, refreshing, or modifying them.\n\nResults are ordered by plan id descending. Pass the returned next_cursor as --cursor to continue. --status applies an exact status filter. --limit must be between 1 and 1000."
+    )]
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<u64>,
+        #[arg(long)]
+        status: Option<String>,
+    },
     #[command(
         about = "Show a stored import plan.",
         long_about = "Export a stored import plan by id.\n\nThis command reads the plan snapshot that was already written earlier and does not rerun scan, hash, or import planning."
@@ -282,7 +299,7 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
                 idx += 1;
             }
             "scan" | "hash" | "plan-import" | "clean" | "materialize" => return Some(idx),
-            "source" | "report" | "cleanup-failed" => return None,
+            "capabilities" | "source" | "report" | "plan" | "cleanup-failed" => return None,
             _ if token.starts_with('-') => {
                 idx += 1;
             }
@@ -320,4 +337,66 @@ fn find_positional_source_index(args: &[OsString], start: usize) -> Option<usize
         return Some(idx);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_offline_capabilities_with_json_output() {
+        let cli = Cli::try_parse_from(["fod-indexer", "--output", "json", "capabilities"])
+            .expect("capabilities command should parse");
+        assert_eq!(cli.output, OutputFormat::Json);
+        assert!(matches!(cli.command, Commands::Capabilities));
+    }
+
+    #[test]
+    fn parses_plan_list_filters() {
+        let cli = Cli::try_parse_from([
+            "fod-indexer",
+            "--output",
+            "json",
+            "plan",
+            "list",
+            "--limit",
+            "25",
+            "--cursor",
+            "42",
+            "--status",
+            "dry_run_completed",
+        ])
+        .expect("plan list command should parse");
+        assert_eq!(cli.output, OutputFormat::Json);
+        match cli.command {
+            Commands::Plan {
+                command:
+                    PlanCommands::List {
+                        limit,
+                        cursor,
+                        status,
+                    },
+            } => {
+                assert_eq!(limit, 25);
+                assert_eq!(cursor, Some(42));
+                assert_eq!(status.as_deref(), Some("dry_run_completed"));
+            }
+            _ => panic!("expected plan list command"),
+        }
+    }
+
+    #[test]
+    fn capabilities_is_not_treated_as_a_positional_source_command() {
+        let args = normalize_indexer_args([
+            OsString::from("fod-indexer"),
+            OsString::from("capabilities"),
+        ]);
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("fod-indexer"),
+                OsString::from("capabilities")
+            ]
+        );
+    }
 }

@@ -15,15 +15,15 @@ The tool scans external sources, groups files by content, and prepares a safe im
 
 The design keeps these concepts separate:
 
-- physical source file
-- content payload
-- logical FOD path or reference
+- physical source file,
+- content payload,
+- logical FOD path or reference.
 
 Duplicate detection must be content-based. A matching filename is never enough.
 
 ## MVP scope
 
-The current implementation supports filesystem-backed source adapters. The adapter kind now carries an explicit policy and capability profile so the shared path-backed flow stays separate from future direct crawlers. The indexed root is still a local filesystem path today.
+The current implementation supports filesystem-backed source adapters. The adapter kind carries an explicit policy and capability profile so the shared path-backed flow stays separate from future direct crawlers. The indexed root is still a local filesystem path today.
 
 ## Shared Core
 
@@ -37,15 +37,15 @@ Keep source-specific logic at the adapter boundary. The core should stay respons
 
 The current supported kinds all still index a local path, but the CLI surfaces their intended storage model explicitly:
 
-- `local`: policy `path-backed`
-- `smb` / `qnap`: policy `mirrored`
-- `adb` / `github`: policy `export-backed`
+- `local`: policy `path-backed`,
+- `smb` / `qnap`: policy `mirrored`,
+- `adb` / `github`: policy `export-backed`.
 
 The underlying capability flags stay visible too:
 
-- `local`: path-backed, read-only from the indexer's point of view, no mirror required, no export required, no direct crawler yet
-- `smb` / `qnap`: path-backed, read-only, mirror-backed, direct crawler possible later
-- `adb` / `github`: path-backed, read-only, mirror-backed, export-backed, direct crawler possible later
+- `local`: path-backed, read-only from the indexer's point of view, no mirror required, no export required, no direct crawler yet,
+- `smb` / `qnap`: path-backed, read-only, mirror-backed, direct crawler possible later,
+- `adb` / `github`: path-backed, read-only, mirror-backed, export-backed, direct crawler possible later.
 
 That keeps the registration contract simple while making the adapter boundary visible to users and future code.
 
@@ -57,21 +57,22 @@ If a future source kind cannot be represented as a local path, mount, or export 
 
 Supported actions:
 
-- `fod-indexer source add [--name <name>] --path <path> --kind local|smb|qnap|adb|github`
-- `fod-indexer source list [--kind <kind>]`
-- `fod-indexer source list --path <path> [--kind <kind>]`
-- `fod-indexer source remove --name <name>`
-- `fod-indexer scan --source <name>`
-- `fod-indexer hash --source <name> --candidates-only`
-- `fod-indexer report duplicates`
-- `fod-indexer report duplicates --id <id>`
-- `fod-indexer plan-import --dry-run`
-- `fod-indexer plan show --id <id>`
-- `fod-indexer clean --source <name> --dry-run`
-- `fod-indexer materialize --source <name>`
-- `fod-indexer cleanup-failed --plan <id>`
+- `fod-indexer capabilities`,
+- `fod-indexer source add [--name <name>] --path <path> --kind local|smb|qnap|adb|github`,
+- `fod-indexer source list [--kind <kind>]`,
+- `fod-indexer source list --path <path> [--kind <kind>]`,
+- `fod-indexer source remove --name <name>`,
+- `fod-indexer scan --source <name>`,
+- `fod-indexer hash --source <name> --candidates-only`,
+- `fod-indexer report duplicates`,
+- `fod-indexer report duplicates --id <id>`,
+- `fod-indexer plan-import --dry-run`,
+- `fod-indexer plan show --id <id>`,
+- `fod-indexer clean --source <name> --dry-run`,
+- `fod-indexer materialize --source <name>`,
+- `fod-indexer cleanup-failed --plan <id>`.
 
-Every command above also accepts `--output json` for machine-readable output. The JSON mode keeps the same underlying contract as the text mode, but returns structured source views, summaries, and stored snapshots instead of ad-hoc prose.
+Every command above accepts `--output json` for machine-readable output. JSON responses use API schema version `1` and add top-level `schema_version` and `producer` fields. Existing payload fields stay at the top level, so the version marker is additive instead of moving responses below a new `data` key.
 
 If `--name` is omitted, `fod-indexer` uses a kind-aware naming heuristic with the current hostname as the final fallback. Examples:
 
@@ -85,6 +86,20 @@ Explicit `--name` stays available when you want to override the suggestion or re
 Use `fod-indexer source list --kind adb` when you want to browse the detected ADB runtime root before scanning it. The command probes the device through `adb shell`, reads `EXTERNAL_STORAGE` and `SECONDARY_STORAGE`, and then maps the chosen storage root to a local `gvfs` mount when one is available so the printed `source add --path` values stay usable and shell-quoted. Use `fod-indexer source list --path /run/user/1000/adb/<serial> --kind adb` when you want to override the detected root and inspect one specific mounted device or copy a child directory path into `source add`.
 Use `fod-indexer source remove --name <name>` to unregister an added source once you no longer want it indexed.
 
+## Read-only integration API
+
+`fod-indexer capabilities` prints the current read-only integration contract without loading FOD configuration or connecting to PostgreSQL. The JSON form is:
+
+```bash
+fod-indexer --output json capabilities
+```
+
+It declares producer and API versions, the required FOD database schema, currently available commands, planned commands, filters, sort order, pagination, limits, consistency, and whether a command is strictly read-only.
+
+The no-id `fod-indexer report duplicates` command is not strictly read-only because it rebuilds derived duplicate-set metadata. `fod-indexer report duplicates --id <id>` only reads an existing set. Consumers such as `msfind` must use the explicit read-only commands and must not copy index SQL.
+
+The detailed contract and planned `plan list`, `duplicate-set list`, `file list/search/show`, and revalidated byte-range read are recorded in [`fod-indexer-read-api.md`](fod-indexer-read-api.md).
+
 ## Snapshot export
 
 `fod-indexer plan show --id <id>` exports a stored import-plan snapshot without rerunning scan or hash. The snapshot includes the stored summary counts, status, request token, timestamps, and plan entries.
@@ -95,9 +110,9 @@ Use `fod-indexer source remove --name <name>` to unregister an added source once
 
 The current replay-safe boundary stays intentionally bounded:
 
-- `scan`, `hash`, `plan-import`, and `cleanup-failed` stay inside the idempotent retry envelope that is safe to repeat after transient disconnects.
-- `materialize` keeps best-effort rollback for partial failures and falls back to `cleanup-failed` when the rollback cannot finish.
-- Full transactional replay of in-flight SQL remains a separate project and should not be treated as part of the shared core.
+- `scan`, `hash`, `plan-import`, and `cleanup-failed` stay inside the idempotent retry envelope that is safe to repeat after transient disconnects,
+- `materialize` keeps best-effort rollback for partial failures and falls back to `cleanup-failed` when the rollback cannot finish,
+- full transactional replay of in-flight SQL remains a separate project and should not be treated as part of the shared core.
 
 ## Indexer Filters
 
@@ -106,11 +121,11 @@ Zero-length files are skipped during scan before they enter the index, so they d
 
 Supported keys:
 
-- `skip_hidden = true|false`
-- `skip_components = name1,name2,...`
-- `skip_prefixes = path/prefix1,path/prefix2,...`
-- `skip_paths = convenience alias that accepts either component names or nested prefixes`
-- `allow_extensions = txt,pdf,jpg,png,doc,xls,...`
+- `skip_hidden = true|false`,
+- `skip_components = name1,name2,...`,
+- `skip_prefixes = path/prefix1,path/prefix2,...`,
+- `skip_paths = convenience alias that accepts either component names or nested prefixes`,
+- `allow_extensions = txt,pdf,jpg,png,doc,xls,...`.
 
 Examples:
 
@@ -141,10 +156,10 @@ Zero-length files may be grouped as a special duplicate case.
 
 Scanner status values are explicit:
 
-- `ok`
-- `unreadable`
-- `unsupported_type`
-- `stat_failed`
+- `ok`,
+- `unreadable`,
+- `unsupported_type`,
+- `stat_failed`.
 
 Unreadable files should be recorded and the scan should continue. A database write failure is the only case that should abort the scan.
 While a scan runs, `fod-indexer scan --source <name>` prints periodic progress lines to stderr with the scanned-file counts, current file path, and elapsed time.
