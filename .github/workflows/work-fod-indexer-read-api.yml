@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - work/fod-3.2.17-indexer-read-api
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
