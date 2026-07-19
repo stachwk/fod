@@ -264,12 +264,10 @@ mod tests {
 
     #[test]
     fn validates_plan_list_limits_and_cursor() {
-        assert!(validate_plan_list_request(
-            crate::output::INDEXER_DEFAULT_PAGE_LIMIT,
-            None,
-            None
-        )
-        .is_ok());
+        assert!(
+            validate_plan_list_request(crate::output::INDEXER_DEFAULT_PAGE_LIMIT, None, None)
+                .is_ok()
+        );
         assert!(validate_plan_list_request(0, None, None).is_err());
         assert!(validate_plan_list_request(INDEXER_MAX_PAGE_LIMIT + 1, None, None).is_err());
         assert!(validate_plan_list_request(10, Some(0), None).is_err());
