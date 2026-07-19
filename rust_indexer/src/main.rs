@@ -16,7 +16,9 @@ mod source_registry;
 
 use crate::model::IndexSource;
 use cli::{Cli, Commands, PlanCommands, ReportCommands, SourceCommands, SourceKind};
-use output::{print_json, SourceListOutput, SourceMutationOutput};
+use output::{
+    print_json, IndexerCapabilitiesOutput, SourceListOutput, SourceMutationOutput,
+};
 use std::path::Path;
 
 fn main() {
@@ -29,10 +31,22 @@ fn main() {
 fn run() -> Result<(), String> {
     let cli = Cli::parse_with_source_aliases();
     let output = cli.output;
+
+    if matches!(&cli.command, Commands::Capabilities) {
+        let capabilities = IndexerCapabilitiesOutput::current();
+        if output.is_json() {
+            print_json(&capabilities)?;
+        } else {
+            println!("{}", capabilities.human_readable());
+        }
+        return Ok(());
+    }
+
     config::initialize_indexer_settings()?;
     let repo = db::open_repo(cli.conninfo.as_deref())?;
 
     match cli.command {
+        Commands::Capabilities => unreachable!("capabilities returns before opening PostgreSQL"),
         Commands::Source { command } => match command {
             SourceCommands::Add { name, path, kind } => {
                 let source = source_registry::register_source(&repo, name.as_deref(), &path, kind)?;
