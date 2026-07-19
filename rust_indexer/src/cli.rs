@@ -9,7 +9,7 @@ use std::ffi::OsString;
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
     long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to inspect its machine-readable capabilities, query the read-only file catalogue, register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer file list --limit 100\n  fod-indexer file search report --extension pdf --limit 25\n  fod-indexer file show --id 42\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
+    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer file list --limit 100\n  fod-indexer file search report --extension pdf --limit 25\n  fod-indexer file show --id 42\n  fod-indexer duplicate-set list --limit 100\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -40,6 +40,16 @@ pub enum Commands {
     File {
         #[command(subcommand)]
         command: FileCommands,
+    },
+    #[command(
+        about = "Inspect stored duplicate sets.",
+        long_about = "List existing duplicate-set metadata without rebuilding it.
+
+This command is strictly read-only. It reads index_duplicate_sets in stable id order and does not scan sources, hash files, refresh duplicate metadata, create plans, or materialize data."
+    )]
+    DuplicateSet {
+        #[command(subcommand)]
+        command: DuplicateSetCommands,
     },
     #[command(
         about = "Manage sources.",
@@ -122,6 +132,20 @@ pub enum Commands {
         source: String,
         #[arg(long, default_value_t = false)]
         dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DuplicateSetCommands {
+    #[command(
+        about = "List stored duplicate sets.",
+        long_about = "List existing duplicate-set metadata without rebuilding it.\n\nResults are ordered by duplicate-set id ascending. Pass the returned next_cursor as --cursor to continue. --limit must be between 1 and 1000."
+    )]
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<u64>,
     },
 }
 
@@ -371,9 +395,8 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
                 idx += 1;
             }
             "scan" | "hash" | "plan-import" | "clean" | "materialize" => return Some(idx),
-            "capabilities" | "file" | "source" | "report" | "plan" | "cleanup-failed" => {
-                return None
-            }
+            "capabilities" | "file" | "duplicate-set" | "source" | "report" | "plan"
+            | "cleanup-failed" => return None,
             _ if token.starts_with('-') => {
                 idx += 1;
             }
@@ -456,6 +479,32 @@ mod tests {
                 assert_eq!(status.as_deref(), Some("dry_run_completed"));
             }
             _ => panic!("expected plan list command"),
+        }
+    }
+
+    #[test]
+    fn parses_duplicate_set_list_pagination() {
+        let cli = Cli::try_parse_from([
+            "fod-indexer",
+            "--output",
+            "json",
+            "duplicate-set",
+            "list",
+            "--limit",
+            "25",
+            "--cursor",
+            "42",
+        ])
+        .expect("duplicate-set list command should parse");
+        assert_eq!(cli.output, OutputFormat::Json);
+        match cli.command {
+            Commands::DuplicateSet {
+                command: DuplicateSetCommands::List { limit, cursor },
+            } => {
+                assert_eq!(limit, 25);
+                assert_eq!(cursor, Some(42));
+            }
+            _ => panic!("expected duplicate-set list command"),
         }
     }
 
