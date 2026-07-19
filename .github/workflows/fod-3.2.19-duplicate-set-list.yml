@@ -1,9 +1,10 @@
 name: FOD 3.2.19 duplicate-set list
 
 on:
-  push:
+  pull_request:
     branches:
-      - work/fod-3.2.19-duplicate-set-list
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
