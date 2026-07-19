@@ -9,7 +9,7 @@ use std::ffi::OsString;
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
     long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to inspect its machine-readable capabilities, register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
+    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -69,7 +69,7 @@ pub enum Commands {
     },
     #[command(
         about = "Inspect stored import plans.",
-        long_about = "Inspect a stored import plan without rerunning the pipeline.\n\nUse plan show --id <id> to export the recorded plan snapshot, including the summary counts and plan entries. This stays on the read side of the contract and does not rebuild the plan."
+        long_about = "List or inspect stored import plans without rerunning the pipeline.\n\nUse plan list for deterministic read-only pagination over existing plans or plan show --id <id> to export one recorded plan snapshot. Neither command runs scan, hash, or import planning."
     )]
     Plan {
         #[command(subcommand)]
@@ -190,6 +190,18 @@ pub enum ReportCommands {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum PlanCommands {
+    #[command(
+        about = "List stored import plans.",
+        long_about = "List existing import plans without creating, refreshing, or modifying them.\n\nResults are ordered by plan id descending. Pass the returned next_cursor as --cursor to continue. --status applies an exact status filter. --limit must be between 1 and 1000."
+    )]
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<u64>,
+        #[arg(long)]
+        status: Option<String>,
+    },
     #[command(
         about = "Show a stored import plan.",
         long_about = "Export a stored import plan by id.\n\nThis command reads the plan snapshot that was already written earlier and does not rerun scan, hash, or import planning."
@@ -337,6 +349,40 @@ mod tests {
             .expect("capabilities command should parse");
         assert_eq!(cli.output, OutputFormat::Json);
         assert!(matches!(cli.command, Commands::Capabilities));
+    }
+
+    #[test]
+    fn parses_plan_list_filters() {
+        let cli = Cli::try_parse_from([
+            "fod-indexer",
+            "--output",
+            "json",
+            "plan",
+            "list",
+            "--limit",
+            "25",
+            "--cursor",
+            "42",
+            "--status",
+            "dry_run_completed",
+        ])
+        .expect("plan list command should parse");
+        assert_eq!(cli.output, OutputFormat::Json);
+        match cli.command {
+            Commands::Plan {
+                command:
+                    PlanCommands::List {
+                        limit,
+                        cursor,
+                        status,
+                    },
+            } => {
+                assert_eq!(limit, 25);
+                assert_eq!(cursor, Some(42));
+                assert_eq!(status.as_deref(), Some("dry_run_completed"));
+            }
+            _ => panic!("expected plan list command"),
+        }
     }
 
     #[test]
