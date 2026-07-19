@@ -102,6 +102,18 @@ Reads one stored import plan. It does not run scan, hash, or planning again.
 
 Reads one existing duplicate set. It does not rebuild duplicate metadata.
 
+### `duplicate-set list`
+
+```text
+fod-indexer duplicate-set list [--limit N] [--cursor CURSOR]
+```
+
+Lists existing rows from `index_duplicate_sets` without invoking scan, hash, or
+the duplicate-set rebuild. Results use `duplicate_set_id ASC` keyset pagination.
+Each item contains the stable duplicate-set id, hash algorithm, full hash, file
+size, file count, total bytes, and creation/update timestamps. The consistency
+model is `live`.
+
 ### `file list`
 
 ```text
@@ -173,10 +185,7 @@ fod-indexer report duplicates --limit N
 
 currently calls the duplicate-set rebuild before returning the report. It is a
 refreshing read over derived state, not a strictly read-only query. `msfind`
-should not call it when it requires a no-write contract.
-
-A future `duplicate-set list` command will read existing rows without rebuilding
-them.
+should use `duplicate-set list` instead when it requires a no-write contract.
 
 ## Planned P1 source-byte read
 
