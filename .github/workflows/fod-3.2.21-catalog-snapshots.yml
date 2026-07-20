@@ -18,33 +18,23 @@ jobs:
           ref: work/fod-3.2.21-catalog-snapshots
           fetch-depth: 0
 
-      - name: Apply integration or focused correction
+      - name: Prepare validated implementation
         run: |
           set -euo pipefail
-          if grep -qx '3.2.21' fod_version.txt; then
-            python3 - <<'PY'
-          from pathlib import Path
-          path = Path('rust_indexer/src/cli.rs')
-          text = path.read_text()
-          old = 'command: FileCommands::Show { id },'
-          if old not in text:
-              raise SystemExit('expected legacy FileCommands::Show test pattern')
-          path.write_text(text.replace(old, 'command: FileCommands::Show { id, .. },', 1))
-          PY
-            rm -f .github/fod-3.2.21-validation.log
-          else
-            python3 .github/scripts/implement_fod_3_2_21.py
-          fi
+          test "$(cat fod_version.txt)" = "3.2.21"
+          rm -f .github/fod-3.2.21-validation.log
 
-      - name: Persist formatted implementation
+      - name: Persist diagnostic cleanup
         run: |
           set -euo pipefail
           cargo fmt --all
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "Fix FOD 3.2.21 snapshot CLI validation"
-          git push origin HEAD:work/fod-3.2.21-catalog-snapshots
+          if ! git diff --cached --quiet; then
+            git commit -m "Prepare final FOD 3.2.21 validation"
+            git push origin HEAD:work/fod-3.2.21-catalog-snapshots
+          fi
 
       - name: Validate and preserve diagnostics
         run: |
@@ -54,7 +44,7 @@ jobs:
             cargo check --workspace &&
             cargo check --workspace --locked &&
             cargo test --locked -p fod-rust-indexer &&
-            cargo test --locked -p fod-rust-mkfs &&
+            cargo test --locked -p fod-rust-mkfs --bins &&
             make test-version &&
             git diff --check
           } > /tmp/fod-3.2.21-validation.log 2>&1
