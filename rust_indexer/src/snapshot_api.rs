@@ -6,6 +6,10 @@ use crate::output::{
 };
 use fod_rust_hotpath::pg::DbRepo;
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static SNAPSHOT_REQUEST_TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CatalogSnapshotView {
@@ -201,12 +205,23 @@ pub fn capabilities_output() -> IndexerCapabilitiesOutput {
     capabilities
 }
 
+fn new_snapshot_request_token() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = SNAPSHOT_REQUEST_TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("catalog-snapshot-{}-{nanos}-{sequence}", std::process::id())
+}
+
 pub fn create_catalog_snapshot(
     repo: &DbRepo,
     source: Option<&str>,
 ) -> Result<CatalogSnapshotCreateOutput, String> {
     ensure_snapshot_schema(repo, "snapshot create")?;
     let source = normalize_source_filter(source)?;
+    let request_token = new_snapshot_request_token();
+    let request_token_literal = sql_quote_literal(&request_token);
     if let Some(source_name) = source.as_deref() {
         let rows = repo.query_rows_text(&format!(
             "SELECT 1 FROM index_sources WHERE name = {} LIMIT 1",
@@ -258,6 +273,7 @@ pub fn create_catalog_snapshot(
         ),
         created AS (
             INSERT INTO index_catalog_snapshots (
+                request_token,
                 status,
                 source_filter,
                 file_count,
@@ -265,12 +281,15 @@ pub fn create_catalog_snapshot(
                 max_file_id
             )
             SELECT
+                {request_token_literal},
                 'complete',
                 {source_literal},
                 COUNT(*)::bigint,
                 COALESCE(SUM(size), 0)::bigint,
                 MAX(id_file)::bigint
             FROM source_rows
+            ON CONFLICT (request_token) DO UPDATE
+                SET request_token = EXCLUDED.request_token
             RETURNING
                 id_catalog_snapshot,
                 status,
@@ -278,7 +297,8 @@ pub fn create_catalog_snapshot(
                 file_count,
                 total_bytes,
                 max_file_id,
-                created_at
+                created_at,
+                (xmax = 0) AS created_new
         ),
         copied AS (
             INSERT INTO index_catalog_snapshot_files (
@@ -326,6 +346,9 @@ pub fn create_catalog_snapshot(
                 source_rows.file_updated_at
             FROM source_rows
             CROSS JOIN created
+            WHERE created.max_file_id IS NOT NULL
+              AND source_rows.id_file <= created.max_file_id
+            ON CONFLICT (id_catalog_snapshot, id_file) DO NOTHING
             RETURNING id_file
         )
         SELECT
@@ -336,6 +359,7 @@ pub fn create_catalog_snapshot(
             created.total_bytes::text,
             COALESCE(created.max_file_id::text, ''),
             created.created_at::text,
+            created.created_new::text,
             (SELECT COUNT(*) FROM copied)::text
         FROM created
         "
@@ -343,15 +367,22 @@ pub fn create_catalog_snapshot(
     let row = rows
         .first()
         .ok_or_else(|| "catalog snapshot create did not return a snapshot".to_string())?;
-    if row.len() < 8 {
+    if row.len() < 9 {
         return Err("catalog snapshot create row is too short".to_string());
     }
     let snapshot = snapshot_from_row(&row[..7])?;
-    let copied_count = parse_u64(&row[7], "copied snapshot file count")?;
-    if copied_count != snapshot.file_count {
+    let created_new = parse_bool(&row[7]);
+    let copied_count = parse_u64(&row[8], "copied snapshot file count")?;
+    if created_new && copied_count != snapshot.file_count {
         return Err(format!(
             "catalog_snapshot_incomplete: expected {} copied files, got {copied_count}",
             snapshot.file_count
+        ));
+    }
+    if !created_new && copied_count > snapshot.file_count {
+        return Err(format!(
+            "catalog_snapshot_replay_invalid: snapshot {} contains {} newly copied rows, expected at most {}",
+            snapshot.snapshot_id, copied_count, snapshot.file_count
         ));
     }
     Ok(CatalogSnapshotCreateOutput {
@@ -497,11 +528,18 @@ fn ensure_snapshot_schema(repo: &DbRepo, operation: &str) -> Result<(), String> 
     let rows = repo.query_rows_text(
         "SELECT
             to_regclass('fod.index_catalog_snapshots') IS NOT NULL,
-            to_regclass('fod.index_catalog_snapshot_files') IS NOT NULL",
+            to_regclass('fod.index_catalog_snapshot_files') IS NOT NULL,
+            EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'fod'
+                  AND table_name = 'index_catalog_snapshots'
+                  AND column_name = 'request_token'
+            )",
     )?;
-    let ready = rows
-        .first()
-        .is_some_and(|row| row.len() >= 2 && parse_bool(&row[0]) && parse_bool(&row[1]));
+    let ready = rows.first().is_some_and(|row| {
+        row.len() >= 3 && parse_bool(&row[0]) && parse_bool(&row[1]) && parse_bool(&row[2])
+    });
     if ready {
         Ok(())
     } else {
@@ -1061,6 +1099,14 @@ mod tests {
         assert!(validate_list_request(10, Some(0)).is_err());
         assert!(validate_snapshot_id(1, "snapshot show").is_ok());
         assert!(validate_snapshot_id(0, "snapshot show").is_err());
+    }
+
+    #[test]
+    fn request_tokens_are_unique_within_a_process() {
+        let first = new_snapshot_request_token();
+        let second = new_snapshot_request_token();
+        assert_ne!(first, second);
+        assert!(first.starts_with("catalog-snapshot-"));
     }
 
     #[test]

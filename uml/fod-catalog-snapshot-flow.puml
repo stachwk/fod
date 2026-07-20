@@ -6,6 +6,7 @@ participant "fod-indexer" as CLI
 database PostgreSQL as DB
 User -> CLI: snapshot create [--source NAME]
 CLI -> DB: one atomic WITH statement
+unique request_token
 DB -> DB: materialize live catalogue rows
 DB -> DB: INSERT index_catalog_snapshots
 DB -> DB: INSERT index_catalog_snapshot_files

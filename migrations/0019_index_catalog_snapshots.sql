@@ -2,6 +2,7 @@ SET search_path TO fod, public;
 
 CREATE TABLE IF NOT EXISTS index_catalog_snapshots (
     id_catalog_snapshot SERIAL PRIMARY KEY,
+    request_token TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL,
     source_filter TEXT,
     file_count BIGINT NOT NULL DEFAULT 0,

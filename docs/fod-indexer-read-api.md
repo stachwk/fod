@@ -238,5 +238,5 @@ fod-indexer file search QUERY --snapshot-id ID
 fod-indexer file show --id FILE_ID --snapshot-id ID
 ```
 
-`snapshot create` atomically copies the current catalogue metadata into `index_catalog_snapshots` and `index_catalog_snapshot_files`. Snapshot-backed file queries return `consistency: stored-snapshot` and the selected `snapshot_id`; later scans, hash updates, source removal, and live catalogue cleanup do not alter copied rows. Snapshot creation and deletion write only snapshot tables. They do not scan, hash, materialize, read source bytes, or modify live index rows.
+`snapshot create` atomically copies the current catalogue metadata into `index_catalog_snapshots` and `index_catalog_snapshot_files`. Snapshot-backed file queries return `consistency: stored-snapshot` and the selected `snapshot_id`; later scans, hash updates, source removal, and live catalogue cleanup do not alter copied rows. Snapshot creation and deletion write only snapshot tables. They do not scan, hash, materialize, read source bytes, or modify live index rows. Snapshot creation uses an internal unique request token and conflict-safe replay bounded by the original maximum file id, so an ambiguous database retry cannot create a second snapshot or add later catalogue rows.
 

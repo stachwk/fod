@@ -468,6 +468,7 @@ ALTER TABLE IF EXISTS lock_range_leases
 
 CREATE TABLE IF NOT EXISTS index_catalog_snapshots (
     id_catalog_snapshot SERIAL PRIMARY KEY,
+    request_token TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL,
     source_filter TEXT,
     file_count BIGINT NOT NULL DEFAULT 0,
