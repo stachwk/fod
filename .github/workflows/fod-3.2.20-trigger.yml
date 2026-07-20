@@ -19,7 +19,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply implementation
-        run: python3 .github/scripts/implement_fod_3_2_20.py
+        run: |
+          python3 -c "from pathlib import Path; p=Path('.github/scripts/implement_fod_3_2_20.py'); t=p.read_text(); p.write_text(t.replace(\"    '''    #[test]\", \"    r'''    #[test]\", 1))"
+          python3 .github/scripts/implement_fod_3_2_20.py
 
       - name: Persist formatted implementation
         run: |
