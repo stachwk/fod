@@ -14,13 +14,14 @@ mod plan;
 mod progress;
 mod read_api;
 mod scan;
+mod snapshot_api;
 mod source;
 mod source_registry;
 
 use crate::model::IndexSource;
 use cli::{
     Cli, Commands, DuplicateSetCommands, FileCommands, PlanCommands, ReportCommands,
-    SourceCommands, SourceKind,
+    SnapshotCommands, SourceCommands, SourceKind,
 };
 use output::{print_json, SourceListOutput, SourceMutationOutput};
 use std::io::Write;
@@ -38,7 +39,7 @@ fn run() -> Result<(), String> {
     let output = cli.output;
 
     if matches!(&cli.command, Commands::Capabilities) {
-        let capabilities = file_read_api::capabilities_output();
+        let capabilities = snapshot_api::capabilities_output();
         if output.is_json() {
             print_json(&capabilities)?;
         } else {
@@ -63,24 +64,76 @@ fn run() -> Result<(), String> {
                 Ok(())
             }
         },
+        Commands::Snapshot { command } => match command {
+            SnapshotCommands::Create { source } => {
+                let snapshot = snapshot_api::create_catalog_snapshot(&repo, source.as_deref())?;
+                if output.is_json() {
+                    print_json(&snapshot)?;
+                } else {
+                    println!("{}", snapshot.human_readable());
+                }
+                Ok(())
+            }
+            SnapshotCommands::List { limit, cursor } => {
+                let snapshots = snapshot_api::list_catalog_snapshots(&repo, limit, cursor)?;
+                if output.is_json() {
+                    print_json(&snapshots)?;
+                } else {
+                    println!("{}", snapshots.human_readable());
+                }
+                Ok(())
+            }
+            SnapshotCommands::Show { id } => {
+                let snapshot = snapshot_api::show_catalog_snapshot(&repo, id)?;
+                if output.is_json() {
+                    print_json(&snapshot)?;
+                } else {
+                    println!("{}", snapshot.human_readable());
+                }
+                Ok(())
+            }
+            SnapshotCommands::Delete { id } => {
+                let deleted = snapshot_api::delete_catalog_snapshot(&repo, id)?;
+                if output.is_json() {
+                    print_json(&deleted)?;
+                } else {
+                    println!("{}", deleted.human_readable());
+                }
+                Ok(())
+            }
+        },
         Commands::File { command } => match command {
             FileCommands::List {
                 limit,
                 cursor,
+                snapshot_id,
                 source,
                 file_kind,
                 scan_status,
                 hash_status,
             } => {
-                let files = read_api::load_file_list(
-                    &repo,
-                    limit,
-                    cursor,
-                    source.as_deref(),
-                    file_kind.as_deref(),
-                    scan_status.as_deref(),
-                    hash_status.as_deref(),
-                )?;
+                let files = if let Some(snapshot_id) = snapshot_id {
+                    snapshot_api::load_snapshot_file_list(
+                        &repo,
+                        snapshot_id,
+                        limit,
+                        cursor,
+                        source.as_deref(),
+                        file_kind.as_deref(),
+                        scan_status.as_deref(),
+                        hash_status.as_deref(),
+                    )?
+                } else {
+                    snapshot_api::SnapshotFileCatalogOutput::from_live(read_api::load_file_list(
+                        &repo,
+                        limit,
+                        cursor,
+                        source.as_deref(),
+                        file_kind.as_deref(),
+                        scan_status.as_deref(),
+                        hash_status.as_deref(),
+                    )?)
+                };
                 if output.is_json() {
                     print_json(&files)?;
                 } else {
@@ -103,24 +156,46 @@ fn run() -> Result<(), String> {
                 mtime_to,
                 limit,
                 cursor,
+                snapshot_id,
             } => {
-                let files = read_api::search_files(
-                    &repo,
-                    limit,
-                    cursor,
-                    query.as_deref(),
-                    path.as_deref(),
-                    name.as_deref(),
-                    source.as_deref(),
-                    extension.as_deref(),
-                    file_kind.as_deref(),
-                    scan_status.as_deref(),
-                    hash_status.as_deref(),
-                    min_size,
-                    max_size,
-                    mtime_from,
-                    mtime_to,
-                )?;
+                let files = if let Some(snapshot_id) = snapshot_id {
+                    snapshot_api::search_snapshot_files(
+                        &repo,
+                        snapshot_id,
+                        limit,
+                        cursor,
+                        query.as_deref(),
+                        path.as_deref(),
+                        name.as_deref(),
+                        source.as_deref(),
+                        extension.as_deref(),
+                        file_kind.as_deref(),
+                        scan_status.as_deref(),
+                        hash_status.as_deref(),
+                        min_size,
+                        max_size,
+                        mtime_from,
+                        mtime_to,
+                    )?
+                } else {
+                    snapshot_api::SnapshotFileCatalogOutput::from_live(read_api::search_files(
+                        &repo,
+                        limit,
+                        cursor,
+                        query.as_deref(),
+                        path.as_deref(),
+                        name.as_deref(),
+                        source.as_deref(),
+                        extension.as_deref(),
+                        file_kind.as_deref(),
+                        scan_status.as_deref(),
+                        hash_status.as_deref(),
+                        min_size,
+                        max_size,
+                        mtime_from,
+                        mtime_to,
+                    )?)
+                };
                 if output.is_json() {
                     print_json(&files)?;
                 } else {
@@ -128,8 +203,12 @@ fn run() -> Result<(), String> {
                 }
                 Ok(())
             }
-            FileCommands::Show { id } => {
-                let file = read_api::show_file(&repo, id)?;
+            FileCommands::Show { id, snapshot_id } => {
+                let file = if let Some(snapshot_id) = snapshot_id {
+                    snapshot_api::show_snapshot_file(&repo, snapshot_id, id)?
+                } else {
+                    snapshot_api::SnapshotFileShowOutput::from_live(read_api::show_file(&repo, id)?)
+                };
                 if output.is_json() {
                     print_json(&file)?;
                 } else {

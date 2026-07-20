@@ -445,9 +445,9 @@ pub fn delete_catalog_snapshot(
         RETURNING file_count::text
         "
     ))?;
-    let row = rows
-        .first()
-        .ok_or_else(|| format!("catalog_snapshot_not_found: snapshot {snapshot_id} does not exist"))?;
+    let row = rows.first().ok_or_else(|| {
+        format!("catalog_snapshot_not_found: snapshot {snapshot_id} does not exist")
+    })?;
     let deleted_file_count = row
         .first()
         .ok_or_else(|| "catalog snapshot delete row is too short".to_string())
@@ -499,9 +499,9 @@ fn ensure_snapshot_schema(repo: &DbRepo, operation: &str) -> Result<(), String> 
             to_regclass('fod.index_catalog_snapshots') IS NOT NULL,
             to_regclass('fod.index_catalog_snapshot_files') IS NOT NULL",
     )?;
-    let ready = rows.first().is_some_and(|row| {
-        row.len() >= 2 && parse_bool(&row[0]) && parse_bool(&row[1])
-    });
+    let ready = rows
+        .first()
+        .is_some_and(|row| row.len() >= 2 && parse_bool(&row[0]) && parse_bool(&row[1]));
     if ready {
         Ok(())
     } else {
@@ -585,6 +585,450 @@ fn parse_bool(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "t" | "true" | "1" | "on"
     )
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SnapshotFileCatalogOutput {
+    pub consistency: &'static str,
+    pub snapshot_id: Option<u64>,
+    pub sort: &'static str,
+    pub limit: usize,
+    pub cursor: Option<u64>,
+    pub filters: crate::read_api::FileCatalogFilters,
+    pub items: Vec<crate::read_api::FileCatalogItem>,
+    pub next_cursor: Option<u64>,
+    pub total: u64,
+}
+
+impl SnapshotFileCatalogOutput {
+    pub fn from_live(output: crate::read_api::FileCatalogOutput) -> Self {
+        Self {
+            consistency: output.consistency,
+            snapshot_id: None,
+            sort: output.sort,
+            limit: output.limit,
+            cursor: output.cursor,
+            filters: output.filters,
+            items: output.items,
+            next_cursor: output.next_cursor,
+            total: output.total,
+        }
+    }
+
+    pub fn human_readable(&self) -> String {
+        let mut text = format!(
+            "FOD indexer file catalogue\nconsistency: {}\nsnapshot_id: {}\nsort: {}\nlimit: {}\ncursor: {}\ntotal: {}\nitems: {}",
+            self.consistency,
+            self.snapshot_id.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+            self.sort,
+            self.limit,
+            self.cursor.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+            self.total,
+            self.items.len(),
+        );
+        for item in &self.items {
+            text.push_str(&format!(
+                "\n- file_id={} source={} kind={} path={} size={} scan_status={} hash_status={}",
+                item.file_id,
+                item.source_name,
+                item.source_kind,
+                item.path,
+                item.size,
+                item.scan_status,
+                item.hash_status.as_deref().unwrap_or("none"),
+            ));
+        }
+        text.push_str(&format!(
+            "\nnext_cursor: {}",
+            self.next_cursor
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        ));
+        text
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SnapshotFileShowOutput {
+    pub consistency: &'static str,
+    pub snapshot_id: Option<u64>,
+    pub item: crate::read_api::FileCatalogItem,
+}
+
+impl SnapshotFileShowOutput {
+    pub fn from_live(output: crate::read_api::FileShowOutput) -> Self {
+        Self {
+            consistency: output.consistency,
+            snapshot_id: None,
+            item: output.item,
+        }
+    }
+
+    pub fn human_readable(&self) -> String {
+        format!(
+            "FOD indexer file\nconsistency: {}\nsnapshot_id: {}\nfile_id={} source={} kind={} source_root={} path={} source_path={} size={} mtime_ns={} inode={} device={} file_kind={} scan_status={} source_changed={} hash_algorithm={} full_hash={} hash_status={} scan_run_id={} created_at={} updated_at={}",
+            self.consistency,
+            self.snapshot_id.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+            self.item.file_id,
+            self.item.source_name,
+            self.item.source_kind,
+            self.item.source_root,
+            self.item.path,
+            self.item.source_path,
+            self.item.size,
+            self.item.mtime_ns.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+            self.item.inode.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+            self.item.device.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+            self.item.file_kind,
+            self.item.scan_status,
+            self.item.source_changed,
+            self.item.hash_algorithm.as_deref().unwrap_or("none"),
+            self.item.full_hash_hex.as_deref().unwrap_or("none"),
+            self.item.hash_status.as_deref().unwrap_or("none"),
+            self.item.scan_run_id.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+            self.item.created_at,
+            self.item.updated_at,
+        )
+    }
+}
+
+pub fn load_snapshot_file_list(
+    repo: &DbRepo,
+    snapshot_id: u64,
+    limit: usize,
+    cursor: Option<u64>,
+    source: Option<&str>,
+    file_kind: Option<&str>,
+    scan_status: Option<&str>,
+    hash_status: Option<&str>,
+) -> Result<SnapshotFileCatalogOutput, String> {
+    let filters = normalize_snapshot_filters(crate::read_api::FileCatalogFilters {
+        source: owned_filter(source),
+        file_kind: owned_filter(file_kind),
+        scan_status: owned_filter(scan_status),
+        hash_status: owned_filter(hash_status),
+        ..crate::read_api::FileCatalogFilters::default()
+    })?;
+    load_snapshot_file_catalog(repo, snapshot_id, limit, cursor, filters, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn search_snapshot_files(
+    repo: &DbRepo,
+    snapshot_id: u64,
+    limit: usize,
+    cursor: Option<u64>,
+    query: Option<&str>,
+    path: Option<&str>,
+    name: Option<&str>,
+    source: Option<&str>,
+    extension: Option<&str>,
+    file_kind: Option<&str>,
+    scan_status: Option<&str>,
+    hash_status: Option<&str>,
+    min_size: Option<u64>,
+    max_size: Option<u64>,
+    mtime_from: Option<i64>,
+    mtime_to: Option<i64>,
+) -> Result<SnapshotFileCatalogOutput, String> {
+    let filters = normalize_snapshot_filters(crate::read_api::FileCatalogFilters {
+        query: owned_filter(query),
+        path: owned_filter(path),
+        name: owned_filter(name),
+        source: owned_filter(source),
+        extension: owned_filter(extension),
+        file_kind: owned_filter(file_kind),
+        scan_status: owned_filter(scan_status),
+        hash_status: owned_filter(hash_status),
+        min_size,
+        max_size,
+        mtime_from,
+        mtime_to,
+    })?;
+    if snapshot_filters_empty(&filters) {
+        return Err("file search requires at least one search filter".to_string());
+    }
+    load_snapshot_file_catalog(repo, snapshot_id, limit, cursor, filters, true)
+}
+
+pub fn show_snapshot_file(
+    repo: &DbRepo,
+    snapshot_id: u64,
+    file_id: u64,
+) -> Result<SnapshotFileShowOutput, String> {
+    ensure_complete_snapshot(repo, snapshot_id)?;
+    if file_id == 0 {
+        return Err("file show --id must be a positive file id".to_string());
+    }
+    let rows = repo.query_rows_text(&format!(
+        "{} WHERE f.id_catalog_snapshot = {} AND f.id_file = {} LIMIT 1",
+        snapshot_file_select(),
+        snapshot_id,
+        file_id
+    ))?;
+    let row = rows.first().ok_or_else(|| {
+        format!("indexed file {file_id} does not exist in catalogue snapshot {snapshot_id}")
+    })?;
+    Ok(SnapshotFileShowOutput {
+        consistency: "stored-snapshot",
+        snapshot_id: Some(snapshot_id),
+        item: snapshot_file_item_from_row(row)?,
+    })
+}
+
+fn load_snapshot_file_catalog(
+    repo: &DbRepo,
+    snapshot_id: u64,
+    limit: usize,
+    cursor: Option<u64>,
+    filters: crate::read_api::FileCatalogFilters,
+    search_mode: bool,
+) -> Result<SnapshotFileCatalogOutput, String> {
+    ensure_complete_snapshot(repo, snapshot_id)?;
+    validate_snapshot_catalog_request(limit, cursor, &filters, search_mode)?;
+    let mut conditions = snapshot_filter_conditions(&filters);
+    conditions.insert(0, format!("f.id_catalog_snapshot = {snapshot_id}"));
+    if let Some(cursor) = cursor {
+        conditions.push(format!("f.id_file > {cursor}"));
+    }
+    let where_clause = format!("WHERE {}", conditions.join(" AND "));
+    let fetch_limit = limit
+        .checked_add(1)
+        .ok_or_else(|| "file catalogue limit is too large".to_string())?;
+    let rows = repo.query_rows_text(&format!(
+        "{} {} ORDER BY f.id_file ASC LIMIT {}",
+        snapshot_file_select(),
+        where_clause,
+        fetch_limit
+    ))?;
+
+    let mut total_conditions = snapshot_filter_conditions(&filters);
+    total_conditions.insert(0, format!("f.id_catalog_snapshot = {snapshot_id}"));
+    let total_rows = repo.query_rows_text(&format!(
+        "SELECT COUNT(*) FROM index_catalog_snapshot_files f WHERE {}",
+        total_conditions.join(" AND ")
+    ))?;
+    let total = total_rows
+        .first()
+        .and_then(|r| r.first())
+        .ok_or_else(|| "snapshot file total row is missing".to_string())
+        .and_then(|v| parse_u64(v, "snapshot file total"))?;
+
+    let mut items = rows
+        .iter()
+        .map(|row| snapshot_file_item_from_row(row))
+        .collect::<Result<Vec<_>, _>>()?;
+    let has_more = items.len() > limit;
+    if has_more {
+        items.truncate(limit);
+    }
+    let next_cursor = if has_more {
+        items.last().map(|item| item.file_id)
+    } else {
+        None
+    };
+    Ok(SnapshotFileCatalogOutput {
+        consistency: "stored-snapshot",
+        snapshot_id: Some(snapshot_id),
+        sort: "file_id ASC",
+        limit,
+        cursor,
+        filters,
+        items,
+        next_cursor,
+        total,
+    })
+}
+
+fn snapshot_file_select() -> &'static str {
+    "SELECT f.id_file::text, f.id_index_source::text, f.source_name, f.source_kind, f.source_root, f.path, f.size::text, COALESCE(f.mtime_ns::text, ''), COALESCE(f.inode::text, ''), COALESCE(f.device::text, ''), f.file_kind, f.scan_status, f.source_changed::text, COALESCE(f.hash_algorithm, ''), COALESCE(encode(f.full_hash, 'hex'), ''), COALESCE(f.hash_status, ''), COALESCE(f.id_scan_run::text, ''), f.file_created_at::text, f.file_updated_at::text FROM index_catalog_snapshot_files f"
+}
+
+fn snapshot_filter_conditions(filters: &crate::read_api::FileCatalogFilters) -> Vec<String> {
+    let mut conditions = Vec::new();
+    if let Some(query) = filters.query.as_deref() {
+        let literal = sql_quote_literal(query);
+        conditions.push(format!("(POSITION(lower({literal}) IN lower(f.path)) > 0 OR POSITION(lower({literal}) IN lower(f.source_name)) > 0)"));
+    }
+    if let Some(path) = filters.path.as_deref() {
+        conditions.push(format!(
+            "POSITION(lower({}) IN lower(f.path)) > 0",
+            sql_quote_literal(path)
+        ));
+    }
+    if let Some(name) = filters.name.as_deref() {
+        conditions.push(format!(
+            "POSITION(lower({}) IN lower(substring(f.path from '[^/]+$'))) > 0",
+            sql_quote_literal(name)
+        ));
+    }
+    if let Some(source) = filters.source.as_deref() {
+        conditions.push(format!("f.source_name = {}", sql_quote_literal(source)));
+    }
+    if let Some(extension) = filters.extension.as_deref() {
+        conditions.push(format!(
+            "lower(COALESCE(substring(f.path from '\\.([^./]+)$'), '')) = lower({})",
+            sql_quote_literal(extension)
+        ));
+    }
+    if let Some(value) = filters.file_kind.as_deref() {
+        conditions.push(format!("f.file_kind = {}", sql_quote_literal(value)));
+    }
+    if let Some(value) = filters.scan_status.as_deref() {
+        conditions.push(format!("f.scan_status = {}", sql_quote_literal(value)));
+    }
+    if let Some(value) = filters.hash_status.as_deref() {
+        conditions.push(format!("f.hash_status = {}", sql_quote_literal(value)));
+    }
+    if let Some(value) = filters.min_size {
+        conditions.push(format!("f.size >= {value}"));
+    }
+    if let Some(value) = filters.max_size {
+        conditions.push(format!("f.size <= {value}"));
+    }
+    if let Some(value) = filters.mtime_from {
+        conditions.push(format!("f.mtime_ns >= {value}"));
+    }
+    if let Some(value) = filters.mtime_to {
+        conditions.push(format!("f.mtime_ns <= {value}"));
+    }
+    conditions
+}
+
+fn normalize_snapshot_filters(
+    mut filters: crate::read_api::FileCatalogFilters,
+) -> Result<crate::read_api::FileCatalogFilters, String> {
+    for (label, value) in [
+        ("query", &mut filters.query),
+        ("path", &mut filters.path),
+        ("name", &mut filters.name),
+        ("source", &mut filters.source),
+        ("file-kind", &mut filters.file_kind),
+        ("scan-status", &mut filters.scan_status),
+        ("hash-status", &mut filters.hash_status),
+    ] {
+        if let Some(text) = value.as_mut() {
+            *text = text.trim().to_string();
+            if text.is_empty() {
+                return Err(format!("file filter --{label} must not be empty"));
+            }
+        }
+    }
+    if let Some(extension) = filters.extension.as_mut() {
+        *extension = extension.trim().trim_start_matches('.').to_string();
+        if extension.is_empty() {
+            return Err("file filter --extension must not be empty".to_string());
+        }
+    }
+    Ok(filters)
+}
+
+fn validate_snapshot_catalog_request(
+    limit: usize,
+    cursor: Option<u64>,
+    filters: &crate::read_api::FileCatalogFilters,
+    search_mode: bool,
+) -> Result<(), String> {
+    if !(1..=INDEXER_MAX_PAGE_LIMIT).contains(&limit) {
+        return Err(format!(
+            "file catalogue --limit must be between 1 and {INDEXER_MAX_PAGE_LIMIT}, got {limit}"
+        ));
+    }
+    if matches!(cursor, Some(0)) {
+        return Err("file catalogue --cursor must be a positive file id".to_string());
+    }
+    if let (Some(min), Some(max)) = (filters.min_size, filters.max_size) {
+        if min > max {
+            return Err("file search --min-size must not exceed --max-size".to_string());
+        }
+    }
+    if let (Some(from), Some(to)) = (filters.mtime_from, filters.mtime_to) {
+        if from > to {
+            return Err("file search --mtime-from must not exceed --mtime-to".to_string());
+        }
+    }
+    if search_mode && snapshot_filters_empty(filters) {
+        return Err("file search requires at least one search filter".to_string());
+    }
+    Ok(())
+}
+
+fn snapshot_filters_empty(filters: &crate::read_api::FileCatalogFilters) -> bool {
+    filters.query.is_none()
+        && filters.path.is_none()
+        && filters.name.is_none()
+        && filters.source.is_none()
+        && filters.extension.is_none()
+        && filters.file_kind.is_none()
+        && filters.scan_status.is_none()
+        && filters.hash_status.is_none()
+        && filters.min_size.is_none()
+        && filters.max_size.is_none()
+        && filters.mtime_from.is_none()
+        && filters.mtime_to.is_none()
+}
+
+fn snapshot_file_item_from_row(row: &[String]) -> Result<crate::read_api::FileCatalogItem, String> {
+    if row.len() < 19 {
+        return Err("snapshot indexed file row is too short".to_string());
+    }
+    let source_root = row[4].clone();
+    let path = row[5].clone();
+    let path_view = std::path::Path::new(&path);
+    let name = path_view
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or(path.as_str())
+        .to_string();
+    let extension = path_view
+        .extension()
+        .and_then(|v| v.to_str())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let source_path = std::path::Path::new(&source_root)
+        .join(&path)
+        .display()
+        .to_string();
+    Ok(crate::read_api::FileCatalogItem {
+        file_id: parse_u64(&row[0], "file id")?,
+        source_id: parse_u64(&row[1], "source id")?,
+        source_name: row[2].clone(),
+        source_kind: row[3].clone(),
+        source_root,
+        path,
+        source_path,
+        name,
+        extension,
+        size: parse_u64(&row[6], "file size")?,
+        mtime_ns: parse_optional_i64_snapshot(&row[7], "file mtime_ns")?,
+        inode: parse_optional_u64(&row[8], "file inode")?,
+        device: parse_optional_u64(&row[9], "file device")?,
+        file_kind: row[10].clone(),
+        scan_status: row[11].clone(),
+        source_changed: parse_bool(&row[12]),
+        hash_algorithm: optional_text(&row[13]),
+        full_hash_hex: optional_text(&row[14]),
+        hash_status: optional_text(&row[15]),
+        scan_run_id: parse_optional_u64(&row[16], "scan run id")?,
+        created_at: row[17].clone(),
+        updated_at: row[18].clone(),
+    })
+}
+
+fn parse_optional_i64_snapshot(value: &str, label: &str) -> Result<Option<i64>, String> {
+    if value.trim().is_empty() {
+        Ok(None)
+    } else {
+        value
+            .trim()
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|e| format!("invalid {label}: {e}"))
+    }
+}
+
+fn owned_filter(value: Option<&str>) -> Option<String> {
+    value.map(str::to_string)
 }
 
 #[cfg(test)]

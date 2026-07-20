@@ -9,7 +9,7 @@ use std::ffi::OsString;
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
     long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to inspect its machine-readable capabilities, query and read from the read-only file catalogue, register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer file list --limit 100\n  fod-indexer file search report --extension pdf --limit 25\n  fod-indexer file show --id 42\n  fod-indexer file read --id 42 --offset 0 --length 65536\n  fod-indexer duplicate-set list --limit 100\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
+    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer file list --limit 100\n  fod-indexer file search report --extension pdf --limit 25\n  fod-indexer file show --id 42\n  fod-indexer file read --id 42 --offset 0 --length 65536\n  fod-indexer snapshot create\n  fod-indexer snapshot list\n  fod-indexer file list --snapshot-id 12 --limit 100\n  fod-indexer duplicate-set list --limit 100\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -50,6 +50,16 @@ This command is strictly read-only. It reads index_duplicate_sets in stable id o
     DuplicateSet {
         #[command(subcommand)]
         command: DuplicateSetCommands,
+    },
+    #[command(
+        about = "Manage immutable catalogue snapshots.",
+        long_about = "Create, list, inspect, or delete immutable copies of the indexed-file catalogue.
+
+Snapshot creation copies existing index metadata only. It does not scan sources, hash files, rebuild duplicates, or read file contents. file list/search/show can later read a stored snapshot with --snapshot-id."
+    )]
+    Snapshot {
+        #[command(subcommand)]
+        command: SnapshotCommands,
     },
     #[command(
         about = "Manage sources.",
@@ -136,6 +146,43 @@ This command is strictly read-only. It reads index_duplicate_sets in stable id o
 }
 
 #[derive(Debug, Clone, Subcommand)]
+pub enum SnapshotCommands {
+    #[command(
+        about = "Create an immutable catalogue snapshot.",
+        long_about = "Atomically copy the current indexed-file catalogue into immutable snapshot tables.
+
+Use --source to capture one registered source only. The command changes snapshot tables but does not modify live file records or source files."
+    )]
+    Create {
+        #[arg(long)]
+        source: Option<String>,
+    },
+    #[command(
+        about = "List catalogue snapshots.",
+        long_about = "List stored catalogue snapshot headers in descending snapshot-id order. Pass next_cursor as --cursor to continue."
+    )]
+    List {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<u64>,
+    },
+    #[command(about = "Show one catalogue snapshot.")]
+    Show {
+        #[arg(long)]
+        id: u64,
+    },
+    #[command(
+        about = "Delete one catalogue snapshot.",
+        long_about = "Delete only the selected stored snapshot and its copied rows. Live catalogue rows and source files are not changed."
+    )]
+    Delete {
+        #[arg(long)]
+        id: u64,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
 pub enum DuplicateSetCommands {
     #[command(
         about = "List stored duplicate sets.",
@@ -160,6 +207,8 @@ pub enum FileCommands {
         limit: usize,
         #[arg(long)]
         cursor: Option<u64>,
+        #[arg(long)]
+        snapshot_id: Option<u64>,
         #[arg(long)]
         source: Option<String>,
         #[arg(long)]
@@ -202,6 +251,8 @@ pub enum FileCommands {
         limit: usize,
         #[arg(long)]
         cursor: Option<u64>,
+        #[arg(long)]
+        snapshot_id: Option<u64>,
     },
     #[command(
         about = "Show one indexed file.",
@@ -210,6 +261,8 @@ pub enum FileCommands {
     Show {
         #[arg(long)]
         id: u64,
+        #[arg(long)]
+        snapshot_id: Option<u64>,
     },
     #[command(
         about = "Read revalidated source bytes.",
@@ -409,8 +462,8 @@ fn find_command_index(args: &[OsString]) -> Option<usize> {
                 idx += 1;
             }
             "scan" | "hash" | "plan-import" | "clean" | "materialize" => return Some(idx),
-            "capabilities" | "file" | "duplicate-set" | "source" | "report" | "plan"
-            | "cleanup-failed" => return None,
+            "capabilities" | "file" | "duplicate-set" | "snapshot" | "source" | "report"
+            | "plan" | "cleanup-failed" => return None,
             _ if token.starts_with('-') => {
                 idx += 1;
             }

@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 18;
-const MIGRATION_FILES: [&str; 18] = [
+const SCHEMA_VERSION: u64 = 19;
+const MIGRATION_FILES: [&str; 19] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -44,9 +44,10 @@ const MIGRATION_FILES: [&str; 18] = [
     "0016_hardlink_promotion_request_tokens.sql",
     "0017_data_object_payload_ownership.sql",
     "0018_payload_capacity_reservations.sql",
+    "0019_index_catalog_snapshots.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 18] = [
+const MIGRATION_DESCRIPTIONS: [&str; 19] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -65,6 +66,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 18] = [
     "Add request tokens for hardlink promotion replay",
     "Make data objects own payload rows",
     "Add transactional payload capacity reservations",
+    "Add immutable index catalogue snapshots",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -206,6 +208,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0018_payload_capacity_reservations.sql"
         )),
+        19 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0019_index_catalog_snapshots.sql"
+        )),
         _ => "",
     }
 }
@@ -230,6 +236,7 @@ fn migration_description(version: u64) -> &'static str {
         16 => MIGRATION_DESCRIPTIONS[15],
         17 => MIGRATION_DESCRIPTIONS[16],
         18 => MIGRATION_DESCRIPTIONS[17],
+        19 => MIGRATION_DESCRIPTIONS[18],
         _ => "Migration",
     }
 }
@@ -254,6 +261,7 @@ fn migration_filename(version: u64) -> &'static str {
         16 => MIGRATION_FILES[15],
         17 => MIGRATION_FILES[16],
         18 => MIGRATION_FILES[17],
+        19 => MIGRATION_FILES[18],
         _ => "unknown.sql",
     }
 }
@@ -368,6 +376,8 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                     ('index_duplicate_sets'),
                     ('index_import_plans'),
                     ('index_import_plan_entries'),
+                    ('index_catalog_snapshots'),
+                    ('index_catalog_snapshot_files'),
                     ('client_sessions'),
                     ('client_session_owner_keys')
                 ) AS required_relations(name)

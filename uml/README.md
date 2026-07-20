@@ -32,3 +32,7 @@ java -jar plantuml.jar -tsvg uml/fod-file-read-all.puml
 ```
 
 Plik zbiorczy wygeneruje kilka osobnych obrazów.
+
+## FOD 3.2.21 — catalogue snapshots
+
+- `fod-catalog-snapshot-flow.puml` — creation, immutable reads, and deletion of catalogue snapshots.
