@@ -12,6 +12,7 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 sha2 = "0.10"
 walkdir = "2"
 fod_rust_hotpath = { package = "fod-rust-hotpath", path = "../rust_hotpath" }

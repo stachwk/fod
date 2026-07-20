@@ -61,6 +61,8 @@ Supported actions:
 - `fod-indexer file list [--limit <n>] [--cursor <id>]`,
 - `fod-indexer file search [query] [filters...]`,
 - `fod-indexer file show --id <id>`,
+- `fod-indexer file read --id <id> [--offset <n>] [--length <n>]`,
+- `fod-indexer duplicate-set list [--limit <n>] [--cursor <id>]`,
 - `fod-indexer source add [--name <name>] --path <path> --kind local|smb|qnap|adb|github`,
 - `fod-indexer source list [--kind <kind>]`,
 - `fod-indexer source list --path <path> [--kind <kind>]`,
@@ -108,11 +110,23 @@ fod-indexer --output json file search report --extension pdf
 fod-indexer --output json file show --id 42
 ```
 
-`file list` and `file search` return a live view ordered by `file_id ASC`, with deterministic keyset pagination through `next_cursor`. `file search` supports path, name, source, extension, file-kind, scan-status, hash-status, size-range, and modification-time filters. `file show` returns one record by stable file id. These commands do not scan, hash, rebuild duplicate sets, create plans, read source contents, or modify index state.
+`file list` and `file search` return a live view ordered by `file_id ASC`, with deterministic keyset pagination through `next_cursor`. `file search` supports path, name, source, extension, file-kind, scan-status, hash-status, size-range, and modification-time filters. `file show` returns one record by stable file id. These catalogue commands do not scan, hash, rebuild duplicate sets, create plans, read source contents, or modify index state.
 
-The no-id `fod-indexer report duplicates` command is not strictly read-only because it rebuilds derived duplicate-set metadata. `fod-indexer report duplicates --id <id>` only reads an existing set. Consumers such as `msfind` must use the explicit read-only commands and must not copy index SQL.
+The revalidated source-byte command resolves the same stable file id and then reads the registered source only after validating its identity:
 
-The detailed contract, the still-planned `duplicate-set list`, and the revalidated byte-range read are recorded in [`fod-indexer-read-api.md`](fod-indexer-read-api.md).
+```bash
+fod-indexer file read --id 42 > source.bin
+fod-indexer file read --id 42 --offset 1048576 --length 65536 > range.bin
+fod-indexer --output json file read --id 42 --offset 0 --length 65536
+```
+
+`file read` validates a safe path within the registered source root, file kind and scan status, size, modification time, inode, device, hash-observed metadata, and any stored partial or full SHA-256. It computes the current full SHA-256, reads the requested range from the same open file, and checks the file and path again before returning data.
+
+With default text output, stdout contains only exact source bytes and stderr contains provenance. JSON output contains Base64 data, source and scan-run provenance, indexed and observed metadata, validation status and basis, current SHA-256, and byte-range information. Missing, inaccessible, changed, replaced, or escaped files return explicit `file_read_*` errors and no bytes. The command does not update any index row.
+
+The no-id `fod-indexer report duplicates` command is not strictly read-only because it rebuilds derived duplicate-set metadata. `fod-indexer report duplicates --id <id>` and `fod-indexer duplicate-set list` only read existing state. Consumers such as `msfind` must use the explicit read-only commands and must not copy index SQL.
+
+The detailed contract for catalogue queries, duplicate-set listing, and revalidated source-byte reads is recorded in [`fod-indexer-read-api.md`](fod-indexer-read-api.md).
 
 ## Snapshot export
 
@@ -178,7 +192,7 @@ Scanner status values are explicit:
 Unreadable files should be recorded and the scan should continue. A database write failure is the only case that should abort the scan.
 While a scan runs, `fod-indexer scan --source <name>` prints periodic progress lines to stderr with the scanned-file counts, current file path, and elapsed time.
 While `fod-indexer hash --source <name>` runs, it prints periodic progress lines to stderr with candidate, partial, full, and retry-needed counts, plus the current file path and elapsed time.
-`fod-indexer report duplicates` skips zero-size duplicate groups so cache and lock files do not dominate the report. In the current pipeline those groups should not appear because scan skips zero-length files before indexing.
+`fod-indexer report duplicates` skips zero-size duplicate groups so cache and lock noise do not dominate the report. In the current pipeline those groups should not appear because scan skips zero-length files before indexing.
 
 ## Import planning
 

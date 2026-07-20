@@ -175,6 +175,45 @@ frozen `snapshot_id` until the database stores immutable catalogue snapshots.
 MIME, extracted text, OCR state, extractor versions, embeddings, and AI metadata
 remain outside `fod-indexer`.
 
+### `file read --id ID`
+
+```text
+fod-indexer file read --id ID [--offset N] [--length N]
+```
+
+The command resolves a stable `file_id`, rejects unsafe relative paths and paths
+that resolve outside the registered source root, and opens the source file only
+for reading. Before returning data it checks:
+
+- indexed file kind and scan status,
+- the stored `source_changed` and hash retry state,
+- size, modification time, inode, and device,
+- metadata observed during hashing when present,
+- the stored full SHA-256 hash, or the stored partial SHA-256 sample when a full
+  hash is not available.
+
+It computes the current full SHA-256 for provenance and rechecks the open file and
+its source path after reading. Missing, inaccessible, replaced, concurrently
+changed, hash-mismatched, or escaped source files fail with an explicit
+`file_read_*` error before bytes are emitted.
+
+Omitting `--length` reads from `--offset` to EOF. A requested range extending
+past EOF is shortened to the available bytes; an offset beyond EOF is rejected.
+
+With default text output, exact bytes are written to stdout and provenance is
+written to stderr, so stdout can be redirected directly to a file or pipe. With
+`--output json`, the versioned response contains:
+
+- source, path, and scan-run provenance,
+- indexed and hash-observed metadata,
+- validation basis and current observed SHA-256,
+- requested and returned byte-range information,
+- `encoding: "base64"` and `data_base64`.
+
+The operation is strictly read-only. It does not update the source-changed flag,
+hash rows, scan runs, duplicate metadata, or plans. It does not perform MIME
+classification, text extraction, OCR, embeddings, or AI processing.
+
 ## Command that is not strictly read-only
 
 The no-id form:
@@ -186,15 +225,3 @@ fod-indexer report duplicates --limit N
 currently calls the duplicate-set rebuild before returning the report. It is a
 refreshing read over derived state, not a strictly read-only query. `msfind`
 should use `duplicate-set list` instead when it requires a no-write contract.
-
-## Planned P1 source-byte read
-
-A future command may provide a revalidated byte-range read by `file_id`:
-
-```text
-fod-indexer file read --id ID [--offset N] [--length N]
-```
-
-It will return source bytes and provenance only after checking that the source
-still matches the indexed identity. It will not perform text extraction, OCR,
-MIME classification, embeddings, or AI processing.
