@@ -70,6 +70,7 @@ fn reports_legacy_single_endpoint_without_changing_connection_compatibility() {
     );
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["mode"], "legacy-single");
+    assert_eq!(payload["routing_enabled"], false);
     assert_eq!(payload["role_discovery_required"], true);
     assert_eq!(payload["unknown_count"], 1);
     assert_eq!(payload["endpoints"][0]["authority"], "db.internal:15432");
@@ -88,6 +89,7 @@ fn reports_explicit_primary_and_replica_roles() {
     );
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["mode"], "explicit-roles");
+    assert_eq!(payload["routing_enabled"], false);
     assert_eq!(payload["role_discovery_required"], false);
     assert_eq!(payload["primary_count"], 2);
     assert_eq!(payload["replica_count"], 2);
@@ -105,6 +107,7 @@ fn reports_transitional_hosts_as_discovery_required() {
     );
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(payload["mode"], "discover-roles");
+    assert_eq!(payload["routing_enabled"], false);
     assert_eq!(payload["role_discovery_required"], true);
     assert_eq!(payload["unknown_count"], 2);
 }
@@ -126,6 +129,7 @@ fn environment_selects_the_endpoint_mode_over_the_config_file() {
     );
     let explicit: serde_json::Value = serde_json::from_slice(&explicit_output.stdout).unwrap();
     assert_eq!(explicit["mode"], "explicit-roles");
+    assert_eq!(explicit["routing_enabled"], false);
     assert_eq!(explicit["endpoints"][0]["authority"], "env-primary:25432");
 
     let explicit_config = write_config("primary_hosts = config-primary:15432");
@@ -140,6 +144,7 @@ fn environment_selects_the_endpoint_mode_over_the_config_file() {
     );
     let discovery: serde_json::Value = serde_json::from_slice(&discovery_output.stdout).unwrap();
     assert_eq!(discovery["mode"], "discover-roles");
+    assert_eq!(discovery["routing_enabled"], false);
     assert_eq!(discovery["endpoints"][0]["authority"], "env-unknown:35432");
 }
 
