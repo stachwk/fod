@@ -30,6 +30,9 @@ from tests.integration.fod_indexer_testlib import (
     write_tree,
 )
 from tests.integration.fod_mount import FODMount
+from tests.integration.test_fod_indexer_catalog_snapshot import (
+    run_catalog_snapshot_regression,
+)
 
 SMOKE_FILES: dict[str, bytes] = {
     "a.txt": b"same",
@@ -246,11 +249,11 @@ def main() -> None:
                         FROM index_import_plans
                         WHERE source_filter = %s
                         ORDER BY id_import_plan DESC
-                            LIMIT 1
-                            """,
-                            (smoke_source,),
-                        )
+                        LIMIT 1
+                        """,
+                        (smoke_source,),
                     )
+                )
                 all_plan_id = latest_all_sources_plan_for_sources(conn, source_names)
 
                 assert_plan_scope(
@@ -290,3 +293,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    run_catalog_snapshot_regression()
