@@ -1,0 +1,433 @@
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded anstyle v1.0.14
+  Downloaded anstream v1.0.0
+  Downloaded anstyle-query v1.1.5
+  Downloaded equivalent v1.0.2
+  Downloaded anstyle-parse v1.0.0
+  Downloaded env_filter v1.0.1
+  Downloaded cfg-if v1.0.4
+  Downloaded version_check v0.9.5
+  Downloaded memoffset v0.9.1
+  Downloaded clap_lex v1.1.0
+  Downloaded is_terminal_polyfill v1.70.2
+  Downloaded crypto-common v0.1.7
+  Downloaded generic-array v0.14.7
+  Downloaded subtle v2.6.1
+  Downloaded ref-cast-impl v1.0.25
+  Downloaded heck v0.5.0
+  Downloaded linked-hash-map v0.5.6
+  Downloaded block-buffer v0.10.4
+  Downloaded ref-cast v1.0.25
+  Downloaded colorchoice v1.0.5
+  Downloaded utf8parse v0.2.2
+  Downloaded rand_chacha v0.3.1
+  Downloaded itoa v1.0.18
+  Downloaded page_size v0.6.0
+  Downloaded proc-macro-crate v3.5.0
+  Downloaded cfg_aliases v0.2.1
+  Downloaded cpufeatures v0.2.17
+  Downloaded pbkdf2 v0.12.2
+  Downloaded strsim v0.11.1
+  Downloaded digest v0.10.7
+  Downloaded same-file v1.0.6
+  Downloaded autocfg v1.5.0
+  Downloaded num_enum v0.7.6
+  Downloaded walkdir v2.5.0
+  Downloaded zmij v1.0.21
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded toml_datetime v1.1.1+spec-1.1.0
+  Downloaded rustversion v1.0.22
+  Downloaded env_logger v0.11.10
+  Downloaded rand_core v0.6.4
+  Downloaded scopeguard v1.2.0
+  Downloaded pkg-config v0.3.33
+  Downloaded lock_api v0.4.14
+  Downloaded aho-corasick v1.1.4
+  Downloaded sha2 v0.10.9
+  Downloaded quote v1.0.45
+  Downloaded hmac v0.12.1
+  Downloaded num_enum_derive v0.7.6
+  Downloaded clap_derive v4.6.1
+  Downloaded getrandom v0.2.17
+  Downloaded toml_parser v1.1.2+spec-1.1.0
+  Downloaded iana-time-zone v0.1.65
+  Downloaded parking_lot v0.12.5
+  Downloaded num-traits v0.2.19
+  Downloaded unicode-ident v1.0.24
+  Downloaded parking_lot_core v0.9.12
+  Downloaded bitflags v2.13.0
+  Downloaded serde_core v1.0.228
+  Downloaded proc-macro2 v1.0.106
+  Downloaded clap v4.6.1
+  Downloaded serde_derive v1.0.228
+  Downloaded toml_edit v0.25.12+spec-1.1.0
+  Downloaded smallvec v1.15.1
+  Downloaded log v0.4.29
+  Downloaded serde v1.0.228
+  Downloaded base64 v0.22.1
+  Downloaded rand v0.8.6
+  Downloaded zerocopy-derive v0.8.48
+  Downloaded indexmap v2.14.0
+  Downloaded memchr v2.8.0
+  Downloaded typenum v1.20.0
+  Downloaded fuser v0.17.0
+  Downloaded hashbrown v0.17.1
+  Downloaded regex v1.12.3
+  Downloaded clap_builder v4.6.0
+  Downloaded winnow v1.0.3
+  Downloaded serde_json v1.0.149
+  Downloaded chrono v0.4.44
+  Downloaded syn v2.0.117
+  Downloaded zerocopy v0.8.48
+  Downloaded nix v0.30.1
+  Downloaded regex-syntax v0.8.10
+  Downloaded regex-automata v0.4.14
+  Downloaded jiff v0.2.24
+  Downloaded libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling libc v0.2.186
+    Checking cfg-if v1.0.4
+   Compiling version_check v0.9.5
+   Compiling generic-array v0.14.7
+    Checking memchr v2.8.0
+    Checking typenum v1.20.0
+   Compiling serde_core v1.0.228
+    Checking subtle v2.6.1
+   Compiling syn v2.0.117
+   Compiling zmij v1.0.21
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.7
+   Compiling zerocopy v0.8.48
+    Checking utf8parse v0.2.2
+    Checking anstyle-parse v1.0.0
+    Checking digest v0.10.7
+   Compiling serde_json v1.0.149
+    Checking is_terminal_polyfill v1.70.2
+   Compiling autocfg v1.5.0
+    Checking anstyle-query v1.1.5
+    Checking anstyle v1.0.14
+    Checking colorchoice v1.0.5
+    Checking anstream v1.0.0
+    Checking itoa v1.0.18
+   Compiling fod-rust-runtime v3.2.21 (/home/runner/work/fod/fod/rust_runtime)
+   Compiling heck v0.5.0
+    Checking cpufeatures v0.2.17
+    Checking strsim v0.11.1
+    Checking clap_lex v1.1.0
+    Checking sha2 v0.10.9
+    Checking clap_builder v4.6.0
+    Checking getrandom v0.2.17
+    Checking base64 v0.22.1
+   Compiling equivalent v1.0.2
+   Compiling winnow v1.0.3
+   Compiling hashbrown v0.17.1
+    Checking rand_core v0.6.4
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling memoffset v0.9.1
+    Checking hmac v0.12.1
+    Checking aho-corasick v1.1.4
+   Compiling indexmap v2.14.0
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling toml_edit v0.25.12+spec-1.1.0
+   Compiling zerocopy-derive v0.8.48
+   Compiling clap_derive v4.6.1
+   Compiling parking_lot_core v0.9.12
+    Checking regex-syntax v0.8.10
+   Compiling rustversion v1.0.22
+   Compiling cfg_aliases v0.2.1
+   Compiling nix v0.30.1
+    Checking regex-automata v0.4.14
+   Compiling proc-macro-crate v3.5.0
+    Checking clap v4.6.1
+    Checking pbkdf2 v0.12.2
+   Compiling num-traits v0.2.19
+   Compiling pkg-config v0.3.33
+    Checking scopeguard v1.2.0
+    Checking log v0.4.29
+    Checking smallvec v1.15.1
+   Compiling ref-cast v1.0.25
+   Compiling fuser v0.17.0
+    Checking lock_api v0.4.14
+   Compiling num_enum_derive v0.7.6
+    Checking regex v1.12.3
+   Compiling ref-cast-impl v1.0.25
+   Compiling serde v1.0.228
+    Checking bitflags v2.13.0
+    Checking num_enum v0.7.6
+    Checking env_filter v1.0.1
+    Checking parking_lot v0.12.5
+   Compiling serde_derive v1.0.228
+    Checking fod-rust-hotpath v3.2.21 (/home/runner/work/fod/fod/rust_hotpath)
+    Checking page_size v0.6.0
+    Checking ppv-lite86 v0.2.21
+    Checking iana-time-zone v0.1.65
+    Checking jiff v0.2.24
+   Compiling fod-rust-fuse v3.2.21 (/home/runner/work/fod/fod/rust_fuse)
+    Checking same-file v1.0.6
+    Checking walkdir v2.5.0
+    Checking rand_chacha v0.3.1
+    Checking rand v0.8.6
+    Checking chrono v0.4.44
+    Checking linked-hash-map v0.5.6
+    Checking fod-rust-indexer v3.2.21 (/home/runner/work/fod/fod/rust_indexer)
+    Checking fod-rust-mkfs v3.2.21 (/home/runner/work/fod/fod/rust_mkfs)
+    Checking env_logger v0.11.10
+warning: method `human_readable` is never used
+   --> rust_indexer/src/read_api.rs:126:8
+    |
+125 | impl FileCatalogItem {
+    | -------------------- method in this implementation
+126 |     fn human_readable(&self) -> String {
+    |        ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `human_readable` is never used
+   --> rust_indexer/src/read_api.rs:162:12
+    |
+161 | impl FileCatalogOutput {
+    | ---------------------- method in this implementation
+162 |     pub fn human_readable(&self) -> String {
+    |            ^^^^^^^^^^^^^^
+
+warning: method `human_readable` is never used
+   --> rust_indexer/src/read_api.rs:198:12
+    |
+197 | impl FileShowOutput {
+    | ------------------- method in this implementation
+198 |     pub fn human_readable(&self) -> String {
+    |            ^^^^^^^^^^^^^^
+
+warning: `fod-rust-indexer` (bin "fod-indexer") generated 3 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 19.26s
+warning: method `human_readable` is never used
+   --> rust_indexer/src/read_api.rs:126:8
+    |
+125 | impl FileCatalogItem {
+    | -------------------- method in this implementation
+126 |     fn human_readable(&self) -> String {
+    |        ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `human_readable` is never used
+   --> rust_indexer/src/read_api.rs:162:12
+    |
+161 | impl FileCatalogOutput {
+    | ---------------------- method in this implementation
+162 |     pub fn human_readable(&self) -> String {
+    |            ^^^^^^^^^^^^^^
+
+warning: method `human_readable` is never used
+   --> rust_indexer/src/read_api.rs:198:12
+    |
+197 | impl FileShowOutput {
+    | ------------------- method in this implementation
+198 |     pub fn human_readable(&self) -> String {
+    |            ^^^^^^^^^^^^^^
+
+warning: `fod-rust-indexer` (bin "fod-indexer") generated 3 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+   Compiling typenum v1.20.0
+   Compiling syn v2.0.117
+   Compiling serde_core v1.0.228
+   Compiling libc v0.2.186
+   Compiling utf8parse v0.2.2
+   Compiling anstyle-parse v1.0.0
+   Compiling zmij v1.0.21
+   Compiling generic-array v0.14.7
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling itoa v1.0.18
+   Compiling anstyle v1.0.14
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling colorchoice v1.0.5
+   Compiling memchr v2.8.0
+   Compiling anstyle-query v1.1.5
+   Compiling anstream v1.0.0
+   Compiling digest v0.10.7
+   Compiling cfg-if v1.0.4
+   Compiling strsim v0.11.1
+   Compiling serde_json v1.0.149
+   Compiling cpufeatures v0.2.17
+   Compiling clap_lex v1.1.0
+   Compiling clap_builder v4.6.0
+   Compiling sha2 v0.10.9
+   Compiling fod-rust-runtime v3.2.21 (/home/runner/work/fod/fod/rust_runtime)
+   Compiling base64 v0.22.1
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling same-file v1.0.6
+   Compiling walkdir v2.5.0
+   Compiling fod-rust-hotpath v3.2.21 (/home/runner/work/fod/fod/rust_hotpath)
+   Compiling clap v4.6.1
+   Compiling serde v1.0.228
+   Compiling fod-rust-indexer v3.2.21 (/home/runner/work/fod/fod/rust_indexer)
+warning: method `human_readable` is never used
+   --> rust_indexer/src/read_api.rs:126:8
+    |
+125 | impl FileCatalogItem {
+    | -------------------- method in this implementation
+126 |     fn human_readable(&self) -> String {
+    |        ^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `human_readable` is never used
+   --> rust_indexer/src/read_api.rs:162:12
+    |
+161 | impl FileCatalogOutput {
+    | ---------------------- method in this implementation
+162 |     pub fn human_readable(&self) -> String {
+    |            ^^^^^^^^^^^^^^
+
+warning: method `human_readable` is never used
+   --> rust_indexer/src/read_api.rs:198:12
+    |
+197 | impl FileShowOutput {
+    | ------------------- method in this implementation
+198 |     pub fn human_readable(&self) -> String {
+    |            ^^^^^^^^^^^^^^
+
+warning: `fod-rust-indexer` (bin "fod-indexer" test) generated 3 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.55s
+     Running unittests src/main.rs (target/debug/deps/fod_indexer-bf663f7a534c3454)
+
+running 28 tests
+test cli::tests::capabilities_is_not_treated_as_a_positional_source_command ... ok
+test cli::tests::parses_file_list_filters ... ok
+test cli::tests::parses_file_read_range ... ok
+test cli::tests::parses_file_search_filters ... ok
+test cli::tests::parses_duplicate_set_list_pagination ... ok
+test duplicate_set_api::tests::exposes_duplicate_set_list_as_available_capability ... ok
+test duplicate_set_api::tests::parses_duplicate_set_list_rows ... ok
+test cli::tests::parses_offline_capabilities_with_json_output ... ok
+test cli::tests::parses_file_show_id ... ok
+test duplicate_set_api::tests::validates_duplicate_set_list_limits_and_cursor ... ok
+test file_read_api::tests::rejects_parent_directory_paths ... ok
+test cli::tests::parses_plan_list_filters ... ok
+test output::tests::capabilities_distinguish_read_only_and_refreshing_commands ... ok
+test output::tests::versioned_json_keeps_existing_payload_fields_at_top_level ... ok
+test read_api::tests::exposes_plan_list_as_available_capability ... ok
+test read_api::tests::exposes_read_only_file_catalog_as_available_capability ... ok
+test read_api::tests::normalizes_file_extensions ... ok
+test read_api::tests::parses_empty_source_filter_as_none ... ok
+test read_api::tests::parses_import_plan_list_rows ... ok
+test read_api::tests::parses_indexed_file_rows_and_derives_path_fields ... ok
+test read_api::tests::validates_file_search_filters_and_ranges ... ok
+test read_api::tests::validates_plan_list_limits_and_cursor ... ok
+test snapshot_api::tests::exposes_snapshot_capabilities ... ok
+test snapshot_api::tests::parses_snapshot_rows ... ok
+test snapshot_api::tests::validates_snapshot_pagination_and_ids ... ok
+test file_read_api::tests::detects_changed_source_before_returning_bytes ... ok
+test file_read_api::tests::reads_revalidated_range_and_encodes_base64 ... ok
+test file_read_api::tests::validates_range_bounds ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Compiling zerocopy v0.8.48
+   Compiling subtle v2.6.1
+   Compiling serde_core v1.0.228
+   Compiling getrandom v0.2.17
+   Compiling digest v0.10.7
+   Compiling rand_core v0.6.4
+   Compiling hmac v0.12.1
+   Compiling sha2 v0.10.9
+   Compiling pbkdf2 v0.12.2
+   Compiling serde_json v1.0.149
+   Compiling fod-rust-runtime v3.2.21 (/home/runner/work/fod/fod/rust_runtime)
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.3.1
+   Compiling rand v0.8.6
+   Compiling fod-rust-mkfs v3.2.21 (/home/runner/work/fod/fod/rust_mkfs)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.54s
+     Running unittests src/bin/fod-bootstrap.rs (target/debug/deps/fod_bootstrap-631323a2c628fb15)
+
+running 3 tests
+test config::tests::maps_runtime_keys_to_fod_env_names ... ok
+test config::tests::applies_runtime_env_to_process_environment ... ok
+test tests::find_in_path_prefers_first_executable_candidate ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/fod-change.rs (target/debug/deps/fod_change-682f56adac1e3db9)
+
+running 2 tests
+test config::tests::applies_runtime_env_to_process_environment ... ok
+test config::tests::maps_runtime_keys_to_fod_env_names ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/fod-config.rs (target/debug/deps/fod_config-3fd6f334bf5784f3)
+
+running 4 tests
+test config::tests::applies_runtime_env_to_process_environment ... ok
+test config::tests::maps_runtime_keys_to_fod_env_names ... ok
+test tls::tests::validate_tls_common_name_accepts_safe_ascii ... ok
+test tls::tests::validate_tls_common_name_rejects_empty_and_unsafe_chars ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/fod_rust_mkfs-de28f05fcc049fd5)
+
+running 7 tests
+test config::tests::applies_runtime_env_to_process_environment ... ok
+test config::tests::maps_runtime_keys_to_fod_env_names ... ok
+test tests::quote_schema_regclass_escapes_identifiers_for_sql_literal ... ok
+test tests::quote_schema_regprocedure_escapes_identifiers_for_sql_literal ... ok
+test tls::tests::validate_tls_common_name_accepts_safe_ascii ... ok
+test tls::tests::validate_tls_common_name_rejects_empty_and_unsafe_chars ... ok
+test tests::base_schema_sql_excludes_legacy_upgrade_migrations ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fod_config.rs (target/debug/deps/fod_config-b96a1c20d2d0a172)
+
+running 7 tests
+test config::tests::applies_runtime_env_to_process_environment ... ok
+test config::tests::maps_runtime_keys_to_fod_env_names ... ok
+test generate_tls_command_creates_client_pair_and_reuses_existing_files ... ok
+test inline_comment_markers_survive_inside_values ... ok
+test resolve_path_and_runtime_config_and_connection_params ... ok
+test resolve_path_fails_fast_for_missing_fod_config ... ok
+test version_matches_bootstrap_and_mkfs ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/schema_upgrade.rs (target/debug/deps/schema_upgrade-c906d201ddf01adc)
+
+running 3 tests
+test schema_clean_requires_existing_schema_admin_secret ... FAILED
+test schema_status_reports_version_secret_and_pending_migrations ... FAILED
+test schema_upgrade_non_destructive_password_protected ... FAILED
+
+failures:
+
+---- schema_clean_requires_existing_schema_admin_secret stdout ----
+
+thread 'schema_clean_requires_existing_schema_admin_secret' (5558) panicked at rust_mkfs/tests/schema_upgrade.rs:770:43:
+connect: "connection to server at \"127.0.0.1\", port 5432 failed: Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- schema_status_reports_version_secret_and_pending_migrations stdout ----
+
+thread 'schema_status_reports_version_secret_and_pending_migrations' (5559) panicked at rust_mkfs/tests/schema_upgrade.rs:629:43:
+connect: "connection to server at \"127.0.0.1\", port 5432 failed: Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?"
+
+---- schema_upgrade_non_destructive_password_protected stdout ----
+
+thread 'schema_upgrade_non_destructive_password_protected' (5560) panicked at rust_mkfs/tests/schema_upgrade.rs:327:43:
+connect: "connection to server at \"127.0.0.1\", port 5432 failed: Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?"
+
+
+failures:
+    schema_clean_requires_existing_schema_admin_secret
+    schema_status_reports_version_secret_and_pending_migrations
+    schema_upgrade_non_destructive_password_protected
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p fod-rust-mkfs --test schema_upgrade`
