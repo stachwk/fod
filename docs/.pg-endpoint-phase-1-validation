@@ -1,0 +1,9 @@
+Validation gate for PostgreSQL multi-endpoint configuration phase 1:
+
+cargo fmt --all -- --check
+cargo test --locked -p fod-rust-mkfs
+RUSTFLAGS="-D warnings" cargo check --workspace --locked
+make test-version
+./target/debug/fod-config endpoint-config
+
+Remove this marker before merge after the local validation results are recorded in the pull request.
