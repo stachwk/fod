@@ -1,0 +1,45 @@
+name: FOD 3.2.21 snapshot replay safety
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  harden-and-test:
+    if: github.head_ref == 'work/fod-3.2.21-catalog-snapshots' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/fod-3.2.21-catalog-snapshots
+          fetch-depth: 0
+
+      - name: Apply replay-safety hardening
+        run: python3 .github/scripts/harden_fod_3_2_21_snapshot_replay.py
+
+      - name: Validate
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo check --workspace
+          cargo check --workspace --locked
+          cargo test --locked -p fod-rust-indexer
+          cargo test --locked -p fod-rust-mkfs --bins
+          make test-version
+          git diff --check
+
+      - name: Commit validated hardening
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fod-3.2.21-snapshot-replay.yml
+          rm -f .github/scripts/harden_fod_3_2_21_snapshot_replay.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Harden FOD 3.2.21 snapshot replay safety"
+          git push origin HEAD:work/fod-3.2.21-catalog-snapshots
