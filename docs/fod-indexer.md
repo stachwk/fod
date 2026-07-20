@@ -248,3 +248,18 @@ scan sources -> index metadata -> hash candidates -> build duplicate sets -> cre
 Long-term, the indexer should support richer source types, but the default archival model should remain self-contained inside FOD. Optional external link replacement must stay opt-in and separate from the normal import path.
 
 The indexer schema should remain separate from the runtime FOD storage layer, and all safety decisions should be based on revalidation rather than metadata alone. `msfind` should keep using this shared core rather than duplicating the pipeline inside its own codebase.
+
+## Immutable catalogue snapshots (FOD 3.2.21)
+
+```bash
+fod-indexer snapshot create [--source NAME]
+fod-indexer snapshot list [--limit N] [--cursor ID]
+fod-indexer snapshot show --id ID
+fod-indexer snapshot delete --id ID
+fod-indexer file list --snapshot-id ID
+fod-indexer file search QUERY --snapshot-id ID
+fod-indexer file show --id FILE_ID --snapshot-id ID
+```
+
+`snapshot create` atomically copies the current catalogue metadata into `index_catalog_snapshots` and `index_catalog_snapshot_files`. Snapshot-backed file queries return `consistency: stored-snapshot` and the selected `snapshot_id`; later scans, hash updates, source removal, and live catalogue cleanup do not alter copied rows. Snapshot creation and deletion write only snapshot tables. They do not scan, hash, materialize, read source bytes, or modify live index rows. Snapshot creation uses an internal unique request token and conflict-safe replay bounded by the original maximum file id, so an ambiguous database retry cannot create a second snapshot or add later catalogue rows.
+

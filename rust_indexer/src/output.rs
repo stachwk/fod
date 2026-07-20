@@ -5,7 +5,7 @@ use fod_rust_runtime::FOD_VERSION_LABEL;
 use serde::Serialize;
 
 pub const INDEXER_API_SCHEMA_VERSION: u32 = 1;
-pub const INDEXER_REQUIRED_DATABASE_SCHEMA_VERSION: u32 = 18;
+pub const INDEXER_REQUIRED_DATABASE_SCHEMA_VERSION: u32 = 19;
 pub const INDEXER_DEFAULT_PAGE_LIMIT: usize = 100;
 pub const INDEXER_MAX_PAGE_LIMIT: usize = 1_000;
 

@@ -1,0 +1,27 @@
+@startuml
+title FOD 3.2.21 — immutable catalogue snapshot flow
+skinparam shadowing false
+actor User
+participant "fod-indexer" as CLI
+database PostgreSQL as DB
+User -> CLI: snapshot create [--source NAME]
+CLI -> DB: one atomic WITH statement
+unique request_token
+DB -> DB: materialize live catalogue rows
+DB -> DB: INSERT index_catalog_snapshots
+DB -> DB: INSERT index_catalog_snapshot_files
+DB --> CLI: snapshot_id + counts
+CLI --> User: stored-snapshot metadata
+User -> CLI: file list/search/show --snapshot-id ID
+CLI -> DB: validate complete snapshot
+CLI -> DB: SELECT immutable copied rows
+DB --> CLI: deterministic file_id page
+CLI --> User: consistency=stored-snapshot\nsnapshot_id=ID
+User -> CLI: snapshot delete --id ID
+CLI -> DB: DELETE header\nON DELETE CASCADE copied rows
+DB --> CLI: deleted file count
+note over CLI,DB
+Snapshot creation changes only snapshot tables.
+Live index rows and source files remain untouched.
+end note
+@enduml
