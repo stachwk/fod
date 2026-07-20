@@ -1,0 +1,16 @@
+name: FOD 3.2.20 trigger
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    if: github.head_ref == 'work/fod-3.2.20-file-read'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo FOD-3.2.20-trigger-ok
