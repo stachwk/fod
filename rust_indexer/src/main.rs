@@ -5,6 +5,7 @@ mod cli;
 mod config;
 mod db;
 mod duplicate_set_api;
+mod file_read_api;
 mod hash;
 mod materialize;
 mod model;
@@ -22,6 +23,7 @@ use cli::{
     SourceCommands, SourceKind,
 };
 use output::{print_json, SourceListOutput, SourceMutationOutput};
+use std::io::Write;
 use std::path::Path;
 
 fn main() {
@@ -36,7 +38,7 @@ fn run() -> Result<(), String> {
     let output = cli.output;
 
     if matches!(&cli.command, Commands::Capabilities) {
-        let capabilities = duplicate_set_api::capabilities_output();
+        let capabilities = file_read_api::capabilities_output();
         if output.is_json() {
             print_json(&capabilities)?;
         } else {
@@ -132,6 +134,22 @@ fn run() -> Result<(), String> {
                     print_json(&file)?;
                 } else {
                     println!("{}", file.human_readable());
+                }
+                Ok(())
+            }
+            FileCommands::Read { id, offset, length } => {
+                let file = file_read_api::read_file(&repo, id, offset, length)?;
+                if output.is_json() {
+                    print_json(&file)?;
+                } else {
+                    eprintln!("{}", file.provenance_human_readable());
+                    let mut stdout = std::io::stdout().lock();
+                    stdout
+                        .write_all(file.bytes())
+                        .map_err(|err| format!("file_read_io_error: stdout write failed: {err}"))?;
+                    stdout
+                        .flush()
+                        .map_err(|err| format!("file_read_io_error: stdout flush failed: {err}"))?;
                 }
                 Ok(())
             }

@@ -8,8 +8,8 @@ use std::ffi::OsString;
     name = "fod-indexer",
     version = FOD_VERSION_LABEL,
     about = "Index external files before importing them into FOD.",
-    long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to inspect its machine-readable capabilities, query the read-only file catalogue, register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
-    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer file list --limit 100\n  fod-indexer file search report --extension pdf --limit 25\n  fod-indexer file show --id 42\n  fod-indexer duplicate-set list --limit 100\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
+    long_about = "Index external files before importing them into FOD.\n\nUse fod-indexer to inspect its machine-readable capabilities, query and read from the read-only file catalogue, register a filesystem-backed source, scan it, hash candidates, report duplicates, build a dry-run import plan, materialize files into FOD, or clean up a failed materialization.",
+    after_long_help = "Examples:\n  fod-indexer capabilities\n  fod-indexer --output json capabilities\n  fod-indexer file list --limit 100\n  fod-indexer file search report --extension pdf --limit 25\n  fod-indexer file show --id 42\n  fod-indexer file read --id 42 --offset 0 --length 65536\n  fod-indexer duplicate-set list --limit 100\n  fod-indexer source add --path ~/Documents --kind local\n  fod-indexer source add --name lt7300_Documents --path ~/Documents --kind local\n  fod-indexer source add --path /mnt/qnap/share --kind qnap\n  fod-indexer source add --path /run/user/1000/gvfs/smb-share:server=192.168.1.11,share=Documents --kind smb\n  fod-indexer source add --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source add --path ~/src/github.com/owner/repo --kind github\n  fod-indexer source list --kind adb\n  fod-indexer source list --path /run/user/1000/adb/0123456789ABCDEF --kind adb\n  fod-indexer source remove --name lt7300_Documents\n  fod-indexer scan --source lt7300_Documents\n  fod-indexer hash --source lt7300_Documents --candidates-only\n  fod-indexer report duplicates\n  fod-indexer report duplicates --id 7\n  fod-indexer plan-import --source lt7300_Documents --dry-run\n  fod-indexer plan list --limit 100\n  fod-indexer plan show --id 42\n  fod-indexer clean --source lt7300_Documents --dry-run\n  fod-indexer clean --source lt7300_Documents\n  fod-indexer materialize --source lt7300_Documents --dry-run\n  fod-indexer materialize --source lt7300_Documents\n  fod-indexer cleanup-failed --plan 42\n  fod-indexer --output json source list --kind adb"
 )]
 pub struct Cli {
     #[arg(long)]
@@ -210,6 +210,20 @@ pub enum FileCommands {
     Show {
         #[arg(long)]
         id: u64,
+    },
+    #[command(
+        about = "Read revalidated source bytes.",
+        long_about = "Read a complete indexed source file or one byte range after revalidating its identity.
+
+The command checks size, modification time, inode, device, and any stored partial or full hash before returning data. Missing, inaccessible, replaced, or changed files fail without returning bytes. Text output writes exact bytes to stdout and provenance to stderr; JSON output returns Base64 data and provenance."
+    )]
+    Read {
+        #[arg(long)]
+        id: u64,
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        #[arg(long)]
+        length: Option<u64>,
     },
 }
 
@@ -595,6 +609,35 @@ mod tests {
                 command: FileCommands::Show { id },
             } => assert_eq!(id, 17),
             _ => panic!("expected file show command"),
+        }
+    }
+
+    #[test]
+    fn parses_file_read_range() {
+        let cli = Cli::try_parse_from([
+            "fod-indexer",
+            "--output",
+            "json",
+            "file",
+            "read",
+            "--id",
+            "17",
+            "--offset",
+            "1024",
+            "--length",
+            "4096",
+        ])
+        .expect("file read command should parse");
+        assert_eq!(cli.output, OutputFormat::Json);
+        match cli.command {
+            Commands::File {
+                command: FileCommands::Read { id, offset, length },
+            } => {
+                assert_eq!(id, 17);
+                assert_eq!(offset, 1024);
+                assert_eq!(length, Some(4096));
+            }
+            _ => panic!("expected file read command"),
         }
     }
 

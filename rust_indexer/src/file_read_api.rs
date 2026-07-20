@@ -258,42 +258,43 @@ fn read_revalidated_record(
     }
 
     let observed_partial_hash_hex = if record.partial_hash_hex.is_some() {
-        Some(crate::db::hex_encode(&hash::compute_partial_hash_from_file(
-            &mut file,
-            snapshot_before.size,
-        )?))
+        Some(crate::db::hex_encode(
+            &hash::compute_partial_hash_from_file(&mut file, snapshot_before.size)?,
+        ))
     } else {
         None
     };
-    let observed_full_hash_hex = crate::db::hex_encode(&hash::compute_full_hash_from_file(&mut file)?);
+    let observed_full_hash_hex =
+        crate::db::hex_encode(&hash::compute_full_hash_from_file(&mut file)?);
 
-    let (validation_basis, indexed_hash_match) = if let Some(expected) = record.full_hash_hex.as_deref() {
-        if observed_full_hash_hex != expected {
-            return Err(format!(
-                "file_read_source_changed: full hash differs for indexed file {} at {}",
-                record.file_id,
-                canonical_path.display()
-            ));
-        }
-        ("metadata+full-hash", Some(true))
-    } else if let Some(expected) = record.partial_hash_hex.as_deref() {
-        if observed_partial_hash_hex.as_deref() != Some(expected) {
-            return Err(format!(
-                "file_read_source_changed: partial hash differs for indexed file {} at {}",
-                record.file_id,
-                canonical_path.display()
-            ));
-        }
-        ("metadata+partial-hash", Some(true))
-    } else {
-        ("metadata-only", None)
-    };
+    let (validation_basis, indexed_hash_match) =
+        if let Some(expected) = record.full_hash_hex.as_deref() {
+            if observed_full_hash_hex != expected {
+                return Err(format!(
+                    "file_read_source_changed: full hash differs for indexed file {} at {}",
+                    record.file_id,
+                    canonical_path.display()
+                ));
+            }
+            ("metadata+full-hash", Some(true))
+        } else if let Some(expected) = record.partial_hash_hex.as_deref() {
+            if observed_partial_hash_hex.as_deref() != Some(expected) {
+                return Err(format!(
+                    "file_read_source_changed: partial hash differs for indexed file {} at {}",
+                    record.file_id,
+                    canonical_path.display()
+                ));
+            }
+            ("metadata+partial-hash", Some(true))
+        } else {
+            ("metadata-only", None)
+        };
 
     let (bytes, range) = read_range(&mut file, snapshot_before.size, offset, length)?;
 
-    let metadata_after = file
-        .metadata()
-        .map_err(|err| classify_io_error("source file metadata after read", &canonical_path, err))?;
+    let metadata_after = file.metadata().map_err(|err| {
+        classify_io_error("source file metadata after read", &canonical_path, err)
+    })?;
     let snapshot_after = FileSnapshot::from_metadata(&metadata_after);
     if snapshot_after != snapshot_before {
         return Err(format!(
@@ -378,7 +379,9 @@ fn validate_index_record(record: &FileReadRecord) -> Result<(), String> {
 
 fn validate_snapshot(record: &FileReadRecord, observed: FileSnapshot) -> Result<(), String> {
     let indexed_match = observed.size == record.size
-        && record.mtime_ns.is_none_or(|value| value == observed.mtime_ns)
+        && record
+            .mtime_ns
+            .is_none_or(|value| value == observed.mtime_ns)
         && record.inode.is_none_or(|value| value == observed.inode)
         && record.device.is_none_or(|value| value == observed.device);
     let hash_observation_match = record
@@ -475,7 +478,10 @@ fn classify_io_error(action: &str, path: &Path, err: std::io::Error) -> String {
         std::io::ErrorKind::PermissionDenied => "file_read_access_denied",
         _ => "file_read_io_error",
     };
-    format!("{code}: unable to access {action} {}: {err}", path.display())
+    format!(
+        "{code}: unable to access {action} {}: {err}",
+        path.display()
+    )
 }
 
 fn file_read_record_from_row(row: &[String]) -> Result<FileReadRecord, String> {
@@ -561,7 +567,9 @@ mod tests {
         fs::create_dir_all(&root).expect("fixture root should be created");
         let path = root.join("fixture.bin");
         let mut output = File::create(&path).expect("fixture file should be created");
-        output.write_all(contents).expect("fixture should be written");
+        output
+            .write_all(contents)
+            .expect("fixture should be written");
         output.sync_all().expect("fixture should be synced");
         drop(output);
         let metadata = fs::metadata(&path).expect("fixture metadata should be readable");

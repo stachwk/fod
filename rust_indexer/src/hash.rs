@@ -13,7 +13,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::Duration;
 
-const HASH_ALGORITHM: &str = "sha256";
+pub(crate) const HASH_ALGORITHM: &str = "sha256";
 const PARTIAL_SAMPLE_BYTES: usize = 64 * 1024;
 const FULL_READ_BUFFER_BYTES: usize = 128 * 1024;
 const HASH_PROGRESS_FILE_STEP: u64 = 50;
@@ -198,16 +198,16 @@ fn read_exact_range(file: &mut File, offset: u64, len: usize) -> Result<Vec<u8>,
     Ok(buffer)
 }
 
-fn compute_partial_hash(path: &Path, snapshot: &FileSnapshot) -> Result<Vec<u8>, String> {
-    let mut file = File::open(path)
-        .map_err(|err| format!("unable to open {} for hashing: {err}", path.display()))?;
+pub(crate) fn compute_partial_hash_from_file(
+    file: &mut File,
+    file_size: u64,
+) -> Result<Vec<u8>, String> {
     let mut hasher = Sha256::new();
-    if snapshot.size == 0 {
+    if file_size == 0 {
         return Ok(hasher.finalize().to_vec());
     }
-
-    for (offset, len) in sample_ranges(snapshot.size) {
-        let bytes = read_exact_range(&mut file, offset, len)?;
+    for (offset, len) in sample_ranges(file_size) {
+        let bytes = read_exact_range(file, offset, len)?;
         hasher.update(offset.to_le_bytes());
         hasher.update((bytes.len() as u64).to_le_bytes());
         hasher.update(&bytes);
@@ -215,21 +215,33 @@ fn compute_partial_hash(path: &Path, snapshot: &FileSnapshot) -> Result<Vec<u8>,
     Ok(hasher.finalize().to_vec())
 }
 
-fn compute_full_hash(path: &Path) -> Result<Vec<u8>, String> {
+fn compute_partial_hash(path: &Path, snapshot: &FileSnapshot) -> Result<Vec<u8>, String> {
     let mut file = File::open(path)
         .map_err(|err| format!("unable to open {} for hashing: {err}", path.display()))?;
+    compute_partial_hash_from_file(&mut file, snapshot.size)
+}
+
+pub(crate) fn compute_full_hash_from_file(file: &mut File) -> Result<Vec<u8>, String> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|err| format!("seek failed before full hashing: {err}"))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; FULL_READ_BUFFER_BYTES];
     loop {
         let read = file
             .read(&mut buffer)
-            .map_err(|err| format!("read failed while hashing {}: {err}", path.display()))?;
+            .map_err(|err| format!("read failed while hashing: {err}"))?;
         if read == 0 {
             break;
         }
         hasher.update(&buffer[..read]);
     }
     Ok(hasher.finalize().to_vec())
+}
+
+fn compute_full_hash(path: &Path) -> Result<Vec<u8>, String> {
+    let mut file = File::open(path)
+        .map_err(|err| format!("unable to open {} for hashing: {err}", path.display()))?;
+    compute_full_hash_from_file(&mut file).map_err(|err| format!("{err} for {}", path.display()))
 }
 
 pub fn rebuild_duplicate_sets(repo: &DbRepo) -> Result<u64, String> {
