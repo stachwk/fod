@@ -659,7 +659,7 @@ mod tests {
             .expect("file show command should parse");
         match cli.command {
             Commands::File {
-                command: FileCommands::Show { id },
+                command: FileCommands::Show { id, .. },
             } => assert_eq!(id, 17),
             _ => panic!("expected file show command"),
         }
