@@ -1,0 +1,42 @@
+name: Remove read API dead code
+
+on:
+  push:
+    branches:
+      - fix/remove-read-api-dead-code
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/remove-read-api-dead-code
+          fetch-depth: 0
+
+      - name: Remove obsolete formatters
+        run: python3 .github/scripts/remove_read_api_dead_code.py
+
+      - name: Validate without warnings
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          RUSTFLAGS='-D warnings' cargo check --workspace --locked
+          RUSTFLAGS='-D warnings' cargo test --locked -p fod-rust-indexer
+          git diff --check
+
+      - name: Commit validated cleanup
+        run: |
+          set -euo pipefail
+          rm -f .github/scripts/remove_read_api_dead_code.py
+          rm -f .github/workflows/remove-read-api-dead-code.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Remove obsolete read API text formatters'
+          git push origin HEAD:fix/remove-read-api-dead-code
