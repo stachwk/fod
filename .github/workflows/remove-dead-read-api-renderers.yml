@@ -1,0 +1,41 @@
+name: Remove dead read API renderers
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup-and-test:
+    if: github.head_ref == 'fix/remove-dead-read-api-renderers' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/remove-dead-read-api-renderers
+          fetch-depth: 0
+
+      - name: Remove dead renderers
+        run: python3 .github/scripts/remove_dead_read_api_renderers.py
+
+      - name: Validate without warnings
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          RUSTFLAGS='-D warnings' cargo check --locked -p fod-rust-indexer
+          cargo test --locked -p fod-rust-indexer
+          git diff --check
+
+      - name: Commit cleanup
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/remove-dead-read-api-renderers.yml
+          rm -f .github/scripts/remove_dead_read_api_renderers.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Remove obsolete read API text renderers'
+          git push origin HEAD:fix/remove-dead-read-api-renderers
