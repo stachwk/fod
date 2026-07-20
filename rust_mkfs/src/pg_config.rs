@@ -1,5 +1,395 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
+use std::collections::{HashMap, HashSet};
+use std::env;
+
 #[allow(unused_imports)]
 pub use fod_rust_runtime::{make_conninfo, resolve_pg_connection_params};
+
+const DEFAULT_PG_HOST: &str = "127.0.0.1";
+const DEFAULT_PG_PORT: u16 = 5432;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PgEndpointRole {
+    Primary,
+    Replica,
+    Unknown,
+}
+
+impl PgEndpointRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Replica => "replica",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PgEndpointMode {
+    LegacySingle,
+    ExplicitRoles,
+    DiscoverRoles,
+}
+
+impl PgEndpointMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacySingle => "legacy-single",
+            Self::ExplicitRoles => "explicit-roles",
+            Self::DiscoverRoles => "discover-roles",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub role: PgEndpointRole,
+}
+
+impl PgEndpoint {
+    pub fn authority(&self) -> String {
+        if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgEndpointConfig {
+    pub mode: PgEndpointMode,
+    pub role_discovery_required: bool,
+    pub endpoints: Vec<PgEndpoint>,
+}
+
+impl PgEndpointConfig {
+    pub fn primary_count(&self) -> usize {
+        self.endpoints
+            .iter()
+            .filter(|endpoint| endpoint.role == PgEndpointRole::Primary)
+            .count()
+    }
+
+    pub fn replica_count(&self) -> usize {
+        self.endpoints
+            .iter()
+            .filter(|endpoint| endpoint.role == PgEndpointRole::Replica)
+            .count()
+    }
+
+    pub fn unknown_count(&self) -> usize {
+        self.endpoints
+            .iter()
+            .filter(|endpoint| endpoint.role == PgEndpointRole::Unknown)
+            .count()
+    }
+}
+
+pub fn resolve_pg_endpoint_config(
+    db_config: &HashMap<String, String>,
+) -> Result<PgEndpointConfig, String> {
+    let primary_hosts = configured_value("FOD_PG_PRIMARY_HOSTS", db_config, "primary_hosts");
+    let replica_hosts = configured_value("FOD_PG_REPLICA_HOSTS", db_config, "replica_hosts");
+    let discovery_hosts = configured_value("FOD_PG_HOSTS", db_config, "hosts");
+
+    let has_explicit_roles = primary_hosts.is_some() || replica_hosts.is_some();
+    if has_explicit_roles && discovery_hosts.is_some() {
+        return Err(
+            "database endpoint configuration is ambiguous: use primary_hosts/replica_hosts or hosts, not both"
+                .to_string(),
+        );
+    }
+
+    if has_explicit_roles {
+        let mut endpoints = Vec::new();
+        if let Some(value) = primary_hosts.as_deref() {
+            endpoints.extend(parse_endpoint_list(value, PgEndpointRole::Primary, "primary_hosts")?);
+        }
+        if let Some(value) = replica_hosts.as_deref() {
+            endpoints.extend(parse_endpoint_list(value, PgEndpointRole::Replica, "replica_hosts")?);
+        }
+        if !endpoints
+            .iter()
+            .any(|endpoint| endpoint.role == PgEndpointRole::Primary)
+        {
+            return Err("primary_hosts must contain at least one endpoint".to_string());
+        }
+        validate_unique_endpoints(&endpoints)?;
+        return Ok(PgEndpointConfig {
+            mode: PgEndpointMode::ExplicitRoles,
+            role_discovery_required: false,
+            endpoints,
+        });
+    }
+
+    if let Some(value) = discovery_hosts.as_deref() {
+        let endpoints = parse_endpoint_list(value, PgEndpointRole::Unknown, "hosts")?;
+        validate_unique_endpoints(&endpoints)?;
+        return Ok(PgEndpointConfig {
+            mode: PgEndpointMode::DiscoverRoles,
+            role_discovery_required: true,
+            endpoints,
+        });
+    }
+
+    let host = configured_value("FOD_PG_HOST", db_config, "host")
+        .unwrap_or_else(|| DEFAULT_PG_HOST.to_string());
+    let port_text = configured_value("FOD_PG_PORT", db_config, "port")
+        .unwrap_or_else(|| DEFAULT_PG_PORT.to_string());
+    let port = parse_port(&port_text, "port")?;
+    let host = host.trim();
+    if host.is_empty() {
+        return Err("database host must not be empty".to_string());
+    }
+
+    Ok(PgEndpointConfig {
+        mode: PgEndpointMode::LegacySingle,
+        role_discovery_required: true,
+        endpoints: vec![PgEndpoint {
+            host: host.to_string(),
+            port,
+            role: PgEndpointRole::Unknown,
+        }],
+    })
+}
+
+fn configured_value(
+    env_name: &str,
+    db_config: &HashMap<String, String>,
+    key: &str,
+) -> Option<String> {
+    env::var(env_name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            db_config
+                .get(key)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+}
+
+fn parse_endpoint_list(
+    value: &str,
+    role: PgEndpointRole,
+    key: &str,
+) -> Result<Vec<PgEndpoint>, String> {
+    let entries = value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        return Err(format!("{key} must contain at least one host:port endpoint"));
+    }
+    entries
+        .into_iter()
+        .map(|entry| parse_endpoint(entry, role, key))
+        .collect()
+}
+
+fn parse_endpoint(entry: &str, role: PgEndpointRole, key: &str) -> Result<PgEndpoint, String> {
+    let (host, port_text) = if let Some(rest) = entry.strip_prefix('[') {
+        let close = rest
+            .find(']')
+            .ok_or_else(|| format!("invalid {key} endpoint `{entry}`: missing closing ]"))?;
+        let host = &rest[..close];
+        let suffix = &rest[close + 1..];
+        let port = suffix.strip_prefix(':').ok_or_else(|| {
+            format!("invalid {key} endpoint `{entry}`: expected [host]:port")
+        })?;
+        (host, port)
+    } else {
+        let (host, port) = entry.rsplit_once(':').ok_or_else(|| {
+            format!("invalid {key} endpoint `{entry}`: expected host:port")
+        })?;
+        if host.contains(':') {
+            return Err(format!(
+                "invalid {key} endpoint `{entry}`: IPv6 addresses must use [address]:port"
+            ));
+        }
+        (host, port)
+    };
+
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(format!("invalid {key} endpoint `{entry}`: host is empty"));
+    }
+    let port = parse_port(port_text, key)?;
+    Ok(PgEndpoint {
+        host: host.to_string(),
+        port,
+        role,
+    })
+}
+
+fn parse_port(value: &str, key: &str) -> Result<u16, String> {
+    value
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port > 0)
+        .ok_or_else(|| format!("invalid {key} port `{value}`: expected 1..65535"))
+}
+
+fn validate_unique_endpoints(endpoints: &[PgEndpoint]) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for endpoint in endpoints {
+        let identity = (endpoint.host.to_ascii_lowercase(), endpoint.port);
+        if !seen.insert(identity) {
+            return Err(format!(
+                "duplicate PostgreSQL endpoint `{}` is not allowed",
+                endpoint.authority()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn clear_endpoint_env() {
+        for key in [
+            "FOD_PG_HOST",
+            "FOD_PG_PORT",
+            "FOD_PG_PRIMARY_HOSTS",
+            "FOD_PG_REPLICA_HOSTS",
+            "FOD_PG_HOSTS",
+        ] {
+            env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn preserves_legacy_single_endpoint_configuration() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        clear_endpoint_env();
+        let config = HashMap::from([
+            ("host".to_string(), "db.internal".to_string()),
+            ("port".to_string(), "15432".to_string()),
+        ]);
+        let resolved = resolve_pg_endpoint_config(&config).unwrap();
+        assert_eq!(resolved.mode, PgEndpointMode::LegacySingle);
+        assert!(resolved.role_discovery_required);
+        assert_eq!(resolved.unknown_count(), 1);
+        assert_eq!(resolved.endpoints[0].authority(), "db.internal:15432");
+        clear_endpoint_env();
+    }
+
+    #[test]
+    fn parses_explicit_primary_and_replica_roles() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        clear_endpoint_env();
+        let config = HashMap::from([
+            (
+                "primary_hosts".to_string(),
+                "127.0.0.1:15432,127.0.0.1:15433".to_string(),
+            ),
+            (
+                "replica_hosts".to_string(),
+                "127.0.0.1:15442,[::1]:15443".to_string(),
+            ),
+        ]);
+        let resolved = resolve_pg_endpoint_config(&config).unwrap();
+        assert_eq!(resolved.mode, PgEndpointMode::ExplicitRoles);
+        assert!(!resolved.role_discovery_required);
+        assert_eq!(resolved.primary_count(), 2);
+        assert_eq!(resolved.replica_count(), 2);
+        assert_eq!(resolved.endpoints[3].authority(), "[::1]:15443");
+        clear_endpoint_env();
+    }
+
+    #[test]
+    fn transitional_hosts_require_role_discovery() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        clear_endpoint_env();
+        let config = HashMap::from([(
+            "hosts".to_string(),
+            "db-a:15432,db-b:15442".to_string(),
+        )]);
+        let resolved = resolve_pg_endpoint_config(&config).unwrap();
+        assert_eq!(resolved.mode, PgEndpointMode::DiscoverRoles);
+        assert!(resolved.role_discovery_required);
+        assert_eq!(resolved.unknown_count(), 2);
+        clear_endpoint_env();
+    }
+
+    #[test]
+    fn environment_overrides_explicit_endpoint_lists() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        clear_endpoint_env();
+        env::set_var("FOD_PG_PRIMARY_HOSTS", "env-primary:25432");
+        env::set_var("FOD_PG_REPLICA_HOSTS", "env-replica:25442");
+        let config = HashMap::from([(
+            "primary_hosts".to_string(),
+            "config-primary:15432".to_string(),
+        )]);
+        let resolved = resolve_pg_endpoint_config(&config).unwrap();
+        assert_eq!(resolved.endpoints[0].authority(), "env-primary:25432");
+        assert_eq!(resolved.endpoints[1].authority(), "env-replica:25442");
+        clear_endpoint_env();
+    }
+
+    #[test]
+    fn rejects_ambiguous_missing_primary_and_duplicate_endpoints() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        clear_endpoint_env();
+
+        let ambiguous = HashMap::from([
+            ("primary_hosts".to_string(), "db-a:15432".to_string()),
+            ("hosts".to_string(), "db-b:15442".to_string()),
+        ]);
+        assert!(resolve_pg_endpoint_config(&ambiguous)
+            .unwrap_err()
+            .contains("ambiguous"));
+
+        let replica_only = HashMap::from([(
+            "replica_hosts".to_string(),
+            "db-r:15442".to_string(),
+        )]);
+        assert!(resolve_pg_endpoint_config(&replica_only)
+            .unwrap_err()
+            .contains("at least one"));
+
+        let duplicate = HashMap::from([
+            ("primary_hosts".to_string(), "db-a:15432".to_string()),
+            ("replica_hosts".to_string(), "DB-A:15432".to_string()),
+        ]);
+        assert!(resolve_pg_endpoint_config(&duplicate)
+            .unwrap_err()
+            .contains("duplicate"));
+        clear_endpoint_env();
+    }
+
+    #[test]
+    fn rejects_invalid_ports_and_unbracketed_ipv6() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        clear_endpoint_env();
+        let invalid_port = HashMap::from([(
+            "primary_hosts".to_string(),
+            "db-a:70000".to_string(),
+        )]);
+        assert!(resolve_pg_endpoint_config(&invalid_port).is_err());
+
+        let invalid_ipv6 = HashMap::from([(
+            "primary_hosts".to_string(),
+            "::1:15432".to_string(),
+        )]);
+        assert!(resolve_pg_endpoint_config(&invalid_ipv6)
+            .unwrap_err()
+            .contains("IPv6"));
+        clear_endpoint_env();
+    }
+}
