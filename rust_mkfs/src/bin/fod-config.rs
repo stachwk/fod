@@ -31,6 +31,7 @@ struct Cli {
 enum CommandKind {
     ResolvePath,
     ConnectionParams,
+    EndpointConfig,
     RuntimeConfig,
     Version,
     GenerateTls {
@@ -68,12 +69,9 @@ fn main() {
             println!("{}", config_path.display());
         }
         CommandKind::ConnectionParams => {
-            let db_section = match config.section("database") {
-                Some(section) => section.clone(),
-                None => {
-                    eprintln!("Missing [database] section in FOD configuration");
-                    std::process::exit(1);
-                }
+            let db_section = match database_section(&config) {
+                Ok(section) => section,
+                Err(err) => exit_with_error(&err),
             };
             let params = pg_config::resolve_pg_connection_params(
                 &db_section,
@@ -85,13 +83,43 @@ fn main() {
             }
             println!("{}", serde_json::Value::Object(map));
         }
+        CommandKind::EndpointConfig => {
+            let db_section = match database_section(&config) {
+                Ok(section) => section,
+                Err(err) => exit_with_error(&err),
+            };
+            let topology = match pg_config::resolve_pg_endpoint_config(&db_section) {
+                Ok(value) => value,
+                Err(err) => exit_with_error(&err),
+            };
+            let endpoints = topology
+                .endpoints
+                .iter()
+                .map(|endpoint| {
+                    json!({
+                        "host": endpoint.host,
+                        "port": endpoint.port,
+                        "role": endpoint.role.as_str(),
+                        "authority": endpoint.authority(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            println!(
+                "{}",
+                json!({
+                    "mode": topology.mode.as_str(),
+                    "role_discovery_required": topology.role_discovery_required,
+                    "primary_count": topology.primary_count(),
+                    "replica_count": topology.replica_count(),
+                    "unknown_count": topology.unknown_count(),
+                    "endpoints": endpoints,
+                })
+            );
+        }
         CommandKind::RuntimeConfig => {
             let runtime = match config::load_runtime_config(&config) {
                 Ok(value) => value,
-                Err(err) => {
-                    eprintln!("{}", err);
-                    std::process::exit(1);
-                }
+                Err(err) => exit_with_error(&err),
             };
             let mut map = serde_json::Map::new();
             for (key, value) in runtime.to_runtime_map() {
@@ -113,10 +141,21 @@ fn main() {
                     json!({"cert_path": cert_path.display().to_string(), "key_path": key_path.display().to_string()})
                 );
             }
-            Err(err) => {
-                eprintln!("{}", err);
-                std::process::exit(1);
-            }
+            Err(err) => exit_with_error(&err),
         },
     }
+}
+
+fn database_section(
+    config: &config::IniConfig,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    config
+        .section("database")
+        .cloned()
+        .ok_or_else(|| "Missing [database] section in FOD configuration".to_string())
+}
+
+fn exit_with_error(message: &str) -> ! {
+    eprintln!("{}", message);
+    std::process::exit(1);
 }
