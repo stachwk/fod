@@ -97,7 +97,7 @@ fn main() {
                 .iter()
                 .map(|endpoint| {
                     json!({
-                        "host": endpoint.host,
+                        "host": endpoint.host.as_str(),
                         "port": endpoint.port,
                         "role": endpoint.role.as_str(),
                         "authority": endpoint.authority(),
@@ -108,6 +108,7 @@ fn main() {
                 "{}",
                 json!({
                     "mode": topology.mode.as_str(),
+                    "routing_enabled": false,
                     "role_discovery_required": topology.role_discovery_required,
                     "primary_count": topology.primary_count(),
                     "replica_count": topology.replica_count(),
