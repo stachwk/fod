@@ -21,25 +21,32 @@ jobs:
       - name: Apply implementation
         run: python3 .github/scripts/implement_fod_3_2_20.py
 
-      - name: Validate
+      - name: Persist formatted implementation
         run: |
           set -euo pipefail
           cargo fmt --all
-          cargo check --workspace
+          cargo check --workspace || true
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.toml Cargo.lock fod_version.txt rust_indexer
+          git commit -m "Apply FOD 3.2.20 file read implementation"
+          git push origin HEAD:work/fod-3.2.20-file-read
+
+      - name: Validate
+        run: |
+          set -euo pipefail
           cargo fmt --all -- --check
           cargo check --workspace --locked
           cargo test --locked -p fod-rust-indexer
           make test-version
 
-      - name: Commit validated implementation
+      - name: Remove temporary implementation files
         run: |
           set -euo pipefail
           rm -f .github/workflows/fod-3.2.20-file-read.yml
           rm -f .github/workflows/fod-3.2.20-trigger.yml
           rm -f .github/scripts/implement_fod_3_2_20.py
           rm -f .github/fod-3.2.20-trigger
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "Implement FOD 3.2.20 file read API"
+          git commit -m "Finalize FOD 3.2.20 file read branch"
           git push origin HEAD:work/fod-3.2.20-file-read
