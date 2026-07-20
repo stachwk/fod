@@ -94,17 +94,8 @@ impl PgEndpointConfig {
 pub fn resolve_pg_endpoint_config(
     db_config: &HashMap<String, String>,
 ) -> Result<PgEndpointConfig, String> {
-    let primary_hosts = configured_value("FOD_PG_PRIMARY_HOSTS", db_config, "primary_hosts");
-    let replica_hosts = configured_value("FOD_PG_REPLICA_HOSTS", db_config, "replica_hosts");
-    let discovery_hosts = configured_value("FOD_PG_HOSTS", db_config, "hosts");
-
+    let (primary_hosts, replica_hosts, discovery_hosts) = endpoint_mode_values(db_config)?;
     let has_explicit_roles = primary_hosts.is_some() || replica_hosts.is_some();
-    if has_explicit_roles && discovery_hosts.is_some() {
-        return Err(
-            "database endpoint configuration is ambiguous: use primary_hosts/replica_hosts or hosts, not both"
-                .to_string(),
-        );
-    }
 
     if has_explicit_roles {
         let mut endpoints = Vec::new();
@@ -159,21 +150,63 @@ pub fn resolve_pg_endpoint_config(
     })
 }
 
+fn endpoint_mode_values(
+    db_config: &HashMap<String, String>,
+) -> Result<(Option<String>, Option<String>, Option<String>), String> {
+    let env_primary = nonempty_env("FOD_PG_PRIMARY_HOSTS");
+    let env_replica = nonempty_env("FOD_PG_REPLICA_HOSTS");
+    let env_hosts = nonempty_env("FOD_PG_HOSTS");
+    let env_explicit = env_primary.is_some() || env_replica.is_some();
+
+    if env_explicit && env_hosts.is_some() {
+        return Err(
+            "PostgreSQL endpoint environment is ambiguous: use FOD_PG_PRIMARY_HOSTS/FOD_PG_REPLICA_HOSTS or FOD_PG_HOSTS, not both"
+                .to_string(),
+        );
+    }
+    if env_explicit {
+        return Ok((
+            env_primary.or_else(|| nonempty_config(db_config, "primary_hosts")),
+            env_replica.or_else(|| nonempty_config(db_config, "replica_hosts")),
+            None,
+        ));
+    }
+    if env_hosts.is_some() {
+        return Ok((None, None, env_hosts));
+    }
+
+    let primary_hosts = nonempty_config(db_config, "primary_hosts");
+    let replica_hosts = nonempty_config(db_config, "replica_hosts");
+    let discovery_hosts = nonempty_config(db_config, "hosts");
+    if (primary_hosts.is_some() || replica_hosts.is_some()) && discovery_hosts.is_some() {
+        return Err(
+            "database endpoint configuration is ambiguous: use primary_hosts/replica_hosts or hosts, not both"
+                .to_string(),
+        );
+    }
+    Ok((primary_hosts, replica_hosts, discovery_hosts))
+}
+
 fn configured_value(
     env_name: &str,
     db_config: &HashMap<String, String>,
     key: &str,
 ) -> Option<String> {
-    env::var(env_name)
+    nonempty_env(env_name).or_else(|| nonempty_config(db_config, key))
+}
+
+fn nonempty_env(name: &str) -> Option<String> {
+    env::var(name)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .or_else(|| {
-            db_config
-                .get(key)
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
+}
+
+fn nonempty_config(db_config: &HashMap<String, String>, key: &str) -> Option<String> {
+    db_config
+        .get(key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn parse_endpoint_list(
@@ -181,17 +214,15 @@ fn parse_endpoint_list(
     role: PgEndpointRole,
     key: &str,
 ) -> Result<Vec<PgEndpoint>, String> {
-    let entries = value
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .collect::<Vec<_>>();
-    if entries.is_empty() {
-        return Err(format!("{key} must contain at least one host:port endpoint"));
+    let raw_entries = value.split(',').collect::<Vec<_>>();
+    if raw_entries.is_empty() || raw_entries.iter().any(|entry| entry.trim().is_empty()) {
+        return Err(format!(
+            "{key} must contain non-empty comma-separated host:port endpoints"
+        ));
     }
-    entries
+    raw_entries
         .into_iter()
-        .map(|entry| parse_endpoint(entry, role, key))
+        .map(|entry| parse_endpoint(entry.trim(), role, key))
         .collect()
 }
 
@@ -327,18 +358,29 @@ mod tests {
     }
 
     #[test]
-    fn environment_overrides_explicit_endpoint_lists() {
+    fn environment_selects_and_overrides_the_endpoint_mode() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         clear_endpoint_env();
         env::set_var("FOD_PG_PRIMARY_HOSTS", "env-primary:25432");
         env::set_var("FOD_PG_REPLICA_HOSTS", "env-replica:25442");
         let config = HashMap::from([(
+            "hosts".to_string(),
+            "config-unknown:15432".to_string(),
+        )]);
+        let resolved = resolve_pg_endpoint_config(&config).unwrap();
+        assert_eq!(resolved.mode, PgEndpointMode::ExplicitRoles);
+        assert_eq!(resolved.endpoints[0].authority(), "env-primary:25432");
+        assert_eq!(resolved.endpoints[1].authority(), "env-replica:25442");
+
+        clear_endpoint_env();
+        env::set_var("FOD_PG_HOSTS", "env-unknown:35432");
+        let explicit_config = HashMap::from([(
             "primary_hosts".to_string(),
             "config-primary:15432".to_string(),
         )]);
-        let resolved = resolve_pg_endpoint_config(&config).unwrap();
-        assert_eq!(resolved.endpoints[0].authority(), "env-primary:25432");
-        assert_eq!(resolved.endpoints[1].authority(), "env-replica:25442");
+        let resolved = resolve_pg_endpoint_config(&explicit_config).unwrap();
+        assert_eq!(resolved.mode, PgEndpointMode::DiscoverRoles);
+        assert_eq!(resolved.endpoints[0].authority(), "env-unknown:35432");
         clear_endpoint_env();
     }
 
@@ -374,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_ports_and_unbracketed_ipv6() {
+    fn rejects_invalid_ports_empty_entries_and_unbracketed_ipv6() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         clear_endpoint_env();
         let invalid_port = HashMap::from([(
@@ -382,6 +424,12 @@ mod tests {
             "db-a:70000".to_string(),
         )]);
         assert!(resolve_pg_endpoint_config(&invalid_port).is_err());
+
+        let empty_entry = HashMap::from([(
+            "primary_hosts".to_string(),
+            "db-a:15432,,db-b:15433".to_string(),
+        )]);
+        assert!(resolve_pg_endpoint_config(&empty_entry).is_err());
 
         let invalid_ipv6 = HashMap::from([(
             "primary_hosts".to_string(),
