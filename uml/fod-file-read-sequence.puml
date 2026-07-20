@@ -1,0 +1,120 @@
+@startuml
+title FOD 3.2.20 — sekwencja fod-indexer file read
+
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+
+actor "Użytkownik / msfind" as User
+participant "Powłoka / proces wywołujący" as Caller
+participant "fod-indexer CLI\ncli.rs + main.rs" as CLI
+control "file_read_api::read_file()" as API
+database "PostgreSQL\nindex_files\nindex_sources\nindex_file_hashes" as DB
+control "Walidacja ścieżki\ni metadanych" as Validation
+collections "System plików\nzarejestrowane źródło" as FS
+control "hash.rs\nSHA-256 partial/full" as Hash
+participant "Warstwa wyjścia" as Output
+
+User -> Caller: fod-indexer [--output json] file read\n--id ID [--offset N] [--length N]
+Caller -> CLI: argv
+CLI -> CLI: parsowanie ID, offset, length, format
+
+CLI -> API: read_file(repo, file_id, offset, length)
+
+API -> API: file_id > 0?
+alt niepoprawny ID
+    API --> CLI: file_read_invalid_id
+    CLI --> Caller: błąd na stderr, kod != 0
+else poprawny ID
+    API -> DB: SELECT pliku, źródła,\nmetadanych skanu i hashy\nWHERE id_file = ID
+    alt brak rekordu
+        DB --> API: 0 wierszy
+        API --> CLI: file_read_not_found
+        CLI --> Caller: błąd na stderr, kod != 0
+    else rekord istnieje
+        DB --> API: FileReadRecord
+        API -> Validation: validate_index_record()
+        Validation -> Validation: regular + scan_status=ok?\nsource_changed=false?\nhash_status != changed_retry_needed?
+        alt rekord niedostępny lub oznaczony jako zmieniony
+            Validation --> API: file_read_unavailable\nlub file_read_source_changed
+            API --> CLI: błąd
+            CLI --> Caller: stderr, bez bajtów
+        else rekord dopuszczony
+            API -> Validation: validate_relative_path(path)
+            Validation -> FS: canonicalize(source_root)\ncanonicalize(source_path)
+            FS --> Validation: ścieżka kanoniczna
+            Validation -> Validation: resolved_path zaczyna się od canonical_root?
+            alt ścieżka niebezpieczna / poza źródłem
+                Validation --> API: file_read_invalid_source_path
+                API --> CLI: błąd
+                CLI --> Caller: stderr, bez bajtów
+            else ścieżka bezpieczna
+                API -> FS: File::open(read-only)
+                FS --> API: uchwyt pliku
+                API -> FS: metadata() przed odczytem
+                FS --> API: size, mtime_ns, inode, device
+                API -> Validation: validate_snapshot(indexed, observed)
+                alt metadane różnią się
+                    Validation --> API: file_read_source_changed
+                    API --> CLI: błąd
+                    CLI --> Caller: stderr, bez bajtów
+                else metadane zgodne
+                    opt zapisany partial_hash
+                        API -> Hash: compute_partial_hash_from_file()
+                        Hash --> API: observed_partial_hash
+                    end
+                    API -> Hash: compute_full_hash_from_file()
+                    Hash --> API: observed_full_sha256
+
+                    alt zapisany full_hash
+                        API -> Validation: porównaj full hash
+                    else tylko partial_hash
+                        API -> Validation: porównaj partial hash
+                    else brak zapisanego hasha
+                        API -> Validation: basis = metadata-only
+                    end
+
+                    alt hash niezgodny / algorytm nieobsługiwany
+                        Validation --> API: file_read_source_changed\nlub file_read_unsupported_hash
+                        API --> CLI: błąd
+                        CLI --> Caller: stderr, bez bajtów
+                    else walidacja hasha poprawna
+                        API -> FS: seek(offset) + read(range)
+                        FS --> API: bytes
+                        API -> FS: metadata() po odczycie
+                        FS --> API: snapshot_after
+                        API -> FS: metadata(canonical_path)
+                        FS --> API: path_snapshot_after
+                        API -> Validation: porównaj before/after\noraz inode/device ścieżki
+                        alt plik zmieniony lub podmieniony w trakcie
+                            Validation --> API: file_read_source_changed
+                            API --> CLI: błąd
+                            CLI --> Caller: stderr, bez bajtów
+                        else stabilny plik
+                            API -> Output: FileReadOutput\nprovenance + validation + range + bytes
+                            alt --output json
+                                Output -> Output: Base64(bytes)
+                                Output --> CLI: JSON
+                                CLI --> Caller: stdout = JSON
+                            else tryb tekstowy
+                                Output --> CLI: provenance_human_readable()
+                                CLI --> Caller: stderr = pochodzenie
+                                CLI --> Caller: stdout = surowe bajty
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+note over API,FS
+Operacja jest tylko do odczytu:
+- brak UPDATE/INSERT/DELETE w PostgreSQL,
+- brak zapisu do pliku źródłowego,
+- bajty są emitowane dopiero po pełnej rewalidacji.
+end note
+@enduml
