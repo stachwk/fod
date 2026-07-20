@@ -21,25 +21,44 @@ jobs:
       - name: Apply integration patch
         run: python3 .github/scripts/implement_fod_3_2_21.py
 
-      - name: Format and validate
+      - name: Persist formatted implementation
         run: |
           set -euo pipefail
           cargo fmt --all
-          cargo fmt --all -- --check
-          cargo check --workspace
-          cargo check --workspace --locked
-          cargo test --locked -p fod-rust-indexer
-          cargo test --locked -p fod-rust-mkfs
-          make test-version
-          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.toml Cargo.lock fod_version.txt migrations rust_indexer rust_mkfs docs uml
+          git commit -m "Apply FOD 3.2.21 catalogue snapshot implementation"
+          git push origin HEAD:work/fod-3.2.21-catalog-snapshots
+
+      - name: Validate and preserve diagnostics
+        run: |
+          set +e
+          {
+            cargo fmt --all -- --check &&
+            cargo check --workspace &&
+            cargo check --workspace --locked &&
+            cargo test --locked -p fod-rust-indexer &&
+            cargo test --locked -p fod-rust-mkfs &&
+            make test-version &&
+            git diff --check
+          } > /tmp/fod-3.2.21-validation.log 2>&1
+          rc=$?
+          cat /tmp/fod-3.2.21-validation.log
+          if [ "$rc" -ne 0 ]; then
+            cp /tmp/fod-3.2.21-validation.log .github/fod-3.2.21-validation.log
+            git add .github/fod-3.2.21-validation.log
+            git commit -m "Record FOD 3.2.21 validation failure"
+            git push origin HEAD:work/fod-3.2.21-catalog-snapshots
+            exit "$rc"
+          fi
 
       - name: Commit validated implementation
         run: |
           set -euo pipefail
           rm -f .github/workflows/fod-3.2.21-catalog-snapshots.yml
           rm -f .github/scripts/implement_fod_3_2_21.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          rm -f .github/fod-3.2.21-validation.log
           git add -A
-          git commit -m "FOD 3.2.21: add immutable catalogue snapshots"
+          git commit -m "Finalize FOD 3.2.21 catalogue snapshots"
           git push origin HEAD:work/fod-3.2.21-catalog-snapshots
