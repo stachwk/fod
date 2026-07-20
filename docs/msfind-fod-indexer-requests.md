@@ -24,8 +24,8 @@ materialization behavior.
 - [x] Add `schema_version` and `producer` to JSON responses without moving the
   existing payload fields.
 - [x] Cover capability, plan-list, duplicate-set-list, file-list, file-search,
-  file-show, row parsing, filter normalization, and range validation in the
-  local Rust test suite.
+  file-show, file-read, row parsing, path safety, source-change detection,
+  filter normalization, and range validation in the local Rust test suite.
 
 See [`fod-indexer-read-api.md`](fod-indexer-read-api.md).
 
@@ -147,19 +147,79 @@ The first contract is explicitly a live view ordered by stable `file_id`; it doe
 not claim a frozen `snapshot_id`. MIME, extracted text, extractor versions, OCR,
 embeddings, and AI metadata remain owned by `msfind`.
 
-## P1: revalidated source-byte read
+## Delivered P1: revalidated source-byte read
 
-Add a read-only byte-range command by `file_id`, with indexed identity,
-provenance, and an explicit changed/missing-source error.
+The strictly read-only command is available:
 
-Text extraction, MIME classification, extractor versions, OCR, embeddings, and
-AI classification remain owned by `msfind`; they should not be added to the FOD
-index tables merely to satisfy this command.
+```text
+fod-indexer file read --id ID [--offset N] [--length N]
+```
+
+It resolves the stable `file_id`, validates the registered source path, checks
+scan and hash metadata, detects missing, inaccessible, replaced, or changed
+source files, and returns no bytes when validation fails.
+
+The JSON response contains:
+
+```text
+schema_version
+producer
+consistency: revalidated-source-read
+provenance:
+  file_id
+  source_id
+  source_name
+  source_kind
+  source_root
+  path
+  source_path
+  resolved_source_path
+  scan_run_id
+  indexed_size
+  indexed_mtime_ns
+  indexed_inode
+  indexed_device
+  hash_algorithm
+  partial_hash_hex
+  full_hash_hex
+  hash_status
+  hash_observed_size
+  hash_observed_mtime_ns
+  hash_observed_inode
+  hash_observed_device
+validation:
+  status
+  basis
+  metadata_match
+  indexed_hash_match
+  observed_hash_algorithm
+  observed_full_hash_hex
+  observed_size
+  observed_mtime_ns
+  observed_inode
+  observed_device
+range:
+  offset
+  requested_length
+  returned_length
+  end_offset
+  eof
+encoding: base64
+data_base64
+```
+
+Text mode writes exact source bytes to stdout and provenance to stderr. JSON
+transports the requested bytes as Base64. Omitting `--length` reads from the
+offset to EOF.
+
+The command does not update any index row. Text extraction, MIME classification,
+extractor versions, OCR, embeddings, and AI classification remain owned by
+`msfind`.
 
 ## Constraints
 
-- All catalogue, duplicate-set-list, and plan-list operations are strictly
-  read-only.
+- All catalogue, duplicate-set-list, plan-list, and file-read operations are
+  strictly read-only.
 - `msfind` does not call `scan`, `hash`, `clean`, `materialize`, or refreshing
   duplicate reports while serving read-only queries.
 - FOD does not depend on `msfind` code.
