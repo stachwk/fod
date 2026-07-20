@@ -1,4 +1,4 @@
-name: FOD 3.2.20 trigger
+name: FOD 3.2.20 implementation
 
 on:
   pull_request:
@@ -6,11 +6,40 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  trigger:
-    if: github.head_ref == 'work/fod-3.2.20-file-read'
+  implement:
+    if: github.head_ref == 'work/fod-3.2.20-file-read' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - run: echo FOD-3.2.20-trigger-ok
+      - uses: actions/checkout@v4
+        with:
+          ref: work/fod-3.2.20-file-read
+          fetch-depth: 0
+
+      - name: Apply implementation
+        run: python3 .github/scripts/implement_fod_3_2_20.py
+
+      - name: Validate
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo check --workspace
+          cargo fmt --all -- --check
+          cargo check --workspace --locked
+          cargo test --locked -p fod-rust-indexer
+          make test-version
+
+      - name: Commit validated implementation
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/fod-3.2.20-file-read.yml
+          rm -f .github/workflows/fod-3.2.20-trigger.yml
+          rm -f .github/scripts/implement_fod_3_2_20.py
+          rm -f .github/fod-3.2.20-trigger
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Implement FOD 3.2.20 file read API"
+          git push origin HEAD:work/fod-3.2.20-file-read
