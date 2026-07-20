@@ -1,0 +1,89 @@
+@startuml
+title FOD 3.2.20 — maszyna stanów i klasy błędów file read
+
+skinparam shadowing false
+hide empty description
+
+state "Żądanie" as Request
+state "Walidacja ID" as ValidateId
+state "Odczyt rekordu z DB" as Lookup
+state "Walidacja rekordu indeksu" as ValidateRecord
+state "Walidacja ścieżki" as ValidatePath
+state "Otwarcie pliku" as OpenFile
+state "Walidacja metadanych" as ValidateMetadata
+state "Walidacja hasha" as ValidateHash
+state "Odczyt zakresu" as ReadRange
+state "Walidacja po odczycie" as ValidateAfter
+state "Budowa odpowiedzi" as BuildOutput
+state "Sukces: JSON Base64" as JsonSuccess
+state "Sukces: raw stdout" as RawSuccess
+
+state "file_read_invalid_id" as EInvalidId <<error>>
+state "file_read_not_found" as ENotFound <<error>>
+state "file_read_unavailable" as EUnavailable <<error>>
+state "file_read_invalid_source_path" as EInvalidPath <<error>>
+state "file_read_source_missing" as EMissing <<error>>
+state "file_read_access_denied" as EAccess <<error>>
+state "file_read_source_changed" as EChanged <<error>>
+state "file_read_unsupported_hash" as EHash <<error>>
+state "file_read_invalid_range" as ERange <<error>>
+state "file_read_io_error" as EIO <<error>>
+
+[*] --> Request
+Request --> ValidateId
+ValidateId --> EInvalidId : id = 0
+ValidateId --> Lookup : id > 0
+
+Lookup --> ENotFound : brak wiersza
+Lookup --> ValidateRecord : rekord znaleziony
+
+ValidateRecord --> EUnavailable : nie regular / scan_status != ok
+ValidateRecord --> EChanged : source_changed\nlub changed_retry_needed
+ValidateRecord --> ValidatePath : rekord dopuszczony
+
+ValidatePath --> EInvalidPath : pusta, absolutna,\nParentDir lub poza root
+ValidatePath --> OpenFile : ścieżka bezpieczna
+
+OpenFile --> EMissing : NotFound
+OpenFile --> EAccess : PermissionDenied
+OpenFile --> EIO : inny błąd I/O
+OpenFile --> ValidateMetadata : otwarto read-only
+
+ValidateMetadata --> EChanged : size/mtime/inode/device\nniezgodne
+ValidateMetadata --> ValidateHash : metadane zgodne
+
+ValidateHash --> EHash : algorytm != sha256
+ValidateHash --> EChanged : partial/full hash niezgodny
+ValidateHash --> ReadRange : hash zgodny\nlub metadata-only
+
+ReadRange --> ERange : offset > size\nlub zakres niemożliwy
+ReadRange --> EIO : seek/read error
+ReadRange --> EChanged : przedwczesny EOF
+ReadRange --> ValidateAfter : bajty w buforze
+
+ValidateAfter --> EChanged : snapshot się zmienił\nlub inode/device podmienione
+ValidateAfter --> BuildOutput : plik stabilny
+
+BuildOutput --> JsonSuccess : --output json
+BuildOutput --> RawSuccess : tryb tekstowy
+
+JsonSuccess --> [*]
+RawSuccess --> [*]
+
+EInvalidId --> [*]
+ENotFound --> [*]
+EUnavailable --> [*]
+EInvalidPath --> [*]
+EMissing --> [*]
+EAccess --> [*]
+EChanged --> [*]
+EHash --> [*]
+ERange --> [*]
+EIO --> [*]
+
+note bottom of EChanged
+Najważniejsza właściwość:
+w każdej ścieżce błędnej
+nie są emitowane bajty pliku.
+end note
+@enduml
