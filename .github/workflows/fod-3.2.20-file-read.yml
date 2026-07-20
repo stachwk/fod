@@ -1,0 +1,391 @@
+name: FOD 3.2.20 file read
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.head_ref == 'work/fod-3.2.20-file-read' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/fod-3.2.20-file-read
+          fetch-depth: 0
+
+      - name: Apply implementation and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          # Share the exact hashing implementation with file read.
+          replace_once(
+              "rust_indexer/src/hash.rs",
+              'const HASH_ALGORITHM: &str = "sha256";',
+              'pub(crate) const HASH_ALGORITHM: &str = "sha256";',
+          )
+          replace_once(
+              "rust_indexer/src/hash.rs",
+              '''fn compute_partial_hash(path: &Path, snapshot: &FileSnapshot) -> Result<Vec<u8>, String> {
+              let mut file = File::open(path)
+                  .map_err(|err| format!("unable to open {} for hashing: {err}", path.display()))?;
+              let mut hasher = Sha256::new();
+              if snapshot.size == 0 {
+                  return Ok(hasher.finalize().to_vec());
+              }
+
+              for (offset, len) in sample_ranges(snapshot.size) {
+                  let bytes = read_exact_range(&mut file, offset, len)?;
+                  hasher.update(offset.to_le_bytes());
+                  hasher.update((bytes.len() as u64).to_le_bytes());
+                  hasher.update(&bytes);
+              }
+              Ok(hasher.finalize().to_vec())
+          }
+
+          fn compute_full_hash(path: &Path) -> Result<Vec<u8>, String> {
+              let mut file = File::open(path)
+                  .map_err(|err| format!("unable to open {} for hashing: {err}", path.display()))?;
+              let mut hasher = Sha256::new();
+              let mut buffer = vec![0u8; FULL_READ_BUFFER_BYTES];
+              loop {
+                  let read = file
+                      .read(&mut buffer)
+                      .map_err(|err| format!("read failed while hashing {}: {err}", path.display()))?;
+                  if read == 0 {
+                      break;
+                  }
+                  hasher.update(&buffer[..read]);
+              }
+              Ok(hasher.finalize().to_vec())
+          }
+          ''',
+              '''pub(crate) fn compute_partial_hash_from_file(
+              file: &mut File,
+              file_size: u64,
+          ) -> Result<Vec<u8>, String> {
+              let mut hasher = Sha256::new();
+              if file_size == 0 {
+                  return Ok(hasher.finalize().to_vec());
+              }
+              for (offset, len) in sample_ranges(file_size) {
+                  let bytes = read_exact_range(file, offset, len)?;
+                  hasher.update(offset.to_le_bytes());
+                  hasher.update((bytes.len() as u64).to_le_bytes());
+                  hasher.update(&bytes);
+              }
+              Ok(hasher.finalize().to_vec())
+          }
+
+          fn compute_partial_hash(path: &Path, snapshot: &FileSnapshot) -> Result<Vec<u8>, String> {
+              let mut file = File::open(path)
+                  .map_err(|err| format!("unable to open {} for hashing: {err}", path.display()))?;
+              compute_partial_hash_from_file(&mut file, snapshot.size)
+          }
+
+          pub(crate) fn compute_full_hash_from_file(file: &mut File) -> Result<Vec<u8>, String> {
+              file.seek(SeekFrom::Start(0))
+                  .map_err(|err| format!("seek failed before full hashing: {err}"))?;
+              let mut hasher = Sha256::new();
+              let mut buffer = vec![0u8; FULL_READ_BUFFER_BYTES];
+              loop {
+                  let read = file
+                      .read(&mut buffer)
+                      .map_err(|err| format!("read failed while hashing: {err}"))?;
+                  if read == 0 {
+                      break;
+                  }
+                  hasher.update(&buffer[..read]);
+              }
+              Ok(hasher.finalize().to_vec())
+          }
+
+          fn compute_full_hash(path: &Path) -> Result<Vec<u8>, String> {
+              let mut file = File::open(path)
+                  .map_err(|err| format!("unable to open {} for hashing: {err}", path.display()))?;
+              compute_full_hash_from_file(&mut file)
+                  .map_err(|err| format!("{err} for {}", path.display()))
+          }
+          ''',
+          )
+
+          # Add Base64 for versioned JSON byte transport.
+          replace_once(
+              "rust_indexer/Cargo.toml",
+              'serde_json = "1"\nsha2 = "0.10"',
+              'serde_json = "1"\nbase64 = "0.22"\nsha2 = "0.10"',
+          )
+
+          # CLI command and help.
+          replace_once(
+              "rust_indexer/src/cli.rs",
+              'query the read-only file catalogue, register a filesystem-backed source',
+              'query and read from the read-only file catalogue, register a filesystem-backed source',
+          )
+          replace_once(
+              "rust_indexer/src/cli.rs",
+              '  fod-indexer file show --id 42\\n  fod-indexer duplicate-set list',
+              '  fod-indexer file show --id 42\\n  fod-indexer file read --id 42 --offset 0 --length 65536\\n  fod-indexer duplicate-set list',
+          )
+          replace_once(
+              "rust_indexer/src/cli.rs",
+              '''    Show {
+                  #[arg(long)]
+                  id: u64,
+              },
+          }
+          ''',
+              '''    Show {
+                  #[arg(long)]
+                  id: u64,
+              },
+              #[command(
+                  about = "Read revalidated source bytes.",
+                  long_about = "Read a complete indexed source file or one byte range after revalidating its identity.\n\nThe command checks size, modification time, inode, device, and any stored partial or full hash before returning data. Missing, inaccessible, replaced, or changed files fail without returning bytes. Text output writes exact bytes to stdout and provenance to stderr; JSON output returns Base64 data and provenance."
+              )]
+              Read {
+                  #[arg(long)]
+                  id: u64,
+                  #[arg(long, default_value_t = 0)]
+                  offset: u64,
+                  #[arg(long)]
+                  length: Option<u64>,
+              },
+          }
+          ''',
+          )
+          replace_once(
+              "rust_indexer/src/cli.rs",
+              '''    #[test]
+              fn parses_file_show_id() {
+                  let cli = Cli::try_parse_from(["fod-indexer", "file", "show", "--id", "17"])
+                      .expect("file show command should parse");
+                  match cli.command {
+                      Commands::File {
+                          command: FileCommands::Show { id },
+                      } => assert_eq!(id, 17),
+                      _ => panic!("expected file show command"),
+                  }
+              }
+          ''',
+              '''    #[test]
+              fn parses_file_show_id() {
+                  let cli = Cli::try_parse_from(["fod-indexer", "file", "show", "--id", "17"])
+                      .expect("file show command should parse");
+                  match cli.command {
+                      Commands::File {
+                          command: FileCommands::Show { id },
+                      } => assert_eq!(id, 17),
+                      _ => panic!("expected file show command"),
+                  }
+              }
+
+              #[test]
+              fn parses_file_read_range() {
+                  let cli = Cli::try_parse_from([
+                      "fod-indexer",
+                      "--output",
+                      "json",
+                      "file",
+                      "read",
+                      "--id",
+                      "17",
+                      "--offset",
+                      "1024",
+                      "--length",
+                      "4096",
+                  ])
+                  .expect("file read command should parse");
+                  assert_eq!(cli.output, OutputFormat::Json);
+                  match cli.command {
+                      Commands::File {
+                          command: FileCommands::Read { id, offset, length },
+                      } => {
+                          assert_eq!(id, 17);
+                          assert_eq!(offset, 1024);
+                          assert_eq!(length, Some(4096));
+                      }
+                      _ => panic!("expected file read command"),
+                  }
+              }
+          ''',
+          )
+
+          # Main command dispatch. Raw mode keeps stdout byte-clean.
+          replace_once(
+              "rust_indexer/src/main.rs",
+              'mod duplicate_set_api;\nmod hash;',
+              'mod duplicate_set_api;\nmod file_read_api;\nmod hash;',
+          )
+          replace_once(
+              "rust_indexer/src/main.rs",
+              'use output::{print_json, SourceListOutput, SourceMutationOutput};\nuse std::path::Path;',
+              'use output::{print_json, SourceListOutput, SourceMutationOutput};\nuse std::io::Write;\nuse std::path::Path;',
+          )
+          replace_once(
+              "rust_indexer/src/main.rs",
+              'let capabilities = duplicate_set_api::capabilities_output();',
+              'let capabilities = file_read_api::capabilities_output();',
+          )
+          replace_once(
+              "rust_indexer/src/main.rs",
+              '''            FileCommands::Show { id } => {
+                  let file = read_api::show_file(&repo, id)?;
+                  if output.is_json() {
+                      print_json(&file)?;
+                  } else {
+                      println!("{}", file.human_readable());
+                  }
+                  Ok(())
+              }
+          ''',
+              '''            FileCommands::Show { id } => {
+                  let file = read_api::show_file(&repo, id)?;
+                  if output.is_json() {
+                      print_json(&file)?;
+                  } else {
+                      println!("{}", file.human_readable());
+                  }
+                  Ok(())
+              }
+              FileCommands::Read { id, offset, length } => {
+                  let file = file_read_api::read_file(&repo, id, offset, length)?;
+                  if output.is_json() {
+                      print_json(&file)?;
+                  } else {
+                      eprintln!("{}", file.provenance_human_readable());
+                      let mut stdout = std::io::stdout().lock();
+                      stdout
+                          .write_all(file.bytes())
+                          .map_err(|err| format!("file_read_io_error: stdout write failed: {err}"))?;
+                      stdout
+                          .flush()
+                          .map_err(|err| format!("file_read_io_error: stdout flush failed: {err}"))?;
+                  }
+                  Ok(())
+              }
+          ''',
+          )
+
+          # Mark the capability as delivered through the new module chain.
+          replace_once(
+              "docs/fod-indexer-read-api.md",
+              '''## Planned P1 source-byte read
+
+          A future command may provide a revalidated byte-range read by `file_id`:
+
+          ```text
+          fod-indexer file read --id ID [--offset N] [--length N]
+          ```
+
+          It will return source bytes and provenance only after checking that the source
+          still matches the indexed identity. It will not perform text extraction, OCR,
+          MIME classification, embeddings, or AI processing.
+          ''',
+              '''## Available revalidated source-byte read
+
+          ```text
+          fod-indexer file read --id ID [--offset N] [--length N]
+          ```
+
+          The command resolves a stable `file_id`, rejects unsafe or escaped source paths,
+          and checks indexed size, modification time, inode, device, scan state, hash
+          observations, and any stored partial or full SHA-256 hash. It rechecks the open
+          file after reading so removal, replacement, concurrent change, and access errors
+          fail before data is returned.
+
+          With text output, exact source bytes are written to stdout and provenance is
+          written to stderr. With `--output json`, the versioned response contains Base64
+          data, range metadata, indexed provenance, observed metadata, the current full
+          SHA-256 hash, and the validation basis. Omitting `--length` reads from `--offset`
+          to EOF; a requested range that extends beyond EOF is shortened to the available
+          bytes.
+
+          The command is strictly read-only. It does not update `source_changed`, hashes,
+          scan runs, plans, or duplicate metadata, and it does not perform text extraction,
+          MIME classification, OCR, embeddings, or AI processing.
+          ''',
+          )
+          replace_once(
+              "docs/msfind-fod-indexer-requests.md",
+              '''## P1: revalidated source-byte read
+
+          Add a read-only byte-range command by `file_id`, with indexed identity,
+          provenance, and an explicit changed/missing-source error.
+
+          Text extraction, MIME classification, extractor versions, OCR, embeddings, and
+          AI classification remain owned by `msfind`; they should not be added to the FOD
+          index tables merely to satisfy this command.
+          ''',
+              '''## Delivered P1: revalidated source-byte read
+
+          The strictly read-only command is available:
+
+          ```text
+          fod-indexer file read --id ID [--offset N] [--length N]
+          ```
+
+          It returns exact bytes or a requested range only after revalidating indexed
+          metadata and stored hashes. JSON transports bytes as Base64 together with source,
+          path, scan-run, size, mtime, inode/device, indexed hash state, observed SHA-256,
+          range, and validation provenance. Missing, inaccessible, replaced, or changed
+          source files return explicit `file_read_*` errors and no bytes.
+
+          Text extraction, MIME classification, extractor versions, OCR, embeddings, and
+          AI classification remain owned by `msfind`.
+          ''',
+          )
+          replace_once(
+              "docs/fod-indexer.md",
+              '- `fod-indexer file show --id <id>`,',
+              '- `fod-indexer file show --id <id>`,\n- `fod-indexer file read --id <id> [--offset <n>] [--length <n>]`,',
+          )
+          replace_once(
+              "docs/fod-indexer.md",
+              '''fod-indexer --output json file show --id 42
+          ```
+
+          `file list` and `file search` return a live view ordered by `file_id ASC`, with deterministic keyset pagination through `next_cursor`. `file search` supports path, name, source, extension, file-kind, scan-status, hash-status, size-range, and modification-time filters. `file show` returns one record by stable file id. These commands do not scan, hash, rebuild duplicate sets, create plans, read source contents, or modify index state.
+          ''',
+              '''fod-indexer --output json file show --id 42
+          fod-indexer --output json file read --id 42 --offset 0 --length 65536
+          ```
+
+          `file list` and `file search` return a live view ordered by `file_id ASC`, with deterministic keyset pagination through `next_cursor`. `file search` supports path, name, source, extension, file-kind, scan-status, hash-status, size-range, and modification-time filters. `file show` returns one record by stable file id. These catalogue queries do not scan, hash, rebuild duplicate sets, create plans, read source contents, or modify index state.
+
+          `file read` is also strictly read-only but accesses the registered source after resolving a stable file id. It validates the safe source path, scan metadata, inode/device identity, stored hash observations, and partial or full SHA-256 before returning bytes. Text output writes raw bytes to stdout and provenance to stderr; JSON returns Base64 data and complete validation provenance.
+          ''',
+          )
+
+          # Release metadata.
+          replace_once("Cargo.toml", 'version = "3.2.19"', 'version = "3.2.20"')
+          Path("fod_version.txt").write_text("3.2.20\n")
+          PY
+
+          cargo fmt --all
+          cargo check --workspace
+          cargo fmt --all -- --check
+          cargo check --workspace --locked
+          cargo test --locked -p fod-rust-indexer
+          make test-version
+
+          rm -f .github/workflows/fod-3.2.20-file-read.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.toml Cargo.lock fod_version.txt rust_indexer docs .github/workflows/fod-3.2.20-file-read.yml
+          git commit -m "Implement FOD 3.2.20 file read API"
+          git push origin HEAD:work/fod-3.2.20-file-read
