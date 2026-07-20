@@ -47,7 +47,7 @@ The transitional form cannot be combined with `primary_hosts` or `replica_hosts`
 - `FOD_PG_HOSTS`
 - existing `FOD_PG_HOST` and `FOD_PG_PORT` for the legacy form
 
-Empty environment values do not erase non-empty configuration-file values.
+Empty environment values do not erase non-empty configuration-file values. A non-empty endpoint-mode environment variable selects that mode over a different mode present in the configuration file. Setting both the explicit-role environment variables and `FOD_PG_HOSTS` is rejected as ambiguous.
 
 ## Validation
 
@@ -58,6 +58,7 @@ The parser rejects:
 - explicit role lists mixed with transitional `hosts`;
 - explicit role mode without any primary endpoint;
 - duplicate endpoints, including case-insensitive hostname duplicates across roles;
+- empty list elements;
 - missing or invalid ports;
 - unbracketed IPv6 authorities.
 
@@ -72,6 +73,7 @@ fod-config endpoint-config
 The JSON output includes:
 
 - configuration mode;
+- `routing_enabled: false`, making the phase boundary explicit;
 - whether role discovery is required;
 - primary, replica, and unknown endpoint counts;
 - normalized endpoint host, port, role, and authority.
