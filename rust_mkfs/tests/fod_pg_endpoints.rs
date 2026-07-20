@@ -32,6 +32,10 @@ fn write_config(database_lines: &str) -> PathBuf {
 }
 
 fn endpoint_config(config_path: &PathBuf) -> Output {
+    endpoint_config_with_env(config_path, &[])
+}
+
+fn endpoint_config_with_env(config_path: &PathBuf, overrides: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fod-config"));
     for key in [
         "FOD_PG_HOST",
@@ -42,8 +46,15 @@ fn endpoint_config(config_path: &PathBuf) -> Output {
     ] {
         command.env_remove(key);
     }
+    for (key, value) in overrides {
+        command.env(key, value);
+    }
     command
-        .args(["--config-path", config_path.to_str().unwrap(), "endpoint-config"])
+        .args([
+            "--config-path",
+            config_path.to_str().unwrap(),
+            "endpoint-config",
+        ])
         .output()
         .unwrap()
 }
@@ -99,11 +110,75 @@ fn reports_transitional_hosts_as_discovery_required() {
 }
 
 #[test]
-fn rejects_ambiguous_role_configuration() {
-    let config_path = write_config(
+fn environment_selects_the_endpoint_mode_over_the_config_file() {
+    let discovery_config = write_config("hosts = config-unknown:15432");
+    let explicit_output = endpoint_config_with_env(
+        &discovery_config,
+        &[
+            ("FOD_PG_PRIMARY_HOSTS", "env-primary:25432"),
+            ("FOD_PG_REPLICA_HOSTS", "env-replica:25442"),
+        ],
+    );
+    assert!(
+        explicit_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explicit_output.stderr)
+    );
+    let explicit: serde_json::Value = serde_json::from_slice(&explicit_output.stdout).unwrap();
+    assert_eq!(explicit["mode"], "explicit-roles");
+    assert_eq!(explicit["endpoints"][0]["authority"], "env-primary:25432");
+
+    let explicit_config = write_config("primary_hosts = config-primary:15432");
+    let discovery_output = endpoint_config_with_env(
+        &explicit_config,
+        &[("FOD_PG_HOSTS", "env-unknown:35432")],
+    );
+    assert!(
+        discovery_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&discovery_output.stderr)
+    );
+    let discovery: serde_json::Value = serde_json::from_slice(&discovery_output.stdout).unwrap();
+    assert_eq!(discovery["mode"], "discover-roles");
+    assert_eq!(discovery["endpoints"][0]["authority"], "env-unknown:35432");
+}
+
+#[test]
+fn rejects_ambiguous_or_incomplete_role_configuration() {
+    let ambiguous_config = write_config(
         "primary_hosts = db-a:15432\nreplica_hosts = db-r:15442\nhosts = db-x:15452",
     );
-    let output = endpoint_config(&config_path);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("ambiguous"));
+    let ambiguous = endpoint_config(&ambiguous_config);
+    assert!(!ambiguous.status.success());
+    assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("ambiguous"));
+
+    let replica_only_config = write_config("replica_hosts = db-r:15442");
+    let replica_only = endpoint_config(&replica_only_config);
+    assert!(!replica_only.status.success());
+    assert!(String::from_utf8_lossy(&replica_only.stderr).contains("at least one"));
+}
+
+#[test]
+fn rejects_duplicates_invalid_ports_empty_entries_and_unbracketed_ipv6() {
+    for (database_lines, expected_error) in [
+        (
+            "primary_hosts = db-a:15432\nreplica_hosts = DB-A:15432",
+            "duplicate",
+        ),
+        ("primary_hosts = db-a:70000", "1..65535"),
+        (
+            "primary_hosts = db-a:15432,,db-b:15433",
+            "non-empty",
+        ),
+        ("primary_hosts = ::1:15432", "IPv6"),
+    ] {
+        let config_path = write_config(database_lines);
+        let output = endpoint_config(&config_path);
+        assert!(!output.status.success(), "{database_lines}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected_error),
+            "expected {expected_error:?} for {database_lines:?}, stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
