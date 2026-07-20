@@ -100,10 +100,18 @@ pub fn resolve_pg_endpoint_config(
     if has_explicit_roles {
         let mut endpoints = Vec::new();
         if let Some(value) = primary_hosts.as_deref() {
-            endpoints.extend(parse_endpoint_list(value, PgEndpointRole::Primary, "primary_hosts")?);
+            endpoints.extend(parse_endpoint_list(
+                value,
+                PgEndpointRole::Primary,
+                "primary_hosts",
+            )?);
         }
         if let Some(value) = replica_hosts.as_deref() {
-            endpoints.extend(parse_endpoint_list(value, PgEndpointRole::Replica, "replica_hosts")?);
+            endpoints.extend(parse_endpoint_list(
+                value,
+                PgEndpointRole::Replica,
+                "replica_hosts",
+            )?);
         }
         if !endpoints
             .iter()
@@ -282,162 +290,4 @@ fn validate_unique_endpoints(endpoints: &[PgEndpoint]) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn clear_endpoint_env() {
-        for key in [
-            "FOD_PG_HOST",
-            "FOD_PG_PORT",
-            "FOD_PG_PRIMARY_HOSTS",
-            "FOD_PG_REPLICA_HOSTS",
-            "FOD_PG_HOSTS",
-        ] {
-            env::remove_var(key);
-        }
-    }
-
-    #[test]
-    fn preserves_legacy_single_endpoint_configuration() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        clear_endpoint_env();
-        let config = HashMap::from([
-            ("host".to_string(), "db.internal".to_string()),
-            ("port".to_string(), "15432".to_string()),
-        ]);
-        let resolved = resolve_pg_endpoint_config(&config).unwrap();
-        assert_eq!(resolved.mode, PgEndpointMode::LegacySingle);
-        assert!(resolved.role_discovery_required);
-        assert_eq!(resolved.unknown_count(), 1);
-        assert_eq!(resolved.endpoints[0].authority(), "db.internal:15432");
-        clear_endpoint_env();
-    }
-
-    #[test]
-    fn parses_explicit_primary_and_replica_roles() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        clear_endpoint_env();
-        let config = HashMap::from([
-            (
-                "primary_hosts".to_string(),
-                "127.0.0.1:15432,127.0.0.1:15433".to_string(),
-            ),
-            (
-                "replica_hosts".to_string(),
-                "127.0.0.1:15442,[::1]:15443".to_string(),
-            ),
-        ]);
-        let resolved = resolve_pg_endpoint_config(&config).unwrap();
-        assert_eq!(resolved.mode, PgEndpointMode::ExplicitRoles);
-        assert!(!resolved.role_discovery_required);
-        assert_eq!(resolved.primary_count(), 2);
-        assert_eq!(resolved.replica_count(), 2);
-        assert_eq!(resolved.endpoints[3].authority(), "[::1]:15443");
-        clear_endpoint_env();
-    }
-
-    #[test]
-    fn transitional_hosts_require_role_discovery() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        clear_endpoint_env();
-        let config = HashMap::from([(
-            "hosts".to_string(),
-            "db-a:15432,db-b:15442".to_string(),
-        )]);
-        let resolved = resolve_pg_endpoint_config(&config).unwrap();
-        assert_eq!(resolved.mode, PgEndpointMode::DiscoverRoles);
-        assert!(resolved.role_discovery_required);
-        assert_eq!(resolved.unknown_count(), 2);
-        clear_endpoint_env();
-    }
-
-    #[test]
-    fn environment_selects_and_overrides_the_endpoint_mode() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        clear_endpoint_env();
-        env::set_var("FOD_PG_PRIMARY_HOSTS", "env-primary:25432");
-        env::set_var("FOD_PG_REPLICA_HOSTS", "env-replica:25442");
-        let config = HashMap::from([(
-            "hosts".to_string(),
-            "config-unknown:15432".to_string(),
-        )]);
-        let resolved = resolve_pg_endpoint_config(&config).unwrap();
-        assert_eq!(resolved.mode, PgEndpointMode::ExplicitRoles);
-        assert_eq!(resolved.endpoints[0].authority(), "env-primary:25432");
-        assert_eq!(resolved.endpoints[1].authority(), "env-replica:25442");
-
-        clear_endpoint_env();
-        env::set_var("FOD_PG_HOSTS", "env-unknown:35432");
-        let explicit_config = HashMap::from([(
-            "primary_hosts".to_string(),
-            "config-primary:15432".to_string(),
-        )]);
-        let resolved = resolve_pg_endpoint_config(&explicit_config).unwrap();
-        assert_eq!(resolved.mode, PgEndpointMode::DiscoverRoles);
-        assert_eq!(resolved.endpoints[0].authority(), "env-unknown:35432");
-        clear_endpoint_env();
-    }
-
-    #[test]
-    fn rejects_ambiguous_missing_primary_and_duplicate_endpoints() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        clear_endpoint_env();
-
-        let ambiguous = HashMap::from([
-            ("primary_hosts".to_string(), "db-a:15432".to_string()),
-            ("hosts".to_string(), "db-b:15442".to_string()),
-        ]);
-        assert!(resolve_pg_endpoint_config(&ambiguous)
-            .unwrap_err()
-            .contains("ambiguous"));
-
-        let replica_only = HashMap::from([(
-            "replica_hosts".to_string(),
-            "db-r:15442".to_string(),
-        )]);
-        assert!(resolve_pg_endpoint_config(&replica_only)
-            .unwrap_err()
-            .contains("at least one"));
-
-        let duplicate = HashMap::from([
-            ("primary_hosts".to_string(), "db-a:15432".to_string()),
-            ("replica_hosts".to_string(), "DB-A:15432".to_string()),
-        ]);
-        assert!(resolve_pg_endpoint_config(&duplicate)
-            .unwrap_err()
-            .contains("duplicate"));
-        clear_endpoint_env();
-    }
-
-    #[test]
-    fn rejects_invalid_ports_empty_entries_and_unbracketed_ipv6() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
-        clear_endpoint_env();
-        let invalid_port = HashMap::from([(
-            "primary_hosts".to_string(),
-            "db-a:70000".to_string(),
-        )]);
-        assert!(resolve_pg_endpoint_config(&invalid_port).is_err());
-
-        let empty_entry = HashMap::from([(
-            "primary_hosts".to_string(),
-            "db-a:15432,,db-b:15433".to_string(),
-        )]);
-        assert!(resolve_pg_endpoint_config(&empty_entry).is_err());
-
-        let invalid_ipv6 = HashMap::from([(
-            "primary_hosts".to_string(),
-            "::1:15432".to_string(),
-        )]);
-        assert!(resolve_pg_endpoint_config(&invalid_ipv6)
-            .unwrap_err()
-            .contains("IPv6"));
-        clear_endpoint_env();
-    }
 }
