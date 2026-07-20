@@ -4,6 +4,7 @@ mod cleanup;
 mod cli;
 mod config;
 mod db;
+mod duplicate_set_api;
 mod hash;
 mod materialize;
 mod model;
@@ -16,7 +17,10 @@ mod source;
 mod source_registry;
 
 use crate::model::IndexSource;
-use cli::{Cli, Commands, FileCommands, PlanCommands, ReportCommands, SourceCommands, SourceKind};
+use cli::{
+    Cli, Commands, DuplicateSetCommands, FileCommands, PlanCommands, ReportCommands,
+    SourceCommands, SourceKind,
+};
 use output::{print_json, SourceListOutput, SourceMutationOutput};
 use std::path::Path;
 
@@ -32,7 +36,7 @@ fn run() -> Result<(), String> {
     let output = cli.output;
 
     if matches!(&cli.command, Commands::Capabilities) {
-        let capabilities = read_api::capabilities_output();
+        let capabilities = duplicate_set_api::capabilities_output();
         if output.is_json() {
             print_json(&capabilities)?;
         } else {
@@ -46,6 +50,17 @@ fn run() -> Result<(), String> {
 
     match cli.command {
         Commands::Capabilities => unreachable!("capabilities returns before opening PostgreSQL"),
+        Commands::DuplicateSet { command } => match command {
+            DuplicateSetCommands::List { limit, cursor } => {
+                let sets = duplicate_set_api::load_duplicate_set_list(&repo, limit, cursor)?;
+                if output.is_json() {
+                    print_json(&sets)?;
+                } else {
+                    println!("{}", sets.human_readable());
+                }
+                Ok(())
+            }
+        },
         Commands::File { command } => match command {
             FileCommands::List {
                 limit,
