@@ -1,0 +1,153 @@
+@startuml
+title FOD 3.2.20 — aktywność walidacji i odczytu pliku
+
+skinparam shadowing false
+skinparam activity {
+  BackgroundColor white
+  BorderColor black
+  DiamondBackgroundColor white
+  DiamondBorderColor black
+}
+
+start
+
+:Odbierz file_id,\noffset i opcjonalne length;
+
+if (file_id > 0?) then (tak)
+else (nie)
+  :file_read_invalid_id;
+  stop
+endif
+
+:SELECT z index_files,\nindex_sources i index_file_hashes;
+
+if (Rekord istnieje?) then (tak)
+else (nie)
+  :file_read_not_found;
+  stop
+endif
+
+if (file_kind = regular\ni scan_status = ok?) then (tak)
+else (nie)
+  :file_read_unavailable;
+  stop
+endif
+
+if (source_changed = true\nlub hash_status = changed_retry_needed?) then (tak)
+  :file_read_source_changed;
+  stop
+else (nie)
+endif
+
+:Sprawdź, czy path jest\nbezpieczną ścieżką względną;
+
+if (Ścieżka względna poprawna?) then (tak)
+else (nie)
+  :file_read_invalid_source_path;
+  stop
+endif
+
+:canonicalize(source_root);\ncanonicalize(source_root/path);
+
+if (Plik istnieje i jest dostępny?) then (tak)
+else (nie)
+  if (NotFound?) then (tak)
+    :file_read_source_missing;
+  else (PermissionDenied)
+    :file_read_access_denied;
+  endif
+  stop
+endif
+
+if (resolved_path jest wewnątrz source_root?) then (tak)
+else (nie)
+  :file_read_invalid_source_path;
+  stop
+endif
+
+:Otwórz plik tylko do odczytu;
+:Pobierz snapshot_before:\nsize, mtime_ns, inode, device;
+
+if (Zwykły plik?) then (tak)
+else (nie)
+  :file_read_source_changed;
+  stop
+endif
+
+:Porównaj snapshot_before\nz metadanymi skanu i hashowania;
+
+if (Metadane zgodne?) then (tak)
+else (nie)
+  :file_read_source_changed;
+  stop
+endif
+
+if (Algorytm hasha obsługiwany?) then (tak)
+else (nie)
+  :file_read_unsupported_hash;
+  stop
+endif
+
+if (Zapisano partial_hash?) then (tak)
+  :Oblicz bieżący partial SHA-256;
+else (nie)
+endif
+
+:Oblicz bieżący pełny SHA-256;
+
+if (Zapisano full_hash?) then (tak)
+  if (Full hash zgodny?) then (tak)
+    :validation basis =\nmetadata+full-hash;
+  else (nie)
+    :file_read_source_changed;
+    stop
+  endif
+else (nie)
+  if (Zapisano partial_hash?) then (tak)
+    if (Partial hash zgodny?) then (tak)
+      :validation basis =\nmetadata+partial-hash;
+    else (nie)
+      :file_read_source_changed;
+      stop
+    endif
+  else (nie)
+    :validation basis = metadata-only;
+  endif
+endif
+
+if (offset <= file_size?) then (tak)
+else (nie)
+  :file_read_invalid_range;
+  stop
+endif
+
+:returned_length = min(length,\nfile_size - offset)\nlub do EOF;
+:seek(offset) i odczytaj dokładnie zakres;
+
+if (Odczytano oczekiwaną liczbę bajtów?) then (tak)
+else (nie)
+  :file_read_source_changed;
+  stop
+endif
+
+:Pobierz snapshot_after\nz otwartego uchwytu;
+:Pobierz bieżące inode/device\nprzez ścieżkę;
+
+if (before = after\ni plik nie został podmieniony?) then (tak)
+else (nie)
+  :file_read_source_changed;
+  stop
+endif
+
+:Zbuduj provenance,\nvalidation i range;
+
+if (--output json?) then (tak)
+  :Zakoduj bajty Base64;
+  :stdout = JSON;
+else (nie)
+  :stderr = pochodzenie;
+  :stdout = surowe bajty;
+endif
+
+stop
+@enduml

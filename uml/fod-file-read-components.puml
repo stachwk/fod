@@ -1,0 +1,70 @@
+@startuml
+title FOD 3.2.20 — komponenty i przepływ danych file read
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+actor "Użytkownik / msfind" as User
+
+package "fod-indexer" {
+  component "CLI\ncli.rs" as CLI
+  component "Dyspozytor\nmain.rs" as Main
+  component "File Read API\nfile_read_api.rs" as ReadAPI
+  component "Hashing\nhash.rs" as Hash
+  component "JSON serializer\nserde + Base64" as Json
+  component "Raw output\nstdout / stderr" as Raw
+}
+
+database "PostgreSQL" as PG {
+  component "index_files" as IndexFiles
+  component "index_sources" as IndexSources
+  component "index_file_hashes" as IndexHashes
+}
+
+folder "Zarejestrowane źródło plików" as Source {
+  file "source_root/path" as File
+}
+
+User --> CLI : file read --id\n[offset, length]
+CLI --> Main : FileCommands::Read
+Main --> ReadAPI : read_file()
+
+ReadAPI --> IndexFiles : SELECT stabilnego file_id
+ReadAPI --> IndexSources : SELECT nazwy, rodzaju,\nroot_path
+ReadAPI --> IndexHashes : SELECT partial/full hash\ni observed metadata
+
+ReadAPI --> File : canonicalize, open RO,\nmetadata, seek, read
+ReadAPI --> Hash : partial SHA-256\nfull SHA-256
+Hash --> File : odczyt z tego samego uchwytu
+
+ReadAPI --> Json : provenance + validation\n+ range + bytes
+ReadAPI --> Raw : provenance + bytes
+
+Json --> User : stdout: JSON\nbytes jako Base64
+Raw --> User : stderr: provenance\nstdout: surowe bajty
+
+note right of PG
+Tylko SELECT.
+Brak modyfikacji:
+- index_files
+- index_sources
+- index_file_hashes
+end note
+
+note right of Source
+Tylko odczyt.
+Brak zapisu, zmiany nazw,
+usuwania lub markerów.
+end note
+
+note bottom of ReadAPI
+Granica bezpieczeństwa:
+1. walidacja rekordu indeksu,
+2. bezpieczna ścieżka,
+3. snapshot przed,
+4. hash,
+5. odczyt zakresu,
+6. snapshot po,
+7. dopiero wtedy emisja danych.
+end note
+@enduml
