@@ -14,8 +14,11 @@ mod version;
 
 use clap::{Parser, Subcommand};
 use config::{load_config_parser, resolve_config_path};
+use fod_rust_runtime::ini_config::{
+    PgEndpointHealthRegistry, PgEndpointHealthSnapshot, PgPoolPlan,
+};
 use pg::DbConn;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tls::generate_client_tls_pair;
 
@@ -130,6 +133,12 @@ fn main() {
                 Ok(value) => value,
                 Err(err) => exit_with_error(&err),
             };
+            let runtime = match config::load_runtime_config(&config) {
+                Ok(value) => value,
+                Err(err) => exit_with_error(&err),
+            };
+            let pool_plan = PgPoolPlan::from_total_limit(runtime.pool_max_connections);
+            let health_registry = PgEndpointHealthRegistry::default();
             let base_params = pg_config::resolve_pg_connection_params(
                 &db_section,
                 &config_path.parent().unwrap_or(Path::new(".")),
@@ -142,6 +151,7 @@ fn main() {
             let mut endpoints = Vec::new();
 
             for endpoint in &topology.endpoints {
+                let authority = endpoint.authority();
                 let params = pg_config::pg_connection_params_for_endpoint(&base_params, endpoint);
                 let conninfo = pg_config::make_conninfo(&params);
                 match DbConn::connect(&conninfo) {
@@ -158,8 +168,16 @@ fn main() {
                             if role_matches == Some(false) {
                                 role_mismatch_count += 1;
                             }
+                            let health = match health_registry.record_probe(
+                                &authority,
+                                endpoint.role,
+                                probe,
+                            ) {
+                                Ok(value) => value,
+                                Err(err) => exit_with_error(&err),
+                            };
                             endpoints.push(json!({
-                                "authority": endpoint.authority(),
+                                "authority": authority,
                                 "host": endpoint.host.as_str(),
                                 "port": endpoint.port,
                                 "configured_role": endpoint.role.as_str(),
@@ -170,13 +188,22 @@ fn main() {
                                 "write_capable": probe.write_capable(),
                                 "consistent": probe.is_consistent(),
                                 "role_matches_config": role_matches,
+                                "health": health_snapshot_json(&health),
                                 "error": null,
                             }));
                         }
                         Err(err) => {
                             failed_count += 1;
+                            let health = match health_registry.record_failure(
+                                &authority,
+                                endpoint.role,
+                                &err,
+                            ) {
+                                Ok(value) => value,
+                                Err(registry_err) => exit_with_error(&registry_err),
+                            };
                             endpoints.push(json!({
-                                "authority": endpoint.authority(),
+                                "authority": authority,
                                 "host": endpoint.host.as_str(),
                                 "port": endpoint.port,
                                 "configured_role": endpoint.role.as_str(),
@@ -185,14 +212,23 @@ fn main() {
                                 "write_capable": false,
                                 "consistent": false,
                                 "role_matches_config": null,
+                                "health": health_snapshot_json(&health),
                                 "error": err,
                             }));
                         }
                     },
                     Err(err) => {
                         failed_count += 1;
+                        let health = match health_registry.record_failure(
+                            &authority,
+                            endpoint.role,
+                            &err,
+                        ) {
+                            Ok(value) => value,
+                            Err(registry_err) => exit_with_error(&registry_err),
+                        };
                         endpoints.push(json!({
-                            "authority": endpoint.authority(),
+                            "authority": authority,
                             "host": endpoint.host.as_str(),
                             "port": endpoint.port,
                             "configured_role": endpoint.role.as_str(),
@@ -201,6 +237,7 @@ fn main() {
                             "write_capable": false,
                             "consistent": false,
                             "role_matches_config": null,
+                            "health": health_snapshot_json(&health),
                             "error": err,
                         }));
                     }
@@ -213,6 +250,10 @@ fn main() {
                     "mode": topology.mode.as_str(),
                     "routing_enabled": false,
                     "probe_only": true,
+                    "health_state_persistence": "process",
+                    "health_failure_threshold": health_registry.failure_threshold(),
+                    "pool_plan_active": false,
+                    "pool_plan": pool_plan_json(&pool_plan),
                     "endpoint_count": topology.endpoints.len(),
                     "reachable_count": reachable_count,
                     "failed_count": failed_count,
@@ -252,6 +293,42 @@ fn main() {
             Err(err) => exit_with_error(&err),
         },
     }
+}
+
+fn health_snapshot_json(snapshot: &PgEndpointHealthSnapshot) -> Value {
+    let eligible_purposes = snapshot
+        .eligible_purposes
+        .iter()
+        .map(|purpose| purpose.as_str())
+        .collect::<Vec<_>>();
+    json!({
+        "state": snapshot.state.as_str(),
+        "configured_role": snapshot.configured_role.as_str(),
+        "observed_role": snapshot.observed_role.map(|role| role.as_str()),
+        "role_matches_config": snapshot.role_matches_config,
+        "consecutive_successes": snapshot.consecutive_successes,
+        "consecutive_failures": snapshot.consecutive_failures,
+        "total_successes": snapshot.total_successes,
+        "total_failures": snapshot.total_failures,
+        "last_success_unix_ms": snapshot.last_success_unix_ms,
+        "last_failure_unix_ms": snapshot.last_failure_unix_ms,
+        "last_error": snapshot.last_error.as_deref(),
+        "eligible_purposes": eligible_purposes,
+        "automatic_routing_enabled": snapshot.automatic_routing_enabled,
+    })
+}
+
+fn pool_plan_json(plan: &PgPoolPlan) -> Value {
+    json!({
+        "mode": plan.mode.as_str(),
+        "total_limit": plan.total_limit,
+        "read_limit": plan.read_limit,
+        "write_limit": plan.write_limit,
+        "control_limit": plan.control_limit,
+        "lease_limit": plan.lease_limit,
+        "dedicated_slots_sum": plan.dedicated_slots_sum(),
+        "routing_enabled": plan.routing_enabled,
+    })
 }
 
 fn database_section(
