@@ -1,8 +1,13 @@
 pub mod pg_endpoints;
+pub mod pg_runtime;
 
 pub use pg_endpoints::{
     pg_connection_params_for_endpoint, resolve_pg_endpoint_config, PgEndpoint, PgEndpointConfig,
     PgEndpointMode, PgEndpointProbe, PgEndpointRole, PgObservedEndpointRole,
+};
+pub use pg_runtime::{
+    PgConnectionPurpose, PgEndpointHealthRegistry, PgEndpointHealthSnapshot, PgEndpointHealthState,
+    PgPoolIsolationMode, PgPoolPlan, DEFAULT_PG_HEALTH_FAILURE_THRESHOLD,
 };
 
 use crate::expand_user;
