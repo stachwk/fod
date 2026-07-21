@@ -38,11 +38,13 @@ SMOKE_FILES: dict[str, bytes] = {
     "a.txt": b"same",
     "b.txt": b"same",
     "c.txt": b"unique",
+    "cross-source-a.bin": b"cross-source-duplicate",
 }
 
 OTHER_FILES: dict[str, bytes] = {
     "d.txt": b"x",
     "e.txt": b"yy",
+    "cross-source-b.bin": b"cross-source-duplicate",
 }
 
 
@@ -201,36 +203,48 @@ def main() -> None:
             assert_contains(other_add_output, str(other_root), "source add other")
 
             smoke_scan_output = run_indexer(ROOT, ["scan", "--source", smoke_source])
-            assert_contains(smoke_scan_output, "scanned files: 3", "scan smoke")
-            assert_contains(smoke_scan_output, "ok files: 3", "scan smoke")
-            assert_contains(smoke_scan_output, "total bytes: 14", "scan smoke")
+            assert_contains(smoke_scan_output, "scanned files: 4", "scan smoke")
+            assert_contains(smoke_scan_output, "ok files: 4", "scan smoke")
+            assert_contains(smoke_scan_output, "total bytes: 36", "scan smoke")
 
             other_scan_output = run_indexer(ROOT, ["scan", "--source", other_source])
-            assert_contains(other_scan_output, "scanned files: 2", "scan other")
-            assert_contains(other_scan_output, "ok files: 2", "scan other")
-            assert_contains(other_scan_output, "total bytes: 3", "scan other")
+            assert_contains(other_scan_output, "scanned files: 3", "scan other")
+            assert_contains(other_scan_output, "ok files: 3", "scan other")
+            assert_contains(other_scan_output, "total bytes: 25", "scan other")
 
             smoke_hash_output = run_indexer(ROOT, ["hash", "--source", smoke_source, "--candidates-only"])
             assert_contains(smoke_hash_output, f"source: {smoke_source}", "hash smoke")
+            assert_contains(smoke_hash_output, "candidate files: 4", "hash smoke")
+            assert_contains(smoke_hash_output, "full hashed: 4", "hash smoke")
+            assert_contains(smoke_hash_output, "duplicate sets: 2", "hash smoke")
 
             other_hash_output = run_indexer(ROOT, ["hash", "--source", other_source, "--candidates-only"])
-            assert_contains(other_hash_output, "candidate files: 0", "hash other")
+            assert_contains(other_hash_output, "candidate files: 2", "hash other")
+            assert_contains(other_hash_output, "full hashed: 2", "hash other")
+            assert_contains(other_hash_output, "duplicate sets: 2", "hash other")
             assert_contains(other_hash_output, f"source: {other_source}", "hash other")
 
             smoke_dry_run_output = run_indexer(ROOT, ["plan-import", "--source", smoke_source, "--dry-run"])
             assert_contains(smoke_dry_run_output, "FOD indexer dry-run import plan", "dry-run smoke")
             assert_contains(smoke_dry_run_output, f"source: {smoke_source}", "dry-run smoke")
-            assert_contains(smoke_dry_run_output, "scanned files: 3", "dry-run smoke")
+            assert_contains(smoke_dry_run_output, "scanned files: 4", "dry-run smoke")
             assert_contains(smoke_dry_run_output, "candidate duplicate groups: 1", "dry-run smoke")
             assert_contains(smoke_dry_run_output, "confirmed duplicate groups: 1", "dry-run smoke")
-            assert_contains(smoke_dry_run_output, "unique payloads: 2", "dry-run smoke")
-            assert_contains(smoke_dry_run_output, "source bytes: 14", "dry-run smoke")
-            assert_contains(smoke_dry_run_output, "estimated import bytes: 10", "dry-run smoke")
+            assert_contains(smoke_dry_run_output, "unique payloads: 3", "dry-run smoke")
+            assert_contains(smoke_dry_run_output, "source bytes: 36", "dry-run smoke")
+            assert_contains(smoke_dry_run_output, "estimated import bytes: 32", "dry-run smoke")
             assert_contains(smoke_dry_run_output, "estimated saved bytes: 4", "dry-run smoke")
 
             all_dry_run_output = run_indexer(ROOT, ["plan-import", "--all-sources", "--dry-run"])
             assert_contains(all_dry_run_output, "FOD indexer dry-run import plan", "dry-run all")
             assert_contains(all_dry_run_output, "source: all sources", "dry-run all")
+            assert_contains(all_dry_run_output, "scanned files: 7", "dry-run all")
+            assert_contains(all_dry_run_output, "candidate duplicate groups: 2", "dry-run all")
+            assert_contains(all_dry_run_output, "confirmed duplicate groups: 2", "dry-run all")
+            assert_contains(all_dry_run_output, "unique payloads: 5", "dry-run all")
+            assert_contains(all_dry_run_output, "source bytes: 61", "dry-run all")
+            assert_contains(all_dry_run_output, "estimated import bytes: 35", "dry-run all")
+            assert_contains(all_dry_run_output, "estimated saved bytes: 26", "dry-run all")
 
             if snapshot_tree(smoke_root) != smoke_snapshot:
                 raise AssertionError("smoke source tree changed during plan-import")
@@ -264,6 +278,7 @@ def main() -> None:
                         (smoke_source, "a.txt", "canonical"),
                         (smoke_source, "b.txt", "reference"),
                         (smoke_source, "c.txt", "unique"),
+                        (smoke_source, "cross-source-a.bin", "unique"),
                     ],
                 )
                 assert_plan_contains_entries(
@@ -271,11 +286,13 @@ def main() -> None:
                     all_plan_id,
                     None,
                     [
+                        (other_source, "cross-source-b.bin", "reference"),
                         (other_source, "d.txt", "unique"),
                         (other_source, "e.txt", "unique"),
                         (smoke_source, "a.txt", "canonical"),
                         (smoke_source, "b.txt", "reference"),
                         (smoke_source, "c.txt", "unique"),
+                        (smoke_source, "cross-source-a.bin", "canonical"),
                     ],
                 )
 
