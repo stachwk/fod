@@ -1,0 +1,59 @@
+name: Fix endpoint probe implementation workflow
+
+on:
+  pull_request:
+    branches: [main]
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.ref == 'agent/pg-endpoint-probes'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Patch workflow and remove diagnostics
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/pg-endpoint-probes.yml')
+          text = path.read_text(encoding='utf-8')
+          old = '''          if tests.count(old_helper) != 1:
+              raise SystemExit("fod_pg_endpoints helper shape changed")
+          tests = tests.replace(old_helper, new_helper)
+'''
+          new = '''          if tests.count(old_helper) == 1:
+              tests = tests.replace(old_helper, new_helper)
+          else:
+              helper_start = tests.index("fn endpoint_config(config_path: &PathBuf) -> Output {")
+              helper_end = tests.index("\\n#[test]", helper_start)
+              tests = tests[:helper_start] + new_helper + "\\n\\n" + tests[helper_end + 1:]
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'unexpected workflow helper guard count: {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
+          rm -f \
+            .github/workflows/pg-endpoint-probes-diagnose.yml \
+            .github/workflows/pg-endpoint-probes-diagnose-report.yml \
+            .github/workflows/pg-endpoint-probes-diagnose-tail.yml \
+            .github/workflows/fix-pg-endpoint-probes-workflow.yml \
+            docs/pg-endpoint-probe-pr-trigger.txt \
+            docs/pg-endpoint-probe-pr.md \
+            docs/pg-endpoint-probe-pr2.md \
+            docs/pg-endpoint-probe-pr3.md \
+            docs/pg-endpoint-probe-anchor-report.txt \
+            docs/pg-endpoint-probe-tail-report.txt
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Fix endpoint probe implementation workflow"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
