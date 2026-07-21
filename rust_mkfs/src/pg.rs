@@ -144,6 +144,9 @@ impl DbConn {
         PgEndpointProbe::parse_row(&value)
     }
 
+    // The same source file is included by multiple FOD binaries. Not every binary
+    // consumes every helper, but the methods remain part of the shared DB wrapper.
+    #[allow(dead_code)]
     pub fn exec(&self, sql: &str) -> Result<(), String> {
         self.exec_raw(sql)
     }
@@ -179,6 +182,7 @@ impl DbConn {
         }
     }
 
+    #[allow(dead_code)]
     pub fn query_scalar_bool(&self, sql: &str) -> Result<bool, String> {
         let value = self.query_scalar_text(sql)?;
         Ok(matches!(
@@ -187,10 +191,12 @@ impl DbConn {
         ))
     }
 
+    #[allow(dead_code)]
     pub fn query_exists(&self, sql: &str) -> Result<bool, String> {
         self.query_scalar_bool(sql)
     }
 
+    #[allow(dead_code)]
     pub fn quote_identifier(ident: &str) -> String {
         format!("\"{}\"", ident.replace('"', "\"\""))
     }
