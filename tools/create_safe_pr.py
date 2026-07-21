@@ -60,7 +60,7 @@ def _read_body(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
     except OSError as error:
-        raise SystemExit(f"unable to read PR body file: {path}: {error}") from error
+        raise SystemExit("unable to read PR body file") from error
 
 
 def _validate_publication_text(title: str, body: str) -> bool:
