@@ -6,7 +6,7 @@ use crate::source;
 use crate::source_registry;
 use fod_rust_hotpath::pg::{DbRepo, DuplicateSetStageRow, IndexFileHashStageRow};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt;
@@ -523,22 +523,80 @@ fn full_hash_group(
     Ok(results)
 }
 
+fn eligible_hash_files(files: Vec<IndexedFile>) -> Vec<IndexedFile> {
+    files
+        .into_iter()
+        .filter(|file| file.scan_status == "ok" && file.file_kind == "regular")
+        .filter(|file| !source::is_ignored_indexed_file(file))
+        .collect()
+}
+
+fn load_global_candidate_sizes(repo: &DbRepo) -> Result<HashSet<u64>, String> {
+    let rows = repo.query_rows_text(
+        "
+        SELECT f.size::text
+        FROM index_files f
+        WHERE f.scan_status = 'ok'
+          AND f.file_kind = 'regular'
+          AND f.size > 0
+        GROUP BY f.size
+        HAVING COUNT(*) > 1
+        ORDER BY f.size
+        ",
+    )?;
+
+    rows.iter()
+        .map(|row| {
+            row.first()
+                .ok_or_else(|| "global candidate-size row is empty".to_string())?
+                .trim()
+                .parse::<u64>()
+                .map_err(|err| format!("invalid global candidate size: {err}"))
+        })
+        .collect()
+}
+
+fn select_hash_scope(
+    source_files: &[IndexedFile],
+    global_candidate_sizes: Option<&HashSet<u64>>,
+    candidates_only: bool,
+) -> Vec<IndexedFile> {
+    if !candidates_only {
+        return source_files.to_vec();
+    }
+
+    let Some(global_candidate_sizes) = global_candidate_sizes else {
+        return Vec::new();
+    };
+
+    source_files
+        .iter()
+        .filter(|file| global_candidate_sizes.contains(&file.size))
+        .cloned()
+        .collect()
+}
+
 pub fn hash_source(
     repo: &DbRepo,
     source_name: &str,
     candidates_only: bool,
 ) -> Result<HashSummary, String> {
     let source = source_registry::load_source(repo, source_name)?;
-    let files = scan::load_indexed_files(repo, Some(source_name))?;
-    let files = files
-        .into_iter()
-        .filter(|file| file.scan_status == "ok" && file.file_kind == "regular")
-        .filter(|file| !source::is_ignored_indexed_file(file))
-        .collect::<Vec<_>>();
+    let source_files = eligible_hash_files(scan::load_indexed_files(repo, Some(source_name))?);
+    let global_candidate_sizes = if candidates_only {
+        Some(load_global_candidate_sizes(repo)?)
+    } else {
+        None
+    };
+    let files = select_hash_scope(
+        &source_files,
+        global_candidate_sizes.as_ref(),
+        candidates_only,
+    );
     let mut summary = HashSummary {
         source_name: source.name.clone(),
         source_path: source.root_path.display().to_string(),
-        scanned_files: files.len() as u64,
+        scanned_files: source_files.len() as u64,
         ..HashSummary::default()
     };
     let mut progress =
@@ -554,9 +612,6 @@ pub fn hash_source(
 
         let mut partial_groups: HashMap<(u64, String), Vec<PartialHashResult>> = HashMap::new();
         for (size, group) in groups {
-            if candidates_only && group.len() <= 1 {
-                continue;
-            }
             summary.candidate_files = summary.candidate_files.saturating_add(group.len() as u64);
             let partials = partial_results_for_group(
                 repo,
@@ -576,7 +631,7 @@ pub fn hash_source(
 
         progress.emit("rebuilding", &summary, None);
         for group in partial_groups.into_values() {
-            if group.len() <= 1 {
+            if !candidates_only && group.len() <= 1 {
                 continue;
             }
             let _full_results = full_hash_group(
@@ -605,5 +660,61 @@ pub fn hash_source(
             progress.fail(&summary, &err);
             Err(err)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn indexed_file(
+        id_file: u64,
+        source_id: u64,
+        source_name: &str,
+        path: &str,
+        size: u64,
+    ) -> IndexedFile {
+        IndexedFile {
+            id_file,
+            source_id,
+            source_name: source_name.to_string(),
+            root_path: PathBuf::from(format!("/tmp/{source_name}")),
+            path: path.to_string(),
+            size,
+            mtime_ns: None,
+            inode: None,
+            device: None,
+            file_kind: "regular".to_string(),
+            scan_status: "ok".to_string(),
+            source_changed: false,
+        }
+    }
+
+    #[test]
+    fn candidates_only_uses_global_sizes_but_keeps_reads_source_scoped() {
+        let source_files = vec![
+            indexed_file(1, 10, "source-a", "a.bin", 100),
+            indexed_file(2, 10, "source-a", "unique.bin", 200),
+        ];
+        let global_candidate_sizes = HashSet::from([100]);
+
+        let selected = select_hash_scope(&source_files, Some(&global_candidate_sizes), true);
+        let ids = selected.iter().map(|file| file.id_file).collect::<Vec<_>>();
+
+        assert_eq!(ids, vec![1]);
+    }
+
+    #[test]
+    fn full_hash_mode_remains_source_scoped() {
+        let source_files = vec![
+            indexed_file(1, 10, "source-a", "a.bin", 100),
+            indexed_file(2, 10, "source-a", "b.bin", 200),
+        ];
+
+        let selected = select_hash_scope(&source_files, None, false);
+        let ids = selected.iter().map(|file| file.id_file).collect::<Vec<_>>();
+
+        assert_eq!(ids, vec![1, 2]);
     }
 }

@@ -230,10 +230,19 @@ def cleanup_indexer_sources(dsn: dict[str, str], source_names: list[str]) -> Non
         set_fod_search_path(conn)
         cur.execute(
             """
-            DELETE FROM index_import_plans
-            WHERE source_filter = ANY(%s)
+            DELETE FROM index_import_plans p
+            WHERE p.source_filter = ANY(%s)
+               OR EXISTS (
+                    SELECT 1
+                    FROM index_import_plan_entries e
+                    JOIN index_files f ON f.id_file = e.id_file
+                    JOIN index_sources s
+                      ON s.id_index_source = f.id_index_source
+                    WHERE e.id_import_plan = p.id_import_plan
+                      AND s.name = ANY(%s)
+               )
             """,
-            (source_names,),
+            (source_names, source_names),
         )
         cur.execute(
             """
