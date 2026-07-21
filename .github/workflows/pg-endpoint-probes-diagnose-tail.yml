@@ -1,0 +1,73 @@
+name: Diagnose endpoint probe tail anchors
+
+on:
+  pull_request:
+    branches: [main]
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  report:
+    if: github.event.pull_request.head.ref == 'agent/pg-endpoint-probes'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Write tail report
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          tests = Path("rust_mkfs/tests/fod_pg_endpoints.rs").read_text(encoding="utf-8")
+          old_helper = '''fn endpoint_config(config_path: &PathBuf) -> Output {
+              endpoint_config_with_env(config_path, &[])
+          }
+
+          fn endpoint_config_with_env(config_path: &PathBuf, overrides: &[(&str, &str)]) -> Output {
+              let mut command = Command::new(env!("CARGO_BIN_EXE_fod-config"));
+              for key in [
+                  "FOD_PG_HOST",
+                  "FOD_PG_PORT",
+                  "FOD_PG_PRIMARY_HOSTS",
+                  "FOD_PG_REPLICA_HOSTS",
+                  "FOD_PG_HOSTS",
+              ] {
+                  command.env_remove(key);
+              }
+              for (key, value) in overrides {
+                  command.env(key, value);
+              }
+              command
+                  .args([
+                      "--config-path",
+                      config_path.to_str().unwrap(),
+                      "endpoint-config",
+                  ])
+                  .output()
+                  .unwrap()
+          }'''.replace("          ", "")
+
+          todo_anchor = "  - Add a repeatable local integration cluster and fault matrix covering primary endpoint loss, replica lag, replica promotion, connection refusal, slow endpoint, pool saturation, read-after-write, lock/lease safety, and recovery without split-brain. Expose endpoint state and routing decisions through status/diagnostic commands before making balancing automatic by default."
+          todo = Path("TODO.md").read_text(encoding="utf-8")
+          cargo = Path("Cargo.toml").read_text(encoding="utf-8")
+          lock = Path("Cargo.lock").read_text(encoding="utf-8")
+          version = Path("fod_version.txt").read_text(encoding="utf-8").strip()
+
+          lines = [
+              f"tests helper: {tests.count(old_helper)}",
+              f"todo anchor: {todo.count(todo_anchor)}",
+              f"workspace version count: {cargo.count('version = chr(34) + 3.2.23 + chr(34)')}",
+              f"lock version count: {lock.count('version = chr(34) + 3.2.23 + chr(34)')}",
+              f"version file: {version}",
+          ]
+          Path("docs/pg-endpoint-probe-tail-report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/pg-endpoint-probe-tail-report.txt
+          git commit -m "Record endpoint probe tail diagnostics"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
