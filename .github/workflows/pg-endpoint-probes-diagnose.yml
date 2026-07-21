@@ -1,0 +1,51 @@
+name: Diagnose endpoint probe patch anchors
+
+on:
+  pull_request:
+    branches: [main]
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.head.ref == 'agent/pg-endpoint-probes'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Print patch anchor counts
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          checks = []
+          checks.append(("lib", Path("rust_runtime/src/lib.rs"), '''pub mod ini_config;
+
+          pub use ini_config::{
+              load_config_parser, resolve_config_path, resolve_config_path_optional, IniConfig,
+          };'''.replace("          ", "")))
+          checks.append(("pg import", Path("rust_mkfs/src/pg.rs"), "use fod_rust_runtime::{PostgresVersionDiagnostics, FOD_SEARCH_PATH};"))
+          checks.append(("pg method", Path("rust_mkfs/src/pg.rs"), '''        Ok(PostgresVersionDiagnostics::new(
+                      libpq_version_num,
+                      server_version_num,
+                      server_version,
+                  ))
+              }
+
+              pub fn exec(&self, sql: &str) -> Result<(), String> {'''.replace("              ", "")))
+          checks.append(("config mod", Path("rust_mkfs/src/bin/fod-config.rs"), '''#[path = "../pg_config.rs"]
+          mod pg_config;
+          #[path = "../tls.rs"]'''.replace("          ", "")))
+          checks.append(("config use", Path("rust_mkfs/src/bin/fod-config.rs"), "use config::{load_config_parser, resolve_config_path};\nuse serde_json::json;"))
+          checks.append(("config enum", Path("rust_mkfs/src/bin/fod-config.rs"), "    EndpointConfig,\n    RuntimeConfig,"))
+          checks.append(("config arm", Path("rust_mkfs/src/bin/fod-config.rs"), "            );\n        }\n        CommandKind::RuntimeConfig => {"))
+
+          for name, path, needle in checks:
+              text = path.read_text(encoding="utf-8")
+              print(f"{name}: {text.count(needle)}")
+              if text.count(needle) != 1:
+                  print(repr(needle))
+          PY
