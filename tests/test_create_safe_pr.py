@@ -117,6 +117,28 @@ class SafePrCreationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertNotIn("--draft", captured.splitlines())
 
+    def test_unreadable_body_path_is_not_echoed(self) -> None:
+        sensitive = "/home/private-user/private-body.md"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--title",
+                "Safe change",
+                "--body-file",
+                sensitive,
+                "--dry-run",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(sensitive, result.stdout)
+        self.assertNotIn(sensitive, result.stderr)
+        self.assertIn("unable to read PR body file", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
