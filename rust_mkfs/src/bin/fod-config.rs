@@ -3,6 +3,8 @@
 
 #[path = "../config.rs"]
 mod config;
+#[path = "../pg.rs"]
+mod pg;
 #[path = "../pg_config.rs"]
 mod pg_config;
 #[path = "../tls.rs"]
@@ -12,6 +14,7 @@ mod version;
 
 use clap::{Parser, Subcommand};
 use config::{load_config_parser, resolve_config_path};
+use pg::DbConn;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use tls::generate_client_tls_pair;
@@ -32,6 +35,7 @@ enum CommandKind {
     ResolvePath,
     ConnectionParams,
     EndpointConfig,
+    EndpointProbe,
     RuntimeConfig,
     Version,
     GenerateTls {
@@ -113,6 +117,109 @@ fn main() {
                     "primary_count": topology.primary_count(),
                     "replica_count": topology.replica_count(),
                     "unknown_count": topology.unknown_count(),
+                    "endpoints": endpoints,
+                })
+            );
+        }
+        CommandKind::EndpointProbe => {
+            let db_section = match database_section(&config) {
+                Ok(section) => section,
+                Err(err) => exit_with_error(&err),
+            };
+            let topology = match pg_config::resolve_pg_endpoint_config(&db_section) {
+                Ok(value) => value,
+                Err(err) => exit_with_error(&err),
+            };
+            let base_params = pg_config::resolve_pg_connection_params(
+                &db_section,
+                &config_path.parent().unwrap_or(Path::new(".")),
+            );
+            let mut reachable_count = 0usize;
+            let mut failed_count = 0usize;
+            let mut write_capable_count = 0usize;
+            let mut role_mismatch_count = 0usize;
+            let mut inconsistent_count = 0usize;
+            let mut endpoints = Vec::new();
+
+            for endpoint in &topology.endpoints {
+                let params = pg_config::pg_connection_params_for_endpoint(&base_params, endpoint);
+                let conninfo = pg_config::make_conninfo(&params);
+                match DbConn::connect(&conninfo) {
+                    Ok(conn) => match conn.postgres_endpoint_probe() {
+                        Ok(probe) => {
+                            reachable_count += 1;
+                            if probe.write_capable() {
+                                write_capable_count += 1;
+                            }
+                            if !probe.is_consistent() {
+                                inconsistent_count += 1;
+                            }
+                            let role_matches = probe.configured_role_matches(endpoint.role);
+                            if role_matches == Some(false) {
+                                role_mismatch_count += 1;
+                            }
+                            endpoints.push(json!({
+                                "authority": endpoint.authority(),
+                                "host": endpoint.host.as_str(),
+                                "port": endpoint.port,
+                                "configured_role": endpoint.role.as_str(),
+                                "connected": true,
+                                "pg_is_in_recovery": probe.pg_is_in_recovery,
+                                "transaction_read_only": probe.transaction_read_only,
+                                "observed_role": probe.observed_role.as_str(),
+                                "write_capable": probe.write_capable(),
+                                "consistent": probe.is_consistent(),
+                                "role_matches_config": role_matches,
+                                "error": null,
+                            }));
+                        }
+                        Err(err) => {
+                            failed_count += 1;
+                            endpoints.push(json!({
+                                "authority": endpoint.authority(),
+                                "host": endpoint.host.as_str(),
+                                "port": endpoint.port,
+                                "configured_role": endpoint.role.as_str(),
+                                "connected": true,
+                                "observed_role": null,
+                                "write_capable": false,
+                                "consistent": false,
+                                "role_matches_config": null,
+                                "error": err,
+                            }));
+                        }
+                    },
+                    Err(err) => {
+                        failed_count += 1;
+                        endpoints.push(json!({
+                            "authority": endpoint.authority(),
+                            "host": endpoint.host.as_str(),
+                            "port": endpoint.port,
+                            "configured_role": endpoint.role.as_str(),
+                            "connected": false,
+                            "observed_role": null,
+                            "write_capable": false,
+                            "consistent": false,
+                            "role_matches_config": null,
+                            "error": err,
+                        }));
+                    }
+                }
+            }
+
+            println!(
+                "{}",
+                json!({
+                    "mode": topology.mode.as_str(),
+                    "routing_enabled": false,
+                    "probe_only": true,
+                    "endpoint_count": topology.endpoints.len(),
+                    "reachable_count": reachable_count,
+                    "failed_count": failed_count,
+                    "write_capable_count": write_capable_count,
+                    "role_mismatch_count": role_mismatch_count,
+                    "inconsistent_count": inconsistent_count,
+                    "all_probes_succeeded": failed_count == 0,
                     "endpoints": endpoints,
                 })
             );
