@@ -4,6 +4,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 
+use fod_rust_runtime::ini_config::PgEndpointProbe;
 use fod_rust_runtime::{PostgresVersionDiagnostics, FOD_SEARCH_PATH};
 
 #[repr(C)]
@@ -133,6 +134,16 @@ impl DbConn {
         ))
     }
 
+    #[allow(dead_code)]
+    pub fn postgres_endpoint_probe(&self) -> Result<PgEndpointProbe, String> {
+        let value = self
+            .query_scalar_text(
+                "SELECT pg_is_in_recovery()::text || '|' || current_setting('transaction_read_only')",
+            )?
+            .ok_or_else(|| "PostgreSQL endpoint probe returned no row".to_string())?;
+        PgEndpointProbe::parse_row(&value)
+    }
+
     pub fn exec(&self, sql: &str) -> Result<(), String> {
         self.exec_raw(sql)
     }
@@ -181,7 +192,7 @@ impl DbConn {
     }
 
     pub fn quote_identifier(ident: &str) -> String {
-        format!("\"{}\"", ident.replace('\"', "\"\""))
+        format!("\"{}\"", ident.replace('"', "\"\""))
     }
 
     #[allow(dead_code)]
