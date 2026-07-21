@@ -154,12 +154,9 @@ impl PgEndpointProbe {
             PgEndpointRole::Unknown => None,
             PgEndpointRole::Primary => Some(matches!(
                 self.observed_role,
-                PgObservedEndpointRole::PrimaryWritable
-                    | PgObservedEndpointRole::PrimaryReadOnly
+                PgObservedEndpointRole::PrimaryWritable | PgObservedEndpointRole::PrimaryReadOnly
             )),
-            PgEndpointRole::Replica => {
-                Some(self.observed_role == PgObservedEndpointRole::Replica)
-            }
+            PgEndpointRole::Replica => Some(self.observed_role == PgObservedEndpointRole::Replica),
         }
     }
 }
@@ -317,11 +314,7 @@ fn parse_endpoint_list(
         .collect()
 }
 
-fn parse_endpoint(
-    entry: &str,
-    role: PgEndpointRole,
-    key: &str,
-) -> Result<PgEndpoint, String> {
+fn parse_endpoint(entry: &str, role: PgEndpointRole, key: &str) -> Result<PgEndpoint, String> {
     let (host, port_text) = if let Some(rest) = entry.strip_prefix('[') {
         let close = rest
             .find(']')
