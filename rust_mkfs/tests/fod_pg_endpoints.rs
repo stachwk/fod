@@ -217,6 +217,17 @@ fn endpoint_probe_reports_live_server_without_enabling_routing() {
     assert_eq!(payload["mode"], "legacy-single");
     assert_eq!(payload["routing_enabled"], false);
     assert_eq!(payload["probe_only"], true);
+    assert_eq!(payload["health_state_persistence"], "process");
+    assert_eq!(payload["health_failure_threshold"], 2);
+    assert_eq!(payload["pool_plan_active"], false);
+    assert_eq!(payload["pool_plan"]["mode"], "dedicated-lanes");
+    assert_eq!(payload["pool_plan"]["total_limit"], 4);
+    assert_eq!(payload["pool_plan"]["read_limit"], 1);
+    assert_eq!(payload["pool_plan"]["write_limit"], 1);
+    assert_eq!(payload["pool_plan"]["control_limit"], 1);
+    assert_eq!(payload["pool_plan"]["lease_limit"], 1);
+    assert_eq!(payload["pool_plan"]["dedicated_slots_sum"], 4);
+    assert_eq!(payload["pool_plan"]["routing_enabled"], false);
     assert_eq!(payload["endpoint_count"], 1);
     assert_eq!(payload["reachable_count"], 1);
     assert_eq!(payload["failed_count"], 0);
@@ -224,4 +235,15 @@ fn endpoint_probe_reports_live_server_without_enabling_routing() {
     assert_eq!(payload["endpoints"][0]["connected"], true);
     assert!(payload["endpoints"][0]["observed_role"].is_string());
     assert!(payload["endpoints"][0]["role_matches_config"].is_null());
+    assert_eq!(payload["endpoints"][0]["health"]["state"], "healthy");
+    assert_eq!(
+        payload["endpoints"][0]["health"]["automatic_routing_enabled"],
+        false
+    );
+    let eligible = payload["endpoints"][0]["health"]["eligible_purposes"]
+        .as_array()
+        .unwrap();
+    for purpose in ["read", "write", "control", "lease"] {
+        assert!(eligible.iter().any(|value| value == purpose));
+    }
 }
