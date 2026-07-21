@@ -1,0 +1,997 @@
+name: FOD PostgreSQL endpoint probes
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-validate:
+    if: github.event.pull_request.head.ref == 'agent/pg-endpoint-probes'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: foddbname
+          POSTGRES_USER: foduser
+          POSTGRES_PASSWORD: cichosza
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U foduser -d foddbname"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: foddbname
+      POSTGRES_USER: foduser
+      POSTGRES_PASSWORD: cichosza
+      FOD_SCHEMA_ADMIN_PASSWORD: endpoint-probe-ci-secret
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev libfuse3-dev pkg-config
+
+      - name: Apply phase 2 implementation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement, found {count}: {old[:120]!r}")
+              file.write_text(text.replace(old, new), encoding="utf-8")
+
+          pg_endpoints = r'''// Copyright (c) 2026 Wojciech Stach
+          // Licensed under BSL 1.1
+
+          use std::collections::{HashMap, HashSet};
+          use std::env;
+
+          const DEFAULT_PG_HOST: &str = "127.0.0.1";
+          const DEFAULT_PG_PORT: u16 = 5432;
+
+          #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          pub enum PgEndpointRole {
+              Primary,
+              Replica,
+              Unknown,
+          }
+
+          impl PgEndpointRole {
+              pub fn as_str(self) -> &'static str {
+                  match self {
+                      Self::Primary => "primary",
+                      Self::Replica => "replica",
+                      Self::Unknown => "unknown",
+                  }
+              }
+          }
+
+          #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          pub enum PgEndpointMode {
+              LegacySingle,
+              ExplicitRoles,
+              DiscoverRoles,
+          }
+
+          impl PgEndpointMode {
+              pub fn as_str(self) -> &'static str {
+                  match self {
+                      Self::LegacySingle => "legacy-single",
+                      Self::ExplicitRoles => "explicit-roles",
+                      Self::DiscoverRoles => "discover-roles",
+                  }
+              }
+          }
+
+          #[derive(Debug, Clone, PartialEq, Eq)]
+          pub struct PgEndpoint {
+              pub host: String,
+              pub port: u16,
+              pub role: PgEndpointRole,
+          }
+
+          impl PgEndpoint {
+              pub fn authority(&self) -> String {
+                  if self.host.contains(':') {
+                      format!("[{}]:{}", self.host, self.port)
+                  } else {
+                      format!("{}:{}", self.host, self.port)
+                  }
+              }
+          }
+
+          #[derive(Debug, Clone, PartialEq, Eq)]
+          pub struct PgEndpointConfig {
+              pub mode: PgEndpointMode,
+              pub role_discovery_required: bool,
+              pub endpoints: Vec<PgEndpoint>,
+          }
+
+          impl PgEndpointConfig {
+              pub fn primary_count(&self) -> usize {
+                  self.endpoints
+                      .iter()
+                      .filter(|endpoint| endpoint.role == PgEndpointRole::Primary)
+                      .count()
+              }
+
+              pub fn replica_count(&self) -> usize {
+                  self.endpoints
+                      .iter()
+                      .filter(|endpoint| endpoint.role == PgEndpointRole::Replica)
+                      .count()
+              }
+
+              pub fn unknown_count(&self) -> usize {
+                  self.endpoints
+                      .iter()
+                      .filter(|endpoint| endpoint.role == PgEndpointRole::Unknown)
+                      .count()
+              }
+          }
+
+          #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          pub enum PgObservedEndpointRole {
+              PrimaryWritable,
+              PrimaryReadOnly,
+              Replica,
+              InconsistentRecoveryWritable,
+          }
+
+          impl PgObservedEndpointRole {
+              pub fn as_str(self) -> &'static str {
+                  match self {
+                      Self::PrimaryWritable => "primary-writable",
+                      Self::PrimaryReadOnly => "primary-read-only",
+                      Self::Replica => "replica",
+                      Self::InconsistentRecoveryWritable => "inconsistent-recovery-writable",
+                  }
+              }
+          }
+
+          #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          pub struct PgEndpointProbe {
+              pub pg_is_in_recovery: bool,
+              pub transaction_read_only: bool,
+              pub observed_role: PgObservedEndpointRole,
+          }
+
+          impl PgEndpointProbe {
+              pub fn from_flags(pg_is_in_recovery: bool, transaction_read_only: bool) -> Self {
+                  let observed_role = match (pg_is_in_recovery, transaction_read_only) {
+                      (false, false) => PgObservedEndpointRole::PrimaryWritable,
+                      (false, true) => PgObservedEndpointRole::PrimaryReadOnly,
+                      (true, true) => PgObservedEndpointRole::Replica,
+                      (true, false) => PgObservedEndpointRole::InconsistentRecoveryWritable,
+                  };
+                  Self {
+                      pg_is_in_recovery,
+                      transaction_read_only,
+                      observed_role,
+                  }
+              }
+
+              pub fn parse_row(value: &str) -> Result<Self, String> {
+                  let (recovery, read_only) = value.trim().split_once('|').ok_or_else(|| {
+                      format!(
+                          "invalid PostgreSQL endpoint probe result `{value}`: expected recovery|transaction_read_only"
+                      )
+                  })?;
+                  Ok(Self::from_flags(
+                      parse_postgres_bool(recovery, "pg_is_in_recovery")?,
+                      parse_postgres_bool(read_only, "transaction_read_only")?,
+                  ))
+              }
+
+              pub fn write_capable(self) -> bool {
+                  self.observed_role == PgObservedEndpointRole::PrimaryWritable
+              }
+
+              pub fn is_consistent(self) -> bool {
+                  self.observed_role != PgObservedEndpointRole::InconsistentRecoveryWritable
+              }
+
+              pub fn configured_role_matches(self, configured: PgEndpointRole) -> Option<bool> {
+                  match configured {
+                      PgEndpointRole::Unknown => None,
+                      PgEndpointRole::Primary => Some(matches!(
+                          self.observed_role,
+                          PgObservedEndpointRole::PrimaryWritable
+                              | PgObservedEndpointRole::PrimaryReadOnly
+                      )),
+                      PgEndpointRole::Replica => {
+                          Some(self.observed_role == PgObservedEndpointRole::Replica)
+                      }
+                  }
+              }
+          }
+
+          pub fn pg_connection_params_for_endpoint(
+              base_params: &HashMap<String, String>,
+              endpoint: &PgEndpoint,
+          ) -> HashMap<String, String> {
+              let mut params = base_params.clone();
+              params.insert("host".to_string(), endpoint.host.clone());
+              params.insert("port".to_string(), endpoint.port.to_string());
+              params
+          }
+
+          pub fn resolve_pg_endpoint_config(
+              db_config: &HashMap<String, String>,
+          ) -> Result<PgEndpointConfig, String> {
+              let (primary_hosts, replica_hosts, discovery_hosts) = endpoint_mode_values(db_config)?;
+              let has_explicit_roles = primary_hosts.is_some() || replica_hosts.is_some();
+
+              if has_explicit_roles {
+                  let mut endpoints = Vec::new();
+                  if let Some(value) = primary_hosts.as_deref() {
+                      endpoints.extend(parse_endpoint_list(
+                          value,
+                          PgEndpointRole::Primary,
+                          "primary_hosts",
+                      )?);
+                  }
+                  if let Some(value) = replica_hosts.as_deref() {
+                      endpoints.extend(parse_endpoint_list(
+                          value,
+                          PgEndpointRole::Replica,
+                          "replica_hosts",
+                      )?);
+                  }
+                  if !endpoints
+                      .iter()
+                      .any(|endpoint| endpoint.role == PgEndpointRole::Primary)
+                  {
+                      return Err("primary_hosts must contain at least one endpoint".to_string());
+                  }
+                  validate_unique_endpoints(&endpoints)?;
+                  return Ok(PgEndpointConfig {
+                      mode: PgEndpointMode::ExplicitRoles,
+                      role_discovery_required: false,
+                      endpoints,
+                  });
+              }
+
+              if let Some(value) = discovery_hosts.as_deref() {
+                  let endpoints = parse_endpoint_list(value, PgEndpointRole::Unknown, "hosts")?;
+                  validate_unique_endpoints(&endpoints)?;
+                  return Ok(PgEndpointConfig {
+                      mode: PgEndpointMode::DiscoverRoles,
+                      role_discovery_required: true,
+                      endpoints,
+                  });
+              }
+
+              let host = configured_value("FOD_PG_HOST", db_config, "host")
+                  .unwrap_or_else(|| DEFAULT_PG_HOST.to_string());
+              let port_text = configured_value("FOD_PG_PORT", db_config, "port")
+                  .unwrap_or_else(|| DEFAULT_PG_PORT.to_string());
+              let port = parse_port(&port_text, "port")?;
+              let host = host.trim();
+              if host.is_empty() {
+                  return Err("database host must not be empty".to_string());
+              }
+
+              Ok(PgEndpointConfig {
+                  mode: PgEndpointMode::LegacySingle,
+                  role_discovery_required: true,
+                  endpoints: vec![PgEndpoint {
+                      host: host.to_string(),
+                      port,
+                      role: PgEndpointRole::Unknown,
+                  }],
+              })
+          }
+
+          fn endpoint_mode_values(
+              db_config: &HashMap<String, String>,
+          ) -> Result<(Option<String>, Option<String>, Option<String>), String> {
+              let env_primary = nonempty_env("FOD_PG_PRIMARY_HOSTS");
+              let env_replica = nonempty_env("FOD_PG_REPLICA_HOSTS");
+              let env_hosts = nonempty_env("FOD_PG_HOSTS");
+              let env_explicit = env_primary.is_some() || env_replica.is_some();
+
+              if env_explicit && env_hosts.is_some() {
+                  return Err(
+                      "PostgreSQL endpoint environment is ambiguous: use FOD_PG_PRIMARY_HOSTS/FOD_PG_REPLICA_HOSTS or FOD_PG_HOSTS, not both"
+                          .to_string(),
+                  );
+              }
+              if env_explicit {
+                  return Ok((
+                      env_primary.or_else(|| nonempty_config(db_config, "primary_hosts")),
+                      env_replica.or_else(|| nonempty_config(db_config, "replica_hosts")),
+                      None,
+                  ));
+              }
+              if env_hosts.is_some() {
+                  return Ok((None, None, env_hosts));
+              }
+
+              let primary_hosts = nonempty_config(db_config, "primary_hosts");
+              let replica_hosts = nonempty_config(db_config, "replica_hosts");
+              let discovery_hosts = nonempty_config(db_config, "hosts");
+              if (primary_hosts.is_some() || replica_hosts.is_some()) && discovery_hosts.is_some() {
+                  return Err(
+                      "database endpoint configuration is ambiguous: use primary_hosts/replica_hosts or hosts, not both"
+                          .to_string(),
+                  );
+              }
+              Ok((primary_hosts, replica_hosts, discovery_hosts))
+          }
+
+          fn configured_value(
+              env_name: &str,
+              db_config: &HashMap<String, String>,
+              key: &str,
+          ) -> Option<String> {
+              nonempty_env(env_name).or_else(|| nonempty_config(db_config, key))
+          }
+
+          fn nonempty_env(name: &str) -> Option<String> {
+              env::var(name)
+                  .ok()
+                  .map(|value| value.trim().to_string())
+                  .filter(|value| !value.is_empty())
+          }
+
+          fn nonempty_config(db_config: &HashMap<String, String>, key: &str) -> Option<String> {
+              db_config
+                  .get(key)
+                  .map(|value| value.trim().to_string())
+                  .filter(|value| !value.is_empty())
+          }
+
+          fn parse_endpoint_list(
+              value: &str,
+              role: PgEndpointRole,
+              key: &str,
+          ) -> Result<Vec<PgEndpoint>, String> {
+              let raw_entries = value.split(',').collect::<Vec<_>>();
+              if raw_entries.is_empty() || raw_entries.iter().any(|entry| entry.trim().is_empty()) {
+                  return Err(format!(
+                      "{key} must contain non-empty comma-separated host:port endpoints"
+                  ));
+              }
+              raw_entries
+                  .into_iter()
+                  .map(|entry| parse_endpoint(entry.trim(), role, key))
+                  .collect()
+          }
+
+          fn parse_endpoint(
+              entry: &str,
+              role: PgEndpointRole,
+              key: &str,
+          ) -> Result<PgEndpoint, String> {
+              let (host, port_text) = if let Some(rest) = entry.strip_prefix('[') {
+                  let close = rest
+                      .find(']')
+                      .ok_or_else(|| format!("invalid {key} endpoint `{entry}`: missing closing ]"))?;
+                  let host = &rest[..close];
+                  let suffix = &rest[close + 1..];
+                  let port = suffix
+                      .strip_prefix(':')
+                      .ok_or_else(|| format!("invalid {key} endpoint `{entry}`: expected [host]:port"))?;
+                  (host, port)
+              } else {
+                  let (host, port) = entry
+                      .rsplit_once(':')
+                      .ok_or_else(|| format!("invalid {key} endpoint `{entry}`: expected host:port"))?;
+                  if host.contains(':') {
+                      return Err(format!(
+                          "invalid {key} endpoint `{entry}`: IPv6 addresses must use [address]:port"
+                      ));
+                  }
+                  (host, port)
+              };
+
+              let host = host.trim();
+              if host.is_empty() {
+                  return Err(format!("invalid {key} endpoint `{entry}`: host is empty"));
+              }
+              let port = parse_port(port_text, key)?;
+              Ok(PgEndpoint {
+                  host: host.to_string(),
+                  port,
+                  role,
+              })
+          }
+
+          fn parse_port(value: &str, key: &str) -> Result<u16, String> {
+              value
+                  .trim()
+                  .parse::<u16>()
+                  .ok()
+                  .filter(|port| *port > 0)
+                  .ok_or_else(|| format!("invalid {key} port `{value}`: expected 1..65535"))
+          }
+
+          fn validate_unique_endpoints(endpoints: &[PgEndpoint]) -> Result<(), String> {
+              let mut seen = HashSet::new();
+              for endpoint in endpoints {
+                  let identity = (endpoint.host.to_ascii_lowercase(), endpoint.port);
+                  if !seen.insert(identity) {
+                      return Err(format!(
+                          "duplicate PostgreSQL endpoint `{}` is not allowed",
+                          endpoint.authority()
+                      ));
+                  }
+              }
+              Ok(())
+          }
+
+          fn parse_postgres_bool(value: &str, label: &str) -> Result<bool, String> {
+              match value.trim().to_ascii_lowercase().as_str() {
+                  "t" | "true" | "1" | "on" | "yes" => Ok(true),
+                  "f" | "false" | "0" | "off" | "no" => Ok(false),
+                  other => Err(format!(
+                      "invalid PostgreSQL endpoint probe {label} value `{other}`"
+                  )),
+              }
+          }
+
+          #[cfg(test)]
+          mod tests {
+              use super::*;
+
+              #[test]
+              fn classifies_all_probe_flag_combinations() {
+                  let writable = PgEndpointProbe::from_flags(false, false);
+                  assert_eq!(writable.observed_role, PgObservedEndpointRole::PrimaryWritable);
+                  assert!(writable.write_capable());
+                  assert!(writable.is_consistent());
+
+                  let primary_read_only = PgEndpointProbe::from_flags(false, true);
+                  assert_eq!(
+                      primary_read_only.observed_role,
+                      PgObservedEndpointRole::PrimaryReadOnly
+                  );
+                  assert!(!primary_read_only.write_capable());
+                  assert_eq!(
+                      primary_read_only.configured_role_matches(PgEndpointRole::Primary),
+                      Some(true)
+                  );
+
+                  let replica = PgEndpointProbe::from_flags(true, true);
+                  assert_eq!(replica.observed_role, PgObservedEndpointRole::Replica);
+                  assert_eq!(
+                      replica.configured_role_matches(PgEndpointRole::Replica),
+                      Some(true)
+                  );
+
+                  let inconsistent = PgEndpointProbe::from_flags(true, false);
+                  assert_eq!(
+                      inconsistent.observed_role,
+                      PgObservedEndpointRole::InconsistentRecoveryWritable
+                  );
+                  assert!(!inconsistent.is_consistent());
+              }
+
+              #[test]
+              fn parses_probe_rows_and_rejects_malformed_values() {
+                  assert_eq!(
+                      PgEndpointProbe::parse_row("false|off").unwrap(),
+                      PgEndpointProbe::from_flags(false, false)
+                  );
+                  assert_eq!(
+                      PgEndpointProbe::parse_row("t|on").unwrap(),
+                      PgEndpointProbe::from_flags(true, true)
+                  );
+                  assert!(PgEndpointProbe::parse_row("false").is_err());
+                  assert!(PgEndpointProbe::parse_row("maybe|off").is_err());
+              }
+
+              #[test]
+              fn endpoint_params_override_only_host_and_port() {
+                  let base = HashMap::from([
+                      ("host".to_string(), "old-host".to_string()),
+                      ("port".to_string(), "5432".to_string()),
+                      ("dbname".to_string(), "foddbname".to_string()),
+                      ("sslmode".to_string(), "require".to_string()),
+                  ]);
+                  let endpoint = PgEndpoint {
+                      host: "db-new".to_string(),
+                      port: 15432,
+                      role: PgEndpointRole::Primary,
+                  };
+                  let resolved = pg_connection_params_for_endpoint(&base, &endpoint);
+                  assert_eq!(resolved.get("host").map(String::as_str), Some("db-new"));
+                  assert_eq!(resolved.get("port").map(String::as_str), Some("15432"));
+                  assert_eq!(
+                      resolved.get("dbname").map(String::as_str),
+                      Some("foddbname")
+                  );
+                  assert_eq!(resolved.get("sslmode").map(String::as_str), Some("require"));
+              }
+          }
+          '''
+          Path("rust_runtime/src/pg_endpoints.rs").write_text(
+              "\n".join(line[10:] if line.startswith("          ") else line for line in pg_endpoints.splitlines()) + "\n",
+              encoding="utf-8",
+          )
+
+          replace_once(
+              "rust_runtime/src/lib.rs",
+              '''pub mod ini_config;
+
+          pub use ini_config::{
+              load_config_parser, resolve_config_path, resolve_config_path_optional, IniConfig,
+          };'''.replace("          ", ""),
+              '''pub mod ini_config;
+          pub mod pg_endpoints;
+
+          pub use ini_config::{
+              load_config_parser, resolve_config_path, resolve_config_path_optional, IniConfig,
+          };
+          pub use pg_endpoints::{
+              pg_connection_params_for_endpoint, resolve_pg_endpoint_config, PgEndpoint,
+              PgEndpointConfig, PgEndpointMode, PgEndpointProbe, PgEndpointRole,
+              PgObservedEndpointRole,
+          };'''.replace("          ", ""),
+          )
+
+          Path("rust_mkfs/src/pg_config.rs").write_text(
+              '''// Copyright (c) 2026 Wojciech Stach
+          // Licensed under BSL 1.1
+
+          #![allow(dead_code)]
+
+          #[allow(unused_imports)]
+          pub use fod_rust_runtime::{
+              make_conninfo, pg_connection_params_for_endpoint, resolve_pg_connection_params,
+              resolve_pg_endpoint_config, PgEndpoint, PgEndpointConfig, PgEndpointMode,
+              PgEndpointProbe, PgEndpointRole, PgObservedEndpointRole,
+          };
+          '''.replace("          ", ""),
+              encoding="utf-8",
+          )
+
+          replace_once(
+              "rust_mkfs/src/pg.rs",
+              "use fod_rust_runtime::{PostgresVersionDiagnostics, FOD_SEARCH_PATH};",
+              "use fod_rust_runtime::{PgEndpointProbe, PostgresVersionDiagnostics, FOD_SEARCH_PATH};",
+          )
+          replace_once(
+              "rust_mkfs/src/pg.rs",
+              '''        Ok(PostgresVersionDiagnostics::new(
+                      libpq_version_num,
+                      server_version_num,
+                      server_version,
+                  ))
+              }
+
+              pub fn exec(&self, sql: &str) -> Result<(), String> {'''.replace("              ", ""),
+              '''        Ok(PostgresVersionDiagnostics::new(
+                      libpq_version_num,
+                      server_version_num,
+                      server_version,
+                  ))
+              }
+
+              #[allow(dead_code)]
+              pub fn postgres_endpoint_probe(&self) -> Result<PgEndpointProbe, String> {
+                  let raw = self
+                      .query_scalar_text(
+                          "SELECT pg_is_in_recovery()::text || '|' || current_setting('transaction_read_only')",
+                      )?
+                      .ok_or_else(|| "PostgreSQL endpoint probe returned no row".to_string())?;
+                  PgEndpointProbe::parse_row(&raw)
+              }
+
+              pub fn exec(&self, sql: &str) -> Result<(), String> {'''.replace("              ", ""),
+          )
+
+          replace_once(
+              "rust_mkfs/src/bin/fod-config.rs",
+              '''#[path = "../pg_config.rs"]
+          mod pg_config;
+          #[path = "../tls.rs"]'''.replace("          ", ""),
+              '''#[path = "../pg_config.rs"]
+          mod pg_config;
+          #[path = "../pg.rs"]
+          mod pg;
+          #[path = "../tls.rs"]'''.replace("          ", ""),
+          )
+          replace_once(
+              "rust_mkfs/src/bin/fod-config.rs",
+              "use config::{load_config_parser, resolve_config_path};\nuse serde_json::json;",
+              "use config::{load_config_parser, resolve_config_path};\nuse pg::DbConn;\nuse serde_json::json;",
+          )
+          replace_once(
+              "rust_mkfs/src/bin/fod-config.rs",
+              "    EndpointConfig,\n    RuntimeConfig,",
+              "    EndpointConfig,\n    EndpointProbe,\n    RuntimeConfig,",
+          )
+
+          endpoint_probe_arm = r'''        CommandKind::EndpointProbe => {
+              let db_section = match database_section(&config) {
+                  Ok(section) => section,
+                  Err(err) => exit_with_error(&err),
+              };
+              let topology = match pg_config::resolve_pg_endpoint_config(&db_section) {
+                  Ok(value) => value,
+                  Err(err) => exit_with_error(&err),
+              };
+              let base_params = pg_config::resolve_pg_connection_params(
+                  &db_section,
+                  &config_path.parent().unwrap_or(Path::new(".")),
+              );
+              let mut reachable_count = 0usize;
+              let mut failed_count = 0usize;
+              let mut write_capable_count = 0usize;
+              let mut role_mismatch_count = 0usize;
+              let mut inconsistent_count = 0usize;
+              let mut endpoints = Vec::new();
+
+              for endpoint in &topology.endpoints {
+                  let params = pg_config::pg_connection_params_for_endpoint(&base_params, endpoint);
+                  let conninfo = pg_config::make_conninfo(&params);
+                  match DbConn::connect(&conninfo) {
+                      Ok(conn) => match conn.postgres_endpoint_probe() {
+                          Ok(probe) => {
+                              reachable_count += 1;
+                              if probe.write_capable() {
+                                  write_capable_count += 1;
+                              }
+                              if !probe.is_consistent() {
+                                  inconsistent_count += 1;
+                              }
+                              let role_matches = probe.configured_role_matches(endpoint.role);
+                              if role_matches == Some(false) {
+                                  role_mismatch_count += 1;
+                              }
+                              endpoints.push(json!({
+                                  "authority": endpoint.authority(),
+                                  "host": endpoint.host.as_str(),
+                                  "port": endpoint.port,
+                                  "configured_role": endpoint.role.as_str(),
+                                  "connected": true,
+                                  "pg_is_in_recovery": probe.pg_is_in_recovery,
+                                  "transaction_read_only": probe.transaction_read_only,
+                                  "observed_role": probe.observed_role.as_str(),
+                                  "write_capable": probe.write_capable(),
+                                  "consistent": probe.is_consistent(),
+                                  "role_matches_config": role_matches,
+                                  "error": null,
+                              }));
+                          }
+                          Err(err) => {
+                              failed_count += 1;
+                              endpoints.push(json!({
+                                  "authority": endpoint.authority(),
+                                  "host": endpoint.host.as_str(),
+                                  "port": endpoint.port,
+                                  "configured_role": endpoint.role.as_str(),
+                                  "connected": true,
+                                  "observed_role": null,
+                                  "write_capable": false,
+                                  "consistent": false,
+                                  "role_matches_config": null,
+                                  "error": err,
+                              }));
+                          }
+                      },
+                      Err(err) => {
+                          failed_count += 1;
+                          endpoints.push(json!({
+                              "authority": endpoint.authority(),
+                              "host": endpoint.host.as_str(),
+                              "port": endpoint.port,
+                              "configured_role": endpoint.role.as_str(),
+                              "connected": false,
+                              "observed_role": null,
+                              "write_capable": false,
+                              "consistent": false,
+                              "role_matches_config": null,
+                              "error": err,
+                          }));
+                      }
+                  }
+              }
+
+              println!(
+                  "{}",
+                  json!({
+                      "mode": topology.mode.as_str(),
+                      "routing_enabled": false,
+                      "probe_only": true,
+                      "endpoint_count": topology.endpoints.len(),
+                      "reachable_count": reachable_count,
+                      "failed_count": failed_count,
+                      "write_capable_count": write_capable_count,
+                      "role_mismatch_count": role_mismatch_count,
+                      "inconsistent_count": inconsistent_count,
+                      "all_probes_succeeded": failed_count == 0,
+                      "endpoints": endpoints,
+                  })
+              );
+          }
+          '''
+          endpoint_probe_arm = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in endpoint_probe_arm.splitlines()
+          )
+          replace_once(
+              "rust_mkfs/src/bin/fod-config.rs",
+              "            );\n        }\n        CommandKind::RuntimeConfig => {",
+              "            );\n        }\n" + endpoint_probe_arm + "        CommandKind::RuntimeConfig => {",
+          )
+
+          tests_path = Path("rust_mkfs/tests/fod_pg_endpoints.rs")
+          tests = tests_path.read_text(encoding="utf-8")
+          old_helper = '''fn endpoint_config(config_path: &PathBuf) -> Output {
+              endpoint_config_with_env(config_path, &[])
+          }
+
+          fn endpoint_config_with_env(config_path: &PathBuf, overrides: &[(&str, &str)]) -> Output {
+              let mut command = Command::new(env!("CARGO_BIN_EXE_fod-config"));
+              for key in [
+                  "FOD_PG_HOST",
+                  "FOD_PG_PORT",
+                  "FOD_PG_PRIMARY_HOSTS",
+                  "FOD_PG_REPLICA_HOSTS",
+                  "FOD_PG_HOSTS",
+              ] {
+                  command.env_remove(key);
+              }
+              for (key, value) in overrides {
+                  command.env(key, value);
+              }
+              command
+                  .args([
+                      "--config-path",
+                      config_path.to_str().unwrap(),
+                      "endpoint-config",
+                  ])
+                  .output()
+                  .unwrap()
+          }'''.replace("          ", "")
+          new_helper = '''fn endpoint_config(config_path: &PathBuf) -> Output {
+              endpoint_config_with_env(config_path, &[])
+          }
+
+          fn endpoint_config_with_env(config_path: &PathBuf, overrides: &[(&str, &str)]) -> Output {
+              config_command_with_env(config_path, "endpoint-config", overrides)
+          }
+
+          fn config_command_with_env(
+              config_path: &PathBuf,
+              subcommand: &str,
+              overrides: &[(&str, &str)],
+          ) -> Output {
+              let mut command = Command::new(env!("CARGO_BIN_EXE_fod-config"));
+              for key in [
+                  "FOD_PG_HOST",
+                  "FOD_PG_PORT",
+                  "FOD_PG_PRIMARY_HOSTS",
+                  "FOD_PG_REPLICA_HOSTS",
+                  "FOD_PG_HOSTS",
+              ] {
+                  command.env_remove(key);
+              }
+              for (key, value) in overrides {
+                  command.env(key, value);
+              }
+              command
+                  .args(["--config-path", config_path.to_str().unwrap(), subcommand])
+                  .output()
+                  .unwrap()
+          }'''.replace("          ", "")
+          if tests.count(old_helper) != 1:
+              raise SystemExit("fod_pg_endpoints helper shape changed")
+          tests = tests.replace(old_helper, new_helper)
+          tests += r'''
+
+          fn write_live_config() -> PathBuf {
+              let dir = unique_temp_dir("pg-endpoint-probe");
+              let config_path = dir.join("fod_config.ini");
+              let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+              let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+              let dbname = env::var("POSTGRES_DB").unwrap_or_else(|_| "foddbname".to_string());
+              let user = env::var("POSTGRES_USER").unwrap_or_else(|_| "foduser".to_string());
+              let password =
+                  env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "cichosza".to_string());
+              fs::write(
+                  &config_path,
+                  format!(
+                      "[database]\nhost = {host}\nport = {port}\ndbname = {dbname}\nuser = {user}\npassword = {password}\n\n[fod]\npool_max_connections = 4\n"
+                  ),
+              )
+              .unwrap();
+              config_path
+          }
+
+          #[test]
+          fn endpoint_probe_reports_live_server_without_enabling_routing() {
+              let config_path = write_live_config();
+              let output = config_command_with_env(&config_path, "endpoint-probe", &[]);
+              assert!(
+                  output.status.success(),
+                  "{}",
+                  String::from_utf8_lossy(&output.stderr)
+              );
+              let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+              assert_eq!(payload["mode"], "legacy-single");
+              assert_eq!(payload["routing_enabled"], false);
+              assert_eq!(payload["probe_only"], true);
+              assert_eq!(payload["endpoint_count"], 1);
+              assert_eq!(payload["reachable_count"], 1);
+              assert_eq!(payload["failed_count"], 0);
+              assert_eq!(payload["all_probes_succeeded"], true);
+              assert_eq!(payload["endpoints"][0]["connected"], true);
+              assert!(payload["endpoints"][0]["observed_role"].is_string());
+              assert!(payload["endpoints"][0]["role_matches_config"].is_null());
+          }
+          '''.replace("          ", "")
+          tests_path.write_text(tests, encoding="utf-8")
+
+          phase2_doc = r'''# PostgreSQL multi-endpoint routing: phase 2
+
+          Status: shared runtime model and live role probes implemented; automatic routing remains disabled.
+
+          ## Goal
+
+          Move the endpoint model introduced in FOD 3.2.23 into `fod-rust-runtime` and verify each configured PostgreSQL endpoint against the server itself before any operation-aware routing is introduced.
+
+          ## Shared runtime contract
+
+          `fod-rust-runtime` now owns:
+
+          - endpoint configuration parsing and validation;
+          - configured roles (`primary`, `replica`, `unknown`);
+          - endpoint-specific connection parameter derivation;
+          - probe result parsing and role classification.
+
+          `rust_mkfs/src/pg_config.rs` is only a compatibility re-export layer. Future FUSE, indexer, and control-plane code can consume one canonical model without copying the parser.
+
+          ## Live probe
+
+          Run:
+
+          ```bash
+          fod-config endpoint-probe
+          ```
+
+          For every configured endpoint FOD opens an independent diagnostic connection and reads:
+
+          ```sql
+          SELECT pg_is_in_recovery()::text
+                 || '|'
+                 || current_setting('transaction_read_only');
+          ```
+
+          The result is classified as:
+
+          - `primary-writable`: not in recovery and transactions are writable;
+          - `primary-read-only`: not in recovery but `transaction_read_only` is enabled;
+          - `replica`: in recovery and transactions are read-only;
+          - `inconsistent-recovery-writable`: recovery reports a replica while the session reports writable transactions.
+
+          The command reports connectivity, configured and observed roles, write capability, consistency, and role mismatch for every endpoint. Connection errors are returned per endpoint so one failed host does not hide results from the others.
+
+          ## Safety boundary
+
+          The JSON output continues to include:
+
+          ```json
+          {
+            "routing_enabled": false,
+            "probe_only": true
+          }
+          ```
+
+          No read, write, schema, lock, lease, session, replay-confirmation, or maintenance operation consumes the probe result for endpoint selection in this phase. Existing production paths continue to use the legacy resolved `host` and `port` connection.
+
+          ## Next phase
+
+          Introduce persistent endpoint state and separate connection pools, initially keeping all authoritative operations primary-only. Routing must remain opt-in until health state, failover revalidation, and read-after-write consistency rules are implemented and tested.
+
+          ## Validation
+
+          ```bash
+          cargo fmt --all -- --check
+          RUSTFLAGS="-D warnings" cargo check --workspace --locked
+          cargo test --locked -p fod-rust-runtime
+          cargo test --locked -p fod-rust-mkfs
+          make test-version
+          fod-config endpoint-probe
+          ```
+          '''
+          Path("docs/postgresql-multi-endpoint-phase-2.md").write_text(
+              "\n".join(line[10:] if line.startswith("          ") else line for line in phase2_doc.splitlines()) + "\n",
+              encoding="utf-8",
+          )
+
+          todo = Path("TODO.md")
+          todo_text = todo.read_text(encoding="utf-8")
+          todo_anchor = "  - Add a repeatable local integration cluster and fault matrix covering primary endpoint loss, replica lag, replica promotion, connection refusal, slow endpoint, pool saturation, read-after-write, lock/lease safety, and recovery without split-brain. Expose endpoint state and routing decisions through status/diagnostic commands before making balancing automatic by default."
+          todo_notes = todo_anchor + "\n  - Implementation note (2026-07-21, FOD 3.2.23): phase 1 added explicit and discovery endpoint configuration plus `fod-config endpoint-config`; runtime traffic still uses legacy `host` and `port`.\n  - Implementation note (2026-07-21, FOD 3.2.24): phase 2 moved the endpoint model into `fod-rust-runtime` and added live `fod-config endpoint-probe` classification using `pg_is_in_recovery()` and `transaction_read_only`; probe results remain diagnostics-only and routing is still disabled."
+          if todo_text.count(todo_anchor) != 1:
+              raise SystemExit("TODO multi-endpoint anchor changed")
+          todo.write_text(todo_text.replace(todo_anchor, todo_notes), encoding="utf-8")
+
+          version_file = Path("fod_version.txt")
+          if version_file.read_text(encoding="utf-8").strip() != "3.2.23":
+              raise SystemExit("unexpected FOD version before phase 2")
+          version_file.write_text("3.2.24\n", encoding="utf-8")
+
+          cargo_toml = Path("Cargo.toml")
+          cargo_text = cargo_toml.read_text(encoding="utf-8")
+          if cargo_text.count('version = "3.2.23"') != 1:
+              raise SystemExit("unexpected workspace version count")
+          cargo_toml.write_text(
+              cargo_text.replace('version = "3.2.23"', 'version = "3.2.24"'),
+              encoding="utf-8",
+          )
+
+          cargo_lock = Path("Cargo.lock")
+          lock_text = cargo_lock.read_text(encoding="utf-8")
+          if lock_text.count('version = "3.2.23"') != 5:
+              raise SystemExit("unexpected FOD package version count in Cargo.lock")
+          cargo_lock.write_text(
+              lock_text.replace('version = "3.2.23"', 'version = "3.2.24"'),
+              encoding="utf-8",
+          )
+          PY
+
+          cargo fmt --all
+
+      - name: Validate implementation
+        run: |
+          cargo fmt --all -- --check
+          RUSTFLAGS="-D warnings" cargo check --workspace --locked
+          cargo test --locked -p fod-rust-runtime
+          cargo test --locked -p fod-rust-mkfs
+          make test-version
+
+          cat > /tmp/fod-endpoint-probe.ini <<'EOF'
+          [database]
+          host = 127.0.0.1
+          port = 5432
+          dbname = foddbname
+          user = foduser
+          password = cichosza
+
+          [fod]
+          pool_max_connections = 4
+          EOF
+          cargo run --locked -q -p fod-rust-mkfs --bin fod-config -- \
+            --config-path /tmp/fod-endpoint-probe.ini endpoint-probe | tee /tmp/endpoint-probe.json
+          python3 - <<'PY'
+          import json
+          payload = json.load(open('/tmp/endpoint-probe.json', encoding='utf-8'))
+          assert payload['routing_enabled'] is False
+          assert payload['probe_only'] is True
+          assert payload['reachable_count'] == 1
+          assert payload['failed_count'] == 0
+          assert payload['endpoints'][0]['observed_role'] == 'primary-writable'
+          PY
+
+      - name: Commit validated implementation
+        run: |
+          rm .github/workflows/pg-endpoint-probes.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "FOD 3.2.24: add PostgreSQL endpoint role probes"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
