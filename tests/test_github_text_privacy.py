@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib.util
-import io
 import subprocess
 import sys
 import tempfile
@@ -24,21 +22,31 @@ SPEC.loader.exec_module(CHECKER)
 
 class PrivacyCheckerTests(unittest.TestCase):
     def test_accepts_aggregate_validation_summary(self) -> None:
-        text = """## Validation\n- 31 unit tests passed\n- integration regression passed\n- 3003 files scanned\n"""
+        text = """## Validation
+- 31 unit tests passed
+- integration regression passed
+- 3003 files scanned
+"""
         self.assertEqual(CHECKER.scan_text(text), [])
 
     def test_accepts_repository_and_synthetic_fixture_paths(self) -> None:
-        text = """Changed rust_indexer/src/hash.rs.\nFixture: /tmp/fod-indexer-test-123/source-a/a.txt\n"""
+        text = """Changed rust_indexer/src/hash.rs.
+Fixture: /tmp/fod-indexer-test-123/source-a/a.txt
+"""
         self.assertEqual(CHECKER.scan_text(text), [])
 
     def test_rejects_local_unix_paths_and_shell_prompt(self) -> None:
-        text = """user@workstation:~/project$ command\npath=/home/user/Documents/private.pdf\nroot=/media/user/archive\n"""
+        text = """user@workstation:~/project$ command
+path=/home/user/Documents/private.pdf
+root=/media/user/archive
+"""
         rules = {finding.rule for finding in CHECKER.scan_text(text)}
         self.assertIn("shell-prompt-identity", rules)
         self.assertIn("unix-user-path", rules)
 
     def test_rejects_raw_indexer_progress_and_current_file(self) -> None:
-        text = """FOD indexer scan progress: phase=running scanned=50 current=secret.pdf status=ok\n"""
+        text = """FOD indexer scan progress: phase=running scanned=50 current=secret.pdf status=ok
+"""
         rules = {finding.rule for finding in CHECKER.scan_text(text)}
         self.assertIn("raw-indexer-progress", rules)
         self.assertIn("current-file-field", rules)
@@ -47,7 +55,8 @@ class PrivacyCheckerTests(unittest.TestCase):
         text = """{
   \"full_hash_hex\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",
   \"created_at\": \"2026-01-01 12:00:00\"
-}\n"""
+}
+"""
         rules = {finding.rule for finding in CHECKER.scan_text(text)}
         self.assertIn("catalogue-hash-field", rules)
         self.assertIn("catalogue-timestamp-field", rules)
