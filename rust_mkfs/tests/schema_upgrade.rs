@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 18;
+const SCHEMA_VERSION: u64 = 19;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -197,7 +197,9 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                       AND conrelid = 'fod.copy_block_crc'::regclass
                       AND contype = 'p'
                 )
-                AND to_regclass('fod.payload_capacity_reservations') IS NOT NULL",
+                AND to_regclass('fod.payload_capacity_reservations') IS NOT NULL
+                AND to_regclass('fod.index_catalog_snapshots') IS NOT NULL
+                AND to_regclass('fod.index_catalog_snapshot_files') IS NOT NULL",
         )
         .expect("inspect payload ownership schema");
     assert!(matches, "payload tables must be owned by data objects");
@@ -445,7 +447,7 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
     assert!(
         String::from_utf8_lossy(&upgrade_result.stdout).contains(
-            "Schema version row was missing; recovered version 18 from the verified schema shape."
+            "Schema version row was missing; recovered version 19 from the verified schema shape."
         ),
         "{}",
         String::from_utf8_lossy(&upgrade_result.stdout)
@@ -678,10 +680,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 18",
+        "FOD schema version: 19",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 18",
+        "Latest migration version: 19",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -703,6 +705,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0016: 0016_hardlink_promotion_request_tokens.sql",
         "0017: 0017_data_object_payload_ownership.sql",
         "0018: 0018_payload_capacity_reservations.sql",
+        "0019: 0019_index_catalog_snapshots.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -722,10 +725,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 18",
+        "Latest migration version: 19",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019",
     ] {
         assert!(
             status_without_version.contains(needle),
