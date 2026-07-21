@@ -531,40 +531,49 @@ fn eligible_hash_files(files: Vec<IndexedFile>) -> Vec<IndexedFile> {
         .collect()
 }
 
+fn load_global_candidate_sizes(repo: &DbRepo) -> Result<HashSet<u64>, String> {
+    let rows = repo.query_rows_text(
+        "
+        SELECT f.size::text
+        FROM index_files f
+        WHERE f.scan_status = 'ok'
+          AND f.file_kind = 'regular'
+          AND f.size > 0
+        GROUP BY f.size
+        HAVING COUNT(*) > 1
+        ORDER BY f.size
+        ",
+    )?;
+
+    rows.iter()
+        .map(|row| {
+            row.first()
+                .ok_or_else(|| "global candidate-size row is empty".to_string())?
+                .trim()
+                .parse::<u64>()
+                .map_err(|err| format!("invalid global candidate size: {err}"))
+        })
+        .collect()
+}
+
 fn select_hash_scope(
     source_files: &[IndexedFile],
-    all_files: Vec<IndexedFile>,
+    global_candidate_sizes: Option<&HashSet<u64>>,
     candidates_only: bool,
 ) -> Vec<IndexedFile> {
     if !candidates_only {
         return source_files.to_vec();
     }
 
-    let source_sizes = source_files
+    let Some(global_candidate_sizes) = global_candidate_sizes else {
+        return Vec::new();
+    };
+
+    source_files
         .iter()
-        .map(|file| file.size)
-        .collect::<HashSet<_>>();
-    let mut groups: BTreeMap<u64, Vec<IndexedFile>> = BTreeMap::new();
-
-    for file in all_files {
-        if source_sizes.contains(&file.size) {
-            groups.entry(file.size).or_default().push(file);
-        }
-    }
-
-    let mut selected = groups
-        .into_values()
-        .filter(|group| group.len() > 1)
-        .flatten()
-        .collect::<Vec<_>>();
-    selected.sort_by(|left, right| {
-        (left.source_id, left.path.as_str(), left.id_file).cmp(&(
-            right.source_id,
-            right.path.as_str(),
-            right.id_file,
-        ))
-    });
-    selected
+        .filter(|file| global_candidate_sizes.contains(&file.size))
+        .cloned()
+        .collect()
 }
 
 pub fn hash_source(
@@ -574,12 +583,16 @@ pub fn hash_source(
 ) -> Result<HashSummary, String> {
     let source = source_registry::load_source(repo, source_name)?;
     let source_files = eligible_hash_files(scan::load_indexed_files(repo, Some(source_name))?);
-    let files = if candidates_only {
-        let all_files = eligible_hash_files(scan::load_indexed_files(repo, None)?);
-        select_hash_scope(&source_files, all_files, true)
+    let global_candidate_sizes = if candidates_only {
+        Some(load_global_candidate_sizes(repo)?)
     } else {
-        select_hash_scope(&source_files, Vec::new(), false)
+        None
     };
+    let files = select_hash_scope(
+        &source_files,
+        global_candidate_sizes.as_ref(),
+        candidates_only,
+    );
     let mut summary = HashSummary {
         source_name: source.name.clone(),
         source_path: source.root_path.display().to_string(),
@@ -599,9 +612,6 @@ pub fn hash_source(
 
         let mut partial_groups: HashMap<(u64, String), Vec<PartialHashResult>> = HashMap::new();
         for (size, group) in groups {
-            if candidates_only && group.len() <= 1 {
-                continue;
-            }
             summary.candidate_files = summary.candidate_files.saturating_add(group.len() as u64);
             let partials = partial_results_for_group(
                 repo,
@@ -621,7 +631,7 @@ pub fn hash_source(
 
         progress.emit("rebuilding", &summary, None);
         for group in partial_groups.into_values() {
-            if group.len() <= 1 {
+            if !candidates_only && group.len() <= 1 {
                 continue;
             }
             let _full_results = full_hash_group(
@@ -682,23 +692,17 @@ mod tests {
     }
 
     #[test]
-    fn candidates_only_expands_to_matching_files_from_other_sources() {
+    fn candidates_only_uses_global_sizes_but_keeps_reads_source_scoped() {
         let source_files = vec![
             indexed_file(1, 10, "source-a", "a.bin", 100),
             indexed_file(2, 10, "source-a", "unique.bin", 200),
         ];
-        let all_files = vec![
-            source_files[0].clone(),
-            source_files[1].clone(),
-            indexed_file(3, 20, "source-b", "b.bin", 100),
-            indexed_file(4, 20, "source-b", "unrelated-a.bin", 300),
-            indexed_file(5, 30, "source-c", "unrelated-b.bin", 300),
-        ];
+        let global_candidate_sizes = HashSet::from([100]);
 
-        let selected = select_hash_scope(&source_files, all_files, true);
+        let selected = select_hash_scope(&source_files, Some(&global_candidate_sizes), true);
         let ids = selected.iter().map(|file| file.id_file).collect::<Vec<_>>();
 
-        assert_eq!(ids, vec![1, 3]);
+        assert_eq!(ids, vec![1]);
     }
 
     #[test]
@@ -708,11 +712,7 @@ mod tests {
             indexed_file(2, 10, "source-a", "b.bin", 200),
         ];
 
-        let selected = select_hash_scope(
-            &source_files,
-            vec![indexed_file(3, 20, "source-b", "peer.bin", 100)],
-            false,
-        );
+        let selected = select_hash_scope(&source_files, None, false);
         let ids = selected.iter().map(|file| file.id_file).collect::<Vec<_>>();
 
         assert_eq!(ids, vec![1, 2]);

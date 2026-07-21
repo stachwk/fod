@@ -214,13 +214,13 @@ def main() -> None:
 
             smoke_hash_output = run_indexer(ROOT, ["hash", "--source", smoke_source, "--candidates-only"])
             assert_contains(smoke_hash_output, f"source: {smoke_source}", "hash smoke")
-            assert_contains(smoke_hash_output, "candidate files: 4", "hash smoke")
-            assert_contains(smoke_hash_output, "full hashed: 4", "hash smoke")
-            assert_contains(smoke_hash_output, "duplicate sets: 2", "hash smoke")
+            assert_contains(smoke_hash_output, "candidate files: 3", "hash smoke")
+            assert_contains(smoke_hash_output, "full hashed: 3", "hash smoke")
+            assert_contains(smoke_hash_output, "duplicate sets: 1", "hash smoke")
 
             other_hash_output = run_indexer(ROOT, ["hash", "--source", other_source, "--candidates-only"])
-            assert_contains(other_hash_output, "candidate files: 2", "hash other")
-            assert_contains(other_hash_output, "full hashed: 2", "hash other")
+            assert_contains(other_hash_output, "candidate files: 1", "hash other")
+            assert_contains(other_hash_output, "full hashed: 1", "hash other")
             assert_contains(other_hash_output, "duplicate sets: 2", "hash other")
             assert_contains(other_hash_output, f"source: {other_source}", "hash other")
 
