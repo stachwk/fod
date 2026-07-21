@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
+#![allow(dead_code)]
+
 use std::collections::{HashMap, HashSet};
 use std::env;
 
@@ -241,14 +243,14 @@ fn parse_endpoint(entry: &str, role: PgEndpointRole, key: &str) -> Result<PgEndp
             .ok_or_else(|| format!("invalid {key} endpoint `{entry}`: missing closing ]"))?;
         let host = &rest[..close];
         let suffix = &rest[close + 1..];
-        let port = suffix.strip_prefix(':').ok_or_else(|| {
-            format!("invalid {key} endpoint `{entry}`: expected [host]:port")
-        })?;
+        let port = suffix
+            .strip_prefix(':')
+            .ok_or_else(|| format!("invalid {key} endpoint `{entry}`: expected [host]:port"))?;
         (host, port)
     } else {
-        let (host, port) = entry.rsplit_once(':').ok_or_else(|| {
-            format!("invalid {key} endpoint `{entry}`: expected host:port")
-        })?;
+        let (host, port) = entry
+            .rsplit_once(':')
+            .ok_or_else(|| format!("invalid {key} endpoint `{entry}`: expected host:port"))?;
         if host.contains(':') {
             return Err(format!(
                 "invalid {key} endpoint `{entry}`: IPv6 addresses must use [address]:port"
