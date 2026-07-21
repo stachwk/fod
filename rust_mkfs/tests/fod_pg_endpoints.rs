@@ -133,10 +133,8 @@ fn environment_selects_the_endpoint_mode_over_the_config_file() {
     assert_eq!(explicit["endpoints"][0]["authority"], "env-primary:25432");
 
     let explicit_config = write_config("primary_hosts = config-primary:15432");
-    let discovery_output = endpoint_config_with_env(
-        &explicit_config,
-        &[("FOD_PG_HOSTS", "env-unknown:35432")],
-    );
+    let discovery_output =
+        endpoint_config_with_env(&explicit_config, &[("FOD_PG_HOSTS", "env-unknown:35432")]);
     assert!(
         discovery_output.status.success(),
         "{}",
@@ -150,9 +148,8 @@ fn environment_selects_the_endpoint_mode_over_the_config_file() {
 
 #[test]
 fn rejects_ambiguous_or_incomplete_role_configuration() {
-    let ambiguous_config = write_config(
-        "primary_hosts = db-a:15432\nreplica_hosts = db-r:15442\nhosts = db-x:15452",
-    );
+    let ambiguous_config =
+        write_config("primary_hosts = db-a:15432\nreplica_hosts = db-r:15442\nhosts = db-x:15452");
     let ambiguous = endpoint_config(&ambiguous_config);
     assert!(!ambiguous.status.success());
     assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("ambiguous"));
@@ -171,10 +168,7 @@ fn rejects_duplicates_invalid_ports_empty_entries_and_unbracketed_ipv6() {
             "duplicate",
         ),
         ("primary_hosts = db-a:70000", "1..65535"),
-        (
-            "primary_hosts = db-a:15432,,db-b:15433",
-            "non-empty",
-        ),
+        ("primary_hosts = db-a:15432,,db-b:15433", "non-empty"),
         ("primary_hosts = ::1:15432", "IPv6"),
     ] {
         let config_path = write_config(database_lines);
