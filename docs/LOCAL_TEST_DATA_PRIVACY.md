@@ -56,6 +56,24 @@ Before creating or updating a pull request, issue, comment, or release note:
 3. Search the text for usernames, hostnames, mount roots, home directories, source names, and recognizable document names.
 4. Do not attach local logs unless the user explicitly approves the sanitized content.
 5. Keep raw logs local. Use them for diagnosis, not as routine GitHub evidence.
+6. Run the privacy checker against the prepared text.
+
+For a saved PR body:
+
+```bash
+python3 tools/check_github_text_privacy.py /tmp/pr-body.md
+```
+
+For stdin:
+
+```bash
+printf '%s\n' '31 unit tests passed' |
+python3 tools/check_github_text_privacy.py --quiet
+```
+
+The checker exits with status `1` when it detects a likely local path, shell identity, raw indexer progress line, current-file field, catalogue hash, or catalogue timestamp. Diagnostics include only a rule name and line number; they do not repeat the detected value.
+
+The checker is a guard, not proof that arbitrary prose is anonymous. A final human review is still required because a recognizable file or directory name may appear without a path.
 
 ## Explicit approval
 
