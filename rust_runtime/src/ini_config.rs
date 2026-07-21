@@ -1,3 +1,10 @@
+pub mod pg_endpoints;
+
+pub use pg_endpoints::{
+    pg_connection_params_for_endpoint, resolve_pg_endpoint_config, PgEndpoint, PgEndpointConfig,
+    PgEndpointMode, PgEndpointProbe, PgEndpointRole, PgObservedEndpointRole,
+};
+
 use crate::expand_user;
 use std::collections::HashMap;
 use std::env;

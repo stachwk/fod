@@ -31,11 +31,37 @@ fn write_config(database_lines: &str) -> PathBuf {
     config_path
 }
 
+fn write_live_config() -> PathBuf {
+    let dir = unique_temp_dir("pg-endpoint-probe");
+    let config_path = dir.join("fod_config.ini");
+    let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+    let dbname = env::var("POSTGRES_DB").unwrap_or_else(|_| "foddbname".to_string());
+    let user = env::var("POSTGRES_USER").unwrap_or_else(|_| "foduser".to_string());
+    let password = env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "cichosza".to_string());
+    fs::write(
+        &config_path,
+        format!(
+            "[database]\nhost = {host}\nport = {port}\ndbname = {dbname}\nuser = {user}\npassword = {password}\n\n[fod]\npool_max_connections = 4\n"
+        ),
+    )
+    .unwrap();
+    config_path
+}
+
 fn endpoint_config(config_path: &PathBuf) -> Output {
     endpoint_config_with_env(config_path, &[])
 }
 
 fn endpoint_config_with_env(config_path: &PathBuf, overrides: &[(&str, &str)]) -> Output {
+    config_command_with_env(config_path, "endpoint-config", overrides)
+}
+
+fn config_command_with_env(
+    config_path: &PathBuf,
+    subcommand: &str,
+    overrides: &[(&str, &str)],
+) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fod-config"));
     for key in [
         "FOD_PG_HOST",
@@ -50,11 +76,7 @@ fn endpoint_config_with_env(config_path: &PathBuf, overrides: &[(&str, &str)]) -
         command.env(key, value);
     }
     command
-        .args([
-            "--config-path",
-            config_path.to_str().unwrap(),
-            "endpoint-config",
-        ])
+        .args(["--config-path", config_path.to_str().unwrap(), subcommand])
         .output()
         .unwrap()
 }
@@ -180,4 +202,26 @@ fn rejects_duplicates_invalid_ports_empty_entries_and_unbracketed_ipv6() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+fn endpoint_probe_reports_live_server_without_enabling_routing() {
+    let config_path = write_live_config();
+    let output = config_command_with_env(&config_path, "endpoint-probe", &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["mode"], "legacy-single");
+    assert_eq!(payload["routing_enabled"], false);
+    assert_eq!(payload["probe_only"], true);
+    assert_eq!(payload["endpoint_count"], 1);
+    assert_eq!(payload["reachable_count"], 1);
+    assert_eq!(payload["failed_count"], 0);
+    assert_eq!(payload["all_probes_succeeded"], true);
+    assert_eq!(payload["endpoints"][0]["connected"], true);
+    assert!(payload["endpoints"][0]["observed_role"].is_string());
+    assert!(payload["endpoints"][0]["role_matches_config"].is_null());
 }
