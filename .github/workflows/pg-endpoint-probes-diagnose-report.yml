@@ -1,0 +1,57 @@
+name: Persist endpoint probe patch diagnostics
+
+on:
+  pull_request:
+    branches: [main]
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  report:
+    if: github.event.pull_request.head.ref == 'agent/pg-endpoint-probes'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Write report
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          checks = []
+          checks.append(("lib", Path("rust_runtime/src/lib.rs"), '''pub mod ini_config;
+
+          pub use ini_config::{
+              load_config_parser, resolve_config_path, resolve_config_path_optional, IniConfig,
+          };'''.replace("          ", "")))
+          checks.append(("pg import", Path("rust_mkfs/src/pg.rs"), "use fod_rust_runtime::{PostgresVersionDiagnostics, FOD_SEARCH_PATH};"))
+          checks.append(("pg method", Path("rust_mkfs/src/pg.rs"), '''        Ok(PostgresVersionDiagnostics::new(
+                      libpq_version_num,
+                      server_version_num,
+                      server_version,
+                  ))
+              }
+
+              pub fn exec(&self, sql: &str) -> Result<(), String> {'''.replace("              ", "")))
+          checks.append(("config mod", Path("rust_mkfs/src/bin/fod-config.rs"), '''#[path = "../pg_config.rs"]
+          mod pg_config;
+          #[path = "../tls.rs"]'''.replace("          ", "")))
+          checks.append(("config use", Path("rust_mkfs/src/bin/fod-config.rs"), "use config::{load_config_parser, resolve_config_path};\nuse serde_json::json;"))
+          checks.append(("config enum", Path("rust_mkfs/src/bin/fod-config.rs"), "    EndpointConfig,\n    RuntimeConfig,"))
+          checks.append(("config arm", Path("rust_mkfs/src/bin/fod-config.rs"), "            );\n        }\n        CommandKind::RuntimeConfig => {"))
+
+          lines = []
+          for name, path, needle in checks:
+              count = path.read_text(encoding="utf-8").count(needle)
+              lines.append(f"{name}: {count}")
+          Path("docs/pg-endpoint-probe-anchor-report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/pg-endpoint-probe-anchor-report.txt
+          git commit -m "Record endpoint probe patch diagnostics"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
