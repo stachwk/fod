@@ -79,7 +79,7 @@ Snapshot creation copies existing index metadata only. It does not scan sources,
     },
     #[command(
         about = "Hash scanned files.",
-        long_about = "Compute partial and full hashes for candidate files in a registered source.\n\nUse --candidates-only to skip files that are not plausible duplicate candidates by size. The command also emits periodic progress lines on stderr while it hashes files and rebuilds duplicate sets."
+        long_about = "Compute partial and full hashes for candidate files in a registered source.\n\nUse --candidates-only to select size-matched candidates from the global indexed catalogue when at least one member belongs to the requested source. Matching peer files from other registered sources are hashed in the same run so cross-source duplicate sets can be confirmed. The command also emits periodic progress lines on stderr while it hashes files and rebuilds duplicate sets."
     )]
     Hash {
         #[arg(long)]

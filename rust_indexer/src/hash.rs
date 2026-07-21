@@ -6,7 +6,7 @@ use crate::source;
 use crate::source_registry;
 use fod_rust_hotpath::pg::{DbRepo, DuplicateSetStageRow, IndexFileHashStageRow};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt;
@@ -523,22 +523,67 @@ fn full_hash_group(
     Ok(results)
 }
 
+fn eligible_hash_files(files: Vec<IndexedFile>) -> Vec<IndexedFile> {
+    files
+        .into_iter()
+        .filter(|file| file.scan_status == "ok" && file.file_kind == "regular")
+        .filter(|file| !source::is_ignored_indexed_file(file))
+        .collect()
+}
+
+fn select_hash_scope(
+    source_files: &[IndexedFile],
+    all_files: Vec<IndexedFile>,
+    candidates_only: bool,
+) -> Vec<IndexedFile> {
+    if !candidates_only {
+        return source_files.to_vec();
+    }
+
+    let source_sizes = source_files
+        .iter()
+        .map(|file| file.size)
+        .collect::<HashSet<_>>();
+    let mut groups: BTreeMap<u64, Vec<IndexedFile>> = BTreeMap::new();
+
+    for file in all_files {
+        if source_sizes.contains(&file.size) {
+            groups.entry(file.size).or_default().push(file);
+        }
+    }
+
+    let mut selected = groups
+        .into_values()
+        .filter(|group| group.len() > 1)
+        .flatten()
+        .collect::<Vec<_>>();
+    selected.sort_by(|left, right| {
+        (left.source_id, left.path.as_str(), left.id_file).cmp(&(
+            right.source_id,
+            right.path.as_str(),
+            right.id_file,
+        ))
+    });
+    selected
+}
+
 pub fn hash_source(
     repo: &DbRepo,
     source_name: &str,
     candidates_only: bool,
 ) -> Result<HashSummary, String> {
     let source = source_registry::load_source(repo, source_name)?;
-    let files = scan::load_indexed_files(repo, Some(source_name))?;
-    let files = files
-        .into_iter()
-        .filter(|file| file.scan_status == "ok" && file.file_kind == "regular")
-        .filter(|file| !source::is_ignored_indexed_file(file))
-        .collect::<Vec<_>>();
+    let source_files = eligible_hash_files(scan::load_indexed_files(repo, Some(source_name))?);
+    let files = if candidates_only {
+        let all_files = eligible_hash_files(scan::load_indexed_files(repo, None)?);
+        select_hash_scope(&source_files, all_files, true)
+    } else {
+        select_hash_scope(&source_files, Vec::new(), false)
+    };
     let mut summary = HashSummary {
         source_name: source.name.clone(),
         source_path: source.root_path.display().to_string(),
-        scanned_files: files.len() as u64,
+        scanned_files: source_files.len() as u64,
         ..HashSummary::default()
     };
     let mut progress =
@@ -605,5 +650,71 @@ pub fn hash_source(
             progress.fail(&summary, &err);
             Err(err)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn indexed_file(
+        id_file: u64,
+        source_id: u64,
+        source_name: &str,
+        path: &str,
+        size: u64,
+    ) -> IndexedFile {
+        IndexedFile {
+            id_file,
+            source_id,
+            source_name: source_name.to_string(),
+            root_path: PathBuf::from(format!("/tmp/{source_name}")),
+            path: path.to_string(),
+            size,
+            mtime_ns: None,
+            inode: None,
+            device: None,
+            file_kind: "regular".to_string(),
+            scan_status: "ok".to_string(),
+            source_changed: false,
+        }
+    }
+
+    #[test]
+    fn candidates_only_expands_to_matching_files_from_other_sources() {
+        let source_files = vec![
+            indexed_file(1, 10, "source-a", "a.bin", 100),
+            indexed_file(2, 10, "source-a", "unique.bin", 200),
+        ];
+        let all_files = vec![
+            source_files[0].clone(),
+            source_files[1].clone(),
+            indexed_file(3, 20, "source-b", "b.bin", 100),
+            indexed_file(4, 20, "source-b", "unrelated-a.bin", 300),
+            indexed_file(5, 30, "source-c", "unrelated-b.bin", 300),
+        ];
+
+        let selected = select_hash_scope(&source_files, all_files, true);
+        let ids = selected.iter().map(|file| file.id_file).collect::<Vec<_>>();
+
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
+    fn full_hash_mode_remains_source_scoped() {
+        let source_files = vec![
+            indexed_file(1, 10, "source-a", "a.bin", 100),
+            indexed_file(2, 10, "source-a", "b.bin", 200),
+        ];
+
+        let selected = select_hash_scope(
+            &source_files,
+            vec![indexed_file(3, 20, "source-b", "peer.bin", 100)],
+            false,
+        );
+        let ids = selected.iter().map(|file| file.id_file).collect::<Vec<_>>();
+
+        assert_eq!(ids, vec![1, 2]);
     }
 }
