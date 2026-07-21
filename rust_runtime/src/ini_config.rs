@@ -6,9 +6,8 @@ pub use pg_endpoints::{
     PgEndpointMode, PgEndpointProbe, PgEndpointRole, PgObservedEndpointRole,
 };
 pub use pg_runtime::{
-    PgConnectionPurpose, PgEndpointHealthRegistry, PgEndpointHealthSnapshot,
-    PgEndpointHealthState, PgPoolIsolationMode, PgPoolPlan,
-    DEFAULT_PG_HEALTH_FAILURE_THRESHOLD,
+    PgConnectionPurpose, PgEndpointHealthRegistry, PgEndpointHealthSnapshot, PgEndpointHealthState,
+    PgPoolIsolationMode, PgPoolPlan, DEFAULT_PG_HEALTH_FAILURE_THRESHOLD,
 };
 
 use crate::expand_user;

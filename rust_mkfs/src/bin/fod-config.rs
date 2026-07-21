@@ -219,14 +219,11 @@ fn main() {
                     },
                     Err(err) => {
                         failed_count += 1;
-                        let health = match health_registry.record_failure(
-                            &authority,
-                            endpoint.role,
-                            &err,
-                        ) {
-                            Ok(value) => value,
-                            Err(registry_err) => exit_with_error(&registry_err),
-                        };
+                        let health =
+                            match health_registry.record_failure(&authority, endpoint.role, &err) {
+                                Ok(value) => value,
+                                Err(registry_err) => exit_with_error(&registry_err),
+                            };
                         endpoints.push(json!({
                             "authority": authority,
                             "host": endpoint.host.as_str(),

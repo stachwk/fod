@@ -57,9 +57,7 @@ pub struct PgPoolPlan {
 
 impl PgPoolPlan {
     pub fn from_total_limit(total_limit: u64) -> Self {
-        let total_limit = usize::try_from(total_limit)
-            .unwrap_or(usize::MAX)
-            .max(1);
+        let total_limit = usize::try_from(total_limit).unwrap_or(usize::MAX).max(1);
 
         if total_limit < PgConnectionPurpose::ALL.len() {
             return Self {
@@ -268,17 +266,13 @@ impl PgEndpointHealthRegistry {
         };
 
         if snapshot.state == PgEndpointHealthState::Healthy {
-            snapshot
-                .eligible_purposes
-                .push(PgConnectionPurpose::Read);
+            snapshot.eligible_purposes.push(PgConnectionPurpose::Read);
             if probe.write_capable() {
-                snapshot
-                    .eligible_purposes
-                    .extend_from_slice(&[
-                        PgConnectionPurpose::Write,
-                        PgConnectionPurpose::Control,
-                        PgConnectionPurpose::Lease,
-                    ]);
+                snapshot.eligible_purposes.extend_from_slice(&[
+                    PgConnectionPurpose::Write,
+                    PgConnectionPurpose::Control,
+                    PgConnectionPurpose::Lease,
+                ]);
             }
         }
 
@@ -317,10 +311,7 @@ impl PgEndpointHealthRegistry {
         Ok(snapshot.clone())
     }
 
-    pub fn snapshot(
-        &self,
-        authority: &str,
-    ) -> Result<Option<PgEndpointHealthSnapshot>, String> {
+    pub fn snapshot(&self, authority: &str) -> Result<Option<PgEndpointHealthSnapshot>, String> {
         let entries = self
             .entries
             .lock()
