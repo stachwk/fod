@@ -98,10 +98,6 @@ Lists stored plans without creating, refreshing, or modifying them. Results use
 
 Reads one stored import plan. It does not run scan, hash, or planning again.
 
-### `report duplicates --id ID`
-
-Reads one existing duplicate set. It does not rebuild duplicate metadata.
-
 ### `duplicate-set list`
 
 ```text
@@ -113,6 +109,24 @@ the duplicate-set rebuild. Results use `duplicate_set_id ASC` keyset pagination.
 Each item contains the stable duplicate-set id, hash algorithm, full hash, file
 size, file count, total bytes, and creation/update timestamps. The consistency
 model is `live`.
+
+### `duplicate-set show --id ID`
+
+```text
+fod-indexer duplicate-set show --id ID
+```
+
+Reads one existing duplicate set and its indexed member files without rebuilding
+duplicate metadata. The response uses the existing duplicate-set snapshot shape,
+including the set header, canonical file id, saved-byte estimate, and deterministically
+ordered members with stable file ids, source metadata, logical and source paths,
+size, hash metadata, and canonical-member status.
+
+The older command below remains available as a compatibility alias:
+
+```text
+fod-indexer report duplicates --id ID
+```
 
 ### `file list`
 

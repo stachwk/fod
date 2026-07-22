@@ -42,10 +42,10 @@ pub enum Commands {
         command: FileCommands,
     },
     #[command(
-        about = "Inspect stored duplicate sets.",
-        long_about = "List existing duplicate-set metadata without rebuilding it.
+        about = "List or inspect stored duplicate sets.",
+        long_about = "List existing duplicate-set metadata or show one stored set with its member files without rebuilding it.
 
-This command is strictly read-only. It reads index_duplicate_sets in stable id order and does not scan sources, hash files, refresh duplicate metadata, create plans, or materialize data."
+These commands are strictly read-only. They read existing duplicate metadata and do not scan sources, hash files, refresh duplicate metadata, create plans, or materialize data."
     )]
     DuplicateSet {
         #[command(subcommand)]
@@ -193,6 +193,16 @@ pub enum DuplicateSetCommands {
         limit: usize,
         #[arg(long)]
         cursor: Option<u64>,
+    },
+    #[command(
+        about = "Show one stored duplicate set.",
+        long_about = "Show one existing duplicate set and its indexed member files by stable duplicate-set id.
+
+The command is strictly read-only and does not rebuild duplicate metadata. It is the structured duplicate-set equivalent of the compatibility command report duplicates --id."
+    )]
+    Show {
+        #[arg(long)]
+        id: u64,
     },
 }
 
@@ -572,6 +582,27 @@ mod tests {
                 assert_eq!(cursor, Some(42));
             }
             _ => panic!("expected duplicate-set list command"),
+        }
+    }
+
+    #[test]
+    fn parses_duplicate_set_show_id() {
+        let cli = Cli::try_parse_from([
+            "fod-indexer",
+            "--output",
+            "json",
+            "duplicate-set",
+            "show",
+            "--id",
+            "17",
+        ])
+        .expect("duplicate-set show command should parse");
+        assert_eq!(cli.output, OutputFormat::Json);
+        match cli.command {
+            Commands::DuplicateSet {
+                command: DuplicateSetCommands::Show { id },
+            } => assert_eq!(id, 17),
+            _ => panic!("expected duplicate-set show command"),
         }
     }
 

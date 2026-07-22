@@ -129,6 +129,18 @@ impl IndexerCapabilitiesOutput {
                     notes: "Reads one already stored import plan and does not rebuild it.",
                 },
                 CommandCapabilityView {
+                    command: "duplicate-set show --id",
+                    status: "available",
+                    read_only: true,
+                    filters: &["id"],
+                    sort: &["members: source_id,path-length,path"],
+                    pagination: None,
+                    default_limit: None,
+                    max_limit: None,
+                    consistency: "stored-derived-state",
+                    notes: "Reads one existing duplicate set and its member files without rebuilding duplicate tables.",
+                },
+                CommandCapabilityView {
                     command: "report duplicates --id",
                     status: "available",
                     read_only: true,
@@ -138,7 +150,7 @@ impl IndexerCapabilitiesOutput {
                     default_limit: None,
                     max_limit: None,
                     consistency: "stored-derived-state",
-                    notes: "Reads one existing duplicate set without rebuilding duplicate tables.",
+                    notes: "Compatibility alias for duplicate-set show --id; reads one existing set without rebuilding duplicate tables.",
                 },
                 CommandCapabilityView {
                     command: "report duplicates",
