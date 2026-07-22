@@ -1,0 +1,90 @@
+name: Finalize FOD 3.2.27 duplicate-set documentation
+
+on:
+  push:
+    branches:
+      - agent/fod-3.2.27-duplicate-set-show
+    paths:
+      - .github/workflows/finalize-fod-3.2.27-doc-contract.yml
+
+permissions:
+  contents: write
+
+jobs:
+  correct-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fod-3.2.27-duplicate-set-show
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Correct documented JSON shape
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one replacement target, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "docs/fod-indexer-read-api.md",
+              """duplicate metadata. The response uses the existing duplicate-set snapshot shape,
+          including the set header, canonical file id, saved-byte estimate, and deterministically
+          ordered members with stable file ids, source metadata, logical and source paths,
+          size, hash metadata, and canonical-member status.
+          """,
+              """duplicate metadata. The response uses the existing duplicate-set snapshot shape:
+          a `duplicate_set` header plus deterministically ordered `members`. Member records
+          include stable file ids, source metadata, logical and source paths, size, hash
+          metadata, and canonical-member status.
+          """,
+          )
+
+          replace_once(
+              "docs/msfind-fod-indexer-requests.md",
+              """duplicate_set
+            duplicate_set_id
+            hash_algorithm
+            full_hash_hex
+            file_size
+            file_count
+            total_bytes
+          canonical_file_id
+          saved_bytes
+          members:
+          """,
+              """duplicate_set
+            id_duplicate_set
+            hash_algorithm
+            full_hash_hex
+            file_size
+            file_count
+            total_bytes
+          members:
+          """,
+          )
+          PY
+
+          git diff --check
+
+      - name: Commit corrected contract
+        shell: bash
+        run: |
+          rm .github/workflows/finalize-fod-3.2.27-doc-contract.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/fod-indexer-read-api.md \
+            docs/msfind-fod-indexer-requests.md \
+            .github/workflows/finalize-fod-3.2.27-doc-contract.yml
+          git commit -m "FOD 3.2.27: correct duplicate-set show contract"
+          make test-version
+          git push origin HEAD:agent/fod-3.2.27-duplicate-set-show
