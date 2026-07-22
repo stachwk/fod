@@ -6,9 +6,18 @@ on:
       - agent/fod-3.2.27-duplicate-set-show
     paths:
       - .github/workflows/apply-fod-3.2.27-duplicate-set-show.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-fod-3.2.27-duplicate-set-show.yml
 
 permissions:
   contents: write
+
+concurrency:
+  group: apply-fod-3.2.27-duplicate-set-show
+  cancel-in-progress: true
 
 jobs:
   apply-and-validate:
