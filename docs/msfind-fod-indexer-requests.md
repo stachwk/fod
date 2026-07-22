@@ -103,14 +103,12 @@ versioned response contains:
 schema_version
 producer
 duplicate_set
-  duplicate_set_id
+  id_duplicate_set
   hash_algorithm
   full_hash_hex
   file_size
   file_count
   total_bytes
-canonical_file_id
-saved_bytes
 members:
   file_id
   source_id

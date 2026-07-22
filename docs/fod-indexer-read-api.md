@@ -117,10 +117,10 @@ fod-indexer duplicate-set show --id ID
 ```
 
 Reads one existing duplicate set and its indexed member files without rebuilding
-duplicate metadata. The response uses the existing duplicate-set snapshot shape,
-including the set header, canonical file id, saved-byte estimate, and deterministically
-ordered members with stable file ids, source metadata, logical and source paths,
-size, hash metadata, and canonical-member status.
+duplicate metadata. The response uses the existing duplicate-set snapshot shape:
+a `duplicate_set` header plus deterministically ordered `members`. Member records
+include stable file ids, source metadata, logical and source paths, size, hash
+metadata, and canonical-member status.
 
 The older command below remains available as a compatibility alias:
 
