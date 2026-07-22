@@ -56,30 +56,26 @@ jobs:
           python3 /tmp/apply_duplicate_set_show.py
           echo "guarded replacements passed"
 
-      - name: Format implementation
-        shell: bash
-        run: cargo fmt --all
-
-      - name: Run indexer check
-        id: cargo-check
+      - name: Capture rustfmt result
+        id: rustfmt
         continue-on-error: true
         shell: bash
         run: |
           set +e
-          cargo check -p fod-rust-indexer > /tmp/cargo-check.log 2>&1
+          cargo fmt --all > /tmp/rustfmt.log 2>&1
           status=$?
           echo "exit_status=$status" >> "$GITHUB_OUTPUT"
           exit "$status"
 
-      - name: Upload cargo check log
+      - name: Upload rustfmt log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fod-3.2.27-cargo-check
-          path: /tmp/cargo-check.log
+          name: fod-3.2.27-rustfmt
+          path: /tmp/rustfmt.log
           if-no-files-found: error
 
-      - name: Fail when cargo check failed
-        if: steps.cargo-check.outputs.exit_status != '0'
+      - name: Fail when rustfmt failed
+        if: steps.rustfmt.outputs.exit_status != '0'
         shell: bash
         run: exit 1
