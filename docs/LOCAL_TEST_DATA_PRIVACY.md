@@ -61,7 +61,8 @@ Before creating or updating a pull request, issue, comment, or release note:
 For a saved PR body:
 
 ```bash
-python3 tools/check_github_text_privacy.py /tmp/pr-body.md
+python3 tools/check_github_text_privacy.py \
+  .git/fod-private/pr-body.md
 ```
 
 For stdin:
@@ -77,26 +78,41 @@ The checker is a guard, not proof that arbitrary prose is anonymous. A final hum
 
 ## Privacy-gated PR creation
 
-Prefer the wrapper when creating a pull request locally:
+Prepare a private PR body from the repository template:
 
 ```bash
-python3 tools/create_safe_pr.py \
-  --title "Describe the change" \
-  --body-file /tmp/pr-body.md \
-  --base main \
-  --head "$(git branch --show-current)"
+python3 tools/create_safe_pr.py --prepare-body
 ```
 
-The wrapper validates both the title and body before running `gh pr create`. It passes the body through `--body-file`; the body content is not copied into a command-line argument or diagnostic message. Pull requests are drafts by default. Use `--ready` only when the change should immediately be ready for review.
+The default file is `.git/fod-private/pr-body.md`. It remains outside version control. An existing body is never overwritten.
 
-Validate without contacting GitHub:
+Edit the prepared body and validate it without contacting GitHub:
 
 ```bash
+${EDITOR:-vi} .git/fod-private/pr-body.md
+
 python3 tools/create_safe_pr.py \
   --title "Describe the change" \
-  --body-file /tmp/pr-body.md \
   --dry-run
 ```
+
+Create the pull request after the branch contains the intended commit:
+
+```bash
+python3 tools/create_safe_pr.py \
+  --title "Describe the change"
+```
+
+The wrapper uses `main` as the base branch, resolves the current branch as the head, validates the title and body, and then runs `gh pr create`. Pull requests are drafts by default. Use `--ready` only when the change should immediately be ready for review.
+
+Real publication is blocked when:
+
+- the head branch is the same as the base branch;
+- the head branch has no commits ahead of the base branch;
+- Git cannot determine the current branch or compare it with the base;
+- the title or body contains likely local metadata.
+
+Use `--base`, `--head`, `--repo`, or `--body-file` only when overriding the defaults is necessary. Dry-run mode checks text only and never invokes Git or GitHub CLI.
 
 When validation fails, GitHub CLI is not invoked. The wrapper reports only rule names and line numbers and does not repeat detected local values.
 
