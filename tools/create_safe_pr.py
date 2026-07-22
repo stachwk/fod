@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Create a GitHub pull request only after local-text privacy validation.
+"""Create a GitHub pull request only after privacy and branch validation.
 
-The wrapper validates the PR title and body file before invoking `gh pr create`.
+The wrapper validates the PR title and body before invoking `gh pr create`.
 It passes the body to GitHub by file path and never prints the body contents.
 """
 
@@ -15,22 +15,41 @@ from pathlib import Path
 from check_github_text_privacy import scan_text
 
 
+DEFAULT_BODY_FILE = Path(".git/fod-private/pr-body.md")
+DEFAULT_TEMPLATE_FILE = Path(".github/PULL_REQUEST_TEMPLATE.md")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Validate a pull-request title and body for likely local metadata, "
-            "then create the PR with GitHub CLI."
+            "Validate pull-request text and branch state, then create the PR "
+            "with GitHub CLI."
         )
     )
-    parser.add_argument("--title", required=True, help="pull-request title")
+    parser.add_argument(
+        "--title",
+        help="pull-request title; required unless --prepare-body is used",
+    )
     parser.add_argument(
         "--body-file",
-        required=True,
         type=Path,
-        help="UTF-8 Markdown file containing the pull-request body",
+        default=DEFAULT_BODY_FILE,
+        help=(
+            "UTF-8 Markdown file containing the pull-request body "
+            "(default: .git/fod-private/pr-body.md)"
+        ),
     )
-    parser.add_argument("--base", help="base branch passed to gh pr create")
-    parser.add_argument("--head", help="head branch passed to gh pr create")
+    parser.add_argument(
+        "--prepare-body",
+        action="store_true",
+        help="copy the repository PR template to the body file when it is absent",
+    )
+    parser.add_argument(
+        "--base",
+        default="main",
+        help="base branch passed to gh pr create (default: main)",
+    )
+    parser.add_argument("--head", help="head branch; defaults to the current branch")
     parser.add_argument("--repo", help="repository passed to gh pr create")
 
     publication_mode = parser.add_mutually_exclusive_group()
@@ -51,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="validate the text without invoking GitHub CLI",
+        help="validate the text without checking branch state or invoking GitHub CLI",
     )
     return parser
 
@@ -61,6 +80,23 @@ def _read_body(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except OSError as error:
         raise SystemExit("unable to read PR body file") from error
+
+
+def _prepare_body(path: Path) -> int:
+    if path.exists():
+        print("safe PR body already exists; not overwritten")
+        return 0
+
+    try:
+        template = DEFAULT_TEMPLATE_FILE.read_text(encoding="utf-8")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(template, encoding="utf-8")
+    except OSError:
+        print("unable to prepare safe PR body file", file=sys.stderr)
+        return 1
+
+    print("safe PR body prepared")
+    return 0
 
 
 def _validate_publication_text(title: str, body: str) -> bool:
@@ -81,7 +117,62 @@ def _validate_publication_text(title: str, body: str) -> bool:
     return False
 
 
-def _gh_command(args: argparse.Namespace) -> list[str]:
+def _git_stdout(*arguments: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        print("safe PR creation blocked: git was not found", file=sys.stderr)
+        return None
+
+    if result.returncode != 0:
+        print("safe PR creation blocked: git preflight failed", file=sys.stderr)
+        return None
+    return result.stdout.strip()
+
+
+def _validated_head(explicit_head: str | None, base: str) -> str | None:
+    head = explicit_head or _git_stdout("branch", "--show-current")
+    if head is None:
+        return None
+    if not head:
+        print(
+            "safe PR creation blocked: unable to determine the current branch",
+            file=sys.stderr,
+        )
+        return None
+    if head == base:
+        print(
+            "safe PR creation blocked: head branch matches the base branch",
+            file=sys.stderr,
+        )
+        return None
+
+    ahead_text = _git_stdout("rev-list", "--count", f"{base}..{head}")
+    if ahead_text is None:
+        return None
+    try:
+        ahead = int(ahead_text)
+    except ValueError:
+        print(
+            "safe PR creation blocked: invalid git preflight result",
+            file=sys.stderr,
+        )
+        return None
+    if ahead < 1:
+        print(
+            "safe PR creation blocked: head branch has no commits ahead of base",
+            file=sys.stderr,
+        )
+        return None
+    return head
+
+
+def _gh_command(args: argparse.Namespace, head: str) -> list[str]:
     command = [
         "gh",
         "pr",
@@ -90,11 +181,11 @@ def _gh_command(args: argparse.Namespace) -> list[str]:
         args.title,
         "--body-file",
         str(args.body_file),
+        "--base",
+        args.base,
+        "--head",
+        head,
     ]
-    if args.base:
-        command.extend(["--base", args.base])
-    if args.head:
-        command.extend(["--head", args.head])
     if args.repo:
         command.extend(["--repo", args.repo])
     if args.draft:
@@ -103,9 +194,15 @@ def _gh_command(args: argparse.Namespace) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    body = _read_body(args.body_file)
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
+    if args.prepare_body:
+        return _prepare_body(args.body_file)
+    if not args.title:
+        parser.error("--title is required unless --prepare-body is used")
+
+    body = _read_body(args.body_file)
     if not _validate_publication_text(args.title, body):
         return 1
 
@@ -113,8 +210,12 @@ def main(argv: list[str] | None = None) -> int:
         print("safe PR text passed; GitHub command not executed")
         return 0
 
+    head = _validated_head(args.head, args.base)
+    if head is None:
+        return 1
+
     try:
-        result = subprocess.run(_gh_command(args), check=False)
+        result = subprocess.run(_gh_command(args, head), check=False)
     except FileNotFoundError:
         print("unable to run GitHub CLI: gh was not found", file=sys.stderr)
         return 127
