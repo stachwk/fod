@@ -88,6 +88,45 @@ total
 `msfind` can use this command to discover valid set ids without calling the
 refreshing no-id `report duplicates` path.
 
+## Delivered P0: show one existing duplicate set with members
+
+The strictly read-only command is available:
+
+```text
+fod-indexer duplicate-set show --id ID
+```
+
+It reads one stored duplicate set without rebuilding duplicate metadata. The
+versioned response contains:
+
+```text
+schema_version
+producer
+duplicate_set
+  id_duplicate_set
+  hash_algorithm
+  full_hash_hex
+  file_size
+  file_count
+  total_bytes
+members:
+  file_id
+  source_id
+  source_name
+  source_kind
+  source_root_path
+  logical_path
+  source_path
+  size
+  hash_algorithm
+  full_hash_hex
+  hash_status
+  is_canonical
+```
+
+`report duplicates --id ID` remains a compatibility alias. New consumers should
+use the `duplicate-set` command family for both discovery and detail retrieval.
+
 ## Delivered P0: list or search the whole file index
 
 The following strictly read-only commands are available:

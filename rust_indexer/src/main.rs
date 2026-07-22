@@ -63,6 +63,16 @@ fn run() -> Result<(), String> {
                 }
                 Ok(())
             }
+            DuplicateSetCommands::Show { id } => {
+                let snapshot = plan::load_duplicate_set_snapshot(&repo, id)?;
+                if output.is_json() {
+                    print_json(&snapshot)?;
+                } else {
+                    println!("FOD indexer duplicate set");
+                    println!("{}", snapshot.human_readable());
+                }
+                Ok(())
+            }
         },
         Commands::Snapshot { command } => match command {
             SnapshotCommands::Create { source } => {

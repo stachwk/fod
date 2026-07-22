@@ -218,4 +218,17 @@ mod tests {
         assert_eq!(command.status, "available");
         assert!(command.read_only);
     }
+
+    #[test]
+    fn exposes_duplicate_set_show_as_available_capability() {
+        let capabilities = capabilities_output();
+        let command = capabilities
+            .commands
+            .iter()
+            .find(|command| command.command == "duplicate-set show --id")
+            .expect("duplicate-set show capability should exist");
+        assert_eq!(command.status, "available");
+        assert!(command.read_only);
+        assert_eq!(command.consistency, "stored-derived-state");
+    }
 }
