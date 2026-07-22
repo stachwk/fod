@@ -15,7 +15,7 @@ diff --git a/rust_indexer/src/cli.rs b/rust_indexer/src/cli.rs
      )]
      DuplicateSet {
          #[command(subcommand)]
-@@ -195,6 +195,14 @@ pub enum DuplicateSetCommands {
+@@ -195,6 +195,17 @@ pub enum DuplicateSetCommands {
          #[arg(long)]
          cursor: Option<u64>,
      },
@@ -32,7 +32,7 @@ diff --git a/rust_indexer/src/cli.rs b/rust_indexer/src/cli.rs
  }
  
  #[derive(Debug, Clone, Subcommand)]
-@@ -575,6 +583,27 @@ mod tests {
+@@ -575,6 +586,28 @@ mod tests {
          }
      }
  
@@ -171,7 +171,7 @@ diff --git a/docs/fod-indexer-read-api.md b/docs/fod-indexer-read-api.md
 diff --git a/docs/msfind-fod-indexer-requests.md b/docs/msfind-fod-indexer-requests.md
 --- a/docs/msfind-fod-indexer-requests.md
 +++ b/docs/msfind-fod-indexer-requests.md
-@@ -90,6 +90,42 @@ next_cursor
+@@ -90,6 +90,48 @@ next_cursor
  `msfind` can use this command to discover valid set ids without calling the
  refreshing no-id `report duplicates` path.
  
