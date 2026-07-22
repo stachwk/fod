@@ -30,6 +30,12 @@ jobs:
           fetch-depth: 1
           show-progress: false
 
+      - name: Install Rust 1.85
+        shell: bash
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup default 1.85.0
+
       - name: Extract and run guarded replacements
         shell: bash
         run: |
@@ -49,3 +55,31 @@ jobs:
           PY
           python3 /tmp/apply_duplicate_set_show.py
           echo "guarded replacements passed"
+
+      - name: Check formatting
+        shell: bash
+        run: cargo fmt --all -- --check
+
+      - name: Run indexer check
+        id: cargo-check
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          cargo check -p fod-rust-indexer > /tmp/cargo-check.log 2>&1
+          status=$?
+          echo "exit_status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Upload cargo check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fod-3.2.27-cargo-check
+          path: /tmp/cargo-check.log
+          if-no-files-found: error
+
+      - name: Fail when cargo check failed
+        if: steps.cargo-check.outputs.exit_status != '0'
+        shell: bash
+        run: exit 1
