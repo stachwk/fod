@@ -75,6 +75,31 @@ The checker exits with status `1` when it detects a likely local path, shell ide
 
 The checker is a guard, not proof that arbitrary prose is anonymous. A final human review is still required because a recognizable file or directory name may appear without a path.
 
+## Privacy-gated PR creation
+
+Prefer the wrapper when creating a pull request locally:
+
+```bash
+python3 tools/create_safe_pr.py \
+  --title "Describe the change" \
+  --body-file /tmp/pr-body.md \
+  --base main \
+  --head "$(git branch --show-current)"
+```
+
+The wrapper validates both the title and body before running `gh pr create`. It passes the body through `--body-file`; the body content is not copied into a command-line argument or diagnostic message. Pull requests are drafts by default. Use `--ready` only when the change should immediately be ready for review.
+
+Validate without contacting GitHub:
+
+```bash
+python3 tools/create_safe_pr.py \
+  --title "Describe the change" \
+  --body-file /tmp/pr-body.md \
+  --dry-run
+```
+
+When validation fails, GitHub CLI is not invoked. The wrapper reports only rule names and line numbers and does not repeat detected local values.
+
 ## Explicit approval
 
 Local filenames, paths, or logs may be published only when the user explicitly requests that specific content to be included after reviewing it. Approval to run a local test is not approval to publish its output.
