@@ -32,51 +32,34 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{path}: expected one replacement target, found {count}")
-              target.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-          replace_once(
-              "docs/fod-indexer-read-api.md",
-              """duplicate metadata. The response uses the existing duplicate-set snapshot shape,
-          including the set header, canonical file id, saved-byte estimate, and deterministically
-          ordered members with stable file ids, source metadata, logical and source paths,
-          size, hash metadata, and canonical-member status.
-          """,
-              """duplicate metadata. The response uses the existing duplicate-set snapshot shape:
-          a `duplicate_set` header plus deterministically ordered `members`. Member records
-          include stable file ids, source metadata, logical and source paths, size, hash
-          metadata, and canonical-member status.
-          """,
+          read_api = Path("docs/fod-indexer-read-api.md")
+          text = read_api.read_text(encoding="utf-8")
+          old = (
+              "including the set header, canonical file id, saved-byte estimate, and deterministically\n"
+              "ordered members with stable file ids, source metadata, logical and source paths,\n"
+              "size, hash metadata, and canonical-member status."
           )
-
-          replace_once(
-              "docs/msfind-fod-indexer-requests.md",
-              """duplicate_set
-            duplicate_set_id
-            hash_algorithm
-            full_hash_hex
-            file_size
-            file_count
-            total_bytes
-          canonical_file_id
-          saved_bytes
-          members:
-          """,
-              """duplicate_set
-            id_duplicate_set
-            hash_algorithm
-            full_hash_hex
-            file_size
-            file_count
-            total_bytes
-          members:
-          """,
+          new = (
+              "a `duplicate_set` header plus deterministically ordered `members`. Member records\n"
+              "include stable file ids, source metadata, logical and source paths, size, hash\n"
+              "metadata, and canonical-member status."
           )
+          if text.count(old) != 1:
+              raise SystemExit("read API contract target is not unique")
+          read_api.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          requests = Path("docs/msfind-fod-indexer-requests.md")
+          text = requests.read_text(encoding="utf-8")
+          start = text.index("## Delivered P0: show one existing duplicate set with members")
+          end = text.index("## Delivered P0: list or search the whole file index", start)
+          section = text[start:end]
+          if section.count("  duplicate_set_id\n") != 1:
+              raise SystemExit("duplicate set id field target is not unique")
+          if section.count("canonical_file_id\nsaved_bytes\n") != 1:
+              raise SystemExit("obsolete duplicate set fields target is not unique")
+          section = section.replace("  duplicate_set_id\n", "  id_duplicate_set\n", 1)
+          section = section.replace("canonical_file_id\nsaved_bytes\n", "", 1)
+          requests.write_text(text[:start] + section + text[end:], encoding="utf-8")
           PY
 
           git diff --check
