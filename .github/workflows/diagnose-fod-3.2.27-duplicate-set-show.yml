@@ -1,0 +1,51 @@
+name: Diagnose FOD 3.2.27 duplicate-set show
+
+on:
+  push:
+    branches:
+      - agent/fod-3.2.27-duplicate-set-show
+    paths:
+      - .github/workflows/diagnose-fod-3.2.27-duplicate-set-show.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/diagnose-fod-3.2.27-duplicate-set-show.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnose-fod-3.2.27-duplicate-set-show
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fod-3.2.27-duplicate-set-show
+          fetch-depth: 1
+          show-progress: false
+
+      - name: Extract and run guarded replacements
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/apply-fod-3.2.27-duplicate-set-show.yml')
+          lines = workflow.read_text(encoding='utf-8').splitlines()
+          start = next(i for i, line in enumerate(lines) if "python3 - <<'PY'" in line) + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
+          script_lines = []
+          for line in lines[start:end]:
+              script_lines.append(line[10:] if line.startswith('          ') else line)
+          script = Path('/tmp/apply_duplicate_set_show.py')
+          script.write_text('\n'.join(script_lines) + '\n', encoding='utf-8')
+          print(f'extracted_lines={len(script_lines)}')
+          PY
+          python3 /tmp/apply_duplicate_set_show.py
+          echo "guarded replacements passed"
