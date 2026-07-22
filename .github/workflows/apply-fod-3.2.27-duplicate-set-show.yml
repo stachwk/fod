@@ -1,0 +1,63 @@
+name: Apply FOD 3.2.27 duplicate-set show
+
+on:
+  push:
+    branches:
+      - agent/fod-3.2.27-duplicate-set-show
+    paths:
+      - .github/workflows/apply-fod-3.2.27-duplicate-set-show.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fod-3.2.27-duplicate-set-show
+          fetch-depth: 0
+
+      - name: Install Rust 1.85
+        shell: bash
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup default 1.85.0
+
+      - name: Apply implementation
+        shell: bash
+        run: |
+          git apply --check .github/patches/fod-3.2.27-duplicate-set-show.patch
+          git apply .github/patches/fod-3.2.27-duplicate-set-show.patch
+          cargo fmt --all
+          cargo check -p fod-rust-indexer
+
+      - name: Validate implementation
+        shell: bash
+        run: |
+          git diff --check
+          cargo fmt --all -- --check
+          RUSTFLAGS="-D warnings" cargo check --locked -p fod-rust-indexer
+          RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-indexer
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          rm .github/patches/fod-3.2.27-duplicate-set-show.patch
+          rm .github/workflows/apply-fod-3.2.27-duplicate-set-show.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock Cargo.toml fod_version.txt \
+            rust_indexer/src/cli.rs \
+            rust_indexer/src/main.rs \
+            rust_indexer/src/output.rs \
+            rust_indexer/src/duplicate_set_api.rs \
+            docs/fod-indexer-read-api.md \
+            docs/msfind-fod-indexer-requests.md \
+            .github/patches/fod-3.2.27-duplicate-set-show.patch \
+            .github/workflows/apply-fod-3.2.27-duplicate-set-show.yml
+          git commit -m "FOD 3.2.27: add duplicate-set show command"
+          make test-version
+          git push origin HEAD:agent/fod-3.2.27-duplicate-set-show
