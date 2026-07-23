@@ -38,7 +38,7 @@ fn opt_in_pg_lanes_mount_and_serve_basic_filesystem_operations() -> Result<(), S
         &[
             ("FOD_PG_POOL_LANES_ENABLED", "1".to_string()),
             ("FOD_POOL_MAX_CONNECTIONS", "10".to_string()),
-            ("FOD_LOG_LEVEL", "info".to_string()),
+            ("FOD_LOG_LEVEL", "debug".to_string()),
         ],
     )?;
 
