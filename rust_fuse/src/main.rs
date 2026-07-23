@@ -4,13 +4,16 @@
 mod compatibility;
 mod copy_plan;
 mod fs;
+mod pg_lanes;
 mod read_cache;
 mod startup;
 mod write_buffer;
 mod write_payload;
 
 use clap::Parser;
-use fod_rust_runtime::{env_var_with_legacy_alias, RuntimeConfig};
+use fod_rust_runtime::{
+    env_var_truthy_with_legacy_alias, env_var_with_legacy_alias, RuntimeConfig,
+};
 use log::LevelFilter;
 use rust_hotpath::pg::DbRepo;
 use std::io::Write;
@@ -55,6 +58,18 @@ fn main() {
         eprintln!("fod-rust-fuse: invalid runtime config: {err}");
         std::process::exit(1);
     });
+
+    if env_var_truthy_with_legacy_alias(pg_lanes::PG_POOL_LANES_ENV, false) {
+        if let Err(err) =
+            pg_lanes::mount_with_lanes(&conninfo, &runtime, args.readonly, &args.mountpoint)
+        {
+            log::error!("FOD mount failed: {}", err);
+            eprintln!("fod-rust-fuse: {}", err);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let repo = DbRepo::with_runtime(&conninfo, &runtime).unwrap_or_else(|err| {
         eprintln!("fod-rust-fuse: failed to open PostgreSQL repo: {err}");
         std::process::exit(1);
