@@ -197,16 +197,24 @@ impl LockHeartbeatHandle {
             .name("fod-lock-heartbeat".to_string())
             .spawn(move || {
                 while !stop_thread.load(Ordering::Relaxed) {
+                    let expected_wake = Instant::now() + interval;
                     thread::park_timeout(interval);
                     if stop_thread.load(Ordering::Relaxed) {
                         break;
                     }
-                    heartbeat_pg_mount_state(
+                    let schedule_delay = Instant::now().saturating_duration_since(expected_wake);
+                    let execution_started = Instant::now();
+                    let failed = heartbeat_pg_mount_state(
                         &repo,
                         session_id,
                         &posix_locks,
                         &local_lock_owners,
                         lease_ttl_seconds,
+                    );
+                    repo.record_heartbeat_observability(
+                        schedule_delay,
+                        execution_started.elapsed(),
+                        failed,
                     );
                 }
             })
@@ -288,12 +296,13 @@ fn heartbeat_pg_mount_state(
     posix_locks: &Arc<Mutex<HashMap<String, Vec<PosixLockRecord>>>>,
     local_lock_owners: &Arc<Mutex<HashSet<u64>>>,
     lease_ttl_seconds: u64,
-) {
+) -> bool {
+    let mut failed = false;
     let local_owners = match local_lock_owners.lock() {
         Ok(guard) => guard.iter().copied().collect::<HashSet<_>>(),
         Err(err) => {
             warn!("FOD lock heartbeat skipped: poisoned owner set: {}", err);
-            return;
+            return true;
         }
     };
 
@@ -302,11 +311,12 @@ fn heartbeat_pg_mount_state(
             "FOD session heartbeat failed session_id={} err={}",
             session_id, err
         );
-        return;
+        return true;
     }
 
     for owner in local_owners.iter().copied() {
         if let Err(err) = repo.touch_client_session_owner_key(session_id, owner) {
+            failed = true;
             warn!(
                 "FOD session owner heartbeat failed session_id={} owner={} err={}",
                 session_id, owner, err
@@ -321,7 +331,7 @@ fn heartbeat_pg_mount_state(
             .collect::<Vec<_>>(),
         Err(err) => {
             warn!("FOD lock heartbeat skipped: poisoned lock map: {}", err);
-            return;
+            return true;
         }
     };
 
@@ -329,6 +339,7 @@ fn heartbeat_pg_mount_state(
         let (resource_kind, resource_id) = match FodFuse::lock_resource_kind_id(&resource_key) {
             Ok(value) => value,
             Err(errno) => {
+                failed = true;
                 warn!(
                     "FOD lock heartbeat skipped resource_key={} errno={}",
                     resource_key, errno
@@ -348,6 +359,7 @@ fn heartbeat_pg_mount_state(
                 record.end,
                 lease_ttl_seconds,
             ) {
+                failed = true;
                 warn!(
                     "FOD lock heartbeat failed resource_key={} owner={} start={} end={:?} err={}",
                     resource_key, record.owner, record.start, record.end, err
@@ -359,11 +371,15 @@ fn heartbeat_pg_mount_state(
     match repo.prune_expired_client_sessions() {
         Ok(true) => {}
         Ok(false) => {}
-        Err(err) => warn!(
-            "FOD session prune failed session_id={} err={}",
-            session_id, err
-        ),
+        Err(err) => {
+            failed = true;
+            warn!(
+                "FOD session prune failed session_id={} err={}",
+                session_id, err
+            );
+        }
     }
+    failed
 }
 
 fn runtime_override_snapshot(repo: &DbRepo) -> Result<HashMap<String, String>, String> {

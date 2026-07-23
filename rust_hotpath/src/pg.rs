@@ -12,6 +12,7 @@ use fod_rust_runtime::{
     POSTGRES_REQUIREMENT_SETTINGS_SQL,
 };
 use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString};
@@ -2274,40 +2275,40 @@ where
     let begin = CString::new("BEGIN").map_err(|_| "SQL contains NUL byte".to_string())?;
     let commit = CString::new("COMMIT").map_err(|_| "SQL contains NUL byte".to_string())?;
     let rollback = CString::new("ROLLBACK").map_err(|_| "SQL contains NUL byte".to_string())?;
-
-    match exec_command(conn, &begin) {
-        Ok(()) => {}
-        Err(err) => {
-            return if is_retryable_connection_error(conn, &err) {
-                Err(replayable_sql_error(err))
-            } else {
-                Err(err)
-            };
-        }
-    }
-
-    match f(conn) {
-        Ok(value) => {
-            if let Err(err) = exec_command(conn, &commit) {
+    let started = Instant::now();
+    let result = match exec_command(conn, &begin) {
+        Ok(()) => match f(conn) {
+            Ok(value) => {
+                if let Err(err) = exec_command(conn, &commit) {
+                    let _ = exec_command(conn, &rollback);
+                    if replay_commit_disconnect && is_retryable_connection_error(conn, &err) {
+                        Err(replayable_sql_error_once(err))
+                    } else {
+                        Err(err)
+                    }
+                } else {
+                    Ok(value)
+                }
+            }
+            Err(err) => {
                 let _ = exec_command(conn, &rollback);
-                if replay_commit_disconnect && is_retryable_connection_error(conn, &err) {
-                    Err(replayable_sql_error_once(err))
+                if is_retryable_connection_error(conn, &err) {
+                    Err(replayable_sql_error(err))
                 } else {
                     Err(err)
                 }
-            } else {
-                Ok(value)
             }
-        }
+        },
         Err(err) => {
-            let _ = exec_command(conn, &rollback);
             if is_retryable_connection_error(conn, &err) {
                 Err(replayable_sql_error(err))
             } else {
                 Err(err)
             }
         }
-    }
+    };
+    observe_current_transaction(started.elapsed(), result.is_err());
+    result
 }
 
 unsafe fn transactional_replayable<T, F>(conn: *mut PGconn, f: F) -> Result<T, String>
@@ -2640,6 +2641,16 @@ pub struct DbRepoPoolObservabilitySnapshot {
     pub operation_micros_total: u64,
     pub operation_micros_max: u64,
     pub replay_count: u64,
+    pub transaction_count: u64,
+    pub transaction_failures: u64,
+    pub transaction_micros_total: u64,
+    pub transaction_micros_max: u64,
+    pub heartbeat_count: u64,
+    pub heartbeat_failures: u64,
+    pub heartbeat_schedule_delay_micros_total: u64,
+    pub heartbeat_schedule_delay_micros_max: u64,
+    pub heartbeat_execution_micros_total: u64,
+    pub heartbeat_execution_micros_max: u64,
 }
 
 impl DbRepoPoolObservabilitySnapshot {
@@ -2656,6 +2667,23 @@ pub struct DbRepoObservabilitySnapshot {
     pub global_payload: DbRepoPayloadObservabilitySnapshot,
     pub persist_buffer_chunk_blocks: u64,
     pub persist_copy_send_buffer_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostgresPressureSnapshot {
+    pub database_connections: u64,
+    pub activity_connections: u64,
+    pub activity_active: u64,
+    pub activity_idle: u64,
+    pub activity_idle_in_transaction: u64,
+    pub temp_files: u64,
+    pub temp_bytes: u64,
+    pub deadlocks: u64,
+    pub shared_buffers: String,
+    pub work_mem: String,
+    pub maintenance_work_mem: String,
+    pub temp_buffers: String,
+    pub current_backend_memory_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2847,6 +2875,16 @@ struct SharedConnectionPoolState {
     operation_micros_total: u64,
     operation_micros_max: u64,
     replay_count: u64,
+    transaction_count: u64,
+    transaction_failures: u64,
+    transaction_micros_total: u64,
+    transaction_micros_max: u64,
+    heartbeat_count: u64,
+    heartbeat_failures: u64,
+    heartbeat_schedule_delay_micros_total: u64,
+    heartbeat_schedule_delay_micros_max: u64,
+    heartbeat_execution_micros_total: u64,
+    heartbeat_execution_micros_max: u64,
 }
 
 #[derive(Debug)]
@@ -2854,6 +2892,39 @@ struct SharedConnectionPool {
     state: Mutex<SharedConnectionPoolState>,
     available: Condvar,
     limit: usize,
+}
+
+thread_local! {
+    static CURRENT_TRANSACTION_POOL: RefCell<Option<Arc<SharedConnectionPool>>> =
+        const { RefCell::new(None) };
+}
+
+struct CurrentTransactionPoolScope {
+    previous: Option<Arc<SharedConnectionPool>>,
+}
+
+impl CurrentTransactionPoolScope {
+    fn enter(pool: Arc<SharedConnectionPool>) -> Self {
+        let previous = CURRENT_TRANSACTION_POOL.with(|current| current.replace(Some(pool)));
+        Self { previous }
+    }
+}
+
+impl Drop for CurrentTransactionPoolScope {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        CURRENT_TRANSACTION_POOL.with(|current| {
+            current.replace(previous);
+        });
+    }
+}
+
+fn observe_current_transaction(elapsed: Duration, failed: bool) {
+    CURRENT_TRANSACTION_POOL.with(|current| {
+        if let Some(pool) = current.borrow().as_ref() {
+            pool.record_transaction(elapsed, failed);
+        }
+    });
 }
 
 #[derive(Debug)]
@@ -3046,6 +3117,49 @@ impl SharedConnectionPool {
         Ok(())
     }
 
+    fn record_transaction(&self, elapsed: Duration, failed: bool) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.transaction_count = state.transaction_count.saturating_add(1);
+        if failed {
+            state.transaction_failures = state.transaction_failures.saturating_add(1);
+        }
+        let elapsed_micros = Self::duration_micros(elapsed);
+        state.transaction_micros_total = state
+            .transaction_micros_total
+            .saturating_add(elapsed_micros);
+        state.transaction_micros_max = state.transaction_micros_max.max(elapsed_micros);
+    }
+
+    fn record_heartbeat(
+        &self,
+        schedule_delay: Duration,
+        execution_elapsed: Duration,
+        failed: bool,
+    ) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.heartbeat_count = state.heartbeat_count.saturating_add(1);
+        if failed {
+            state.heartbeat_failures = state.heartbeat_failures.saturating_add(1);
+        }
+        let schedule_delay_micros = Self::duration_micros(schedule_delay);
+        state.heartbeat_schedule_delay_micros_total = state
+            .heartbeat_schedule_delay_micros_total
+            .saturating_add(schedule_delay_micros);
+        state.heartbeat_schedule_delay_micros_max = state
+            .heartbeat_schedule_delay_micros_max
+            .max(schedule_delay_micros);
+        let execution_micros = Self::duration_micros(execution_elapsed);
+        state.heartbeat_execution_micros_total = state
+            .heartbeat_execution_micros_total
+            .saturating_add(execution_micros);
+        state.heartbeat_execution_micros_max =
+            state.heartbeat_execution_micros_max.max(execution_micros);
+    }
+
     fn snapshot(&self) -> Result<DbRepoPoolObservabilitySnapshot, String> {
         let state = self
             .state
@@ -3072,6 +3186,16 @@ impl SharedConnectionPool {
             operation_micros_total: state.operation_micros_total,
             operation_micros_max: state.operation_micros_max,
             replay_count: state.replay_count,
+            transaction_count: state.transaction_count,
+            transaction_failures: state.transaction_failures,
+            transaction_micros_total: state.transaction_micros_total,
+            transaction_micros_max: state.transaction_micros_max,
+            heartbeat_count: state.heartbeat_count,
+            heartbeat_failures: state.heartbeat_failures,
+            heartbeat_schedule_delay_micros_total: state.heartbeat_schedule_delay_micros_total,
+            heartbeat_schedule_delay_micros_max: state.heartbeat_schedule_delay_micros_max,
+            heartbeat_execution_micros_total: state.heartbeat_execution_micros_total,
+            heartbeat_execution_micros_max: state.heartbeat_execution_micros_max,
         })
     }
 }
@@ -3194,6 +3318,8 @@ impl DbRepo {
             };
 
             let operation_started = Instant::now();
+            let _transaction_pool_scope =
+                CurrentTransactionPoolScope::enter(Arc::clone(&self.pool));
             let result = f(conn);
             let operation_elapsed = operation_started.elapsed();
             match result {
@@ -3248,6 +3374,82 @@ impl DbRepo {
             global_payload: self.global_payload_observability.snapshot()?,
             persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,
             persist_copy_send_buffer_bytes: persist_copy_send_buffer_bytes(),
+        })
+    }
+
+    pub fn record_heartbeat_observability(
+        &self,
+        schedule_delay: Duration,
+        execution_elapsed: Duration,
+        failed: bool,
+    ) {
+        self.pool
+            .record_heartbeat(schedule_delay, execution_elapsed, failed);
+    }
+
+    pub fn postgres_pressure_snapshot(&self) -> Result<PostgresPressureSnapshot, String> {
+        self.with_control_connection(|conn| unsafe {
+            let backend_memory_sql = if PQserverVersion(conn) >= 130_000 {
+                "COALESCE((SELECT SUM(total_bytes)::bigint::text FROM pg_backend_memory_contexts), '')"
+            } else {
+                "''"
+            };
+            let sql = CString::new(format!(
+                "SELECT \
+                    COALESCE((SELECT numbackends::text FROM pg_stat_database WHERE datname = current_database()), '0'), \
+                    (SELECT COUNT(*)::text FROM pg_stat_activity WHERE datname = current_database()), \
+                    (SELECT COUNT(*) FILTER (WHERE state = 'active')::text FROM pg_stat_activity WHERE datname = current_database()), \
+                    (SELECT COUNT(*) FILTER (WHERE state = 'idle')::text FROM pg_stat_activity WHERE datname = current_database()), \
+                    (SELECT COUNT(*) FILTER (WHERE state = 'idle in transaction')::text FROM pg_stat_activity WHERE datname = current_database()), \
+                    COALESCE((SELECT temp_files::text FROM pg_stat_database WHERE datname = current_database()), '0'), \
+                    COALESCE((SELECT temp_bytes::text FROM pg_stat_database WHERE datname = current_database()), '0'), \
+                    COALESCE((SELECT deadlocks::text FROM pg_stat_database WHERE datname = current_database()), '0'), \
+                    current_setting('shared_buffers'), \
+                    current_setting('work_mem'), \
+                    current_setting('maintenance_work_mem'), \
+                    current_setting('temp_buffers'), \
+                    {backend_memory_sql}"
+            ))
+            .map_err(|_| "PostgreSQL pressure SQL contains NUL byte".to_string())?;
+            let rows = query_rows_text_on_conn(conn, &sql)?;
+            let row = rows
+                .into_iter()
+                .next()
+                .ok_or_else(|| "PostgreSQL pressure query returned no rows".to_string())?;
+            if row.len() != 13 {
+                return Err(format!(
+                    "PostgreSQL pressure query returned {} columns instead of 13",
+                    row.len()
+                ));
+            }
+            let parse_u64 = |index: usize, name: &str| {
+                row[index]
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|err| format!("invalid PostgreSQL {name} value: {err}"))
+            };
+            Ok(PostgresPressureSnapshot {
+                database_connections: parse_u64(0, "database connection count")?,
+                activity_connections: parse_u64(1, "activity connection count")?,
+                activity_active: parse_u64(2, "active connection count")?,
+                activity_idle: parse_u64(3, "idle connection count")?,
+                activity_idle_in_transaction: parse_u64(
+                    4,
+                    "idle-in-transaction connection count",
+                )?,
+                temp_files: parse_u64(5, "temp file count")?,
+                temp_bytes: parse_u64(6, "temp byte count")?,
+                deadlocks: parse_u64(7, "deadlock count")?,
+                shared_buffers: row[8].clone(),
+                work_mem: row[9].clone(),
+                maintenance_work_mem: row[10].clone(),
+                temp_buffers: row[11].clone(),
+                current_backend_memory_bytes: if row[12].trim().is_empty() {
+                    None
+                } else {
+                    Some(parse_u64(12, "current backend memory byte count")?)
+                },
+            })
         })
     }
 

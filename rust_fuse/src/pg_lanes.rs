@@ -10,10 +10,17 @@ use rust_hotpath::pg::{DbRepo, DbRepoPayloadObservability};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 pub const PG_POOL_LANES_ENV: &str = "FOD_PG_POOL_LANES_ENABLED";
+pub const PG_OBSERVABILITY_INTERVAL_MS_ENV: &str = "FOD_PG_OBSERVABILITY_INTERVAL_MS";
 const LEGACY_DSN_AUTHORITY: &str = "legacy-dsn";
+const DEFAULT_PG_OBSERVABILITY_INTERVAL_MS: u64 = 5_000;
+const MIN_PG_OBSERVABILITY_INTERVAL_MS: u64 = 100;
+const MAX_PG_OBSERVABILITY_INTERVAL_MS: u64 = 3_600_000;
 const CONNECTION_OK: c_int = 0;
 const PGRES_TUPLES_OK: c_int = 2;
 
@@ -69,9 +76,55 @@ pub struct DbRepoLaneKeepalive {
     repositories: Vec<DbRepo>,
 }
 
+struct LaneObservabilitySampler {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
 impl DbRepoLaneKeepalive {
     pub fn active_lane_count(&self) -> usize {
         self.repositories.len()
+    }
+}
+
+impl LaneObservabilitySampler {
+    fn spawn(
+        repositories: Vec<(&'static str, DbRepo)>,
+        process_rss_peak: Arc<AtomicU64>,
+        interval: Duration,
+    ) -> Result<Self, String> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        let thread = thread::Builder::new()
+            .name("fod-pg-observability".to_string())
+            .spawn(move || {
+                while !stop_thread.load(Ordering::Relaxed) {
+                    thread::park_timeout(interval);
+                    if stop_thread.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    log_lane_observability("periodic", &repositories, &process_rss_peak);
+                }
+            })
+            .map_err(|err| format!("failed to spawn PostgreSQL observability thread: {err}"))?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for LaneObservabilitySampler {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -282,13 +335,18 @@ pub fn mount_with_lanes(
     }
 
     let observability_repositories = lanes.observability_repositories();
+    let process_rss_peak = Arc::new(AtomicU64::new(0));
     let control_repo = lanes.repo_for(PgConnectionPurpose::Control);
     log_postgres_diagnostics(control_repo);
     if let Err(err) =
         validate_and_log_postgres_requirements(control_repo, diagnostics.total_limit as u64)
     {
         let _ = lanes.record_connection_failure(&err);
-        log_lane_observability("startup-failed", &observability_repositories);
+        log_lane_observability(
+            "startup-failed",
+            &observability_repositories,
+            &process_rss_peak,
+        );
         return Err(format!(
             "PostgreSQL runtime requirements validation failed: {err}"
         ));
@@ -298,12 +356,30 @@ pub fn mount_with_lanes(
         Ok(snapshot) => snapshot,
         Err(err) => {
             let _ = lanes.record_connection_failure(&err);
-            log_lane_observability("startup-failed", &observability_repositories);
+            log_lane_observability(
+                "startup-failed",
+                &observability_repositories,
+                &process_rss_peak,
+            );
             return Err(format!("failed to read startup snapshot: {err}"));
         }
     };
     log::debug!("FOD startup snapshot={:?}", snapshot);
-    log_lane_observability("post-startup", &observability_repositories);
+    log_lane_observability(
+        "post-startup",
+        &observability_repositories,
+        &process_rss_peak,
+    );
+    let observability_interval = postgres_observability_interval()?;
+    log::info!(
+        "FOD PostgreSQL lane observability sampler: interval_ms={}",
+        observability_interval.as_millis()
+    );
+    let mut observability_sampler = LaneObservabilitySampler::spawn(
+        observability_repositories.clone(),
+        Arc::clone(&process_rss_peak),
+        observability_interval,
+    )?;
     let settings =
         crate::startup::FodFuseSettings::from_runtime(runtime, &snapshot, requested_readonly);
     let (mount_repo, keepalive) = lanes.into_mount_repo();
@@ -312,23 +388,88 @@ pub fn mount_with_lanes(
         keepalive.active_lane_count()
     );
     let result = crate::startup::mount_fuse(mount_repo, runtime, settings, mountpoint, &snapshot);
-    log_lane_observability("post-mount", &observability_repositories);
+    observability_sampler.stop();
+    log_lane_observability("post-mount", &observability_repositories, &process_rss_peak);
     drop(keepalive);
     result
 }
 
-fn log_lane_observability(stage: &str, repositories: &[(&str, DbRepo)]) {
+fn postgres_observability_interval() -> Result<Duration, String> {
+    let interval_ms = match std::env::var(PG_OBSERVABILITY_INTERVAL_MS_ENV) {
+        Ok(value) => value.parse::<u64>().map_err(|err| {
+            format!(
+                "{PG_OBSERVABILITY_INTERVAL_MS_ENV} must be an integer number of milliseconds: {err}"
+            )
+        })?,
+        Err(std::env::VarError::NotPresent) => DEFAULT_PG_OBSERVABILITY_INTERVAL_MS,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(format!(
+                "{PG_OBSERVABILITY_INTERVAL_MS_ENV} must contain valid UTF-8"
+            ));
+        }
+    };
+    if !(MIN_PG_OBSERVABILITY_INTERVAL_MS..=MAX_PG_OBSERVABILITY_INTERVAL_MS).contains(&interval_ms)
+    {
+        return Err(format!(
+            "{PG_OBSERVABILITY_INTERVAL_MS_ENV} must be between {MIN_PG_OBSERVABILITY_INTERVAL_MS} and {MAX_PG_OBSERVABILITY_INTERVAL_MS} milliseconds"
+        ));
+    }
+    Ok(Duration::from_millis(interval_ms))
+}
+
+fn log_lane_observability(
+    stage: &str,
+    repositories: &[(&str, DbRepo)],
+    process_rss_peak: &AtomicU64,
+) {
     match current_process_rss_bytes() {
-        Ok(process_rss_bytes) => log::info!(
-            "FOD PostgreSQL lane process observability: stage={} process_rss_bytes={}",
-            stage,
-            process_rss_bytes
-        ),
+        Ok(process_rss_bytes) => {
+            let previous_peak = process_rss_peak.fetch_max(process_rss_bytes, Ordering::Relaxed);
+            log::info!(
+                "FOD PostgreSQL lane process observability: stage={} process_rss_bytes={} process_rss_peak_bytes={}",
+                stage,
+                process_rss_bytes,
+                previous_peak.max(process_rss_bytes)
+            );
+        }
         Err(err) => log::warn!(
             "FOD PostgreSQL lane process observability unavailable: stage={} error={}",
             stage,
             err
         ),
+    }
+
+    let pressure_repository = repositories
+        .iter()
+        .find(|(lane, _)| *lane == PgConnectionPurpose::Control.as_str())
+        .or_else(|| repositories.first());
+    if let Some((lane, repo)) = pressure_repository {
+        match repo.postgres_pressure_snapshot() {
+            Ok(pressure) => log::info!(
+                "FOD PostgreSQL pressure observability: stage={} source_lane={} database_connections={} activity_connections={} activity_active={} activity_idle={} activity_idle_in_transaction={} temp_files={} temp_bytes={} deadlocks={} shared_buffers={} work_mem={} maintenance_work_mem={} temp_buffers={} current_backend_memory_bytes={:?}",
+                stage,
+                lane,
+                pressure.database_connections,
+                pressure.activity_connections,
+                pressure.activity_active,
+                pressure.activity_idle,
+                pressure.activity_idle_in_transaction,
+                pressure.temp_files,
+                pressure.temp_bytes,
+                pressure.deadlocks,
+                pressure.shared_buffers,
+                pressure.work_mem,
+                pressure.maintenance_work_mem,
+                pressure.temp_buffers,
+                pressure.current_backend_memory_bytes,
+            ),
+            Err(err) => log::warn!(
+                "FOD PostgreSQL pressure observability unavailable: stage={} source_lane={} error={}",
+                stage,
+                lane,
+                err
+            ),
+        }
     }
 
     let mut global_payload_logged = false;
@@ -338,7 +479,7 @@ fn log_lane_observability(stage: &str, repositories: &[(&str, DbRepo)]) {
                 let pool = snapshot.pool;
                 let payload = snapshot.payload;
                 log::info!(
-                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled=false",
+                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} transaction_count={} transaction_failures={} transaction_micros_total={} transaction_micros_max={} heartbeat_count={} heartbeat_failures={} heartbeat_schedule_delay_micros_total={} heartbeat_schedule_delay_micros_max={} heartbeat_execution_micros_total={} heartbeat_execution_micros_max={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled=false",
                     stage,
                     lane,
                     pool.connection_limit,
@@ -362,6 +503,16 @@ fn log_lane_observability(stage: &str, repositories: &[(&str, DbRepo)]) {
                     pool.operation_micros_total,
                     pool.operation_micros_max,
                     pool.replay_count,
+                    pool.transaction_count,
+                    pool.transaction_failures,
+                    pool.transaction_micros_total,
+                    pool.transaction_micros_max,
+                    pool.heartbeat_count,
+                    pool.heartbeat_failures,
+                    pool.heartbeat_schedule_delay_micros_total,
+                    pool.heartbeat_schedule_delay_micros_max,
+                    pool.heartbeat_execution_micros_total,
+                    pool.heartbeat_execution_micros_max,
                     payload.in_flight_bytes,
                     payload.peak_in_flight_bytes,
                     payload.accounting_errors,

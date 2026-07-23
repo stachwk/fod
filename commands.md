@@ -2299,3 +2299,23 @@ Base commit at execution time: `02089d3bb4d694a3ea10fe67f9d5c24083ed135e`
 - corrected the concurrent `BENCHMARKS.md` section to use only the results from this verified worktree run
 - final `cargo fmt --all`, `cargo fmt --all -- --check`, warning-free locked workspace check, and `git diff --check` (passed)
 - final `findmnt`, FOD process, and target ownership inspection (no active FOD mount or process and no non-user-owned target artifact)
+
+Execution date: `2026-07-23`
+
+Base commit at execution time: `8dc5e886b9e1e447ca76f422490f5951fb9f2193`
+
+- MemPalace search in wing `myai` for the remaining phase-4 Stage 2 transaction, heartbeat, process-memory, PostgreSQL-pressure, queue, and throughput decisions
+- repository and documentation inspection with `git status`, `git diff`, `rg`, and `sed`
+- `cargo fmt --all`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed before the version increment)
+- `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (passed before the version increment)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --offline` (passed for FOD `3.2.33` and refreshed workspace package versions in `Cargo.lock`)
+- `FOD_PG_OBSERVABILITY_INTERVAL_MS=100 FOD_LOCK_HEARTBEAT_INTERVAL_SECONDS=0.2 cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (passed; temporary log capture confirmed periodic RSS/PostgreSQL pressure, transaction, and heartbeat metrics)
+- `cargo test --locked -p fod-rust-hotpath` (passed: `80` unit tests and the complete integration/doc-test suite, including all `15` transactional replay cases)
+- `cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse` (`31` passed)
+- `make test-locking` (all `4` independent-mount PostgreSQL lock and lease tests passed)
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (passed: block write/read `3048/8000 KiB/s`, extent write/read `2909/7111 KiB/s`)
+- `make test-fio-sequential-io-strace` (passed: block write/read `5818/1829 KiB/s`, extent write/read `6400/1684 KiB/s`; retained the known non-fatal post-unmount `EINVAL` warning)
+- final `git diff --check`, `cargo fmt --all -- --check`, and `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed)
+- `make test-version` (`7` passed for FOD `3.2.33`)
+- post-test `findmnt`, FOD process, and target ownership inspection (no active FOD mount or daemon and no non-user-owned target artifact)

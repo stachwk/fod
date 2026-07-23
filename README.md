@@ -200,6 +200,17 @@ PostgreSQL requirements for the current feature set:
 The canonical contract and startup behavior are documented in
 [`docs/postgresql-runtime-requirements.md`](docs/postgresql-runtime-requirements.md).
 
+The opt-in PostgreSQL lane path (`FOD_PG_POOL_LANES_ENABLED=true`) emits
+cumulative pool, transaction, heartbeat, payload, process-RSS, and server
+pressure diagnostics while it is mounted. Periodic samples default to 5000
+milliseconds; set `FOD_PG_OBSERVABILITY_INTERVAL_MS` to a value from `100` to
+`3600000` when a benchmark needs a different interval. The pressure sample
+uses database activity and cumulative database statistics plus effective
+memory settings. On PostgreSQL 13 and newer it also reports memory allocated by
+the diagnostics connection itself, not total PostgreSQL server RSS. See
+[`docs/postgresql-multi-endpoint-phase-4.md`](docs/postgresql-multi-endpoint-phase-4.md)
+for the metric boundaries and the still-disabled routing contract.
+
 ## Example `fod_config.example.ini`
 
 This is a minimal starting point. The repo-root `fod_config.ini` is kept as the local dev/test config, while `fod_config.example.ini` is the shareable template. If you plan to install the config on a shared host, copy the example and change the password before running `make install-config`.

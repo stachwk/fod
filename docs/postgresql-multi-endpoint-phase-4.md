@@ -4,9 +4,10 @@
 
 Phase 4 wires the phase-3 health and pool-plan contracts into `fod-rust-fuse`
 startup without enabling multi-endpoint routing. Stage 1 mounted correctness is
-complete. Stage 2 now has its first observability foundation for connection
-pools, process memory, and payload persistence. Server memory, logical
-queueing, memory-policy, and endpoint-routing stages remain separate work.
+complete. Stage 2 observability now covers connection pools, transactions,
+heartbeat timing, process memory, payload persistence, and portable
+PostgreSQL pressure indicators. Logical queueing, memory-policy, and
+endpoint-routing stages remain separate work.
 
 The feature is opt-in through:
 
@@ -203,28 +204,48 @@ Record at least:
   and maxima per lane.
 - [x] Configured persistence chunk blocks and COPY send-buffer bytes.
 - [x] FOD process RSS snapshots after startup and after mount completion.
-- [ ] Queued logical tasks classified by operation and lane. Pool acquisition
-  waiters are not yet a logical operation queue.
 - [x] In-flight payload bytes globally and per lane.
-- [ ] Observed batch sizes plus bytes and files completed per second.
-- [ ] Transaction-specific latency and error counts. The current repository
-  operation timer may include more or less than one SQL transaction.
-- [ ] Control/lease heartbeat delay.
-- [ ] Periodic or peak FOD process RSS during benchmark workloads.
-- [ ] PostgreSQL-side memory pressure during benchmarks.
+- [x] Observed persistence operation sizes and cumulative rows, bytes, and
+  elapsed time. Physical database batch sizes and completed files per second
+  require the Stage 3 logical task boundary.
+- [x] Transaction-specific latency and error counts, recorded for each
+  transaction attempt separately from repository-operation timing.
+- [x] Heartbeat scheduling delay, execution latency, and failure counts.
+- [x] Periodic current and peak FOD process RSS during mounted workloads.
+- [x] PostgreSQL activity, temporary-file, deadlock, memory-setting, and
+  current diagnostics-backend memory snapshots.
 
 No automatic concurrency adjustment should be added before these measurements are available.
 
 The pool snapshots are cumulative and shared by all clones of one `DbRepo`.
 They are emitted with non-secret lane labels at `post-startup`,
-`startup-failed`, and `post-mount`. The instrumentation does not issue extra SQL
-and does not alter endpoint selection, connection limits, replay policy, or
-automatic routing.
+`startup-failed`, `periodic`, and `post-mount`. Periodic snapshots default to
+five seconds and can be changed from 100 milliseconds to one hour with
+`FOD_PG_OBSERVABILITY_INTERVAL_MS`. Each pressure snapshot issues one
+control-plane SQL query. The instrumentation does not alter endpoint
+selection, connection limits, replay policy, or automatic routing.
 
 `operation_failures` counts repository closures that returned `Err`. It is a
 diagnostic execution count, not yet a health score: operation classification
 must separate expected application-level errors from connection, transaction,
 and server failures before endpoint selection can consume it.
+
+Transaction counters cover the exact `BEGIN` through `COMMIT` or `ROLLBACK`
+scope and count bounded replay attempts independently. A transaction body may
+return an expected application error, so `transaction_failures` is also a
+diagnostic execution count rather than an endpoint health score.
+
+Heartbeat counters cover one complete lock/session maintenance cycle. Until
+operation routing is enabled, the heartbeat remains on the write repository;
+the metric follows the repository that actually executed it instead of
+pretending it already uses the reserved lease lane.
+
+The PostgreSQL pressure snapshot uses portable cumulative statistics from
+`pg_stat_database` and current activity from `pg_stat_activity`. It also records
+effective `shared_buffers`, `work_mem`, `maintenance_work_mem`, and
+`temp_buffers`. PostgreSQL 13 and newer additionally expose memory allocated by
+the diagnostics query's own backend. This is not total server RSS and must be
+combined with host or container measurements when sizing a production server.
 
 Payload persistence has a separate cancellation-safe observation scope around
 each block, extent, or streaming-file persistence call. The scope starts before
@@ -238,16 +259,17 @@ input rows and bytes, and cumulative and maximum elapsed time. A streaming
 file import attributes its logical file size to the operation even though its
 resident application buffer remains bounded by the configured chunk and COPY
 send-buffer sizes. These counters therefore describe persistence flow, not
-process RSS or an enforced memory reservation. Actual database batch sizes,
-completed files per second, and transaction-only latency remain open
-measurements. Counter overflow or release underflow increments the explicit
-`payload_accounting_errors` diagnostic instead of silently wrapping a value.
+process RSS or an enforced memory reservation. Counter overflow or release
+underflow increments the explicit `payload_accounting_errors` diagnostic
+instead of silently wrapping a value.
 
 ### Stage 3: separate queues from backend pools
 
 Introduce:
 
 - a logical task queue for bulk file operations;
+- queued logical task classification by operation and lane;
+- actual database batch-size and completed-file throughput measurements;
 - a semaphore or equivalent active-transaction limit per lane;
 - a global byte-budget permit for payloads in flight;
 - a per-task buffer cap;
@@ -360,9 +382,9 @@ opt_in_enabled=true
 
 ## Next phase
 
-The next Stage 2 increment should classify logical operations and add
-transaction-only latency, heartbeat delay, periodic process RSS, and
-PostgreSQL-side memory measurements before operation routing or concurrency
+Stage 2 is complete for the current non-queued architecture. Stage 3 should
+introduce the logical task boundary, classify queued work, and measure actual
+batch and file completion rates before operation routing or concurrency
 tuning. After those measurements are trustworthy, operation classification
 inside the FUSE layer may proceed:
 
