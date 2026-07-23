@@ -2345,6 +2345,8 @@ pub struct DbRepo {
     persist_block_transport: PersistBlockTransport,
     data_object_swap_cleanup: DataObjectSwapCleanup,
     pool: Arc<SharedConnectionPool>,
+    payload_observability: Arc<DbRepoPayloadObservability>,
+    global_payload_observability: Arc<DbRepoPayloadObservability>,
     lock_session_id: Mutex<i64>,
     lock_schema_ready: Mutex<bool>,
     owner_session_cache: Mutex<HashMap<u64, i64>>,
@@ -2359,6 +2361,8 @@ impl Clone for DbRepo {
             persist_block_transport: self.persist_block_transport,
             data_object_swap_cleanup: self.data_object_swap_cleanup,
             pool: Arc::clone(&self.pool),
+            payload_observability: Arc::clone(&self.payload_observability),
+            global_payload_observability: Arc::clone(&self.global_payload_observability),
             lock_session_id: Mutex::new(
                 self.lock_session_id
                     .lock()
@@ -2421,6 +2425,18 @@ pub struct PersistExtentRow {
     pub block_count: u64,
     pub used_bytes: u64,
     pub payload: Vec<u8>,
+}
+
+fn persist_block_input_bytes(blocks: &[PersistBlockRow<'_>]) -> u64 {
+    blocks.iter().fold(0u64, |total, block| {
+        total.saturating_add(block.data.len() as u64)
+    })
+}
+
+fn persist_extent_input_bytes(extents: &[PersistExtentRow]) -> u64 {
+    extents.iter().fold(0u64, |total, extent| {
+        total.saturating_add(extent.payload.len() as u64)
+    })
 }
 
 pub const STORAGE_QUOTA_EXCEEDED_PREFIX: &str = "FOD_ENOSPC:";
@@ -2636,8 +2652,178 @@ impl DbRepoPoolObservabilitySnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbRepoObservabilitySnapshot {
     pub pool: DbRepoPoolObservabilitySnapshot,
+    pub payload: DbRepoPayloadObservabilitySnapshot,
+    pub global_payload: DbRepoPayloadObservabilitySnapshot,
     pub persist_buffer_chunk_blocks: u64,
     pub persist_copy_send_buffer_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoPayloadObservabilitySnapshot {
+    pub in_flight_bytes: u64,
+    pub peak_in_flight_bytes: u64,
+    pub accounting_errors: u64,
+    pub persist_operation_count: u64,
+    pub persist_operation_failures: u64,
+    pub persist_input_rows_total: u64,
+    pub persist_input_rows_max: u64,
+    pub persist_input_bytes_total: u64,
+    pub persist_input_bytes_max: u64,
+    pub persist_micros_total: u64,
+    pub persist_micros_max: u64,
+}
+
+#[derive(Debug, Default)]
+struct DbRepoPayloadObservabilityState {
+    in_flight_bytes: u64,
+    peak_in_flight_bytes: u64,
+    accounting_errors: u64,
+    persist_operation_count: u64,
+    persist_operation_failures: u64,
+    persist_input_rows_total: u64,
+    persist_input_rows_max: u64,
+    persist_input_bytes_total: u64,
+    persist_input_bytes_max: u64,
+    persist_micros_total: u64,
+    persist_micros_max: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct DbRepoPayloadObservability {
+    state: Mutex<DbRepoPayloadObservabilityState>,
+}
+
+fn accumulate_observation(target: &mut u64, value: u64) -> bool {
+    match target.checked_add(value) {
+        Some(total) => {
+            *target = total;
+            true
+        }
+        None => {
+            *target = u64::MAX;
+            false
+        }
+    }
+}
+
+impl DbRepoPayloadObservability {
+    fn begin(&self, input_bytes: u64) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        let Some(in_flight_bytes) = state.in_flight_bytes.checked_add(input_bytes) else {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+            return false;
+        };
+        state.in_flight_bytes = in_flight_bytes;
+        state.peak_in_flight_bytes = state.peak_in_flight_bytes.max(state.in_flight_bytes);
+        true
+    }
+
+    fn finish(&self, input_bytes: u64, input_rows: u64, elapsed: Duration, failed: bool) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        match state.in_flight_bytes.checked_sub(input_bytes) {
+            Some(in_flight_bytes) => state.in_flight_bytes = in_flight_bytes,
+            None => {
+                state.in_flight_bytes = 0;
+                state.accounting_errors = state.accounting_errors.saturating_add(1);
+            }
+        }
+        let mut accounting_error = !accumulate_observation(&mut state.persist_operation_count, 1);
+        if failed {
+            accounting_error |= !accumulate_observation(&mut state.persist_operation_failures, 1);
+        }
+        accounting_error |=
+            !accumulate_observation(&mut state.persist_input_rows_total, input_rows);
+        state.persist_input_rows_max = state.persist_input_rows_max.max(input_rows);
+        accounting_error |=
+            !accumulate_observation(&mut state.persist_input_bytes_total, input_bytes);
+        state.persist_input_bytes_max = state.persist_input_bytes_max.max(input_bytes);
+        let elapsed_micros = SharedConnectionPool::duration_micros(elapsed);
+        accounting_error |=
+            !accumulate_observation(&mut state.persist_micros_total, elapsed_micros);
+        state.persist_micros_max = state.persist_micros_max.max(elapsed_micros);
+        if accounting_error {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+        }
+    }
+
+    fn snapshot(&self) -> Result<DbRepoPayloadObservabilitySnapshot, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "payload observability state is poisoned".to_string())?;
+        Ok(DbRepoPayloadObservabilitySnapshot {
+            in_flight_bytes: state.in_flight_bytes,
+            peak_in_flight_bytes: state.peak_in_flight_bytes,
+            accounting_errors: state.accounting_errors,
+            persist_operation_count: state.persist_operation_count,
+            persist_operation_failures: state.persist_operation_failures,
+            persist_input_rows_total: state.persist_input_rows_total,
+            persist_input_rows_max: state.persist_input_rows_max,
+            persist_input_bytes_total: state.persist_input_bytes_total,
+            persist_input_bytes_max: state.persist_input_bytes_max,
+            persist_micros_total: state.persist_micros_total,
+            persist_micros_max: state.persist_micros_max,
+        })
+    }
+}
+
+struct PayloadPersistGuard {
+    local: Arc<DbRepoPayloadObservability>,
+    global: Option<Arc<DbRepoPayloadObservability>>,
+    local_started: bool,
+    global_started: bool,
+    input_bytes: u64,
+    input_rows: u64,
+    started: Instant,
+    failed: bool,
+}
+
+impl PayloadPersistGuard {
+    fn new(
+        local: Arc<DbRepoPayloadObservability>,
+        global: Arc<DbRepoPayloadObservability>,
+        input_bytes: u64,
+        input_rows: u64,
+    ) -> Self {
+        let local_started = local.begin(input_bytes);
+        let global = (!Arc::ptr_eq(&local, &global)).then_some(global);
+        let global_started = global
+            .as_ref()
+            .is_some_and(|tracker| tracker.begin(input_bytes));
+        Self {
+            local,
+            global,
+            local_started,
+            global_started,
+            input_bytes,
+            input_rows,
+            started: Instant::now(),
+            failed: true,
+        }
+    }
+
+    fn mark_success(&mut self) {
+        self.failed = false;
+    }
+}
+
+impl Drop for PayloadPersistGuard {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        if self.local_started {
+            self.local
+                .finish(self.input_bytes, self.input_rows, elapsed, self.failed);
+        }
+        if self.global_started {
+            if let Some(global) = &self.global {
+                global.finish(self.input_bytes, self.input_rows, elapsed, self.failed);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -2897,6 +3083,34 @@ impl DbRepo {
     }
 
     pub fn with_runtime(conninfo: &str, runtime: &RuntimeConfig) -> Result<Self, String> {
+        let payload_observability = Arc::new(DbRepoPayloadObservability::default());
+        Self::with_runtime_observability(
+            conninfo,
+            runtime,
+            Arc::clone(&payload_observability),
+            payload_observability,
+        )
+    }
+
+    pub fn with_runtime_and_global_payload_observability(
+        conninfo: &str,
+        runtime: &RuntimeConfig,
+        global_payload_observability: Arc<DbRepoPayloadObservability>,
+    ) -> Result<Self, String> {
+        Self::with_runtime_observability(
+            conninfo,
+            runtime,
+            Arc::new(DbRepoPayloadObservability::default()),
+            global_payload_observability,
+        )
+    }
+
+    fn with_runtime_observability(
+        conninfo: &str,
+        runtime: &RuntimeConfig,
+        payload_observability: Arc<DbRepoPayloadObservability>,
+        global_payload_observability: Arc<DbRepoPayloadObservability>,
+    ) -> Result<Self, String> {
         let core = runtime.core_settings();
         let storage = runtime.storage_settings();
         Self::new_with_tuning(
@@ -2906,6 +3120,8 @@ impl DbRepo {
             storage.persist_block_transport,
             storage.data_object_swap_cleanup,
             core.pool_max_connections.max(1) as usize,
+            payload_observability,
+            global_payload_observability,
         )
     }
 
@@ -2916,6 +3132,8 @@ impl DbRepo {
         persist_block_transport: PersistBlockTransport,
         data_object_swap_cleanup: DataObjectSwapCleanup,
         connection_limit: usize,
+        payload_observability: Arc<DbRepoPayloadObservability>,
+        global_payload_observability: Arc<DbRepoPayloadObservability>,
     ) -> Result<Self, String> {
         if conninfo.is_empty() {
             return Err("connection string is empty".to_string());
@@ -2927,6 +3145,8 @@ impl DbRepo {
             persist_block_transport,
             data_object_swap_cleanup,
             pool: Arc::new(SharedConnectionPool::new(connection_limit.max(1))),
+            payload_observability,
+            global_payload_observability,
             lock_session_id: Mutex::new(NEXT_LOCK_SESSION_ID.fetch_sub(1, Ordering::Relaxed)),
             lock_schema_ready: Mutex::new(false),
             owner_session_cache: Mutex::new(HashMap::new()),
@@ -3024,9 +3244,20 @@ impl DbRepo {
     pub fn observability_snapshot(&self) -> Result<DbRepoObservabilitySnapshot, String> {
         Ok(DbRepoObservabilitySnapshot {
             pool: self.pool.snapshot()?,
+            payload: self.payload_observability.snapshot()?,
+            global_payload: self.global_payload_observability.snapshot()?,
             persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,
             persist_copy_send_buffer_bytes: persist_copy_send_buffer_bytes(),
         })
+    }
+
+    fn payload_persist_guard(&self, input_bytes: u64, input_rows: u64) -> PayloadPersistGuard {
+        PayloadPersistGuard::new(
+            Arc::clone(&self.payload_observability),
+            Arc::clone(&self.global_payload_observability),
+            input_bytes,
+            input_rows,
+        )
     }
 
     pub fn postgres_runtime_requirements(&self) -> Result<PostgresRuntimeRequirements, String> {
@@ -8700,7 +8931,8 @@ impl DbRepo {
         expected_hash: &str,
         maintain_copy_crc_table: bool,
     ) -> Result<(), String> {
-        self.with_cached_connection(|conn| unsafe {
+        let mut payload_guard = self.payload_persist_guard(file_size, total_blocks);
+        let result = self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
                 self.persist_file_blocks_streaming_on_conn(
@@ -8716,7 +8948,11 @@ impl DbRepo {
                 )?;
                 self.enforce_payload_quota_on_conn(conn, quota_bytes, None)
             })
-        })
+        });
+        if result.is_ok() {
+            payload_guard.mark_success();
+        }
+        result
     }
 
     pub fn persist_file_blocks(
@@ -8772,7 +9008,9 @@ impl DbRepo {
         maintain_copy_crc_table: bool,
         capacity_reservation_token: Option<&str>,
     ) -> Result<(), String> {
-        self.with_cached_connection(|conn| unsafe {
+        let mut payload_guard =
+            self.payload_persist_guard(persist_block_input_bytes(blocks), blocks.len() as u64);
+        let result = self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
                 self.refresh_payload_reservation_on_conn(
@@ -8807,7 +9045,11 @@ impl DbRepo {
                 }?;
                 self.enforce_payload_quota_on_conn(conn, quota_bytes, capacity_reservation_token)
             })
-        })
+        });
+        if result.is_ok() {
+            payload_guard.mark_success();
+        }
+        result
     }
 
     unsafe fn lock_payload_quota_on_conn(&self, conn: *mut PGconn) -> Result<Option<u64>, String> {
@@ -9018,7 +9260,9 @@ impl DbRepo {
             return Ok(());
         }
 
-        self.with_cached_connection(|conn| unsafe {
+        let mut payload_guard =
+            self.payload_persist_guard(persist_extent_input_bytes(extents), extents.len() as u64);
+        let result = self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
                 self.refresh_payload_reservation_on_conn(
@@ -9054,7 +9298,11 @@ impl DbRepo {
                 self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
                 self.enforce_payload_quota_on_conn(conn, quota_bytes, capacity_reservation_token)
             })
-        })
+        });
+        if result.is_ok() {
+            payload_guard.mark_success();
+        }
+        result
     }
 
     pub fn persist_new_object_extents(
@@ -9088,7 +9336,9 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        let mut payload_guard =
+            self.payload_persist_guard(persist_extent_input_bytes(extents), extents.len() as u64);
+        let result = self.with_cached_connection(|conn| unsafe {
             transactional_replay_confirmed(
                 conn,
                 |conn| {
@@ -9141,7 +9391,11 @@ impl DbRepo {
                     Ok(target.data_object_id)
                 },
             )
-        })
+        });
+        if result.is_ok() {
+            payload_guard.mark_success();
+        }
+        result
     }
 
     pub fn persist_file_extents_native(

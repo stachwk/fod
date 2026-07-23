@@ -2076,3 +2076,44 @@ eligible for object GC. The current object-keyed merge reproducer completed a
 fresh 16384-row insert in `224.411 ms`, filtered an identical conflict set in
 `365.851 ms`, and updated the changed conflict set in `349.311 ms`, while the
 real `fod.data_blocks` count stayed unchanged.
+
+## 2026-07-23 PostgreSQL Lane Payload Observability Gate
+
+Collected locally from the worktree based on commit `02089d3`, targeting FOD
+`3.2.32`. These are single-run correctness and execution-shape measurements,
+not a throughput baseline for production tuning.
+
+Commands:
+
+```bash
+cargo test --locked -p fod-rust-fuse --test data_blocks_conflict_benchmark -- --nocapture
+FOD_PROFILE_IO=1 make test-fio-sequential-io
+make test-fio-sequential-io-strace
+```
+
+Final dedicated-lane manual probe with one 4 KiB write:
+
+| metric | global | write lane | read/control/lease lanes |
+| --- | ---: | ---: | ---: |
+| peak in-flight payload bytes | 4096 | 4096 | 0 |
+| input payload bytes total | 4096 | 4096 | 0 |
+| input rows total | 1 | 1 | 0 |
+| persistence calls | 2 | 2 | 0 |
+| persistence failures | 0 | 0 | 0 |
+| accounting errors | 0 | 0 | 0 |
+| in-flight bytes after unmount | 0 | 0 | 0 |
+
+Mounted sequential 64 KiB results:
+
+| profile | layout | write | read |
+| --- | --- | ---: | ---: |
+| normal | block | 2065 KiB/s | 4923 KiB/s |
+| normal | extent | 2370 KiB/s | 4571 KiB/s |
+| strace | block | 4267 KiB/s | 1085 KiB/s |
+| strace | extent | 3556 KiB/s | 853 KiB/s |
+
+The 64 MiB data-block conflict run reported `20.03 MiB/s` for the identical
+overwrite, `31.57 MiB/s` for seed creation, and `28.17 MiB/s` for the changed
+overwrite. The mounted payload probe verified counter placement and cleanup;
+the small fio and one-run conflict values remain too noisy for tuning
+decisions.

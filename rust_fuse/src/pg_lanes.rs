@@ -6,10 +6,11 @@ use fod_rust_runtime::ini_config::{
     PgEndpointRole, PgPoolIsolationMode, PgPoolPlan,
 };
 use fod_rust_runtime::{env_var_truthy_with_legacy_alias, RuntimeConfig};
-use rust_hotpath::pg::DbRepo;
+use rust_hotpath::pg::{DbRepo, DbRepoPayloadObservability};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
+use std::sync::Arc;
 
 pub const PG_POOL_LANES_ENV: &str = "FOD_PG_POOL_LANES_ENABLED";
 const LEGACY_DSN_AUTHORITY: &str = "legacy-dsn";
@@ -94,16 +95,45 @@ impl DbRepoLanes {
     ) -> Result<Self, String> {
         let plan = PgPoolPlan::from_total_limit(runtime.pool_max_connections);
         let dedicated = opt_in_enabled && plan.mode == PgPoolIsolationMode::DedicatedLanes;
+        let global_payload_observability = Arc::new(DbRepoPayloadObservability::default());
 
         let storage = if dedicated {
             DbRepoLaneStorage::Dedicated {
-                read: build_lane_repo(conninfo, runtime, &plan, PgConnectionPurpose::Read)?,
-                write: build_lane_repo(conninfo, runtime, &plan, PgConnectionPurpose::Write)?,
-                control: build_lane_repo(conninfo, runtime, &plan, PgConnectionPurpose::Control)?,
-                lease: build_lane_repo(conninfo, runtime, &plan, PgConnectionPurpose::Lease)?,
+                read: build_lane_repo(
+                    conninfo,
+                    runtime,
+                    &plan,
+                    PgConnectionPurpose::Read,
+                    Arc::clone(&global_payload_observability),
+                )?,
+                write: build_lane_repo(
+                    conninfo,
+                    runtime,
+                    &plan,
+                    PgConnectionPurpose::Write,
+                    Arc::clone(&global_payload_observability),
+                )?,
+                control: build_lane_repo(
+                    conninfo,
+                    runtime,
+                    &plan,
+                    PgConnectionPurpose::Control,
+                    Arc::clone(&global_payload_observability),
+                )?,
+                lease: build_lane_repo(
+                    conninfo,
+                    runtime,
+                    &plan,
+                    PgConnectionPurpose::Lease,
+                    global_payload_observability,
+                )?,
             }
         } else {
-            DbRepoLaneStorage::Shared(DbRepo::with_runtime(conninfo, runtime)?)
+            DbRepoLaneStorage::Shared(DbRepo::with_runtime_and_global_payload_observability(
+                conninfo,
+                runtime,
+                global_payload_observability,
+            )?)
         };
 
         Ok(Self {
@@ -301,12 +331,14 @@ fn log_lane_observability(stage: &str, repositories: &[(&str, DbRepo)]) {
         ),
     }
 
+    let mut global_payload_logged = false;
     for (lane, repo) in repositories {
         match repo.observability_snapshot() {
             Ok(snapshot) => {
                 let pool = snapshot.pool;
+                let payload = snapshot.payload;
                 log::info!(
-                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled=false",
+                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled=false",
                     stage,
                     lane,
                     pool.connection_limit,
@@ -330,9 +362,39 @@ fn log_lane_observability(stage: &str, repositories: &[(&str, DbRepo)]) {
                     pool.operation_micros_total,
                     pool.operation_micros_max,
                     pool.replay_count,
+                    payload.in_flight_bytes,
+                    payload.peak_in_flight_bytes,
+                    payload.accounting_errors,
+                    payload.persist_operation_count,
+                    payload.persist_operation_failures,
+                    payload.persist_input_rows_total,
+                    payload.persist_input_rows_max,
+                    payload.persist_input_bytes_total,
+                    payload.persist_input_bytes_max,
+                    payload.persist_micros_total,
+                    payload.persist_micros_max,
                     snapshot.persist_buffer_chunk_blocks,
                     snapshot.persist_copy_send_buffer_bytes,
                 );
+                if !global_payload_logged {
+                    let global_payload = snapshot.global_payload;
+                    log::info!(
+                        "FOD PostgreSQL global payload observability: stage={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={}",
+                        stage,
+                        global_payload.in_flight_bytes,
+                        global_payload.peak_in_flight_bytes,
+                        global_payload.accounting_errors,
+                        global_payload.persist_operation_count,
+                        global_payload.persist_operation_failures,
+                        global_payload.persist_input_rows_total,
+                        global_payload.persist_input_rows_max,
+                        global_payload.persist_input_bytes_total,
+                        global_payload.persist_input_bytes_max,
+                        global_payload.persist_micros_total,
+                        global_payload.persist_micros_max,
+                    );
+                    global_payload_logged = true;
+                }
             }
             Err(err) => log::warn!(
                 "FOD PostgreSQL lane observability unavailable: stage={} lane={} error={}",
@@ -426,10 +488,15 @@ fn build_lane_repo(
     runtime: &RuntimeConfig,
     plan: &PgPoolPlan,
     purpose: PgConnectionPurpose,
+    global_payload_observability: Arc<DbRepoPayloadObservability>,
 ) -> Result<DbRepo, String> {
     let mut lane_runtime = runtime.clone();
     lane_runtime.pool_max_connections = plan.limit_for(purpose) as u64;
-    DbRepo::with_runtime(conninfo, &lane_runtime)
+    DbRepo::with_runtime_and_global_payload_observability(
+        conninfo,
+        &lane_runtime,
+        global_payload_observability,
+    )
 }
 
 fn postgres_endpoint_probe(conninfo: &str) -> Result<PgEndpointProbe, String> {

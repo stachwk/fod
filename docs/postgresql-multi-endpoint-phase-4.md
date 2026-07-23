@@ -5,8 +5,8 @@
 Phase 4 wires the phase-3 health and pool-plan contracts into `fod-rust-fuse`
 startup without enabling multi-endpoint routing. Stage 1 mounted correctness is
 complete. Stage 2 now has its first observability foundation for connection
-pools and process memory; payload flow, server memory, queueing, memory-policy,
-and endpoint-routing stages remain separate work.
+pools, process memory, and payload persistence. Server memory, logical
+queueing, memory-policy, and endpoint-routing stages remain separate work.
 
 The feature is opt-in through:
 
@@ -99,7 +99,9 @@ boundaries:
 
 - mounted `CREATE` succeeds and returns an empty-file attribute row;
 - the first write persists through the dedicated write lane;
-- `fsync` completes after persistence.
+- the write is persisted before the test's `sync_all()` call returns; the
+  separate missing explicit fuser `fsync` callback remains tracked as a
+  filesystem-durability follow-up.
 
 The diagnostic run also found a malformed local test database whose initialized
 schema had an empty `config` table. That state is not accepted as an empty-file
@@ -203,7 +205,7 @@ Record at least:
 - [x] FOD process RSS snapshots after startup and after mount completion.
 - [ ] Queued logical tasks classified by operation and lane. Pool acquisition
   waiters are not yet a logical operation queue.
-- [ ] In-flight payload bytes globally and per lane.
+- [x] In-flight payload bytes globally and per lane.
 - [ ] Observed batch sizes plus bytes and files completed per second.
 - [ ] Transaction-specific latency and error counts. The current repository
   operation timer may include more or less than one SQL transaction.
@@ -223,6 +225,23 @@ automatic routing.
 diagnostic execution count, not yet a health score: operation classification
 must separate expected application-level errors from connection, transaction,
 and server failures before endpoint selection can consume it.
+
+Payload persistence has a separate cancellation-safe observation scope around
+each block, extent, or streaming-file persistence call. The scope starts before
+connection-pool acquisition and remains active across one bounded replay, so
+its current and peak byte counts represent logical payload attributed to work
+that FOD is actively trying to persist. Each dedicated lane has its own
+tracker, and all lane repositories also share one process-wide tracker.
+
+The payload snapshot records operation/failure counts, cumulative and maximum
+input rows and bytes, and cumulative and maximum elapsed time. A streaming
+file import attributes its logical file size to the operation even though its
+resident application buffer remains bounded by the configured chunk and COPY
+send-buffer sizes. These counters therefore describe persistence flow, not
+process RSS or an enforced memory reservation. Actual database batch sizes,
+completed files per second, and transaction-only latency remain open
+measurements. Counter overflow or release underflow increments the explicit
+`payload_accounting_errors` diagnostic instead of silently wrapping a value.
 
 ### Stage 3: separate queues from backend pools
 
@@ -341,9 +360,11 @@ opt_in_enabled=true
 
 ## Next phase
 
-Stage 2 adds observability before operation routing or concurrency tuning.
-After those measurements are trustworthy, operation classification inside the
-FUSE layer may proceed:
+The next Stage 2 increment should classify logical operations and add
+transaction-only latency, heartbeat delay, periodic process RSS, and
+PostgreSQL-side memory measurements before operation routing or concurrency
+tuning. After those measurements are trustworthy, operation classification
+inside the FUSE layer may proceed:
 
 - direct read-only methods to the read lane;
 - keep all mutations on the write lane;

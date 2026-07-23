@@ -2276,3 +2276,26 @@ Base commit at execution time: `4499dd71b9004e43e5bec9c029b7321b268369dd`
 - `make test-version` (`7` passed for FOD `3.2.30`)
 - `cargo fmt --all -- --check` (passed)
 - `git diff --check` (passed)
+
+Execution date: `2026-07-23`
+
+Base commit at execution time: `02089d3bb4d694a3ea10fe67f9d5c24083ed135e`
+
+- MemPalace search in wing `myai` for the next PostgreSQL multi-endpoint phase, health/scoring work, queueing, and the phase-4 Stage 2 backlog
+- inspection of `docs/postgresql-multi-endpoint-phase-4.md`, `TODO.md`, `rust_fuse/src/pg_lanes.rs`, `rust_fuse/tests/pg_lanes_mount.rs`, `rust_fuse/tests/support.rs`, and persistence entrypoints in `rust_hotpath/src/pg.rs`
+- `cargo fmt --all`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed before the version increment)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --offline` (passed for FOD `3.2.32` and regenerated workspace package versions in `Cargo.lock`)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for the final payload-accounting implementation)
+- `cargo test --locked -p fod-rust-runtime` (`25` passed)
+- `cargo test --locked -p fod-rust-hotpath` (complete unit/integration/doc-test suite passed, including `15` transactional replay cases)
+- `cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse` (`31` passed)
+- `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (passed twice during implementation)
+- `cargo test --locked -p fod-rust-fuse --test data_blocks_conflict_benchmark -- --nocapture` (three 64 MiB seed/no-op-overwrite/changed-overwrite cases passed at `31.57`, `20.03`, and `28.17 MiB/s`)
+- manual dedicated-lane mount/write/unmount probes using `/tmp/fod-payload-observability-*`; the final 4096-byte probe reported write/global peak `4096`, total `4096`, one input row, two persistence calls, zero failures, zero current in-flight bytes, and zero accounting errors; the created file and temporary mountpoints were removed
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (passed: block write/read `2065/4923 KiB/s`, extent write/read `2370/4571 KiB/s`)
+- `make test-fio-sequential-io-strace` (passed: block write/read `4267/1085 KiB/s`, extent write/read `3556/853 KiB/s`; retained the known post-unmount `EINVAL` warning)
+- `make test-version` (`7` passed for FOD `3.2.32`)
+- corrected the concurrent `BENCHMARKS.md` section to use only the results from this verified worktree run
+- final `cargo fmt --all`, `cargo fmt --all -- --check`, warning-free locked workspace check, and `git diff --check` (passed)
+- final `findmnt`, FOD process, and target ownership inspection (no active FOD mount or process and no non-user-owned target artifact)
