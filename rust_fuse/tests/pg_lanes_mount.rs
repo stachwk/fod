@@ -4,7 +4,8 @@
 mod support;
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -165,9 +166,28 @@ fn opt_in_pg_lanes_mount_and_serve_basic_filesystem_operations() -> Result<(), S
             .map_err(|err| format!("create_dir_all {} failed: {err}", directory.display())),
     )?;
 
-    if let Err(err) = fs::write(&source, payload) {
+    let mut created = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&source)
+    {
+        Ok(file) => file,
+        Err(err) => {
+            return Err(format!(
+                "create {} failed: {err}\nPostgreSQL state after failed mounted create:\n{}\nFOD mount log (last 400 lines):\n{}",
+                source.display(),
+                failed_create_database_diagnostics(
+                    &directory_logical_path,
+                    &source_logical_path
+                ),
+                mounted.log_tail(400)
+            ));
+        }
+    };
+
+    if let Err(err) = created.write_all(payload) {
         return Err(format!(
-            "write {} failed: {err}\nPostgreSQL state after failed mounted create:\n{}\nFOD mount log (last 400 lines):\n{}",
+            "write_all {} failed after successful create: {err}\nPostgreSQL state after failed mounted write:\n{}\nFOD mount log (last 400 lines):\n{}",
             source.display(),
             failed_create_database_diagnostics(
                 &directory_logical_path,
@@ -176,6 +196,19 @@ fn opt_in_pg_lanes_mount_and_serve_basic_filesystem_operations() -> Result<(), S
             mounted.log_tail(400)
         ));
     }
+
+    if let Err(err) = created.sync_all() {
+        return Err(format!(
+            "sync_all {} failed after successful create and write: {err}\nPostgreSQL state after failed mounted fsync:\n{}\nFOD mount log (last 400 lines):\n{}",
+            source.display(),
+            failed_create_database_diagnostics(
+                &directory_logical_path,
+                &source_logical_path
+            ),
+            mounted.log_tail(400)
+        ));
+    }
+    drop(created);
 
     let observed = with_mount_log(
         &mounted,
