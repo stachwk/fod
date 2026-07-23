@@ -3,11 +3,14 @@
 
 mod support;
 
+use std::collections::HashMap;
 use std::fs;
 use std::thread::sleep;
 use std::time::Duration;
 
-use support::{unique_suffix, MountedFs};
+use fod_rust_runtime::RuntimeConfig;
+use rust_hotpath::pg::DbRepo;
+use support::{conninfo_from_config, unique_suffix, MountedFs};
 
 fn with_mount_log<T>(mounted: &MountedFs, result: Result<T, String>) -> Result<T, String> {
     result.map_err(|err| {
@@ -16,6 +19,39 @@ fn with_mount_log<T>(mounted: &MountedFs, result: Result<T, String>) -> Result<T
             mounted.log_tail(400)
         )
     })
+}
+
+fn direct_write_lane_create_preflight() -> Result<(), String> {
+    let mut values = HashMap::new();
+    values.insert("pool_max_connections".to_string(), "6".to_string());
+    let runtime = RuntimeConfig::from_runtime_map(&values)
+        .map_err(|err| format!("direct write-lane runtime config failed: {err}"))?;
+    let conninfo = conninfo_from_config()
+        .map_err(|err| format!("direct write-lane conninfo failed: {err}"))?;
+    let repo = DbRepo::with_runtime(&conninfo, &runtime)
+        .map_err(|err| format!("direct write-lane repo creation failed: {err}"))?;
+
+    let suffix = unique_suffix();
+    let directory_name = format!("pg-lanes-direct-{suffix}");
+    let directory_path = format!("/{directory_name}");
+    let file_path = format!("{directory_path}/source.txt");
+    let uid = unsafe { libc::geteuid() };
+    let gid = unsafe { libc::getegid() };
+
+    let directory_id = repo
+        .create_directory(None, &directory_name, 0o775, uid, gid, &directory_path)
+        .map_err(|err| format!("direct write-lane create_directory failed: {err}"))?;
+    repo.create_file(
+        Some(directory_id),
+        "source.txt",
+        0o100664,
+        uid,
+        gid,
+        &file_path,
+    )
+    .map_err(|err| format!("direct write-lane create_file failed: {err}"))?;
+
+    Ok(())
 }
 
 fn wait_for_lane_diagnostics(mounted: &MountedFs) -> Result<String, String> {
@@ -42,6 +78,8 @@ fn wait_for_lane_diagnostics(mounted: &MountedFs) -> Result<String, String> {
 
 #[test]
 fn opt_in_pg_lanes_mount_and_serve_basic_filesystem_operations() -> Result<(), String> {
+    direct_write_lane_create_preflight()?;
+
     let mounted = MountedFs::start_with_env(
         "pg-lanes-opt-in",
         &[
