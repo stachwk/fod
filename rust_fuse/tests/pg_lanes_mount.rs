@@ -77,10 +77,32 @@ fn failed_create_database_diagnostics(directory_path: &str, file_path: &str) -> 
         let file = repo
             .resolve_path(file_path)
             .map_err(|err| format!("resolve file failed: {err}"))?;
-        let attrs_len = repo
+        let attrs_blob = repo
             .fetch_path_attrs_blob(file_path)
-            .map_err(|err| format!("fetch file attrs failed: {err}"))?
-            .map(|blob| blob.len());
+            .map_err(|err| format!("fetch file attrs failed: {err}"))?;
+        let attrs_len = attrs_blob.as_ref().map(Vec::len);
+        let attrs_fields = attrs_blob.as_ref().map(|blob| {
+            blob.split(|byte| *byte == 0)
+                .map(|field| String::from_utf8_lossy(field).to_string())
+                .collect::<Vec<_>>()
+        });
+        let (file_link_count, special_metadata) = match file.entry_id {
+            Some(file_id) => {
+                let links = repo
+                    .count_file_links(file_id)
+                    .map(|count| format!("ok count={count}"))
+                    .unwrap_or_else(|err| format!("error={err}"));
+                let special = repo
+                    .get_special_file_metadata(file_id)
+                    .map(|value| format!("ok value={value:?}"))
+                    .unwrap_or_else(|err| format!("error={err}"));
+                (links, special)
+            }
+            None => (
+                "skipped: missing file id".to_string(),
+                "skipped: missing file id".to_string(),
+            ),
+        };
 
         let uid = unsafe { libc::geteuid() };
         let gid = unsafe { libc::getegid() };
@@ -108,7 +130,7 @@ fn failed_create_database_diagnostics(directory_path: &str, file_path: &str) -> 
         };
 
         Ok(format!(
-            "directory={directory:?}\nfile={file:?}\nfile_attrs_blob_len={attrs_len:?}\ndirect_create_after_fuse={direct_create}"
+            "directory={directory:?}\nfile={file:?}\nfile_attrs_blob_len={attrs_len:?}\nfile_attrs_fields={attrs_fields:?}\nfile_link_count={file_link_count}\nspecial_metadata={special_metadata}\ndirect_create_after_fuse={direct_create}"
         ))
     })();
 
