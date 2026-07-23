@@ -79,6 +79,18 @@ The runtime health snapshot continues to expose `automatic_routing_enabled = fal
 
 The write lane is used for the existing mount repository so the operation semantics are unchanged. The read and lease repositories are retained as explicit capacity boundaries but are not yet selected by individual filesystem operations.
 
+## Mounted integration coverage
+
+`rust_fuse/tests/pg_lanes_mount.rs` starts a real FUSE mount with dedicated lanes enabled and a deterministic pool limit of ten. The smoke test:
+
+- verifies dedicated-lane startup diagnostics;
+- verifies that the startup snapshot is read through the control lane;
+- verifies that the three non-write repositories remain alive;
+- creates, writes, reads, renames, stats, and removes a file through the mounted filesystem;
+- cleans up its unique mounted path before unmounting.
+
+This test proves that opt-in lane construction is compatible with basic mounted filesystem behavior. It does not yet route individual read, lock, or heartbeat operations away from the write-lane mount repository.
+
 ## Test isolation
 
 Existing FUSE benchmarks that validate the production compatibility path set:
@@ -90,8 +102,6 @@ FOD_PG_POOL_LANES_ENABLED=0
 explicitly when launching `fod-bootstrap`. This prevents a developer shell or test environment from accidentally converting a legacy regression test into an opt-in lane test.
 
 The data-block conflict benchmark also appends the last 200 lines of its mount log to filesystem-operation failures. A raw `EIO` is therefore accompanied by the underlying FUSE or PostgreSQL diagnostic instead of being lost when the temporary mount workspace is removed.
-
-Dedicated-lane behavior is covered separately by the `pg_lanes` unit tests and must later receive its own explicit mounted integration suite.
 
 ## Validation targets
 
@@ -106,20 +116,22 @@ cargo test --locked -p fod-rust-mkfs
 make test-version
 ```
 
-The conflict benchmark should be run first because it exercises mount startup and large file creation:
+Run the dedicated-lane mounted smoke explicitly:
+
+```bash
+cargo test --locked \
+  -p fod-rust-fuse \
+  --test pg_lanes_mount \
+  -- --nocapture
+```
+
+The conflict benchmark exercises the unchanged compatibility path and large file creation:
 
 ```bash
 cargo test --locked \
   -p fod-rust-fuse \
   --test data_blocks_conflict_benchmark \
   -- --nocapture
-```
-
-Live startup should then be tested twice:
-
-```bash
-FOD_PG_POOL_LANES_ENABLED=false ...
-FOD_PG_POOL_LANES_ENABLED=true ...
 ```
 
 Expected log fields for the default total of ten in opt-in mode:
