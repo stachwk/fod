@@ -171,22 +171,16 @@ impl DbRepoLanes {
 
     pub fn probe_health(&self, conninfo: &str) -> Result<PgEndpointHealthSnapshot, String> {
         let result = postgres_endpoint_probe(conninfo);
-        self.health.record_probe_result(
-            LEGACY_DSN_AUTHORITY,
-            PgEndpointRole::Unknown,
-            result,
-        )
+        self.health
+            .record_probe_result(LEGACY_DSN_AUTHORITY, PgEndpointRole::Unknown, result)
     }
 
     pub fn record_connection_failure(
         &self,
         error: &str,
     ) -> Result<PgEndpointHealthSnapshot, String> {
-        self.health.record_failure(
-            LEGACY_DSN_AUTHORITY,
-            PgEndpointRole::Unknown,
-            error,
-        )
+        self.health
+            .record_failure(LEGACY_DSN_AUTHORITY, PgEndpointRole::Unknown, error)
     }
 }
 

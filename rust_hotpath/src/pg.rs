@@ -4572,19 +4572,48 @@ impl DbRepo {
     }
 
     pub fn startup_snapshot(&self) -> Result<StartupSnapshot, String> {
-        let block_size = match self.query_config_value("block_size") {
-            Ok(value) => value.and_then(|value| value.trim().parse::<u32>().ok()),
-            Err(_) => None,
-        };
-        let is_in_recovery = self.is_in_recovery().unwrap_or(false);
-        let schema_version = self.schema_version().unwrap_or(None);
-        let schema_is_initialized = self.schema_is_initialized().unwrap_or(false);
+        let schema_is_initialized = self.schema_is_initialized()?;
+        let is_in_recovery = self.is_in_recovery()?;
+
+        if !schema_is_initialized {
+            return Ok(StartupSnapshot {
+                block_size: None,
+                is_in_recovery,
+                schema_version: None,
+                schema_is_initialized: false,
+            });
+        }
+
+        let block_size_value = self
+            .query_config_value("block_size")?
+            .ok_or_else(|| "initialized FOD schema is missing config.block_size".to_string())?;
+        let block_size = block_size_value
+            .trim()
+            .parse::<u32>()
+            .map_err(|err| format!("invalid config.block_size value: {err}"))?;
+        if block_size == 0 {
+            return Err("config.block_size must be greater than zero".to_string());
+        }
+
+        let max_fs_size_bytes_value =
+            self.query_config_value("max_fs_size_bytes")?
+                .ok_or_else(|| {
+                    "initialized FOD schema is missing config.max_fs_size_bytes".to_string()
+                })?;
+        max_fs_size_bytes_value
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid config.max_fs_size_bytes value: {err}"))?;
+
+        let schema_version = self
+            .schema_version()?
+            .ok_or_else(|| "initialized FOD schema is missing schema version".to_string())?;
 
         Ok(StartupSnapshot {
-            block_size,
+            block_size: Some(block_size),
             is_in_recovery,
-            schema_version,
-            schema_is_initialized,
+            schema_version: Some(schema_version),
+            schema_is_initialized: true,
         })
     }
 

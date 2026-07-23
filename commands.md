@@ -2185,3 +2185,36 @@ Base commit at execution time: `81eec1a`
 - `cargo test -p fod-rust-fuse --no-run` (passed)
 - `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
 - `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
+
+Execution date: `2026-07-23`
+
+Base commit at execution time: `2c04860`
+
+- MemPalace searches in wing `myai` for the next FOD implementation stage, payload-capacity work, and open implementation follow-ups
+- `git status --short --branch`
+- `git log -8 --oneline --decorate`
+- `git diff -- rust_fuse/src/fs.rs rust_fuse/src/pg_lanes.rs rust_fuse/src/write_buffer.rs`
+- `rg -n '^\s*- \[ \]' TODO.md docs/*.md ROADMAP.md`
+- inspection of `TODO.md`, `docs/postgresql-multi-endpoint-phase-4.md`, `rust_fuse/tests/pg_lanes_mount.rs`, `rust_fuse/src/fs.rs`, `rust_fuse/src/pg_lanes.rs`, `rust_fuse/src/write_buffer.rs`, and `rust_hotpath/src/pg.rs`
+- `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (first run exposed an empty local `fod.config`; after inserting only missing `block_size` and `max_fs_size_bytes`, passed)
+- local PostgreSQL inspection of schema version and `fod.config` (schema `19`; initially zero config rows)
+- local PostgreSQL upsert of only missing test configuration rows: `block_size=4096`, `max_fs_size_bytes=10737418240`
+- `cargo fmt --all`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (expected pre-regeneration failure after version change)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --offline` (passed and regenerated FOD package versions in `Cargo.lock`)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed)
+- parallel package-test attempt for runtime, hotpath, FUSE, and mkfs (invalid combined run because mkfs schema tests rebuild the same local `fod` schema; runtime and mkfs passed, database-dependent hotpath/FUSE cases were rerun sequentially)
+- `make init` (restored a current local schema after mkfs schema tests)
+- `cargo test --locked -p fod-rust-hotpath` (passed)
+- `cargo test --locked -p fod-rust-fuse` (31 binary tests, three conflict tests, large-copy, and large-file tests passed; stopped only at four root-required locking tests)
+- `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (passed)
+- `make test-locking` (`4` sudo-only tests passed)
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (block and opt-in extent cases passed)
+- `make test-fio-sequential-io-strace` (block and opt-in extent cases passed)
+- reversible local PostgreSQL startup-validation probes: temporarily removed each required config row, verified pre-mount rejection, and restored the original values
+- local PostgreSQL verification that `block_size=4096` and `max_fs_size_bytes=10737418240` were restored
+- `make test-version` (`7` passed for `3.2.28`)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
+- `fusermount3 -u /tmp/fod-rust-fuse-4177110-1784836179366831335-data-blocks-conflict-noop-overwrite/mount` (removed the stale mount left by the invalid parallel run)
+- final `findmnt`, process, target-owner, and database-config checks (no FOD mounts or daemons, no non-user-owned target artifacts, both required config values restored)

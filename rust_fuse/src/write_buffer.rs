@@ -603,7 +603,20 @@ impl FodFuse {
                     live.copy_dedupe_crc_table,
                     capacity_reservation_token,
                 )
-                .map_err(|err| persist_error_errno(&err))
+                .map_err(|err| {
+                    let errno = persist_error_errno(&err);
+                    warn!(
+                        "FOD block persistence failed file_id={} file_size={} total_blocks={} truncate_pending={} rows={} errno={} err={}",
+                        state.file_id,
+                        state.file_size,
+                        execution_plan.total_blocks,
+                        state.truncate_pending,
+                        rows.len(),
+                        errno,
+                        err
+                    );
+                    errno
+                })
             }
             PersistPayloadPlan::Extents(extents) => {
                 let rows = self.prepare_persist_extent_rows_from_extent_ranges(
@@ -628,7 +641,20 @@ impl FodFuse {
                     live.copy_dedupe_crc_table,
                     capacity_reservation_token,
                 )
-                .map_err(|err| persist_error_errno(&err))
+                .map_err(|err| {
+                    let errno = persist_error_errno(&err);
+                    warn!(
+                        "FOD extent persistence failed file_id={} file_size={} total_blocks={} truncate_pending={} rows={} errno={} err={}",
+                        state.file_id,
+                        state.file_size,
+                        execution_plan.total_blocks,
+                        state.truncate_pending,
+                        rows.len(),
+                        errno,
+                        err
+                    );
+                    errno
+                })
             }
         }
     }

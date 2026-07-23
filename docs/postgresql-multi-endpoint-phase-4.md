@@ -2,7 +2,10 @@
 
 ## Status
 
-Phase 4 wires the phase-3 health and pool-plan contracts into `fod-rust-fuse` startup without enabling multi-endpoint routing.
+Phase 4 wires the phase-3 health and pool-plan contracts into `fod-rust-fuse`
+startup without enabling multi-endpoint routing. Stage 1 mounted correctness is
+complete; later observability, queueing, memory-policy, and endpoint-routing
+stages remain separate work.
 
 The feature is opt-in through:
 
@@ -89,7 +92,20 @@ The write lane is used for the existing mount repository. The read and lease rep
 - create, write, read, rename, stat, and remove operations through the mounted filesystem;
 - cleanup of the unique mounted path before unmounting.
 
-The mounted smoke is currently a blocking validation target rather than completed proof. Lane startup and direct `DbRepo` creation succeed, but the mounted `CREATE` path still returns `EIO`. Operation routing and release version advancement must remain blocked until the mounted create failure is diagnosed and the full smoke passes locally.
+The mounted smoke now passes the complete create, write, sync, read, rename,
+stat, remove, and cleanup sequence. The investigation separated three
+boundaries:
+
+- mounted `CREATE` succeeds and returns an empty-file attribute row;
+- the first write persists through the dedicated write lane;
+- `fsync` completes after persistence.
+
+The diagnostic run also found a malformed local test database whose initialized
+schema had an empty `config` table. That state is not accepted as an empty-file
+allocation. `startup_snapshot` now rejects an initialized schema with missing
+or invalid `config.block_size`, missing or invalid
+`config.max_fs_size_bytes`, or a missing schema-version row before mounting,
+instead of deferring the failure to the first payload write.
 
 ## Test isolation
 
@@ -163,11 +179,12 @@ The control and lease lanes should use:
 
 Before increasing concurrency or routing individual operations:
 
-- diagnose the mounted `CREATE` `EIO`;
-- retain the full underlying PostgreSQL/FUSE error in diagnostics;
-- prove create, write, read, rename, stat, remove, and cleanup through `pg_lanes_mount`;
-- rerun the unchanged compatibility-path regressions;
-- keep multi-endpoint routing disabled.
+- [x] Diagnose the mounted `CREATE`/write `EIO`.
+- [x] Retain the full underlying PostgreSQL/FUSE error in diagnostics.
+- [x] Prove create, write, read, rename, stat, remove, and cleanup through
+  `pg_lanes_mount`.
+- [x] Rerun the unchanged compatibility-path regressions.
+- [x] Keep multi-endpoint routing disabled.
 
 ### Stage 2: add observability before tuning
 
@@ -302,7 +319,9 @@ opt_in_enabled=true
 
 ## Next phase
 
-The immediate next step is to restore mounted `CREATE` correctness and complete the lane smoke. After that, operation classification inside the FUSE layer may proceed:
+Stage 2 adds observability before operation routing or concurrency tuning.
+After those measurements are trustworthy, operation classification inside the
+FUSE layer may proceed:
 
 - direct read-only methods to the read lane;
 - keep all mutations on the write lane;
