@@ -2218,3 +2218,25 @@ Base commit at execution time: `2c04860`
 - `git diff --check` (passed)
 - `fusermount3 -u /tmp/fod-rust-fuse-4177110-1784836179366831335-data-blocks-conflict-noop-overwrite/mount` (removed the stale mount left by the invalid parallel run)
 - final `findmnt`, process, target-owner, and database-config checks (no FOD mounts or daemons, no non-user-owned target artifacts, both required config values restored)
+
+Execution date: `2026-07-23`
+
+Base commit at execution time: `4499dd71b9004e43e5bec9c029b7321b268369dd`
+
+- MemPalace searches in wing `myai` for PostgreSQL lane observability, pool wait metrics, and the phase-4 stage-2 plan
+- inspection of `docs/postgresql-multi-endpoint-phase-4.md`, `TODO.md`, `conclusions.md`, `commands.md`, `rust_hotpath/src/pg.rs`, `rust_fuse/src/pg_lanes.rs`, `rust_fuse/src/main.rs`, and `rust_runtime/src/ini_config/pg_runtime.rs`
+- `cargo fmt --all`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed before the FOD version increment)
+- `git diff --check` (passed before documentation and version updates)
+- `cargo fmt --all`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.29`)
+- `cargo test --locked -p fod-rust-hotpath` (passed: `80` unit tests and the complete hotpath integration/doc-test suite)
+- `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (passed)
+- parallel temporary `/tmp` log watcher plus a second `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (mounted test passed; watcher intentionally ended through `timeout` after capturing `post-startup` and `post-mount` lane snapshots)
+- captured lane result: control `operation_count=6`, write `operation_count=137`, read/lease `operation_count=0`, all lanes `peak_queued_acquisitions=0`, process RSS `15921152` then `18259968` bytes
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (passed for block and opt-in extent layouts)
+- `make test-fio-sequential-io-strace` (passed for block and opt-in extent layouts)
+- `make test-version` (`7` passed for FOD `3.2.29`)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
+- local mount/process/target-owner inspection (no stale FOD mount or daemon and no non-user-owned target artifact observed)

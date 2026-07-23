@@ -131,6 +131,23 @@ impl DbRepoLanes {
         }
     }
 
+    fn observability_repositories(&self) -> Vec<(&'static str, DbRepo)> {
+        match &self.storage {
+            DbRepoLaneStorage::Shared(repo) => vec![("shared", repo.clone())],
+            DbRepoLaneStorage::Dedicated {
+                read,
+                write,
+                control,
+                lease,
+            } => vec![
+                (PgConnectionPurpose::Read.as_str(), read.clone()),
+                (PgConnectionPurpose::Write.as_str(), write.clone()),
+                (PgConnectionPurpose::Control.as_str(), control.clone()),
+                (PgConnectionPurpose::Lease.as_str(), lease.clone()),
+            ],
+        }
+    }
+
     pub fn into_mount_repo(self) -> (DbRepo, DbRepoLaneKeepalive) {
         match self.storage {
             DbRepoLaneStorage::Shared(repo) => (
@@ -234,14 +251,20 @@ pub fn mount_with_lanes(
         ),
     }
 
+    let observability_repositories = lanes.observability_repositories();
     let control_repo = lanes.repo_for(PgConnectionPurpose::Control);
     log_postgres_diagnostics(control_repo);
     log::debug!("FOD reading startup snapshot through control lane");
-    let snapshot = control_repo.startup_snapshot().map_err(|err| {
-        let _ = lanes.record_connection_failure(&err);
-        format!("failed to read startup snapshot: {err}")
-    })?;
+    let snapshot = match control_repo.startup_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            let _ = lanes.record_connection_failure(&err);
+            log_lane_observability("startup-failed", &observability_repositories);
+            return Err(format!("failed to read startup snapshot: {err}"));
+        }
+    };
     log::debug!("FOD startup snapshot={:?}", snapshot);
+    log_lane_observability("post-startup", &observability_repositories);
     let settings =
         crate::startup::FodFuseSettings::from_runtime(runtime, &snapshot, requested_readonly);
     let (mount_repo, keepalive) = lanes.into_mount_repo();
@@ -250,8 +273,90 @@ pub fn mount_with_lanes(
         keepalive.active_lane_count()
     );
     let result = crate::startup::mount_fuse(mount_repo, runtime, settings, mountpoint, &snapshot);
+    log_lane_observability("post-mount", &observability_repositories);
     drop(keepalive);
     result
+}
+
+fn log_lane_observability(stage: &str, repositories: &[(&str, DbRepo)]) {
+    match current_process_rss_bytes() {
+        Ok(process_rss_bytes) => log::info!(
+            "FOD PostgreSQL lane process observability: stage={} process_rss_bytes={}",
+            stage,
+            process_rss_bytes
+        ),
+        Err(err) => log::warn!(
+            "FOD PostgreSQL lane process observability unavailable: stage={} error={}",
+            stage,
+            err
+        ),
+    }
+
+    for (lane, repo) in repositories {
+        match repo.observability_snapshot() {
+            Ok(snapshot) => {
+                let pool = snapshot.pool;
+                log::info!(
+                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled=false",
+                    stage,
+                    lane,
+                    pool.connection_limit,
+                    pool.live_connections,
+                    pool.idle_connections(),
+                    pool.idle_write_connections,
+                    pool.idle_control_connections,
+                    pool.active_connections,
+                    pool.queued_acquisitions,
+                    pool.peak_active_connections,
+                    pool.peak_queued_acquisitions,
+                    pool.acquisition_count,
+                    pool.acquisition_wait_micros_total,
+                    pool.acquisition_wait_micros_max,
+                    pool.connection_create_count,
+                    pool.connection_create_failures,
+                    pool.connection_create_micros_total,
+                    pool.connection_create_micros_max,
+                    pool.operation_count,
+                    pool.operation_failures,
+                    pool.operation_micros_total,
+                    pool.operation_micros_max,
+                    pool.replay_count,
+                    snapshot.persist_buffer_chunk_blocks,
+                    snapshot.persist_copy_send_buffer_bytes,
+                );
+            }
+            Err(err) => log::warn!(
+                "FOD PostgreSQL lane observability unavailable: stage={} lane={} error={}",
+                stage,
+                lane,
+                err
+            ),
+        }
+    }
+}
+
+fn current_process_rss_bytes() -> Result<u64, String> {
+    let status = std::fs::read_to_string("/proc/self/status")
+        .map_err(|err| format!("unable to read /proc/self/status: {err}"))?;
+    let line = status
+        .lines()
+        .find(|line| line.starts_with("VmRSS:"))
+        .ok_or_else(|| "VmRSS is missing from /proc/self/status".to_string())?;
+    let mut fields = line.split_whitespace();
+    let _label = fields.next();
+    let kib = fields
+        .next()
+        .ok_or_else(|| "VmRSS value is missing".to_string())?
+        .parse::<u64>()
+        .map_err(|err| format!("invalid VmRSS value: {err}"))?;
+    let unit = fields
+        .next()
+        .ok_or_else(|| "VmRSS unit is missing".to_string())?;
+    if unit != "kB" {
+        return Err(format!("unsupported VmRSS unit: {unit}"));
+    }
+    kib.checked_mul(1024)
+        .ok_or_else(|| "VmRSS byte value overflowed".to_string())
 }
 
 fn log_postgres_diagnostics(repo: &DbRepo) {

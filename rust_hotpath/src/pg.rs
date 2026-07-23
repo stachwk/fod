@@ -2550,11 +2550,65 @@ impl ConnectionLane {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoPoolObservabilitySnapshot {
+    pub connection_limit: usize,
+    pub live_connections: usize,
+    pub idle_write_connections: usize,
+    pub idle_control_connections: usize,
+    pub active_connections: usize,
+    pub queued_acquisitions: usize,
+    pub peak_active_connections: usize,
+    pub peak_queued_acquisitions: usize,
+    pub acquisition_count: u64,
+    pub acquisition_wait_micros_total: u64,
+    pub acquisition_wait_micros_max: u64,
+    pub connection_create_count: u64,
+    pub connection_create_failures: u64,
+    pub connection_create_micros_total: u64,
+    pub connection_create_micros_max: u64,
+    pub operation_count: u64,
+    pub operation_failures: u64,
+    pub operation_micros_total: u64,
+    pub operation_micros_max: u64,
+    pub replay_count: u64,
+}
+
+impl DbRepoPoolObservabilitySnapshot {
+    pub fn idle_connections(&self) -> usize {
+        self.idle_write_connections
+            .saturating_add(self.idle_control_connections)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoObservabilitySnapshot {
+    pub pool: DbRepoPoolObservabilitySnapshot,
+    pub persist_buffer_chunk_blocks: u64,
+    pub persist_copy_send_buffer_bytes: usize,
+}
+
 #[derive(Debug, Default)]
 struct SharedConnectionPoolState {
     cached_conn: Vec<usize>,
     control_cached_conn: Vec<usize>,
     live_connections: usize,
+    active_connections: usize,
+    queued_acquisitions: usize,
+    peak_active_connections: usize,
+    peak_queued_acquisitions: usize,
+    acquisition_count: u64,
+    acquisition_wait_micros_total: u64,
+    acquisition_wait_micros_max: u64,
+    connection_create_count: u64,
+    connection_create_failures: u64,
+    connection_create_micros_total: u64,
+    connection_create_micros_max: u64,
+    operation_count: u64,
+    operation_failures: u64,
+    operation_micros_total: u64,
+    operation_micros_max: u64,
+    replay_count: u64,
 }
 
 #[derive(Debug)]
@@ -2598,21 +2652,85 @@ impl SharedConnectionPool {
         cache.push(conn as usize);
     }
 
+    fn duration_micros(elapsed: Duration) -> u64 {
+        elapsed.as_micros().min(u64::MAX as u128) as u64
+    }
+
+    fn finish_acquisition(
+        state: &mut SharedConnectionPoolState,
+        started: Instant,
+        queued: bool,
+    ) -> Result<(), String> {
+        if queued {
+            state.queued_acquisitions = state
+                .queued_acquisitions
+                .checked_sub(1)
+                .ok_or_else(|| "connection pool queued acquisition underflow".to_string())?;
+        }
+        state.active_connections = state.active_connections.saturating_add(1);
+        state.peak_active_connections = state.peak_active_connections.max(state.active_connections);
+        state.acquisition_count = state.acquisition_count.saturating_add(1);
+        let elapsed_micros = Self::duration_micros(started.elapsed());
+        state.acquisition_wait_micros_total = state
+            .acquisition_wait_micros_total
+            .saturating_add(elapsed_micros);
+        state.acquisition_wait_micros_max = state.acquisition_wait_micros_max.max(elapsed_micros);
+        Ok(())
+    }
+
+    fn finish_operation(state: &mut SharedConnectionPoolState, elapsed: Duration, failed: bool) {
+        state.operation_count = state.operation_count.saturating_add(1);
+        if failed {
+            state.operation_failures = state.operation_failures.saturating_add(1);
+        }
+        let elapsed_micros = Self::duration_micros(elapsed);
+        state.operation_micros_total = state.operation_micros_total.saturating_add(elapsed_micros);
+        state.operation_micros_max = state.operation_micros_max.max(elapsed_micros);
+    }
+
+    fn release_active(state: &mut SharedConnectionPoolState) -> Result<(), String> {
+        state.active_connections = state
+            .active_connections
+            .checked_sub(1)
+            .ok_or_else(|| "connection pool active connection underflow".to_string())?;
+        Ok(())
+    }
+
+    fn release_live(state: &mut SharedConnectionPoolState) -> Result<(), String> {
+        state.live_connections = state
+            .live_connections
+            .checked_sub(1)
+            .ok_or_else(|| "connection pool live connection underflow".to_string())?;
+        Ok(())
+    }
+
     fn acquire(&self, lane: ConnectionLane) -> Result<ConnectionAcquisition, String> {
+        let started = Instant::now();
         let mut state = self
             .state
             .lock()
             .map_err(|_| "connection pool is poisoned".to_string())?;
+        let mut queued = false;
         loop {
             if let Some(conn) = Self::take_cached(&mut state, lane) {
+                Self::finish_acquisition(&mut state, started, queued)?;
                 return Ok(ConnectionAcquisition::Cached(conn));
             }
             if let Some(conn) = Self::take_cached(&mut state, lane.other()) {
+                Self::finish_acquisition(&mut state, started, queued)?;
                 return Ok(ConnectionAcquisition::Cached(conn));
             }
             if state.live_connections < self.limit {
                 state.live_connections += 1;
+                Self::finish_acquisition(&mut state, started, queued)?;
                 return Ok(ConnectionAcquisition::ReservedSlot);
+            }
+            if !queued {
+                queued = true;
+                state.queued_acquisitions = state.queued_acquisitions.saturating_add(1);
+                state.peak_queued_acquisitions = state
+                    .peak_queued_acquisitions
+                    .max(state.queued_acquisitions);
             }
             state = self
                 .available
@@ -2621,24 +2739,102 @@ impl SharedConnectionPool {
         }
     }
 
-    fn return_cached(&self, lane: ConnectionLane, conn: *mut PGconn) -> Result<(), String> {
+    fn record_connection_created(&self, elapsed: Duration) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "connection pool is poisoned".to_string())?;
+        state.connection_create_count = state.connection_create_count.saturating_add(1);
+        let elapsed_micros = Self::duration_micros(elapsed);
+        state.connection_create_micros_total = state
+            .connection_create_micros_total
+            .saturating_add(elapsed_micros);
+        state.connection_create_micros_max = state.connection_create_micros_max.max(elapsed_micros);
+        Ok(())
+    }
+
+    fn return_cached(
+        &self,
+        lane: ConnectionLane,
+        conn: *mut PGconn,
+        operation_elapsed: Duration,
+    ) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "connection pool is poisoned".to_string())?;
+        Self::finish_operation(&mut state, operation_elapsed, false);
+        Self::release_active(&mut state)?;
         Self::push_cached(&mut state, lane, conn);
         self.available.notify_one();
         Ok(())
     }
 
-    fn release_slot(&self) -> Result<(), String> {
+    fn release_failed_operation(&self, operation_elapsed: Duration) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "connection pool is poisoned".to_string())?;
-        state.live_connections = state.live_connections.saturating_sub(1);
+        Self::finish_operation(&mut state, operation_elapsed, true);
+        Self::release_active(&mut state)?;
+        Self::release_live(&mut state)?;
         self.available.notify_one();
         Ok(())
+    }
+
+    fn release_unconnected_slot(&self, connect_elapsed: Duration) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "connection pool is poisoned".to_string())?;
+        state.connection_create_failures = state.connection_create_failures.saturating_add(1);
+        let elapsed_micros = Self::duration_micros(connect_elapsed);
+        state.connection_create_micros_total = state
+            .connection_create_micros_total
+            .saturating_add(elapsed_micros);
+        state.connection_create_micros_max = state.connection_create_micros_max.max(elapsed_micros);
+        Self::release_active(&mut state)?;
+        Self::release_live(&mut state)?;
+        self.available.notify_one();
+        Ok(())
+    }
+
+    fn record_replay(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "connection pool is poisoned".to_string())?;
+        state.replay_count = state.replay_count.saturating_add(1);
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Result<DbRepoPoolObservabilitySnapshot, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "connection pool is poisoned".to_string())?;
+        Ok(DbRepoPoolObservabilitySnapshot {
+            connection_limit: self.limit,
+            live_connections: state.live_connections,
+            idle_write_connections: state.cached_conn.len(),
+            idle_control_connections: state.control_cached_conn.len(),
+            active_connections: state.active_connections,
+            queued_acquisitions: state.queued_acquisitions,
+            peak_active_connections: state.peak_active_connections,
+            peak_queued_acquisitions: state.peak_queued_acquisitions,
+            acquisition_count: state.acquisition_count,
+            acquisition_wait_micros_total: state.acquisition_wait_micros_total,
+            acquisition_wait_micros_max: state.acquisition_wait_micros_max,
+            connection_create_count: state.connection_create_count,
+            connection_create_failures: state.connection_create_failures,
+            connection_create_micros_total: state.connection_create_micros_total,
+            connection_create_micros_max: state.connection_create_micros_max,
+            operation_count: state.operation_count,
+            operation_failures: state.operation_failures,
+            operation_micros_total: state.operation_micros_total,
+            operation_micros_max: state.operation_micros_max,
+            replay_count: state.replay_count,
+        })
     }
 }
 
@@ -2696,21 +2892,41 @@ impl DbRepo {
             let conn = match acquisition {
                 ConnectionAcquisition::Cached(conn) => conn,
                 ConnectionAcquisition::ReservedSlot => {
+                    let connect_started = Instant::now();
                     match connect(&self.conninfo, &self.connection_tuning) {
-                        Ok(conn) => conn,
+                        Ok(conn) => {
+                            if let Err(err) = self
+                                .pool
+                                .record_connection_created(connect_started.elapsed())
+                            {
+                                unsafe {
+                                    PQfinish(conn);
+                                }
+                                return Err(err);
+                            }
+                            conn
+                        }
                         Err(err) => {
-                            let _ = self.pool.release_slot();
+                            if let Err(pool_err) = self
+                                .pool
+                                .release_unconnected_slot(connect_started.elapsed())
+                            {
+                                return Err(format!(
+                                    "{err}; connection pool cleanup failed: {pool_err}"
+                                ));
+                            }
                             return Err(err);
                         }
                     }
                 }
             };
 
+            let operation_started = Instant::now();
             let result = f(conn);
+            let operation_elapsed = operation_started.elapsed();
             match result {
                 Ok(value) => {
-                    if let Err(err) = self.pool.return_cached(lane, conn) {
-                        let _ = self.pool.release_slot();
+                    if let Err(err) = self.pool.return_cached(lane, conn, operation_elapsed) {
                         unsafe {
                             PQfinish(conn);
                         }
@@ -2721,11 +2937,15 @@ impl DbRepo {
                 Err(err) => {
                     let replayable = err.starts_with(REPLAYABLE_SQL_ERROR_PREFIX);
                     let err = strip_replayable_sql_error(err);
-                    let _ = self.pool.release_slot();
+                    let pool_result = self.pool.release_failed_operation(operation_elapsed);
                     unsafe {
                         PQfinish(conn);
                     }
+                    if let Err(pool_err) = pool_result {
+                        return Err(format!("{err}; connection pool cleanup failed: {pool_err}"));
+                    }
                     if replayable && !replayed {
+                        self.pool.record_replay()?;
                         replayed = true;
                         continue;
                     }
@@ -2747,6 +2967,14 @@ impl DbRepo {
         F: FnMut(*mut PGconn) -> Result<T, String>,
     {
         self.with_connection(ConnectionLane::Control, f)
+    }
+
+    pub fn observability_snapshot(&self) -> Result<DbRepoObservabilitySnapshot, String> {
+        Ok(DbRepoObservabilitySnapshot {
+            pool: self.pool.snapshot()?,
+            persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,
+            persist_copy_send_buffer_bytes: persist_copy_send_buffer_bytes(),
+        })
     }
 
     pub fn postgres_version_diagnostics(&self) -> Result<PostgresVersionDiagnostics, String> {

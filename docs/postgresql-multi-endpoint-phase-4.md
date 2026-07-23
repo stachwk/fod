@@ -4,8 +4,9 @@
 
 Phase 4 wires the phase-3 health and pool-plan contracts into `fod-rust-fuse`
 startup without enabling multi-endpoint routing. Stage 1 mounted correctness is
-complete; later observability, queueing, memory-policy, and endpoint-routing
-stages remain separate work.
+complete. Stage 2 now has its first observability foundation for connection
+pools and process memory; payload flow, server memory, queueing, memory-policy,
+and endpoint-routing stages remain separate work.
 
 The feature is opt-in through:
 
@@ -190,17 +191,38 @@ Before increasing concurrency or routing individual operations:
 
 Record at least:
 
-- queued logical tasks by operation and lane;
-- active tasks and active PostgreSQL connections by lane;
-- connection-acquisition wait time;
-- in-flight payload bytes globally and per lane;
-- configured and observed batch sizes;
-- bytes and files completed per second;
-- transaction latency and error counts;
-- control/lease heartbeat delay;
-- FOD process RSS and PostgreSQL-side memory pressure during benchmarks.
+- [x] Current and peak connection-pool acquisition waiters per lane.
+- [x] Current and peak active PostgreSQL connections plus live and idle
+  connections per lane.
+- [x] Connection-acquisition wait totals and maxima per lane.
+- [x] Connection creation counts, failures, and latency totals and maxima per
+  lane.
+- [x] Repository-operation counts, failures, replay counts, and latency totals
+  and maxima per lane.
+- [x] Configured persistence chunk blocks and COPY send-buffer bytes.
+- [x] FOD process RSS snapshots after startup and after mount completion.
+- [ ] Queued logical tasks classified by operation and lane. Pool acquisition
+  waiters are not yet a logical operation queue.
+- [ ] In-flight payload bytes globally and per lane.
+- [ ] Observed batch sizes plus bytes and files completed per second.
+- [ ] Transaction-specific latency and error counts. The current repository
+  operation timer may include more or less than one SQL transaction.
+- [ ] Control/lease heartbeat delay.
+- [ ] Periodic or peak FOD process RSS during benchmark workloads.
+- [ ] PostgreSQL-side memory pressure during benchmarks.
 
 No automatic concurrency adjustment should be added before these measurements are available.
+
+The pool snapshots are cumulative and shared by all clones of one `DbRepo`.
+They are emitted with non-secret lane labels at `post-startup`,
+`startup-failed`, and `post-mount`. The instrumentation does not issue extra SQL
+and does not alter endpoint selection, connection limits, replay policy, or
+automatic routing.
+
+`operation_failures` counts repository closures that returned `Err`. It is a
+diagnostic execution count, not yet a health score: operation classification
+must separate expected application-level errors from connection, transaction,
+and server failures before endpoint selection can consume it.
 
 ### Stage 3: separate queues from backend pools
 
