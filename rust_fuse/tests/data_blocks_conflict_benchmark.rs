@@ -7,12 +7,15 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use support::{checked_payload_len, parse_size_bytes, repeating_payload, MountedFs};
+use support::{
+    checked_payload_len, parse_size_bytes, repeating_payload, unique_suffix, MountedFs,
+};
 
 static DEFAULT_CONFLICT_BENCHMARK_LOCK: Mutex<()> = Mutex::new(());
+static DEFAULT_CONFLICT_ID: OnceLock<String> = OnceLock::new();
 
 fn has_explicit_conflict_id() -> bool {
     env::var("DATA_BLOCKS_CONFLICT_ID")
@@ -24,7 +27,11 @@ fn conflict_id() -> String {
     env::var("DATA_BLOCKS_CONFLICT_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "default".to_string())
+        .unwrap_or_else(|| {
+            DEFAULT_CONFLICT_ID
+                .get_or_init(|| format!("test-{}", unique_suffix()))
+                .clone()
+        })
         .replace(['/', '\\'], "_")
 }
 
@@ -65,8 +72,18 @@ fn mounted_conflict_fs(name: &str) -> Result<MountedFs, String> {
         &[
             ("FOD_WRITE_FLUSH_THRESHOLD_BYTES", (1_u64 << 60).to_string()),
             ("FOD_PROFILE_IO", "1".to_string()),
+            ("FOD_PG_POOL_LANES_ENABLED", "0".to_string()),
         ],
     )
+}
+
+fn with_mount_log<T>(mounted: &MountedFs, result: Result<T, String>) -> Result<T, String> {
+    result.map_err(|err| {
+        format!(
+            "{err}\nFOD mount log (last 200 lines):\n{}",
+            mounted.log_tail(200)
+        )
+    })
 }
 
 fn write_full_payload(file_path: &Path, payload: &[u8], truncate: bool) -> Result<f64, String> {
@@ -107,11 +124,17 @@ fn run_overwrite_benchmark(name: &str, marker: &[u8]) -> Result<(), String> {
 
     if !file_path.exists() && !has_explicit_conflict_id() {
         let (dir_path, _) = workload_paths(&mounted.mountpoint);
-        fs::create_dir_all(&dir_path).map_err(|err| format!("create_dir_all failed: {err}"))?;
-        write_full_payload(
-            &file_path,
-            &payload(b"fod-data-blocks-conflict-seed-")?,
-            true,
+        with_mount_log(
+            &mounted,
+            fs::create_dir_all(&dir_path).map_err(|err| format!("create_dir_all failed: {err}")),
+        )?;
+        with_mount_log(
+            &mounted,
+            write_full_payload(
+                &file_path,
+                &payload(b"fod-data-blocks-conflict-seed-")?,
+                true,
+            ),
         )?;
     } else if !file_path.exists() {
         return Err(format!(
@@ -121,8 +144,11 @@ fn run_overwrite_benchmark(name: &str, marker: &[u8]) -> Result<(), String> {
         ));
     }
 
-    let elapsed = write_full_payload(&file_path, &overwrite_payload, false)?;
-    verify_payload(&file_path, &overwrite_payload)?;
+    let elapsed = with_mount_log(
+        &mounted,
+        write_full_payload(&file_path, &overwrite_payload, false),
+    )?;
+    with_mount_log(&mounted, verify_payload(&file_path, &overwrite_payload))?;
     let throughput_mib_s = if elapsed > 0.0 {
         (total as f64 / 1024.0 / 1024.0) / elapsed
     } else {
@@ -151,10 +177,16 @@ fn data_blocks_conflict_seed() -> Result<(), String> {
 
     let _ = fs::remove_file(&file_path);
     let _ = fs::remove_dir(&dir_path);
-    fs::create_dir_all(&dir_path).map_err(|err| format!("create_dir_all failed: {err}"))?;
+    with_mount_log(
+        &mounted,
+        fs::create_dir_all(&dir_path).map_err(|err| format!("create_dir_all failed: {err}")),
+    )?;
 
-    let elapsed = write_full_payload(&file_path, &seed_payload, true)?;
-    verify_payload(&file_path, &seed_payload)?;
+    let elapsed = with_mount_log(
+        &mounted,
+        write_full_payload(&file_path, &seed_payload, true),
+    )?;
+    with_mount_log(&mounted, verify_payload(&file_path, &seed_payload))?;
     let throughput_mib_s = if elapsed > 0.0 {
         (total as f64 / 1024.0 / 1024.0) / elapsed
     } else {
