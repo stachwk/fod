@@ -10,9 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use support::{
-    checked_payload_len, parse_size_bytes, repeating_payload, unique_suffix, MountedFs,
-};
+use support::{checked_payload_len, parse_size_bytes, repeating_payload, unique_suffix, MountedFs};
 
 static DEFAULT_CONFLICT_BENCHMARK_LOCK: Mutex<()> = Mutex::new(());
 static DEFAULT_CONFLICT_ID: OnceLock<String> = OnceLock::new();
