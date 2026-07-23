@@ -77,19 +77,19 @@ The following remain disabled:
 
 The runtime health snapshot continues to expose `automatic_routing_enabled = false`, and the pool plan continues to expose `routing_enabled = false`.
 
-The write lane is used for the existing mount repository so the operation semantics are unchanged. The read and lease repositories are retained as explicit capacity boundaries but are not yet selected by individual filesystem operations.
+The write lane is used for the existing mount repository. The read and lease repositories are retained as explicit capacity boundaries but are not yet selected by individual filesystem operations.
 
 ## Mounted integration coverage
 
-`rust_fuse/tests/pg_lanes_mount.rs` starts a real FUSE mount with dedicated lanes enabled and a deterministic pool limit of ten. The smoke test:
+`rust_fuse/tests/pg_lanes_mount.rs` starts a real FUSE mount with dedicated lanes enabled and a deterministic pool limit of ten. Its target coverage is:
 
-- verifies dedicated-lane startup diagnostics;
-- verifies that the startup snapshot is read through the control lane;
-- verifies that the three non-write repositories remain alive;
-- creates, writes, reads, renames, stats, and removes a file through the mounted filesystem;
-- cleans up its unique mounted path before unmounting.
+- dedicated-lane startup diagnostics;
+- startup snapshot reads through the control lane;
+- lifetime of the three non-write repositories;
+- create, write, read, rename, stat, and remove operations through the mounted filesystem;
+- cleanup of the unique mounted path before unmounting.
 
-This test proves that opt-in lane construction is compatible with basic mounted filesystem behavior. It does not yet route individual read, lock, or heartbeat operations away from the write-lane mount repository.
+The mounted smoke is currently a blocking validation target rather than completed proof. Lane startup and direct `DbRepo` creation succeed, but the mounted `CREATE` path still returns `EIO`. Operation routing and release version advancement must remain blocked until the mounted create failure is diagnosed and the full smoke passes locally.
 
 ## Test isolation
 
@@ -102,6 +102,157 @@ FOD_PG_POOL_LANES_ENABLED=0
 explicitly when launching `fod-bootstrap`. This prevents a developer shell or test environment from accidentally converting a legacy regression test into an opt-in lane test.
 
 The data-block conflict benchmark also appends the last 200 lines of its mount log to filesystem-operation failures. A raw `EIO` is therefore accompanied by the underlying FUSE or PostgreSQL diagnostic instead of being lost when the temporary mount workspace is removed.
+
+## Memory-aware lane scaling requirements
+
+Connection count, transfer size, and query memory are separate controls. FOD must not infer a larger PostgreSQL memory allowance from a larger transferred block, a larger `COPY` batch, or a larger number of concurrent file-copy tasks.
+
+The implementation must preserve these invariants:
+
+1. **Transfer size is independent from `work_mem`.** File payload blocks and `COPY` batches use bounded application buffers. They do not justify raising PostgreSQL sort/hash memory.
+2. **Logical task concurrency is independent from active PostgreSQL backends.** FOD may accept hundreds of queued copy tasks while allowing only a measured number of transactions to execute concurrently.
+3. **Memory is budgeted globally and per task.** The write path must enforce both a per-task buffer limit and a global in-flight byte limit.
+4. **Backpressure is mandatory.** When the active-connection or in-flight-byte budget is exhausted, new tasks wait instead of allocating unbounded memory or opening unbounded connections.
+5. **Write/copy connections use a low-memory profile.** Bulk transfer should favor short transactions, bounded batches, and predictable memory over large session-level memory settings.
+6. **Search memory is granted only to selected queries.** Expensive search, sort, hash, and aggregation operations may use a larger transaction-scoped setting such as `SET LOCAL work_mem`, never a high global default for all FOD connections.
+7. **Control and lease capacity remains protected.** Copy saturation must not consume the connections needed for startup checks, schema/control work, lock leases, or session heartbeats.
+8. **A target such as 500 means logical tasks first, not automatically 500 physical PostgreSQL backends.** Direct backend counts must be selected from measured throughput, latency, server process overhead, and memory use.
+9. **External pooling is optional, not assumed.** Transaction pooling such as PgBouncer may be evaluated for high logical concurrency, but FOD must remain correct without it.
+
+## Lane memory profiles
+
+### Write and copy profile
+
+The write/copy lane should use:
+
+- many queued logical tasks;
+- a bounded number of active PostgreSQL transactions;
+- small session memory settings;
+- bounded per-task payload buffers;
+- a global in-flight payload budget;
+- short transactions and bounded `COPY` or batch sizes;
+- adaptive concurrency only after measurements show that additional active connections improve throughput.
+
+The implementation must avoid a model equivalent to `connection_count × large_buffer_per_connection`. Increasing concurrency must not multiply a large memory reservation across every backend.
+
+### Search and analysis profile
+
+The search/analysis lane should use:
+
+- fewer active connections than bulk copy;
+- a separate concurrency limit;
+- larger memory only for queries proven to benefit from it;
+- transaction-scoped `SET LOCAL work_mem` or an equivalent per-query mechanism;
+- timeout and cancellation support so expensive searches cannot starve filesystem traffic.
+
+One query may consume `work_mem` more than once for separate sort/hash nodes and parallel workers. Therefore a high global `work_mem` is explicitly prohibited as a scaling mechanism.
+
+### Control and lease profile
+
+The control and lease lanes should use:
+
+- one or two reserved connections per purpose unless benchmarks justify another value;
+- minimal session memory;
+- no payload buffering;
+- priority over bulk work when the server is saturated;
+- independent health and wait-time diagnostics.
+
+## Implementation backlog
+
+### Stage 1: restore mounted correctness
+
+Before increasing concurrency or routing individual operations:
+
+- diagnose the mounted `CREATE` `EIO`;
+- retain the full underlying PostgreSQL/FUSE error in diagnostics;
+- prove create, write, read, rename, stat, remove, and cleanup through `pg_lanes_mount`;
+- rerun the unchanged compatibility-path regressions;
+- keep multi-endpoint routing disabled.
+
+### Stage 2: add observability before tuning
+
+Record at least:
+
+- queued logical tasks by operation and lane;
+- active tasks and active PostgreSQL connections by lane;
+- connection-acquisition wait time;
+- in-flight payload bytes globally and per lane;
+- configured and observed batch sizes;
+- bytes and files completed per second;
+- transaction latency and error counts;
+- control/lease heartbeat delay;
+- FOD process RSS and PostgreSQL-side memory pressure during benchmarks.
+
+No automatic concurrency adjustment should be added before these measurements are available.
+
+### Stage 3: separate queues from backend pools
+
+Introduce:
+
+- a logical task queue for bulk file operations;
+- a semaphore or equivalent active-transaction limit per lane;
+- a global byte-budget permit for payloads in flight;
+- a per-task buffer cap;
+- cancellation-safe permit release;
+- fairness so one large file cannot permanently block many small files;
+- explicit backpressure diagnostics.
+
+The queue depth may be high, including experiments with 500 logical tasks, while the active backend count remains independently configurable.
+
+### Stage 4: apply operation-specific memory policy
+
+Implement:
+
+- a low-memory default for write/copy, control, and lease sessions;
+- transaction-scoped search memory for approved search operations only;
+- validation and safe upper bounds for every memory setting;
+- rejection of configurations whose worst-case concurrent memory budget exceeds the configured FOD budget;
+- diagnostics that report effective policy without exposing connection secrets.
+
+### Stage 5: benchmark and adaptive scaling
+
+Benchmark a matrix rather than assuming that more PostgreSQL backends are faster. Initial test points should include:
+
+- logical copy tasks: 50, 100, 250, 500;
+- active write connections: 10, 25, 50, 100, then higher only if throughput is still improving;
+- multiple transfer block and batch sizes;
+- mixed small-file and large-file workloads;
+- concurrent search and control/lease activity;
+- direct PostgreSQL connections and, separately, optional transaction-pool evaluation.
+
+Stop increasing active connections when throughput plateaus, latency rises materially, control/lease responsiveness degrades, or memory growth becomes disproportionate.
+
+## Provisional runtime controls
+
+Names must be finalized against the existing runtime configuration conventions before implementation. The required concepts are:
+
+| Provisional control | Meaning |
+| --- | --- |
+| `pg_copy_task_limit` | maximum queued or admitted logical copy tasks |
+| `pg_write_active_connections` | maximum simultaneously active write/copy database operations |
+| `pg_write_inflight_bytes` | global payload-byte budget for the write/copy lane |
+| `pg_write_buffer_bytes_per_task` | maximum application buffer held by one task |
+| `pg_write_batch_bytes` | bounded payload size for one database batch or `COPY` segment |
+| `pg_search_active_connections` | separate active-query limit for search/analysis |
+| `pg_search_work_mem` | validated value applied only inside selected search transactions |
+| `pg_control_connections` | reserved control capacity |
+| `pg_lease_connections` | reserved lease/heartbeat capacity |
+
+The final names may differ, but the controls must remain independent. A single `pool_max_connections` value is insufficient for the target architecture.
+
+## Acceptance criteria
+
+The memory-aware lane work is complete only when local validation demonstrates:
+
+- mounted filesystem correctness with lanes enabled;
+- no regression on the default compatibility path;
+- bounded FOD RSS under the configured in-flight byte budget;
+- no global high-`work_mem` requirement;
+- stable control and lease responsiveness during saturated copying;
+- no deadlock or permit leak during errors and cancellation;
+- throughput measurements across the concurrency matrix;
+- a documented default that favors bounded memory and operational safety over maximum connection count;
+- version metadata advanced only after the complete stage passes locally.
 
 ## Validation targets
 
@@ -151,11 +302,11 @@ opt_in_enabled=true
 
 ## Next phase
 
-The next implementation step is operation classification inside the FUSE layer:
+The immediate next step is to restore mounted `CREATE` correctness and complete the lane smoke. After that, operation classification inside the FUSE layer may proceed:
 
 - direct read-only methods to the read lane;
 - keep all mutations on the write lane;
 - direct schema and administrative checks to the control lane;
 - direct lock leases and session heartbeats to the lease lane.
 
-That step must first prove that moving an operation between independent connections does not weaken transaction, replay-confirmation, lock-owner, or session-heartbeat guarantees. Multi-endpoint host selection remains a later phase.
+That step must prove that moving an operation between independent connections does not weaken transaction, replay-confirmation, lock-owner, or session-heartbeat guarantees. Memory-aware queueing and connection limits must be implemented before attempting very high logical concurrency. Multi-endpoint host selection remains a later phase.
