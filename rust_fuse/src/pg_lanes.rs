@@ -254,6 +254,15 @@ pub fn mount_with_lanes(
     let observability_repositories = lanes.observability_repositories();
     let control_repo = lanes.repo_for(PgConnectionPurpose::Control);
     log_postgres_diagnostics(control_repo);
+    if let Err(err) =
+        validate_and_log_postgres_requirements(control_repo, diagnostics.total_limit as u64)
+    {
+        let _ = lanes.record_connection_failure(&err);
+        log_lane_observability("startup-failed", &observability_repositories);
+        return Err(format!(
+            "PostgreSQL runtime requirements validation failed: {err}"
+        ));
+    }
     log::debug!("FOD reading startup snapshot through control lane");
     let snapshot = match control_repo.startup_snapshot() {
         Ok(snapshot) => snapshot,
@@ -357,6 +366,41 @@ fn current_process_rss_bytes() -> Result<u64, String> {
     }
     kib.checked_mul(1024)
         .ok_or_else(|| "VmRSS byte value overflowed".to_string())
+}
+
+pub fn validate_and_log_postgres_requirements(
+    repo: &DbRepo,
+    pool_max_connections: u64,
+) -> Result<(), String> {
+    let requirements = repo.postgres_runtime_requirements_for_pool_limit(pool_max_connections)?;
+    for warning in requirements.server_configuration_warnings()? {
+        log::warn!(
+            "FOD PostgreSQL instance configuration requires attention: {}",
+            warning
+        );
+    }
+
+    let time_zone = requirements
+        .settings
+        .get("TimeZone")
+        .map(|setting| setting.display_value())
+        .unwrap_or_else(|| "unknown".to_string());
+    let isolation = requirements
+        .settings
+        .get("transaction_isolation")
+        .map(|setting| setting.display_value())
+        .unwrap_or_else(|| "unknown".to_string());
+    log::info!(
+        "FOD PostgreSQL runtime requirements: server_version_num={} minimum_server_version_num={} pool_max_connections={} max_connections={} required_max_connections={} session_time_zone={} session_transaction_isolation={} session_timeouts=disabled standard_conforming_strings=on",
+        requirements.server_version_num,
+        requirements.minimum_server_version_num,
+        requirements.pool_max_connections,
+        requirements.max_connections()?,
+        requirements.required_max_connections,
+        time_zone,
+        isolation,
+    );
+    Ok(())
 }
 
 fn log_postgres_diagnostics(repo: &DbRepo) {

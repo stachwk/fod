@@ -50,6 +50,10 @@ fn run() -> Result<(), String> {
 
     config::initialize_indexer_settings()?;
     let repo = db::open_repo(cli.conninfo.as_deref())?;
+    let postgres_requirements = repo.postgres_runtime_requirements()?;
+    for warning in postgres_requirements.server_configuration_warnings()? {
+        eprintln!("FOD PostgreSQL instance configuration requires attention: {warning}");
+    }
 
     match cli.command {
         Commands::Capabilities => unreachable!("capabilities returns before opening PostgreSQL"),

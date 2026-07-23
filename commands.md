@@ -2009,6 +2009,37 @@ Base commit at execution time: `3e9c1c0`
 - `sed -n '8380,8735p' rust_hotpath/src/pg.rs`
 - `cargo fmt --all`
 - `git diff --check` (passed)
+
+Execution date: `2026-07-23`
+
+Base commit at execution time: `84817059ccd44c651478dcc25936c536d088e7eb`
+
+- MemPalace searches in wing `myai` for PostgreSQL startup requirements, session tuning, `max_connections`, and the existing requirements smoke
+- inspection of `README.md`, `TODO.md`, `docs/postgresql-multi-endpoint-phase-4.md`, `rust_runtime/src/lib.rs`, `rust_hotpath/src/pg.rs`, `rust_fuse/src/main.rs`, `rust_fuse/src/pg_lanes.rs`, `rust_mkfs/src/pg.rs`, `rust_mkfs/src/main.rs`, `rust_indexer/src/main.rs`, and `tests/integration/test_postgresql_requirements.py`
+- `cargo fmt --all`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (first run exposed shared `rust_mkfs/src/pg.rs` methods unused by sibling binaries; passed after applying the existing local `dead_code` convention to those methods only)
+- `make build-debug` (passed for all FOD debug binaries)
+- `target/debug/fod-rust-mkfs status` (passed; FOD `3.2.31`, PostgreSQL `16.14`, schema `19`, ready)
+- `FOD_POOL_MAX_CONNECTIONS=100 target/debug/fod-indexer source list --kind local` (passed and produced the expected `max_connections` instance warning: observed `100`, required `>=102`, context `postmaster`)
+- `cargo test --locked -p fod-rust-runtime` (`25` passed)
+- `cargo test --locked -p fod-rust-hotpath` (first post-change run exposed a replay-proxy marker collision with uppercase `READ COMMITTED`; the final run passed the complete suite after using the equivalent lowercase GUC value)
+- `cargo test --locked -p fod-rust-hotpath --test transactional_replay_smoke` (final targeted run: `15` passed)
+- `cargo test --locked -p fod-rust-mkfs` (all binary, config, endpoint, and three schema-upgrade tests passed)
+- `make init` (schema existed, so initialization was skipped)
+- local `fod.config` inspection after mkfs tests (table was empty)
+- local PostgreSQL upsert restoring only `block_size=4096` and `max_fs_size_bytes=10737418240`
+- `cargo test --locked -p fod-rust-hotpath` (final complete run passed after restoring the required local test configuration)
+- `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (passed)
+- `make test-postgresql-requirements` (passed: autocommit off, PostgreSQL `160014`, `max_connections=100`, pool limit `10`)
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io` (passed for block and opt-in extent layouts)
+- `make test-fio-sequential-io-strace` (passed for block and opt-in extent layouts)
+- `cargo test --locked -p fod-rust-indexer` (`33` passed)
+- `cargo fmt --all -- --check` (passed after applying formatting)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.31`)
+- `make test-version` (`7` passed for FOD `3.2.31`)
+- `git diff --check` (passed)
+- final source review with `git status --short --branch`, `git diff --stat`, focused `git diff`, and `git diff --check`
+- final environment inspection with `findmnt`, `ps`, and target ownership checks (no active FOD mount or process and no non-user-owned target artifact)
 - `cargo check --workspace` (passed)
 - `make test-rust-pg-query` (first run: `14` passed, renewal assertion failed because it assumed one textual PostgreSQL boolean representation; persistence and the reclaimed-capacity rejection passed)
 - `cargo fmt --all`

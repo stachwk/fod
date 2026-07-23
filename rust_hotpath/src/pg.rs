@@ -5,9 +5,11 @@ use crate::crc32_bytes;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use fod_rust_runtime::{
-    env_var_truthy_with_legacy_alias, request_token as generate_request_token,
-    DataObjectSwapCleanup, PersistBlockTransport, PostgresVersionDiagnostics, RuntimeConfig,
-    RuntimeStorageSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
+    env_var_truthy_with_legacy_alias, postgres_session_setup_sql,
+    request_token as generate_request_token, DataObjectSwapCleanup, PersistBlockTransport,
+    PostgresRuntimeRequirements, PostgresVersionDiagnostics, RuntimeConfig, RuntimeStorageSettings,
+    FOD_SCHEMA_NAME, FOD_SEARCH_PATH, MIN_POSTGRES_SERVER_VERSION_NUM,
+    POSTGRES_REQUIREMENT_SETTINGS_SQL,
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -931,6 +933,24 @@ fn apply_connection_tuning(conninfo: &str, tuning: &ConnectionTuning) -> Result<
     Ok(tuned)
 }
 
+unsafe fn exec_connection_setup_command(conn: *mut PGconn, sql: &str) -> Result<(), String> {
+    let sql =
+        CString::new(sql).map_err(|_| "PostgreSQL session SQL contains NUL byte".to_string())?;
+    let res = PQexec(conn, sql.as_ptr());
+    if res.is_null() {
+        return Err(conn_error(conn));
+    }
+    let status = PQresultStatus(res);
+    if status == PGRES_COMMAND_OK {
+        PQclear(res);
+        Ok(())
+    } else {
+        let err = result_error(res);
+        PQclear(res);
+        Err(err)
+    }
+}
+
 fn connect(conninfo: &str, tuning: &ConnectionTuning) -> Result<*mut PGconn, String> {
     let conninfo = apply_connection_tuning(conninfo, tuning)?;
     let conninfo =
@@ -945,20 +965,27 @@ fn connect(conninfo: &str, tuning: &ConnectionTuning) -> Result<*mut PGconn, Str
             PQfinish(conn);
             return Err(err);
         }
-        let set_search_path = CString::new(format!("SET search_path TO {}", FOD_SEARCH_PATH))
-            .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let res = PQexec(conn, set_search_path.as_ptr());
-        if res.is_null() {
-            let err = conn_error(conn);
+        let server_version_num = PQserverVersion(conn);
+        if server_version_num < MIN_POSTGRES_SERVER_VERSION_NUM {
+            let err = format!(
+                "PostgreSQL server_version_num={server_version_num} is unsupported; FOD requires {MIN_POSTGRES_SERVER_VERSION_NUM} or newer. Upgrade the PostgreSQL instance before starting FOD."
+            );
             PQfinish(conn);
             return Err(err);
         }
-        let status = PQresultStatus(res);
-        PQclear(res);
-        if status != PGRES_COMMAND_OK {
-            let err = conn_error(conn);
+
+        let set_search_path = format!("SET search_path TO {FOD_SEARCH_PATH}");
+        let session_setup_sql = postgres_session_setup_sql(server_version_num)
+            .iter()
+            .copied()
+            .chain(std::iter::once(set_search_path.as_str()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        if let Err(err) = exec_connection_setup_command(conn, &session_setup_sql) {
             PQfinish(conn);
-            return Err(err);
+            return Err(format!(
+                "failed to apply required PostgreSQL session settings: {err}"
+            ));
         }
         let schema_is_initialized = schema_is_initialized_on_conn(conn).map_err(|err| {
             PQfinish(conn);
@@ -1013,6 +1040,31 @@ unsafe fn query_rows_text_on_conn(
         return Err(err);
     }
     fetch_rows_text(res)
+}
+
+unsafe fn postgres_runtime_requirements_on_conn(
+    conn: *mut PGconn,
+    pool_max_connections: u64,
+) -> Result<PostgresRuntimeRequirements, String> {
+    let sql = CString::new(POSTGRES_REQUIREMENT_SETTINGS_SQL)
+        .map_err(|_| "PostgreSQL requirements SQL contains NUL byte".to_string())?;
+    let rows = query_rows_text_on_conn(conn, &sql)?;
+    let requirements = PostgresRuntimeRequirements::from_pg_settings_rows(
+        PQserverVersion(conn),
+        pool_max_connections,
+        rows,
+    )?;
+    if let Some(err) = requirements.unsupported_version_error() {
+        return Err(err);
+    }
+    let session_errors = requirements.session_configuration_errors();
+    if !session_errors.is_empty() {
+        return Err(format!(
+            "PostgreSQL session requirements were not applied: {}",
+            session_errors.join("; ")
+        ));
+    }
+    Ok(requirements)
 }
 
 unsafe fn schema_is_initialized_on_conn(conn: *mut PGconn) -> Result<bool, String> {
@@ -2974,6 +3026,19 @@ impl DbRepo {
             pool: self.pool.snapshot()?,
             persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,
             persist_copy_send_buffer_bytes: persist_copy_send_buffer_bytes(),
+        })
+    }
+
+    pub fn postgres_runtime_requirements(&self) -> Result<PostgresRuntimeRequirements, String> {
+        self.postgres_runtime_requirements_for_pool_limit(self.pool.limit as u64)
+    }
+
+    pub fn postgres_runtime_requirements_for_pool_limit(
+        &self,
+        pool_max_connections: u64,
+    ) -> Result<PostgresRuntimeRequirements, String> {
+        self.with_control_connection(|conn| unsafe {
+            postgres_runtime_requirements_on_conn(conn, pool_max_connections)
         })
     }
 

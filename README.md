@@ -178,18 +178,27 @@ PostgreSQL requirements for the current feature set:
 
 - PostgreSQL 9.5 or newer
 - `max_connections` should be comfortably above `pool_max_connections`; as a practical minimum, keep at least two extra server connections available for admin and concurrent FOD clients
-- no special lock-manager parameters are required; the default `read committed` transaction isolation is sufficient
+- `fsync` and `full_page_writes` should remain enabled for crash-safe storage
+- every physical FOD connection enforces UTC, `read committed`, disabled statement/lock/idle-transaction timeouts, and standard-conforming strings for its own session
 - FOD expects transactional PostgreSQL connections with `autocommit` disabled
-- FOD initializes the UTC session state once per cached physical connection and keeps the steady-state return path to a cheap `rollback()`. Write and control-plane work use separate cached connections so long flushes do not block heartbeat or lease maintenance.
+- FOD reads the relevant values from `pg_settings` during startup. Session-adjustable values are corrected on every new physical connection; settings that require an instance reload or restart produce an explicit warning with the observed value, required value, PostgreSQL setting context, and pending-restart state.
+- FOD keeps the steady-state return path to a cheap `rollback()`. Write and control-plane work use separate cached connections so long flushes do not block heartbeat or lease maintenance.
 - `sslmode=require` is enough for encrypted connections, and `verify-full` is appropriate if you also want certificate verification
 
 | Requirement | Value |
 | --- | --- |
 | PostgreSQL version | `9.5+` |
 | Transaction mode | `autocommit = off` |
-| Isolation level | `read committed` |
+| Session time zone | `UTC`, enforced per connection |
+| Isolation level | `read committed`, enforced per connection |
+| Session timeouts | `statement_timeout=0`, `lock_timeout=0`, and `idle_in_transaction_session_timeout=0` where supported |
+| SQL string semantics | `standard_conforming_strings=on`, enforced per connection |
 | `max_connections` | `pool_max_connections + 2` or higher |
+| Crash-safe WAL | `fsync=on`, `full_page_writes=on` |
 | TLS | `sslmode=require` for encryption, `verify-full` for certificate verification |
+
+The canonical contract and startup behavior are documented in
+[`docs/postgresql-runtime-requirements.md`](docs/postgresql-runtime-requirements.md).
 
 ## Example `fod_config.example.ini`
 

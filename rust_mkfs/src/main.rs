@@ -13,7 +13,7 @@ use clap::{Parser, ValueEnum};
 use std::env;
 use std::path::Path;
 
-use config::{load_config_parser, resolve_config_path};
+use config::{load_config_parser, load_runtime_config, resolve_config_path};
 use pg::DbConn;
 use pg_config::{make_conninfo, resolve_pg_connection_params};
 use runtime::{FOD_SCHEMA_NAME, FOD_SEARCH_PATH};
@@ -551,6 +551,13 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let runtime = match load_runtime_config(&config) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("{}", err);
+            std::process::exit(1);
+        }
+    };
     let db_section = match config.section("database") {
         Some(section) => section.clone(),
         None => {
@@ -567,6 +574,25 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let postgres_requirements =
+        match conn.postgres_runtime_requirements(runtime.pool_max_connections) {
+            Ok(requirements) => requirements,
+            Err(err) => {
+                eprintln!("PostgreSQL runtime requirements validation failed: {err}");
+                std::process::exit(1);
+            }
+        };
+    match postgres_requirements.server_configuration_warnings() {
+        Ok(warnings) => {
+            for warning in warnings {
+                eprintln!("FOD PostgreSQL instance configuration requires attention: {warning}");
+            }
+        }
+        Err(err) => {
+            eprintln!("PostgreSQL runtime requirements validation failed: {err}");
+            std::process::exit(1);
+        }
+    }
 
     let (schema_admin_password, schema_admin_source) = load_schema_admin_password(&cli);
     let uid_gid = current_uid_gid();

@@ -89,6 +89,12 @@ fn main() {
             err
         ),
     }
+    if let Err(err) =
+        pg_lanes::validate_and_log_postgres_requirements(&repo, runtime.pool_max_connections)
+    {
+        eprintln!("fod-rust-fuse: PostgreSQL runtime requirements validation failed: {err}");
+        std::process::exit(1);
+    }
     log::debug!("FOD reading startup snapshot");
     let snapshot = repo.startup_snapshot().unwrap_or_else(|err| {
         eprintln!("fod-rust-fuse: failed to read startup snapshot: {err}");

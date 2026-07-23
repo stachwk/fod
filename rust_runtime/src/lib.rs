@@ -9,9 +9,15 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod ini_config;
+mod postgres_requirements;
 
 pub use ini_config::{
     load_config_parser, resolve_config_path, resolve_config_path_optional, IniConfig,
+};
+pub use postgres_requirements::{
+    postgres_session_setup_sql, PostgresRuntimeRequirements, PostgresSettingObservation,
+    MIN_POSTGRES_SERVER_VERSION_NUM, POSTGRES_ADMIN_CONNECTION_RESERVE,
+    POSTGRES_REQUIREMENT_SETTINGS_SQL,
 };
 
 pub const DEFAULT_METADATA_TTL: Duration = Duration::from_secs(1);

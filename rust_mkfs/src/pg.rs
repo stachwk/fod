@@ -5,7 +5,10 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 
 use fod_rust_runtime::ini_config::PgEndpointProbe;
-use fod_rust_runtime::{PostgresVersionDiagnostics, FOD_SEARCH_PATH};
+use fod_rust_runtime::{
+    postgres_session_setup_sql, PostgresRuntimeRequirements, PostgresVersionDiagnostics,
+    FOD_SEARCH_PATH, MIN_POSTGRES_SERVER_VERSION_NUM, POSTGRES_REQUIREMENT_SETTINGS_SQL,
+};
 
 #[repr(C)]
 struct PGconn {
@@ -88,7 +91,22 @@ impl DbConn {
     pub fn connect(conninfo: &str) -> Result<Self, String> {
         let conn = connect_raw(conninfo)?;
         let conn = Self { conn };
-        conn.exec_raw(&format!("SET search_path TO {}", FOD_SEARCH_PATH))?;
+        let server_version_num = unsafe { PQserverVersion(conn.conn) };
+        if server_version_num < MIN_POSTGRES_SERVER_VERSION_NUM {
+            return Err(format!(
+                "PostgreSQL server_version_num={server_version_num} is unsupported; FOD requires {MIN_POSTGRES_SERVER_VERSION_NUM} or newer. Upgrade the PostgreSQL instance before starting FOD."
+            ));
+        }
+        let set_search_path = format!("SET search_path TO {FOD_SEARCH_PATH}");
+        let session_setup_sql = postgres_session_setup_sql(server_version_num)
+            .iter()
+            .copied()
+            .chain(std::iter::once(set_search_path.as_str()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        conn.exec_raw(&session_setup_sql).map_err(|err| {
+            format!("failed to apply required PostgreSQL session settings: {err}")
+        })?;
         Ok(conn)
     }
 
@@ -174,6 +192,64 @@ impl DbConn {
                             ))
                         }
                     }
+                }
+                _ => Err(conn_error(self.conn)),
+            };
+            PQclear(res);
+            out
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn postgres_runtime_requirements(
+        &self,
+        pool_max_connections: u64,
+    ) -> Result<PostgresRuntimeRequirements, String> {
+        let rows = self.query_rows_text(POSTGRES_REQUIREMENT_SETTINGS_SQL)?;
+        let requirements = PostgresRuntimeRequirements::from_pg_settings_rows(
+            unsafe { PQserverVersion(self.conn) },
+            pool_max_connections,
+            rows,
+        )?;
+        if let Some(err) = requirements.unsupported_version_error() {
+            return Err(err);
+        }
+        let session_errors = requirements.session_configuration_errors();
+        if !session_errors.is_empty() {
+            return Err(format!(
+                "PostgreSQL session requirements were not applied: {}",
+                session_errors.join("; ")
+            ));
+        }
+        Ok(requirements)
+    }
+
+    #[allow(dead_code)]
+    fn query_rows_text(&self, sql: &str) -> Result<Vec<Vec<String>>, String> {
+        let sql = CString::new(sql).map_err(|_| "SQL text contains NUL byte".to_string())?;
+        unsafe {
+            let res = PQexec(self.conn, sql.as_ptr());
+            if res.is_null() {
+                return Err(conn_error(self.conn));
+            }
+            let out = match PQresultStatus(res) {
+                PGRES_TUPLES_OK => {
+                    let rows = PQntuples(res);
+                    let cols = PQnfields(res);
+                    let mut values = Vec::with_capacity(rows.max(0) as usize);
+                    for row in 0..rows {
+                        let mut current = Vec::with_capacity(cols.max(0) as usize);
+                        for col in 0..cols {
+                            let value_ptr = PQgetvalue(res, row, col);
+                            current.push(if value_ptr.is_null() {
+                                String::new()
+                            } else {
+                                CStr::from_ptr(value_ptr).to_string_lossy().to_string()
+                            });
+                        }
+                        values.push(current);
+                    }
+                    Ok(values)
                 }
                 _ => Err(conn_error(self.conn)),
             };
