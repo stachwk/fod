@@ -2240,3 +2240,8 @@ Base commit at execution time: `4499dd71b9004e43e5bec9c029b7321b268369dd`
 - `cargo fmt --all -- --check` (passed)
 - `git diff --check` (passed)
 - local mount/process/target-owner inspection (no stale FOD mount or daemon and no non-user-owned target artifact observed)
+- `source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing myai --agent codex` (passed after commit `7fe2f42`; processed `7` changed files and filed `1500` drawers)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed after the history-only FOD `3.2.30` increment)
+- `make test-version` (`7` passed for FOD `3.2.30`)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
