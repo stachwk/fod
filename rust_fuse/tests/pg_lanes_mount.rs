@@ -21,16 +21,23 @@ fn with_mount_log<T>(mounted: &MountedFs, result: Result<T, String>) -> Result<T
     })
 }
 
-fn direct_write_lane_create_preflight() -> Result<(), String> {
+fn runtime_with_pool_limit(limit: u64) -> Result<RuntimeConfig, String> {
     let mut values = HashMap::new();
-    values.insert("pool_max_connections".to_string(), "6".to_string());
-    let runtime = RuntimeConfig::from_runtime_map(&values)
-        .map_err(|err| format!("direct write-lane runtime config failed: {err}"))?;
+    values.insert("pool_max_connections".to_string(), limit.to_string());
+    RuntimeConfig::from_runtime_map(&values)
+        .map_err(|err| format!("direct write-lane runtime config failed: {err}"))
+}
+
+fn direct_write_lane_repo() -> Result<DbRepo, String> {
+    let runtime = runtime_with_pool_limit(6)?;
     let conninfo = conninfo_from_config()
         .map_err(|err| format!("direct write-lane conninfo failed: {err}"))?;
-    let repo = DbRepo::with_runtime(&conninfo, &runtime)
-        .map_err(|err| format!("direct write-lane repo creation failed: {err}"))?;
+    DbRepo::with_runtime(&conninfo, &runtime)
+        .map_err(|err| format!("direct write-lane repo creation failed: {err}"))
+}
 
+fn direct_write_lane_create_preflight() -> Result<(), String> {
+    let repo = direct_write_lane_repo()?;
     let suffix = unique_suffix();
     let directory_name = format!("pg-lanes-direct-{suffix}");
     let directory_path = format!("/{directory_name}");
@@ -41,17 +48,70 @@ fn direct_write_lane_create_preflight() -> Result<(), String> {
     let directory_id = repo
         .create_directory(None, &directory_name, 0o775, uid, gid, &directory_path)
         .map_err(|err| format!("direct write-lane create_directory failed: {err}"))?;
-    repo.create_file(
-        Some(directory_id),
-        "source.txt",
-        0o100664,
-        uid,
-        gid,
-        &file_path,
-    )
-    .map_err(|err| format!("direct write-lane create_file failed: {err}"))?;
+    let file_id = repo
+        .create_file(
+            Some(directory_id),
+            "source.txt",
+            0o100664,
+            uid,
+            gid,
+            &file_path,
+        )
+        .map_err(|err| format!("direct write-lane create_file failed: {err}"))?;
+
+    repo.purge_primary_file(file_id)
+        .map_err(|err| format!("direct write-lane cleanup file failed: {err}"))?;
+    repo.delete_directory_entry(directory_id)
+        .map_err(|err| format!("direct write-lane cleanup directory failed: {err}"))?;
 
     Ok(())
+}
+
+fn failed_create_database_diagnostics(directory_path: &str, file_path: &str) -> String {
+    let result = (|| -> Result<String, String> {
+        let repo = direct_write_lane_repo()?;
+        let directory = repo
+            .resolve_path(directory_path)
+            .map_err(|err| format!("resolve directory failed: {err}"))?;
+        let file = repo
+            .resolve_path(file_path)
+            .map_err(|err| format!("resolve file failed: {err}"))?;
+        let attrs_len = repo
+            .fetch_path_attrs_blob(file_path)
+            .map_err(|err| format!("fetch file attrs failed: {err}"))?
+            .map(|blob| blob.len());
+
+        let uid = unsafe { libc::geteuid() };
+        let gid = unsafe { libc::getegid() };
+        let probe_name = format!("direct-after-fuse-{}.txt", unique_suffix());
+        let probe_path = format!("{directory_path}/{probe_name}");
+        let direct_create = match directory.entry_id {
+            Some(directory_id) => match repo.create_file(
+                Some(directory_id),
+                &probe_name,
+                0o100664,
+                uid,
+                gid,
+                &probe_path,
+            ) {
+                Ok(file_id) => {
+                    let cleanup = repo
+                        .purge_primary_file(file_id)
+                        .map(|_| "ok".to_string())
+                        .unwrap_or_else(|err| format!("error={err}"));
+                    format!("ok file_id={file_id} cleanup={cleanup}")
+                }
+                Err(err) => format!("error={err}"),
+            },
+            None => "skipped: missing directory id".to_string(),
+        };
+
+        Ok(format!(
+            "directory={directory:?}\nfile={file:?}\nfile_attrs_blob_len={attrs_len:?}\ndirect_create_after_fuse={direct_create}"
+        ))
+    })();
+
+    result.unwrap_or_else(|err| format!("database diagnostics failed: {err}"))
 }
 
 fn wait_for_lane_diagnostics(mounted: &MountedFs) -> Result<String, String> {
@@ -91,9 +151,10 @@ fn opt_in_pg_lanes_mount_and_serve_basic_filesystem_operations() -> Result<(), S
 
     wait_for_lane_diagnostics(&mounted)?;
 
-    let directory = mounted
-        .mountpoint
-        .join(format!("pg-lanes-smoke-{}", unique_suffix()));
+    let directory_name = format!("pg-lanes-smoke-{}", unique_suffix());
+    let directory_logical_path = format!("/{directory_name}");
+    let source_logical_path = format!("{directory_logical_path}/source.txt");
+    let directory = mounted.mountpoint.join(&directory_name);
     let source = directory.join("source.txt");
     let renamed = directory.join("renamed.txt");
     let payload = b"FOD PostgreSQL lane mounted smoke\n";
@@ -103,11 +164,18 @@ fn opt_in_pg_lanes_mount_and_serve_basic_filesystem_operations() -> Result<(), S
         fs::create_dir_all(&directory)
             .map_err(|err| format!("create_dir_all {} failed: {err}", directory.display())),
     )?;
-    with_mount_log(
-        &mounted,
-        fs::write(&source, payload)
-            .map_err(|err| format!("write {} failed: {err}", source.display())),
-    )?;
+
+    if let Err(err) = fs::write(&source, payload) {
+        return Err(format!(
+            "write {} failed: {err}\nPostgreSQL state after failed mounted create:\n{}\nFOD mount log (last 400 lines):\n{}",
+            source.display(),
+            failed_create_database_diagnostics(
+                &directory_logical_path,
+                &source_logical_path
+            ),
+            mounted.log_tail(400)
+        ));
+    }
 
     let observed = with_mount_log(
         &mounted,
