@@ -2,9 +2,9 @@
 
 ## Current Status
 
-- The current FOD release is sourced from `fod_version.txt`; at the time this
-  roadmap was refreshed the implemented release was `3.2.33` and the next
-  documentation commit is prepared as `3.2.34`.
+- The current FOD release is sourced from `fod_version.txt`; this roadmap
+  intentionally avoids duplicating the latest patch number as an authoritative
+  version source.
 - FOD has a working PostgreSQL-backed FUSE core, schema version `19`,
   documented runtime profiles, a shared Rust indexing core, and a broad local
   integration suite.
@@ -49,7 +49,8 @@
 - aggregate the existing FUSE callback, PostgreSQL, libpq, runtime, and
   storage-format diagnostics only after the individual boundaries expose
   trustworthy machine-readable data
-- implement an explicit `fsync` durability contract by reusing the existing write-state persistence path and propagating PostgreSQL errors truthfully
+- keep the explicit `fsync` durability contract covered by mounted regression
+  tests and extend it only with measured failure-injection cases
 - instrument inode/path cache lifetime and implement `forget` plus `batch_forget` if large-tree measurements confirm retained entries
 - connect the existing resize and sparse-storage machinery to explicitly supported `fallocate` modes; reject unsupported mode combinations with `EOPNOTSUPP`
 - benchmark `readdirplus` against `readdir` for large directories and keep it only when it measurably reduces callbacks or PostgreSQL work

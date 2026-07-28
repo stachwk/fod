@@ -2049,6 +2049,9 @@ Base commit at execution time: `84817059ccd44c651478dcc25936c536d088e7eb`
 - `cargo test -p fod-rust-hotpath --lib` (passed: `80` tests)
 - `cargo fmt --all -- --check` (passed)
 - `git diff --check` (passed)
+- `printf 'fod_version=' && tr -d '\n' < fod_version.txt && printf '\n' && cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name,.version] | @tsv'` (all workspace packages report `3.2.35`)
+- `git diff --stat && git status --short`
+- `git diff -- rust_fuse/src/fs.rs TODO.md docs/compatibility-contracts.md docs/fuse-protocol-7-32-7-40-capabilities.md docs/postgresql-multi-endpoint-phase-4.md | sed -n '1,280p'`
 - `cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name, .version] | @tsv'` (all five workspace packages report `3.2.14`)
 
 Execution date: `2026-07-18`
@@ -2340,3 +2343,25 @@ Base commit at execution time: `ea6a1bc7d0b69ec826ef9fbd7d21ae99be960c2e`
 - `make test-version` (`7` passed for FOD `3.2.34`)
 - `git status --short && git diff --stat && git diff -- Cargo.lock Cargo.toml fod_version.txt | sed -n '1,160p'`
 - `rg -n '^\s*- \[ \]' TODO.md docs/*.md docs/**/*.md ROADMAP.md && rg -n 'Current schema version: 18|Database schema \| version 18|FOD `3\.2\.16`|prepared for `FOD 3\.2\.16`|through version 17|schema-v17 storage contracts' ROADMAP.md TODO.md docs README.md README.pl` (open TODO list printed; stale-current-pattern search had no matches)
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `3f9375b493122a451ee6f76abf4e088732204ab9`
+
+- MemPalace dry-run mine for project context in wing `myai`
+- `source ~/.venv/bin/activate && mempalace search "FOD fsync flush_write_state release PostgreSQL durability fuser" --wing myai`
+- `git status --short --branch && git log -3 --oneline && printf 'version=' && tr -d '\n' < fod_version.txt && printf '\n'`
+- inspection of `rust_fuse/src/fs.rs`, `rust_fuse/src/write_buffer.rs`, `rust_fuse/tests/pg_lanes_mount.rs`, `rust_fuse/tests/remount_durability_benchmark.rs`, `rust_fuse/tests/support.rs`, `TODO.md`, `ROADMAP.md`, `docs/compatibility-contracts.md`, `docs/fuse-protocol-7-32-7-40-capabilities.md`, and `docs/postgresql-multi-endpoint-phase-4.md`
+- `rg -n "fn flush|fn fsync|flush_write_state|release\(" rust_fuse/src rust_fuse/tests`
+- `nl -ba /home/wojtek/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/lib.rs | sed -n '640,710p'`
+- `cargo fmt --all`
+- `cargo metadata --no-deps --format-version 1 >/tmp/fod-cargo-metadata.json`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.35`)
+- `make test-version` (`7` passed for FOD `3.2.35`)
+- `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (passed twice after the `fsync` implementation and release-lock cleanup)
+- `make test-remount-durability-benchmark` (passed twice; final run wrote `65536` bytes and read them after remount)
+- `rg -n "Not Implemented|fsync\(|FOD fsync|sync_all" rust_fuse/tests tests/integration docs TODO.md conclusions.md`
+- one malformed exploratory `rg` command used unescaped backticks and made the shell attempt command substitution; the result was ignored and replaced by a safely quoted follow-up search
+- `rg -n 'prepared for|3\.2\.34|missing explicit fuser|Not explicitly implemented \|.*fsync|currently treats a failed final persist as non-fatal|implement `fsync`' ROADMAP.md TODO.md docs/compatibility-contracts.md docs/fuse-protocol-7-32-7-40-capabilities.md docs/postgresql-multi-endpoint-phase-4.md Cargo.toml Cargo.lock` (only `fsyncdir` remained in the not-implemented list)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)

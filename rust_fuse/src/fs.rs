@@ -3176,6 +3176,42 @@ impl FodFuse {
         }
     }
 
+    fn flush_write_state_for_handle(&self, fh: u64) -> Result<bool, libc::c_int> {
+        let Some(mut state) = self.write_state_for_handle(fh) else {
+            return Ok(false);
+        };
+        if !Self::write_state_has_pending_changes(&state) {
+            return Ok(false);
+        }
+        self.flush_write_state(&mut state)?;
+        if Self::write_state_has_pending_changes(&state) {
+            self.update_write_state(fh, state);
+        } else {
+            self.remove_write_state(fh);
+        }
+        Ok(true)
+    }
+
+    fn clear_locks_for_owner_and_sync(&self, owner: u64, context: &str, fh: u64) {
+        self.register_local_lock_owner(owner);
+        let changed = self.clear_locks_for_owner(owner);
+        for resource_key in changed {
+            let records = self
+                .posix_locks
+                .lock()
+                .ok()
+                .and_then(|guard| guard.get(&resource_key).cloned())
+                .unwrap_or_default();
+            if let Err(errno) = self.persist_lock_records_for_key(&resource_key, owner, &records) {
+                warn!(
+                    "FOD {} lock sync failed fh={} resource_key={} errno={}",
+                    context, fh, resource_key, errno
+                );
+            }
+        }
+        self.refresh_local_lock_owner_state(owner);
+    }
+
     pub fn register_client_session(
         &mut self,
         mountpoint: &Path,
@@ -4455,45 +4491,51 @@ impl Filesystem for FodFuse {
             return;
         }
         self.register_local_lock_owner(lock_owner);
-        let Some(mut state) = self.write_state_for_handle(fh) else {
-            debug!("FOD flush no write state fh={}", fh);
-            reply.ok();
-            return;
-        };
-        if !Self::write_state_has_pending_changes(&state) {
-            debug!("FOD flush clean state fh={}", fh);
-            reply.ok();
-            return;
-        }
-        if let Err(errno) = self.flush_write_state(&mut state) {
-            warn!("FOD flush failed fh={} errno={}", fh, errno);
-            fuse_reply_error!(reply, errno);
-            return;
-        }
-        if Self::write_state_has_pending_changes(&state) {
-            self.update_write_state(fh, state);
-        } else {
-            self.remove_write_state(fh);
-        }
-        let changed = self.clear_locks_for_owner(lock_owner);
-        for resource_key in changed {
-            let records = self
-                .posix_locks
-                .lock()
-                .ok()
-                .and_then(|guard| guard.get(&resource_key).cloned())
-                .unwrap_or_default();
-            if let Err(errno) =
-                self.persist_lock_records_for_key(&resource_key, lock_owner, &records)
-            {
-                warn!(
-                    "FOD flush lock sync failed fh={} resource_key={} errno={}",
-                    fh, resource_key, errno
-                );
+        match self.flush_write_state_for_handle(fh) {
+            Ok(true) => {
+                debug!("FOD flush persisted dirty state fh={}", fh);
+            }
+            Ok(false) => {
+                debug!("FOD flush clean or missing state fh={}", fh);
+            }
+            Err(errno) => {
+                warn!("FOD flush failed fh={} errno={}", fh, errno);
+                fuse_reply_error!(reply, errno);
+                return;
             }
         }
-        self.refresh_local_lock_owner_state(lock_owner);
+        self.clear_locks_for_owner_and_sync(lock_owner, "flush", fh);
         debug!("FOD flush completed fh={} lock_owner={}", fh, lock_owner);
+        reply.ok();
+    }
+
+    fn fsync(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        datasync: bool,
+        reply: ReplyEmpty,
+    ) {
+        let fh = fh.0;
+        let _write_profile = self.start_fuse_write_profile();
+        debug!(
+            "FOD fsync fh={} datasync={} read_only={}",
+            fh, datasync, self.read_only
+        );
+        if self.read_only {
+            fuse_reply_error!(reply, libc::EROFS);
+            return;
+        }
+        match self.flush_write_state_for_handle(fh) {
+            Ok(true) => debug!("FOD fsync persisted dirty state fh={}", fh),
+            Ok(false) => debug!("FOD fsync clean or missing state fh={}", fh),
+            Err(errno) => {
+                warn!("FOD fsync failed fh={} errno={}", fh, errno);
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        }
         reply.ok();
     }
 
@@ -4695,57 +4737,23 @@ impl Filesystem for FodFuse {
         );
         if self.read_only {
             if let Some(owner) = lock_owner {
-                self.register_local_lock_owner(owner);
-                let changed = self.clear_locks_for_owner(owner);
-                for resource_key in changed {
-                    let records = self
-                        .posix_locks
-                        .lock()
-                        .ok()
-                        .and_then(|guard| guard.get(&resource_key).cloned())
-                        .unwrap_or_default();
-                    if let Err(errno) =
-                        self.persist_lock_records_for_key(&resource_key, owner, &records)
-                    {
-                        warn!(
-                            "FOD release lock sync failed fh={} resource_key={} errno={}",
-                            fh, resource_key, errno
-                        );
-                    }
-                }
-                self.refresh_local_lock_owner_state(owner);
+                self.clear_locks_for_owner_and_sync(owner, "release", fh);
             }
             self.remove_handle_state(fh);
             reply.ok();
             return;
         }
-        if let Some(mut state) = self.write_state_for_handle(fh) {
-            if Self::write_state_has_pending_changes(&state)
-                && self.flush_write_state(&mut state).is_ok()
-            {
-                self.update_write_state(fh, state);
+        if let Err(errno) = self.flush_write_state_for_handle(fh) {
+            warn!("FOD release flush failed fh={} errno={}", fh, errno);
+            if let Some(owner) = lock_owner {
+                self.clear_locks_for_owner_and_sync(owner, "release", fh);
             }
+            self.remove_handle_state(fh);
+            fuse_reply_error!(reply, errno);
+            return;
         }
         if let Some(owner) = lock_owner {
-            self.register_local_lock_owner(owner);
-            let changed = self.clear_locks_for_owner(owner);
-            for resource_key in changed {
-                let records = self
-                    .posix_locks
-                    .lock()
-                    .ok()
-                    .and_then(|guard| guard.get(&resource_key).cloned())
-                    .unwrap_or_default();
-                if let Err(errno) =
-                    self.persist_lock_records_for_key(&resource_key, owner, &records)
-                {
-                    warn!(
-                        "FOD release lock sync failed fh={} resource_key={} errno={}",
-                        fh, resource_key, errno
-                    );
-                }
-            }
-            self.refresh_local_lock_owner_state(owner);
+            self.clear_locks_for_owner_and_sync(owner, "release", fh);
         }
         self.remove_handle_state(fh);
         debug!("FOD release completed fh={}", fh);

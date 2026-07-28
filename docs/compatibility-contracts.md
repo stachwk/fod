@@ -5,8 +5,9 @@ release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
 Inventory date: `2026-07-28`
 
-Reviewed base: commit `ea6a1bc` (`FOD 3.2.33`). This documentation update is
-prepared for `FOD 3.2.34`.
+Reviewed base: commit `ea6a1bc` (`FOD 3.2.33`) and refreshed by later planning
+and `fsync` documentation commits. The current release version remains sourced
+from `fod_version.txt`.
 
 ## Rust Toolchain
 
@@ -44,9 +45,9 @@ prepared for `FOD 3.2.34`.
 
 | Status | Operations |
 | --- | --- |
-| Explicit and exercised | init, lookup, getattr, readdir, readlink, statfs, xattr operations, access, poll, open, POSIX/flock locking, flush, read, release, setattr, namespace operations, write, copy_file_range, mknod, symlink, link |
+| Explicit and exercised | init, lookup, getattr, readdir, readlink, statfs, xattr operations, access, poll, open, POSIX/flock locking, flush, fsync, read, release, setattr, namespace operations, write, copy_file_range, mknod, symlink, link |
 | Explicit but not comprehensively exercised | ioctl, bmap |
-| Not explicitly implemented | destroy, forget, batch_forget, fsync, opendir, readdirplus, releasedir, fsyncdir, fallocate, lseek |
+| Not explicitly implemented | destroy, forget, batch_forget, opendir, readdirplus, releasedir, fsyncdir, fallocate, lseek |
 | Not exposed by the inspected high-level API | native SYNCFS, TMPFILE, STATX callbacks |
 
 Syscall success through a kernel or library fallback is not proof that FOD
@@ -54,7 +55,8 @@ implements the corresponding callback.
 
 ### Priority follow-ups
 
-- implement `fsync` by reusing the current write-state persistence path;
+- add explicit failure-injection coverage for `fsync` once a narrow mounted
+  PostgreSQL error-injection harness exists;
 - measure inode/path cache retention and add `forget` plus `batch_forget` when
   the lookup-reference lifecycle is defined;
 - connect selected `fallocate` modes to existing resize and sparse-storage

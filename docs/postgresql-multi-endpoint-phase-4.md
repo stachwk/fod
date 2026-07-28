@@ -100,9 +100,8 @@ boundaries:
 
 - mounted `CREATE` succeeds and returns an empty-file attribute row;
 - the first write persists through the dedicated write lane;
-- the write is persisted before the test's `sync_all()` call returns; the
-  separate missing explicit fuser `fsync` callback remains tracked as a
-  filesystem-durability follow-up.
+- the write is persisted before the test's `sync_all()` call returns through the
+  explicit per-file `fsync` callback.
 
 The diagnostic run also found a malformed local test database whose initialized
 schema had an empty `config` table. That state is not accepted as an empty-file
