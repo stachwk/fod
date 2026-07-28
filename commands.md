@@ -2052,6 +2052,29 @@ Base commit at execution time: `84817059ccd44c651478dcc25936c536d088e7eb`
 - `printf 'fod_version=' && tr -d '\n' < fod_version.txt && printf '\n' && cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name,.version] | @tsv'` (all workspace packages report `3.2.35`)
 - `git diff --stat && git status --short`
 - `git diff -- rust_fuse/src/fs.rs TODO.md docs/compatibility-contracts.md docs/fuse-protocol-7-32-7-40-capabilities.md docs/postgresql-multi-endpoint-phase-4.md | sed -n '1,280p'`
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `09508f4f9bccd8d71eaa8c6aa7831a210247a7aa`
+
+- MemPalace dry-run mine for project context in wing `myai`
+- `source ~/.venv/bin/activate && mempalace search "mkfs test database restore target empty fod.config make init operator database" --wing myai`
+- `git status --short --branch && git log -3 --oneline && printf 'version=' && tr -d '\n' < fod_version.txt && printf '\n'`
+- inspection of `Makefile`, `TODO.md`, `rust_mkfs/src/main.rs`, `rust_mkfs/tests/schema_upgrade.rs`, `migrations/base_schema.sql`, and existing schema/restore references
+- `cargo search fuser --limit 5 && cargo search clap --limit 3 && cargo search serde --limit 3 && cargo search postgres --limit 3`
+- `cargo update --workspace --dry-run`
+- `cargo info fuser`
+- `cargo info fuser@0.18.0 && cargo info clap@4.6.4 && cargo info serde@1.0.229`
+- `make -n test-db-restore-local`
+- `cargo metadata --no-deps --format-version 1 >/tmp/fod-cargo-metadata.json`
+- `make test-db-restore-local` (passed; reset local Docker Compose `fod` database and initialized schema version `19`)
+- `target/debug/fod-rust-mkfs status` (passed; FOD `3.2.36`, schema `19`, ready)
+- `if make test-db-restore-local QNAP=1; then echo 'unexpected success' >&2; exit 1; else status=$?; if [ "$status" -eq 2 ]; then echo 'expected QNAP refusal'; else echo "unexpected status $status" >&2; exit "$status"; fi; fi` (passed by refusing remote/QNAP mode)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.36`)
+- `make test-version` (`7` passed for FOD `3.2.36`)
+- `cargo update --workspace --dry-run --verbose` (reported no lockfile changes; listed newer available crates including `fuser 0.18.0`, `clap 4.6.4`, `serde 1.0.229`, and `serde_json 1.0.150`)
+- `printf 'fod_version=' && tr -d '\n' < fod_version.txt && printf '\n' && cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name,.version] | @tsv'` (all workspace packages report `3.2.36`)
+- `git diff --stat && git status --short && git diff --check`
 - `cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name, .version] | @tsv'` (all five workspace packages report `3.2.14`)
 
 Execution date: `2026-07-18`
