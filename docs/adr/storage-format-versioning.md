@@ -20,11 +20,11 @@ been applied. A storage-format boundary is narrower: it exists only when
 persisted payload cannot be interpreted safely by both sides of an upgrade
 without an explicit conversion or compatibility decision.
 
-Schema version 18 is the current database shape. Payload ownership is rooted in
+Schema version 19 is the current database shape. Payload ownership is rooted in
 `data_objects`; `data_blocks`, `data_extents`, and `copy_block_crc` refer to the
-object; extents remain opt-in; and payload-capacity reservations are control
-records rather than file data. There is no separate storage-format column or
-marker today.
+object; extents remain opt-in; payload-capacity reservations are control records
+rather than file data; and immutable index catalogue snapshots are part of the
+schema contract. There is no separate storage-format column or marker today.
 
 ## Decision
 
@@ -72,4 +72,4 @@ on unsupported states.
 Future storage redesigns cannot add an ad hoc marker or schema column before
 updating this ADR or replacing it with a more specific accepted decision.
 
-The current schema version 18 requires no new storage-format marker.
+The current schema version 19 requires no new storage-format marker.

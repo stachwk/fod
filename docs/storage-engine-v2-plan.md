@@ -61,6 +61,10 @@ Implementation status:
 - schema version 17 now makes `data_object_id` the exclusive payload owner,
   removes representative `id_file` columns from all payload tables, and uses
   object-level cascading deletion in the runtime and indexer cleanup paths;
+- later schema versions build on that ownership model: schema version 18 adds
+  transactional payload-capacity reservations, and schema version 19 adds
+  immutable index catalogue snapshots without adding a separate storage-format
+  marker;
 - extents remain opt-in because mixed and random workloads still regress.
 
 ## Original problem and remaining copy issue

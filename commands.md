@@ -2319,3 +2319,24 @@ Base commit at execution time: `8dc5e886b9e1e447ca76f422490f5951fb9f2193`
 - final `git diff --check`, `cargo fmt --all -- --check`, and `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed)
 - `make test-version` (`7` passed for FOD `3.2.33`)
 - post-test `findmnt`, FOD process, and target ownership inspection (no active FOD mount or daemon and no non-user-owned target artifact)
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `ea6a1bc7d0b69ec826ef9fbd7d21ae99be960c2e`
+
+- `git status --short --branch && git rev-parse --short HEAD && printf 'version=' && tr -d '\n' < fod_version.txt && printf '\n'`
+- `source ~/.venv/bin/activate && mempalace --help`
+- `rg -n "3\.2\.[0-9]+|schema ?1[0-8]|schemat ?1[0-8]|schema version|wersja|TODO|FOD 3\.2" --glob '*.md'`
+- `source ~/.venv/bin/activate && mempalace search "FOD 3.2.33 schema 19 documentation TODO roadmap compatibility" --wing myai`
+- inspection of `ROADMAP.md`, `TODO.md`, `docs/compatibility-contracts.md`, `docs/adr/storage-format-versioning.md`, `docs/postgresql-multi-endpoint-phase-4.md`, `docs/storage-engine-v2-plan.md`, `Cargo.toml`, `docs/versioning.md`, `commands.md`, and `conclusions.md`
+- `rg -n 'SCHEMA_VERSION|latest_migration_version|Add immutable index catalogue snapshots|CURRENT_SCHEMA' rust_mkfs/src/main.rs migrations`
+- `rg -n '3\.2\.16|schema version `18`|schema version 18|version 18|version `18`|version 17|through version 17|schema-v17|schematu.*17|wersj.*17' README.md README.pl ROADMAP.md TODO.md docs/*.md docs/**/*.md`
+- `rg -n '^\s*- \[ \]' TODO.md docs/*.md docs/**/*.md ROADMAP.md`
+- `git log -5 --oneline --decorate`
+- `cargo metadata --no-deps --format-version 1 >/tmp/fod-cargo-metadata.json`
+- `rg -n 'FOD `3\.2\.16`|prepared for `FOD 3\.2\.16`|Current schema version: 18|schema version `18`|schema version 18|version 18|version `18`|through version 17|schema-v17 storage contracts|schema-v17 ownership' ROADMAP.md TODO.md README.md README.pl docs/compatibility-contracts.md docs/adr/storage-format-versioning.md docs/storage-engine-v2-plan.md`
+- `git diff --check` (passed)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.34`)
+- `make test-version` (`7` passed for FOD `3.2.34`)
+- `git status --short && git diff --stat && git diff -- Cargo.lock Cargo.toml fod_version.txt | sed -n '1,160p'`
+- `rg -n '^\s*- \[ \]' TODO.md docs/*.md docs/**/*.md ROADMAP.md && rg -n 'Current schema version: 18|Database schema \| version 18|FOD `3\.2\.16`|prepared for `FOD 3\.2\.16`|through version 17|schema-v17 storage contracts' ROADMAP.md TODO.md docs README.md README.pl` (open TODO list printed; stale-current-pattern search had no matches)

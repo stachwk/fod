@@ -3,10 +3,10 @@
 This document records the current verified compatibility boundaries of FOD. The
 release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
-Inventory date: `2026-07-19`
+Inventory date: `2026-07-28`
 
-Reviewed base: commit `9422007` (`FOD 3.2.15`). This documentation update is
-prepared for `FOD 3.2.16`.
+Reviewed base: commit `ea6a1bc` (`FOD 3.2.33`). This documentation update is
+prepared for `FOD 3.2.34`.
 
 ## Rust Toolchain
 
@@ -85,7 +85,7 @@ implements the corresponding callback.
 
 ## PostgreSQL storage
 
-- Current schema version: 18.
+- Current schema version: 19.
 - Fresh installs use `migrations/base_schema.sql`; numbered files preserve the
   upgrade path.
 - Payload rows are owned by `data_object_id`.
@@ -130,7 +130,7 @@ implements the corresponding callback.
 
 ## Storage-format evolution
 
-- Current physical layouts are blocks and opt-in extents under schema version 18.
+- Current physical layouts are blocks and opt-in extents under schema version 19.
 - Incompatible structure or interpretation changes require a schema migration.
 - Per-object format markers are appropriate only when multiple layouts must
   coexist and readers can dispatch safely.
@@ -145,6 +145,6 @@ implements the corresponding callback.
 | Rust | minimum 1.85, Edition 2021 |
 | Automation | no active GitHub Actions workflow |
 | Hotpath ABI | internal Rust interface; no supported public C ABI |
-| Database schema | version 18 |
+| Database schema | version 19 |
 | Capacity | canonical DB quota, advisory-lock admission, expiring reservations |
 | Layout | block or extent payload per object |

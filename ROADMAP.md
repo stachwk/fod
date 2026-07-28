@@ -2,7 +2,12 @@
 
 ## Current Status
 
-- FOD `3.2.16` has a working PostgreSQL-backed FUSE core, schema version `18`, documented runtime profiles, a shared Rust indexing core, and a broad local integration suite.
+- The current FOD release is sourced from `fod_version.txt`; at the time this
+  roadmap was refreshed the implemented release was `3.2.33` and the next
+  documentation commit is prepared as `3.2.34`.
+- FOD has a working PostgreSQL-backed FUSE core, schema version `19`,
+  documented runtime profiles, a shared Rust indexing core, and a broad local
+  integration suite.
 - The repository currently has no active GitHub Actions workflow. `make test-all` is the main local regression gate, while `make test-all-full` adds wider mounted and indexer coverage.
 - Benchmark baselines are tracked in [`BENCHMARKS.md`](BENCHMARKS.md), while [`TODO.md`](TODO.md) records open follow-ups, accepted decisions, completed work, and regression notes.
 - SELinux mount-label policy is a deliberate non-goal; xattr-backed metadata and runtime gating are the supported path.
@@ -22,7 +27,7 @@
 - xattr and ACL support
 - PostgreSQL-backed advisory locking and session leases
 - runtime tunables in `fod_config.ini`
-- safe schema init, repair, status, and migration handling through schema version `18`
+- safe schema init, repair, status, and migration handling through schema version `19`
 - Rust-backed repository and query layers
 - split attribute and directory-entry caches
 - shared Rust `fod-indexer` core with capability-driven source kinds
@@ -37,8 +42,13 @@
 ## Near Term
 
 - keep `make test-all`, `make test-all-full`, `cargo fmt --all -- --check`, `cargo check --workspace --locked`, and `make test-version` as the documented local quality gates
+- keep planning documentation synchronized with `fod_version.txt`, the Cargo
+  workspace version, and the Rust schema manifest before closing further TODO
+  items
 - introduce an active automated workflow only as an explicit project decision, with Rust 1.85 minimum-version coverage and locked dependency checks
-- create a machine-readable FUSE callback and capability matrix covering: kernel protocol availability, public `fuser` API availability, FOD implementation status, semantic readiness, and assigned regression tests
+- aggregate the existing FUSE callback, PostgreSQL, libpq, runtime, and
+  storage-format diagnostics only after the individual boundaries expose
+  trustworthy machine-readable data
 - implement an explicit `fsync` durability contract by reusing the existing write-state persistence path and propagating PostgreSQL errors truthfully
 - instrument inode/path cache lifetime and implement `forget` plus `batch_forget` if large-tree measurements confirm retained entries
 - connect the existing resize and sparse-storage machinery to explicitly supported `fallocate` modes; reject unsupported mode combinations with `EOPNOTSUPP`
