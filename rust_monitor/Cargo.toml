@@ -8,5 +8,9 @@ rust-version.workspace = true
 name = "fod_rust_monitor"
 path = "src/lib.rs"
 
+[[bin]]
+name = "fod-monitor"
+path = "src/main.rs"
+
 [dependencies]
 log = "0.4"

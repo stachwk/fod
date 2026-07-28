@@ -2135,6 +2135,25 @@ Base commit at execution time: `59d96ba`
 - `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.41`)
 - `cargo test --locked -p fod-rust-monitor` (passed; no unit/doc tests yet)
 - `cargo test --locked -p fod-rust-hotpath` (passed: `80` unit tests plus all hotpath integration/doc-test targets)
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `352297a`
+
+- inspected `Makefile`, `rust_monitor/Cargo.toml`, `rust_monitor/src/lib.rs`, `rust_indexer/src/main.rs`, and `rust_mkfs/src/main.rs`
+- added the `fod-monitor` binary target and initial `status` command
+- wired `fod-monitor` into `build-debug`, `install-root-scripts`, and `install-on-root`
+- `cargo fmt --all`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.42`)
+- `make build-debug` (passed and built `target/debug/fod-monitor`)
+- `target/debug/fod-monitor --help` (passed)
+- `target/debug/fod-monitor --version` (reported `fod-monitor 3.2.42`)
+- `target/debug/fod-monitor status` (passed; no local FOD processes detected)
+- `make -n install-root-scripts` (confirmed install and strip commands for `/usr/local/bin/fod-monitor`)
+- `cargo build --manifest-path Cargo.toml --profile release -p fod-rust-monitor --bin fod-monitor` (passed)
+- `make install-on-root` (passed; installed and stripped `/usr/local/bin/fod-monitor`)
+- `/usr/local/bin/fod-monitor --version` (reported `fod-monitor 3.2.42`)
+- `/usr/local/bin/fod-monitor status` (passed; no local FOD processes detected)
 - `printf 'fod_version=' && tr -d '\n' < fod_version.txt && printf '\n' && cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name,.version] | @tsv'` (all workspace packages report `3.2.35`)
 - `git diff --stat && git status --short`
 - `git diff -- rust_fuse/src/fs.rs TODO.md docs/compatibility-contracts.md docs/fuse-protocol-7-32-7-40-capabilities.md docs/postgresql-multi-endpoint-phase-4.md | sed -n '1,280p'`
