@@ -2082,6 +2082,21 @@ Base commit at execution time: `1e652a2`
 - `cargo test --locked -p fod-rust-fuse --test mount_smoke -- --nocapture` (`9` passed; startup diagnostic reported `fuser=0.18.0`)
 - `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (`1` passed)
 - `make test-remount-durability-benchmark` (passed; wrote and read `65536` bytes after remount)
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `55ff34f`
+
+- `source ~/.venv/bin/activate && mempalace search "FOD fod-monitor pg_lanes monitoring process PostgreSQL pool metrics" --wing myai`
+- `git status --short --branch && cat fod_version.txt && nl -ba Cargo.toml | sed -n '1,50p'`
+- inspection of `rust_fuse/src/pg_lanes.rs`, `rust_hotpath/src/pg.rs`, `ROADMAP.md`, `TODO.md`, and `docs/postgresql-multi-endpoint-phase-4.md`
+- `rg -n 'Observ|Metric|metrics|Memory|rss|pg_stat|Pool|Lane|snapshot|diagnostic|Monitor' rust_fuse/src/pg_lanes.rs rust_hotpath/src/pg.rs rust_fuse/src`
+- `cargo fmt --all`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.38`)
+- `cargo fmt --all -- --check` (passed)
+- `cargo test --locked -p fod-rust-monitor` (passed; no unit/doc tests yet)
+- `cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse pg_lanes::tests -- --nocapture` (`4` lane orchestration tests passed)
+- `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (passed)
 - `printf 'fod_version=' && tr -d '\n' < fod_version.txt && printf '\n' && cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name,.version] | @tsv'` (all workspace packages report `3.2.35`)
 - `git diff --stat && git status --short`
 - `git diff -- rust_fuse/src/fs.rs TODO.md docs/compatibility-contracts.md docs/fuse-protocol-7-32-7-40-capabilities.md docs/postgresql-multi-endpoint-phase-4.md | sed -n '1,280p'`

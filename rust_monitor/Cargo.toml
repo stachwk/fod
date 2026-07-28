@@ -1,0 +1,13 @@
+[package]
+name = "fod-rust-monitor"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+
+[lib]
+name = "fod_rust_monitor"
+path = "src/lib.rs"
+
+[dependencies]
+log = "0.4"
+rust_hotpath = { package = "fod-rust-hotpath", path = "../rust_hotpath" }

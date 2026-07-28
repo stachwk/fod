@@ -2,6 +2,7 @@
 members = [
     "rust_runtime",
     "rust_hotpath",
+    "rust_monitor",
     "rust_mkfs",
     "rust_fuse",
     "rust_indexer",
@@ -9,7 +10,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "3.2.37"
+version = "3.2.38"
 rust-version = "1.85"
 
 [profile.release-lto]

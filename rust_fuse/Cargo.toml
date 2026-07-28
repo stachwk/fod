@@ -15,3 +15,4 @@ log = "0.4"
 linked-hash-map = "0.5"
 rust_hotpath = { package = "fod-rust-hotpath", path = "../rust_hotpath" }
 fod_rust_runtime = { package = "fod-rust-runtime", path = "../rust_runtime" }
+fod_rust_monitor = { package = "fod-rust-monitor", path = "../rust_monitor" }

@@ -63,6 +63,7 @@
 
 - design role-aware multi-endpoint PostgreSQL routing with explicit primary and replica roles, operation-aware selection, and read-after-write consistency
 - add endpoint health, latency, pool, replay-lag, and circuit-breaker diagnostics before enabling automatic replica routing
+- keep expanding `fod-rust-monitor` as the shared home for process, PostgreSQL, lane, queue, and throughput diagnostics instead of growing `pg_lanes.rs` or `pg.rs` further
 - strengthen production-style fault tests for reconnect, promotion, lag, lock/session safety, and replay confirmation without presenting independent primaries as a safe multi-primary filesystem
 - continue performance work only from measured SQL, WAL, connection, memory, or FUSE callback evidence
 - keep backup and restore aligned with PostgreSQL operational practices rather than creating a parallel FOD-specific backup format
