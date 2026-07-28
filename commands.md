@@ -2123,6 +2123,18 @@ Base commit at execution time: `1b69421`
 - `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.40`)
 - `cargo test --locked -p fod-rust-monitor` (passed; no unit/doc tests yet)
 - `cargo test --locked -p fod-rust-hotpath` (passed: `80` unit tests plus all hotpath integration/doc-test targets)
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `59d96ba`
+
+- `source ~/.venv/bin/activate && mempalace search "FOD LogicalTaskQueueObservability monitor queue aggregator Stage 3" --wing myai`
+- `git status --short --branch && cat fod_version.txt && nl -ba rust_monitor/src/lib.rs | sed -n '1,190p'`
+- added `LogicalTaskQueueObservability` to `rust_monitor/src/lib.rs`
+- `cargo fmt --all -- --check` (passed)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.41`)
+- `cargo test --locked -p fod-rust-monitor` (passed; no unit/doc tests yet)
+- `cargo test --locked -p fod-rust-hotpath` (passed: `80` unit tests plus all hotpath integration/doc-test targets)
 - `printf 'fod_version=' && tr -d '\n' < fod_version.txt && printf '\n' && cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name,.version] | @tsv'` (all workspace packages report `3.2.35`)
 - `git diff --stat && git status --short`
 - `git diff -- rust_fuse/src/fs.rs TODO.md docs/compatibility-contracts.md docs/fuse-protocol-7-32-7-40-capabilities.md docs/postgresql-multi-endpoint-phase-4.md | sed -n '1,280p'`

@@ -394,6 +394,13 @@ snapshot, and completed-file/byte throughput helpers. They are intentionally
 not wired to scheduling yet; this keeps the monitor contract stable before
 changing FUSE execution behavior.
 
+Implementation note, 2026-07-28: `LogicalTaskQueueObservability` now provides
+the first in-memory Stage 3 counter aggregate for admitted, queued, active,
+completed, failed, backpressure, fairness, active-transaction,
+payload-in-flight, database-batch, throughput, and accounting-error counters.
+It remains disconnected from the FUSE execution path until scheduling and
+backpressure policy are defined.
+
 - direct read-only methods to the read lane;
 - keep all mutations on the write lane;
 - direct schema and administrative checks to the control lane;

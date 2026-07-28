@@ -84,6 +84,7 @@ pub struct LogicalTaskQueueSnapshot {
     pub per_task_buffer_limit_bytes: u64,
     pub backpressure_events: u64,
     pub fairness_yields: u64,
+    pub accounting_errors: u64,
 }
 
 impl LogicalTaskQueueSnapshot {
@@ -136,6 +137,185 @@ impl LogicalTaskThroughputSnapshot {
             return 0;
         }
         self.database_batch_rows / self.database_batches
+    }
+}
+
+#[derive(Debug, Default)]
+struct LogicalTaskQueueObservabilityState {
+    admitted_tasks: u64,
+    completed_tasks: u64,
+    failed_tasks: u64,
+    queued_tasks: u64,
+    active_tasks: u64,
+    peak_queued_tasks: u64,
+    peak_active_tasks: u64,
+    active_transactions: u64,
+    payload_in_flight_bytes: u64,
+    backpressure_events: u64,
+    fairness_yields: u64,
+    completed_files: u64,
+    completed_bytes: u64,
+    database_batches: u64,
+    database_batch_rows: u64,
+    database_batch_bytes: u64,
+    elapsed_micros: u64,
+    accounting_errors: u64,
+}
+
+#[derive(Debug)]
+pub struct LogicalTaskQueueObservability {
+    class: LogicalTaskClass,
+    active_transaction_limit: u64,
+    payload_in_flight_limit_bytes: u64,
+    per_task_buffer_limit_bytes: u64,
+    state: Mutex<LogicalTaskQueueObservabilityState>,
+}
+
+impl LogicalTaskQueueObservability {
+    pub fn new(
+        class: LogicalTaskClass,
+        active_transaction_limit: u64,
+        payload_in_flight_limit_bytes: u64,
+        per_task_buffer_limit_bytes: u64,
+    ) -> Self {
+        Self {
+            class,
+            active_transaction_limit,
+            payload_in_flight_limit_bytes,
+            per_task_buffer_limit_bytes,
+            state: Mutex::new(LogicalTaskQueueObservabilityState::default()),
+        }
+    }
+
+    pub fn admit_task(&self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.admitted_tasks = state.admitted_tasks.saturating_add(1);
+        state.queued_tasks = state.queued_tasks.saturating_add(1);
+        state.peak_queued_tasks = state.peak_queued_tasks.max(state.queued_tasks);
+    }
+
+    pub fn start_task(&self, payload_bytes: u64, starts_transaction: bool) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        match state.queued_tasks.checked_sub(1) {
+            Some(queued_tasks) => state.queued_tasks = queued_tasks,
+            None => state.accounting_errors = state.accounting_errors.saturating_add(1),
+        }
+        state.active_tasks = state.active_tasks.saturating_add(1);
+        state.peak_active_tasks = state.peak_active_tasks.max(state.active_tasks);
+        state.payload_in_flight_bytes = state.payload_in_flight_bytes.saturating_add(payload_bytes);
+        if starts_transaction {
+            state.active_transactions = state.active_transactions.saturating_add(1);
+        }
+    }
+
+    pub fn finish_task(
+        &self,
+        payload_bytes: u64,
+        ends_transaction: bool,
+        failed: bool,
+        elapsed: Duration,
+        completed_files: u64,
+        completed_bytes: u64,
+    ) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.completed_tasks = state.completed_tasks.saturating_add(1);
+        if failed {
+            state.failed_tasks = state.failed_tasks.saturating_add(1);
+        }
+        match state.active_tasks.checked_sub(1) {
+            Some(active_tasks) => state.active_tasks = active_tasks,
+            None => state.accounting_errors = state.accounting_errors.saturating_add(1),
+        }
+        match state.payload_in_flight_bytes.checked_sub(payload_bytes) {
+            Some(payload_in_flight_bytes) => {
+                state.payload_in_flight_bytes = payload_in_flight_bytes
+            }
+            None => {
+                state.payload_in_flight_bytes = 0;
+                state.accounting_errors = state.accounting_errors.saturating_add(1);
+            }
+        }
+        if ends_transaction {
+            match state.active_transactions.checked_sub(1) {
+                Some(active_transactions) => state.active_transactions = active_transactions,
+                None => state.accounting_errors = state.accounting_errors.saturating_add(1),
+            }
+        }
+        state.completed_files = state.completed_files.saturating_add(completed_files);
+        state.completed_bytes = state.completed_bytes.saturating_add(completed_bytes);
+        state.elapsed_micros = state
+            .elapsed_micros
+            .saturating_add(duration_micros(elapsed));
+    }
+
+    pub fn record_database_batch(&self, rows: u64, bytes: u64) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.database_batches = state.database_batches.saturating_add(1);
+        state.database_batch_rows = state.database_batch_rows.saturating_add(rows);
+        state.database_batch_bytes = state.database_batch_bytes.saturating_add(bytes);
+    }
+
+    pub fn record_backpressure(&self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.backpressure_events = state.backpressure_events.saturating_add(1);
+    }
+
+    pub fn record_fairness_yield(&self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.fairness_yields = state.fairness_yields.saturating_add(1);
+    }
+
+    pub fn queue_snapshot(&self) -> Result<LogicalTaskQueueSnapshot, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "logical task queue observability state is poisoned".to_string())?;
+        Ok(LogicalTaskQueueSnapshot {
+            class: self.class,
+            admitted_tasks: state.admitted_tasks,
+            completed_tasks: state.completed_tasks,
+            failed_tasks: state.failed_tasks,
+            queued_tasks: state.queued_tasks,
+            active_tasks: state.active_tasks,
+            peak_queued_tasks: state.peak_queued_tasks,
+            peak_active_tasks: state.peak_active_tasks,
+            active_transactions: state.active_transactions,
+            active_transaction_limit: self.active_transaction_limit,
+            payload_in_flight_bytes: state.payload_in_flight_bytes,
+            payload_in_flight_limit_bytes: self.payload_in_flight_limit_bytes,
+            per_task_buffer_limit_bytes: self.per_task_buffer_limit_bytes,
+            backpressure_events: state.backpressure_events,
+            fairness_yields: state.fairness_yields,
+            accounting_errors: state.accounting_errors,
+        })
+    }
+
+    pub fn throughput_snapshot(&self) -> Result<LogicalTaskThroughputSnapshot, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "logical task queue observability state is poisoned".to_string())?;
+        Ok(LogicalTaskThroughputSnapshot {
+            class: self.class,
+            completed_files: state.completed_files,
+            completed_bytes: state.completed_bytes,
+            database_batches: state.database_batches,
+            database_batch_rows: state.database_batch_rows,
+            database_batch_bytes: state.database_batch_bytes,
+            elapsed_micros: state.elapsed_micros,
+        })
     }
 }
 
