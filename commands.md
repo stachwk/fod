@@ -2493,3 +2493,19 @@ Base commit at execution time: `3f9375b493122a451ee6f76abf4e088732204ab9`
 - `rg -n 'prepared for|3\.2\.34|missing explicit fuser|Not explicitly implemented \|.*fsync|currently treats a failed final persist as non-fatal|implement `fsync`' ROADMAP.md TODO.md docs/compatibility-contracts.md docs/fuse-protocol-7-32-7-40-capabilities.md docs/postgresql-multi-endpoint-phase-4.md Cargo.toml Cargo.lock` (only `fsyncdir` remained in the not-implemented list)
 - `cargo fmt --all -- --check` (passed)
 - `git diff --check` (passed)
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `916c2d01b3737ba4377d937af7726b8bd8ed09ed`
+
+- `source ~/.venv/bin/activate && mempalace search "FOD fod-monitor top report process monitoring" --wing myai`
+- `git status --short --branch && cat fod_version.txt`
+- inspection of `rust_monitor/src/main.rs`, `rust_monitor/Cargo.toml`, `Makefile`, `README.md`, `README.pl`, `TODO.md`, and docs references mentioning `fod-monitor`
+- `cargo fmt --all -- --check`
+- `cargo test --locked -p fod-rust-monitor`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `target/debug/fod-monitor --help && target/debug/fod-monitor status && target/debug/fod-monitor top --iterations 1 --no-clear && target/debug/fod-monitor report` (first attempt hit the previous debug binary before rebuilding the executable)
+- `cargo build --manifest-path rust_monitor/Cargo.toml --bin fod-monitor`
+- `make -n install-root-scripts | rg "fod-monitor|rust_monitor|monitor"`
+- `target/debug/fod-monitor --help && target/debug/fod-monitor status && target/debug/fod-monitor top --iterations 1 --no-clear && target/debug/fod-monitor report`
+- `make build-debug`
