@@ -4,6 +4,10 @@
 use crate::crc32_bytes;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use fod_rust_monitor::{
+    DbRepoObservabilitySnapshot, DbRepoPayloadObservability, DbRepoPoolObservabilitySnapshot,
+    LaneObservabilitySource, PostgresPressureSnapshot,
+};
 use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, postgres_session_setup_sql,
     request_token as generate_request_token, DataObjectSwapCleanup, PersistBlockTransport,
@@ -2619,186 +2623,6 @@ impl ConnectionLane {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DbRepoPoolObservabilitySnapshot {
-    pub connection_limit: usize,
-    pub live_connections: usize,
-    pub idle_write_connections: usize,
-    pub idle_control_connections: usize,
-    pub active_connections: usize,
-    pub queued_acquisitions: usize,
-    pub peak_active_connections: usize,
-    pub peak_queued_acquisitions: usize,
-    pub acquisition_count: u64,
-    pub acquisition_wait_micros_total: u64,
-    pub acquisition_wait_micros_max: u64,
-    pub connection_create_count: u64,
-    pub connection_create_failures: u64,
-    pub connection_create_micros_total: u64,
-    pub connection_create_micros_max: u64,
-    pub operation_count: u64,
-    pub operation_failures: u64,
-    pub operation_micros_total: u64,
-    pub operation_micros_max: u64,
-    pub replay_count: u64,
-    pub transaction_count: u64,
-    pub transaction_failures: u64,
-    pub transaction_micros_total: u64,
-    pub transaction_micros_max: u64,
-    pub heartbeat_count: u64,
-    pub heartbeat_failures: u64,
-    pub heartbeat_schedule_delay_micros_total: u64,
-    pub heartbeat_schedule_delay_micros_max: u64,
-    pub heartbeat_execution_micros_total: u64,
-    pub heartbeat_execution_micros_max: u64,
-}
-
-impl DbRepoPoolObservabilitySnapshot {
-    pub fn idle_connections(&self) -> usize {
-        self.idle_write_connections
-            .saturating_add(self.idle_control_connections)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DbRepoObservabilitySnapshot {
-    pub pool: DbRepoPoolObservabilitySnapshot,
-    pub payload: DbRepoPayloadObservabilitySnapshot,
-    pub global_payload: DbRepoPayloadObservabilitySnapshot,
-    pub persist_buffer_chunk_blocks: u64,
-    pub persist_copy_send_buffer_bytes: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostgresPressureSnapshot {
-    pub database_connections: u64,
-    pub activity_connections: u64,
-    pub activity_active: u64,
-    pub activity_idle: u64,
-    pub activity_idle_in_transaction: u64,
-    pub temp_files: u64,
-    pub temp_bytes: u64,
-    pub deadlocks: u64,
-    pub shared_buffers: String,
-    pub work_mem: String,
-    pub maintenance_work_mem: String,
-    pub temp_buffers: String,
-    pub current_backend_memory_bytes: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DbRepoPayloadObservabilitySnapshot {
-    pub in_flight_bytes: u64,
-    pub peak_in_flight_bytes: u64,
-    pub accounting_errors: u64,
-    pub persist_operation_count: u64,
-    pub persist_operation_failures: u64,
-    pub persist_input_rows_total: u64,
-    pub persist_input_rows_max: u64,
-    pub persist_input_bytes_total: u64,
-    pub persist_input_bytes_max: u64,
-    pub persist_micros_total: u64,
-    pub persist_micros_max: u64,
-}
-
-#[derive(Debug, Default)]
-struct DbRepoPayloadObservabilityState {
-    in_flight_bytes: u64,
-    peak_in_flight_bytes: u64,
-    accounting_errors: u64,
-    persist_operation_count: u64,
-    persist_operation_failures: u64,
-    persist_input_rows_total: u64,
-    persist_input_rows_max: u64,
-    persist_input_bytes_total: u64,
-    persist_input_bytes_max: u64,
-    persist_micros_total: u64,
-    persist_micros_max: u64,
-}
-
-#[derive(Debug, Default)]
-pub struct DbRepoPayloadObservability {
-    state: Mutex<DbRepoPayloadObservabilityState>,
-}
-
-fn accumulate_observation(target: &mut u64, value: u64) -> bool {
-    match target.checked_add(value) {
-        Some(total) => {
-            *target = total;
-            true
-        }
-        None => {
-            *target = u64::MAX;
-            false
-        }
-    }
-}
-
-impl DbRepoPayloadObservability {
-    fn begin(&self, input_bytes: u64) -> bool {
-        let Ok(mut state) = self.state.lock() else {
-            return false;
-        };
-        let Some(in_flight_bytes) = state.in_flight_bytes.checked_add(input_bytes) else {
-            state.accounting_errors = state.accounting_errors.saturating_add(1);
-            return false;
-        };
-        state.in_flight_bytes = in_flight_bytes;
-        state.peak_in_flight_bytes = state.peak_in_flight_bytes.max(state.in_flight_bytes);
-        true
-    }
-
-    fn finish(&self, input_bytes: u64, input_rows: u64, elapsed: Duration, failed: bool) {
-        let Ok(mut state) = self.state.lock() else {
-            return;
-        };
-        match state.in_flight_bytes.checked_sub(input_bytes) {
-            Some(in_flight_bytes) => state.in_flight_bytes = in_flight_bytes,
-            None => {
-                state.in_flight_bytes = 0;
-                state.accounting_errors = state.accounting_errors.saturating_add(1);
-            }
-        }
-        let mut accounting_error = !accumulate_observation(&mut state.persist_operation_count, 1);
-        if failed {
-            accounting_error |= !accumulate_observation(&mut state.persist_operation_failures, 1);
-        }
-        accounting_error |=
-            !accumulate_observation(&mut state.persist_input_rows_total, input_rows);
-        state.persist_input_rows_max = state.persist_input_rows_max.max(input_rows);
-        accounting_error |=
-            !accumulate_observation(&mut state.persist_input_bytes_total, input_bytes);
-        state.persist_input_bytes_max = state.persist_input_bytes_max.max(input_bytes);
-        let elapsed_micros = SharedConnectionPool::duration_micros(elapsed);
-        accounting_error |=
-            !accumulate_observation(&mut state.persist_micros_total, elapsed_micros);
-        state.persist_micros_max = state.persist_micros_max.max(elapsed_micros);
-        if accounting_error {
-            state.accounting_errors = state.accounting_errors.saturating_add(1);
-        }
-    }
-
-    fn snapshot(&self) -> Result<DbRepoPayloadObservabilitySnapshot, String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "payload observability state is poisoned".to_string())?;
-        Ok(DbRepoPayloadObservabilitySnapshot {
-            in_flight_bytes: state.in_flight_bytes,
-            peak_in_flight_bytes: state.peak_in_flight_bytes,
-            accounting_errors: state.accounting_errors,
-            persist_operation_count: state.persist_operation_count,
-            persist_operation_failures: state.persist_operation_failures,
-            persist_input_rows_total: state.persist_input_rows_total,
-            persist_input_rows_max: state.persist_input_rows_max,
-            persist_input_bytes_total: state.persist_input_bytes_total,
-            persist_input_bytes_max: state.persist_input_bytes_max,
-            persist_micros_total: state.persist_micros_total,
-            persist_micros_max: state.persist_micros_max,
-        })
-    }
-}
-
 struct PayloadPersistGuard {
     local: Arc<DbRepoPayloadObservability>,
     global: Option<Arc<DbRepoPayloadObservability>>,
@@ -2817,11 +2641,11 @@ impl PayloadPersistGuard {
         input_bytes: u64,
         input_rows: u64,
     ) -> Self {
-        let local_started = local.begin(input_bytes);
+        let local_started = local.begin_persist(input_bytes);
         let global = (!Arc::ptr_eq(&local, &global)).then_some(global);
         let global_started = global
             .as_ref()
-            .is_some_and(|tracker| tracker.begin(input_bytes));
+            .is_some_and(|tracker| tracker.begin_persist(input_bytes));
         Self {
             local,
             global,
@@ -2844,11 +2668,11 @@ impl Drop for PayloadPersistGuard {
         let elapsed = self.started.elapsed();
         if self.local_started {
             self.local
-                .finish(self.input_bytes, self.input_rows, elapsed, self.failed);
+                .finish_persist(self.input_bytes, self.input_rows, elapsed, self.failed);
         }
         if self.global_started {
             if let Some(global) = &self.global {
-                global.finish(self.input_bytes, self.input_rows, elapsed, self.failed);
+                global.finish_persist(self.input_bytes, self.input_rows, elapsed, self.failed);
             }
         }
     }
@@ -10948,6 +10772,16 @@ impl DbRepo {
             PQclear(res);
             Ok(names)
         })
+    }
+}
+
+impl LaneObservabilitySource for DbRepo {
+    fn observability_snapshot(&self) -> Result<DbRepoObservabilitySnapshot, String> {
+        DbRepo::observability_snapshot(self)
+    }
+
+    fn postgres_pressure_snapshot(&self) -> Result<PostgresPressureSnapshot, String> {
+        DbRepo::postgres_pressure_snapshot(self)
     }
 }
 

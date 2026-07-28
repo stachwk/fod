@@ -1,13 +1,16 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use fod_rust_monitor::{log_lane_observability, LaneObservabilitySampler};
+use fod_rust_monitor::{
+    log_lane_observability, DbRepoPayloadObservability, LaneObservabilitySampler,
+    LaneObservabilitySource,
+};
 use fod_rust_runtime::ini_config::{
     PgConnectionPurpose, PgEndpointHealthRegistry, PgEndpointHealthSnapshot, PgEndpointProbe,
     PgEndpointRole, PgPoolIsolationMode, PgPoolPlan,
 };
 use fod_rust_runtime::{env_var_truthy_with_legacy_alias, RuntimeConfig};
-use rust_hotpath::pg::{DbRepo, DbRepoPayloadObservability};
+use rust_hotpath::pg::DbRepo;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
@@ -168,19 +171,33 @@ impl DbRepoLanes {
         }
     }
 
-    fn observability_repositories(&self) -> Vec<(&'static str, DbRepo)> {
+    fn observability_repositories(
+        &self,
+    ) -> Vec<(&'static str, Arc<dyn LaneObservabilitySource + Send + Sync>)> {
         match &self.storage {
-            DbRepoLaneStorage::Shared(repo) => vec![("shared", repo.clone())],
+            DbRepoLaneStorage::Shared(repo) => vec![("shared", observability_source(repo))],
             DbRepoLaneStorage::Dedicated {
                 read,
                 write,
                 control,
                 lease,
             } => vec![
-                (PgConnectionPurpose::Read.as_str(), read.clone()),
-                (PgConnectionPurpose::Write.as_str(), write.clone()),
-                (PgConnectionPurpose::Control.as_str(), control.clone()),
-                (PgConnectionPurpose::Lease.as_str(), lease.clone()),
+                (
+                    PgConnectionPurpose::Read.as_str(),
+                    observability_source(read),
+                ),
+                (
+                    PgConnectionPurpose::Write.as_str(),
+                    observability_source(write),
+                ),
+                (
+                    PgConnectionPurpose::Control.as_str(),
+                    observability_source(control),
+                ),
+                (
+                    PgConnectionPurpose::Lease.as_str(),
+                    observability_source(lease),
+                ),
             ],
         }
     }
@@ -236,6 +253,10 @@ impl DbRepoLanes {
         self.health
             .record_failure(LEGACY_DSN_AUTHORITY, PgEndpointRole::Unknown, error)
     }
+}
+
+fn observability_source(repo: &DbRepo) -> Arc<dyn LaneObservabilitySource + Send + Sync> {
+    Arc::new(repo.clone())
 }
 
 pub fn mount_with_lanes(

@@ -10,4 +10,3 @@ path = "src/lib.rs"
 
 [dependencies]
 log = "0.4"
-rust_hotpath = { package = "fod-rust-hotpath", path = "../rust_hotpath" }

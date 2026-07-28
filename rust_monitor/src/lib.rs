@@ -1,11 +1,206 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use rust_hotpath::pg::DbRepo;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoPoolObservabilitySnapshot {
+    pub connection_limit: usize,
+    pub live_connections: usize,
+    pub idle_write_connections: usize,
+    pub idle_control_connections: usize,
+    pub active_connections: usize,
+    pub queued_acquisitions: usize,
+    pub peak_active_connections: usize,
+    pub peak_queued_acquisitions: usize,
+    pub acquisition_count: u64,
+    pub acquisition_wait_micros_total: u64,
+    pub acquisition_wait_micros_max: u64,
+    pub connection_create_count: u64,
+    pub connection_create_failures: u64,
+    pub connection_create_micros_total: u64,
+    pub connection_create_micros_max: u64,
+    pub operation_count: u64,
+    pub operation_failures: u64,
+    pub operation_micros_total: u64,
+    pub operation_micros_max: u64,
+    pub replay_count: u64,
+    pub transaction_count: u64,
+    pub transaction_failures: u64,
+    pub transaction_micros_total: u64,
+    pub transaction_micros_max: u64,
+    pub heartbeat_count: u64,
+    pub heartbeat_failures: u64,
+    pub heartbeat_schedule_delay_micros_total: u64,
+    pub heartbeat_schedule_delay_micros_max: u64,
+    pub heartbeat_execution_micros_total: u64,
+    pub heartbeat_execution_micros_max: u64,
+}
+
+impl DbRepoPoolObservabilitySnapshot {
+    pub fn idle_connections(&self) -> usize {
+        self.idle_write_connections
+            .saturating_add(self.idle_control_connections)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoObservabilitySnapshot {
+    pub pool: DbRepoPoolObservabilitySnapshot,
+    pub payload: DbRepoPayloadObservabilitySnapshot,
+    pub global_payload: DbRepoPayloadObservabilitySnapshot,
+    pub persist_buffer_chunk_blocks: u64,
+    pub persist_copy_send_buffer_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostgresPressureSnapshot {
+    pub database_connections: u64,
+    pub activity_connections: u64,
+    pub activity_active: u64,
+    pub activity_idle: u64,
+    pub activity_idle_in_transaction: u64,
+    pub temp_files: u64,
+    pub temp_bytes: u64,
+    pub deadlocks: u64,
+    pub shared_buffers: String,
+    pub work_mem: String,
+    pub maintenance_work_mem: String,
+    pub temp_buffers: String,
+    pub current_backend_memory_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoPayloadObservabilitySnapshot {
+    pub in_flight_bytes: u64,
+    pub peak_in_flight_bytes: u64,
+    pub accounting_errors: u64,
+    pub persist_operation_count: u64,
+    pub persist_operation_failures: u64,
+    pub persist_input_rows_total: u64,
+    pub persist_input_rows_max: u64,
+    pub persist_input_bytes_total: u64,
+    pub persist_input_bytes_max: u64,
+    pub persist_micros_total: u64,
+    pub persist_micros_max: u64,
+}
+
+#[derive(Debug, Default)]
+struct DbRepoPayloadObservabilityState {
+    in_flight_bytes: u64,
+    peak_in_flight_bytes: u64,
+    accounting_errors: u64,
+    persist_operation_count: u64,
+    persist_operation_failures: u64,
+    persist_input_rows_total: u64,
+    persist_input_rows_max: u64,
+    persist_input_bytes_total: u64,
+    persist_input_bytes_max: u64,
+    persist_micros_total: u64,
+    persist_micros_max: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct DbRepoPayloadObservability {
+    state: Mutex<DbRepoPayloadObservabilityState>,
+}
+
+fn accumulate_observation(target: &mut u64, value: u64) -> bool {
+    match target.checked_add(value) {
+        Some(total) => {
+            *target = total;
+            true
+        }
+        None => {
+            *target = u64::MAX;
+            false
+        }
+    }
+}
+
+fn duration_micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
+impl DbRepoPayloadObservability {
+    pub fn begin_persist(&self, input_bytes: u64) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        let Some(in_flight_bytes) = state.in_flight_bytes.checked_add(input_bytes) else {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+            return false;
+        };
+        state.in_flight_bytes = in_flight_bytes;
+        state.peak_in_flight_bytes = state.peak_in_flight_bytes.max(state.in_flight_bytes);
+        true
+    }
+
+    pub fn finish_persist(
+        &self,
+        input_bytes: u64,
+        input_rows: u64,
+        elapsed: Duration,
+        failed: bool,
+    ) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        match state.in_flight_bytes.checked_sub(input_bytes) {
+            Some(in_flight_bytes) => state.in_flight_bytes = in_flight_bytes,
+            None => {
+                state.in_flight_bytes = 0;
+                state.accounting_errors = state.accounting_errors.saturating_add(1);
+            }
+        }
+        let mut accounting_error = !accumulate_observation(&mut state.persist_operation_count, 1);
+        if failed {
+            accounting_error |= !accumulate_observation(&mut state.persist_operation_failures, 1);
+        }
+        accounting_error |=
+            !accumulate_observation(&mut state.persist_input_rows_total, input_rows);
+        state.persist_input_rows_max = state.persist_input_rows_max.max(input_rows);
+        accounting_error |=
+            !accumulate_observation(&mut state.persist_input_bytes_total, input_bytes);
+        state.persist_input_bytes_max = state.persist_input_bytes_max.max(input_bytes);
+        let elapsed_micros = duration_micros(elapsed);
+        accounting_error |=
+            !accumulate_observation(&mut state.persist_micros_total, elapsed_micros);
+        state.persist_micros_max = state.persist_micros_max.max(elapsed_micros);
+        if accounting_error {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+        }
+    }
+
+    pub fn snapshot(&self) -> Result<DbRepoPayloadObservabilitySnapshot, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "payload observability state is poisoned".to_string())?;
+        Ok(DbRepoPayloadObservabilitySnapshot {
+            in_flight_bytes: state.in_flight_bytes,
+            peak_in_flight_bytes: state.peak_in_flight_bytes,
+            accounting_errors: state.accounting_errors,
+            persist_operation_count: state.persist_operation_count,
+            persist_operation_failures: state.persist_operation_failures,
+            persist_input_rows_total: state.persist_input_rows_total,
+            persist_input_rows_max: state.persist_input_rows_max,
+            persist_input_bytes_total: state.persist_input_bytes_total,
+            persist_input_bytes_max: state.persist_input_bytes_max,
+            persist_micros_total: state.persist_micros_total,
+            persist_micros_max: state.persist_micros_max,
+        })
+    }
+}
+
+pub trait LaneObservabilitySource {
+    fn observability_snapshot(&self) -> Result<DbRepoObservabilitySnapshot, String>;
+    fn postgres_pressure_snapshot(&self) -> Result<PostgresPressureSnapshot, String>;
+}
 
 pub struct LaneObservabilitySampler {
     stop: Arc<AtomicBool>,
@@ -14,7 +209,7 @@ pub struct LaneObservabilitySampler {
 
 impl LaneObservabilitySampler {
     pub fn spawn(
-        repositories: Vec<(&'static str, DbRepo)>,
+        repositories: Vec<(&'static str, Arc<dyn LaneObservabilitySource + Send + Sync>)>,
         process_rss_peak: Arc<AtomicU64>,
         interval: Duration,
     ) -> Result<Self, String> {
@@ -55,7 +250,7 @@ impl Drop for LaneObservabilitySampler {
 
 pub fn log_lane_observability(
     stage: &str,
-    repositories: &[(&str, DbRepo)],
+    repositories: &[(&str, Arc<dyn LaneObservabilitySource + Send + Sync>)],
     process_rss_peak: &AtomicU64,
 ) {
     match current_process_rss_bytes() {
