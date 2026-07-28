@@ -5,7 +5,7 @@ use fuser::{InitFlags, KernelConfig, Version};
 use log::info;
 use std::io;
 
-pub(crate) const FUSER_VERSION: &str = "0.17.0";
+pub(crate) const FUSER_VERSION: &str = "0.18.0";
 pub(crate) const USERSPACE_PROTOCOL_MAX: Version = Version(7, 40);
 
 const FOD_REQUESTED_CAPABILITIES: InitFlags =

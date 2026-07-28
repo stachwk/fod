@@ -29,8 +29,10 @@ from `fod_version.txt`.
 
 ## FUSE and libfuse
 
-- FOD pins `fuser 0.17.0` with an explicit `libfuse3` backend.
-- The configured userspace protocol maximum is FUSE ABI 7.40.
+- FOD pins `fuser 0.18.0` with an explicit `libfuse3` backend.
+- FUSE protocol availability is reported from runtime negotiation; `fuser 0.18.0`
+  no longer exposes the previous `abi-7-*` Cargo feature flags used by the
+  earlier `0.17.0` build.
 - Startup diagnostics report the fuser version, kernel protocol, negotiated
   protocol, available capabilities, and the capabilities requested by FOD.
 - FOD requests POSIX and flock locking capabilities independently.
@@ -143,7 +145,7 @@ implements the corresponding callback.
 
 | Boundary | Current contract |
 | --- | --- |
-| FUSE | fuser 0.17.0, ABI maximum 7.40, explicit libfuse3 |
+| FUSE | fuser 0.18.0, runtime-negotiated protocol, explicit libfuse3 |
 | Rust | minimum 1.85, Edition 2021 |
 | Automation | no active GitHub Actions workflow |
 | Hotpath ABI | internal Rust interface; no supported public C ABI |

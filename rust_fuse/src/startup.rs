@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use fuser::{mount2, Config, MountOption, SessionACL};
+use fuser::{mount as fuser_mount, Config, MountOption, SessionACL};
 use log::info;
 use rust_hotpath::pg::{DbRepo, StartupSnapshot};
 use std::path::{Path, PathBuf};
@@ -349,5 +349,5 @@ pub fn mount_fuse(
         mountpoint.display()
     );
 
-    mount2(fs, mountpoint, &config).map_err(|err| format!("mount failed: {:?}", err))
+    fuser_mount(fs, mountpoint, &config).map_err(|err| format!("mount failed: {:?}", err))
 }

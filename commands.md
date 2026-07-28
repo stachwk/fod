@@ -2049,6 +2049,39 @@ Base commit at execution time: `84817059ccd44c651478dcc25936c536d088e7eb`
 - `cargo test -p fod-rust-hotpath --lib` (passed: `80` tests)
 - `cargo fmt --all -- --check` (passed)
 - `git diff --check` (passed)
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `1e652a2`
+
+- MemPalace dry-run mine for project context in wing `myai`
+- `source ~/.venv/bin/activate && mempalace search "fuser 0.18.0 compatibility FOD abi-7-40 libfuse3" --wing myai`
+- `git status --short --branch && git log -3 --oneline && printf 'version=' && tr -d '\n' < fod_version.txt && printf '\n'`
+- `rg -n 'fuser|clap|serde_json|serde|postgres' Cargo.toml rust_*/Cargo.toml Cargo.lock`
+- `cargo tree --invert --package fuser@0.17.0`
+- `cargo tree --invert --package clap@4.6.2`
+- `cargo tree --invert --package serde@1.0.228`
+- `cargo tree --invert --package serde_json@1.0.145`
+- `cargo tree --invert --package postgres@0.19.14` (no package matched; FOD has no Rust `postgres` crate dependency)
+- `cargo info fuser@0.18.0`
+- `cargo info clap@4.6.4`
+- `cargo info serde@1.0.229`
+- `cargo update -p fuser --precise 0.18.0`
+- `cargo update -p clap --precise 4.6.4`
+- `cargo update -p serde --precise 1.0.229`
+- `cargo update -p serde_json --precise 1.0.150`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (first run failed because `fuser 0.18.0` removed public `mount2`; fixed by switching to `fuser::mount`)
+- `cargo fmt --all -- --check` (passed)
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked` (passed for FOD `3.2.37`)
+- `cargo tree --locked -p fod-rust-fuse | rg 'fuser|clap|serde|serde_json|postgres'`
+- `cargo tree --locked -p fod-rust-indexer | rg 'fuser|clap|serde|serde_json|postgres'`
+- `cargo tree --locked -p fod-rust-mkfs | rg 'fuser|clap|serde|serde_json|postgres'`
+- `make test-version` (`7` passed for FOD `3.2.37`)
+- `cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse` (`31` passed)
+- `cargo test --locked -p fod-rust-indexer` (`33` passed)
+- `cargo test --locked -p fod-rust-fuse --test mount_smoke -- --nocapture` (`9` passed; startup diagnostic reported `fuser=0.18.0`)
+- `cargo test --locked -p fod-rust-fuse --test pg_lanes_mount -- --nocapture` (`1` passed)
+- `make test-remount-durability-benchmark` (passed; wrote and read `65536` bytes after remount)
 - `printf 'fod_version=' && tr -d '\n' < fod_version.txt && printf '\n' && cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | [.name,.version] | @tsv'` (all workspace packages report `3.2.35`)
 - `git diff --stat && git status --short`
 - `git diff -- rust_fuse/src/fs.rs TODO.md docs/compatibility-contracts.md docs/fuse-protocol-7-32-7-40-capabilities.md docs/postgresql-multi-endpoint-phase-4.md | sed -n '1,280p'`

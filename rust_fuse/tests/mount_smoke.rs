@@ -33,7 +33,7 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
     println!("{compatibility_line}");
     let required_fields = [
         "FOD FUSE compatibility:",
-        "fuser=0.17.0",
+        "fuser=0.18.0",
         "userspace_protocol_max=7.40",
         "kernel_protocol=",
         "negotiated_protocol=",

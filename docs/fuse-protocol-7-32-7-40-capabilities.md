@@ -9,11 +9,15 @@ This document classifies the FUSE protocol surface added after the frozen ABI
 exposure, and safe FOD semantics are separate facts. No capability is enabled
 only because the negotiated protocol is 7.40.
 
-## Verified Runtime
+## Historical Verified Runtime
 
-The validation host kernel advertised FUSE protocol 7.44. FOD uses
-`fuser 0.17.0`, compiles protocol maximum 7.40, and negotiates 7.40. The
-structured init diagnostic confirmed that the host advertises, among other
+This 2026-07-12 inventory was collected on the then-current `fuser 0.17.0`
+build. The validation host kernel advertised FUSE protocol 7.44, the userspace
+build compiled protocol maximum 7.40, and the session negotiated 7.40. Current
+FOD fuser and protocol reporting policy is tracked in
+`docs/compatibility-contracts.md`.
+
+The structured init diagnostic confirmed that the host advertised, among other
 flags, `HANDLE_KILLPRIV_V2`, `SETXATTR_EXT`, `SECURITY_CTX`,
 `CREATE_SUPP_GROUP`, `HAS_EXPIRE_ONLY`, `DIRECT_IO_ALLOW_MMAP`, `PASSTHROUGH`,
 `NO_EXPORT_SUPPORT`, and `HAS_RESEND`.
@@ -36,7 +40,8 @@ version, but FOD must still provide safe semantics before returning them.
 | `FUSE_DIRECT_IO_ALLOW_MMAP` | 7.39 | Advertised by this host | Exposed as `InitFlags::FUSE_DIRECT_IO_ALLOW_MMAP` | Applies only to diagnostic/opt-in `FOPEN_DIRECT_IO` mounts | High page-cache, dirty-page, mmap/write, truncate, and multi-mount coherence risk | Shared/private mmap, dirty writeback, truncate, concurrent writer, remount, two mounts | Do not request without a separate mmap coherence project |
 | `FUSE_PASSTHROUGH` and `FOPEN_PASSTHROUGH` | 7.40 | `PASSTHROUGH` advertised by this host | Init flag, stack-depth configuration, backing-fd registration, and passthrough replies are exposed | Not aligned with PostgreSQL-owned payloads; FOD has no backing file descriptor per data object | Architectural: kernel I/O would bypass FOD storage, locking, replay, cache, and journal logic | Only meaningful for a new backing-file storage architecture | Reject for the current PostgreSQL storage model |
 
-`fuser 0.17` maps unknown opcodes to `ENOSYS`, but it does not expose enough
+The historical `fuser 0.17` baseline maps unknown opcodes to `ENOSYS`, but it
+does not expose enough
 request data for FOD to implement `SYNCFS`, `TMPFILE`, or `STATX` in the
 high-level trait. FOD must not patch private parser structures merely to claim
 support. A future upstream fuser release, a deliberate maintained fork, or a
