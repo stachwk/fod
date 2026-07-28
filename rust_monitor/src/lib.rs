@@ -7,6 +7,138 @@ use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalTaskLane {
+    Read,
+    Write,
+    Control,
+    Lease,
+}
+
+impl LogicalTaskLane {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Control => "control",
+            Self::Lease => "lease",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalTaskOperation {
+    FileRead,
+    FileWrite,
+    FileCopy,
+    FileImport,
+    MetadataRead,
+    MetadataWrite,
+    LockLease,
+    SessionHeartbeat,
+    Maintenance,
+}
+
+impl LogicalTaskOperation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FileRead => "file-read",
+            Self::FileWrite => "file-write",
+            Self::FileCopy => "file-copy",
+            Self::FileImport => "file-import",
+            Self::MetadataRead => "metadata-read",
+            Self::MetadataWrite => "metadata-write",
+            Self::LockLease => "lock-lease",
+            Self::SessionHeartbeat => "session-heartbeat",
+            Self::Maintenance => "maintenance",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogicalTaskClass {
+    pub lane: LogicalTaskLane,
+    pub operation: LogicalTaskOperation,
+}
+
+impl LogicalTaskClass {
+    pub const fn new(lane: LogicalTaskLane, operation: LogicalTaskOperation) -> Self {
+        Self { lane, operation }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogicalTaskQueueSnapshot {
+    pub class: LogicalTaskClass,
+    pub admitted_tasks: u64,
+    pub completed_tasks: u64,
+    pub failed_tasks: u64,
+    pub queued_tasks: u64,
+    pub active_tasks: u64,
+    pub peak_queued_tasks: u64,
+    pub peak_active_tasks: u64,
+    pub active_transactions: u64,
+    pub active_transaction_limit: u64,
+    pub payload_in_flight_bytes: u64,
+    pub payload_in_flight_limit_bytes: u64,
+    pub per_task_buffer_limit_bytes: u64,
+    pub backpressure_events: u64,
+    pub fairness_yields: u64,
+}
+
+impl LogicalTaskQueueSnapshot {
+    pub fn completed_successfully(&self) -> u64 {
+        self.completed_tasks.saturating_sub(self.failed_tasks)
+    }
+
+    pub fn active_transaction_headroom(&self) -> u64 {
+        self.active_transaction_limit
+            .saturating_sub(self.active_transactions)
+    }
+
+    pub fn payload_headroom_bytes(&self) -> u64 {
+        self.payload_in_flight_limit_bytes
+            .saturating_sub(self.payload_in_flight_bytes)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogicalTaskThroughputSnapshot {
+    pub class: LogicalTaskClass,
+    pub completed_files: u64,
+    pub completed_bytes: u64,
+    pub database_batches: u64,
+    pub database_batch_rows: u64,
+    pub database_batch_bytes: u64,
+    pub elapsed_micros: u64,
+}
+
+impl LogicalTaskThroughputSnapshot {
+    pub fn completed_files_per_second_milli(&self) -> u64 {
+        if self.elapsed_micros == 0 {
+            return 0;
+        }
+        self.completed_files
+            .saturating_mul(1_000_000)
+            .saturating_mul(1_000)
+            / self.elapsed_micros
+    }
+
+    pub fn completed_bytes_per_second(&self) -> u64 {
+        if self.elapsed_micros == 0 {
+            return 0;
+        }
+        self.completed_bytes.saturating_mul(1_000_000) / self.elapsed_micros
+    }
+
+    pub fn average_database_batch_rows(&self) -> u64 {
+        if self.database_batches == 0 {
+            return 0;
+        }
+        self.database_batch_rows / self.database_batches
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbRepoPoolObservabilitySnapshot {
     pub connection_limit: usize,

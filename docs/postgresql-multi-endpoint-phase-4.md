@@ -387,6 +387,13 @@ batch and file completion rates before operation routing or concurrency
 tuning. After those measurements are trustworthy, operation classification
 inside the FUSE layer may proceed:
 
+Implementation note, 2026-07-28: `fod-rust-monitor` now contains the first
+machine-readable Stage 3 queue contracts: logical task lane, operation, class,
+queue snapshot, active-transaction headroom, payload headroom, database batch
+snapshot, and completed-file/byte throughput helpers. They are intentionally
+not wired to scheduling yet; this keeps the monitor contract stable before
+changing FUSE execution behavior.
+
 - direct read-only methods to the read lane;
 - keep all mutations on the write lane;
 - direct schema and administrative checks to the control lane;
