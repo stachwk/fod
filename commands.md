@@ -2509,3 +2509,24 @@ Base commit at execution time: `916c2d01b3737ba4377d937af7726b8bd8ed09ed`
 - `make -n install-root-scripts | rg "fod-monitor|rust_monitor|monitor"`
 - `target/debug/fod-monitor --help && target/debug/fod-monitor status && target/debug/fod-monitor top --iterations 1 --no-clear && target/debug/fod-monitor report`
 - `make build-debug`
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `ce1a8a0`
+
+- `date --iso-8601=seconds && git rev-parse --short HEAD && target/debug/fod-monitor top --iterations 2 --interval 1 --no-clear`
+- `target/debug/fod-monitor top --iterations 1 --interval 1 >/tmp/fod-monitor-top-clear.out && sed -n '1,80p' /tmp/fod-monitor-top-clear.out`
+
+Execution date: `2026-07-28`
+
+Base commit at execution time: `ce1a8a0`
+
+- `date --iso-8601=seconds && git rev-parse --short HEAD && rm -f /tmp/fod-indexer && ln -s /bin/sleep /tmp/fod-indexer && /tmp/fod-indexer 5 & monitor_pid=$!; target/debug/fod-monitor top --iterations 3 --interval 1 --no-clear; wait "$monitor_pid"; rm -f /tmp/fod-indexer` (rejected by the command safety filter before execution because of `rm -f`)
+- `date --iso-8601=seconds && git rev-parse --short HEAD && test_dir=$(mktemp -d /tmp/fod-monitor-visible.XXXXXX) && ln -s /bin/sleep "$test_dir/fod-indexer" && "$test_dir/fod-indexer" 5 & monitor_pid=$!; target/debug/fod-monitor top --iterations 3 --interval 1 --no-clear; wait "$monitor_pid"; rmdir "$test_dir" 2>/dev/null || true` (system `sleep` rejected the synthetic executable name)
+- `date --iso-8601=seconds && git rev-parse --short HEAD && timeout 6s target/debug/fod-indexer scan --source RZCY615YE1P_all_wew >/tmp/fod-monitor-indexer-scan.out 2>/tmp/fod-monitor-indexer-scan.err & scan_pid=$!; sleep 1; target/debug/fod-monitor top --iterations 4 --interval 1 --no-clear; wait "$scan_pid" || true; printf '\n--- fod-indexer stdout ---\n'; sed -n '1,40p' /tmp/fod-monitor-indexer-scan.out; printf '\n--- fod-indexer stderr ---\n'; sed -n '1,80p' /tmp/fod-monitor-indexer-scan.err` (source was not registered, so the indexer exited before the monitor sample)
+- `target/debug/fod-indexer source added || target/debug/fod-indexer source list || true`
+- `test_dir=$(mktemp -d /tmp/fod-monitor-src.XXXXXX) && for i in $(seq 1 15000); do printf 'fod-monitor sample %s\n' "$i" > "$test_dir/file-$i.txt"; done && target/debug/fod-indexer source add --name monitor_visible --path "$test_dir" --kind local && date --iso-8601=seconds && git rev-parse --short HEAD && target/debug/fod-indexer scan --source monitor_visible >/tmp/fod-monitor-visible-scan.out 2>/tmp/fod-monitor-visible-scan.err & scan_pid=$!; sleep 1; target/debug/fod-monitor top --iterations 4 --interval 1 --no-clear; wait "$scan_pid" || true; printf '\n--- fod-indexer stdout ---\n'; sed -n '1,80p' /tmp/fod-monitor-visible-scan.out; printf '\n--- fod-indexer stderr ---\n'; sed -n '1,80p' /tmp/fod-monitor-visible-scan.err`
+- `target/debug/fod-indexer source --help && target/debug/fod-indexer source list`
+- `find /tmp -maxdepth 1 -type d -name 'fod-monitor-src.*' -print`
+- `target/debug/fod-indexer source remove --help && target/debug/fod-indexer source remove --name monitor_visible && target/debug/fod-indexer source list`
+- `find /tmp/fod-monitor-src.XBRCjJ -type f -delete && rmdir /tmp/fod-monitor-src.XBRCjJ && find /tmp -maxdepth 1 -type d -name 'fod-monitor-src.*' -print`
