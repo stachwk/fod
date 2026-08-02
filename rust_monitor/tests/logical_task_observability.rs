@@ -2,9 +2,11 @@
 // Licensed under BSL 1.1
 
 use fod_rust_monitor::{
-    LogicalTaskClass, LogicalTaskLane, LogicalTaskOperation, LogicalTaskQueueObservability,
+    LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
+    LogicalTaskQueueObservability,
 };
 use std::sync::Arc;
+use std::time::Duration;
 
 fn tracker() -> Arc<LogicalTaskQueueObservability> {
     Arc::new(LogicalTaskQueueObservability::new(
@@ -23,7 +25,9 @@ fn completed_observation_balances_active_payload_and_throughput() {
     let active = tracker.queue_snapshot().unwrap();
     assert_eq!(active.admitted_tasks, 1);
     assert_eq!(active.queued_tasks, 0);
+    assert_eq!(active.peak_queued_tasks, 1);
     assert_eq!(active.active_tasks, 1);
+    assert_eq!(active.peak_active_tasks, 1);
     assert_eq!(active.active_transactions, 1);
     assert_eq!(active.payload_in_flight_bytes, 4096);
 
@@ -72,4 +76,15 @@ fn explicit_failure_is_counted_once() {
     assert_eq!(finished.failed_tasks, 1);
     assert_eq!(finished.active_tasks, 0);
     assert_eq!(finished.payload_in_flight_bytes, 0);
+}
+
+#[test]
+fn logical_task_sampler_starts_reports_and_stops() {
+    let tracker = tracker();
+    tracker.observe_task(256, false).complete(0, 256);
+
+    let mut sampler =
+        LogicalTaskObservabilitySampler::spawn(vec![tracker], Duration::from_millis(1)).unwrap();
+    std::thread::sleep(Duration::from_millis(5));
+    sampler.stop();
 }

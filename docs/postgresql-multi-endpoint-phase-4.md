@@ -271,6 +271,13 @@ explicit failure, or an early return. The configured limits remain zero in this
 slice to mean observation-only; enforcement is deferred to the queue and permit
 steps below.
 
+
+FOD 3.2.46 adds a reusable `fod-rust-monitor` sampler for these logical-task
+snapshots. Every FUSE mount emits cumulative read/write/copy metrics every 30
+seconds and once at shutdown. Immediate observation now records admission and
+start under one mutex acquisition, reducing hot-path synchronization without
+changing task ordering, limits, routing, or failure semantics.
+
 Introduce:
 
 - a logical task queue for bulk file operations;

@@ -255,9 +255,24 @@ impl LogicalTaskQueueObservability {
         payload_bytes: u64,
         starts_transaction: bool,
     ) -> LogicalTaskObservation {
-        self.admit_task();
-        self.start_task(payload_bytes, starts_transaction);
+        self.admit_and_start_task(payload_bytes, starts_transaction);
         LogicalTaskObservation::new(Arc::clone(self), payload_bytes, starts_transaction)
+    }
+
+    fn admit_and_start_task(&self, payload_bytes: u64, starts_transaction: bool) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.admitted_tasks = state.admitted_tasks.saturating_add(1);
+        state.queued_tasks = state.queued_tasks.saturating_add(1);
+        state.peak_queued_tasks = state.peak_queued_tasks.max(state.queued_tasks);
+        state.queued_tasks = state.queued_tasks.saturating_sub(1);
+        state.active_tasks = state.active_tasks.saturating_add(1);
+        state.peak_active_tasks = state.peak_active_tasks.max(state.active_tasks);
+        state.payload_in_flight_bytes = state.payload_in_flight_bytes.saturating_add(payload_bytes);
+        if starts_transaction {
+            state.active_transactions = state.active_transactions.saturating_add(1);
+        }
     }
 
     pub fn admit_task(&self) {
@@ -630,6 +645,99 @@ impl LaneObservabilitySampler {
 impl Drop for LaneObservabilitySampler {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+pub struct LogicalTaskObservabilitySampler {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl LogicalTaskObservabilitySampler {
+    pub fn spawn(
+        trackers: Vec<Arc<LogicalTaskQueueObservability>>,
+        interval: Duration,
+    ) -> Result<Self, String> {
+        if interval.is_zero() {
+            return Err(
+                "logical task observability interval must be greater than zero".to_string(),
+            );
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        let thread = thread::Builder::new()
+            .name("fod-task-observability".to_string())
+            .spawn(move || {
+                while !stop_thread.load(Ordering::Relaxed) {
+                    thread::park_timeout(interval);
+                    if stop_thread.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    log_logical_task_observability("periodic", &trackers);
+                }
+            })
+            .map_err(|err| format!("failed to spawn logical task observability thread: {err}"))?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    pub fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for LogicalTaskObservabilitySampler {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+pub fn log_logical_task_observability(
+    stage: &str,
+    trackers: &[Arc<LogicalTaskQueueObservability>],
+) {
+    for tracker in trackers {
+        match (tracker.queue_snapshot(), tracker.throughput_snapshot()) {
+            (Ok(queue), Ok(throughput)) if queue.admitted_tasks > 0 => {
+                log::info!(
+                    "FOD logical task observability: stage={} lane={} operation={} admitted_tasks={} completed_tasks={} failed_tasks={} queued_tasks={} active_tasks={} peak_queued_tasks={} peak_active_tasks={} active_transactions={} payload_in_flight_bytes={} completed_files={} completed_bytes={} completed_bytes_per_second={} database_batches={} database_batch_rows={} database_batch_bytes={} elapsed_micros={} accounting_errors={}",
+                    stage,
+                    queue.class.lane.as_str(),
+                    queue.class.operation.as_str(),
+                    queue.admitted_tasks,
+                    queue.completed_tasks,
+                    queue.failed_tasks,
+                    queue.queued_tasks,
+                    queue.active_tasks,
+                    queue.peak_queued_tasks,
+                    queue.peak_active_tasks,
+                    queue.active_transactions,
+                    queue.payload_in_flight_bytes,
+                    throughput.completed_files,
+                    throughput.completed_bytes,
+                    throughput.completed_bytes_per_second(),
+                    throughput.database_batches,
+                    throughput.database_batch_rows,
+                    throughput.database_batch_bytes,
+                    throughput.elapsed_micros,
+                    queue.accounting_errors,
+                );
+            }
+            (Err(err), _) | (_, Err(err)) => {
+                log::warn!(
+                    "FOD logical task observability unavailable: stage={} error={}",
+                    stage,
+                    err
+                );
+            }
+            _ => {}
+        }
     }
 }
 

@@ -3,7 +3,9 @@
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use fod_rust_monitor::{
-    LogicalTaskClass, LogicalTaskLane, LogicalTaskOperation, LogicalTaskQueueObservability,
+    log_logical_task_observability as log_logical_task_snapshots, LogicalTaskClass,
+    LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
+    LogicalTaskQueueObservability,
 };
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
@@ -178,6 +180,7 @@ struct LockHeartbeatHandle {
 }
 
 const RUNTIME_RELOAD_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const LOGICAL_TASK_OBSERVABILITY_INTERVAL: Duration = Duration::from_secs(30);
 
 struct RuntimeReloadHandle {
     stop: Arc<AtomicBool>,
@@ -892,6 +895,7 @@ pub struct FodFuse {
     logical_read_tasks: Arc<LogicalTaskQueueObservability>,
     logical_write_tasks: Arc<LogicalTaskQueueObservability>,
     logical_copy_tasks: Arc<LogicalTaskQueueObservability>,
+    logical_task_observability: Option<LogicalTaskObservabilitySampler>,
     next_fh: Mutex<u64>,
     request_seq: AtomicU64,
     session_id: Option<u64>,
@@ -975,6 +979,7 @@ impl FodFuse {
             logical_read_tasks,
             logical_write_tasks,
             logical_copy_tasks,
+            logical_task_observability: None,
             next_fh: Mutex::new(1),
             request_seq: AtomicU64::new(1),
             session_id: None,
@@ -1300,37 +1305,17 @@ impl FodFuse {
         self.record_reply_write_elapsed(started.elapsed());
     }
 
-    fn log_logical_task_observability(&self) {
-        for tracker in [
-            &self.logical_read_tasks,
-            &self.logical_write_tasks,
-            &self.logical_copy_tasks,
-        ] {
-            match (tracker.queue_snapshot(), tracker.throughput_snapshot()) {
-                (Ok(queue), Ok(throughput)) if queue.admitted_tasks > 0 => {
-                    info!(
-                        "FOD logical task observability: lane={} operation={} admitted_tasks={} completed_tasks={} failed_tasks={} queued_tasks={} active_tasks={} peak_queued_tasks={} peak_active_tasks={} payload_in_flight_bytes={} completed_bytes={} elapsed_micros={} accounting_errors={}",
-                        queue.class.lane.as_str(),
-                        queue.class.operation.as_str(),
-                        queue.admitted_tasks,
-                        queue.completed_tasks,
-                        queue.failed_tasks,
-                        queue.queued_tasks,
-                        queue.active_tasks,
-                        queue.peak_queued_tasks,
-                        queue.peak_active_tasks,
-                        queue.payload_in_flight_bytes,
-                        throughput.completed_bytes,
-                        throughput.elapsed_micros,
-                        queue.accounting_errors,
-                    );
-                }
-                (Err(err), _) | (_, Err(err)) => {
-                    warn!("FOD logical task observability snapshot failed: {}", err);
-                }
-                _ => {}
-            }
-        }
+    fn logical_task_trackers(&self) -> Vec<Arc<LogicalTaskQueueObservability>> {
+        vec![
+            Arc::clone(&self.logical_read_tasks),
+            Arc::clone(&self.logical_write_tasks),
+            Arc::clone(&self.logical_copy_tasks),
+        ]
+    }
+
+    fn log_logical_task_observability(&self, stage: &str) {
+        let trackers = self.logical_task_trackers();
+        log_logical_task_snapshots(stage, &trackers);
     }
 
     pub(crate) fn maybe_touch_client_session_write(&self) {
@@ -3337,17 +3322,32 @@ impl FodFuse {
         self.runtime_reload = Some(handle);
         Ok(())
     }
+
+    pub fn start_logical_task_observability(&mut self) -> Result<(), String> {
+        if self.logical_task_observability.is_some() {
+            return Ok(());
+        }
+        let sampler = LogicalTaskObservabilitySampler::spawn(
+            self.logical_task_trackers(),
+            LOGICAL_TASK_OBSERVABILITY_INTERVAL,
+        )?;
+        self.logical_task_observability = Some(sampler);
+        Ok(())
+    }
 }
 
 impl Drop for FodFuse {
     fn drop(&mut self) {
+        if let Some(mut sampler) = self.logical_task_observability.take() {
+            sampler.stop();
+        }
         if self.profile.has_activity() {
             info!("FOD boundary profile:");
             for line in self.profile.snapshot_lines() {
                 info!("  {}", line);
             }
         }
-        self.log_logical_task_observability();
+        self.log_logical_task_observability("shutdown");
     }
 }
 

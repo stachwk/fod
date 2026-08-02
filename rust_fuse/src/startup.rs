@@ -338,6 +338,8 @@ pub fn mount_fuse(
     }
     fs.start_runtime_reload(runtime)
         .map_err(|err| format!("failed to start runtime reload: {err}"))?;
+    fs.start_logical_task_observability()
+        .map_err(|err| format!("failed to start logical task observability: {err}"))?;
 
     let config = mount_config(&mount, &security);
     log_mount_status(
