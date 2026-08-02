@@ -264,6 +264,13 @@ instead of silently wrapping a value.
 
 ### Stage 3: separate queues from backend pools
 
+FOD 3.2.45 starts the runtime boundary without changing scheduling. A
+cancellation-safe observation guard now classifies actual FUSE `read`, `write`,
+and `copy_file_range` requests and guarantees counter release on success,
+explicit failure, or an early return. The configured limits remain zero in this
+slice to mean observation-only; enforcement is deferred to the queue and permit
+steps below.
+
 Introduce:
 
 - a logical task queue for bulk file operations;

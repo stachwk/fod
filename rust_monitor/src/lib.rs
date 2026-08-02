@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogicalTaskLane {
@@ -171,6 +171,69 @@ pub struct LogicalTaskQueueObservability {
     state: Mutex<LogicalTaskQueueObservabilityState>,
 }
 
+#[derive(Debug)]
+pub struct LogicalTaskObservation {
+    observability: Arc<LogicalTaskQueueObservability>,
+    payload_bytes: u64,
+    transaction_active: bool,
+    started: Instant,
+    completed_files: u64,
+    completed_bytes: u64,
+    failed: bool,
+    finished: bool,
+}
+
+impl LogicalTaskObservation {
+    fn new(
+        observability: Arc<LogicalTaskQueueObservability>,
+        payload_bytes: u64,
+        transaction_active: bool,
+    ) -> Self {
+        Self {
+            observability,
+            payload_bytes,
+            transaction_active,
+            started: Instant::now(),
+            completed_files: 0,
+            completed_bytes: 0,
+            failed: true,
+            finished: false,
+        }
+    }
+
+    pub fn complete(mut self, completed_files: u64, completed_bytes: u64) {
+        self.completed_files = completed_files;
+        self.completed_bytes = completed_bytes;
+        self.failed = false;
+        self.finish();
+    }
+
+    pub fn fail(mut self) {
+        self.finish();
+    }
+
+    fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.observability.finish_task(
+            self.payload_bytes,
+            self.transaction_active,
+            self.failed,
+            self.started.elapsed(),
+            self.completed_files,
+            self.completed_bytes,
+        );
+        self.finished = true;
+    }
+}
+
+impl Drop for LogicalTaskObservation {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 impl LogicalTaskQueueObservability {
     pub fn new(
         class: LogicalTaskClass,
@@ -185,6 +248,16 @@ impl LogicalTaskQueueObservability {
             per_task_buffer_limit_bytes,
             state: Mutex::new(LogicalTaskQueueObservabilityState::default()),
         }
+    }
+
+    pub fn observe_task(
+        self: &Arc<Self>,
+        payload_bytes: u64,
+        starts_transaction: bool,
+    ) -> LogicalTaskObservation {
+        self.admit_task();
+        self.start_task(payload_bytes, starts_transaction);
+        LogicalTaskObservation::new(Arc::clone(self), payload_bytes, starts_transaction)
     }
 
     pub fn admit_task(&self) {

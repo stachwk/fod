@@ -2,6 +2,9 @@
 // Licensed under BSL 1.1
 
 use chrono::{DateTime, NaiveDateTime, Utc};
+use fod_rust_monitor::{
+    LogicalTaskClass, LogicalTaskLane, LogicalTaskOperation, LogicalTaskQueueObservability,
+};
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
     Filesystem, FopenFlags, Generation, INodeNo, IoctlFlags, KernelConfig, LockOwner, OpenFlags,
@@ -886,6 +889,9 @@ pub struct FodFuse {
     statfs_cache: Mutex<Option<StatfsSnapshot>>,
     last_write_session_touch: Mutex<Option<Instant>>,
     profile: Arc<FodFuseProfileCounters>,
+    logical_read_tasks: Arc<LogicalTaskQueueObservability>,
+    logical_write_tasks: Arc<LogicalTaskQueueObservability>,
+    logical_copy_tasks: Arc<LogicalTaskQueueObservability>,
     next_fh: Mutex<u64>,
     request_seq: AtomicU64,
     session_id: Option<u64>,
@@ -910,6 +916,28 @@ impl FodFuse {
         let mut path_to_inode = HashMap::new();
         inode_to_path.insert(ROOT_INO, "/".to_string());
         path_to_inode.insert("/".to_string(), ROOT_INO);
+
+        // Wartosci 0 oznaczaja, ze ten etap tylko mierzy ruch.
+        // Limity i backpressure pozostaja wylaczone do kolejnego kroku Stage 3.
+        let logical_read_tasks = Arc::new(LogicalTaskQueueObservability::new(
+            LogicalTaskClass::new(LogicalTaskLane::Read, LogicalTaskOperation::FileRead),
+            0,
+            0,
+            0,
+        ));
+        let logical_write_tasks = Arc::new(LogicalTaskQueueObservability::new(
+            LogicalTaskClass::new(LogicalTaskLane::Write, LogicalTaskOperation::FileWrite),
+            0,
+            0,
+            storage.write_flush_threshold_bytes,
+        ));
+        let logical_copy_tasks = Arc::new(LogicalTaskQueueObservability::new(
+            LogicalTaskClass::new(LogicalTaskLane::Write, LogicalTaskOperation::FileCopy),
+            0,
+            0,
+            storage.write_flush_threshold_bytes,
+        ));
+
         Self {
             repo,
             block_size: storage.block_size.max(1),
@@ -944,6 +972,9 @@ impl FodFuse {
             statfs_cache: Mutex::new(None),
             last_write_session_touch: Mutex::new(None),
             profile: Arc::new(FodFuseProfileCounters::default()),
+            logical_read_tasks,
+            logical_write_tasks,
+            logical_copy_tasks,
             next_fh: Mutex::new(1),
             request_seq: AtomicU64::new(1),
             session_id: None,
@@ -1267,6 +1298,39 @@ impl FodFuse {
         let started = Instant::now();
         reply.written(written);
         self.record_reply_write_elapsed(started.elapsed());
+    }
+
+    fn log_logical_task_observability(&self) {
+        for tracker in [
+            &self.logical_read_tasks,
+            &self.logical_write_tasks,
+            &self.logical_copy_tasks,
+        ] {
+            match (tracker.queue_snapshot(), tracker.throughput_snapshot()) {
+                (Ok(queue), Ok(throughput)) if queue.admitted_tasks > 0 => {
+                    info!(
+                        "FOD logical task observability: lane={} operation={} admitted_tasks={} completed_tasks={} failed_tasks={} queued_tasks={} active_tasks={} peak_queued_tasks={} peak_active_tasks={} payload_in_flight_bytes={} completed_bytes={} elapsed_micros={} accounting_errors={}",
+                        queue.class.lane.as_str(),
+                        queue.class.operation.as_str(),
+                        queue.admitted_tasks,
+                        queue.completed_tasks,
+                        queue.failed_tasks,
+                        queue.queued_tasks,
+                        queue.active_tasks,
+                        queue.peak_queued_tasks,
+                        queue.peak_active_tasks,
+                        queue.payload_in_flight_bytes,
+                        throughput.completed_bytes,
+                        throughput.elapsed_micros,
+                        queue.accounting_errors,
+                    );
+                }
+                (Err(err), _) | (_, Err(err)) => {
+                    warn!("FOD logical task observability snapshot failed: {}", err);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub(crate) fn maybe_touch_client_session_write(&self) {
@@ -3283,6 +3347,7 @@ impl Drop for FodFuse {
                 info!("  {}", line);
             }
         }
+        self.log_logical_task_observability();
     }
 }
 
@@ -4554,6 +4619,7 @@ impl Filesystem for FodFuse {
         let fh = fh.0;
         let req_id = self.next_request_id();
         let _read_profile = self.start_fuse_read_profile();
+        let read_task = self.logical_read_tasks.observe_task(u64::from(size), false);
         let file_id = match self.file_id_for_handle_or_errno(fh, ino) {
             Ok(value) => value,
             Err(errno) => {
@@ -4610,6 +4676,7 @@ impl Filesystem for FodFuse {
             if let Some((path, attrs)) = current_attrs.as_ref() {
                 self.touch_access_time(path, attrs);
             }
+            read_task.complete(0, data.len() as u64);
             self.reply_data_profiled(reply, &data);
             return;
         }
@@ -4630,6 +4697,7 @@ impl Filesystem for FodFuse {
             },
         };
         if offset >= file_size {
+            read_task.complete(0, 0);
             self.reply_data_profiled(reply, &[]);
             return;
         }
@@ -4644,6 +4712,7 @@ impl Filesystem for FodFuse {
                 let slice_end = (end_offset.saturating_sub(block_offset)) as usize;
                 let data = block.as_ref();
                 if slice_end <= data.len() && slice_start <= slice_end {
+                    read_task.complete(0, slice_end.saturating_sub(slice_start) as u64);
                     self.reply_data_profiled(reply, &data[slice_start..slice_end]);
                     if let Some((path, attrs)) = current_attrs.as_ref() {
                         self.touch_access_time(path, attrs);
@@ -4682,6 +4751,7 @@ impl Filesystem for FodFuse {
                         if *actual_block_index == first_block {
                             let data = block.as_ref();
                             if slice_end <= data.len() && slice_start <= slice_end {
+                                read_task.complete(0, slice_end.saturating_sub(slice_start) as u64);
                                 self.reply_data_profiled(reply, &data[slice_start..slice_end]);
                                 if let Some((path, attrs)) = current_attrs.as_ref() {
                                     self.touch_access_time(path, attrs);
@@ -4704,6 +4774,7 @@ impl Filesystem for FodFuse {
                 if let Some((path, attrs)) = current_attrs.as_ref() {
                     self.touch_access_time(path, attrs);
                 }
+                read_task.complete(0, data.len() as u64);
                 self.reply_data_profiled(reply, &data)
             }
             Err(errno) => {
@@ -5786,6 +5857,9 @@ impl Filesystem for FodFuse {
         let fh = fh.0;
         let req_id = self.next_request_id();
         let _write_profile = self.start_fuse_write_profile();
+        let write_task = self
+            .logical_write_tasks
+            .observe_task(data.len() as u64, false);
         if self.read_only {
             fuse_reply_error!(reply, libc::EROFS);
             return;
@@ -5816,6 +5890,7 @@ impl Filesystem for FodFuse {
             ),
         );
         if data.is_empty() {
+            write_task.complete(0, 0);
             self.reply_written_profiled(reply, 0);
             return;
         }
@@ -5888,6 +5963,7 @@ impl Filesystem for FodFuse {
                         offset,
                         data.len()
                     );
+                    write_task.complete(0, data.len() as u64);
                     self.reply_written_profiled(reply, data.len() as u32);
                     return;
                 }
@@ -5962,6 +6038,7 @@ impl Filesystem for FodFuse {
             fh,
             data.len()
         );
+        write_task.complete(0, data.len() as u64);
         self.reply_written_profiled(reply, data.len() as u32);
     }
 
@@ -5984,11 +6061,13 @@ impl Filesystem for FodFuse {
         let fh_out = fh_out.0;
         let req_id = self.next_request_id();
         let _write_profile = self.start_fuse_write_profile();
+        let copy_task = self.logical_copy_tasks.observe_task(len, false);
         if self.read_only {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
         if len == 0 {
+            copy_task.complete(0, 0);
             self.reply_written_profiled(reply, 0);
             return;
         }
@@ -6087,6 +6166,7 @@ impl Filesystem for FodFuse {
         let Some(bounds) =
             copy_range_bounds(self.block_size, src_offset, dst_offset, len, src_size)
         else {
+            copy_task.complete(0, 0);
             self.reply_written_profiled(reply, 0);
             return;
         };
@@ -6128,6 +6208,7 @@ impl Filesystem for FodFuse {
                         "FOD req={} op=copy_file_range adopted source data object src_file_id={} dst_file_id={} len={}",
                         req_id, src_file_id, dst_file_id, copy_len
                     );
+                    copy_task.complete(0, copy_len);
                     self.reply_written_profiled(reply, copy_len as u32);
                     return;
                 }
@@ -6288,6 +6369,7 @@ impl Filesystem for FodFuse {
                         req_id, src_file_id, dst_file_id, copy_len
                     );
                 }
+                copy_task.complete(0, copy_len);
                 self.reply_written_profiled(reply, copy_len as u32);
                 return;
             }
@@ -6327,6 +6409,7 @@ impl Filesystem for FodFuse {
                 "FOD req={} op=copy_file_range dedupe wrote changed blocks src_file_id={} dst_file_id={} len={}",
                 req_id, src_file_id, dst_file_id, copy_len
             );
+            copy_task.complete(0, copy_len);
             self.reply_written_profiled(reply, copy_len as u32);
             return;
         }
@@ -6359,6 +6442,7 @@ impl Filesystem for FodFuse {
             "FOD req={} op=copy_file_range completed src_file_id={} dst_file_id={} len={}",
             req_id, src_file_id, dst_file_id, copy_len
         );
+        copy_task.complete(0, copy_len);
         self.reply_written_profiled(reply, copy_len as u32);
     }
 
