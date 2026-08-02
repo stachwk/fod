@@ -97,6 +97,10 @@ $(FOD_DEBUG_BUILD_STAMP): Makefile $(FOD_RUST_INPUTS)
 
 .PHONY: build-debug
 
+# The local integration suites share one Docker/PostgreSQL database and FUSE
+# mount resources. Keep their prerequisites serial even when make receives -j.
+.NOTPARALLEL: test-integration test-all test-all-full
+
 # Benchmark targets are run sequentially because they share the same local
 # Docker/PostgreSQL state and often rebuild the same binaries.
 BENCHMARK_TARGETS := \
@@ -719,6 +723,11 @@ install-config-user:
 test-config-warning:
 	tests/integration/test_config_warning.sh
 
+test-makefile-db-restore-order:
+	$(PYTHON) tests/test_makefile_db_restore_order.py
+
+.PHONY: test-makefile-db-restore-order
+
 install-mount-helper:
 	@printf '%s\n' "Installing mount.fod -> $(MOUNT_HELPER_DEST)"
 	sudo install -D -m 0755 mount.fod $(MOUNT_HELPER_DEST)
@@ -890,7 +899,7 @@ unmount:
 		umount $(MOUNTPOINT); \
 	fi
 
-test-integration: venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-runtime-validation test-schema-upgrade test-block-read test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary test-two-mount-quota
+test-integration: test-makefile-db-restore-order venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-mkfs-suite-local-restored test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-schema-upgrade test-block-read test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary test-two-mount-quota
 test-integration: test-rust-hotpath-persist-block-plan
 test-integration: test-rust-hotpath-persist-block-crc-plan
 test-integration: test-config-warning
@@ -1027,6 +1036,25 @@ test-runtime-config: init test-mkfs-config-suite
 
 test-rust-mkfs-suite:
 	$(CARGO_TEST_MKFS)
+
+# The complete mkfs suite intentionally exercises malformed and incomplete
+# schemas. Always restore the guarded local Docker database before later FUSE
+# integration tests consume it. Restore is attempted even when the suite fails.
+test-rust-mkfs-suite-local-restored:
+	@set -u; \
+		suite_status=0; \
+		restore_status=0; \
+		$(MAKE) --no-print-directory test-rust-mkfs-suite || suite_status=$$?; \
+		$(MAKE) --no-print-directory test-db-restore-local || restore_status=$$?; \
+		if [ "$$suite_status" -ne 0 ]; then \
+			if [ "$$restore_status" -ne 0 ]; then \
+				echo "mkfs suite failed with status $$suite_status and local database restore failed with status $$restore_status" >&2; \
+			fi; \
+			exit "$$suite_status"; \
+		fi; \
+		exit "$$restore_status"
+
+.PHONY: test-rust-mkfs-suite-local-restored
 
 test-runtime-validation: test-rust-mkfs-suite
 	@:
