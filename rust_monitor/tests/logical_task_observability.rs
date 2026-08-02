@@ -79,12 +79,26 @@ fn explicit_failure_is_counted_once() {
 }
 
 #[test]
-fn logical_task_sampler_starts_reports_and_stops() {
+fn combined_snapshot_contains_queue_and_throughput_from_one_state() {
+    let tracker = tracker();
+    tracker.observe_task(1024, false).complete(1, 1024);
+
+    let snapshot = tracker.snapshot().unwrap();
+    assert_eq!(snapshot.queue.admitted_tasks, 1);
+    assert_eq!(snapshot.queue.completed_tasks, 1);
+    assert_eq!(snapshot.queue.active_tasks, 0);
+    assert_eq!(snapshot.throughput.completed_files, 1);
+    assert_eq!(snapshot.throughput.completed_bytes, 1024);
+    assert_eq!(snapshot.queue.class, snapshot.throughput.class);
+}
+
+#[test]
+fn logical_task_sampler_samples_now_and_stops_without_sleep() {
     let tracker = tracker();
     tracker.observe_task(256, false).complete(0, 256);
 
     let mut sampler =
-        LogicalTaskObservabilitySampler::spawn(vec![tracker], Duration::from_millis(1)).unwrap();
-    std::thread::sleep(Duration::from_millis(5));
+        LogicalTaskObservabilitySampler::spawn(vec![tracker], Duration::from_secs(60)).unwrap();
+    sampler.sample_now();
     sampler.stop();
 }

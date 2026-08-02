@@ -140,6 +140,12 @@ impl LogicalTaskThroughputSnapshot {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogicalTaskObservabilitySnapshot {
+    pub queue: LogicalTaskQueueSnapshot,
+    pub throughput: LogicalTaskThroughputSnapshot,
+}
+
 #[derive(Debug, Default)]
 struct LogicalTaskQueueObservabilityState {
     admitted_tasks: u64,
@@ -365,45 +371,48 @@ impl LogicalTaskQueueObservability {
         state.fairness_yields = state.fairness_yields.saturating_add(1);
     }
 
-    pub fn queue_snapshot(&self) -> Result<LogicalTaskQueueSnapshot, String> {
+    pub fn snapshot(&self) -> Result<LogicalTaskObservabilitySnapshot, String> {
         let state = self
             .state
             .lock()
             .map_err(|_| "logical task queue observability state is poisoned".to_string())?;
-        Ok(LogicalTaskQueueSnapshot {
-            class: self.class,
-            admitted_tasks: state.admitted_tasks,
-            completed_tasks: state.completed_tasks,
-            failed_tasks: state.failed_tasks,
-            queued_tasks: state.queued_tasks,
-            active_tasks: state.active_tasks,
-            peak_queued_tasks: state.peak_queued_tasks,
-            peak_active_tasks: state.peak_active_tasks,
-            active_transactions: state.active_transactions,
-            active_transaction_limit: self.active_transaction_limit,
-            payload_in_flight_bytes: state.payload_in_flight_bytes,
-            payload_in_flight_limit_bytes: self.payload_in_flight_limit_bytes,
-            per_task_buffer_limit_bytes: self.per_task_buffer_limit_bytes,
-            backpressure_events: state.backpressure_events,
-            fairness_yields: state.fairness_yields,
-            accounting_errors: state.accounting_errors,
+        Ok(LogicalTaskObservabilitySnapshot {
+            queue: LogicalTaskQueueSnapshot {
+                class: self.class,
+                admitted_tasks: state.admitted_tasks,
+                completed_tasks: state.completed_tasks,
+                failed_tasks: state.failed_tasks,
+                queued_tasks: state.queued_tasks,
+                active_tasks: state.active_tasks,
+                peak_queued_tasks: state.peak_queued_tasks,
+                peak_active_tasks: state.peak_active_tasks,
+                active_transactions: state.active_transactions,
+                active_transaction_limit: self.active_transaction_limit,
+                payload_in_flight_bytes: state.payload_in_flight_bytes,
+                payload_in_flight_limit_bytes: self.payload_in_flight_limit_bytes,
+                per_task_buffer_limit_bytes: self.per_task_buffer_limit_bytes,
+                backpressure_events: state.backpressure_events,
+                fairness_yields: state.fairness_yields,
+                accounting_errors: state.accounting_errors,
+            },
+            throughput: LogicalTaskThroughputSnapshot {
+                class: self.class,
+                completed_files: state.completed_files,
+                completed_bytes: state.completed_bytes,
+                database_batches: state.database_batches,
+                database_batch_rows: state.database_batch_rows,
+                database_batch_bytes: state.database_batch_bytes,
+                elapsed_micros: state.elapsed_micros,
+            },
         })
     }
 
+    pub fn queue_snapshot(&self) -> Result<LogicalTaskQueueSnapshot, String> {
+        Ok(self.snapshot()?.queue)
+    }
+
     pub fn throughput_snapshot(&self) -> Result<LogicalTaskThroughputSnapshot, String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "logical task queue observability state is poisoned".to_string())?;
-        Ok(LogicalTaskThroughputSnapshot {
-            class: self.class,
-            completed_files: state.completed_files,
-            completed_bytes: state.completed_bytes,
-            database_batches: state.database_batches,
-            database_batch_rows: state.database_batch_rows,
-            database_batch_bytes: state.database_batch_bytes,
-            elapsed_micros: state.elapsed_micros,
-        })
+        Ok(self.snapshot()?.throughput)
     }
 }
 
@@ -648,23 +657,63 @@ impl Drop for LaneObservabilitySampler {
     }
 }
 
+pub const LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS_ENV: &str = "FOD_TASK_OBSERVABILITY_INTERVAL_MS";
+const MIN_LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS: u64 = 100;
+const MAX_LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS: u64 = 3_600_000;
+
+fn parse_logical_task_observability_interval(value: &str) -> Result<Duration, String> {
+    let interval_ms = value.parse::<u64>().map_err(|err| {
+        format!(
+            "{LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS_ENV} must be an integer number of milliseconds: {err}"
+        )
+    })?;
+    if !(MIN_LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS..=MAX_LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS)
+        .contains(&interval_ms)
+    {
+        return Err(format!(
+            "{LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS_ENV} must be between {MIN_LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS} and {MAX_LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS} milliseconds"
+        ));
+    }
+    Ok(Duration::from_millis(interval_ms))
+}
+
+fn logical_task_observability_interval(default_interval: Duration) -> Result<Duration, String> {
+    match std::env::var(LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS_ENV) {
+        Ok(value) => parse_logical_task_observability_interval(&value),
+        Err(std::env::VarError::NotPresent) => {
+            if default_interval.is_zero() {
+                Err("logical task observability interval must be greater than zero".to_string())
+            } else {
+                Ok(default_interval)
+            }
+        }
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+            "{LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS_ENV} must contain valid UTF-8"
+        )),
+    }
+}
+
 pub struct LogicalTaskObservabilitySampler {
     stop: Arc<AtomicBool>,
+    trackers: Arc<Vec<Arc<LogicalTaskQueueObservability>>>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl LogicalTaskObservabilitySampler {
     pub fn spawn(
         trackers: Vec<Arc<LogicalTaskQueueObservability>>,
-        interval: Duration,
+        default_interval: Duration,
     ) -> Result<Self, String> {
-        if interval.is_zero() {
-            return Err(
-                "logical task observability interval must be greater than zero".to_string(),
-            );
-        }
+        let interval = logical_task_observability_interval(default_interval)?;
+        let trackers = Arc::new(trackers);
+        let trackers_thread = Arc::clone(&trackers);
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
+        log::info!(
+            "FOD logical task observability sampler: interval_ms={} env={}",
+            interval.as_millis(),
+            LOGICAL_TASK_OBSERVABILITY_INTERVAL_MS_ENV
+        );
         let thread = thread::Builder::new()
             .name("fod-task-observability".to_string())
             .spawn(move || {
@@ -673,14 +722,19 @@ impl LogicalTaskObservabilitySampler {
                     if stop_thread.load(Ordering::Relaxed) {
                         break;
                     }
-                    log_logical_task_observability("periodic", &trackers);
+                    log_logical_task_observability("periodic", trackers_thread.as_slice());
                 }
             })
             .map_err(|err| format!("failed to spawn logical task observability thread: {err}"))?;
         Ok(Self {
             stop,
+            trackers,
             thread: Some(thread),
         })
+    }
+
+    pub fn sample_now(&self) {
+        log_logical_task_observability("manual", self.trackers.as_slice());
     }
 
     pub fn stop(&mut self) {
@@ -703,8 +757,10 @@ pub fn log_logical_task_observability(
     trackers: &[Arc<LogicalTaskQueueObservability>],
 ) {
     for tracker in trackers {
-        match (tracker.queue_snapshot(), tracker.throughput_snapshot()) {
-            (Ok(queue), Ok(throughput)) if queue.admitted_tasks > 0 => {
+        match tracker.snapshot() {
+            Ok(snapshot) if snapshot.queue.admitted_tasks > 0 => {
+                let queue = snapshot.queue;
+                let throughput = snapshot.throughput;
                 log::info!(
                     "FOD logical task observability: stage={} lane={} operation={} admitted_tasks={} completed_tasks={} failed_tasks={} queued_tasks={} active_tasks={} peak_queued_tasks={} peak_active_tasks={} active_transactions={} payload_in_flight_bytes={} completed_files={} completed_bytes={} completed_bytes_per_second={} database_batches={} database_batch_rows={} database_batch_bytes={} elapsed_micros={} accounting_errors={}",
                     stage,
@@ -729,7 +785,7 @@ pub fn log_logical_task_observability(
                     queue.accounting_errors,
                 );
             }
-            (Err(err), _) | (_, Err(err)) => {
+            Err(err) => {
                 log::warn!(
                     "FOD logical task observability unavailable: stage={} error={}",
                     stage,
@@ -903,4 +959,28 @@ pub fn current_process_rss_bytes() -> Result<u64, String> {
     }
     kib.checked_mul(1024)
         .ok_or_else(|| "VmRSS byte value overflowed".to_string())
+}
+
+#[cfg(test)]
+mod logical_task_interval_tests {
+    use super::*;
+
+    #[test]
+    fn parses_valid_logical_task_interval() {
+        assert_eq!(
+            parse_logical_task_observability_interval("250").unwrap(),
+            Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn rejects_logical_task_interval_outside_bounds() {
+        assert!(parse_logical_task_observability_interval("99").is_err());
+        assert!(parse_logical_task_observability_interval("3600001").is_err());
+    }
+
+    #[test]
+    fn rejects_non_numeric_logical_task_interval() {
+        assert!(parse_logical_task_observability_interval("thirty").is_err());
+    }
 }

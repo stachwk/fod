@@ -278,6 +278,14 @@ seconds and once at shutdown. Immediate observation now records admission and
 start under one mutex acquisition, reducing hot-path synchronization without
 changing task ordering, limits, routing, or failure semantics.
 
+
+FOD 3.2.47 reads each queue/throughput report from one locked state snapshot,
+so a log line cannot combine counters from two different instants. The default
+30-second period can be overridden with
+`FOD_TASK_OBSERVABILITY_INTERVAL_MS`; accepted values range from 100 through
+3600000 milliseconds. The sampler also exposes an immediate sampling method
+used by deterministic tests without timing sleeps.
+
 Introduce:
 
 - a logical task queue for bulk file operations;
