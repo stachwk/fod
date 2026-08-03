@@ -2550,3 +2550,23 @@ Base commit at execution time: `5cf1051`
 - `git diff HEAD~1..HEAD --check`
 - `git show --stat --oneline --decorate HEAD`
 - `git diff HEAD~1..HEAD`
+
+## 2026-08-03 — FOD 3.2.51 unused FUSE constructor cleanup
+
+Base commit at execution time: `a38381a`
+
+- `git status --short`
+- `git rev-parse --short HEAD`
+- `cat fod_version.txt`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-runtime`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse`
+- `make test-mount-suite`
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`

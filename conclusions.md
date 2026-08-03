@@ -457,3 +457,10 @@ FOD checklist for the common FUSE/FS bottlenecks:
 - Read operations use their own process-local gate. File writes and `copy_file_range` intentionally share one write-lane gate so copy pressure cannot bypass the write admission budget.
 - A zero limit preserves the previous single-lock observation path. Positive limits use a condition variable and an RAII permit; waiting tasks remain visible in queue counters and capacity is released on normal completion, explicit error, or early return.
 - This stage does not claim PostgreSQL transaction limiting, payload-memory enforcement, fairness, or multi-endpoint routing. Those remain independent acceptance steps.
+
+## 2026-08-03 — FOD 3.2.51 unused FUSE constructor cleanup
+
+- Base commit: `a38381a`.
+- `FodFuse::new` was compiled only for tests but no test called it; the production mount already used `FodFuse::new_with_task_settings`.
+- Removing the unused wrapper is preferable to `#[allow(dead_code)]` because it preserves strict warning checks and leaves one explicit constructor contract.
+- The change does not alter task admission, PostgreSQL behavior, FUSE callbacks, configuration parsing, or routing.

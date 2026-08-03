@@ -296,6 +296,12 @@ tasks in the existing queue counters and record one backpressure event per task
 that actually waits. This slice does not limit active PostgreSQL transactions,
 enforce payload byte budgets, guarantee fairness, or alter endpoint routing.
 
+FOD 3.2.51 removes the unused test-only compatibility constructor that
+wrapped `new_with_task_settings`. The FUSE binary now has one constructor path
+for logical-task settings in production and test builds, which keeps
+`RUSTFLAGS="-D warnings" cargo test -p fod-rust-fuse --bin fod-rust-fuse`
+clean without hiding dead-code warnings. Runtime admission behavior is unchanged.
+
 Introduce:
 
 - a logical task queue for bulk file operations;

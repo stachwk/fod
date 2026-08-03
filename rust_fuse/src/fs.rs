@@ -906,11 +906,6 @@ pub struct FodFuse {
 }
 
 impl FodFuse {
-    #[cfg(test)]
-    pub fn new(repo: DbRepo, settings: FodFuseSettings, runtime: &RuntimeConfig) -> Self {
-        Self::new_with_task_settings(repo, settings, runtime, RuntimeTaskSettings::default())
-    }
-
     pub fn new_with_task_settings(
         repo: DbRepo,
         settings: FodFuseSettings,
