@@ -229,9 +229,17 @@ Logical FUSE task observation is separate from PostgreSQL lane observation.
 Every mount records cumulative `read`, `write`, and `copy_file_range` queue and
 throughput snapshots. Its sampler defaults to 30000 milliseconds and can be
 set from `100` to `3600000` with
-`FOD_TASK_OBSERVABILITY_INTERVAL_MS`. These counters are observation-only:
-they do not yet impose queue limits, transaction permits, memory budgets, or
-automatic endpoint routing. See
+`FOD_TASK_OBSERVABILITY_INTERVAL_MS`.
+
+FOD 3.2.50 adds opt-in process-local admission for these callbacks.
+`FOD_TASK_READ_ACTIVE_LIMIT` bounds active reads, while
+`FOD_TASK_WRITE_ACTIVE_LIMIT` is shared by writes and `copy_file_range`.
+Zero is the default and preserves the previous
+observation-only path without an admission wait. A positive limit keeps excess
+tasks in the logical queue, records one backpressure event for a task that had
+to wait, and releases capacity through an RAII permit on every return path.
+These limits do not yet constrain PostgreSQL transactions, reserve payload
+bytes, implement fairness, or enable automatic endpoint routing. See
 [`docs/postgresql-multi-endpoint-phase-4.md`](docs/postgresql-multi-endpoint-phase-4.md)
 for the metric boundaries and the still-disabled routing contract.
 

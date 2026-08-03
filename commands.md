@@ -2530,3 +2530,23 @@ Base commit at execution time: `ce1a8a0`
 - `find /tmp -maxdepth 1 -type d -name 'fod-monitor-src.*' -print`
 - `target/debug/fod-indexer source remove --help && target/debug/fod-indexer source remove --name monitor_visible && target/debug/fod-indexer source list`
 - `find /tmp/fod-monitor-src.XBRCjJ -type f -delete && rmdir /tmp/fod-monitor-src.XBRCjJ && find /tmp -maxdepth 1 -type d -name 'fod-monitor-src.*' -print`
+
+## 2026-08-03 — FOD 3.2.50 logical task admission
+
+Base commit at execution time: `5cf1051`
+
+- `git status --short`
+- `git rev-parse --short HEAD`
+- `cat fod_version.txt`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `cargo test --locked -p fod-rust-monitor`
+- `cargo test --locked -p fod-rust-runtime`
+- `cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse`
+- `FOD_TASK_READ_ACTIVE_LIMIT=1 FOD_TASK_WRITE_ACTIVE_LIMIT=1 make test-mount-suite`
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`

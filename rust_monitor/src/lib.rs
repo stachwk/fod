@@ -2,8 +2,7 @@
 // Licensed under BSL 1.1
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -178,6 +177,20 @@ pub struct LogicalTaskQueueObservability {
 }
 
 #[derive(Debug)]
+pub struct LogicalTaskAdmissionGate {
+    active_task_limit: u64,
+    active_tasks: Mutex<u64>,
+    wake_one: Condvar,
+}
+
+#[derive(Debug)]
+pub struct LogicalTaskAdmissionPermit {
+    gate: Arc<LogicalTaskAdmissionGate>,
+    observability: Option<Arc<LogicalTaskQueueObservability>>,
+    acquired: bool,
+}
+
+#[derive(Debug)]
 pub struct LogicalTaskObservation {
     observability: Arc<LogicalTaskQueueObservability>,
     payload_bytes: u64,
@@ -240,6 +253,97 @@ impl Drop for LogicalTaskObservation {
     }
 }
 
+impl LogicalTaskAdmissionGate {
+    pub fn new(active_task_limit: u64) -> Self {
+        Self {
+            active_task_limit,
+            active_tasks: Mutex::new(0),
+            wake_one: Condvar::new(),
+        }
+    }
+
+    pub fn active_task_limit(&self) -> u64 {
+        self.active_task_limit
+    }
+
+    pub fn observe_task(
+        self: &Arc<Self>,
+        observability: &Arc<LogicalTaskQueueObservability>,
+        payload_bytes: u64,
+        starts_transaction: bool,
+    ) -> (LogicalTaskAdmissionPermit, LogicalTaskObservation) {
+        if self.active_task_limit == 0 {
+            return (
+                LogicalTaskAdmissionPermit {
+                    gate: Arc::clone(self),
+                    observability: None,
+                    acquired: false,
+                },
+                observability.observe_task(payload_bytes, starts_transaction),
+            );
+        }
+
+        observability.admit_task();
+        let mut active_tasks = match self.active_tasks.lock() {
+            Ok(guard) => guard,
+            Err(err) => {
+                observability.record_accounting_error();
+                err.into_inner()
+            }
+        };
+        let mut backpressure_recorded = false;
+        while *active_tasks >= self.active_task_limit {
+            if !backpressure_recorded {
+                observability.record_backpressure();
+                backpressure_recorded = true;
+            }
+            active_tasks = match self.wake_one.wait(active_tasks) {
+                Ok(guard) => guard,
+                Err(err) => {
+                    observability.record_accounting_error();
+                    err.into_inner()
+                }
+            };
+        }
+        *active_tasks = active_tasks.saturating_add(1);
+        drop(active_tasks);
+
+        let observation = observability.observe_admitted_task(payload_bytes, starts_transaction);
+        (
+            LogicalTaskAdmissionPermit {
+                gate: Arc::clone(self),
+                observability: Some(Arc::clone(observability)),
+                acquired: true,
+            },
+            observation,
+        )
+    }
+}
+
+impl Drop for LogicalTaskAdmissionPermit {
+    fn drop(&mut self) {
+        if !self.acquired {
+            return;
+        }
+        let Some(observability) = self.observability.as_ref() else {
+            return;
+        };
+        let mut active_tasks = match self.gate.active_tasks.lock() {
+            Ok(guard) => guard,
+            Err(err) => {
+                observability.record_accounting_error();
+                err.into_inner()
+            }
+        };
+        match active_tasks.checked_sub(1) {
+            Some(value) => *active_tasks = value,
+            None => observability.record_accounting_error(),
+        }
+        drop(active_tasks);
+        self.gate.wake_one.notify_one();
+    }
+}
+
 impl LogicalTaskQueueObservability {
     pub fn new(
         class: LogicalTaskClass,
@@ -262,6 +366,15 @@ impl LogicalTaskQueueObservability {
         starts_transaction: bool,
     ) -> LogicalTaskObservation {
         self.admit_and_start_task(payload_bytes, starts_transaction);
+        LogicalTaskObservation::new(Arc::clone(self), payload_bytes, starts_transaction)
+    }
+
+    pub fn observe_admitted_task(
+        self: &Arc<Self>,
+        payload_bytes: u64,
+        starts_transaction: bool,
+    ) -> LogicalTaskObservation {
+        self.start_task(payload_bytes, starts_transaction);
         LogicalTaskObservation::new(Arc::clone(self), payload_bytes, starts_transaction)
     }
 
@@ -369,6 +482,13 @@ impl LogicalTaskQueueObservability {
             return;
         };
         state.fairness_yields = state.fairness_yields.saturating_add(1);
+    }
+
+    pub fn record_accounting_error(&self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.accounting_errors = state.accounting_errors.saturating_add(1);
     }
 
     pub fn snapshot(&self) -> Result<LogicalTaskObservabilitySnapshot, String> {

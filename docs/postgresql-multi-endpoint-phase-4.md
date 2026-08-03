@@ -286,6 +286,16 @@ so a log line cannot combine counters from two different instants. The default
 3600000 milliseconds. The sampler also exposes an immediate sampling method
 used by deterministic tests without timing sleeps.
 
+FOD 3.2.50 adds the first enforced Stage 3 boundary. A reusable
+`LogicalTaskAdmissionGate` in `fod-rust-monitor` uses a condition variable and
+an RAII permit to bound active logical FUSE work. Reads use a dedicated gate;
+writes and `copy_file_range` share the write-lane gate. The first slice is
+configured through `FOD_TASK_READ_ACTIVE_LIMIT` and
+`FOD_TASK_WRITE_ACTIVE_LIMIT`. Zero keeps enforcement disabled. Positive limits retain waiting
+tasks in the existing queue counters and record one backpressure event per task
+that actually waits. This slice does not limit active PostgreSQL transactions,
+enforce payload byte budgets, guarantee fairness, or alter endpoint routing.
+
 Introduce:
 
 - a logical task queue for bulk file operations;

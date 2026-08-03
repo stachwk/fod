@@ -506,6 +506,39 @@ pub struct RuntimeCoreSettings {
     pub pool_max_connections: u64,
 }
 
+/// Process-local logical FUSE task admission controls.
+/// Zero keeps enforcement disabled and preserves observation-only behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeTaskSettings {
+    pub read_active_limit: u64,
+    pub write_active_limit: u64,
+}
+
+impl RuntimeTaskSettings {
+    pub fn from_env() -> Result<Self, String> {
+        Ok(Self {
+            read_active_limit: task_active_limit_from_env("FOD_TASK_READ_ACTIVE_LIMIT")?,
+            write_active_limit: task_active_limit_from_env("FOD_TASK_WRITE_ACTIVE_LIMIT")?,
+        })
+    }
+}
+
+fn task_active_limit_from_env(name: &str) -> Result<u64, String> {
+    let Some(value) = env::var_os(name) else {
+        return Ok(0);
+    };
+    let value = value
+        .into_string()
+        .map_err(|_| format!("{name} is not valid UTF-8"))?;
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{name} must not be empty"));
+    }
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("invalid {name} value: {value}"))
+}
+
 /// FUSE mount behavior and VFS semantics.
 #[derive(Debug, Clone)]
 pub struct RuntimeMountSettings {

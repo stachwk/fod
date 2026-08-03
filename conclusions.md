@@ -449,3 +449,11 @@ FOD checklist for the common FUSE/FS bottlenecks:
 - FOD `3.2.41` adds `LogicalTaskQueueObservability` as an in-memory Stage 3 aggregate in `fod-rust-monitor`. It records queue/task lifecycle counters, active-transaction and payload-in-flight state, database batch totals, throughput totals, backpressure/fairness counters, and accounting errors without changing FUSE scheduling or routing.
 - FOD `3.2.42` turns `fod-rust-monitor` into an installable binary as well as a library. The initial `fod-monitor status` command reports local FOD processes and RSS memory from `/proc`, while `make install-root-scripts` and `make install-on-root` now build, install, and strip `/usr/local/bin/fod-monitor`.
 - FOD `3.2.43` makes `fod-monitor` useful as an operator-facing runtime viewer, not only a presence check. `status` reports system load, uptime, memory, and per-process RSS, virtual memory, threads, file descriptors, context switches, and command line; `top`/`watch` can refresh the same view continuously; `report` emits a one-shot text report that can be redirected into an incident or benchmark artifact.
+
+## 2026-08-03 — FOD 3.2.50 logical task admission
+
+- Base commit: `5cf1051`.
+- The existing logical-task counters already separated admitted, queued, active, completed, and failed work, so the smallest safe Stage 3 step was an admission gate rather than a second queue model.
+- Read operations use their own process-local gate. File writes and `copy_file_range` intentionally share one write-lane gate so copy pressure cannot bypass the write admission budget.
+- A zero limit preserves the previous single-lock observation path. Positive limits use a condition variable and an RAII permit; waiting tasks remain visible in queue counters and capacity is released on normal completion, explicit error, or early return.
+- This stage does not claim PostgreSQL transaction limiting, payload-memory enforcement, fairness, or multi-endpoint routing. Those remain independent acceptance steps.

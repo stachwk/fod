@@ -3,8 +3,8 @@
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use fod_rust_monitor::{
-    log_logical_task_observability as log_logical_task_snapshots, LogicalTaskClass,
-    LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
+    log_logical_task_observability as log_logical_task_snapshots, LogicalTaskAdmissionGate,
+    LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
     LogicalTaskQueueObservability,
 };
 use fuser::{
@@ -31,7 +31,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fod_rust_runtime::{
     duration_to_micros, reloadable_snapshot_from_json, AtimeStat, RuntimeConfig,
-    RuntimeReloadableSettings, FOD_SCHEMA_NAME,
+    RuntimeReloadableSettings, RuntimeTaskSettings, FOD_SCHEMA_NAME,
 };
 pub use fod_rust_runtime::{AtimePolicy, LockBackend};
 
@@ -895,6 +895,8 @@ pub struct FodFuse {
     logical_read_tasks: Arc<LogicalTaskQueueObservability>,
     logical_write_tasks: Arc<LogicalTaskQueueObservability>,
     logical_copy_tasks: Arc<LogicalTaskQueueObservability>,
+    logical_read_gate: Arc<LogicalTaskAdmissionGate>,
+    logical_write_gate: Arc<LogicalTaskAdmissionGate>,
     logical_task_observability: Option<LogicalTaskObservabilitySampler>,
     next_fh: Mutex<u64>,
     request_seq: AtomicU64,
@@ -904,7 +906,17 @@ pub struct FodFuse {
 }
 
 impl FodFuse {
+    #[cfg(test)]
     pub fn new(repo: DbRepo, settings: FodFuseSettings, runtime: &RuntimeConfig) -> Self {
+        Self::new_with_task_settings(repo, settings, runtime, RuntimeTaskSettings::default())
+    }
+
+    pub fn new_with_task_settings(
+        repo: DbRepo,
+        settings: FodFuseSettings,
+        runtime: &RuntimeConfig,
+        task_settings: RuntimeTaskSettings,
+    ) -> Self {
         let FodFuseSettings {
             storage,
             cache,
@@ -921,8 +933,8 @@ impl FodFuse {
         inode_to_path.insert(ROOT_INO, "/".to_string());
         path_to_inode.insert("/".to_string(), ROOT_INO);
 
-        // Wartosci 0 oznaczaja, ze ten etap tylko mierzy ruch.
-        // Limity i backpressure pozostaja wylaczone do kolejnego kroku Stage 3.
+        // Zero keeps the existing observation-only fast path. Positive values
+        // enable process-local logical admission without changing DB pool limits.
         let logical_read_tasks = Arc::new(LogicalTaskQueueObservability::new(
             LogicalTaskClass::new(LogicalTaskLane::Read, LogicalTaskOperation::FileRead),
             0,
@@ -940,6 +952,13 @@ impl FodFuse {
             0,
             0,
             storage.write_flush_threshold_bytes,
+        ));
+        let logical_read_gate = Arc::new(LogicalTaskAdmissionGate::new(
+            task_settings.read_active_limit,
+        ));
+        // File writes and copy_file_range share one write-lane gate.
+        let logical_write_gate = Arc::new(LogicalTaskAdmissionGate::new(
+            task_settings.write_active_limit,
         ));
 
         Self {
@@ -979,6 +998,8 @@ impl FodFuse {
             logical_read_tasks,
             logical_write_tasks,
             logical_copy_tasks,
+            logical_read_gate,
+            logical_write_gate,
             logical_task_observability: None,
             next_fh: Mutex::new(1),
             request_seq: AtomicU64::new(1),
@@ -1303,6 +1324,13 @@ impl FodFuse {
         let started = Instant::now();
         reply.written(written);
         self.record_reply_write_elapsed(started.elapsed());
+    }
+
+    pub(crate) fn logical_task_active_limits(&self) -> (u64, u64) {
+        (
+            self.logical_read_gate.active_task_limit(),
+            self.logical_write_gate.active_task_limit(),
+        )
     }
 
     fn logical_task_trackers(&self) -> Vec<Arc<LogicalTaskQueueObservability>> {
@@ -4619,7 +4647,9 @@ impl Filesystem for FodFuse {
         let fh = fh.0;
         let req_id = self.next_request_id();
         let _read_profile = self.start_fuse_read_profile();
-        let read_task = self.logical_read_tasks.observe_task(u64::from(size), false);
+        let (_read_permit, read_task) =
+            self.logical_read_gate
+                .observe_task(&self.logical_read_tasks, u64::from(size), false);
         let file_id = match self.file_id_for_handle_or_errno(fh, ino) {
             Ok(value) => value,
             Err(errno) => {
@@ -5857,9 +5887,11 @@ impl Filesystem for FodFuse {
         let fh = fh.0;
         let req_id = self.next_request_id();
         let _write_profile = self.start_fuse_write_profile();
-        let write_task = self
-            .logical_write_tasks
-            .observe_task(data.len() as u64, false);
+        let (_write_permit, write_task) = self.logical_write_gate.observe_task(
+            &self.logical_write_tasks,
+            data.len() as u64,
+            false,
+        );
         if self.read_only {
             fuse_reply_error!(reply, libc::EROFS);
             return;
@@ -6061,7 +6093,9 @@ impl Filesystem for FodFuse {
         let fh_out = fh_out.0;
         let req_id = self.next_request_id();
         let _write_profile = self.start_fuse_write_profile();
-        let copy_task = self.logical_copy_tasks.observe_task(len, false);
+        let (_copy_permit, copy_task) =
+            self.logical_write_gate
+                .observe_task(&self.logical_copy_tasks, len, false);
         if self.read_only {
             fuse_reply_error!(reply, libc::EROFS);
             return;

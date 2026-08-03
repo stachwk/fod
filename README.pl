@@ -221,9 +221,18 @@ Obserwacja logicznych zadań FUSE jest osobnym samplerem. Każdy mount raportuje
 skumulowane kolejki i przepustowość operacji `read`, `write` oraz
 `copy_file_range`. Domyślny interwał wynosi 30000 ms, a
 `FOD_TASK_OBSERVABILITY_INTERVAL_MS` przyjmuje wartości od `100` do
-`3600000` ms. Są to nadal wyłącznie pomiary: nie włączają limitów kolejek,
-semaforów transakcji, budżetu pamięci ani automatycznego routingu endpointów.
-Szczegóły opisuje
+`3600000` ms.
+
+FOD 3.2.50 dodaje włączane jawnie, procesowo-lokalne ograniczenie aktywnych
+callbacków. `FOD_TASK_READ_ACTIVE_LIMIT` ogranicza odczyty, a
+`FOD_TASK_WRITE_ACTIVE_LIMIT` jest wspólny dla zapisów i `copy_file_range`.
+Domyślne `0` zachowuje poprzednią
+ścieżkę wyłącznie obserwacyjną bez oczekiwania na permit. Wartość dodatnia
+pozostawia nadmiarowe zadania w kolejce logicznej, zapisuje jedno zdarzenie
+backpressure dla zadania, które musiało czekać, i zwalnia pojemność przez permit
+RAII na każdej ścieżce wyjścia. Limity nie ograniczają jeszcze transakcji
+PostgreSQL, nie rezerwują bajtów payloadu, nie zapewniają fairness i nie
+włączają automatycznego routingu endpointów. Szczegóły opisuje
 [`docs/postgresql-multi-endpoint-phase-4.md`](docs/postgresql-multi-endpoint-phase-4.md).
 
 ## Przykładowy `fod_config.example.ini`

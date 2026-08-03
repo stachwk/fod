@@ -10,7 +10,7 @@ use std::time::Duration;
 use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, env_var_with_legacy_alias, RuntimeCacheSettings,
     RuntimeConfig, RuntimeCoreSettings, RuntimeLockSettings, RuntimeMountSettings,
-    RuntimeSecuritySettings, RuntimeStorageSettings,
+    RuntimeSecuritySettings, RuntimeStorageSettings, RuntimeTaskSettings,
 };
 pub use fod_rust_runtime::{AtimePolicy, LockBackend};
 
@@ -292,6 +292,12 @@ fn log_mount_status(
         storage.enable_extents,
         storage.extent_target_bytes
     );
+    let (task_read_active_limit, task_write_active_limit) = fs.logical_task_active_limits();
+    info!(
+        "FOD logical task admission read_active_limit={} write_active_limit={} write_gate_includes_copy=true zero_disables_enforcement=true",
+        task_read_active_limit,
+        task_write_active_limit
+    );
     info!(
         "FOD mount options: {:?} acl={:?}",
         config.mount_options, config.acl
@@ -315,7 +321,9 @@ pub fn mount_fuse(
         );
     }
 
-    let mut fs = FodFuse::new(repo, settings, runtime);
+    let task_settings = RuntimeTaskSettings::from_env()
+        .map_err(|err| format!("invalid logical task admission config: {err}"))?;
+    let mut fs = FodFuse::new_with_task_settings(repo, settings, runtime, task_settings);
     let read_only = fs.read_only;
     let core = runtime.core_settings();
     let mount = runtime.mount_settings(read_only);
