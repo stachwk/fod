@@ -302,6 +302,16 @@ for logical-task settings in production and test builds, which keeps
 `RUSTFLAGS="-D warnings" cargo test -p fod-rust-fuse --bin fod-rust-fuse`
 clean without hiding dead-code warnings. Runtime admission behavior is unchanged.
 
+FOD 3.2.52 adds FIFO ordering to every positive process-local logical-task
+limit. Each admission gate assigns tickets under the same mutex that protects
+its active count. A task enters only when its ticket is being served and a slot
+is available; releasing a permit wakes the ticket queue. `notify_all` is
+intentional because waking only a later ticket could leave the next eligible
+waiter asleep. The existing backpressure counter records the first wait, while
+`fairness_yields` records the first deferral behind an older ticket. The
+zero-limit fast path, PostgreSQL pools, payload accounting, and routing are
+unchanged.
+
 Introduce:
 
 - a logical task queue for bulk file operations;
@@ -311,7 +321,7 @@ Introduce:
 - a global byte-budget permit for payloads in flight;
 - a per-task buffer cap;
 - cancellation-safe permit release;
-- fairness so one large file cannot permanently block many small files;
+- benchmark FIFO fairness under mixed small/large-file workloads and quantify wake-all overhead;
 - explicit backpressure diagnostics.
 
 The queue depth may be high, including experiments with 500 logical tasks, while the active backend count remains independently configurable.

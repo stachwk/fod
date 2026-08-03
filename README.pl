@@ -228,11 +228,14 @@ callbacków. `FOD_TASK_READ_ACTIVE_LIMIT` ogranicza odczyty, a
 `FOD_TASK_WRITE_ACTIVE_LIMIT` jest wspólny dla zapisów i `copy_file_range`.
 Domyślne `0` zachowuje poprzednią
 ścieżkę wyłącznie obserwacyjną bez oczekiwania na permit. Wartość dodatnia
-pozostawia nadmiarowe zadania w kolejce logicznej, zapisuje jedno zdarzenie
-backpressure dla zadania, które musiało czekać, i zwalnia pojemność przez permit
-RAII na każdej ścieżce wyjścia. Limity nie ograniczają jeszcze transakcji
-PostgreSQL, nie rezerwują bajtów payloadu, nie zapewniają fairness i nie
-włączają automatycznego routingu endpointów. Szczegóły opisuje
+przydziela uporządkowane bilety i wpuszcza oczekujące zadania FIFO w obrębie
+każdej bramki. Zadanie oczekujące zapisuje jedno zdarzenie backpressure, a
+zadanie ustępujące wcześniejszemu biletowi zapisuje jedno fairness yield.
+Pojemność jest zwalniana przez permit RAII na każdej ścieżce wyjścia. Limity
+nie ograniczają jeszcze transakcji PostgreSQL, nie rezerwują bajtów payloadu
+i nie włączają automatycznego routingu endpointów. Kolejność FIFO jest lokalna
+dla procesu i osobna dla bramki odczytu oraz wspólnej bramki zapisu/kopiowania.
+Szczegóły opisuje
 [`docs/postgresql-multi-endpoint-phase-4.md`](docs/postgresql-multi-endpoint-phase-4.md).
 
 ## Przykładowy `fod_config.example.ini`

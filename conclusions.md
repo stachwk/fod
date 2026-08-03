@@ -464,3 +464,11 @@ FOD checklist for the common FUSE/FS bottlenecks:
 - `FodFuse::new` was compiled only for tests but no test called it; the production mount already used `FodFuse::new_with_task_settings`.
 - Removing the unused wrapper is preferable to `#[allow(dead_code)]` because it preserves strict warning checks and leaves one explicit constructor contract.
 - The change does not alter task admission, PostgreSQL behavior, FUSE callbacks, configuration parsing, or routing.
+
+## 2026-08-03 — FOD 3.2.52 FIFO logical task admission
+
+- Base commit: `0fe5dd1`.
+- The 3.2.50 condition-variable gate limited concurrency but did not define which waiter should acquire the next slot.
+- Each positive-limit gate now assigns tickets under the gate mutex and serves them in FIFO order. Reads keep their own queue; writes and `copy_file_range` keep sharing one queue.
+- `notify_all` is required for correctness with ticket order: `notify_one` may wake a later ticket, which would go back to sleep while the eligible ticket remains blocked.
+- The zero-limit fast path is unchanged. This stage does not add PostgreSQL transaction permits, payload byte budgets, cross-process fairness, or endpoint routing.

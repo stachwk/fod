@@ -2570,3 +2570,23 @@ Base commit at execution time: `a38381a`
 - `git diff HEAD~1..HEAD --check`
 - `git show --stat --oneline --decorate HEAD`
 - `git diff HEAD~1..HEAD`
+
+## 2026-08-03 — FOD 3.2.52 FIFO logical task admission
+
+Base commit at execution time: `0fe5dd1`
+
+- `git status --short`
+- `git rev-parse --short HEAD`
+- `cat fod_version.txt`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked -- --test-threads=1`
+- `FOD_TASK_READ_ACTIVE_LIMIT=1 FOD_TASK_WRITE_ACTIVE_LIMIT=1 make test-mount-suite`
+- `FOD_TASK_READ_ACTIVE_LIMIT=1 FOD_TASK_WRITE_ACTIVE_LIMIT=1 FOD_PROFILE_IO=1 make test-fio-sequential-io`
+- `FOD_TASK_READ_ACTIVE_LIMIT=1 FOD_TASK_WRITE_ACTIVE_LIMIT=1 make test-fio-sequential-io-strace`
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`

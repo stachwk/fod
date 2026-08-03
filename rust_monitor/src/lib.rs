@@ -176,11 +176,18 @@ pub struct LogicalTaskQueueObservability {
     state: Mutex<LogicalTaskQueueObservabilityState>,
 }
 
+#[derive(Debug, Default)]
+struct LogicalTaskAdmissionState {
+    active_tasks: u64,
+    next_ticket: u64,
+    serving_ticket: u64,
+}
+
 #[derive(Debug)]
 pub struct LogicalTaskAdmissionGate {
     active_task_limit: u64,
-    active_tasks: Mutex<u64>,
-    wake_one: Condvar,
+    state: Mutex<LogicalTaskAdmissionState>,
+    state_changed: Condvar,
 }
 
 #[derive(Debug)]
@@ -257,8 +264,8 @@ impl LogicalTaskAdmissionGate {
     pub fn new(active_task_limit: u64) -> Self {
         Self {
             active_task_limit,
-            active_tasks: Mutex::new(0),
-            wake_one: Condvar::new(),
+            state: Mutex::new(LogicalTaskAdmissionState::default()),
+            state_changed: Condvar::new(),
         }
     }
 
@@ -284,20 +291,28 @@ impl LogicalTaskAdmissionGate {
         }
 
         observability.admit_task();
-        let mut active_tasks = match self.active_tasks.lock() {
+        let mut state = match self.state.lock() {
             Ok(guard) => guard,
             Err(err) => {
                 observability.record_accounting_error();
                 err.into_inner()
             }
         };
+        let ticket = state.next_ticket;
+        state.next_ticket = state.next_ticket.wrapping_add(1);
+
         let mut backpressure_recorded = false;
-        while *active_tasks >= self.active_task_limit {
+        let mut fairness_recorded = false;
+        while ticket != state.serving_ticket || state.active_tasks >= self.active_task_limit {
             if !backpressure_recorded {
                 observability.record_backpressure();
                 backpressure_recorded = true;
             }
-            active_tasks = match self.wake_one.wait(active_tasks) {
+            if ticket != state.serving_ticket && !fairness_recorded {
+                observability.record_fairness_yield();
+                fairness_recorded = true;
+            }
+            state = match self.state_changed.wait(state) {
                 Ok(guard) => guard,
                 Err(err) => {
                     observability.record_accounting_error();
@@ -305,8 +320,18 @@ impl LogicalTaskAdmissionGate {
                 }
             };
         }
-        *active_tasks = active_tasks.saturating_add(1);
-        drop(active_tasks);
+
+        state.active_tasks = state.active_tasks.saturating_add(1);
+        state.serving_ticket = state.serving_ticket.wrapping_add(1);
+        let can_admit_next = state.active_tasks < self.active_task_limit
+            && state.serving_ticket != state.next_ticket;
+        drop(state);
+
+        if can_admit_next {
+            // Ticket ordering requires waking every waiter: waking a later ticket
+            // alone could leave the next eligible task asleep indefinitely.
+            self.state_changed.notify_all();
+        }
 
         let observation = observability.observe_admitted_task(payload_bytes, starts_transaction);
         (
@@ -328,19 +353,23 @@ impl Drop for LogicalTaskAdmissionPermit {
         let Some(observability) = self.observability.as_ref() else {
             return;
         };
-        let mut active_tasks = match self.gate.active_tasks.lock() {
+        let mut state = match self.gate.state.lock() {
             Ok(guard) => guard,
             Err(err) => {
                 observability.record_accounting_error();
                 err.into_inner()
             }
         };
-        match active_tasks.checked_sub(1) {
-            Some(value) => *active_tasks = value,
+        match state.active_tasks.checked_sub(1) {
+            Some(value) => state.active_tasks = value,
             None => observability.record_accounting_error(),
         }
-        drop(active_tasks);
-        self.gate.wake_one.notify_one();
+        let has_waiters = state.serving_ticket != state.next_ticket;
+        drop(state);
+
+        if has_waiters {
+            self.gate.state_changed.notify_all();
+        }
     }
 }
 
