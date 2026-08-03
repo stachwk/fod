@@ -100,7 +100,7 @@ FOD to oprogramowanie source-available licencjonowane na warunkach Business Sour
 ## Aktualny Stan
 
 - Główne operacje FUSE są zaimplementowane i pokryte testami integracyjnymi.
-- `make test-all` przechodzi, a `make test-all-full` jest dostępne jako szerszy zestaw.
+- `make test-all` jest główną lokalną bramką regresji, a `make test-all-full` zawiera ten zestaw i rozszerza go o szersze testy mounta oraz indexera. Od FOD 3.2.48 przebieg integracyjny odtwarza zabezpieczoną lokalną bazę testową Docker po pełnym zestawie mkfs, zanim ruszą kolejne testy FUSE.
 - Odczyty korzystają teraz z blokowego ładowania z małym cache i read-ahead zamiast pełnego ładowania pliku przy każdym dostępie.
 - Test porównujący uprawnienia jest świadomie local-filesystem-vs-FOD, a nie tylko ext4-vs-FOD; porównuje hostowy zapisywalny local filesystem z FOD i sprawdza zgodność semantyki dla mode, ownership, access checków, sticky-bit unlink/rmdir oraz plików należących do root.
 - Widoczność `allow_other` zależy od hosta: dedykowany test robi skip, jeśli host nie wystawia mounta dla `nobody`, więc jest to test diagnostyczny, a nie uniwersalna gwarancja pass/fail.
@@ -126,9 +126,25 @@ FOD to oprogramowanie source-available licencjonowane na warunkach Business Sour
 
 Repozytorium nie ma obecnie aktywnego workflow GitHub Actions. Walidacja jest
 uruchamiana jawnie przez targety Makefile: `make test-all` jest główną lokalną
-bramką regresji, a `make test-all-full` dodaje szersze testy mounta i indexera.
-Przyszły workflow automatyczny musi zostać dodany i włączony jawnie, zamiast
-wynikać z nieaktywnego pliku.
+bramką regresji, a `make test-all-full` zawiera ją i dodaje szersze testy
+mounta oraz indexera. Przyszły workflow automatyczny musi zostać dodany i
+włączony jawnie, zamiast wynikać z nieaktywnego pliku.
+
+Lokalne zestawy integracyjne są wykonywane sekwencyjnie nawet przy `make -j`,
+ponieważ współdzielą jedną bazę Docker/PostgreSQL i zasoby mounta FUSE. Pełny
+zestaw mkfs celowo sprawdza również uszkodzone i niepełne stany schematu.
+Wewnątrz `test-integration` jest uruchamiany przez
+`test-rust-mkfs-suite-local-restored`, który zawsze próbuje wykonać
+zabezpieczone `test-db-restore-local` przed dalszymi testami FUSE, również
+wtedy, gdy sam zestaw mkfs zakończy się błędem.
+
+Bezpośrednie `cargo test --workspace --locked` wykrywa także
+`lock_backend_smoke`, którego cztery testy mountowanych blokad wymagają
+`sudo`. Ten zestaw należy uruchamiać przez `make test-locking`. Po samodzielnym
+wykonaniu `cargo test --locked -p fod-rust-mkfs`,
+`make test-runtime-validation` albo
+`make test-rust-hotpath-runtime-size-limits` należy uruchomić
+`make test-db-restore-local` przed kolejnymi testami mounta.
 
 Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasady_sprawdzen.md).
 
@@ -193,6 +209,22 @@ Wymagania PostgreSQL dla obecnego zestawu funkcji:
 | Poziom izolacji | `read committed` |
 | `max_connections` | `pool_max_connections + 2` lub więcej |
 | TLS | `sslmode=require` do szyfrowania, `verify-full` do weryfikacji certyfikatu |
+
+Opcjonalna ścieżka osobnych pul PostgreSQL
+(`FOD_PG_POOL_LANES_ENABLED=true`) raportuje skumulowane dane o pulach,
+transakcjach, heartbeat, payloadach, RSS procesu i presji serwera. Próbki pul
+PostgreSQL są domyślnie wykonywane co 5000 ms. Interwał można ustawić w
+zakresie od `100` do `3600000` ms przez
+`FOD_PG_OBSERVABILITY_INTERVAL_MS`.
+
+Obserwacja logicznych zadań FUSE jest osobnym samplerem. Każdy mount raportuje
+skumulowane kolejki i przepustowość operacji `read`, `write` oraz
+`copy_file_range`. Domyślny interwał wynosi 30000 ms, a
+`FOD_TASK_OBSERVABILITY_INTERVAL_MS` przyjmuje wartości od `100` do
+`3600000` ms. Są to nadal wyłącznie pomiary: nie włączają limitów kolejek,
+semaforów transakcji, budżetu pamięci ani automatycznego routingu endpointów.
+Szczegóły opisuje
+[`docs/postgresql-multi-endpoint-phase-4.md`](docs/postgresql-multi-endpoint-phase-4.md).
 
 ## Przykładowy `fod_config.example.ini`
 

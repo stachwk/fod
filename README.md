@@ -97,7 +97,7 @@ FOD is source-available software licensed under Business Source License 1.1 (BSL
 ## Current Status
 
 - Core FUSE operations are implemented and covered by integration tests.
-- `make test-all` passes, and `make test-all-full` is available for wider coverage.
+- `make test-all` is the main local regression gate; `make test-all-full` includes it and adds broader mounted and indexer coverage. Since FOD 3.2.48, the integration gate restores the guarded local Docker test database after the complete mkfs suite before later FUSE tests run.
 - Reads use block-range loading with a small read cache and read-ahead instead of loading whole files on every access.
 - The permissions comparison test is intentionally local-filesystem-vs-FOD, not ext4-only; it compares the host's writable local filesystem against FOD and asserts matching semantics for mode, ownership, access checks, sticky-bit unlink/rmdir, and root-owned files.
 - `allow_other` visibility is host-dependent: the dedicated test skips when the host does not expose the mount to `nobody`, so it is a diagnostic coverage check rather than a universal pass/fail guarantee.
@@ -124,9 +124,24 @@ FOD is source-available software licensed under Business Source License 1.1 (BSL
 
 The repository currently has no active GitHub Actions workflow. Validation is
 run explicitly through Makefile targets; `make test-all` is the main local
-regression gate and `make test-all-full` adds the broader mounted and indexer
-coverage. A future automated workflow must be introduced explicitly rather
-than inferred from an inactive file.
+regression gate and `make test-all-full` includes it before adding broader
+mounted and indexer coverage. A future automated workflow must be introduced
+explicitly rather than inferred from an inactive file.
+
+The local integration gates are serial even when `make -j` is used because they
+share one Docker/PostgreSQL database and FUSE mount resources. The complete
+mkfs suite intentionally exercises malformed and incomplete schemas. Inside
+`test-integration` it runs through `test-rust-mkfs-suite-local-restored`, which
+always attempts the guarded `test-db-restore-local` cleanup before later FUSE
+tests continue, including when the mkfs suite itself fails.
+
+A direct `cargo test --workspace --locked` also discovers
+`lock_backend_smoke`, whose four mounted lock tests must run through `sudo`.
+Use `make test-locking` for that suite. If the complete mkfs suite is run
+standalone with `cargo test --locked -p fod-rust-mkfs`,
+`make test-runtime-validation`, or
+`make test-rust-hotpath-runtime-size-limits`, run
+`make test-db-restore-local` before starting later mount tests.
 
 For step-by-step local verification profiles, see [zasady_sprawdzen.md](zasady_sprawdzen.md).
 
@@ -202,12 +217,21 @@ The canonical contract and startup behavior are documented in
 
 The opt-in PostgreSQL lane path (`FOD_PG_POOL_LANES_ENABLED=true`) emits
 cumulative pool, transaction, heartbeat, payload, process-RSS, and server
-pressure diagnostics while it is mounted. Periodic samples default to 5000
-milliseconds; set `FOD_PG_OBSERVABILITY_INTERVAL_MS` to a value from `100` to
-`3600000` when a benchmark needs a different interval. The pressure sample
-uses database activity and cumulative database statistics plus effective
-memory settings. On PostgreSQL 13 and newer it also reports memory allocated by
-the diagnostics connection itself, not total PostgreSQL server RSS. See
+pressure diagnostics while it is mounted. PostgreSQL lane samples default to
+5000 milliseconds; set `FOD_PG_OBSERVABILITY_INTERVAL_MS` to a value from
+`100` to `3600000` when a benchmark needs a different interval. The pressure
+sample uses database activity and cumulative database statistics plus
+effective memory settings. On PostgreSQL 13 and newer it also reports memory
+allocated by the diagnostics connection itself, not total PostgreSQL server
+RSS.
+
+Logical FUSE task observation is separate from PostgreSQL lane observation.
+Every mount records cumulative `read`, `write`, and `copy_file_range` queue and
+throughput snapshots. Its sampler defaults to 30000 milliseconds and can be
+set from `100` to `3600000` with
+`FOD_TASK_OBSERVABILITY_INTERVAL_MS`. These counters are observation-only:
+they do not yet impose queue limits, transaction permits, memory budgets, or
+automatic endpoint routing. See
 [`docs/postgresql-multi-endpoint-phase-4.md`](docs/postgresql-multi-endpoint-phase-4.md)
 for the metric boundaries and the still-disabled routing contract.
 

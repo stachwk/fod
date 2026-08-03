@@ -15,6 +15,14 @@ Ten plik opisuje profile sprawdzeń dla FOD. Profil oznacza tu uporządkowaną, 
 - Jeśli helper testowy sam uruchamia `mkfs` albo `mount.fod`, niech też czyta `ADMP_TRACE_ENV`, żeby trace nie urywał się na poziomie wspólnych helperów.
 - `strace` i `perf` są traktowane jako narzędzia diagnostyczne, więc nie powinny trafiać do trace jako monitorowane programy.
 - Nie zmieniaj `.gitignore` w ramach profili sprawdzeń.
+- `test-integration`, `test-all` i `test-all-full` współdzielą lokalną bazę
+  Docker/PostgreSQL oraz zasoby FUSE i są celowo wykonywane sekwencyjnie,
+  również przy `make -j`.
+- Pełny zestaw mkfs celowo modyfikuje lokalny stan schematu. Przed testami
+  mounta używaj `make test-rust-mkfs-suite-local-restored` albo po ręcznym
+  uruchomieniu mkfs wykonaj `make test-db-restore-local`.
+- `cargo test --workspace --locked` nie zastępuje `make test-locking`, ponieważ
+  `lock_backend_smoke` wymaga uruchomienia przez `sudo`.
 
 ## Profil bazowy bazy i konfiguracji
 
@@ -43,7 +51,8 @@ Oczekiwany wynik: targety kończą się bez błędów, a `make init` nie tworzy 
 
 ## Profil mkfs i runtime
 
-Cel: sprawdzić helpery `mkfs`, profile runtime i ścieżki TLS / wersji.
+Cel: sprawdzić helpery `mkfs`, profile runtime i ścieżki TLS / wersji bez
+pozostawienia lokalnej bazy w stanie używanym przez testy niepełnego schematu.
 
 1. Sprawdź zestaw konfiguracji `mkfs`.
 
@@ -51,33 +60,58 @@ Cel: sprawdzić helpery `mkfs`, profile runtime i ścieżki TLS / wersji.
 make test-mkfs-config-suite
 ```
 
-2. Sprawdź runtime config i jego walidację.
+2. Uruchom pełny lokalny zestaw mkfs z automatycznym odtworzeniem bazy.
+
+```bash
+make test-rust-mkfs-suite-local-restored
+```
+
+Ten target najpierw wykonuje pełny `test-rust-mkfs-suite`, a następnie zawsze
+próbuje uruchomić zabezpieczone `test-db-restore-local`, również wtedy, gdy
+testy mkfs zgłoszą błąd.
+
+3. Sprawdź runtime config.
 
 ```bash
 make test-runtime-config
-make test-runtime-validation
 ```
 
-3. Sprawdź nazwane profile runtime.
+4. Sprawdź nazwane profile runtime.
 
 ```bash
 make test-runtime-profile
 make test-runtime-profile-extents
 ```
 
-4. Sprawdź ścieżkę TLS dla `mkfs`.
+5. Sprawdź ścieżkę TLS dla `mkfs`.
 
 ```bash
 make test-mkfs-pg-tls
 ```
 
-5. Sprawdź publikowaną wersję.
+6. Sprawdź publikowaną wersję.
 
 ```bash
 make test-version
 ```
 
-Oczekiwany wynik: profile runtime, helpery `mkfs` i wersja są spójne z aktualnym drzewem źródłowym, a wariant extents pozostaje opt-in.
+Samodzielne targety `make test-runtime-validation` i
+`make test-rust-hotpath-runtime-size-limits` zachowują surowy pełny zestaw
+mkfs. Tak samo działa bezpośrednie:
+
+```bash
+cargo test --locked -p fod-rust-mkfs
+```
+
+Po każdym z tych trzech wariantów, przed testami FUSE, wykonaj:
+
+```bash
+make test-db-restore-local
+```
+
+Oczekiwany wynik: profile runtime, helpery `mkfs` i wersja są spójne z
+aktualnym drzewem źródłowym, wariant extents pozostaje opt-in, a lokalna baza
+jest ponownie gotowa do testów mounta.
 
 ## Profil mount i uprawnień
 
@@ -210,25 +244,55 @@ Oczekiwany wynik: trace dotyczy tylko binarek FOD, a nie całego otoczenia test�
 
 Cel: uruchomić szeroki zestaw regresji.
 
-1. Uruchom główny zestaw regresyjny.
+1. Dla głównej lokalnej bramki uruchom:
 
 ```bash
-make test-all
+make test-all 2>&1 | tee /tmp/fod-test-all.log
 ```
 
-2. Uruchom rozszerzony zestaw regresyjny.
+`test-all` zawiera `test-integration`, testy mounta, blokad, journala,
+konfliktu rename i puli połączeń. W przebiegu integracyjnym pełny zestaw mkfs
+jest wykonywany przez `test-rust-mkfs-suite-local-restored`, dlatego baza jest
+odtwarzana przed dalszymi testami FUSE.
+
+2. Dla najszerszego lokalnego zestawu uruchom zamiast tego:
 
 ```bash
-make test-all-full
+make test-all-full 2>&1 | tee /tmp/fod-test-all-full.log
 ```
 
-3. Jeśli chcesz jeszcze szersze pokrycie integracyjne, dodaj:
+`test-all-full` zawiera całe `test-all` i dodaje między innymi szersze testy
+plików, katalogów, metadanych, symlinków, polityk `atime` oraz indexera. Nie ma
+potrzeby uruchamiać wcześniej osobno `make test-all`, chyba że świadomie chcesz
+powtórzyć główną bramkę.
+
+3. Nie zastępuj testu blokad surowym `cargo test --workspace`. Jeśli analizujesz
+tylko backend blokad, użyj:
 
 ```bash
-make test-integration
+make test-locking
 ```
 
-Oczekiwany wynik: pełny zestaw przechodzi albo jasno pokazuje, który profil trzeba zawęzić do izolacji problemu.
+Oczekiwany wynik: pełny zestaw przechodzi albo zapisany log jasno pokazuje,
+który profil trzeba zawęzić do izolacji problemu. Błąd
+`lock backend smoke must be run via sudo` oznacza użycie niewłaściwego
+polecenia, a nie regresję backendu blokad.
+
+## Odtworzenie lokalnej bazy po ręcznych testach mkfs
+
+Cel: przywrócić lokalny testowy PostgreSQL po teście, który celowo zostawił
+uszkodzony albo niepełny schemat.
+
+```bash
+make test-db-restore-local
+make test-timestamp-touch-once
+```
+
+Pierwszy target działa wyłącznie dla domyślnego lokalnego środowiska
+`docker-compose.yml` i odmawia pracy dla QNAP, zdalnego endpointu,
+niestandardowych parametrów bazy oraz aktywnego mounta lub demona FOD. Drugi
+target potwierdza, że odtworzony schemat zawiera poprawne `config.block_size` i
+jest gotowy do uruchomienia FUSE.
 
 ## Profil ręczny bez `make`
 

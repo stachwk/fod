@@ -355,6 +355,21 @@ The memory-aware lane work is complete only when local validation demonstrates:
 - a documented default that favors bounded memory and operational safety over maximum connection count;
 - version metadata advanced only after the complete stage passes locally.
 
+## Local test database lifecycle
+
+The complete mkfs suite intentionally creates malformed and incomplete schema
+states. FOD 3.2.48 made that lifecycle explicit for the local integration gate:
+`test-integration` invokes `test-rust-mkfs-suite-local-restored`, which runs the
+complete mkfs suite and then attempts `test-db-restore-local` before later FUSE
+tests. The restore is attempted even when the suite fails, while the original
+suite status remains the primary failure result.
+
+`test-integration`, `test-all`, and `test-all-full` are marked serial because
+they share one Docker/PostgreSQL database and FUSE mount resources. Standalone
+invocations of the raw mkfs suite and its compatibility aliases retain their
+original scope; follow them with `make test-db-restore-local` before starting a
+mounted test.
+
 ## Validation targets
 
 Validation is performed locally; the project does not use GitHub Actions.
@@ -363,8 +378,10 @@ Validation is performed locally; the project does not use GitHub Actions.
 cargo fmt --all -- --check
 RUSTFLAGS="-D warnings" cargo check --workspace --locked
 cargo test --locked -p fod-rust-runtime
-cargo test --locked -p fod-rust-fuse
-cargo test --locked -p fod-rust-mkfs
+cargo test --locked -p fod-rust-monitor
+cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse
+make test-locking
+make test-rust-mkfs-suite-local-restored
 make test-version
 ```
 
