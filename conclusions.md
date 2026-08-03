@@ -472,3 +472,12 @@ FOD checklist for the common FUSE/FS bottlenecks:
 - Each positive-limit gate now assigns tickets under the gate mutex and serves them in FIFO order. Reads keep their own queue; writes and `copy_file_range` keep sharing one queue.
 - `notify_all` is required for correctness with ticket order: `notify_one` may wake a later ticket, which would go back to sleep while the eligible ticket remains blocked.
 - The zero-limit fast path is unchanged. This stage does not add PostgreSQL transaction permits, payload byte budgets, cross-process fairness, or endpoint routing.
+
+## 2026-08-03 — FOD 3.2.53 deterministic FIFO admission validation
+
+- Base commit: `8d33c48`.
+- The previous fio runs used `iodepth=1`, so they exercised admission but did not prove ordering among multiple waiters.
+- The new unit test queues eight threads behind a held permit, waits until every ticket is assigned, then verifies exact FIFO acquisition and balanced observability counters.
+- The ignored 500-waiter benchmark measures the complete local handoff path and reports elapsed microseconds plus nanoseconds per waiter. It intentionally has no timing assertion, avoiding hardware-dependent CI failures.
+- The benchmark includes scheduler, channel, accounting, and wake-all costs. It must not be interpreted as isolated `Condvar::notify_all` latency.
+- Production admission behavior is unchanged; this version strengthens validation only.

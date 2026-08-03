@@ -2590,3 +2590,25 @@ Base commit at execution time: `0fe5dd1`
 - `git diff HEAD~1..HEAD --check`
 - `git show --stat --oneline --decorate HEAD`
 - `git diff HEAD~1..HEAD`
+
+## 2026-08-03 — FOD 3.2.53 FIFO admission validation
+
+Base commit at execution time: `8d33c48`
+
+- `git status --short`
+- `git rev-parse --short HEAD`
+- `cat fod_version.txt`
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked --no-run`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor -- --test-threads=1`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor fifo_notify_all_benchmark_500_waiters -- --ignored --nocapture --test-threads=1`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-runtime`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse`
+- `FOD_TASK_READ_ACTIVE_LIMIT=1 FOD_TASK_WRITE_ACTIVE_LIMIT=1 make test-mount-suite`
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`

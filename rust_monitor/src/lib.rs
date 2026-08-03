@@ -1133,3 +1133,174 @@ mod logical_task_interval_tests {
         assert!(parse_logical_task_observability_interval("thirty").is_err());
     }
 }
+
+#[cfg(test)]
+mod logical_task_admission_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::thread::JoinHandle;
+    use std::time::Instant;
+
+    const TEST_WAITERS: usize = 8;
+    const BENCHMARK_WAITERS: usize = 500;
+    const WORKER_STACK_BYTES: usize = 128 * 1024;
+
+    fn tracker() -> Arc<LogicalTaskQueueObservability> {
+        Arc::new(LogicalTaskQueueObservability::new(
+            LogicalTaskClass::new(LogicalTaskLane::Write, LogicalTaskOperation::FileWrite),
+            0,
+            0,
+            4096,
+        ))
+    }
+
+    fn wait_for_next_ticket(gate: &LogicalTaskAdmissionGate, expected: u64) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let next_ticket = gate
+                .state
+                .lock()
+                .expect("logical task admission state")
+                .next_ticket;
+            if next_ticket == expected {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for next_ticket={expected}; observed {next_ticket}"
+            );
+            thread::yield_now();
+        }
+    }
+
+    fn spawn_waiter(
+        id: usize,
+        gate: Arc<LogicalTaskAdmissionGate>,
+        tracker: Arc<LogicalTaskQueueObservability>,
+        admitted: mpsc::Sender<usize>,
+    ) -> JoinHandle<()> {
+        thread::Builder::new()
+            .name(format!("fod-fifo-waiter-{id}"))
+            .stack_size(WORKER_STACK_BYTES)
+            .spawn(move || {
+                let (permit, observation) = gate.observe_task(&tracker, 1, false);
+                admitted.send(id).expect("send admitted waiter id");
+                observation.complete(0, 1);
+                drop(permit);
+            })
+            .expect("spawn FIFO waiter")
+    }
+
+    fn queue_waiters(
+        count: usize,
+        gate: &Arc<LogicalTaskAdmissionGate>,
+        tracker: &Arc<LogicalTaskQueueObservability>,
+        admitted: &mpsc::Sender<usize>,
+    ) -> Vec<JoinHandle<()>> {
+        let mut workers = Vec::with_capacity(count);
+        for id in 0..count {
+            workers.push(spawn_waiter(
+                id,
+                Arc::clone(gate),
+                Arc::clone(tracker),
+                admitted.clone(),
+            ));
+            wait_for_next_ticket(gate, u64::try_from(id + 2).unwrap());
+        }
+        workers
+    }
+
+    fn receive_fifo_order(count: usize, admitted: &mpsc::Receiver<usize>, timeout: Duration) {
+        for expected in 0..count {
+            let observed = admitted
+                .recv_timeout(timeout)
+                .expect("FIFO waiter did not acquire within timeout");
+            assert_eq!(observed, expected);
+        }
+    }
+
+    #[test]
+    fn fifo_admission_preserves_ticket_order_and_balances_counters() {
+        let gate = Arc::new(LogicalTaskAdmissionGate::new(1));
+        let tracker = tracker();
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+
+        let (initial_permit, initial_observation) = gate.observe_task(&tracker, 1, false);
+        let workers = queue_waiters(TEST_WAITERS, &gate, &tracker, &admitted_tx);
+        drop(admitted_tx);
+
+        let queued = tracker.queue_snapshot().unwrap();
+        assert_eq!(queued.admitted_tasks, (TEST_WAITERS + 1) as u64);
+        assert_eq!(queued.queued_tasks, TEST_WAITERS as u64);
+        assert_eq!(queued.active_tasks, 1);
+        assert_eq!(queued.peak_queued_tasks, TEST_WAITERS as u64);
+        assert_eq!(queued.peak_active_tasks, 1);
+
+        initial_observation.complete(0, 1);
+        drop(initial_permit);
+
+        receive_fifo_order(TEST_WAITERS, &admitted_rx, Duration::from_secs(2));
+        for worker in workers {
+            worker.join().expect("FIFO waiter thread");
+        }
+
+        let finished = tracker.queue_snapshot().unwrap();
+        assert_eq!(finished.admitted_tasks, (TEST_WAITERS + 1) as u64);
+        assert_eq!(finished.completed_tasks, (TEST_WAITERS + 1) as u64);
+        assert_eq!(finished.failed_tasks, 0);
+        assert_eq!(finished.queued_tasks, 0);
+        assert_eq!(finished.active_tasks, 0);
+        assert_eq!(finished.backpressure_events, TEST_WAITERS as u64);
+        assert_eq!(
+            finished.fairness_yields,
+            TEST_WAITERS.saturating_sub(1) as u64
+        );
+        assert_eq!(finished.accounting_errors, 0);
+    }
+
+    #[test]
+    #[ignore = "diagnostic 500-waiter FIFO notify_all benchmark"]
+    fn fifo_notify_all_benchmark_500_waiters() {
+        let gate = Arc::new(LogicalTaskAdmissionGate::new(1));
+        let tracker = tracker();
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+
+        let (initial_permit, initial_observation) = gate.observe_task(&tracker, 1, false);
+        let workers = queue_waiters(BENCHMARK_WAITERS, &gate, &tracker, &admitted_tx);
+        drop(admitted_tx);
+
+        let queued = tracker.queue_snapshot().unwrap();
+        assert_eq!(queued.queued_tasks, BENCHMARK_WAITERS as u64);
+        assert_eq!(queued.peak_queued_tasks, BENCHMARK_WAITERS as u64);
+
+        let started = Instant::now();
+        initial_observation.complete(0, 1);
+        drop(initial_permit);
+
+        receive_fifo_order(BENCHMARK_WAITERS, &admitted_rx, Duration::from_secs(10));
+        for worker in workers {
+            worker.join().expect("FIFO benchmark waiter thread");
+        }
+        let elapsed = started.elapsed();
+
+        let elapsed_nanos = elapsed.as_nanos();
+        let nanos_per_waiter = elapsed_nanos / BENCHMARK_WAITERS as u128;
+        eprintln!(
+            "FOD FIFO notify_all benchmark: waiters={} elapsed_us={} nanos_per_waiter={}",
+            BENCHMARK_WAITERS,
+            elapsed.as_micros(),
+            nanos_per_waiter
+        );
+
+        let finished = tracker.queue_snapshot().unwrap();
+        assert_eq!(finished.completed_tasks, (BENCHMARK_WAITERS + 1) as u64);
+        assert_eq!(finished.queued_tasks, 0);
+        assert_eq!(finished.active_tasks, 0);
+        assert_eq!(finished.backpressure_events, BENCHMARK_WAITERS as u64);
+        assert_eq!(
+            finished.fairness_yields,
+            BENCHMARK_WAITERS.saturating_sub(1) as u64
+        );
+        assert_eq!(finished.accounting_errors, 0);
+    }
+}

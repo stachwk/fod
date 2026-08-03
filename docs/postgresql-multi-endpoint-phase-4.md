@@ -312,6 +312,16 @@ waiter asleep. The existing backpressure counter records the first wait, while
 zero-limit fast path, PostgreSQL pools, payload accounting, and routing are
 unchanged.
 
+FOD 3.2.53 adds deterministic validation for that contract without widening
+the production API. An in-module unit test holds one permit, assigns eight
+tickets in a controlled order, releases the permit, and checks exact FIFO
+acquisition plus queue, backpressure, fairness, and accounting balance. A
+separate ignored diagnostic benchmark repeats the same contract with 500
+waiters and prints total handoff time plus nanoseconds per waiter. The reported
+number includes thread scheduling, channels, observation accounting, and
+`notify_all`; it is an end-to-end local handoff measurement, not a pure
+condition-variable microbenchmark and not a CI performance threshold.
+
 Introduce:
 
 - a logical task queue for bulk file operations;
@@ -321,7 +331,7 @@ Introduce:
 - a global byte-budget permit for payloads in flight;
 - a per-task buffer cap;
 - cancellation-safe permit release;
-- benchmark FIFO fairness under mixed small/large-file workloads and quantify wake-all overhead;
+- benchmark FIFO fairness end to end through FUSE under mixed small/large-file workloads;
 - explicit backpressure diagnostics.
 
 The queue depth may be high, including experiments with 500 logical tasks, while the active backend count remains independently configurable.
