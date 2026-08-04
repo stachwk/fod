@@ -1939,3 +1939,34 @@ profile-pg-data-blocks-bloat:
 	@mkdir -p $(ARTIFACTS_DIR)
 	$(PSQL) -f scripts/perf/pg/data_blocks_bloat.sql > $(ARTIFACTS_DIR)/pg_data_blocks_bloat$(PROFILE_CAPTURE_SUFFIX).txt
 	@cat $(ARTIFACTS_DIR)/pg_data_blocks_bloat$(PROFILE_CAPTURE_SUFFIX).txt
+
+FIFO_ADMISSION_PROFILE_SCRIPT ?= tests/integration/test_fifo_admission_profile.sh
+FIFO_ADMISSION_PROFILE_REPEAT ?= 5
+FIFO_ADMISSION_PROFILE_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+FIFO_ADMISSION_PROFILE_ARTIFACT_DIR ?= /tmp/fod-fifo-admission-profile/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)-$(FIFO_ADMISSION_PROFILE_RUN_ID)
+
+.PHONY: test-fifo-admission-benchmark test-fifo-admission-strace test-fifo-admission-profile test-fifo-admission-analysis
+
+test-fifo-admission-benchmark:
+	FIFO_PROFILE_REPEAT="$(FIFO_ADMISSION_PROFILE_REPEAT)" \
+	FIFO_PROFILE_RUN_ID="$(FIFO_ADMISSION_PROFILE_RUN_ID)" \
+	FIFO_PROFILE_ARTIFACT_DIR="$(FIFO_ADMISSION_PROFILE_ARTIFACT_DIR)" \
+	bash "$(FIFO_ADMISSION_PROFILE_SCRIPT)" baseline
+
+test-fifo-admission-strace:
+	FIFO_PROFILE_REPEAT="$(FIFO_ADMISSION_PROFILE_REPEAT)" \
+	FIFO_PROFILE_RUN_ID="$(FIFO_ADMISSION_PROFILE_RUN_ID)" \
+	FIFO_PROFILE_ARTIFACT_DIR="$(FIFO_ADMISSION_PROFILE_ARTIFACT_DIR)" \
+	bash "$(FIFO_ADMISSION_PROFILE_SCRIPT)" strace
+
+test-fifo-admission-profile:
+	FIFO_PROFILE_REPEAT="$(FIFO_ADMISSION_PROFILE_REPEAT)" \
+	FIFO_PROFILE_RUN_ID="$(FIFO_ADMISSION_PROFILE_RUN_ID)" \
+	FIFO_PROFILE_ARTIFACT_DIR="$(FIFO_ADMISSION_PROFILE_ARTIFACT_DIR)" \
+	bash "$(FIFO_ADMISSION_PROFILE_SCRIPT)" profile
+
+test-fifo-admission-analysis:
+	FIFO_PROFILE_REPEAT="$(FIFO_ADMISSION_PROFILE_REPEAT)" \
+	FIFO_PROFILE_RUN_ID="$(FIFO_ADMISSION_PROFILE_RUN_ID)" \
+	FIFO_PROFILE_ARTIFACT_DIR="$(FIFO_ADMISSION_PROFILE_ARTIFACT_DIR)" \
+	bash "$(FIFO_ADMISSION_PROFILE_SCRIPT)" all

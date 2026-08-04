@@ -322,6 +322,23 @@ number includes thread scheduling, channels, observation accounting, and
 `notify_all`; it is an end-to-end local handoff measurement, not a pure
 condition-variable microbenchmark and not a CI performance threshold.
 
+FOD 3.2.54 records the first repeated result on commit `bbae407`: five
+successful runs with 500 waiters measured 65831 through 96528 microseconds,
+with an 84913.6 microsecond mean and 86502 microsecond median. Per-waiter values
+measured 131663 through 193057 nanoseconds, with a 169828.2 nanosecond mean and
+173005 nanosecond median. The population coefficient of variation for elapsed
+time was 13.53 percent. These values describe the complete local test handoff,
+not isolated `notify_all` latency.
+
+The same version adds `test-fifo-admission-benchmark`,
+`test-fifo-admission-strace`, `test-fifo-admission-profile`, and the combined
+`test-fifo-admission-analysis` Make targets. They build the monitor test harness
+once and then execute the binary directly, keeping Cargo compilation outside
+the measured workload. The profiler prefers `perf stat -d` and falls back to
+`/usr/bin/time -v` when kernel permissions do not expose performance counters.
+Generated logs remain outside the repository unless the artifact directory is
+overridden.
+
 Introduce:
 
 - a logical task queue for bulk file operations;

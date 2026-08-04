@@ -481,3 +481,24 @@ FOD checklist for the common FUSE/FS bottlenecks:
 - The ignored 500-waiter benchmark measures the complete local handoff path and reports elapsed microseconds plus nanoseconds per waiter. It intentionally has no timing assertion, avoiding hardware-dependent CI failures.
 - The benchmark includes scheduler, channel, accounting, and wake-all costs. It must not be interpreted as isolated `Condvar::notify_all` latency.
 - Production admission behavior is unchanged; this version strengthens validation only.
+
+## 2026-08-04 — FOD 3.2.54 FIFO admission profiling baseline
+
+- Base commit: `bbae407`.
+- Five successful 500-waiter runs:
+  - elapsed microseconds: `96528`, `65831`, `79442`, `86502`, `96265`;
+  - nanoseconds per waiter: `193057`, `131663`, `158885`, `173005`, `192531`.
+- Aggregate elapsed result:
+  - minimum `65831 us`;
+  - maximum `96528 us`;
+  - mean `84913.6 us`;
+  - median `86502 us`;
+  - population coefficient of variation `13.53%`.
+- Aggregate per-waiter result:
+  - minimum `131663 ns`;
+  - maximum `193057 ns`;
+  - mean `169828.2 ns`;
+  - median `173005 ns`.
+- All five runs preserved exact FIFO order and completed without deadlock.
+- The measurement includes thread scheduling, mutex reacquisition, channels, observability accounting, permits, and thread shutdown; it is not isolated `Condvar::notify_all` latency.
+- The new profiling helper builds the test binary once before measurement and provides baseline, syscall-summary, and resource/counter profiles without altering production admission behavior.

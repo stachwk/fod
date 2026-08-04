@@ -2612,3 +2612,23 @@ Base commit at execution time: `8d33c48`
 - `git diff HEAD~1..HEAD --check`
 - `git show --stat --oneline --decorate HEAD`
 - `git diff HEAD~1..HEAD`
+
+## 2026-08-04 — FOD 3.2.54 FIFO admission profiling
+
+Base commit at execution time: `bbae407`
+
+- `bash -n tests/integration/test_fifo_admission_profile.sh`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked --no-run`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor -- --test-threads=1`
+- `make test-fifo-admission-benchmark FIFO_ADMISSION_PROFILE_REPEAT=5`
+- `make test-fifo-admission-strace`
+- `make test-fifo-admission-profile FIFO_ADMISSION_PROFILE_REPEAT=5`
+- `make test-fifo-admission-analysis FIFO_ADMISSION_PROFILE_REPEAT=5`
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`
+
+The default artifact directory is `/tmp/fod-fifo-admission-profile/<commit>-<UTC run id>`. Set `FIFO_ADMISSION_PROFILE_ARTIFACT_DIR` to retain results elsewhere.
