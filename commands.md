@@ -2653,3 +2653,18 @@ Base commit at execution time: `722bc9e`
 - `git diff HEAD~1..HEAD --check`
 - `git show --stat --oneline --decorate HEAD`
 - `git diff HEAD~1..HEAD`
+
+## 2026-08-04 — FOD 3.2.56 FIFO resource summary
+
+Base commit at execution time: `9172b25`
+
+- `bash -n tests/integration/test_fifo_admission_profile.sh`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor -- --test-threads=1`
+- `make test-fifo-admission-profile FIFO_ADMISSION_PROFILE_REPEAT=5`
+- verify `fifo-admission-resource-summary.txt` reports five runs and contains no `n/a`;
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`

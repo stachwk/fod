@@ -528,7 +528,17 @@ Artifact directory: `/tmp/fod-fifo-admission-profile/fod-3.2.55-670987-178584499
 - Median change versus the FOD 3.2.54 profiling run (`174667 us`): `60.61%`.
 - `strace -f -c` futex calls: `2255`; errors: `78`; reduction versus `126763`: `98.22%`.
 - `strace -f -c` sched_yield calls: `6254`; errors: `0`.
-- Median voluntary context switches: `n/a`.
-- Median involuntary context switches: `n/a`.
-- Median maximum RSS: `n/a` kB.
+- Median voluntary context switches: `1020.0`.
+- Median involuntary context switches: `758.0`.
+- Median maximum RSS: `9660.0` kB.
 - The profile remains an end-to-end 500-thread handoff measurement, including scheduler and test-harness overhead.
+
+## 2026-08-04 — FOD 3.2.56 resource-profile summary correction
+
+- The FOD 3.2.55 implementation and measurements were valid, but the apply-time parser did not accept the leading whitespace emitted by `/usr/bin/time -v`; three values were therefore written as `n/a`.
+- Corrected FOD 3.2.55 medians:
+  - voluntary context switches: `1020.0`;
+  - involuntary context switches: `758.0`;
+  - maximum resident set size: `9660.0 kB`.
+- Compared with FOD 3.2.54, voluntary context switches fell from `63615` to `1020` (`98.40%`), involuntary context switches fell from `1015` to `758` (`25.32%`), and maximum RSS fell from `9940 kB` to `9660 kB` (`2.82%`).
+- The profiling helper now creates `fifo-admission-resource-summary.txt` directly from `/usr/bin/time -v` output and fails when metrics are missing or run counts disagree.

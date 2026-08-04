@@ -349,6 +349,14 @@ accounting therefore includes reserved-but-not-yet-running tickets, preventing
 a later caller from stealing the slot. The zero-limit observation-only path and
 the public admission API are unchanged.
 
+FOD 3.2.56 corrects the resource-summary layer used after that benchmark.
+The `/usr/bin/time -v` report indents metric lines, which the apply-time parser
+did not previously accept. The reusable profiling helper now parses and
+validates the raw report itself and writes
+`fifo-admission-resource-summary.txt`. Missing metrics or inconsistent run
+counts fail the profiling target instead of silently producing `n/a`.
+Production queueing and wakeup behavior are unchanged.
+
 Introduce:
 
 - a logical task queue for bulk file operations;

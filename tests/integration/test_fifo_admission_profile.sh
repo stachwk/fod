@@ -18,6 +18,7 @@ STRACE_SUMMARY="$ARTIFACT_DIR/fifo-admission-strace-summary.txt"
 STRACE_RUN_LOG="$ARTIFACT_DIR/fifo-admission-strace-run.log"
 PROFILE_SUMMARY="$ARTIFACT_DIR/fifo-admission-profile-summary.txt"
 PROFILE_RUN_LOG="$ARTIFACT_DIR/fifo-admission-profile-run.log"
+RESOURCE_SUMMARY="$ARTIFACT_DIR/fifo-admission-resource-summary.txt"
 
 case "$REPEAT" in
     ''|*[!0-9]*)
@@ -178,6 +179,94 @@ run_strace() {
     cat "$STRACE_SUMMARY"
 }
 
+summarize_resource_profile() {
+    "$PYTHON_BIN" - "$PROFILE_SUMMARY" "$RESOURCE_SUMMARY" <<'PY'
+import re
+import statistics
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+text = source.read_text(encoding="utf-8")
+
+def integers(label: str) -> list[int]:
+    pattern = re.compile(rf"^\s*{re.escape(label)}:\s*(\d+)\s*$", re.MULTILINE)
+    return [int(value) for value in pattern.findall(text)]
+
+def floats(label: str) -> list[float]:
+    pattern = re.compile(rf"^\s*{re.escape(label)}:\s*(\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+    return [float(value) for value in pattern.findall(text)]
+
+def percentages(label: str) -> list[int]:
+    pattern = re.compile(rf"^\s*{re.escape(label)}:\s*(\d+)%\s*$", re.MULTILINE)
+    return [int(value) for value in pattern.findall(text)]
+
+def wall_seconds() -> list[float]:
+    pattern = re.compile(
+        r"^\s*Elapsed \(wall clock\) time \(h:mm:ss or m:ss\):\s*"
+        r"(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)\s*$",
+        re.MULTILINE,
+    )
+    values = []
+    for hours, minutes, seconds in pattern.findall(text):
+        values.append(int(hours or 0) * 3600.0 + int(minutes) * 60.0 + float(seconds))
+    return values
+
+voluntary = integers("Voluntary context switches")
+involuntary = integers("Involuntary context switches")
+rss = integers("Maximum resident set size (kbytes)")
+user_time = floats("User time (seconds)")
+system_time = floats("System time (seconds)")
+cpu = percentages("Percent of CPU this job got")
+wall = wall_seconds()
+
+groups = {
+    "voluntary context switches": voluntary,
+    "involuntary context switches": involuntary,
+    "maximum RSS": rss,
+    "user time": user_time,
+    "system time": system_time,
+    "CPU percent": cpu,
+    "wall clock": wall,
+}
+for label, values in groups.items():
+    if not values:
+        raise SystemExit(f"no resource profile measurements found for {label}")
+
+counts = {len(values) for values in groups.values()}
+if len(counts) != 1:
+    raise SystemExit(f"inconsistent resource profile run counts: {sorted(counts)}")
+
+def joined(values: list[object]) -> str:
+    return ",".join(str(value) for value in values)
+
+lines = [
+    "FOD FIFO admission resource summary",
+    f"runs={len(voluntary)}",
+    f"voluntary_context_switches={joined(voluntary)}",
+    f"voluntary_context_switches_mean={statistics.mean(voluntary):.1f}",
+    f"voluntary_context_switches_median={statistics.median(voluntary):.1f}",
+    f"involuntary_context_switches={joined(involuntary)}",
+    f"involuntary_context_switches_mean={statistics.mean(involuntary):.1f}",
+    f"involuntary_context_switches_median={statistics.median(involuntary):.1f}",
+    f"maximum_rss_kbytes={joined(rss)}",
+    f"maximum_rss_kbytes_mean={statistics.mean(rss):.1f}",
+    f"maximum_rss_kbytes_median={statistics.median(rss):.1f}",
+    f"user_time_seconds={joined(user_time)}",
+    f"user_time_seconds_median={statistics.median(user_time):.2f}",
+    f"system_time_seconds={joined(system_time)}",
+    f"system_time_seconds_median={statistics.median(system_time):.2f}",
+    f"cpu_percent={joined(cpu)}",
+    f"cpu_percent_median={statistics.median(cpu):.1f}",
+    f"wall_clock_seconds={joined(wall)}",
+    f"wall_clock_seconds_median={statistics.median(wall):.2f}",
+]
+destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+    cat "$RESOURCE_SUMMARY"
+}
+
 run_profile() {
     : >"$PROFILE_RUN_LOG"
     if command -v perf >/dev/null 2>&1 \
@@ -214,6 +303,8 @@ run_profile() {
     echo
     echo "FOD FIFO admission resource profile summary:"
     cat "$PROFILE_SUMMARY"
+    echo
+    summarize_resource_profile
 }
 
 case "$MODE" in
