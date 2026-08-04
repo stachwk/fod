@@ -2632,3 +2632,24 @@ Base commit at execution time: `bbae407`
 - `git diff HEAD~1..HEAD`
 
 The default artifact directory is `/tmp/fod-fifo-admission-profile/<commit>-<UTC run id>`. Set `FIFO_ADMISSION_PROFILE_ARTIFACT_DIR` to retain results elsewhere.
+
+## 2026-08-04 — FOD 3.2.55 targeted FIFO wakeups
+
+Base commit at execution time: `722bc9e`
+
+- `cargo fmt --all`
+- `cargo fmt --all -- --check`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked --no-run`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor -- --test-threads=1`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-runtime`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse`
+- `FOD_TASK_READ_ACTIVE_LIMIT=1 FOD_TASK_WRITE_ACTIVE_LIMIT=1 make test-mount-suite`
+- `FOD_TASK_READ_ACTIVE_LIMIT=1 FOD_TASK_WRITE_ACTIVE_LIMIT=1 FOD_PROFILE_IO=1 make test-fio-sequential-io`
+- `FOD_TASK_READ_ACTIVE_LIMIT=1 FOD_TASK_WRITE_ACTIVE_LIMIT=1 make test-fio-sequential-io-strace`
+- `make test-fifo-admission-analysis FIFO_ADMISSION_PROFILE_REPEAT=5`
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`

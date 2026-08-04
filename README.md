@@ -239,9 +239,12 @@ observation-only path without an admission wait. A positive limit assigns
 ordered tickets and admits waiting tasks FIFO within each gate. A waiting task
 records one backpressure event, and a task that defers to an earlier ticket
 records one fairness yield. Capacity is released through an RAII permit on
-every return path. These limits do not yet constrain PostgreSQL transactions,
-reserve payload bytes, or enable automatic endpoint routing. FIFO ordering is
-process-local and separate for the read gate and the shared write/copy gate. See
+every return path. Since FOD 3.2.55, each queued ticket owns a private wake
+signal, so releasing capacity wakes only the oldest eligible waiter instead of
+broadcasting to the complete queue. These limits do not yet constrain
+PostgreSQL transactions, reserve payload bytes, or enable automatic endpoint
+routing. FIFO ordering is process-local and separate for the read gate and the
+shared write/copy gate. See
 [`docs/postgresql-multi-endpoint-phase-4.md`](docs/postgresql-multi-endpoint-phase-4.md)
 for the metric boundaries and the still-disabled routing contract.
 

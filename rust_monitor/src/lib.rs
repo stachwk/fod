@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
@@ -176,18 +177,26 @@ pub struct LogicalTaskQueueObservability {
     state: Mutex<LogicalTaskQueueObservabilityState>,
 }
 
+#[derive(Debug)]
+struct LogicalTaskAdmissionWaiter {
+    ticket: u64,
+    ready: Mutex<bool>,
+    ready_changed: Condvar,
+    observability: Arc<LogicalTaskQueueObservability>,
+}
+
 #[derive(Debug, Default)]
 struct LogicalTaskAdmissionState {
     active_tasks: u64,
     next_ticket: u64,
     serving_ticket: u64,
+    waiters: VecDeque<Arc<LogicalTaskAdmissionWaiter>>,
 }
 
 #[derive(Debug)]
 pub struct LogicalTaskAdmissionGate {
     active_task_limit: u64,
     state: Mutex<LogicalTaskAdmissionState>,
-    state_changed: Condvar,
 }
 
 #[derive(Debug)]
@@ -260,17 +269,78 @@ impl Drop for LogicalTaskObservation {
     }
 }
 
+impl LogicalTaskAdmissionWaiter {
+    fn new(ticket: u64, observability: Arc<LogicalTaskQueueObservability>) -> Self {
+        Self {
+            ticket,
+            ready: Mutex::new(false),
+            ready_changed: Condvar::new(),
+            observability,
+        }
+    }
+
+    fn wait(&self) {
+        let mut ready = match self.ready.lock() {
+            Ok(guard) => guard,
+            Err(err) => {
+                self.observability.record_accounting_error();
+                err.into_inner()
+            }
+        };
+        while !*ready {
+            ready = match self.ready_changed.wait(ready) {
+                Ok(guard) => guard,
+                Err(err) => {
+                    self.observability.record_accounting_error();
+                    err.into_inner()
+                }
+            };
+        }
+    }
+
+    fn signal(&self) {
+        let mut ready = match self.ready.lock() {
+            Ok(guard) => guard,
+            Err(err) => {
+                self.observability.record_accounting_error();
+                err.into_inner()
+            }
+        };
+        *ready = true;
+        drop(ready);
+        self.ready_changed.notify_one();
+    }
+}
+
 impl LogicalTaskAdmissionGate {
     pub fn new(active_task_limit: u64) -> Self {
         Self {
             active_task_limit,
             state: Mutex::new(LogicalTaskAdmissionState::default()),
-            state_changed: Condvar::new(),
         }
     }
 
     pub fn active_task_limit(&self) -> u64 {
         self.active_task_limit
+    }
+
+    fn reserve_next_waiter(
+        &self,
+        state: &mut LogicalTaskAdmissionState,
+    ) -> Option<Arc<LogicalTaskAdmissionWaiter>> {
+        if state.active_tasks >= self.active_task_limit {
+            return None;
+        }
+
+        let waiter = state.waiters.pop_front()?;
+        if waiter.ticket != state.serving_ticket {
+            waiter.observability.record_accounting_error();
+            state.serving_ticket = waiter.ticket;
+        }
+
+        state.active_tasks = state.active_tasks.saturating_add(1);
+        state.serving_ticket = state.serving_ticket.wrapping_add(1);
+        Some(waiter)
     }
 
     pub fn observe_task(
@@ -298,40 +368,29 @@ impl LogicalTaskAdmissionGate {
                 err.into_inner()
             }
         };
+
         let ticket = state.next_ticket;
         state.next_ticket = state.next_ticket.wrapping_add(1);
-
-        let mut backpressure_recorded = false;
-        let mut fairness_recorded = false;
-        while ticket != state.serving_ticket || state.active_tasks >= self.active_task_limit {
-            if !backpressure_recorded {
-                observability.record_backpressure();
-                backpressure_recorded = true;
-            }
-            if ticket != state.serving_ticket && !fairness_recorded {
-                observability.record_fairness_yield();
-                fairness_recorded = true;
-            }
-            state = match self.state_changed.wait(state) {
-                Ok(guard) => guard,
-                Err(err) => {
-                    observability.record_accounting_error();
-                    err.into_inner()
-                }
-            };
-        }
-
-        state.active_tasks = state.active_tasks.saturating_add(1);
-        state.serving_ticket = state.serving_ticket.wrapping_add(1);
-        let can_admit_next = state.active_tasks < self.active_task_limit
-            && state.serving_ticket != state.next_ticket;
+        let has_older_waiter = !state.waiters.is_empty();
+        let capacity_is_full = state.active_tasks >= self.active_task_limit;
+        let waiter = Arc::new(LogicalTaskAdmissionWaiter::new(
+            ticket,
+            Arc::clone(observability),
+        ));
+        state.waiters.push_back(Arc::clone(&waiter));
+        let waiter_to_wake = self.reserve_next_waiter(&mut state);
         drop(state);
 
-        if can_admit_next {
-            // Ticket ordering requires waking every waiter: waking a later ticket
-            // alone could leave the next eligible task asleep indefinitely.
-            self.state_changed.notify_all();
+        if capacity_is_full || has_older_waiter {
+            observability.record_backpressure();
         }
+        if has_older_waiter {
+            observability.record_fairness_yield();
+        }
+        if let Some(waiter_to_wake) = waiter_to_wake {
+            waiter_to_wake.signal();
+        }
+        waiter.wait();
 
         let observation = observability.observe_admitted_task(payload_bytes, starts_transaction);
         (
@@ -353,6 +412,7 @@ impl Drop for LogicalTaskAdmissionPermit {
         let Some(observability) = self.observability.as_ref() else {
             return;
         };
+
         let mut state = match self.gate.state.lock() {
             Ok(guard) => guard,
             Err(err) => {
@@ -360,15 +420,20 @@ impl Drop for LogicalTaskAdmissionPermit {
                 err.into_inner()
             }
         };
-        match state.active_tasks.checked_sub(1) {
-            Some(value) => state.active_tasks = value,
-            None => observability.record_accounting_error(),
-        }
-        let has_waiters = state.serving_ticket != state.next_ticket;
+        let waiter_to_wake = match state.active_tasks.checked_sub(1) {
+            Some(value) => {
+                state.active_tasks = value;
+                self.gate.reserve_next_waiter(&mut state)
+            }
+            None => {
+                observability.record_accounting_error();
+                None
+            }
+        };
         drop(state);
 
-        if has_waiters {
-            self.gate.state_changed.notify_all();
+        if let Some(waiter_to_wake) = waiter_to_wake {
+            waiter_to_wake.signal();
         }
     }
 }
@@ -1259,8 +1324,8 @@ mod logical_task_admission_tests {
     }
 
     #[test]
-    #[ignore = "diagnostic 500-waiter FIFO notify_all benchmark"]
-    fn fifo_notify_all_benchmark_500_waiters() {
+    #[ignore = "diagnostic 500-waiter targeted FIFO wake benchmark"]
+    fn fifo_targeted_wake_benchmark_500_waiters() {
         let gate = Arc::new(LogicalTaskAdmissionGate::new(1));
         let tracker = tracker();
         let (admitted_tx, admitted_rx) = mpsc::channel();
@@ -1286,7 +1351,7 @@ mod logical_task_admission_tests {
         let elapsed_nanos = elapsed.as_nanos();
         let nanos_per_waiter = elapsed_nanos / BENCHMARK_WAITERS as u128;
         eprintln!(
-            "FOD FIFO notify_all benchmark: waiters={} elapsed_us={} nanos_per_waiter={}",
+            "FOD FIFO targeted-wake benchmark: waiters={} elapsed_us={} nanos_per_waiter={}",
             BENCHMARK_WAITERS,
             elapsed.as_micros(),
             nanos_per_waiter

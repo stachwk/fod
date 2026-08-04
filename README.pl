@@ -231,11 +231,13 @@ Domyślne `0` zachowuje poprzednią
 przydziela uporządkowane bilety i wpuszcza oczekujące zadania FIFO w obrębie
 każdej bramki. Zadanie oczekujące zapisuje jedno zdarzenie backpressure, a
 zadanie ustępujące wcześniejszemu biletowi zapisuje jedno fairness yield.
-Pojemność jest zwalniana przez permit RAII na każdej ścieżce wyjścia. Limity
-nie ograniczają jeszcze transakcji PostgreSQL, nie rezerwują bajtów payloadu
-i nie włączają automatycznego routingu endpointów. Kolejność FIFO jest lokalna
-dla procesu i osobna dla bramki odczytu oraz wspólnej bramki zapisu/kopiowania.
-Szczegóły opisuje
+Pojemność jest zwalniana przez permit RAII na każdej ścieżce wyjścia. Od FOD
+3.2.55 każdy bilet w kolejce ma prywatny sygnał wybudzenia, dlatego zwolnienie
+pojemności budzi wyłącznie najstarsze uprawnione zadanie zamiast całej kolejki.
+Limity nie ograniczają jeszcze transakcji PostgreSQL, nie rezerwują bajtów
+payloadu i nie włączają automatycznego routingu endpointów. Kolejność FIFO jest
+lokalna dla procesu i osobna dla bramki odczytu oraz wspólnej bramki
+zapisu/kopiowania. Szczegóły opisuje
 [`docs/postgresql-multi-endpoint-phase-4.md`](docs/postgresql-multi-endpoint-phase-4.md).
 
 ## Przykładowy `fod_config.example.ini`

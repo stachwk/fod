@@ -502,3 +502,33 @@ FOD checklist for the common FUSE/FS bottlenecks:
 - All five runs preserved exact FIFO order and completed without deadlock.
 - The measurement includes thread scheduling, mutex reacquisition, channels, observability accounting, permits, and thread shutdown; it is not isolated `Condvar::notify_all` latency.
 - The new profiling helper builds the test binary once before measurement and provides baseline, syscall-summary, and resource/counter profiles without altering production admission behavior.
+
+## 2026-08-04 — FOD 3.2.55 targeted FIFO wakeups
+
+- Base commit: `722bc9e`.
+- The FOD 3.2.54 profile showed a wake storm: `126763` futex calls, approximately `59000` to `65000` voluntary context switches per run, and `99.62%` of aggregated strace syscall time in futex.
+- One private condition variable and ready flag are now allocated per queued ticket.
+- The gate reserves capacity for the oldest `VecDeque` entry under the gate mutex, then signals only that waiter after unlocking.
+- Reservation before signalling preserves FIFO and prevents later arrivals from stealing a released slot.
+- The ready flag prevents a lost wakeup when signalling happens before the target thread starts waiting.
+- The zero-limit path, public API, queue counters, backpressure semantics, and fairness semantics remain unchanged.
+- Apply-time profiling results follow below.
+
+## 2026-08-04 — FOD 3.2.55 apply-time targeted-wake profile
+
+Artifact directory: `/tmp/fod-fifo-admission-profile/fod-3.2.55-670987-1785844997`
+
+- Five-run elapsed values: `115439,63625,73995,68803,65213` us.
+- Elapsed minimum: `63625` us.
+- Elapsed maximum: `115439` us.
+- Elapsed mean: `77415.0` us.
+- Elapsed median: `68803.0` us.
+- Elapsed population CV: `24.99%`.
+- Per-waiter median: `137607.0` ns.
+- Median change versus the FOD 3.2.54 profiling run (`174667 us`): `60.61%`.
+- `strace -f -c` futex calls: `2255`; errors: `78`; reduction versus `126763`: `98.22%`.
+- `strace -f -c` sched_yield calls: `6254`; errors: `0`.
+- Median voluntary context switches: `n/a`.
+- Median involuntary context switches: `n/a`.
+- Median maximum RSS: `n/a` kB.
+- The profile remains an end-to-end 500-thread handoff measurement, including scheduler and test-harness overhead.

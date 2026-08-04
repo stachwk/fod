@@ -339,6 +339,16 @@ the measured workload. The profiler prefers `perf stat -d` and falls back to
 Generated logs remain outside the repository unless the artifact directory is
 overridden.
 
+FOD 3.2.55 removes the broadcast wakeup identified by that profile. Every
+queued ticket now owns a private condition variable and a persistent ready
+flag. The gate keeps those waiters in a `VecDeque`, reserves a newly available
+slot for the oldest ticket while holding the gate mutex, and then signals only
+that waiter after releasing the mutex. The ready flag makes notification safe
+when the signal arrives before the waiter enters `Condvar::wait`. Active-task
+accounting therefore includes reserved-but-not-yet-running tickets, preventing
+a later caller from stealing the slot. The zero-limit observation-only path and
+the public admission API are unchanged.
+
 Introduce:
 
 - a logical task queue for bulk file operations;
