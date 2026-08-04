@@ -357,6 +357,17 @@ validates the raw report itself and writes
 counts fail the profiling target instead of silently producing `n/a`.
 Production queueing and wakeup behavior are unchanged.
 
+FOD 3.2.57 adds boundary-level fairness validation through an actual FUSE
+mount. For each configured write admission limit (`0`, `1`, `2`, and `4` by
+default), a paced large sequential writer overlaps with multiple small-file
+writers. The harness records per-small-file latency, p95, worst latency, large
+writer duration, and the percentage of small operations that complete before
+the large writer ends. Positive limits fail when fewer than the configured
+overlap percentage (90 percent by default) complete during the large write.
+Every run also checks file size and payload integrity. This benchmark validates
+starvation resistance across real FUSE callbacks, but it does not yet reserve
+PostgreSQL transactions or payload bytes.
+
 Introduce:
 
 - a logical task queue for bulk file operations;

@@ -542,3 +542,15 @@ Artifact directory: `/tmp/fod-fifo-admission-profile/fod-3.2.55-670987-178584499
   - maximum resident set size: `9660.0 kB`.
 - Compared with FOD 3.2.54, voluntary context switches fell from `63615` to `1020` (`98.40%`), involuntary context switches fell from `1015` to `758` (`25.32%`), and maximum RSS fell from `9940 kB` to `9660 kB` (`2.82%`).
 - The profiling helper now creates `fifo-admission-resource-summary.txt` directly from `/usr/bin/time -v` output and fails when metrics are missing or run counts disagree.
+
+## 2026-08-04 — FOD 3.2.57 real FUSE FIFO fairness benchmark
+
+- Adds `make test-fifo-fuse-fairness`.
+- Default comparison covers write admission limits `0`, `1`, `2`, and `4`.
+- Each limit runs three times by default.
+- One paced 4 MiB sequential writer overlaps with 24 independent 4 KiB small-file writers.
+- Positive admission limits require at least 90% of small writes to finish before the large writer ends.
+- Every run verifies the large file size plus every small file size and payload.
+- Per-run JSON and aggregate JSON/Markdown summaries are written to `/tmp/fod-fifo-fuse-fairness/...`.
+- The test measures client-visible latency through a real FUSE mount. It does not claim exact client launch order equals kernel callback ticket order.
+- Production admission behavior is unchanged.

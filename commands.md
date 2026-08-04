@@ -2668,3 +2668,21 @@ Base commit at execution time: `9172b25`
 - `git diff HEAD~1..HEAD --check`
 - `git show --stat --oneline --decorate HEAD`
 - `git diff HEAD~1..HEAD`
+
+## 2026-08-04 — FOD 3.2.57 real FUSE FIFO fairness benchmark
+
+Base commit at execution time: `787e9cb`
+
+- `python3 -m py_compile tests/integration/test_fifo_fuse_fairness.py`
+- `bash -n tests/integration/test_fifo_fuse_fairness.sh`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked --no-run`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor -- --test-threads=1`
+- `make test-fifo-fuse-fairness`
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`
+
+The default fairness artifacts are stored under `/tmp/fod-fifo-fuse-fairness/<commit>-<UTC run id>`.
