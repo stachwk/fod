@@ -754,3 +754,14 @@ Aktualny runtime jest w pełni Rustowy. Notatki poniżej są zachowane wyłączn
 
 - W erze Pythona bootstrap, `mkfs`, ładowanie configów i profili, callbacki FUSE, logika administracyjna, migracje schematu, testy integracyjne oraz warstwy polityk typu ACL/permissions/journal/runtime validation żyły w Pythonie.
 - Rust teraz odpowiada za runtime hot-path i core storage opisane wyżej.
+
+## Wielowątkowa pętla zdarzeń FUSE (FOD 3.2.58)
+
+`FOD_FUSE_EVENT_THREADS` ustala liczbę wątków obsługi żądań fuser. Domyślna
+wartość `1` zachowuje dotychczasowe działanie; dozwolony zakres to `1`–`256`.
+Limity admission większe od jednego działają rzeczywiście dopiero przy więcej
+niż jednym wątku pętli FUSE.
+
+`FOD_FUSE_CLONE_FD` może nadać każdemu wątkowi osobny sklonowany deskryptor
+`/dev/fuse`. Domyślnie opcja jest wyłączona. Benchmark używa ośmiu wątków FUSE
+i pozostawia klonowanie deskryptora wyłączone.

@@ -2686,3 +2686,51 @@ Base commit at execution time: `787e9cb`
 - `git diff HEAD~1..HEAD`
 
 The default fairness artifacts are stored under `/tmp/fod-fifo-fuse-fairness/<commit>-<UTC run id>`.
+
+## 2026-08-07 — FOD 3.2.58 saturated real-FUSE fairness benchmark
+
+Base commit at execution time: `4760c3b`
+
+- `python3 -m py_compile tests/integration/test_fifo_fuse_fairness.py`
+- `bash -n tests/integration/fod_testlib.sh`
+- `bash -n tests/integration/test_fifo_fuse_fairness.sh`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked --no-run`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor -- --test-threads=1`
+- `make test-mount-suite`
+- `make test-fifo-fuse-fairness`
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`
+
+The fairness command commits only after every run proves real queue pressure through archived shutdown observability.
+
+## 2026-08-07 — FOD 3.2.58 threaded FUSE repair
+
+- `FOD_FUSE_EVENT_THREADS=8 FOD_FUSE_CLONE_FD=0 make test-mount-suite`
+- `FOD_FUSE_EVENT_THREADS=8 FOD_FUSE_CLONE_FD=0 FOD_PROFILE_IO=1 make test-fio-sequential-io`
+- `FOD_FUSE_EVENT_THREADS=8 FOD_FUSE_CLONE_FD=0 make test-fio-sequential-io-strace`
+- `FOD_FUSE_EVENT_THREADS=8 FOD_FUSE_CLONE_FD=0 FOD_PROFILE_IO=1 make test-fio-mixed-io`
+- `make test-fifo-fuse-fairness FIFO_FUSE_FAIRNESS_EVENT_THREADS=8 FIFO_FUSE_FAIRNESS_CLONE_FD=0`
+- `make test-version`
+- `git diff --check`
+- `git diff HEAD~1..HEAD --check`
+- `git show --stat --oneline --decorate HEAD`
+- `git diff HEAD~1..HEAD`
+
+## 2026-08-07 — FOD 3.2.58 write-boundary fairness repair
+
+- validate `fod_logical_task_metric` against a synthetic shutdown log;
+- `python3 -m py_compile tests/integration/test_fifo_fuse_fairness.py`;
+- `bash -n tests/integration/fod_testlib.sh`;
+- `bash -n tests/integration/test_fifo_fuse_fairness.sh`;
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`;
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked --no-run`;
+- `FOD_FUSE_EVENT_THREADS=8 FOD_FUSE_CLONE_FD=0 make test-mount-suite`;
+- `FOD_FUSE_EVENT_THREADS=8 FOD_FUSE_CLONE_FD=0 FOD_PROFILE_IO=1 make test-fio-sequential-io`;
+- `make test-fifo-fuse-fairness FIFO_FUSE_FAIRNESS_EVENT_THREADS=8 FIFO_FUSE_FAIRNESS_CLONE_FD=0`;
+- `make test-version`;
+- `git diff --check`;
+- after commit: `git diff --check HEAD~1..HEAD`, `git show`, and full `git diff HEAD~1..HEAD`.

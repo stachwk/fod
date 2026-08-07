@@ -554,3 +554,71 @@ Artifact directory: `/tmp/fod-fifo-admission-profile/fod-3.2.55-670987-178584499
 - Per-run JSON and aggregate JSON/Markdown summaries are written to `/tmp/fod-fifo-fuse-fairness/...`.
 - The test measures client-visible latency through a real FUSE mount. It does not claim exact client launch order equals kernel callback ticket order.
 - Production admission behavior is unchanged.
+
+## 2026-08-04 — FOD 3.2.57 initial real-FUSE fairness result
+
+- All 12 runs completed without worker, timeout, accounting, size, or payload-integrity errors.
+- Every limit completed 100% of small writes before the paced large writer ended.
+- Median results:
+  - limit `0`: large `1258.430 ms`, small `299.380 ms`, small p95 `500.949 ms`;
+  - limit `1`: large `1273.380 ms`, small `306.571 ms`, small p95 `528.321 ms`;
+  - limit `2`: large `1134.528 ms`, small `229.194 ms`, small p95 `398.831 ms`;
+  - limit `4`: large `1155.903 ms`, small `229.085 ms`, small p95 `424.440 ms`.
+- The result is not sufficient to select a default limit: every shutdown snapshot reported `peak_queued_tasks=1` and `peak_active_tasks=1`, including limits `2` and `4`.
+- The debug callback grep also reported zero because the mount used info-level logging; shutdown observability reported `3144` admitted and completed file-write callbacks per limit.
+- FOD 3.2.58 must require measured queue saturation instead of accepting overlap alone.
+
+## 2026-08-07 — FOD 3.2.58 saturated real-FUSE fairness benchmark
+
+- Replaces the paced single large writer with eight independent writer processes.
+- Each large writer performs four 256 KiB write calls without intentional pacing.
+- Twenty-four prepared 4 KiB writers are released into the continuing large stream.
+- Every limit/run pair uses a fresh mount; order rotates between repeats.
+- The shutdown log is archived after unmount and parsed into each run JSON.
+- Unlimited mode must demonstrate at least two concurrent callbacks.
+- Positive limits must demonstrate `peak_queued_tasks >= 2` and `peak_active_tasks == configured limit`.
+- Completion balance, empty final queue, zero failures, zero accounting errors, tail operations, small-write overlap, sizes, and full payload digests are mandatory.
+- The generic integration cleanup now falls back to shutdown observability when debug request lines are unavailable.
+- Production admission behavior is unchanged.
+
+## 2026-08-07 — FOD 3.2.58 single-threaded FUSE root cause
+
+- The first saturated run stopped correctly before commit.
+- Unlimited admission completed `56` write callbacks without failures, but
+  reported `peak_queued_tasks=1` and `peak_active_tasks=1`.
+- FOD did not set `fuser::Config::n_threads`; the default single dispatcher
+  serialized callbacks before the admission gate.
+- FOD 3.2.58 keeps one thread as the compatibility default, adds validated
+  explicit configuration, and uses eight event threads in the saturation test.
+
+## 2026-08-07 — FOD 3.2.58 write-boundary criterion correction
+
+- The threaded baseline proves the event-loop change works:
+  `peak_active_tasks=8` with admission disabled.
+- Limit `1` proves the admission gate is saturated:
+  `peak_queued_tasks=8`, `peak_active_tasks=1`, `56` admitted/completed writes,
+  zero failed tasks, and zero accounting errors.
+- The first threaded run failed only because the harness measured each small
+  operation through `fsync()`. Logical-task admission ends when the FUSE write
+  callback replies, so post-write `fsync` delay is outside that gate.
+- The benchmark now records `write()` latency and total write-plus-fsync latency
+  separately. The 90% progress criterion uses only `write()` completion.
+- The large competing stream is extended from four to eight 256 KiB writes per
+  large worker to keep a stable post-injection workload.
+- The AWK observability fallback now uses `field_index` rather than shadowing
+  AWK's built-in `index()` function.
+
+## 2026-08-07 — FOD 3.2.58 threaded saturation result
+
+Artifact directory: `/tmp/fod-fifo-fuse-fairness/fod-3.2.58-write-boundary-2923036-1786102688`
+
+| limit | runs | large median ms | small write median ms | small write p95 ms | worst small write ms | minimum write overlap % | minimum tail ops | peak queued | peak active | callbacks median |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 3 | 180.399 | 25.608 | 28.891 | 42.808 | 100.00 | 57 | 1-1 | 8-8 | 88 |
+| 1 | 3 | 231.631 | 25.492 | 41.706 | 122.560 | 100.00 | 61 | 8-8 | 1-1 | 88 |
+| 2 | 3 | 186.197 | 11.762 | 17.781 | 20.718 | 100.00 | 60 | 6-7 | 2-2 | 88 |
+| 4 | 3 | 185.709 | 13.650 | 37.251 | 72.191 | 100.00 | 57 | 5-5 | 4-4 | 88 |
+
+- Positive limits passed only after shutdown observability proved a real backlog and exact active-limit use.
+- The progress threshold refers to completion of `write()`, not the later `fsync()` tail.
+- All runs drained the queue and passed failure, accounting, size, and full-payload-digest checks.

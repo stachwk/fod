@@ -769,3 +769,15 @@ The current runtime is Rust-backed end to end. The notes below are kept for migr
 
 - In the Python era, bootstrap, mkfs, config/profile loading, FUSE callbacks, admin logic, schema migrations, integration tests, and policy layers such as ACL/permissions/journal/runtime validation lived in Python.
 - Rust now owns the runtime hot paths and storage core described above.
+
+## FUSE event-loop concurrency (FOD 3.2.58)
+
+`FOD_FUSE_EVENT_THREADS` configures fuser request-dispatch threads. The default
+is `1` for backward compatibility and the accepted range is `1` through `256`.
+Logical-task admission limits greater than one require more than one event-loop
+thread to become effective.
+
+`FOD_FUSE_CLONE_FD` optionally gives each worker a cloned `/dev/fuse`
+descriptor. It defaults to `false`; enable it only after validating the target
+Linux kernel. The fairness benchmark uses eight event threads and keeps
+descriptor cloning disabled by default.

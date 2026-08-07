@@ -45,6 +45,7 @@ Reading guide:
   - Implementation note (2026-08-04): FOD 3.2.55 replaces broadcast `notify_all` handoffs with one private condition variable per queued ticket. Capacity is reserved under the gate mutex for the oldest waiter before that waiter is signalled, preventing lost wakeups and preserving strict FIFO while eliminating the 500-thread wake storm measured in 3.2.54. The apply-time analysis records the new baseline, syscall, context-switch, and RSS results for direct comparison.
   - Implementation note (2026-08-04): FOD 3.2.56 fixes resource-profile summary extraction for the leading whitespace emitted by `/usr/bin/time -v`. The profiler now writes a validated `fifo-admission-resource-summary.txt` with run lists, means, and medians for context switches, RSS, CPU, user/system time, and wall-clock time. Production admission behavior is unchanged.
   - Implementation note (2026-08-04): FOD 3.2.57 adds a real FUSE mixed-size fairness benchmark. A paced large sequential writer overlaps with many independent small-file writers under write admission limits `0`, `1`, `2`, and `4`. Positive limits must complete at least 90% of small writes before the large writer finishes, while every run verifies file size and payload integrity. JSON and Markdown summaries are written outside the repository. This validates starvation resistance at the FUSE boundary; PostgreSQL transaction and payload-byte limits remain separate.
+  - Implementation note (2026-08-07): FOD 3.2.58 strengthens that benchmark into a saturation test. Eight independent large writer processes issue repeated 256 KiB writes without client pacing; prepared small writers are released into the continuing large stream. Every run uses a fresh mount, limit order rotates between repeats, and archived shutdown observability must prove concurrent baseline callbacks, `peak_queued_tasks >= 2`, and exact exercise of positive active limits. The test fails when queue pressure was not actually created.
   - Prefer explicit configuration such as `primary_hosts = 127.0.0.1:15432,127.0.0.1:15433` and `replica_hosts = 127.0.0.1:15442,127.0.0.1:15443`. Keep the existing `host` plus `port` format for single-node backward compatibility. A generic `hosts` field may be accepted only as a transitional form whose roles are discovered through `pg_is_in_recovery()` and `transaction_read_only`, never by assuming that the first two entries are primaries.
   - Reserve and consume the cluster ports from `/home/wojtek/git/config/ports/fod.env`: primaries `15432`/`15433`, replicas `15442`/`15443`. Treat multiple writable endpoints as HA/proxy entrypoints to the same authoritative primary unless the selected PostgreSQL technology provides real multi-primary conflict handling; do not silently present independent PostgreSQL primaries as one safe write cluster.
   - Split connection management into write/control/lease pools and read pools. Writes, schema changes, lock leases, session heartbeats, replay confirmation, and other authoritative operations must use a verified writable primary. Eligible read-only metadata and payload queries may use replicas, with primary fallback.
@@ -714,3 +715,17 @@ Notes:
 - [x] Add a deterministic eviction policy for `recent_write_blocks`.
 - [x] Compare FIFO vs LRU behavior for `ReadBlockCache` on sequential, mixed, and random fio workloads. A six-run repeat series showed a mixed picture on the current host: sequential reads favored LRU, mixed workloads favored FIFO, and random mixed was effectively tied, so the cache policy choice is workload-dependent.
 - [x] Keep extents opt-in until end-to-end mixed/random benchmarks show a stable win over the default block path. Fresh mixed and random mixed fio runs on this host still favor the block path, so the extent PoC stays an explicit opt-in.
+
+  - Implementation correction (2026-08-07): the first saturation run
+    proved that FOD still used fuser's default single event-loop thread.
+    Therefore all limits reported `peak_active_tasks=1`. FOD 3.2.58 adds
+    `FOD_FUSE_EVENT_THREADS` and optional `FOD_FUSE_CLONE_FD`; the saturation
+    benchmark explicitly uses eight event threads and still requires a measured
+    backlog plus exact active-limit use.
+
+  - Implementation correction (2026-08-07): fairness now measures
+    completion of the small `write()` call, which is the operation protected by
+    logical-task admission. `fsync()` remains an end-to-end latency metric but
+    no longer decides starvation. Large writers perform eight 256 KiB writes
+    each to keep a longer competing tail, and failed runs are fully annotated
+    instead of aborting before shutdown observability is parsed.

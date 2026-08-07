@@ -368,6 +368,21 @@ Every run also checks file size and payload integrity. This benchmark validates
 starvation resistance across real FUSE callbacks, but it does not yet reserve
 PostgreSQL transactions or payload bytes.
 
+The first FOD 3.2.57 execution completed all twelve runs with 100 percent
+small-write overlap and no data errors, but shutdown observability reported
+`peak_queued_tasks=1` and `peak_active_tasks=1` for every limit. The paced 4 KiB
+client loop therefore validated boundary correctness but did not saturate the
+admission gate or distinguish limits `2` and `4`.
+
+FOD 3.2.58 replaces that workload with multiple processes released through
+shared start events. Eight large writers repeatedly issue 256 KiB writes with
+no client pacing, while prepared small writers enter after the first large
+wave and before the remaining large operations. Each limit/run pair receives a
+fresh mount and archived shutdown log. The harness now fails unless the
+unlimited baseline proves concurrent callbacks and every positive limit proves
+both a queued backlog and exact use of the configured active capacity. Limit
+order rotates between repeats to reduce cache and warm-up bias.
+
 Introduce:
 
 - a logical task queue for bulk file operations;
@@ -528,3 +543,30 @@ backpressure policy are defined.
 - direct lock leases and session heartbeats to the lease lane.
 
 That step must prove that moving an operation between independent connections does not weaken transaction, replay-confirmation, lock-owner, or session-heartbeat guarantees. Memory-aware queueing and connection limits must be implemented before attempting very high logical concurrency. Multi-endpoint host selection remains a later phase.
+
+### FOD 3.2.58 threaded FUSE event-loop correction
+
+The first saturated run stopped on the unlimited baseline with
+`peak_queued_tasks=1` and `peak_active_tasks=1`. FOD had left
+`fuser::Config::n_threads` unspecified, so fuser used one request-dispatch
+thread and serialized callbacks before they reached the admission gate.
+
+FOD 3.2.58 now exposes `FOD_FUSE_EVENT_THREADS` with a backward-compatible
+default of one and an upper bound of 256. `FOD_FUSE_CLONE_FD` remains disabled
+by default. The saturation benchmark sets eight event-loop workers and retains
+strict queue-pressure and active-limit criteria.
+
+### FOD 3.2.58 write-boundary fairness criterion
+
+The first threaded saturation run established real callback concurrency and
+queue pressure, but the small-operation overlap calculation included the
+client's subsequent `fsync()`. Logical-task admission protects `file-write`
+callbacks, not the later fsync path. The benchmark therefore now timestamps
+the return from `write()` separately from fsync completion and applies the
+starvation/progress threshold only to the write boundary. End-to-end fsync
+latency remains recorded for diagnosis.
+
+The competing large stream is doubled to eight 256 KiB writes per large
+worker, providing a longer tail after small writers are released. A failed run
+is still unmounted and annotated so shutdown observability is available for
+all configured limits.

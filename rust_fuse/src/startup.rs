@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fod_rust_runtime::{
-    env_var_truthy_with_legacy_alias, env_var_with_legacy_alias, RuntimeCacheSettings,
+    env_var_truthy_with_legacy_alias, env_var_with_legacy_alias, parse_bool, RuntimeCacheSettings,
     RuntimeConfig, RuntimeCoreSettings, RuntimeLockSettings, RuntimeMountSettings,
     RuntimeSecuritySettings, RuntimeStorageSettings, RuntimeTaskSettings,
 };
@@ -137,7 +137,37 @@ impl FodFuseSettings {
     }
 }
 
-fn mount_config(mount: &RuntimeMountSettings, security: &RuntimeSecuritySettings) -> Config {
+const DEFAULT_FUSE_EVENT_THREADS: usize = 1;
+const MAX_FUSE_EVENT_THREADS: usize = 256;
+
+fn fuse_event_loop_config() -> Result<(usize, bool), String> {
+    let event_threads = match env_var_with_legacy_alias("FOD_FUSE_EVENT_THREADS") {
+        Some(value) => value.parse::<usize>().map_err(|err| {
+            format!(
+                "FOD_FUSE_EVENT_THREADS must be an integer between 1 and {MAX_FUSE_EVENT_THREADS}: {err}"
+            )
+        })?,
+        None => DEFAULT_FUSE_EVENT_THREADS,
+    };
+    if !(1..=MAX_FUSE_EVENT_THREADS).contains(&event_threads) {
+        return Err(format!(
+            "FOD_FUSE_EVENT_THREADS must be between 1 and {MAX_FUSE_EVENT_THREADS}, got {event_threads}"
+        ));
+    }
+
+    let clone_fd = match env_var_with_legacy_alias("FOD_FUSE_CLONE_FD") {
+        Some(value) => {
+            parse_bool(&value).map_err(|err| format!("invalid FOD_FUSE_CLONE_FD: {err}"))?
+        }
+        None => false,
+    };
+    Ok((event_threads, clone_fd && event_threads > 1))
+}
+
+fn mount_config(
+    mount: &RuntimeMountSettings,
+    security: &RuntimeSecuritySettings,
+) -> Result<Config, String> {
     let mut options = vec![
         MountOption::FSName("fod".to_string()),
         MountOption::AutoUnmount,
@@ -194,9 +224,12 @@ fn mount_config(mount: &RuntimeMountSettings, security: &RuntimeSecuritySettings
         options.push(MountOption::CUSTOM("writeback_cache".to_string()));
     }
     let mut config = Config::default();
+    let (event_threads, clone_fd) = fuse_event_loop_config()?;
     config.mount_options = options;
     config.acl = acl;
-    config
+    config.n_threads = Some(event_threads);
+    config.clone_fd = clone_fd;
+    Ok(config)
 }
 
 fn log_mount_status(
@@ -302,6 +335,11 @@ fn log_mount_status(
         "FOD mount options: {:?} acl={:?}",
         config.mount_options, config.acl
     );
+    info!(
+        "FOD FUSE event loop: threads={} clone_fd={}",
+        config.n_threads.unwrap_or(DEFAULT_FUSE_EVENT_THREADS),
+        config.clone_fd
+    );
     if env_var_truthy_with_legacy_alias("FOD_DEBUG_SNAPSHOT", false) {
         info!("FOD debug snapshot: {}", fs.debug_snapshot());
     }
@@ -349,7 +387,7 @@ pub fn mount_fuse(
     fs.start_logical_task_observability()
         .map_err(|err| format!("failed to start logical task observability: {err}"))?;
 
-    let config = mount_config(&mount, &security);
+    let config = mount_config(&mount, &security)?;
     log_mount_status(
         mountpoint, &core, &mount, &security, &lock, &cache, &storage, &fs, snapshot, &config,
     );

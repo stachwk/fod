@@ -97,6 +97,35 @@ fod_strace_summary_to_markdown() {
   ' "${summary_file}"
 }
 
+fod_logical_task_metric() {
+  local log_file="$1"
+  local operation="$2"
+  local metric="$3"
+  awk -v expected_operation="${operation}" -v expected_metric="${metric}" '
+    /FOD logical task observability:/ && /stage=shutdown/ {
+      operation = ""
+      value = ""
+      for (field_index = 1; field_index <= NF; field_index++) {
+        if ($field_index == "operation=" expected_operation) {
+          operation = expected_operation
+        }
+        if (index($field_index, expected_metric "=") == 1) {
+          split($field_index, fields, "=")
+          value = fields[2]
+        }
+      }
+      if (operation == expected_operation && value != "") {
+        selected = value
+      }
+    }
+    END {
+      if (selected != "") {
+        print selected
+      }
+    }
+  ' "${log_file}"
+}
+
 fod_test_cleanup() {
   local restore_errexit=0
   if [[ "$-" == *e* ]]; then
@@ -121,6 +150,18 @@ fod_test_cleanup() {
     read_calls="$(grep -oE 'FOD req=[0-9]+ op=read( |$)' "${LOG_FILE}" | sort -u | wc -l | tr -d ' ')"
     write_calls="$(grep -oE 'FOD req=[0-9]+ op=write( |$)' "${LOG_FILE}" | sort -u | wc -l | tr -d ' ')"
     copy_file_range_calls="$(grep -oE 'FOD req=[0-9]+ op=copy_file_range( |$)' "${LOG_FILE}" | sort -u | wc -l | tr -d ' ')"
+    if [[ "${read_calls}" == "0" ]]; then
+      read_calls="$(fod_logical_task_metric "${LOG_FILE}" file-read admitted_tasks)"
+      read_calls="${read_calls:-0}"
+    fi
+    if [[ "${write_calls}" == "0" ]]; then
+      write_calls="$(fod_logical_task_metric "${LOG_FILE}" file-write admitted_tasks)"
+      write_calls="${write_calls:-0}"
+    fi
+    if [[ "${copy_file_range_calls}" == "0" ]]; then
+      copy_file_range_calls="$(fod_logical_task_metric "${LOG_FILE}" file-copy admitted_tasks)"
+      copy_file_range_calls="${copy_file_range_calls:-0}"
+    fi
     printf 'FOD callback counts: read=%s write=%s copy_file_range=%s\n' \
       "${read_calls}" "${write_calls}" "${copy_file_range_calls}"
     echo "FOD boundary profile summary:"
@@ -129,6 +170,10 @@ fod_test_cleanup() {
   if [[ -n "${FOD_STRACE_SUMMARY_FILE:-}" && -f "${FOD_STRACE_SUMMARY_FILE}" ]]; then
     echo "FOD strace profile summary${FOD_STRACE_LABEL:+ (${FOD_STRACE_LABEL})}:"
     fod_strace_summary_to_markdown "${FOD_STRACE_SUMMARY_FILE}" || cat "${FOD_STRACE_SUMMARY_FILE}" || true
+  fi
+  if [[ -n "${FOD_TEST_LOG_ARCHIVE:-}" && -f "${LOG_FILE:-}" ]]; then
+    mkdir -p "$(dirname "${FOD_TEST_LOG_ARCHIVE}")"
+    cp "${LOG_FILE}" "${FOD_TEST_LOG_ARCHIVE}"
   fi
   rm -rf "${MOUNTPOINT}" "${LOG_FILE}"
   if [[ -n "${FOD_STRACE_SUMMARY_FILE:-}" ]]; then
@@ -139,6 +184,7 @@ fod_test_cleanup() {
   FOD_PID=""
   FOD_STRACE_SUMMARY_FILE=""
   FOD_STRACE_LABEL=""
+  FOD_TEST_LOG_ARCHIVE=""
   if (( restore_errexit )); then
     set -e
   fi
