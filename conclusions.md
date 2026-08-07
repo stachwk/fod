@@ -655,3 +655,46 @@ Best binding candidate: threads `8`, limit `4`, score `90.530`.
 | 5 | 2 | 4 | 69.938 | 112.145 | 27.604 | 37.508 | 13.44 |
 
 The ranking remains diagnostic; this commit does not change runtime defaults.
+
+## 2026-08-07 — FOD 3.2.60 admission confirmation suite
+
+- Confirms only the four decision-relevant configurations from FOD 3.2.59:
+  `8/4`, `16/4`, `4/8`, and `8/0`.
+- Uses ten runs per candidate, forty fresh mounts total.
+- Rotates candidate order between repeats.
+- Reuses the validated FOD 3.2.58 fairness workload and FOD 3.2.59 matrix
+  annotation/ranking logic.
+- Executes three sequential fio runs and three strace runs under `8/4`, all with
+  `FOD_PROFILE_IO=1`.
+- Default confirmation thresholds for `8/4`:
+  - rank 1 among the four candidates;
+  - at least 10% throughput gain versus `8/0`;
+  - at least 10% improvement in small-write median versus `8/0`;
+  - at least 10% improvement in small-write p95 versus `8/0`;
+  - aggregate stability CV no higher than 25%.
+- Performance verdict is recorded and does not by default prevent committing the
+  measurement infrastructure. Correctness or incomplete-data errors do fail.
+- Production defaults remain unchanged.
+
+## 2026-08-07 — FOD 3.2.60 apply-time confirmation result
+
+Artifact directory: `/tmp/fod-fuse-admission-confirmation/fod-3.2.60-3092631-1786105616`
+
+Verdict: `confirmed`.
+
+- target rank: `1`;
+- throughput gain vs `8/0`: `54.02%`;
+- small-write median improvement vs `8/0`: `31.44%`;
+- small-write p95 improvement vs `8/0`: `29.95%`;
+- target stability CV: `18.63%`.
+
+| threads | limit | rank | score | throughput MiB/s | small median ms | small p95 ms | stability CV % |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 4 | 1 | 96.666 | 121.677 | 16.214 | 22.403 | 18.63 |
+| 16 | 4 | 2 | 93.654 | 112.734 | 15.675 | 22.271 | 33.61 |
+| 4 | 8 | 3 | 78.57 | 85.821 | 19.120 | 25.354 | 31.25 |
+| 8 | 0 | 4 | 67.236 | 78.999 | 23.649 | 31.983 | 42.41 |
+
+Captured fio/strace logs: `6`.
+
+Production defaults remain unchanged in FOD 3.2.60.

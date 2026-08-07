@@ -737,3 +737,13 @@ Notes:
     are measured rather than incorrectly rejected. The report ranks eligible
     cells using throughput, small-write median, small-write p95, and stability,
     while leaving production defaults unchanged until enough evidence exists.
+
+  - Implementation note (2026-08-07): FOD 3.2.60 adds a focused
+    confirmation suite for the four most relevant configurations from 3.2.59:
+    `8/4`, `16/4`, `4/8`, and the `8/0` same-thread unlimited baseline. Each
+    candidate runs ten times with rotated order and fresh mounts. The `8/4`
+    candidate also receives three sequential-fio and three strace runs. The
+    report marks `8/4` confirmed only when it remains rank 1, improves throughput
+    and both small-write latency measures by at least 10% versus `8/0`, and
+    keeps aggregate stability CV at or below 25%. Runtime defaults remain
+    unchanged.

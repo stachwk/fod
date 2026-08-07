@@ -2748,3 +2748,17 @@ The fairness command commits only after every run proves real queue pressure thr
 - after commit: exact changed-file validation, `git diff --check HEAD~1..HEAD`,
   full diff captured to `/tmp/fod-3.2.59-<sha>.diff`, and push only after the
   post-commit review passes.
+
+## 2026-08-07 — FOD 3.2.60 admission confirmation suite
+
+- `python3 -m py_compile tests/integration/test_fuse_admission_confirmation.py`
+- `bash -n tests/integration/test_fuse_admission_confirmation.sh`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked --no-run`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor -- --test-threads=1`
+- `make test-fuse-admission-confirmation`
+- `make test-version`
+- `git diff --check`
+- after commit: exact changed-file validation, `git diff --check HEAD~1..HEAD`,
+  full diff saved under `/tmp/fod-3.2.60-<sha>.diff`, and push only after the
+  post-commit review succeeds.

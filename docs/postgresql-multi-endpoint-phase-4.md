@@ -591,3 +591,22 @@ capacity. The aggregate report includes throughput, median and p95 small-write
 latency, run-to-run coefficient of variation, observability peaks, changes
 against the same-thread unlimited baseline, and a weighted diagnostic ranking.
 No production default is changed by this stage.
+
+### FOD 3.2.60 admission confirmation suite
+
+FOD 3.2.59 identified `event_threads=8 / write_limit=4` as both the overall
+diagnostic leader and the strongest binding candidate, but the earlier matrix
+used only three repeats per cell. FOD 3.2.60 narrows the search to the leader,
+the two closest relevant alternatives (`16/4` and `4/8`), and the same-thread
+unlimited baseline (`8/0`).
+
+Each configuration runs ten times with a fresh mount and rotated ordering. The
+same correctness gates from the matrix remain active: complete accounting,
+drained queues, expected active-limit behavior, and full write progress. The
+aggregate confirmation report records whether `8/4` stays rank 1 and whether it
+retains at least 10% throughput gain plus 10% median and p95 latency improvement
+against `8/0`, with stability CV no worse than 25%.
+
+The suite also runs real sequential fio and strace three times under `8/4` with
+`FOD_PROFILE_IO=1`. Those logs are retained beside the confirmation artifacts.
+This stage still does not modify runtime defaults.

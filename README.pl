@@ -782,3 +782,21 @@ współczynnik zmienności między przebiegami, szczyty kolejki i aktywności or
 zmiany względem konfiguracji bez limitu. Powstaje także ranking diagnostyczny.
 Ranking jest materiałem do późniejszej decyzji konfiguracyjnej; FOD 3.2.59 nie
 zmienia automatycznie wartości domyślnych runtime.
+
+## Test potwierdzający admission (FOD 3.2.60)
+
+`make test-fuse-admission-confirmation` wykonuje pomiar potwierdzający na większej
+próbie, bez zmiany wartości domyślnych runtime. Porównywane są dokładnie cztery
+konfiguracje:
+
+- 8 wątków FUSE, limit zapisu 4 — lider FOD 3.2.59;
+- 16 wątków FUSE, limit zapisu 4;
+- 4 wątki FUSE, limit zapisu 8;
+- 8 wątków FUSE, limit zapisu 0 — baza bez limitu dla tej samej liczby wątków.
+
+Każda konfiguracja jest domyślnie wykonywana dziesięć razy, ze zmienianą
+kolejnością i świeżym mountem. Następnie dla `8/4` wykonywane są trzy rzeczywiste
+testy fio sequential oraz trzy odpowiadające im pomiary strace. Raport ocenia
+ranking, zmianę przepustowości względem `8/0`, poprawę mediany i p95 małych
+zapisów oraz stabilność między przebiegami. Wynik wydajności jest zapisywany jako
+dowód, ale sam w sobie nie blokuje zapisania infrastruktury testowej.

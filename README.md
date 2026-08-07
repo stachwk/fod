@@ -798,3 +798,21 @@ run-to-run coefficient of variation, queue/active peaks, and baseline-relative
 changes. It also calculates a diagnostic ranking. That ranking is evidence for
 a later configuration decision; FOD 3.2.59 does not automatically change the
 runtime defaults.
+
+## Admission confirmation suite (FOD 3.2.60)
+
+`make test-fuse-admission-confirmation` performs a higher-sample confirmation of
+the FOD 3.2.59 ranking without changing runtime defaults. It compares exactly
+four configurations:
+
+- event threads `8`, write limit `4` (the 3.2.59 leader);
+- event threads `16`, write limit `4`;
+- event threads `4`, write limit `8`;
+- event threads `8`, write limit `0` (same-thread unlimited baseline).
+
+Each candidate runs ten times by default with rotated order and a fresh mount.
+The suite then executes three real sequential-fio runs and three corresponding
+strace runs under `8/4`. A confirmation report evaluates rank, throughput gain
+against `8/0`, small-write median/p95 improvement, and run-to-run stability.
+Performance confirmation is recorded as evidence rather than used as the
+default commit gate.
