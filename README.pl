@@ -765,3 +765,20 @@ niż jednym wątku pętli FUSE.
 `FOD_FUSE_CLONE_FD` może nadać każdemu wątkowi osobny sklonowany deskryptor
 `/dev/fuse`. Domyślnie opcja jest wyłączona. Benchmark używa ośmiu wątków FUSE
 i pozostawia klonowanie deskryptora wyłączone.
+
+## Macierz strojenia admission FUSE (FOD 3.2.59)
+
+`make test-fuse-admission-matrix` porównuje współbieżność pętli FUSE z limitami
+logicznego admission zapisu bez zmiany wartości domyślnych produkcji. Domyślna
+macierz obejmuje:
+
+- `FOD_FUSE_EVENT_THREADS`: `2`, `4`, `8`, `16`;
+- `FOD_TASK_WRITE_ACTIVE_LIMIT`: `0`, `1`, `2`, `4`, `8`;
+- trzy rotowane powtórzenia każdej komórki;
+- wyłączone klonowanie deskryptora FUSE.
+
+Raport zapisuje przepustowość dużego strumienia, medianę i p95 małych zapisów,
+współczynnik zmienności między przebiegami, szczyty kolejki i aktywności oraz
+zmiany względem konfiguracji bez limitu. Powstaje także ranking diagnostyczny.
+Ranking jest materiałem do późniejszej decyzji konfiguracyjnej; FOD 3.2.59 nie
+zmienia automatycznie wartości domyślnych runtime.

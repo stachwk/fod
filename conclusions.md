@@ -622,3 +622,36 @@ Artifact directory: `/tmp/fod-fifo-fuse-fairness/fod-3.2.58-write-boundary-29230
 - Positive limits passed only after shutdown observability proved a real backlog and exact active-limit use.
 - The progress threshold refers to completion of `write()`, not the later `fsync()` tail.
 - All runs drained the queue and passed failure, accounting, size, and full-payload-digest checks.
+
+## 2026-08-07 — FOD 3.2.59 FUSE admission tuning matrix
+
+- Adds `make test-fuse-admission-matrix`.
+- Default event-thread axis: `2`, `4`, `8`, `16`.
+- Default write-admission axis: `0`, `1`, `2`, `4`, `8`.
+- Each of the 20 cells runs three times with a fresh mount and rotated order.
+- Workload uses 16 large writer processes, eight 256 KiB writes per large
+  writer, and 32 prepared 4 KiB small writers.
+- Binding cells must prove queue pressure and exact active-limit use.
+- Non-binding cells (`limit >= threads`) are retained because they show when
+  FUSE dispatch, not logical admission, is the actual concurrency ceiling.
+- Ranking weights are deliberately explicit: throughput 35%, small-write
+  median 25%, small-write p95 25%, run-to-run stability 15%.
+- The score is diagnostic only. FOD 3.2.59 does not alter production defaults.
+
+## 2026-08-07 — FOD 3.2.59 apply-time matrix result
+
+Artifact directory: `/tmp/fod-fuse-admission-matrix/fod-3.2.59-3025784-1786104660`
+
+Overall diagnostic leader: threads `8`, limit `4`, score `90.530`.
+
+Best binding candidate: threads `8`, limit `4`, score `90.530`.
+
+| rank | threads | limit | score | throughput MiB/s | small median ms | small p95 ms | stability CV % |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 8 | 4 | 90.530 | 127.501 | 16.577 | 22.867 | 18.36 |
+| 2 | 4 | 8 | 81.920 | 71.715 | 14.325 | 19.440 | 22.61 |
+| 3 | 16 | 4 | 81.390 | 95.174 | 15.902 | 23.153 | 27.63 |
+| 4 | 2 | 8 | 71.520 | 92.307 | 20.690 | 29.080 | 23.36 |
+| 5 | 2 | 4 | 69.938 | 112.145 | 27.604 | 37.508 | 13.44 |
+
+The ranking remains diagnostic; this commit does not change runtime defaults.

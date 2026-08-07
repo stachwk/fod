@@ -781,3 +781,20 @@ thread to become effective.
 descriptor. It defaults to `false`; enable it only after validating the target
 Linux kernel. The fairness benchmark uses eight event threads and keeps
 descriptor cloning disabled by default.
+
+## FUSE admission tuning matrix (FOD 3.2.59)
+
+`make test-fuse-admission-matrix` compares FUSE event-loop concurrency with
+logical write-admission limits without changing production defaults. The
+default matrix is:
+
+- `FOD_FUSE_EVENT_THREADS`: `2`, `4`, `8`, `16`;
+- `FOD_TASK_WRITE_ACTIVE_LIMIT`: `0`, `1`, `2`, `4`, `8`;
+- three rotated repeats per cell;
+- cloned FUSE descriptors disabled.
+
+The report records large-stream throughput, small-write median and p95 latency,
+run-to-run coefficient of variation, queue/active peaks, and baseline-relative
+changes. It also calculates a diagnostic ranking. That ranking is evidence for
+a later configuration decision; FOD 3.2.59 does not automatically change the
+runtime defaults.

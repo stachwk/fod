@@ -729,3 +729,11 @@ Notes:
     no longer decides starvation. Large writers perform eight 256 KiB writes
     each to keep a longer competing tail, and failed runs are fully annotated
     instead of aborting before shutdown observability is parsed.
+
+  - Implementation note (2026-08-07): FOD 3.2.59 adds a repeatable FUSE
+    admission tuning matrix across event-thread counts `2/4/8/16` and write
+    admission limits `0/1/2/4/8`. Each cell uses a fresh mount, matrix order is
+    rotated between repeats, and non-binding combinations (`limit >= threads`)
+    are measured rather than incorrectly rejected. The report ranks eligible
+    cells using throughput, small-write median, small-write p95, and stability,
+    while leaving production defaults unchanged until enough evidence exists.

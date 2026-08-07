@@ -570,3 +570,24 @@ The competing large stream is doubled to eight 256 KiB writes per large
 worker, providing a longer tail after small writers are released. A failed run
 is still unmounted and annotated so shutdown observability is available for
 all configured limits.
+
+### FOD 3.2.59 admission tuning matrix
+
+FOD 3.2.58 proved that multi-threaded FUSE dispatch is required before
+process-local admission limits greater than one can have an effect. FOD 3.2.59
+adds a controlled tuning matrix rather than selecting a default from one
+four-point benchmark.
+
+The default axes are event-loop threads `2`, `4`, `8`, `16` and write admission
+limits `0`, `1`, `2`, `4`, `8`. Sixteen prepared large writers and thirty-two
+small writers create enough concurrency to exercise the larger thread counts.
+Every cell uses a fresh mount and three repeats; the order is rotated to reduce
+warm-cache and PostgreSQL warm-up bias.
+
+Binding combinations (`0 < limit < threads`) must demonstrate a queued backlog
+and exact use of the configured limit. Non-binding combinations are valid
+measurements: when `limit >= threads`, FUSE dispatch itself is the tighter
+capacity. The aggregate report includes throughput, median and p95 small-write
+latency, run-to-run coefficient of variation, observability peaks, changes
+against the same-thread unlimited baseline, and a weighted diagnostic ranking.
+No production default is changed by this stage.

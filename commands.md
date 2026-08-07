@@ -2734,3 +2734,17 @@ The fairness command commits only after every run proves real queue pressure thr
 - `make test-version`;
 - `git diff --check`;
 - after commit: `git diff --check HEAD~1..HEAD`, `git show`, and full `git diff HEAD~1..HEAD`.
+
+## 2026-08-07 — FOD 3.2.59 FUSE admission tuning matrix
+
+- `python3 -m py_compile tests/integration/test_fuse_admission_matrix.py`
+- `bash -n tests/integration/test_fuse_admission_matrix.sh`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked --no-run`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-monitor -- --test-threads=1`
+- `make test-fuse-admission-matrix`
+- `make test-version`
+- `git diff --check`
+- after commit: exact changed-file validation, `git diff --check HEAD~1..HEAD`,
+  full diff captured to `/tmp/fod-3.2.59-<sha>.diff`, and push only after the
+  post-commit review passes.
