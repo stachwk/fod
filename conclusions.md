@@ -776,3 +776,16 @@ validation. Production Rust/FUSE/hot-path behavior is unchanged.
 - transaction delta: `3470`
 - artifact directory: `/tmp/fod-postgres-telemetry/fod-3.2.62-2535463-1786177014`
 - password value was not stored in the report.
+
+## 2026-08-08 — FOD 3.2.63 transaction admission
+
+Transaction concurrency is now bounded at the actual PostgreSQL
+`BEGIN`/`COMMIT`/`ROLLBACK` boundary rather than inferred from FUSE callback
+concurrency. The transaction gate is process-local and independent from the
+connection-pool limit and FUSE task admission.
+
+Write transactions and control/lease transactions use separate FIFO gates.
+RAII release covers normal commit, rollback, replayable disconnects and error
+unwinding. The base preset uses write limit `4` and control/lease limit `2`
+with connection pool `10`; code fallback remains `0` when startup configuration
+is absent.

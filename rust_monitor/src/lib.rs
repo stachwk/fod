@@ -631,6 +631,19 @@ impl LogicalTaskQueueObservability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoTransactionAdmissionSnapshot {
+    pub limit: u64,
+    pub active: u64,
+    pub queued: u64,
+    pub peak_active: u64,
+    pub peak_queued: u64,
+    pub admission_count: u64,
+    pub backpressure_events: u64,
+    pub fairness_yields: u64,
+    pub accounting_errors: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbRepoPoolObservabilitySnapshot {
     pub connection_limit: usize,
     pub live_connections: usize,
@@ -656,6 +669,8 @@ pub struct DbRepoPoolObservabilitySnapshot {
     pub transaction_failures: u64,
     pub transaction_micros_total: u64,
     pub transaction_micros_max: u64,
+    pub write_transaction_admission: DbRepoTransactionAdmissionSnapshot,
+    pub control_transaction_admission: DbRepoTransactionAdmissionSnapshot,
     pub heartbeat_count: u64,
     pub heartbeat_failures: u64,
     pub heartbeat_schedule_delay_micros_total: u64,
@@ -1073,7 +1088,7 @@ pub fn log_lane_observability(
                 let pool = snapshot.pool;
                 let payload = snapshot.payload;
                 log::info!(
-                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} transaction_count={} transaction_failures={} transaction_micros_total={} transaction_micros_max={} heartbeat_count={} heartbeat_failures={} heartbeat_schedule_delay_micros_total={} heartbeat_schedule_delay_micros_max={} heartbeat_execution_micros_total={} heartbeat_execution_micros_max={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled=false",
+                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} transaction_count={} transaction_failures={} transaction_micros_total={} transaction_micros_max={} write_transaction_limit={} write_active_transactions={} write_queued_transactions={} write_peak_active_transactions={} write_peak_queued_transactions={} write_transaction_admission_count={} write_transaction_backpressure_events={} write_transaction_fairness_yields={} write_transaction_accounting_errors={} control_transaction_limit={} control_active_transactions={} control_queued_transactions={} control_peak_active_transactions={} control_peak_queued_transactions={} control_transaction_admission_count={} control_transaction_backpressure_events={} control_transaction_fairness_yields={} control_transaction_accounting_errors={} heartbeat_count={} heartbeat_failures={} heartbeat_schedule_delay_micros_total={} heartbeat_schedule_delay_micros_max={} heartbeat_execution_micros_total={} heartbeat_execution_micros_max={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled=false",
                     stage,
                     lane,
                     pool.connection_limit,
@@ -1101,6 +1116,24 @@ pub fn log_lane_observability(
                     pool.transaction_failures,
                     pool.transaction_micros_total,
                     pool.transaction_micros_max,
+                    pool.write_transaction_admission.limit,
+                    pool.write_transaction_admission.active,
+                    pool.write_transaction_admission.queued,
+                    pool.write_transaction_admission.peak_active,
+                    pool.write_transaction_admission.peak_queued,
+                    pool.write_transaction_admission.admission_count,
+                    pool.write_transaction_admission.backpressure_events,
+                    pool.write_transaction_admission.fairness_yields,
+                    pool.write_transaction_admission.accounting_errors,
+                    pool.control_transaction_admission.limit,
+                    pool.control_transaction_admission.active,
+                    pool.control_transaction_admission.queued,
+                    pool.control_transaction_admission.peak_active,
+                    pool.control_transaction_admission.peak_queued,
+                    pool.control_transaction_admission.admission_count,
+                    pool.control_transaction_admission.backpressure_events,
+                    pool.control_transaction_admission.fairness_yields,
+                    pool.control_transaction_admission.accounting_errors,
                     pool.heartbeat_count,
                     pool.heartbeat_failures,
                     pool.heartbeat_schedule_delay_micros_total,

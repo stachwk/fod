@@ -849,3 +849,18 @@ values are never written to the report.
 
 The implementation roadmap after the confirmed `8/4` FUSE configuration is
 recorded in `docs/fod-roadmap-3.2.62-plus.md`.
+
+## PostgreSQL transaction admission
+
+FOD 3.2.63 adds process-local admission at the real PostgreSQL transaction
+boundary. Write and control/lease lanes have independent limits:
+
+```ini
+pg_write_transaction_limit = 4
+pg_control_transaction_limit = 2
+```
+
+The environment overrides are `FOD_PG_WRITE_TRANSACTION_LIMIT` and
+`FOD_PG_CONTROL_TRANSACTION_LIMIT`. A value of `0` disables the selected gate.
+The permit is acquired immediately before `BEGIN` and released after `COMMIT`,
+`ROLLBACK`, or error cleanup.

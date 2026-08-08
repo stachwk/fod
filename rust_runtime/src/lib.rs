@@ -517,13 +517,30 @@ pub struct RuntimeTaskSettings {
 impl RuntimeTaskSettings {
     pub fn from_env() -> Result<Self, String> {
         Ok(Self {
-            read_active_limit: task_active_limit_from_env("FOD_TASK_READ_ACTIVE_LIMIT")?,
-            write_active_limit: task_active_limit_from_env("FOD_TASK_WRITE_ACTIVE_LIMIT")?,
+            read_active_limit: active_limit_from_env("FOD_TASK_READ_ACTIVE_LIMIT")?,
+            write_active_limit: active_limit_from_env("FOD_TASK_WRITE_ACTIVE_LIMIT")?,
         })
     }
 }
 
-fn task_active_limit_from_env(name: &str) -> Result<u64, String> {
+/// Process-local PostgreSQL transaction admission controls.
+/// Zero disables the corresponding transaction gate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeTransactionSettings {
+    pub write_active_limit: u64,
+    pub control_active_limit: u64,
+}
+
+impl RuntimeTransactionSettings {
+    pub fn from_env() -> Result<Self, String> {
+        Ok(Self {
+            write_active_limit: active_limit_from_env("FOD_PG_WRITE_TRANSACTION_LIMIT")?,
+            control_active_limit: active_limit_from_env("FOD_PG_CONTROL_TRANSACTION_LIMIT")?,
+        })
+    }
+}
+
+fn active_limit_from_env(name: &str) -> Result<u64, String> {
     let Some(value) = env::var_os(name) else {
         return Ok(0);
     };

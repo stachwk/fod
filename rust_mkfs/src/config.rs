@@ -45,6 +45,16 @@ const STARTUP_PASSTHROUGH_SPECS: &[(&str, &str, StartupPassthroughKind)] = &[
         StartupPassthroughKind::U64 { min: 0, max: None },
     ),
     (
+        "pg_write_transaction_limit",
+        "FOD_PG_WRITE_TRANSACTION_LIMIT",
+        StartupPassthroughKind::U64 { min: 0, max: None },
+    ),
+    (
+        "pg_control_transaction_limit",
+        "FOD_PG_CONTROL_TRANSACTION_LIMIT",
+        StartupPassthroughKind::U64 { min: 0, max: None },
+    ),
+    (
         "allow_other",
         "FOD_ALLOW_OTHER",
         StartupPassthroughKind::Bool,

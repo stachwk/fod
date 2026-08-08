@@ -2806,3 +2806,15 @@ make test-fuse-production-validation
 ```
 
 but PostgreSQL snapshot failures are blocking starting with FOD 3.2.62.
+
+## FOD 3.2.63 PostgreSQL transaction admission
+
+```bash
+make test-postgresql-transaction-admission
+```
+
+The real PostgreSQL test uses explicit test limits (`write=2`, `control=1`) and
+concurrent transactions containing `pg_sleep()` so queueing is deterministic.
+
+Hot-path regression checks also run sequential strace, mixed I/O and random
+mixed I/O with `FOD_PROFILE_IO=1`, FUSE `8/4`, and transaction limits `4/2`.

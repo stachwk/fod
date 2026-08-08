@@ -144,3 +144,18 @@ connection identity:
 
 Diagnostics may report which environment-variable name supplied each
 non-secret field. They never report the password value.
+
+## PostgreSQL transaction admission controls
+
+`pg_write_transaction_limit` and `pg_control_transaction_limit` are startup-only
+process-local controls propagated to `FOD_PG_WRITE_TRANSACTION_LIMIT` and
+`FOD_PG_CONTROL_TRANSACTION_LIMIT`.
+
+- `0` disables the corresponding transaction gate.
+- positive values bound concurrently active explicit PostgreSQL transactions.
+- queue wait happens after connection acquisition but before `BEGIN`.
+- permit lifetime ends after commit/rollback/error handling.
+- write and control/lease lanes are independent.
+- these controls do not replace `pool_max_connections`.
+
+The base INI values are `4` for write and `2` for control/lease.

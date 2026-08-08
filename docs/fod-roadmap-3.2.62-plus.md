@@ -30,9 +30,28 @@ Acceptance:
 
 ## FOD 3.2.63 — PostgreSQL transaction admission
 
+Status: implemented.
+
 Add explicit limits at the PostgreSQL transaction boundary rather than only at
 the FUSE callback boundary. Preserve cancellation safety, accounting and
 read/write/control/lease separation.
+
+Implementation:
+- acquire a process-local FIFO transaction permit immediately before `BEGIN`;
+- release it by RAII after `COMMIT`, `ROLLBACK`, disconnect/replay, or error;
+- keep independent write and control/lease gates;
+- keep zero as the disabled compatibility fallback;
+- persist balanced base values `4` for write and `2` for control/lease;
+- expose active, queued, peak, backpressure, fairness and accounting metrics;
+- verify limits with real PostgreSQL transactions held by `pg_sleep()`.
+
+Acceptance:
+- six concurrent write-lane workers never exceed two active transactions when
+  the test limit is `2`;
+- four control-lane workers never exceed one active transaction when the test
+  limit is `1`;
+- both lanes return to zero active/queued with zero accounting errors;
+- sequential strace and mixed/random-mixed FUSE tests pass with I/O profiling.
 
 ## FOD 3.2.64 — Payload byte budget and backpressure
 

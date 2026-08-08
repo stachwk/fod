@@ -39,6 +39,7 @@ Generated from quoted `FOD_*` literals in production Rust sources. Rust identifi
 | `FOD_PERSIST_BLOCK_TRANSPORT` | `[fod] persist_block_transport` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PERSIST_BUFFER_CHUNK_BLOCKS` | `[fod] persist_buffer_chunk_blocks` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` | `[fod] persist_copy_send_buffer_bytes` | intentional-env-only | - | - | rust_hotpath/src/pg.rs | experimental libpq COPY send-buffer tuning; default 1 MiB |
+| `FOD_PG_CONTROL_TRANSACTION_LIMIT` | `[fod] pg_control_transaction_limit` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | - |
 | `FOD_PG_DBNAME` | `[database] dbname` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PG_HOST` | `[database] host` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs, rust_runtime/src/lib.rs | - |
 | `FOD_PG_HOSTS` | `[database] hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs | - |
@@ -54,6 +55,7 @@ Generated from quoted `FOD_*` literals in production Rust sources. Rust identifi
 | `FOD_PG_SSLROOTCERT` | `[database] sslrootcert` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PG_USER` | `[database] user` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PG_VISIBLE_PATH` | `[fod] pg_visible_path` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
+| `FOD_PG_WRITE_TRANSACTION_LIMIT` | `[fod] pg_write_transaction_limit` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | - |
 | `FOD_POOL_MAX_CONNECTIONS` | `[fod] pool_max_connections` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PROFILE` | `[fod] profile` | intentional-env-only | - | fod_config.ini, fod_config.example.ini | rust_mkfs/src/bin/fod-bootstrap.rs, rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | profile selector; [fod] profile is also supported |
 | `FOD_PROFILE_IO` | `[fod] profile_io` | intentional-env-only | - | - | rust_hotpath/src/pg.rs | profiling instrumentation |

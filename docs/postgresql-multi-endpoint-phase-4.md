@@ -637,3 +637,13 @@ The next implementation order is:
 1. FOD 3.2.63 — PostgreSQL transaction-boundary admission;
 2. FOD 3.2.64 — payload byte budget/backpressure;
 3. FOD 3.2.65+ — role-aware endpoint routing, consistency and failover.
+
+## FOD 3.2.63 transaction admission foundation
+
+The single-endpoint runtime now has explicit write and control/lease transaction
+admission before multi-endpoint routing is activated. Admission follows the
+logical connection lane, not the cached physical connection being reused.
+
+The gate remains process-local. Cross-process/global fairness is a later
+multi-endpoint concern. FOD 3.2.64 can add byte-budget backpressure without
+conflating transaction count with payload size.

@@ -6,18 +6,18 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use fod_rust_monitor::{
     DbRepoObservabilitySnapshot, DbRepoPayloadObservability, DbRepoPoolObservabilitySnapshot,
-    LaneObservabilitySource, PostgresPressureSnapshot,
+    DbRepoTransactionAdmissionSnapshot, LaneObservabilitySource, PostgresPressureSnapshot,
 };
 use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, postgres_session_setup_sql,
     request_token as generate_request_token, DataObjectSwapCleanup, PersistBlockTransport,
     PostgresRuntimeRequirements, PostgresVersionDiagnostics, RuntimeConfig, RuntimeStorageSettings,
-    FOD_SCHEMA_NAME, FOD_SEARCH_PATH, MIN_POSTGRES_SERVER_VERSION_NUM,
+    RuntimeTransactionSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH, MIN_POSTGRES_SERVER_VERSION_NUM,
     POSTGRES_REQUIREMENT_SETTINGS_SQL,
 };
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString};
 use std::fs::File;
@@ -2276,6 +2276,7 @@ unsafe fn transactional_impl<T, F>(
 where
     F: FnMut(*mut PGconn) -> Result<T, String>,
 {
+    let _transaction_admission = acquire_current_transaction_admission()?;
     let begin = CString::new("BEGIN").map_err(|_| "SQL contains NUL byte".to_string())?;
     let commit = CString::new("COMMIT").map_err(|_| "SQL contains NUL byte".to_string())?;
     let rollback = CString::new("ROLLBACK").map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -2678,6 +2679,183 @@ impl Drop for PayloadPersistGuard {
     }
 }
 
+#[derive(Debug)]
+struct TransactionAdmissionWaiter {
+    ticket: u64,
+    ready: Mutex<bool>,
+    ready_changed: Condvar,
+}
+
+impl TransactionAdmissionWaiter {
+    fn new(ticket: u64) -> Self {
+        Self {
+            ticket,
+            ready: Mutex::new(false),
+            ready_changed: Condvar::new(),
+        }
+    }
+
+    fn wait(&self) {
+        let mut ready = self.ready.lock().unwrap_or_else(|err| err.into_inner());
+        while !*ready {
+            ready = self
+                .ready_changed
+                .wait(ready)
+                .unwrap_or_else(|err| err.into_inner());
+        }
+    }
+
+    fn signal(&self) {
+        let mut ready = self.ready.lock().unwrap_or_else(|err| err.into_inner());
+        *ready = true;
+        drop(ready);
+        self.ready_changed.notify_one();
+    }
+}
+
+#[derive(Debug, Default)]
+struct TransactionAdmissionState {
+    active: u64,
+    queued: u64,
+    peak_active: u64,
+    peak_queued: u64,
+    next_ticket: u64,
+    serving_ticket: u64,
+    waiters: VecDeque<Arc<TransactionAdmissionWaiter>>,
+    admission_count: u64,
+    backpressure_events: u64,
+    fairness_yields: u64,
+    accounting_errors: u64,
+}
+
+#[derive(Debug)]
+struct TransactionAdmissionGate {
+    limit: u64,
+    state: Mutex<TransactionAdmissionState>,
+}
+
+#[derive(Debug)]
+struct TransactionAdmissionPermit {
+    gate: Arc<TransactionAdmissionGate>,
+    acquired: bool,
+}
+
+impl TransactionAdmissionGate {
+    fn new(limit: u64) -> Self {
+        Self {
+            limit,
+            state: Mutex::new(TransactionAdmissionState::default()),
+        }
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, TransactionAdmissionState> {
+        match self.state.lock() {
+            Ok(state) => state,
+            Err(err) => {
+                let mut state = err.into_inner();
+                state.accounting_errors = state.accounting_errors.saturating_add(1);
+                state
+            }
+        }
+    }
+
+    fn reserve_next_waiter(
+        &self,
+        state: &mut TransactionAdmissionState,
+    ) -> Option<Arc<TransactionAdmissionWaiter>> {
+        if state.active >= self.limit {
+            return None;
+        }
+        let waiter = state.waiters.pop_front()?;
+        if waiter.ticket != state.serving_ticket {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+            state.serving_ticket = waiter.ticket;
+        }
+        match state.queued.checked_sub(1) {
+            Some(queued) => state.queued = queued,
+            None => state.accounting_errors = state.accounting_errors.saturating_add(1),
+        }
+        state.active = state.active.saturating_add(1);
+        state.peak_active = state.peak_active.max(state.active);
+        state.admission_count = state.admission_count.saturating_add(1);
+        state.serving_ticket = state.serving_ticket.wrapping_add(1);
+        Some(waiter)
+    }
+
+    fn acquire(self: &Arc<Self>) -> TransactionAdmissionPermit {
+        if self.limit == 0 {
+            return TransactionAdmissionPermit {
+                gate: Arc::clone(self),
+                acquired: false,
+            };
+        }
+
+        let mut state = self.lock_state();
+        let ticket = state.next_ticket;
+        state.next_ticket = state.next_ticket.wrapping_add(1);
+        let had_older_waiter = !state.waiters.is_empty();
+        let capacity_full = state.active >= self.limit;
+        let waiter = Arc::new(TransactionAdmissionWaiter::new(ticket));
+        state.waiters.push_back(Arc::clone(&waiter));
+        state.queued = state.queued.saturating_add(1);
+        state.peak_queued = state.peak_queued.max(state.queued);
+        if capacity_full || had_older_waiter {
+            state.backpressure_events = state.backpressure_events.saturating_add(1);
+        }
+        if had_older_waiter {
+            state.fairness_yields = state.fairness_yields.saturating_add(1);
+        }
+        let waiter_to_wake = self.reserve_next_waiter(&mut state);
+        drop(state);
+
+        if let Some(waiter_to_wake) = waiter_to_wake {
+            waiter_to_wake.signal();
+        }
+        waiter.wait();
+
+        TransactionAdmissionPermit {
+            gate: Arc::clone(self),
+            acquired: true,
+        }
+    }
+
+    fn snapshot(&self) -> DbRepoTransactionAdmissionSnapshot {
+        let state = self.lock_state();
+        DbRepoTransactionAdmissionSnapshot {
+            limit: self.limit,
+            active: state.active,
+            queued: state.queued,
+            peak_active: state.peak_active,
+            peak_queued: state.peak_queued,
+            admission_count: state.admission_count,
+            backpressure_events: state.backpressure_events,
+            fairness_yields: state.fairness_yields,
+            accounting_errors: state.accounting_errors,
+        }
+    }
+}
+
+impl Drop for TransactionAdmissionPermit {
+    fn drop(&mut self) {
+        if !self.acquired {
+            return;
+        }
+        let mut state = self.gate.lock_state();
+        match state.active.checked_sub(1) {
+            Some(active) => state.active = active,
+            None => {
+                state.accounting_errors = state.accounting_errors.saturating_add(1);
+                return;
+            }
+        }
+        let waiter_to_wake = self.gate.reserve_next_waiter(&mut state);
+        drop(state);
+        if let Some(waiter_to_wake) = waiter_to_wake {
+            waiter_to_wake.signal();
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct SharedConnectionPoolState {
     cached_conn: Vec<usize>,
@@ -2716,20 +2894,29 @@ struct SharedConnectionPool {
     state: Mutex<SharedConnectionPoolState>,
     available: Condvar,
     limit: usize,
+    write_transaction_gate: Arc<TransactionAdmissionGate>,
+    control_transaction_gate: Arc<TransactionAdmissionGate>,
+}
+
+#[derive(Clone)]
+struct CurrentTransactionContext {
+    pool: Arc<SharedConnectionPool>,
+    lane: ConnectionLane,
 }
 
 thread_local! {
-    static CURRENT_TRANSACTION_POOL: RefCell<Option<Arc<SharedConnectionPool>>> =
+    static CURRENT_TRANSACTION_CONTEXT: RefCell<Option<CurrentTransactionContext>> =
         const { RefCell::new(None) };
 }
 
 struct CurrentTransactionPoolScope {
-    previous: Option<Arc<SharedConnectionPool>>,
+    previous: Option<CurrentTransactionContext>,
 }
 
 impl CurrentTransactionPoolScope {
-    fn enter(pool: Arc<SharedConnectionPool>) -> Self {
-        let previous = CURRENT_TRANSACTION_POOL.with(|current| current.replace(Some(pool)));
+    fn enter(pool: Arc<SharedConnectionPool>, lane: ConnectionLane) -> Self {
+        let previous = CURRENT_TRANSACTION_CONTEXT
+            .with(|current| current.replace(Some(CurrentTransactionContext { pool, lane })));
         Self { previous }
     }
 }
@@ -2737,16 +2924,26 @@ impl CurrentTransactionPoolScope {
 impl Drop for CurrentTransactionPoolScope {
     fn drop(&mut self) {
         let previous = self.previous.take();
-        CURRENT_TRANSACTION_POOL.with(|current| {
+        CURRENT_TRANSACTION_CONTEXT.with(|current| {
             current.replace(previous);
         });
     }
 }
 
+fn acquire_current_transaction_admission() -> Result<Option<TransactionAdmissionPermit>, String> {
+    CURRENT_TRANSACTION_CONTEXT.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .map(|context| context.pool.acquire_transaction(context.lane))
+            .transpose()
+    })
+}
+
 fn observe_current_transaction(elapsed: Duration, failed: bool) {
-    CURRENT_TRANSACTION_POOL.with(|current| {
-        if let Some(pool) = current.borrow().as_ref() {
-            pool.record_transaction(elapsed, failed);
+    CURRENT_TRANSACTION_CONTEXT.with(|current| {
+        if let Some(context) = current.borrow().as_ref() {
+            context.pool.record_transaction(elapsed, failed);
         }
     });
 }
@@ -2758,12 +2955,32 @@ enum ConnectionAcquisition {
 }
 
 impl SharedConnectionPool {
-    fn new(limit: usize) -> Self {
+    fn new(limit: usize, transaction_settings: RuntimeTransactionSettings) -> Self {
         Self {
             state: Mutex::new(SharedConnectionPoolState::default()),
             available: Condvar::new(),
             limit: limit.max(1),
+            write_transaction_gate: Arc::new(TransactionAdmissionGate::new(
+                transaction_settings.write_active_limit,
+            )),
+            control_transaction_gate: Arc::new(TransactionAdmissionGate::new(
+                transaction_settings.control_active_limit,
+            )),
         }
+    }
+
+    fn transaction_gate(&self, lane: ConnectionLane) -> Arc<TransactionAdmissionGate> {
+        match lane {
+            ConnectionLane::Write => Arc::clone(&self.write_transaction_gate),
+            ConnectionLane::Control => Arc::clone(&self.control_transaction_gate),
+        }
+    }
+
+    fn acquire_transaction(
+        &self,
+        lane: ConnectionLane,
+    ) -> Result<TransactionAdmissionPermit, String> {
+        Ok(self.transaction_gate(lane).acquire())
     }
 
     fn take_cached(
@@ -2985,6 +3202,8 @@ impl SharedConnectionPool {
     }
 
     fn snapshot(&self) -> Result<DbRepoPoolObservabilitySnapshot, String> {
+        let write_transaction_admission = self.write_transaction_gate.snapshot();
+        let control_transaction_admission = self.control_transaction_gate.snapshot();
         let state = self
             .state
             .lock()
@@ -3014,6 +3233,8 @@ impl SharedConnectionPool {
             transaction_failures: state.transaction_failures,
             transaction_micros_total: state.transaction_micros_total,
             transaction_micros_max: state.transaction_micros_max,
+            write_transaction_admission,
+            control_transaction_admission,
             heartbeat_count: state.heartbeat_count,
             heartbeat_failures: state.heartbeat_failures,
             heartbeat_schedule_delay_micros_total: state.heartbeat_schedule_delay_micros_total,
@@ -3061,6 +3282,7 @@ impl DbRepo {
     ) -> Result<Self, String> {
         let core = runtime.core_settings();
         let storage = runtime.storage_settings();
+        let transaction_settings = RuntimeTransactionSettings::from_env()?;
         Self::new_with_tuning(
             conninfo,
             ConnectionTuning::from_storage(&storage),
@@ -3068,6 +3290,7 @@ impl DbRepo {
             storage.persist_block_transport,
             storage.data_object_swap_cleanup,
             core.pool_max_connections.max(1) as usize,
+            transaction_settings,
             payload_observability,
             global_payload_observability,
         )
@@ -3080,6 +3303,7 @@ impl DbRepo {
         persist_block_transport: PersistBlockTransport,
         data_object_swap_cleanup: DataObjectSwapCleanup,
         connection_limit: usize,
+        transaction_settings: RuntimeTransactionSettings,
         payload_observability: Arc<DbRepoPayloadObservability>,
         global_payload_observability: Arc<DbRepoPayloadObservability>,
     ) -> Result<Self, String> {
@@ -3092,7 +3316,10 @@ impl DbRepo {
             persist_buffer_chunk_blocks: persist_buffer_chunk_blocks.max(1),
             persist_block_transport,
             data_object_swap_cleanup,
-            pool: Arc::new(SharedConnectionPool::new(connection_limit.max(1))),
+            pool: Arc::new(SharedConnectionPool::new(
+                connection_limit.max(1),
+                transaction_settings,
+            )),
             payload_observability,
             global_payload_observability,
             lock_session_id: Mutex::new(NEXT_LOCK_SESSION_ID.fetch_sub(1, Ordering::Relaxed)),
@@ -3143,7 +3370,7 @@ impl DbRepo {
 
             let operation_started = Instant::now();
             let _transaction_pool_scope =
-                CurrentTransactionPoolScope::enter(Arc::clone(&self.pool));
+                CurrentTransactionPoolScope::enter(Arc::clone(&self.pool), lane);
             let result = f(conn);
             let operation_elapsed = operation_started.elapsed();
             match result {
@@ -11032,6 +11259,88 @@ mod tests {
         assert!(sql_is_replayable_command(&trigger_drop_sql));
         assert!(sql_is_replayable_command(&trigger_create_sql));
         assert!(!sql_is_replayable_command(&negative_sql));
+    }
+
+    #[test]
+    fn transaction_admission_limits_real_postgres_transactions_by_lane() {
+        fn run_phase(repo: &DbRepo, lane: ConnectionLane, workers: usize, sleep_seconds: f64) {
+            let barrier = Arc::new(std::sync::Barrier::new(workers));
+            let mut handles = Vec::with_capacity(workers);
+            for _ in 0..workers {
+                let repo = repo.clone();
+                let barrier = Arc::clone(&barrier);
+                handles.push(std::thread::spawn(move || {
+                    repo.with_connection(lane, |conn| {
+                        barrier.wait();
+                        unsafe {
+                            transactional_replayable(conn, |conn| {
+                                let sql = CString::new(format!("SELECT pg_sleep({sleep_seconds})"))
+                                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                                let _ = query_scalar_text_on_conn(conn, &sql)?;
+                                Ok(())
+                            })
+                        }
+                    })
+                    .expect("transaction admission phase failed");
+                }));
+            }
+            for handle in handles {
+                handle
+                    .join()
+                    .expect("transaction admission worker panicked");
+            }
+        }
+
+        let runtime = RuntimeConfig::from_runtime_map(&HashMap::new()).unwrap();
+        let storage = runtime.storage_settings();
+        let payload = Arc::new(DbRepoPayloadObservability::default());
+        let repo = DbRepo::new_with_tuning(
+            &conninfo(),
+            ConnectionTuning::from_storage(&storage),
+            storage.persist_buffer_chunk_blocks,
+            storage.persist_block_transport,
+            storage.data_object_swap_cleanup,
+            8,
+            RuntimeTransactionSettings {
+                write_active_limit: 2,
+                control_active_limit: 1,
+            },
+            Arc::clone(&payload),
+            payload,
+        )
+        .unwrap();
+
+        run_phase(&repo, ConnectionLane::Write, 6, 0.08);
+        let after_write = repo.observability_snapshot().unwrap().pool;
+        assert_eq!(after_write.write_transaction_admission.limit, 2);
+        assert_eq!(after_write.write_transaction_admission.active, 0);
+        assert_eq!(after_write.write_transaction_admission.queued, 0);
+        assert_eq!(after_write.write_transaction_admission.peak_active, 2);
+        assert!(after_write.write_transaction_admission.peak_queued >= 2);
+        assert!(after_write.write_transaction_admission.backpressure_events >= 1);
+        assert_eq!(after_write.write_transaction_admission.accounting_errors, 0);
+        assert_eq!(after_write.control_transaction_admission.peak_active, 0);
+
+        run_phase(&repo, ConnectionLane::Control, 4, 0.08);
+        let after_control = repo.observability_snapshot().unwrap().pool;
+        assert_eq!(after_control.control_transaction_admission.limit, 1);
+        assert_eq!(after_control.control_transaction_admission.active, 0);
+        assert_eq!(after_control.control_transaction_admission.queued, 0);
+        assert_eq!(after_control.control_transaction_admission.peak_active, 1);
+        assert!(after_control.control_transaction_admission.peak_queued >= 2);
+        assert!(
+            after_control
+                .control_transaction_admission
+                .backpressure_events
+                >= 1
+        );
+        assert_eq!(
+            after_control
+                .control_transaction_admission
+                .accounting_errors,
+            0
+        );
+        assert!(after_control.transaction_count >= 10);
     }
 
     #[test]

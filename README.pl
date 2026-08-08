@@ -833,3 +833,19 @@ odczytać. Hasło PostgreSQL nigdy nie trafia do raportu.
 
 Kolejność dalszych prac po potwierdzeniu konfiguracji FUSE `8/4` znajduje się w
 `docs/fod-roadmap-3.2.62-plus.md`.
+
+## Dopuszczanie transakcji PostgreSQL
+
+FOD 3.2.63 dodaje procesowy limit dokładnie na granicy rzeczywistej transakcji
+PostgreSQL. Transakcje zapisu oraz transakcje sterujące/lease mają niezależne
+limity:
+
+```ini
+pg_write_transaction_limit = 4
+pg_control_transaction_limit = 2
+```
+
+Odpowiadające zmienne środowiskowe to `FOD_PG_WRITE_TRANSACTION_LIMIT` i
+`FOD_PG_CONTROL_TRANSACTION_LIMIT`. Wartość `0` wyłącza dany limit. Zezwolenie
+jest pobierane bezpośrednio przed `BEGIN` i zwalniane po `COMMIT`, `ROLLBACK`
+albo obsłudze błędu.

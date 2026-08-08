@@ -2145,3 +2145,16 @@ test-fuse-postgres-telemetry:
 		--repeat 1 \
 		--endurance-seconds-per-config 1 \
 		--postgres-telemetry-smoke
+
+.PHONY: test-postgresql-transaction-admission
+test-postgresql-transaction-admission:
+	@$(MAKE) --no-print-directory up
+	@$(MAKE) --no-print-directory wait
+	@$(MAKE) --no-print-directory init
+	POSTGRES_HOST="$(FOD_PG_HOST)" \
+	POSTGRES_PORT="$(FOD_PG_PORT)" \
+	POSTGRES_DB="$(FOD_PG_DBNAME)" \
+	POSTGRES_USER="$(FOD_PG_USER)" \
+	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
+	cargo test --locked -p fod-rust-hotpath \
+		transaction_admission_limits_real_postgres_transactions_by_lane -- --test-threads=1
