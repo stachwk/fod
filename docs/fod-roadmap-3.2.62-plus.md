@@ -55,9 +55,30 @@ Acceptance:
 
 ## FOD 3.2.64 — Payload byte budget and backpressure
 
+Status: implemented.
+
 Bound payload bytes in flight independently of task count. Integrate the budget
 with admission observability and verify that large requests cannot starve small
 operations or exhaust memory.
+
+Implementation:
+- one process-local global payload budget shared by PostgreSQL repository lanes;
+- FIFO admission based on requested payload bytes;
+- base limit `64MiB`, with `0` preserving disabled compatibility behavior;
+- an oversized request is admitted alone when the budget is otherwise empty,
+  avoiding deadlock while preventing concurrent payload amplification;
+- observability for reserved/queued bytes, queue depth, peaks, admissions,
+  backpressure, fairness, oversized requests and accounting failures;
+- integration at `PayloadPersistGuard`, before persist work is counted active;
+- Makefile secret-echo audit and silent execution for password-bearing recipes.
+
+Acceptance:
+- a blocked payload request stays queued until enough bytes are released;
+- reserved and in-flight counters return to zero;
+- oversized single requests do not deadlock;
+- accounting errors stay zero;
+- hot-path fio/strace and telemetry smoke continue to pass;
+- Makefile audit finds no echoable password-bearing recipe command.
 
 ## FOD 3.2.65+ — Role-aware multi-endpoint routing
 

@@ -9,7 +9,7 @@ use fod_rust_runtime::ini_config::{
     PgConnectionPurpose, PgEndpointHealthRegistry, PgEndpointHealthSnapshot, PgEndpointProbe,
     PgEndpointRole, PgPoolIsolationMode, PgPoolPlan,
 };
-use fod_rust_runtime::{env_var_truthy_with_legacy_alias, RuntimeConfig};
+use fod_rust_runtime::{env_var_truthy_with_legacy_alias, RuntimeConfig, RuntimePayloadSettings};
 use rust_hotpath::pg::DbRepo;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
@@ -105,7 +105,11 @@ impl DbRepoLanes {
     ) -> Result<Self, String> {
         let plan = PgPoolPlan::from_total_limit(runtime.pool_max_connections);
         let dedicated = opt_in_enabled && plan.mode == PgPoolIsolationMode::DedicatedLanes;
-        let global_payload_observability = Arc::new(DbRepoPayloadObservability::default());
+        let payload_settings = RuntimePayloadSettings::from_env()?;
+        let global_payload_observability =
+            Arc::new(DbRepoPayloadObservability::with_in_flight_limit_bytes(
+                payload_settings.in_flight_limit_bytes,
+            ));
 
         let storage = if dedicated {
             DbRepoLaneStorage::Dedicated {

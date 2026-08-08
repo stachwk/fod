@@ -2818,3 +2818,19 @@ concurrent transactions containing `pg_sleep()` so queueing is deterministic.
 
 Hot-path regression checks also run sequential strace, mixed I/O and random
 mixed I/O with `FOD_PROFILE_IO=1`, FUSE `8/4`, and transaction limits `4/2`.
+
+## FOD 3.2.64 payload byte budget and Makefile secret audit
+
+```bash
+make test-postgresql-payload-budget
+make test-makefile-secret-echo-audit
+```
+
+The payload tests verify blocking/release semantics and the
+`PayloadPersistGuard` integration. Hot-path regression validation also runs
+sequential strace, mixed I/O, random-mixed I/O and the PostgreSQL telemetry
+smoke with the base `64MiB` payload budget.
+
+The Makefile audit treats password-bearing logical recipe commands as sensitive
+and requires the recipe command to be silent (`@`). It prevents Make itself
+from echoing expanded password values into logs.

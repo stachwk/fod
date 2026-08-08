@@ -849,3 +849,22 @@ Odpowiadające zmienne środowiskowe to `FOD_PG_WRITE_TRANSACTION_LIMIT` i
 `FOD_PG_CONTROL_TRANSACTION_LIMIT`. Wartość `0` wyłącza dany limit. Zezwolenie
 jest pobierane bezpośrednio przed `BEGIN` i zwalniane po `COMMIT`, `ROLLBACK`
 albo obsłudze błędu.
+
+## Budżet bajtów danych PostgreSQL
+
+FOD 3.2.64 dodaje globalny, procesowy budżet bajtów dla danych przekazywanych do
+operacji persist PostgreSQL:
+
+```ini
+pg_payload_in_flight_limit_bytes = 64MiB
+```
+
+Zmiana środowiskowa to `FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES`. Wartość `0`
+wyłącza ograniczenie. Żądania są dopuszczane kolejką FIFO z uwzględnieniem ich
+rozmiaru. Pojedyncze żądanie większe od limitu może wejść tylko wtedy, gdy nie
+ma innego zarezerwowanego payloadu, dzięki czemu taki przypadek nie powoduje
+zakleszczenia.
+
+FOD 3.2.64 wycisza również linie poleceń Makefile zawierające hasła PostgreSQL
+lub hasło administratora schematu. Kontrolę regresji wykonuje
+`make test-makefile-secret-echo-audit`.

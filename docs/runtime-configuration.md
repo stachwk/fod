@@ -159,3 +159,19 @@ process-local controls propagated to `FOD_PG_WRITE_TRANSACTION_LIMIT` and
 - these controls do not replace `pool_max_connections`.
 
 The base INI values are `4` for write and `2` for control/lease.
+
+## PostgreSQL payload byte budget
+
+`pg_payload_in_flight_limit_bytes` is propagated at startup to
+`FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES` and accepts the same byte-size syntax as
+other FOD size settings, for example `64MiB`.
+
+- `0` disables the byte-admission gate.
+- the budget is process-local and shared across PostgreSQL lanes;
+- admission is FIFO and based on logical persist input bytes;
+- the permit is acquired before the persist operation becomes active and is
+  released by RAII after success or failure;
+- a request larger than the limit may run only as the sole reserved payload;
+- transaction limits and connection-pool limits remain independent.
+
+The base configuration uses `64MiB`.

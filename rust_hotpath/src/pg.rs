@@ -5,15 +5,16 @@ use crate::crc32_bytes;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use fod_rust_monitor::{
-    DbRepoObservabilitySnapshot, DbRepoPayloadObservability, DbRepoPoolObservabilitySnapshot,
-    DbRepoTransactionAdmissionSnapshot, LaneObservabilitySource, PostgresPressureSnapshot,
+    DbRepoObservabilitySnapshot, DbRepoPayloadBudgetPermit, DbRepoPayloadObservability,
+    DbRepoPoolObservabilitySnapshot, DbRepoTransactionAdmissionSnapshot, LaneObservabilitySource,
+    PostgresPressureSnapshot,
 };
 use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, postgres_session_setup_sql,
     request_token as generate_request_token, DataObjectSwapCleanup, PersistBlockTransport,
-    PostgresRuntimeRequirements, PostgresVersionDiagnostics, RuntimeConfig, RuntimeStorageSettings,
-    RuntimeTransactionSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH, MIN_POSTGRES_SERVER_VERSION_NUM,
-    POSTGRES_REQUIREMENT_SETTINGS_SQL,
+    PostgresRuntimeRequirements, PostgresVersionDiagnostics, RuntimeConfig, RuntimePayloadSettings,
+    RuntimeStorageSettings, RuntimeTransactionSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
+    MIN_POSTGRES_SERVER_VERSION_NUM, POSTGRES_REQUIREMENT_SETTINGS_SQL,
 };
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
@@ -2625,6 +2626,7 @@ impl ConnectionLane {
 }
 
 struct PayloadPersistGuard {
+    _budget_permit: DbRepoPayloadBudgetPermit,
     local: Arc<DbRepoPayloadObservability>,
     global: Option<Arc<DbRepoPayloadObservability>>,
     local_started: bool,
@@ -2642,12 +2644,14 @@ impl PayloadPersistGuard {
         input_bytes: u64,
         input_rows: u64,
     ) -> Self {
+        let budget_permit = global.acquire_payload_budget(input_bytes);
         let local_started = local.begin_persist(input_bytes);
         let global = (!Arc::ptr_eq(&local, &global)).then_some(global);
         let global_started = global
             .as_ref()
             .is_some_and(|tracker| tracker.begin_persist(input_bytes));
         Self {
+            _budget_permit: budget_permit,
             local,
             global,
             local_started,
@@ -3252,12 +3256,16 @@ impl DbRepo {
     }
 
     pub fn with_runtime(conninfo: &str, runtime: &RuntimeConfig) -> Result<Self, String> {
-        let payload_observability = Arc::new(DbRepoPayloadObservability::default());
+        let payload_settings = RuntimePayloadSettings::from_env()?;
+        let global_payload_observability =
+            Arc::new(DbRepoPayloadObservability::with_in_flight_limit_bytes(
+                payload_settings.in_flight_limit_bytes,
+            ));
         Self::with_runtime_observability(
             conninfo,
             runtime,
-            Arc::clone(&payload_observability),
-            payload_observability,
+            Arc::new(DbRepoPayloadObservability::default()),
+            global_payload_observability,
         )
     }
 
@@ -11259,6 +11267,65 @@ mod tests {
         assert!(sql_is_replayable_command(&trigger_drop_sql));
         assert!(sql_is_replayable_command(&trigger_create_sql));
         assert!(!sql_is_replayable_command(&negative_sql));
+    }
+
+    #[test]
+    fn payload_persist_guard_uses_global_byte_budget() {
+        let global = Arc::new(DbRepoPayloadObservability::with_in_flight_limit_bytes(10));
+        let mut first = PayloadPersistGuard::new(
+            Arc::new(DbRepoPayloadObservability::default()),
+            Arc::clone(&global),
+            7,
+            1,
+        );
+
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker_global = Arc::clone(&global);
+        let worker = std::thread::spawn(move || {
+            let mut guard = PayloadPersistGuard::new(
+                Arc::new(DbRepoPayloadObservability::default()),
+                worker_global,
+                6,
+                1,
+            );
+            guard.mark_success();
+            acquired_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot = global.snapshot().unwrap();
+            if snapshot.queued_requests >= 1 && snapshot.queued_bytes >= 6 {
+                assert_eq!(snapshot.reserved_bytes, 7);
+                assert_eq!(snapshot.in_flight_bytes, 7);
+                assert!(snapshot.backpressure_events >= 1);
+                break;
+            }
+            assert!(Instant::now() < deadline, "payload guard did not queue");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(acquired_rx.try_recv().is_err());
+
+        first.mark_success();
+        drop(first);
+        acquired_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("queued payload guard was not admitted");
+        let active = global.snapshot().unwrap();
+        assert_eq!(active.reserved_bytes, 6);
+        assert_eq!(active.in_flight_bytes, 6);
+
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        let final_snapshot = global.snapshot().unwrap();
+        assert_eq!(final_snapshot.reserved_bytes, 0);
+        assert_eq!(final_snapshot.in_flight_bytes, 0);
+        assert_eq!(final_snapshot.queued_requests, 0);
+        assert_eq!(final_snapshot.budget_accounting_errors, 0);
+        assert_eq!(final_snapshot.accounting_errors, 0);
     }
 
     #[test]

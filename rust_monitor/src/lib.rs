@@ -716,6 +716,18 @@ pub struct PostgresPressureSnapshot {
 pub struct DbRepoPayloadObservabilitySnapshot {
     pub in_flight_bytes: u64,
     pub peak_in_flight_bytes: u64,
+    pub in_flight_limit_bytes: u64,
+    pub reserved_bytes: u64,
+    pub queued_bytes: u64,
+    pub peak_reserved_bytes: u64,
+    pub peak_queued_bytes: u64,
+    pub queued_requests: u64,
+    pub peak_queued_requests: u64,
+    pub admission_count: u64,
+    pub backpressure_events: u64,
+    pub fairness_yields: u64,
+    pub oversized_admissions: u64,
+    pub budget_accounting_errors: u64,
     pub accounting_errors: u64,
     pub persist_operation_count: u64,
     pub persist_operation_failures: u64,
@@ -742,9 +754,72 @@ struct DbRepoPayloadObservabilityState {
     persist_micros_max: u64,
 }
 
+#[derive(Debug)]
+struct DbRepoPayloadBudgetWaiter {
+    ticket: u64,
+    requested_bytes: u64,
+    ready: Mutex<bool>,
+    ready_changed: Condvar,
+}
+
+impl DbRepoPayloadBudgetWaiter {
+    fn new(ticket: u64, requested_bytes: u64) -> Self {
+        Self {
+            ticket,
+            requested_bytes,
+            ready: Mutex::new(false),
+            ready_changed: Condvar::new(),
+        }
+    }
+
+    fn wait(&self) {
+        let mut ready = self.ready.lock().unwrap_or_else(|err| err.into_inner());
+        while !*ready {
+            ready = self
+                .ready_changed
+                .wait(ready)
+                .unwrap_or_else(|err| err.into_inner());
+        }
+    }
+
+    fn signal(&self) {
+        let mut ready = self.ready.lock().unwrap_or_else(|err| err.into_inner());
+        *ready = true;
+        drop(ready);
+        self.ready_changed.notify_one();
+    }
+}
+
+#[derive(Debug, Default)]
+struct DbRepoPayloadBudgetState {
+    reserved_bytes: u64,
+    queued_bytes: u64,
+    peak_reserved_bytes: u64,
+    peak_queued_bytes: u64,
+    queued_requests: u64,
+    peak_queued_requests: u64,
+    next_ticket: u64,
+    serving_ticket: u64,
+    waiters: VecDeque<Arc<DbRepoPayloadBudgetWaiter>>,
+    admission_count: u64,
+    backpressure_events: u64,
+    fairness_yields: u64,
+    oversized_admissions: u64,
+    accounting_errors: u64,
+}
+
+#[derive(Debug)]
+pub struct DbRepoPayloadBudgetPermit {
+    tracker: Arc<DbRepoPayloadObservability>,
+    reserved_bytes: u64,
+    acquired: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct DbRepoPayloadObservability {
     state: Mutex<DbRepoPayloadObservabilityState>,
+    in_flight_limit_bytes: u64,
+    budget_state: Mutex<DbRepoPayloadBudgetState>,
 }
 
 fn accumulate_observation(target: &mut u64, value: u64) -> bool {
@@ -765,6 +840,130 @@ fn duration_micros(duration: Duration) -> u64 {
 }
 
 impl DbRepoPayloadObservability {
+    pub fn with_in_flight_limit_bytes(in_flight_limit_bytes: u64) -> Self {
+        Self {
+            state: Mutex::new(DbRepoPayloadObservabilityState::default()),
+            in_flight_limit_bytes,
+            budget_state: Mutex::new(DbRepoPayloadBudgetState::default()),
+        }
+    }
+
+    fn lock_budget_state(&self) -> std::sync::MutexGuard<'_, DbRepoPayloadBudgetState> {
+        match self.budget_state.lock() {
+            Ok(state) => state,
+            Err(err) => {
+                let mut state = err.into_inner();
+                state.accounting_errors = state.accounting_errors.saturating_add(1);
+                state
+            }
+        }
+    }
+
+    fn request_fits_budget(&self, reserved_bytes: u64, requested_bytes: u64) -> bool {
+        if self.in_flight_limit_bytes == 0 {
+            return true;
+        }
+        if reserved_bytes == 0 && requested_bytes > self.in_flight_limit_bytes {
+            return true;
+        }
+        requested_bytes <= self.in_flight_limit_bytes.saturating_sub(reserved_bytes)
+    }
+
+    fn reserve_ready_waiters(
+        &self,
+        state: &mut DbRepoPayloadBudgetState,
+    ) -> Vec<Arc<DbRepoPayloadBudgetWaiter>> {
+        let mut ready = Vec::new();
+        loop {
+            let Some(waiter) = state.waiters.front() else {
+                break;
+            };
+            if !self.request_fits_budget(state.reserved_bytes, waiter.requested_bytes) {
+                break;
+            }
+            let waiter = state.waiters.pop_front().expect("front waiter disappeared");
+            if waiter.ticket != state.serving_ticket {
+                state.accounting_errors = state.accounting_errors.saturating_add(1);
+                state.serving_ticket = waiter.ticket;
+            }
+            match state.queued_requests.checked_sub(1) {
+                Some(value) => state.queued_requests = value,
+                None => state.accounting_errors = state.accounting_errors.saturating_add(1),
+            }
+            match state.queued_bytes.checked_sub(waiter.requested_bytes) {
+                Some(value) => state.queued_bytes = value,
+                None => {
+                    state.queued_bytes = 0;
+                    state.accounting_errors = state.accounting_errors.saturating_add(1);
+                }
+            }
+            match state.reserved_bytes.checked_add(waiter.requested_bytes) {
+                Some(value) => state.reserved_bytes = value,
+                None => {
+                    state.reserved_bytes = u64::MAX;
+                    state.accounting_errors = state.accounting_errors.saturating_add(1);
+                }
+            }
+            state.peak_reserved_bytes = state.peak_reserved_bytes.max(state.reserved_bytes);
+            state.admission_count = state.admission_count.saturating_add(1);
+            if waiter.requested_bytes > self.in_flight_limit_bytes {
+                state.oversized_admissions = state.oversized_admissions.saturating_add(1);
+            }
+            state.serving_ticket = state.serving_ticket.wrapping_add(1);
+            ready.push(waiter);
+        }
+        ready
+    }
+
+    pub fn acquire_payload_budget(
+        self: &Arc<Self>,
+        requested_bytes: u64,
+    ) -> DbRepoPayloadBudgetPermit {
+        if self.in_flight_limit_bytes == 0 || requested_bytes == 0 {
+            return DbRepoPayloadBudgetPermit {
+                tracker: Arc::clone(self),
+                reserved_bytes: 0,
+                acquired: false,
+            };
+        }
+
+        let mut state = self.lock_budget_state();
+        let ticket = state.next_ticket;
+        state.next_ticket = state.next_ticket.wrapping_add(1);
+        let had_older_waiter = !state.waiters.is_empty();
+        let capacity_blocked = !self.request_fits_budget(state.reserved_bytes, requested_bytes);
+        let waiter = Arc::new(DbRepoPayloadBudgetWaiter::new(ticket, requested_bytes));
+        state.waiters.push_back(Arc::clone(&waiter));
+        state.queued_requests = state.queued_requests.saturating_add(1);
+        state.peak_queued_requests = state.peak_queued_requests.max(state.queued_requests);
+        match state.queued_bytes.checked_add(requested_bytes) {
+            Some(value) => state.queued_bytes = value,
+            None => {
+                state.queued_bytes = u64::MAX;
+                state.accounting_errors = state.accounting_errors.saturating_add(1);
+            }
+        }
+        state.peak_queued_bytes = state.peak_queued_bytes.max(state.queued_bytes);
+        if had_older_waiter || capacity_blocked {
+            state.backpressure_events = state.backpressure_events.saturating_add(1);
+        }
+        if had_older_waiter {
+            state.fairness_yields = state.fairness_yields.saturating_add(1);
+        }
+        let ready = self.reserve_ready_waiters(&mut state);
+        drop(state);
+        for ready_waiter in ready {
+            ready_waiter.signal();
+        }
+        waiter.wait();
+
+        DbRepoPayloadBudgetPermit {
+            tracker: Arc::clone(self),
+            reserved_bytes: requested_bytes,
+            acquired: true,
+        }
+    }
+
     pub fn begin_persist(&self, input_bytes: u64) -> bool {
         let Ok(mut state) = self.state.lock() else {
             return false;
@@ -819,9 +1018,22 @@ impl DbRepoPayloadObservability {
             .state
             .lock()
             .map_err(|_| "payload observability state is poisoned".to_string())?;
+        let budget = self.lock_budget_state();
         Ok(DbRepoPayloadObservabilitySnapshot {
             in_flight_bytes: state.in_flight_bytes,
             peak_in_flight_bytes: state.peak_in_flight_bytes,
+            in_flight_limit_bytes: self.in_flight_limit_bytes,
+            reserved_bytes: budget.reserved_bytes,
+            queued_bytes: budget.queued_bytes,
+            peak_reserved_bytes: budget.peak_reserved_bytes,
+            peak_queued_bytes: budget.peak_queued_bytes,
+            queued_requests: budget.queued_requests,
+            peak_queued_requests: budget.peak_queued_requests,
+            admission_count: budget.admission_count,
+            backpressure_events: budget.backpressure_events,
+            fairness_yields: budget.fairness_yields,
+            oversized_admissions: budget.oversized_admissions,
+            budget_accounting_errors: budget.accounting_errors,
             accounting_errors: state.accounting_errors,
             persist_operation_count: state.persist_operation_count,
             persist_operation_failures: state.persist_operation_failures,
@@ -832,6 +1044,27 @@ impl DbRepoPayloadObservability {
             persist_micros_total: state.persist_micros_total,
             persist_micros_max: state.persist_micros_max,
         })
+    }
+}
+
+impl Drop for DbRepoPayloadBudgetPermit {
+    fn drop(&mut self) {
+        if !self.acquired {
+            return;
+        }
+        let mut state = self.tracker.lock_budget_state();
+        match state.reserved_bytes.checked_sub(self.reserved_bytes) {
+            Some(value) => state.reserved_bytes = value,
+            None => {
+                state.reserved_bytes = 0;
+                state.accounting_errors = state.accounting_errors.saturating_add(1);
+            }
+        }
+        let ready = self.tracker.reserve_ready_waiters(&mut state);
+        drop(state);
+        for waiter in ready {
+            waiter.signal();
+        }
     }
 }
 
@@ -1157,10 +1390,22 @@ pub fn log_lane_observability(
                 if !global_payload_logged {
                     let global_payload = snapshot.global_payload;
                     log::info!(
-                        "FOD PostgreSQL global payload observability: stage={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={}",
+                        "FOD PostgreSQL global payload observability: stage={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_in_flight_limit_bytes={} payload_reserved_bytes={} payload_queued_bytes={} payload_peak_reserved_bytes={} payload_peak_queued_bytes={} payload_queued_requests={} payload_peak_queued_requests={} payload_admission_count={} payload_backpressure_events={} payload_fairness_yields={} payload_oversized_admissions={} payload_budget_accounting_errors={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={}",
                         stage,
                         global_payload.in_flight_bytes,
                         global_payload.peak_in_flight_bytes,
+                        global_payload.in_flight_limit_bytes,
+                        global_payload.reserved_bytes,
+                        global_payload.queued_bytes,
+                        global_payload.peak_reserved_bytes,
+                        global_payload.peak_queued_bytes,
+                        global_payload.queued_requests,
+                        global_payload.peak_queued_requests,
+                        global_payload.admission_count,
+                        global_payload.backpressure_events,
+                        global_payload.fairness_yields,
+                        global_payload.oversized_admissions,
+                        global_payload.budget_accounting_errors,
                         global_payload.accounting_errors,
                         global_payload.persist_operation_count,
                         global_payload.persist_operation_failures,
@@ -1206,6 +1451,69 @@ pub fn current_process_rss_bytes() -> Result<u64, String> {
     }
     kib.checked_mul(1024)
         .ok_or_else(|| "VmRSS byte value overflowed".to_string())
+}
+
+#[cfg(test)]
+mod payload_budget_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn payload_budget_blocks_until_reserved_bytes_are_released() {
+        let tracker = Arc::new(DbRepoPayloadObservability::with_in_flight_limit_bytes(10));
+        let first = tracker.acquire_payload_budget(7);
+
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker_tracker = Arc::clone(&tracker);
+        let worker = std::thread::spawn(move || {
+            let _permit = worker_tracker.acquire_payload_budget(6);
+            acquired_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot = tracker.snapshot().unwrap();
+            if snapshot.queued_requests >= 1 && snapshot.queued_bytes >= 6 {
+                assert_eq!(snapshot.reserved_bytes, 7);
+                assert!(snapshot.backpressure_events >= 1);
+                break;
+            }
+            assert!(Instant::now() < deadline, "payload request did not queue");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(acquired_rx.try_recv().is_err());
+
+        drop(first);
+        acquired_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("queued payload request was not admitted");
+        assert_eq!(tracker.snapshot().unwrap().reserved_bytes, 6);
+
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        let final_snapshot = tracker.snapshot().unwrap();
+        assert_eq!(final_snapshot.reserved_bytes, 0);
+        assert_eq!(final_snapshot.queued_bytes, 0);
+        assert_eq!(final_snapshot.queued_requests, 0);
+        assert_eq!(final_snapshot.admission_count, 2);
+        assert_eq!(final_snapshot.budget_accounting_errors, 0);
+    }
+
+    #[test]
+    fn oversized_payload_is_admitted_alone_to_avoid_deadlock() {
+        let tracker = Arc::new(DbRepoPayloadObservability::with_in_flight_limit_bytes(10));
+        let permit = tracker.acquire_payload_budget(15);
+        let snapshot = tracker.snapshot().unwrap();
+        assert_eq!(snapshot.reserved_bytes, 15);
+        assert_eq!(snapshot.oversized_admissions, 1);
+        assert_eq!(snapshot.admission_count, 1);
+        drop(permit);
+        assert_eq!(tracker.snapshot().unwrap().reserved_bytes, 0);
+    }
 }
 
 #[cfg(test)]

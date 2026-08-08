@@ -45,6 +45,7 @@ Generated from quoted `FOD_*` literals in production Rust sources. Rust identifi
 | `FOD_PG_HOSTS` | `[database] hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs | - |
 | `FOD_PG_OBSERVABILITY_INTERVAL_MS` | `[fod] pg_observability_interval_ms` | intentional-env-only | - | - | rust_fuse/src/pg_lanes.rs | PostgreSQL lane observability sampler; default 5000 ms, valid 100..3600000 ms |
 | `FOD_PG_PASSWORD` | `[database] password` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
+| `FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES` | `[fod] pg_payload_in_flight_limit_bytes` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | - |
 | `FOD_PG_POOL_LANES_ENABLED` | `[fod] pg_pool_lanes_enabled` | intentional-env-only | - | - | rust_fuse/src/pg_lanes.rs | temporary opt-in for dedicated PostgreSQL read/write/control/lease pools |
 | `FOD_PG_PORT` | `[database] port` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs, rust_runtime/src/lib.rs | - |
 | `FOD_PG_PRIMARY_HOSTS` | `[database] primary_hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs | - |

@@ -864,3 +864,22 @@ The environment overrides are `FOD_PG_WRITE_TRANSACTION_LIMIT` and
 `FOD_PG_CONTROL_TRANSACTION_LIMIT`. A value of `0` disables the selected gate.
 The permit is acquired immediately before `BEGIN` and released after `COMMIT`,
 `ROLLBACK`, or error cleanup.
+
+## PostgreSQL payload byte budget
+
+FOD 3.2.64 adds a process-local global byte budget for PostgreSQL persist
+payloads:
+
+```ini
+pg_payload_in_flight_limit_bytes = 64MiB
+```
+
+The environment override is `FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES`. `0`
+disables enforcement. Requests are admitted in FIFO order by byte size. A
+single request larger than the configured budget is allowed only when no other
+payload is reserved, preventing an impossible-to-satisfy request from
+deadlocking the process.
+
+FOD 3.2.64 also prevents Makefile recipe echo from exposing PostgreSQL and
+schema-admin password values. `make test-makefile-secret-echo-audit` checks this
+property for current Makefile recipes.

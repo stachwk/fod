@@ -647,3 +647,14 @@ logical connection lane, not the cached physical connection being reused.
 The gate remains process-local. Cross-process/global fairness is a later
 multi-endpoint concern. FOD 3.2.64 can add byte-budget backpressure without
 conflating transaction count with payload size.
+
+## FOD 3.2.64 payload budget foundation
+
+The single-process runtime now bounds both transaction count and global
+PostgreSQL persist payload bytes before automatic multi-endpoint routing is
+enabled. The payload budget is shared by all current repository lanes so
+dedicated lane pools cannot independently consume the full process budget.
+
+This is still process-local. A later multi-endpoint/global fairness stage may
+need coordination across mounts or processes, but it should preserve the
+separation between connection capacity, transaction capacity and byte capacity.

@@ -540,6 +540,31 @@ impl RuntimeTransactionSettings {
     }
 }
 
+/// Process-local PostgreSQL payload byte budget.
+/// Zero disables byte-budget admission.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimePayloadSettings {
+    pub in_flight_limit_bytes: u64,
+}
+
+impl RuntimePayloadSettings {
+    pub fn from_env() -> Result<Self, String> {
+        let in_flight_limit_bytes = match env::var("FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES") {
+            Ok(value) => parse_size_bytes(&value)
+                .map_err(|err| format!("invalid FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES: {err}"))?,
+            Err(env::VarError::NotPresent) => 0,
+            Err(env::VarError::NotUnicode(_)) => {
+                return Err(
+                    "FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES must contain valid UTF-8".to_string(),
+                )
+            }
+        };
+        Ok(Self {
+            in_flight_limit_bytes,
+        })
+    }
+}
+
 fn active_limit_from_env(name: &str) -> Result<u64, String> {
     let Some(value) = env::var_os(name) else {
         return Ok(0);

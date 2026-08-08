@@ -7,7 +7,7 @@ use std::env;
 #[allow(unused_imports)]
 pub use fod_rust_runtime::ini_config::{load_config_parser, resolve_config_path, IniConfig};
 use fod_rust_runtime::{
-    apply_runtime_env_from_map, env_var_with_legacy_alias, parse_bool,
+    apply_runtime_env_from_map, env_var_with_legacy_alias, parse_bool, parse_size_bytes,
     runtime_env_var_name as runtime_env_var_name_shared, RuntimeConfig,
 };
 
@@ -16,6 +16,7 @@ use fod_rust_runtime::{
 enum StartupPassthroughKind {
     Bool,
     U64 { min: u64, max: Option<u64> },
+    SizeBytes,
     NonNegativeFloat,
 }
 
@@ -53,6 +54,11 @@ const STARTUP_PASSTHROUGH_SPECS: &[(&str, &str, StartupPassthroughKind)] = &[
         "pg_control_transaction_limit",
         "FOD_PG_CONTROL_TRANSACTION_LIMIT",
         StartupPassthroughKind::U64 { min: 0, max: None },
+    ),
+    (
+        "pg_payload_in_flight_limit_bytes",
+        "FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES",
+        StartupPassthroughKind::SizeBytes,
     ),
     (
         "allow_other",
@@ -115,6 +121,9 @@ fn validate_startup_passthrough_value(
             }
             Ok(())
         }
+        StartupPassthroughKind::SizeBytes => parse_size_bytes(value)
+            .map(|_| ())
+            .map_err(|err| format!("{key}: {err}")),
         StartupPassthroughKind::NonNegativeFloat => {
             let parsed = value
                 .trim()

@@ -789,3 +789,25 @@ RAII release covers normal commit, rollback, replayable disconnects and error
 unwinding. The base preset uses write limit `4` and control/lease limit `2`
 with connection pool `10`; code fallback remains `0` when startup configuration
 is absent.
+
+## 2026-08-08 — FOD 3.2.64 payload budget and logging security
+
+The existing payload observability measured bytes in flight but did not apply
+backpressure. FOD 3.2.64 turns the global cross-lane payload tracker into an
+actual byte-admission boundary. Transaction count and payload size remain
+independent controls: transaction admission bounds active PostgreSQL
+transactions, while the payload budget bounds the amount of logical persist
+data admitted concurrently.
+
+The base payload budget is `64MiB`. Strict FIFO prevents smaller requests from
+bypassing an older large request. A request larger than the configured budget
+is permitted only when the budget is empty, which prevents deadlock without
+allowing several oversized requests to amplify memory pressure concurrently.
+
+Security/logging conclusion: previous Makefile execution could echo expanded
+test passwords such as `POSTGRES_PASSWORD` and `FOD_SCHEMA_ADMIN_PASSWORD` into
+captured logs. This did not block FOD 3.2.63 correctness, but logs containing
+those command lines must be treated as sensitive. FOD 3.2.64 silences
+password-bearing Makefile recipe commands and adds an audit that blocks future
+echo regressions. This protects Makefile command echo; child tools must still
+avoid printing secrets themselves.
