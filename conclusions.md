@@ -751,3 +751,28 @@ Endurance 8/0: `155.0s`, `15` iterations.
 PostgreSQL snapshot warnings: `18`.
 
 Correctness/accounting checks passed. Hard-coded runtime fallbacks remain unchanged.
+
+## 2026-08-08 — FOD 3.2.62 PostgreSQL telemetry diagnosis
+
+The 3.2.61 production-validation harness selected `FOD_PG_HOST` and sometimes
+`FOD_PG_PORT`, but selected database/user/password from `POSTGRES_*`. The
+Makefile exports `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER`
+and `FOD_PG_PASSWORD` to child processes; the `POSTGRES_*` Make variables are
+used to configure Docker and are not the canonical exported runtime identity.
+
+That mismatch explains why FUSE workloads could succeed while the auxiliary
+`psql` snapshots were unavailable. FOD 3.2.62 aligns the telemetry connection
+resolver with the exported FOD variables, keeps `POSTGRES_*` as compatibility
+fallbacks, and makes required telemetry failures blocking for the production
+validation. Production Rust/FUSE/hot-path behavior is unchanged.
+
+## 2026-08-08 — FOD 3.2.62 telemetry smoke result
+
+- status: `ok`
+- endpoint: `127.0.0.1:5432`
+- database: `foddbname`
+- user: `foduser`
+- source variables: `{"database": "FOD_PG_DBNAME", "host": "FOD_PG_HOST", "password": "FOD_PG_PASSWORD", "port": "FOD_PG_PORT", "user": "FOD_PG_USER"}`
+- transaction delta: `3470`
+- artifact directory: `/tmp/fod-postgres-telemetry/fod-3.2.62-2535463-1786177014`
+- password value was not stored in the report.

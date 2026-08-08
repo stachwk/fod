@@ -2132,3 +2132,16 @@ test-fuse-production-validation: init
 		--artifact-dir "$(FUSE_PRODUCTION_VALIDATION_ARTIFACT_DIR)" \
 		--repeat "$(FUSE_PRODUCTION_VALIDATION_REPEAT)" \
 		--endurance-seconds-per-config "$(FUSE_PRODUCTION_VALIDATION_ENDURANCE_SECONDS_PER_CONFIG)"
+
+FUSE_POSTGRES_TELEMETRY_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+FUSE_POSTGRES_TELEMETRY_ARTIFACT_DIR ?= /tmp/fod-postgres-telemetry/$(FOD_VERSION)-$(FUSE_POSTGRES_TELEMETRY_RUN_ID)
+
+.PHONY: test-fuse-postgres-telemetry
+test-fuse-postgres-telemetry:
+	@mkdir -p "$(FUSE_POSTGRES_TELEMETRY_ARTIFACT_DIR)"
+	$(PYTHON) tests/integration/test_fuse_production_validation.py \
+		--root "$(CURDIR)" \
+		--artifact-dir "$(FUSE_POSTGRES_TELEMETRY_ARTIFACT_DIR)" \
+		--repeat 1 \
+		--endurance-seconds-per-config 1 \
+		--postgres-telemetry-smoke

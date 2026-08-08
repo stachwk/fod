@@ -623,3 +623,17 @@ The final validation compares `8/4` against `8/0` on sequential, mixed and
 random-mixed PostgreSQL-backed FUSE workloads, captures strace runs, and runs
 the mount suite under the candidate. Correctness/accounting failures block the
 suite; performance differences are preserved as evidence.
+
+## FOD 3.2.62 telemetry gate before transaction admission
+
+Before adding PostgreSQL transaction admission, payload-byte budgets or
+automatic multi-endpoint routing, the production benchmark must have reliable
+database-side measurements. FOD 3.2.62 therefore makes the
+`pg_stat_database` snapshot path use the same exported `FOD_PG_*` connection
+identity as the FOD workload and makes unavailable required snapshots a
+validation failure.
+
+The next implementation order is:
+1. FOD 3.2.63 — PostgreSQL transaction-boundary admission;
+2. FOD 3.2.64 — payload byte budget/backpressure;
+3. FOD 3.2.65+ — role-aware endpoint routing, consistency and failover.

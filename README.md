@@ -832,3 +832,20 @@ task_write_active_limit = 4
 The corresponding `FOD_*` environment variables remain higher-priority
 overrides. See `docs/runtime-configuration.md` for semantics, ranges,
 precedence, benchmark evidence, and the generated env-vs-INI audit.
+
+## PostgreSQL telemetry validation
+
+FOD 3.2.62 adds a fast PostgreSQL telemetry smoke for the production-validation
+harness:
+
+```bash
+make test-fuse-postgres-telemetry
+```
+
+The smoke uses the same exported `FOD_PG_*` endpoint and credential variables as
+the FOD Makefile/runtime path, captures `pg_stat_database` before and after one
+real sequential FUSE workload, and fails if snapshots are unavailable. Password
+values are never written to the report.
+
+The implementation roadmap after the confirmed `8/4` FUSE configuration is
+recorded in `docs/fod-roadmap-3.2.62-plus.md`.

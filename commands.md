@@ -2785,3 +2785,24 @@ The fairness command commits only after every run proves real queue pressure thr
   teardown `EBUSY` on `/tmp/fod-suite.*`.
 - V8 runs the mount suite before repeated fio/endurance work, then performs the
   full `8/4` versus `8/0` validation only after mount cleanup passes.
+
+## FOD 3.2.62 PostgreSQL telemetry
+
+Fast telemetry check against the selected Makefile backend:
+
+```bash
+make test-fuse-postgres-telemetry
+```
+
+The target writes its JSON/Markdown artifacts outside the repository under
+`/tmp/fod-postgres-telemetry/` by default. It performs a `pg_stat_database`
+snapshot, runs one real sequential FUSE workload with the confirmed `8/4`
+settings, captures another snapshot, and requires a positive transaction delta.
+
+The full production-validation target continues to use:
+
+```bash
+make test-fuse-production-validation
+```
+
+but PostgreSQL snapshot failures are blocking starting with FOD 3.2.62.

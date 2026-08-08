@@ -816,3 +816,20 @@ task_write_active_limit = 4
 Odpowiadające zmienne `FOD_*` pozostają nadpisaniami o wyższym priorytecie.
 Znaczenie parametrów, zakresy, kolejność nadpisywania, wyniki benchmarków oraz
 audyt env-vs-INI opisuje `docs/runtime-configuration.md`.
+
+## Walidacja telemetrii PostgreSQL
+
+FOD 3.2.62 dodaje szybki test telemetrii PostgreSQL dla produkcyjnego zestawu
+walidacyjnego:
+
+```bash
+make test-fuse-postgres-telemetry
+```
+
+Test używa tych samych eksportowanych parametrów `FOD_PG_*` co Makefile i
+runtime FOD, wykonuje snapshot `pg_stat_database` przed i po rzeczywistym
+sekwencyjnym obciążeniu FUSE i kończy się błędem, jeśli snapshotów nie można
+odczytać. Hasło PostgreSQL nigdy nie trafia do raportu.
+
+Kolejność dalszych prac po potwierdzeniu konfiguracji FUSE `8/4` znajduje się w
+`docs/fod-roadmap-3.2.62-plus.md`.

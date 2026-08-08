@@ -755,3 +755,16 @@ Notes:
     generates a production-Rust env-vs-INI audit, and adds a final production
     validation against `8/0` across sequential, mixed, random-mixed, strace, and
     mount-suite paths. Hard-coded fallback values remain unchanged.
+
+## Execution roadmap after FOD 3.2.61
+
+- [x] FOD 3.2.62 — fix and explain `pg_stat_database` telemetry. Use the same
+  exported `FOD_PG_*` connection identity as the real FOD test/runtime path,
+  add a before/after real-workload smoke, and make missing required snapshots
+  fail validation instead of being warning-only.
+- [ ] FOD 3.2.63 — add PostgreSQL transaction-boundary admission limits.
+- [ ] FOD 3.2.64 — add payload-byte budgets and byte-aware backpressure.
+- [ ] FOD 3.2.65+ — continue role-aware multi-endpoint routing, consistency,
+  endpoint health/load scoring, failover and cross-process fairness work.
+
+Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.

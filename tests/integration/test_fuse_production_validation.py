@@ -38,6 +38,43 @@ PG_FIELDS = [
     "temp_bytes", "blk_read_time", "blk_write_time", "session_time", "active_time",
 ]
 
+def first_env(*names, default):
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None and value != "":
+            return value, name
+    return default, "default"
+
+def pg_connection_settings():
+    host, host_source = first_env("FOD_PG_HOST", default="127.0.0.1")
+    port, port_source = first_env("FOD_PG_PORT", "POSTGRES_PORT", default="5432")
+    database, database_source = first_env("FOD_PG_DBNAME", "POSTGRES_DB", default="foddbname")
+    user, user_source = first_env("FOD_PG_USER", "POSTGRES_USER", default="foduser")
+    password, password_source = first_env("FOD_PG_PASSWORD", "POSTGRES_PASSWORD", default="")
+    return {
+        "host": host,
+        "port": str(port),
+        "database": database,
+        "user": user,
+        "password": password,
+        "sources": {
+            "host": host_source,
+            "port": port_source,
+            "database": database_source,
+            "user": user_source,
+            "password": password_source,
+        },
+    }
+
+def public_pg_connection(settings):
+    return {
+        "host": settings["host"],
+        "port": settings["port"],
+        "database": settings["database"],
+        "user": settings["user"],
+        "sources": settings["sources"],
+    }
+
 def run_logged(root, command, env_extra, log_path):
     env = os.environ.copy(); env.update(env_extra)
     started = time.monotonic()
@@ -74,31 +111,38 @@ def validate_obs(config_name, case_name, run_index, obs, errors):
             )
 
 def pg_snapshot(root):
-    user = os.environ.get("POSTGRES_USER", "foduser")
-    database = os.environ.get("POSTGRES_DB", "foddbname")
-    password = os.environ.get("POSTGRES_PASSWORD", "")
-    host = os.environ.get("FOD_PG_HOST", "127.0.0.1")
-    port = os.environ.get("POSTGRES_PORT") or os.environ.get("FOD_PG_PORT") or "5432"
+    settings = pg_connection_settings()
     sql = "SELECT " + ",".join(PG_FIELDS) + " FROM pg_stat_database WHERE datname=current_database();"
-    env = os.environ.copy(); env["PGPASSWORD"] = password
+    env = os.environ.copy()
+    env["PGPASSWORD"] = settings["password"]
     cp = subprocess.run(
         ["psql", "-X", "-A", "-t", "-F", "|", "-v", "ON_ERROR_STOP=1",
-         "-h", host, "-p", str(port), "-U", user, "-d", database, "-c", sql],
+         "-h", settings["host"], "-p", settings["port"], "-U", settings["user"],
+         "-d", settings["database"], "-c", sql],
         cwd=root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         check=False,
     )
+    public = public_pg_connection(settings)
     if cp.returncode != 0:
-        return {"available": False, "error": cp.stderr.strip()}
+        return {"available": False, "connection": public, "error": cp.stderr.strip()}
     line = cp.stdout.strip().splitlines()[-1] if cp.stdout.strip() else ""
     values = line.split("|")
     if len(values) != len(PG_FIELDS):
-        return {"available": False, "error": f"unexpected pg_stat_database row: {line!r}"}
-    result = {"available": True}
+        return {
+            "available": False,
+            "connection": public,
+            "error": f"unexpected pg_stat_database row: {line!r}",
+        }
+    result = {"available": True, "connection": public}
     for name, value in zip(PG_FIELDS, values):
         try:
             result[name] = float(value) if "." in value else int(value)
         except ValueError:
-            result[name] = 0.0
+            return {
+                "available": False,
+                "connection": public,
+                "error": f"invalid pg_stat_database value for {name}: {value!r}",
+            }
     return result
 
 def pg_delta(before, after):
@@ -145,17 +189,86 @@ def run_endurance(root, artifact_dir, config_name, seconds, errors):
         "runs": iterations,
     }
 
+
+def run_postgres_telemetry_smoke(root, artifact_dir):
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    before = pg_snapshot(root)
+    if not before.get("available"):
+        raise RuntimeError(f"PostgreSQL telemetry preflight failed: {before}")
+
+    log_path = artifact_dir / "postgres-telemetry-sequential.log"
+    elapsed, _ = run_logged(root, CASES[0][1], CONFIGS["target-8-4"], log_path)
+
+    after = pg_snapshot(root)
+    if not after.get("available"):
+        raise RuntimeError(f"PostgreSQL telemetry post-workload snapshot failed: {after}")
+
+    delta = pg_delta(before, after)
+    if not delta.get("available"):
+        raise RuntimeError(f"PostgreSQL telemetry delta failed: {delta}")
+    if delta["transactions"] <= 0:
+        raise RuntimeError(
+            "PostgreSQL telemetry smoke observed no transaction delta; "
+            f"connection={before['connection']}"
+        )
+
+    report = {
+        "schema_version": 1,
+        "connection": before["connection"],
+        "workload": "sequential",
+        "elapsed_seconds": round(elapsed, 6),
+        "transactions": delta["transactions"],
+        "active_time_per_transaction_ms_proxy": delta["active_time_per_transaction_ms_proxy"],
+        "cache_hit_ratio_percent": delta["cache_hit_ratio_percent"],
+        "before": before,
+        "after": after,
+        "delta": delta,
+        "log": str(log_path),
+        "status": "ok",
+    }
+    json_path = artifact_dir / "postgres-telemetry-smoke.json"
+    json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    md_path = artifact_dir / "postgres-telemetry-smoke.md"
+    md = (
+        "# FOD PostgreSQL telemetry smoke\n\n"
+        "Status: **ok**\n\n"
+        f"- connection: `{report['connection']['host']}:{report['connection']['port']}` "
+        f"database=`{report['connection']['database']}` user=`{report['connection']['user']}`\n"
+        f"- env sources: `{json.dumps(report['connection']['sources'], sort_keys=True)}`\n"
+        f"- workload: sequential, elapsed={report['elapsed_seconds']:.3f}s\n"
+        f"- transaction delta: {report['transactions']}\n"
+        f"- active-time/xact proxy: {report['active_time_per_transaction_ms_proxy']}\n"
+        f"- cache-hit ratio: {report['cache_hit_ratio_percent']}\n"
+    )
+    md_path.write_text(md, encoding="utf-8")
+    print(md, end="")
+    print(json.dumps({
+        "status": "ok",
+        "connection": report["connection"],
+        "transactions": report["transactions"],
+        "artifact_dir": str(artifact_dir),
+    }, sort_keys=True))
+    return 0
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
     parser.add_argument("--artifact-dir", required=True)
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--endurance-seconds-per-config", type=int, default=150)
+    parser.add_argument("--postgres-telemetry-smoke", action="store_true")
     args = parser.parse_args()
     if args.repeat < 1 or args.endurance_seconds_per_config < 1:
         raise SystemExit("repeat and endurance seconds must be >= 1")
     root = Path(args.root).resolve()
     artifact_dir = Path(args.artifact_dir).resolve(); artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.postgres_telemetry_smoke:
+        return run_postgres_telemetry_smoke(root, artifact_dir)
+
+    pg_preflight = pg_snapshot(root)
+    if not pg_preflight.get("available"):
+        raise RuntimeError(f"PostgreSQL telemetry preflight failed: {pg_preflight}")
 
     rows = []; correctness_errors = []; pg_warnings = []
     names = list(CONFIGS)
@@ -202,6 +315,13 @@ def main():
         name: run_endurance(root, artifact_dir, name, args.endurance_seconds_per_config, correctness_errors)
         for name in names
     }
+    for config_name, summary in endurance.items():
+        for item in summary["runs"]:
+            if not item["postgres"].get("available"):
+                pg_warnings.append(
+                    f"{config_name}/endurance-randrw/run-{item['iteration']}: "
+                    f"{item['postgres']}"
+                )
 
     grouped = {}
     for row in rows:
@@ -228,7 +348,7 @@ def main():
         )
 
     verdict = (
-        "invalid" if correctness_errors else
+        "invalid" if (correctness_errors or pg_warnings) else
         "production_candidate_supported" if all(checks.values()) else
         "performance_regression_observed"
     )
@@ -241,6 +361,8 @@ def main():
         "summaries": summaries,
         "performance_checks": checks,
         "correctness_errors": correctness_errors,
+        "postgres_connection": pg_preflight["connection"],
+        "postgres_preflight": pg_preflight,
         "postgres_snapshot_warnings": pg_warnings,
         "strace_logs": strace,
         "mount_suite": {"elapsed_seconds": round(mount_elapsed, 6), "log": str(mount_log)},
@@ -281,7 +403,7 @@ def main():
     md = "\n".join(lines) + "\n"
     (artifact_dir / "production-validation-summary.md").write_text(md, encoding="utf-8")
     print(md, end="")
-    return 1 if correctness_errors else 0
+    return 1 if (correctness_errors or pg_warnings) else 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -131,3 +131,16 @@ The following controls intentionally remain environment-only:
 Any remaining `env-only-or-incomplete-ini` row in
 `docs/runtime-env-ini-audit.md` remains an explicit review item instead of
 being silently promoted to persistent configuration.
+
+## PostgreSQL telemetry harness connection precedence
+
+The production-validation telemetry harness follows the Makefile/runtime
+connection identity:
+
+1. `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER`,
+   `FOD_PG_PASSWORD`;
+2. compatible `POSTGRES_*` values where a corresponding FOD value is absent;
+3. local development fallbacks.
+
+Diagnostics may report which environment-variable name supplied each
+non-secret field. They never report the password value.
