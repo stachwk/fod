@@ -828,3 +828,23 @@ endpoint, but the startup snapshot then makes the mount read-only.
 This stage provides startup failover only. Transparent endpoint replacement
 after a mounted path fails must preserve transaction replay confirmation,
 lock/lease ownership and read consistency, so it remains the next stage.
+
+## 2026-08-08 — FOD 3.2.66 runtime primary failover
+
+Startup failover alone is insufficient because `DbRepo` previously stored one
+immutable conninfo and replay reopened that same DSN. Runtime routing therefore
+has to exist inside the connection-recovery boundary.
+
+FOD 3.2.66 introduces a shared target generation. A replayable connection
+failure invalidates the generation and rotates to the next configured primary
+entrypoint. Cached connections are generation-tagged: stale entries are closed
+on acquisition, and in-flight stale connections are closed instead of being
+returned to cache. This prevents an old endpoint from silently re-entering the
+pool after failover.
+
+Every newly opened routed connection is revalidated against its required role.
+For writable mounts the target must remain a non-recovery, non-read-only
+primary. This is not a general multi-primary protocol: configured primary
+entrypoints must still refer to the same authoritative PostgreSQL primary/HA
+cluster. Replica read routing remains deferred until WAL/replay-LSN consistency
+is available.

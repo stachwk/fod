@@ -96,15 +96,31 @@ Status: implemented.
 - a real mount test refuses the first primary and proves write/read through the
   second primary.
 
-## FOD 3.2.66+ — Runtime routing, replica consistency and failover
+## FOD 3.2.66 — Runtime primary failover
 
-- route eligible reads to replicas only with primary pinning or WAL/replay-LSN
-  read-after-write consistency;
-- re-evaluate endpoints after connection failures and support runtime failover
-  without weakening replay-confirmation guarantees;
+Status: implemented.
+
+- share one runtime target generation across the current PostgreSQL lane
+  repositories;
+- rotate to the next configured primary entrypoint after a replayable
+  connection failure;
+- revalidate every newly opened failover target as a writable primary;
+- tag cached connections with their routing generation and discard stale
+  generations after a target transition;
+- preserve existing one-replay and durable replay-confirmation behavior;
+- expose active authority, generation, failure/failover counters, role
+  rejections and stale cached-connection discards;
+- verify runtime failover by terminating a live PostgreSQL backend and requiring
+  the replayed query to complete through the second primary target.
+
+## FOD 3.2.67+ — Replica consistency, read routing and advanced failover
+
+- add primary write-LSN capture and replica replay-LSN checks;
+- route eligible reads to replicas only after read-after-write consistency can
+  be proved or after explicit stale-tolerant classification;
 - add endpoint latency, replica lag and pool-pressure scoring;
-- add hysteresis/circuit-breaker behavior;
-- cover promotion/failover and split-brain safety;
+- add hysteresis/circuit-breaker cooldown behavior;
+- cover promotion, split-brain prevention and lock/lease safety across failover;
 - add cross-process fairness where required.
 
 The confirmed `8/4` FUSE admission configuration remains the production

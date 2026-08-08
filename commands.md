@@ -2856,3 +2856,29 @@ pg_endpoint_routing_enabled = true
 primary_hosts = db-a:5432,db-b:5432
 replica_hosts = db-r1:5432,db-r2:5432
 ```
+
+## FOD 3.2.66 runtime PostgreSQL primary failover
+
+```bash
+make test-postgresql-runtime-failover
+```
+
+The integration test opens a routed repository with two logical primary
+entrypoints, warms a cached connection, terminates its PostgreSQL backend with
+`pg_terminate_backend()`, and requires the next query to replay successfully
+through the second target. It also verifies the routing generation and failover
+observability.
+
+Configuration:
+
+```ini
+[fod]
+pg_endpoint_routing_enabled = true
+pg_runtime_failover_enabled = true
+
+[database]
+primary_hosts = db-a:5432,db-b:5432
+```
+
+`primary_hosts` must identify HA/proxy entrypoints for the same authoritative
+PostgreSQL primary/cluster.

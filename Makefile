@@ -2180,3 +2180,15 @@ test-postgresql-endpoint-routing:
 	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
 	cargo test --locked -p fod-rust-fuse --test pg_lanes_mount \
 		endpoint_routing_skips_unreachable_primary_and_mounts_selected_primary -- --test-threads=1
+
+.PHONY: test-postgresql-runtime-failover
+test-postgresql-runtime-failover:
+	@$(MAKE) --no-print-directory up
+	@$(MAKE) --no-print-directory wait
+	@$(MAKE) --no-print-directory init
+	@POSTGRES_HOST="$(FOD_PG_HOST)" \
+	POSTGRES_PORT="$(FOD_PG_PORT)" \
+	POSTGRES_DB="$(FOD_PG_DBNAME)" \
+	POSTGRES_USER="$(FOD_PG_USER)" \
+	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
+	cargo test --locked -p fod-rust-hotpath --test runtime_failover -- --test-threads=1

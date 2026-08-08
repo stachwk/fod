@@ -51,6 +51,7 @@ Generated from quoted `FOD_*` literals in production Rust sources. Rust identifi
 | `FOD_PG_PORT` | `[database] port` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs, rust_runtime/src/lib.rs | - |
 | `FOD_PG_PRIMARY_HOSTS` | `[database] primary_hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_mkfs/src/bin/fod-bootstrap.rs, rust_runtime/src/ini_config/pg_endpoints.rs | - |
 | `FOD_PG_REPLICA_HOSTS` | `[database] replica_hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_mkfs/src/bin/fod-bootstrap.rs, rust_runtime/src/ini_config/pg_endpoints.rs | - |
+| `FOD_PG_RUNTIME_FAILOVER_ENABLED` | `[fod] pg_runtime_failover_enabled` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | - |
 | `FOD_PG_SSLCERT` | `[database] sslcert` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PG_SSLKEY` | `[database] sslkey` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PG_SSLMODE` | `[database] sslmode` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |

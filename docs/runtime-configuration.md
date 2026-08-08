@@ -195,3 +195,23 @@ For multi-endpoint configuration:
 - the selected endpoint overrides only host/port in the base DSN, preserving
   database, credentials and TLS settings;
 - writable mounts stay pinned to the selected primary in FOD 3.2.65.
+
+## PostgreSQL runtime primary failover
+
+`pg_runtime_failover_enabled` is propagated to
+`FOD_PG_RUNTIME_FAILOVER_ENABLED`.
+
+When enabled together with multi-endpoint routing on a writable mount:
+- the selected primary is target generation 1;
+- replayable connection failure advances the generation and rotates to the next
+  configured primary/unknown candidate;
+- every newly connected target must live-probe as writable primary;
+- cached connections are tagged with the generation that created them;
+- cached/in-flight connections from an old generation are discarded instead of
+  re-entering the pool;
+- only one existing operation replay is attempted, preserving the prior replay
+  safety boundary.
+
+The setting must only be enabled for HA/proxy primary entrypoints representing
+the same authoritative PostgreSQL primary/cluster. FOD 3.2.66 does not claim
+safe independent multi-primary operation.

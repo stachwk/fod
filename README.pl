@@ -883,3 +883,21 @@ Zapisywalny mount pozostaje w tej wersji przypięty do jednego wybranego primary
 więc zwykłe odczyty nie trafiają na potencjalnie opóźnioną replikę i zachowana
 jest spójność odczytu po zapisie. Dynamiczne przełączenie podczas pracy mountu
 pozostaje następnym etapem.
+
+## Przełączanie primary PostgreSQL podczas pracy
+
+FOD 3.2.66 dodaje przełączanie podczas pracy pomiędzy skonfigurowanymi
+zapisywalnymi punktami wejścia PostgreSQL primary. Mechanizm jest przeznaczony
+dla punktów HA/proxy prowadzących do tego samego autorytatywnego primary/klastra
+PostgreSQL, a nie dla niezależnych węzłów multi-primary.
+
+Każde połączenie `DbRepo` ma generację routingu. Błąd połączenia kwalifikujący
+się do replay powoduje zmianę generacji i, gdy runtime failover jest włączony,
+przejście do następnego punktu primary. Połączenia z cache należące do starszej
+generacji są odrzucane i nie wracają do obsługi. Nowe połączenie jest ponownie
+sprawdzane: `pg_is_in_recovery() = false` oraz
+`transaction_read_only = false`.
+
+Dotychczasowy mechanizm potwierdzania replay nadal obsługuje niejednoznaczne
+przypadki utraty potwierdzenia COMMIT. Routing odczytów na repliki nie jest
+jeszcze włączony.

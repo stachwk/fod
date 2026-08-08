@@ -673,3 +673,20 @@ load balancing.
 The next stage must re-evaluate endpoints during runtime and route reads to
 replicas only together with explicit primary-pinning or WAL/replay-LSN
 read-after-write consistency.
+
+## FOD 3.2.66 runtime primary failover
+
+Phase 4 now extends beyond startup selection. The hot-path repository owns a
+shared runtime target set and routing generation. A replayable disconnect
+advances the generation; all lane pools observe that generation, stale cached
+connections are rejected, and new connections can move to the next primary
+entrypoint.
+
+Failover candidates are still constrained to configured primary/unknown
+candidates and each new connection must probe as writable primary. This
+supports multiple HA/proxy entrypoints for the same authoritative PostgreSQL
+primary/cluster. It does not make independent writable PostgreSQL nodes safe.
+
+Read traffic stays primary-pinned. The next phase must capture a write-side WAL
+LSN and compare replica replay LSN before any stale-sensitive read can move to a
+replica.

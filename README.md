@@ -898,3 +898,20 @@ Writable mounts remain pinned to one selected primary in this stage, so normal
 reads are not sent to a potentially lagging replica and read-after-write
 consistency is preserved. Runtime failover after a mounted endpoint later
 fails is intentionally deferred.
+
+## Runtime PostgreSQL primary failover
+
+FOD 3.2.66 adds runtime failover between configured writable PostgreSQL primary
+entrypoints. It is intended for HA/proxy entrypoints that reach the same
+authoritative PostgreSQL primary/cluster, not independent multi-primary nodes.
+
+Each `DbRepo` connection carries a routing generation. A replayable connection
+failure advances the target generation and, when runtime failover is enabled,
+rotates to the next configured primary entrypoint. Cached connections from an
+older generation are discarded and never returned to service. A newly opened
+target is live-validated as `pg_is_in_recovery() = false` and
+`transaction_read_only = false` before FOD uses it.
+
+Existing replay-confirmation semantics remain responsible for ambiguous lost
+COMMIT acknowledgements. Replica read routing is intentionally not enabled in
+this stage.

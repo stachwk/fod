@@ -665,6 +665,7 @@ pub struct DbRepoPoolObservabilitySnapshot {
     pub operation_micros_total: u64,
     pub operation_micros_max: u64,
     pub replay_count: u64,
+    pub stale_connection_discards: u64,
     pub transaction_count: u64,
     pub transaction_failures: u64,
     pub transaction_micros_total: u64,
@@ -687,8 +688,22 @@ impl DbRepoPoolObservabilitySnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoConnectionRoutingSnapshot {
+    pub endpoint_routing_enabled: bool,
+    pub runtime_failover_enabled: bool,
+    pub target_count: usize,
+    pub active_authority: String,
+    pub generation: u64,
+    pub failover_count: u64,
+    pub connection_failures: u64,
+    pub role_rejections: u64,
+    pub last_failed_authority: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DbRepoObservabilitySnapshot {
     pub pool: DbRepoPoolObservabilitySnapshot,
+    pub routing: DbRepoConnectionRoutingSnapshot,
     pub payload: DbRepoPayloadObservabilitySnapshot,
     pub global_payload: DbRepoPayloadObservabilitySnapshot,
     pub persist_buffer_chunk_blocks: u64,
@@ -1319,9 +1334,10 @@ pub fn log_lane_observability(
         match repo.observability_snapshot() {
             Ok(snapshot) => {
                 let pool = snapshot.pool;
+                let routing = snapshot.routing;
                 let payload = snapshot.payload;
                 log::info!(
-                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} transaction_count={} transaction_failures={} transaction_micros_total={} transaction_micros_max={} write_transaction_limit={} write_active_transactions={} write_queued_transactions={} write_peak_active_transactions={} write_peak_queued_transactions={} write_transaction_admission_count={} write_transaction_backpressure_events={} write_transaction_fairness_yields={} write_transaction_accounting_errors={} control_transaction_limit={} control_active_transactions={} control_queued_transactions={} control_peak_active_transactions={} control_peak_queued_transactions={} control_transaction_admission_count={} control_transaction_backpressure_events={} control_transaction_fairness_yields={} control_transaction_accounting_errors={} heartbeat_count={} heartbeat_failures={} heartbeat_schedule_delay_micros_total={} heartbeat_schedule_delay_micros_max={} heartbeat_execution_micros_total={} heartbeat_execution_micros_max={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled=false",
+                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} stale_connection_discards={} transaction_count={} transaction_failures={} transaction_micros_total={} transaction_micros_max={} write_transaction_limit={} write_active_transactions={} write_queued_transactions={} write_peak_active_transactions={} write_peak_queued_transactions={} write_transaction_admission_count={} write_transaction_backpressure_events={} write_transaction_fairness_yields={} write_transaction_accounting_errors={} control_transaction_limit={} control_active_transactions={} control_queued_transactions={} control_peak_active_transactions={} control_peak_queued_transactions={} control_transaction_admission_count={} control_transaction_backpressure_events={} control_transaction_fairness_yields={} control_transaction_accounting_errors={} heartbeat_count={} heartbeat_failures={} heartbeat_schedule_delay_micros_total={} heartbeat_schedule_delay_micros_max={} heartbeat_execution_micros_total={} heartbeat_execution_micros_max={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled={} runtime_failover_enabled={} routing_target_count={} routing_active_authority={} routing_generation={} runtime_failover_count={} routing_connection_failures={} routing_role_rejections={} routing_last_failed_authority={}",
                     stage,
                     lane,
                     pool.connection_limit,
@@ -1345,6 +1361,7 @@ pub fn log_lane_observability(
                     pool.operation_micros_total,
                     pool.operation_micros_max,
                     pool.replay_count,
+                    pool.stale_connection_discards,
                     pool.transaction_count,
                     pool.transaction_failures,
                     pool.transaction_micros_total,
@@ -1386,6 +1403,15 @@ pub fn log_lane_observability(
                     payload.persist_micros_max,
                     snapshot.persist_buffer_chunk_blocks,
                     snapshot.persist_copy_send_buffer_bytes,
+                    routing.endpoint_routing_enabled,
+                    routing.runtime_failover_enabled,
+                    routing.target_count,
+                    routing.active_authority.as_str(),
+                    routing.generation,
+                    routing.failover_count,
+                    routing.connection_failures,
+                    routing.role_rejections,
+                    routing.last_failed_authority.as_deref().unwrap_or("none"),
                 );
                 if !global_payload_logged {
                     let global_payload = snapshot.global_payload;

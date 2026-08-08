@@ -5,9 +5,9 @@ use crate::crc32_bytes;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use fod_rust_monitor::{
-    DbRepoObservabilitySnapshot, DbRepoPayloadBudgetPermit, DbRepoPayloadObservability,
-    DbRepoPoolObservabilitySnapshot, DbRepoTransactionAdmissionSnapshot, LaneObservabilitySource,
-    PostgresPressureSnapshot,
+    DbRepoConnectionRoutingSnapshot, DbRepoObservabilitySnapshot, DbRepoPayloadBudgetPermit,
+    DbRepoPayloadObservability, DbRepoPoolObservabilitySnapshot,
+    DbRepoTransactionAdmissionSnapshot, LaneObservabilitySource, PostgresPressureSnapshot,
 };
 use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, postgres_session_setup_sql,
@@ -374,6 +374,245 @@ unsafe fn is_retryable_connection_error(conn: *const PGconn, err: &str) -> bool 
         || lower.contains("connection reset by peer")
         || lower.contains("ssl connection has been closed unexpectedly")
         || lower.contains("terminating connection due to administrator command")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbRepoConnectionTargetRequirement {
+    Any,
+    WritablePrimary,
+    ReadOnlyReplica,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoConnectionTarget {
+    pub authority: String,
+    pub conninfo: String,
+}
+
+#[derive(Debug)]
+struct DbRepoConnectionTargetState {
+    active_index: usize,
+    generation: u64,
+    failover_count: u64,
+    connection_failures: u64,
+    role_rejections: u64,
+    last_failed_authority: Option<String>,
+}
+
+impl Default for DbRepoConnectionTargetState {
+    fn default() -> Self {
+        Self {
+            active_index: 0,
+            generation: 1,
+            failover_count: 0,
+            connection_failures: 0,
+            role_rejections: 0,
+            last_failed_authority: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DbRepoConnectionTargets {
+    targets: Vec<DbRepoConnectionTarget>,
+    requirement: DbRepoConnectionTargetRequirement,
+    endpoint_routing_enabled: bool,
+    runtime_failover_enabled: bool,
+    state: Mutex<DbRepoConnectionTargetState>,
+    transition: Mutex<()>,
+}
+
+impl DbRepoConnectionTargets {
+    pub fn single(conninfo: &str) -> Result<Self, String> {
+        Self::new(
+            vec![DbRepoConnectionTarget {
+                authority: "legacy-dsn".to_string(),
+                conninfo: conninfo.to_string(),
+            }],
+            DbRepoConnectionTargetRequirement::Any,
+            false,
+            false,
+        )
+    }
+
+    pub fn new(
+        targets: Vec<DbRepoConnectionTarget>,
+        requirement: DbRepoConnectionTargetRequirement,
+        endpoint_routing_enabled: bool,
+        runtime_failover_enabled: bool,
+    ) -> Result<Self, String> {
+        if targets.is_empty() {
+            return Err("PostgreSQL connection target list must not be empty".to_string());
+        }
+        for target in &targets {
+            if target.authority.trim().is_empty() {
+                return Err("PostgreSQL connection target authority must not be empty".to_string());
+            }
+            if target.conninfo.trim().is_empty() {
+                return Err(format!(
+                    "PostgreSQL connection target {} has empty conninfo",
+                    target.authority
+                ));
+            }
+        }
+        Ok(Self {
+            runtime_failover_enabled: runtime_failover_enabled && targets.len() > 1,
+            targets,
+            requirement,
+            endpoint_routing_enabled,
+            state: Mutex::new(DbRepoConnectionTargetState::default()),
+            transition: Mutex::new(()),
+        })
+    }
+
+    fn state(&self) -> Result<std::sync::MutexGuard<'_, DbRepoConnectionTargetState>, String> {
+        self.state
+            .lock()
+            .map_err(|_| "PostgreSQL connection target state is poisoned".to_string())
+    }
+
+    fn current_target(&self) -> Result<(DbRepoConnectionTarget, u64), String> {
+        let state = self.state()?;
+        Ok((self.targets[state.active_index].clone(), state.generation))
+    }
+
+    pub fn generation(&self) -> Result<u64, String> {
+        Ok(self.state()?.generation)
+    }
+
+    pub fn snapshot(&self) -> Result<DbRepoConnectionRoutingSnapshot, String> {
+        let state = self.state()?;
+        Ok(DbRepoConnectionRoutingSnapshot {
+            endpoint_routing_enabled: self.endpoint_routing_enabled,
+            runtime_failover_enabled: self.runtime_failover_enabled,
+            target_count: self.targets.len(),
+            active_authority: self.targets[state.active_index].authority.clone(),
+            generation: state.generation,
+            failover_count: state.failover_count,
+            connection_failures: state.connection_failures,
+            role_rejections: state.role_rejections,
+            last_failed_authority: state.last_failed_authority.clone(),
+        })
+    }
+
+    fn advance_after_failure(
+        &self,
+        expected_generation: u64,
+        authority: &str,
+        role_rejection: bool,
+    ) -> Result<u64, String> {
+        let mut state = self.state()?;
+        state.connection_failures = state.connection_failures.saturating_add(1);
+        if role_rejection {
+            state.role_rejections = state.role_rejections.saturating_add(1);
+        }
+        state.last_failed_authority = Some(authority.to_string());
+        if state.generation != expected_generation {
+            return Ok(state.generation);
+        }
+        state.generation = state.generation.saturating_add(1);
+        if self.runtime_failover_enabled {
+            state.active_index = (state.active_index + 1) % self.targets.len();
+            state.failover_count = state.failover_count.saturating_add(1);
+        }
+        Ok(state.generation)
+    }
+
+    fn mark_operation_connection_failure(&self, generation: u64) -> Result<u64, String> {
+        let _transition = self
+            .transition
+            .lock()
+            .map_err(|_| "PostgreSQL connection target transition is poisoned".to_string())?;
+        let (target, _) = self.current_target()?;
+        self.advance_after_failure(generation, &target.authority, false)
+    }
+
+    fn connect_new(&self, tuning: &ConnectionTuning) -> Result<(*mut PGconn, u64), String> {
+        let _transition = self
+            .transition
+            .lock()
+            .map_err(|_| "PostgreSQL connection target transition is poisoned".to_string())?;
+        let attempts = if self.runtime_failover_enabled {
+            self.targets.len()
+        } else {
+            1
+        };
+        let mut errors = Vec::new();
+        for _ in 0..attempts {
+            let (target, generation) = self.current_target()?;
+            match connect(&target.conninfo, tuning) {
+                Ok(conn) => {
+                    match unsafe { validate_connection_target_role(conn, self.requirement) } {
+                        Ok(()) => return Ok((conn, generation)),
+                        Err(err) => {
+                            unsafe {
+                                PQfinish(conn);
+                            }
+                            errors.push(format!("{}: {}", target.authority, err));
+                            self.advance_after_failure(generation, &target.authority, true)?;
+                        }
+                    }
+                }
+                Err(err) => {
+                    errors.push(format!("{}: {}", target.authority, err));
+                    self.advance_after_failure(generation, &target.authority, false)?;
+                }
+            }
+        }
+        Err(format!(
+            "PostgreSQL connection targets exhausted: {}",
+            errors.join(" | ")
+        ))
+    }
+}
+
+unsafe fn validate_connection_target_role(
+    conn: *mut PGconn,
+    requirement: DbRepoConnectionTargetRequirement,
+) -> Result<(), String> {
+    if requirement == DbRepoConnectionTargetRequirement::Any {
+        return Ok(());
+    }
+    let sql = CString::new(
+        "SELECT pg_is_in_recovery()::text || '|' || current_setting('transaction_read_only')",
+    )
+    .map_err(|_| "PostgreSQL target validation SQL contains NUL byte".to_string())?;
+    let res = PQexec(conn, sql.as_ptr());
+    if res.is_null() {
+        return Err(conn_error(conn));
+    }
+    if PQresultStatus(res) != PGRES_TUPLES_OK {
+        let err = result_error(res);
+        PQclear(res);
+        return Err(err);
+    }
+    let value = fetch_single_text(res)?;
+    let (recovery, read_only) = value
+        .trim()
+        .split_once('|')
+        .ok_or_else(|| format!("invalid PostgreSQL target role probe `{value}`"))?;
+    let parse_bool = |value: &str| -> Result<bool, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "t" | "true" | "1" | "on" => Ok(true),
+            "f" | "false" | "0" | "off" => Ok(false),
+            other => Err(format!("invalid PostgreSQL boolean `{other}`")),
+        }
+    };
+    let recovery = parse_bool(recovery)?;
+    let read_only = parse_bool(read_only)?;
+    let accepted = match requirement {
+        DbRepoConnectionTargetRequirement::Any => true,
+        DbRepoConnectionTargetRequirement::WritablePrimary => !recovery && !read_only,
+        DbRepoConnectionTargetRequirement::ReadOnlyReplica => recovery && read_only,
+    };
+    if accepted {
+        Ok(())
+    } else {
+        Err(format!(
+            "PostgreSQL target role rejected: recovery={} transaction_read_only={}",
+            recovery, read_only
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2346,7 +2585,7 @@ where
 /// DbRepo keeps separate cached connections for write-heavy work and control-plane
 /// lease/session maintenance so long flushes do not starve heartbeats or cleanup.
 pub struct DbRepo {
-    conninfo: String,
+    connection_targets: Arc<DbRepoConnectionTargets>,
     connection_tuning: ConnectionTuning,
     persist_buffer_chunk_blocks: u64,
     persist_block_transport: PersistBlockTransport,
@@ -2362,7 +2601,7 @@ pub struct DbRepo {
 impl Clone for DbRepo {
     fn clone(&self) -> Self {
         Self {
-            conninfo: self.conninfo.clone(),
+            connection_targets: Arc::clone(&self.connection_targets),
             connection_tuning: self.connection_tuning.clone(),
             persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,
             persist_block_transport: self.persist_block_transport,
@@ -2860,10 +3099,16 @@ impl Drop for TransactionAdmissionPermit {
     }
 }
 
+#[derive(Debug)]
+struct CachedConnection {
+    conn: usize,
+    generation: u64,
+}
+
 #[derive(Debug, Default)]
 struct SharedConnectionPoolState {
-    cached_conn: Vec<usize>,
-    control_cached_conn: Vec<usize>,
+    cached_conn: Vec<CachedConnection>,
+    control_cached_conn: Vec<CachedConnection>,
     live_connections: usize,
     active_connections: usize,
     queued_acquisitions: usize,
@@ -2881,6 +3126,7 @@ struct SharedConnectionPoolState {
     operation_micros_total: u64,
     operation_micros_max: u64,
     replay_count: u64,
+    stale_connection_discards: u64,
     transaction_count: u64,
     transaction_failures: u64,
     transaction_micros_total: u64,
@@ -2954,7 +3200,7 @@ fn observe_current_transaction(elapsed: Duration, failed: bool) {
 
 #[derive(Debug)]
 enum ConnectionAcquisition {
-    Cached(*mut PGconn),
+    Cached { conn: *mut PGconn, generation: u64 },
     ReservedSlot,
 }
 
@@ -2990,20 +3236,44 @@ impl SharedConnectionPool {
     fn take_cached(
         state: &mut SharedConnectionPoolState,
         lane: ConnectionLane,
-    ) -> Option<*mut PGconn> {
-        let cache = match lane {
-            ConnectionLane::Write => &mut state.cached_conn,
-            ConnectionLane::Control => &mut state.control_cached_conn,
-        };
-        cache.pop().map(|value| value as *mut PGconn)
+        generation: u64,
+    ) -> Result<Option<CachedConnection>, String> {
+        loop {
+            let cached = match lane {
+                ConnectionLane::Write => state.cached_conn.pop(),
+                ConnectionLane::Control => state.control_cached_conn.pop(),
+            };
+            let Some(cached) = cached else {
+                return Ok(None);
+            };
+            if cached.generation == generation {
+                return Ok(Some(cached));
+            }
+            state.live_connections = state
+                .live_connections
+                .checked_sub(1)
+                .ok_or_else(|| "connection pool live connection underflow".to_string())?;
+            state.stale_connection_discards = state.stale_connection_discards.saturating_add(1);
+            unsafe {
+                PQfinish(cached.conn as *mut PGconn);
+            }
+        }
     }
 
-    fn push_cached(state: &mut SharedConnectionPoolState, lane: ConnectionLane, conn: *mut PGconn) {
-        let cache = match lane {
-            ConnectionLane::Write => &mut state.cached_conn,
-            ConnectionLane::Control => &mut state.control_cached_conn,
+    fn push_cached(
+        state: &mut SharedConnectionPoolState,
+        lane: ConnectionLane,
+        conn: *mut PGconn,
+        generation: u64,
+    ) {
+        let cached = CachedConnection {
+            conn: conn as usize,
+            generation,
         };
-        cache.push(conn as usize);
+        match lane {
+            ConnectionLane::Write => state.cached_conn.push(cached),
+            ConnectionLane::Control => state.control_cached_conn.push(cached),
+        }
     }
 
     fn duration_micros(elapsed: Duration) -> u64 {
@@ -3058,7 +3328,11 @@ impl SharedConnectionPool {
         Ok(())
     }
 
-    fn acquire(&self, lane: ConnectionLane) -> Result<ConnectionAcquisition, String> {
+    fn acquire(
+        &self,
+        lane: ConnectionLane,
+        generation: u64,
+    ) -> Result<ConnectionAcquisition, String> {
         let started = Instant::now();
         let mut state = self
             .state
@@ -3066,13 +3340,19 @@ impl SharedConnectionPool {
             .map_err(|_| "connection pool is poisoned".to_string())?;
         let mut queued = false;
         loop {
-            if let Some(conn) = Self::take_cached(&mut state, lane) {
+            if let Some(cached) = Self::take_cached(&mut state, lane, generation)? {
                 Self::finish_acquisition(&mut state, started, queued)?;
-                return Ok(ConnectionAcquisition::Cached(conn));
+                return Ok(ConnectionAcquisition::Cached {
+                    conn: cached.conn as *mut PGconn,
+                    generation: cached.generation,
+                });
             }
-            if let Some(conn) = Self::take_cached(&mut state, lane.other()) {
+            if let Some(cached) = Self::take_cached(&mut state, lane.other(), generation)? {
                 Self::finish_acquisition(&mut state, started, queued)?;
-                return Ok(ConnectionAcquisition::Cached(conn));
+                return Ok(ConnectionAcquisition::Cached {
+                    conn: cached.conn as *mut PGconn,
+                    generation: cached.generation,
+                });
             }
             if state.live_connections < self.limit {
                 state.live_connections += 1;
@@ -3111,17 +3391,26 @@ impl SharedConnectionPool {
         &self,
         lane: ConnectionLane,
         conn: *mut PGconn,
+        generation: u64,
+        current_generation: u64,
         operation_elapsed: Duration,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "connection pool is poisoned".to_string())?;
         Self::finish_operation(&mut state, operation_elapsed, false);
         Self::release_active(&mut state)?;
-        Self::push_cached(&mut state, lane, conn);
-        self.available.notify_one();
-        Ok(())
+        if generation == current_generation {
+            Self::push_cached(&mut state, lane, conn, generation);
+            self.available.notify_one();
+            Ok(true)
+        } else {
+            Self::release_live(&mut state)?;
+            state.stale_connection_discards = state.stale_connection_discards.saturating_add(1);
+            self.available.notify_one();
+            Ok(false)
+        }
     }
 
     fn release_failed_operation(&self, operation_elapsed: Duration) -> Result<(), String> {
@@ -3233,6 +3522,7 @@ impl SharedConnectionPool {
             operation_micros_total: state.operation_micros_total,
             operation_micros_max: state.operation_micros_max,
             replay_count: state.replay_count,
+            stale_connection_discards: state.stale_connection_discards,
             transaction_count: state.transaction_count,
             transaction_failures: state.transaction_failures,
             transaction_micros_total: state.transaction_micros_total,
@@ -3288,11 +3578,56 @@ impl DbRepo {
         payload_observability: Arc<DbRepoPayloadObservability>,
         global_payload_observability: Arc<DbRepoPayloadObservability>,
     ) -> Result<Self, String> {
+        let connection_targets = Arc::new(DbRepoConnectionTargets::single(conninfo)?);
+        Self::with_runtime_observability_targets(
+            connection_targets,
+            runtime,
+            payload_observability,
+            global_payload_observability,
+        )
+    }
+
+    pub fn with_runtime_connection_targets(
+        connection_targets: Arc<DbRepoConnectionTargets>,
+        runtime: &RuntimeConfig,
+    ) -> Result<Self, String> {
+        let payload_settings = RuntimePayloadSettings::from_env()?;
+        let global_payload_observability =
+            Arc::new(DbRepoPayloadObservability::with_in_flight_limit_bytes(
+                payload_settings.in_flight_limit_bytes,
+            ));
+        Self::with_runtime_observability_targets(
+            connection_targets,
+            runtime,
+            Arc::new(DbRepoPayloadObservability::default()),
+            global_payload_observability,
+        )
+    }
+
+    pub fn with_runtime_connection_targets_and_global_payload_observability(
+        connection_targets: Arc<DbRepoConnectionTargets>,
+        runtime: &RuntimeConfig,
+        global_payload_observability: Arc<DbRepoPayloadObservability>,
+    ) -> Result<Self, String> {
+        Self::with_runtime_observability_targets(
+            connection_targets,
+            runtime,
+            Arc::new(DbRepoPayloadObservability::default()),
+            global_payload_observability,
+        )
+    }
+
+    fn with_runtime_observability_targets(
+        connection_targets: Arc<DbRepoConnectionTargets>,
+        runtime: &RuntimeConfig,
+        payload_observability: Arc<DbRepoPayloadObservability>,
+        global_payload_observability: Arc<DbRepoPayloadObservability>,
+    ) -> Result<Self, String> {
         let core = runtime.core_settings();
         let storage = runtime.storage_settings();
         let transaction_settings = RuntimeTransactionSettings::from_env()?;
-        Self::new_with_tuning(
-            conninfo,
+        Self::new_with_tuning_targets(
+            connection_targets,
             ConnectionTuning::from_storage(&storage),
             storage.persist_buffer_chunk_blocks,
             storage.persist_block_transport,
@@ -3304,6 +3639,7 @@ impl DbRepo {
         )
     }
 
+    #[cfg(test)]
     fn new_with_tuning(
         conninfo: &str,
         connection_tuning: ConnectionTuning,
@@ -3315,11 +3651,33 @@ impl DbRepo {
         payload_observability: Arc<DbRepoPayloadObservability>,
         global_payload_observability: Arc<DbRepoPayloadObservability>,
     ) -> Result<Self, String> {
-        if conninfo.is_empty() {
-            return Err("connection string is empty".to_string());
-        }
+        let connection_targets = Arc::new(DbRepoConnectionTargets::single(conninfo)?);
+        Self::new_with_tuning_targets(
+            connection_targets,
+            connection_tuning,
+            persist_buffer_chunk_blocks,
+            persist_block_transport,
+            data_object_swap_cleanup,
+            connection_limit,
+            transaction_settings,
+            payload_observability,
+            global_payload_observability,
+        )
+    }
+
+    fn new_with_tuning_targets(
+        connection_targets: Arc<DbRepoConnectionTargets>,
+        connection_tuning: ConnectionTuning,
+        persist_buffer_chunk_blocks: u64,
+        persist_block_transport: PersistBlockTransport,
+        data_object_swap_cleanup: DataObjectSwapCleanup,
+        connection_limit: usize,
+        transaction_settings: RuntimeTransactionSettings,
+        payload_observability: Arc<DbRepoPayloadObservability>,
+        global_payload_observability: Arc<DbRepoPayloadObservability>,
+    ) -> Result<Self, String> {
         Ok(Self {
-            conninfo: conninfo.to_string(),
+            connection_targets,
             connection_tuning,
             persist_buffer_chunk_blocks: persist_buffer_chunk_blocks.max(1),
             persist_block_transport,
@@ -3343,13 +3701,14 @@ impl DbRepo {
         let mut replayed = false;
 
         loop {
-            let acquisition = self.pool.acquire(lane)?;
-            let conn = match acquisition {
-                ConnectionAcquisition::Cached(conn) => conn,
+            let current_generation = self.connection_targets.generation()?;
+            let acquisition = self.pool.acquire(lane, current_generation)?;
+            let (conn, generation) = match acquisition {
+                ConnectionAcquisition::Cached { conn, generation } => (conn, generation),
                 ConnectionAcquisition::ReservedSlot => {
                     let connect_started = Instant::now();
-                    match connect(&self.conninfo, &self.connection_tuning) {
-                        Ok(conn) => {
+                    match self.connection_targets.connect_new(&self.connection_tuning) {
+                        Ok((conn, generation)) => {
                             if let Err(err) = self
                                 .pool
                                 .record_connection_created(connect_started.elapsed())
@@ -3359,7 +3718,7 @@ impl DbRepo {
                                 }
                                 return Err(err);
                             }
-                            conn
+                            (conn, generation)
                         }
                         Err(err) => {
                             if let Err(pool_err) = self
@@ -3383,11 +3742,24 @@ impl DbRepo {
             let operation_elapsed = operation_started.elapsed();
             match result {
                 Ok(value) => {
-                    if let Err(err) = self.pool.return_cached(lane, conn, operation_elapsed) {
-                        unsafe {
+                    let current_generation = self.connection_targets.generation()?;
+                    match self.pool.return_cached(
+                        lane,
+                        conn,
+                        generation,
+                        current_generation,
+                        operation_elapsed,
+                    ) {
+                        Ok(true) => {}
+                        Ok(false) => unsafe {
                             PQfinish(conn);
+                        },
+                        Err(err) => {
+                            unsafe {
+                                PQfinish(conn);
+                            }
+                            return Err(err);
                         }
-                        return Err(err);
                     }
                     return Ok(value);
                 }
@@ -3402,6 +3774,8 @@ impl DbRepo {
                         return Err(format!("{err}; connection pool cleanup failed: {pool_err}"));
                     }
                     if replayable && !replayed {
+                        self.connection_targets
+                            .mark_operation_connection_failure(generation)?;
                         self.pool.record_replay()?;
                         replayed = true;
                         continue;
@@ -3429,6 +3803,7 @@ impl DbRepo {
     pub fn observability_snapshot(&self) -> Result<DbRepoObservabilitySnapshot, String> {
         Ok(DbRepoObservabilitySnapshot {
             pool: self.pool.snapshot()?,
+            routing: self.connection_targets.snapshot()?,
             payload: self.payload_observability.snapshot()?,
             global_payload: self.global_payload_observability.snapshot()?,
             persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,

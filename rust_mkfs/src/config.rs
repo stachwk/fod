@@ -66,6 +66,11 @@ const STARTUP_PASSTHROUGH_SPECS: &[(&str, &str, StartupPassthroughKind)] = &[
         StartupPassthroughKind::Bool,
     ),
     (
+        "pg_runtime_failover_enabled",
+        "FOD_PG_RUNTIME_FAILOVER_ENABLED",
+        StartupPassthroughKind::Bool,
+    ),
+    (
         "allow_other",
         "FOD_ALLOW_OTHER",
         StartupPassthroughKind::Bool,
