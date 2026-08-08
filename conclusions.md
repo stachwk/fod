@@ -698,3 +698,56 @@ Verdict: `confirmed`.
 Captured fio/strace logs: `6`.
 
 Production defaults remain unchanged in FOD 3.2.60.
+
+## 2026-08-08 — FOD 3.2.61 production validation and INI parity
+
+- Active in both base INI files: `fuse_event_threads=8`,
+  `fuse_clone_fd=false`, `task_read_active_limit=0`,
+  `task_write_active_limit=4`.
+- Explicit environment variables keep precedence over INI.
+- Bootstrap now propagates startup-only FUSE controls from INI to the Rust FUSE
+  child; previously equivalent INI keys would have been ignored.
+- `allow_other` is active and false; FUSE cache timeouts are documented but
+  commented to preserve established defaults.
+- `scripts/audit_runtime_env_ini.py` generates the production Rust env-vs-INI
+  inventory.
+- `test-fuse-production-validation` compares `8/4` with `8/0` on real
+  PostgreSQL-backed sequential, mixed and random-mixed FUSE workloads, plus
+  strace and the mount suite.
+- Hard-coded runtime fallbacks are not changed in this stage.
+
+## 2026-08-08 — FOD 3.2.61 mount-suite cleanup race
+
+The first production-validation attempt reached `test-mount-suite` after the
+compile, configuration, and environment-audit checks passed.
+`test_selinux_runtime_feature_on` correctly took the host-dependent skip path,
+but `TemporaryDirectory.cleanup()` received `EBUSY` because the threaded FUSE
+mount had not fully detached yet.
+
+The failure was in the integration-test mount helper, not in FOD data
+correctness. The helper previously issued one unmount command, ignored its
+return code, terminated the FUSE process, and immediately removed the
+directory without verifying kernel mount state.
+
+The helper now retries normal detach after process shutdown, uses a bounded
+lazy-detach fallback only for test cleanup, verifies that the mountpoint is
+actually detached, and raises an explicit error if it remains mounted.
+Production FUSE unmount semantics are unchanged.
+
+## 2026-08-08 — FOD 3.2.61 apply-time production validation result
+
+Artifact directory: `/tmp/fod-fuse-production-validation/fod-3.2.61-v8-1289068-1786152459`
+
+Verdict: `production_candidate_supported`.
+
+| workload | 8/4 median s | 8/0 median s | 8/4 delta % |
+| --- | ---: | ---: | ---: |
+| sequential | 3.735 | 3.739 | -0.11 |
+| mixed | 8.306 | 10.108 | -17.83 |
+| random-mixed | 11.289 | 10.363 | 8.93 |
+
+Endurance 8/4: `158.6s`, `16` iterations.
+Endurance 8/0: `155.0s`, `15` iterations.
+PostgreSQL snapshot warnings: `18`.
+
+Correctness/accounting checks passed. Hard-coded runtime fallbacks remain unchanged.

@@ -49,6 +49,14 @@ sslkey = client.key
 
 [fod]
 profile = bulk_write
+fuse_event_threads = 8
+fuse_clone_fd = false
+task_read_active_limit = 0
+task_write_active_limit = 4
+allow_other = false
+entry_timeout_seconds = 1
+attr_timeout_seconds = 2
+negative_timeout_seconds = 0
 pool_max_connections = 12
 pg_visible_path = ./visible-pg
 metadata_cache_ttl_seconds = 11
@@ -96,6 +104,14 @@ fn fod_config_command() -> Command {
         "FOD_PG_SSLROOTCERT",
         "FOD_PG_SSLCERT",
         "FOD_PG_SSLKEY",
+        "FOD_FUSE_EVENT_THREADS",
+        "FOD_FUSE_CLONE_FD",
+        "FOD_TASK_READ_ACTIVE_LIMIT",
+        "FOD_TASK_WRITE_ACTIVE_LIMIT",
+        "FOD_ALLOW_OTHER",
+        "FOD_ENTRY_TIMEOUT_SECONDS",
+        "FOD_ATTR_TIMEOUT_SECONDS",
+        "FOD_NEGATIVE_TIMEOUT_SECONDS",
     ] {
         command.env_remove(key);
     }
@@ -171,6 +187,14 @@ fn resolve_path_and_runtime_config_and_connection_params() {
     assert!(runtime.status.success());
     let runtime: serde_json::Value = serde_json::from_slice(&runtime.stdout).unwrap();
     assert_eq!(runtime["profile"], "bulk_write");
+    assert_eq!(runtime["fuse_event_threads"], "8");
+    assert_eq!(runtime["fuse_clone_fd"], "false");
+    assert_eq!(runtime["task_read_active_limit"], "0");
+    assert_eq!(runtime["task_write_active_limit"], "4");
+    assert_eq!(runtime["allow_other"], "false");
+    assert_eq!(runtime["entry_timeout_seconds"], "1");
+    assert_eq!(runtime["attr_timeout_seconds"], "2");
+    assert_eq!(runtime["negative_timeout_seconds"], "0");
     assert_eq!(runtime["role"], "auto");
     assert_eq!(runtime["pool_max_connections"], "12");
     assert_eq!(runtime["lock_backend"], "postgres_lease");
@@ -211,6 +235,17 @@ fn resolve_path_and_runtime_config_and_connection_params() {
         runtime["selinux_rootcontext"],
         "system_u:object_r:fod_root_t:s0"
     );
+
+    let overridden = fod_config_command()
+        .env("FOD_FUSE_EVENT_THREADS", "16")
+        .env("FOD_TASK_WRITE_ACTIVE_LIMIT", "2")
+        .arg("runtime-config")
+        .output()
+        .unwrap();
+    assert!(overridden.status.success());
+    let overridden: serde_json::Value = serde_json::from_slice(&overridden.stdout).unwrap();
+    assert_eq!(overridden["fuse_event_threads"], "16");
+    assert_eq!(overridden["task_write_active_limit"], "2");
 
     match _old_config {
         Some(value) => env::set_var("FOD_CONFIG", value),

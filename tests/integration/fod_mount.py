@@ -227,16 +227,49 @@ class FODMount:
         if self.config is None:
             return
 
-        mountpoint = str(self.config.mountpoint)
+        mount_path = self.config.mountpoint
+        mountpoint = str(mount_path)
+        log_file = self.config.log_file
+        cleanup_messages: list[str] = []
+
+        def unmount_once(*, lazy: bool) -> None:
+            if not self._is_mountpoint(mount_path):
+                return
+            if shutil.which("fusermount3"):
+                command = ["fusermount3", "-uz" if lazy else "-u", mountpoint]
+            elif shutil.which("fusermount"):
+                command = ["fusermount", "-uz" if lazy else "-u", mountpoint]
+            else:
+                command = ["umount"]
+                if lazy:
+                    command.append("-l")
+                command.append(mountpoint)
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                cleanup_messages.append(
+                    f"{' '.join(command)} rc={result.returncode} "
+                    f"stderr={result.stderr.strip()}"
+                )
+
+        def wait_unmounted(timeout_seconds: float) -> bool:
+            deadline = time.monotonic() + timeout_seconds
+            while time.monotonic() < deadline:
+                if not self._is_mountpoint(mount_path):
+                    return True
+                time.sleep(0.05)
+            return not self._is_mountpoint(mount_path)
+
+        still_mounted = False
         try:
-            if self._is_mountpoint(self.config.mountpoint):
-                if shutil.which("fusermount3"):
-                    subprocess.run(["fusermount3", "-u", mountpoint], check=False)
-                elif shutil.which("fusermount"):
-                    subprocess.run(["fusermount", "-u", mountpoint], check=False)
-                else:
-                    subprocess.run(["umount", mountpoint], check=False)
-        finally:
+            if self._is_mountpoint(mount_path):
+                unmount_once(lazy=False)
+                wait_unmounted(0.5)
+
             if self.process is not None and self.process.poll() is None:
                 self.process.send_signal(signal.SIGTERM)
                 try:
@@ -244,14 +277,34 @@ class FODMount:
                 except subprocess.TimeoutExpired:
                     self.process.kill()
                     self.process.wait(timeout=5)
+
+            if self._is_mountpoint(mount_path):
+                for _ in range(5):
+                    unmount_once(lazy=False)
+                    if wait_unmounted(0.25):
+                        break
+
+            if self._is_mountpoint(mount_path):
+                unmount_once(lazy=True)
+                wait_unmounted(2.0)
+
+            still_mounted = self._is_mountpoint(mount_path)
+        finally:
             if hasattr(self, "_log_handle"):
                 self._log_handle.close()
             try:
-                self.config.log_file.unlink(missing_ok=True)
+                log_file.unlink(missing_ok=True)
             except Exception:
                 pass
             self.config = None
             self.process = None
+
+        if still_mounted:
+            detail = "; ".join(cleanup_messages) or "no unmount diagnostics"
+            raise RuntimeError(
+                f"FOD test mount remained mounted after cleanup: "
+                f"{mountpoint}; {detail}"
+            )
 
     def __enter__(self) -> "FODMount":
         return self

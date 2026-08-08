@@ -816,3 +816,19 @@ strace runs under `8/4`. A confirmation report evaluates rank, throughput gain
 against `8/0`, small-write median/p95 improvement, and run-to-run stability.
 Performance confirmation is recorded as evidence rather than used as the
 default commit gate.
+
+## Recommended FUSE concurrency (FOD 3.2.61)
+
+Persistent configuration now carries the FOD 3.2.60-confirmed candidate:
+
+```ini
+[fod]
+fuse_event_threads = 8
+fuse_clone_fd = false
+task_read_active_limit = 0
+task_write_active_limit = 4
+```
+
+The corresponding `FOD_*` environment variables remain higher-priority
+overrides. See `docs/runtime-configuration.md` for semantics, ranges,
+precedence, benchmark evidence, and the generated env-vs-INI audit.

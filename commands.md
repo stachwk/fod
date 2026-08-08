@@ -2762,3 +2762,26 @@ The fairness command commits only after every run proves real queue pressure thr
 - after commit: exact changed-file validation, `git diff --check HEAD~1..HEAD`,
   full diff saved under `/tmp/fod-3.2.60-<sha>.diff`, and push only after the
   post-commit review succeeds.
+
+## 2026-08-08 — FOD 3.2.61 production validation and INI audit
+
+- `python3 scripts/audit_runtime_env_ini.py --root . --output docs/runtime-env-ini-audit.md --check`
+- `target/debug/fod-config --config-path fod_config.ini runtime-config`
+- `target/debug/fod-config --config-path fod_config.example.ini runtime-config`
+- `RUSTFLAGS="-D warnings" cargo check --workspace --locked`
+- `RUSTFLAGS="-D warnings" cargo test --workspace --locked --no-run`
+- `RUSTFLAGS="-D warnings" cargo test --locked -p fod-rust-mkfs --test fod_config -- --test-threads=1`
+- `make test-fuse-production-validation`
+- `make test-version`
+- `git diff --check`
+- after commit: exact file-set validation, `git diff --check HEAD~1..HEAD`,
+  full diff saved to `/tmp/fod-3.2.61-<sha>.diff`, then push.
+
+## 2026-08-08 — FOD 3.2.61 v8 mount cleanup
+
+- First production-validation artifact:
+  `/tmp/fod-fuse-production-validation/fod-3.2.61-1229697-1786151553`.
+- Failure: `test_selinux_runtime_feature_on` skip followed by test-helper
+  teardown `EBUSY` on `/tmp/fod-suite.*`.
+- V8 runs the mount suite before repeated fio/endurance work, then performs the
+  full `8/4` versus `8/0` validation only after mount cleanup passes.

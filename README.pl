@@ -800,3 +800,19 @@ testy fio sequential oraz trzy odpowiadające im pomiary strace. Raport ocenia
 ranking, zmianę przepustowości względem `8/0`, poprawę mediany i p95 małych
 zapisów oraz stabilność między przebiegami. Wynik wydajności jest zapisywany jako
 dowód, ale sam w sobie nie blokuje zapisania infrastruktury testowej.
+
+## Zalecana współbieżność FUSE (FOD 3.2.61)
+
+Konfiguracja trwała zawiera teraz kandydata potwierdzonego w FOD 3.2.60:
+
+```ini
+[fod]
+fuse_event_threads = 8
+fuse_clone_fd = false
+task_read_active_limit = 0
+task_write_active_limit = 4
+```
+
+Odpowiadające zmienne `FOD_*` pozostają nadpisaniami o wyższym priorytecie.
+Znaczenie parametrów, zakresy, kolejność nadpisywania, wyniki benchmarków oraz
+audyt env-vs-INI opisuje `docs/runtime-configuration.md`.

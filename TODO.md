@@ -747,3 +747,11 @@ Notes:
     and both small-write latency measures by at least 10% versus `8/0`, and
     keeps aggregate stability CV at or below 25%. Runtime defaults remain
     unchanged.
+
+  - Implementation note (2026-08-08): FOD 3.2.61 moves the
+    confirmed `8/4` FUSE concurrency/admission candidate into both base INI
+    files, adds bootstrap propagation for startup-only FUSE controls while
+    preserving explicit env overrides, documents the controls and their ranges,
+    generates a production-Rust env-vs-INI audit, and adds a final production
+    validation against `8/0` across sequential, mixed, random-mixed, strace, and
+    mount-suite paths. Hard-coded fallback values remain unchanged.

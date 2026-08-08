@@ -13,7 +13,7 @@ mod tls;
 mod version;
 
 use clap::{Parser, Subcommand};
-use config::{load_config_parser, resolve_config_path};
+use config::{load_config_parser, resolve_config_path, startup_passthrough_runtime_map};
 use fod_rust_runtime::ini_config::{
     PgEndpointHealthRegistry, PgEndpointHealthSnapshot, PgPoolPlan,
 };
@@ -269,6 +269,13 @@ fn main() {
             };
             let mut map = serde_json::Map::new();
             for (key, value) in runtime.to_runtime_map() {
+                map.insert(key, serde_json::Value::String(value));
+            }
+            let startup_values = match startup_passthrough_runtime_map(&config) {
+                Ok(value) => value,
+                Err(err) => exit_with_error(&err),
+            };
+            for (key, value) in startup_values {
                 map.insert(key, serde_json::Value::String(value));
             }
             println!("{}", serde_json::Value::Object(map));

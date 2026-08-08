@@ -9,7 +9,9 @@ mod pg_config;
 mod version;
 
 use clap::Parser;
-use config::{load_config_parser, load_runtime_config, resolve_config_path};
+use config::{
+    apply_startup_passthrough_env, load_config_parser, load_runtime_config, resolve_config_path,
+};
 use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, env_var_with_legacy_alias, BootstrapOverrides,
 };
@@ -181,6 +183,10 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if let Err(err) = apply_startup_passthrough_env(&config) {
+        eprintln!("{}", err);
+        std::process::exit(1);
+    }
     let runtime = match load_runtime_config(&config) {
         Ok(value) => value,
         Err(err) => {

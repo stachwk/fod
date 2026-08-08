@@ -2116,3 +2116,19 @@ test-fuse-admission-confirmation: init
 	FUSE_ADMISSION_CONFIRM_RUN_ID="$(FUSE_ADMISSION_CONFIRM_RUN_ID)" \
 	FUSE_ADMISSION_CONFIRM_ARTIFACT_DIR="$(FUSE_ADMISSION_CONFIRM_ARTIFACT_DIR)" \
 	bash "$(FUSE_ADMISSION_CONFIRM_SCRIPT)"
+
+
+FUSE_PRODUCTION_VALIDATION_SCRIPT ?= tests/integration/test_fuse_production_validation.py
+FUSE_PRODUCTION_VALIDATION_REPEAT ?= 3
+FUSE_PRODUCTION_VALIDATION_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+FUSE_PRODUCTION_VALIDATION_ARTIFACT_DIR ?= /tmp/fod-fuse-production-validation/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)-$(FUSE_PRODUCTION_VALIDATION_RUN_ID)
+FUSE_PRODUCTION_VALIDATION_ENDURANCE_SECONDS_PER_CONFIG ?= 150
+
+.PHONY: test-fuse-production-validation
+
+test-fuse-production-validation: init
+	python3 "$(FUSE_PRODUCTION_VALIDATION_SCRIPT)" \
+		--root "$(CURDIR)" \
+		--artifact-dir "$(FUSE_PRODUCTION_VALIDATION_ARTIFACT_DIR)" \
+		--repeat "$(FUSE_PRODUCTION_VALIDATION_REPEAT)" \
+		--endurance-seconds-per-config "$(FUSE_PRODUCTION_VALIDATION_ENDURANCE_SECONDS_PER_CONFIG)"

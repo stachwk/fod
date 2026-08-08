@@ -610,3 +610,16 @@ against `8/0`, with stability CV no worse than 25%.
 The suite also runs real sequential fio and strace three times under `8/4` with
 `FOD_PROFILE_IO=1`. Those logs are retained beside the confirmation artifacts.
 This stage still does not modify runtime defaults.
+
+### FOD 3.2.61 production-path validation and persistent configuration
+
+FOD 3.2.60 confirmed `event_threads=8 / write_limit=4` with ten runs, but those
+values were still supplied through environment variables. FOD 3.2.61 closes
+that configuration gap by putting `8/4`, unlimited read admission and
+`clone_fd=false` in both base INI files and propagating those startup-only keys
+through bootstrap.
+
+The final validation compares `8/4` against `8/0` on sequential, mixed and
+random-mixed PostgreSQL-backed FUSE workloads, captures strace runs, and runs
+the mount suite under the candidate. Correctness/accounting failures block the
+suite; performance differences are preserved as evidence.
