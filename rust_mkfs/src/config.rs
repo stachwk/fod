@@ -61,6 +61,11 @@ const STARTUP_PASSTHROUGH_SPECS: &[(&str, &str, StartupPassthroughKind)] = &[
         StartupPassthroughKind::SizeBytes,
     ),
     (
+        "pg_endpoint_routing_enabled",
+        "FOD_PG_ENDPOINT_ROUTING_ENABLED",
+        StartupPassthroughKind::Bool,
+    ),
+    (
         "allow_other",
         "FOD_ALLOW_OTHER",
         StartupPassthroughKind::Bool,

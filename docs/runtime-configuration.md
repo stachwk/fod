@@ -175,3 +175,23 @@ other FOD size settings, for example `64MiB`.
 - transaction limits and connection-pool limits remain independent.
 
 The base configuration uses `64MiB`.
+
+## PostgreSQL endpoint startup routing
+
+`pg_endpoint_routing_enabled` is propagated to
+`FOD_PG_ENDPOINT_ROUTING_ENABLED`. The base INI enables it, while legacy
+single-node `host` + `port` keeps existing single-DSN behavior. Enabling
+endpoint routing also selects the `pg_lanes` startup path even when dedicated
+pool lanes are disabled; in that case the selected endpoint is used by the
+shared repository pool.
+
+For multi-endpoint configuration:
+- endpoint roles come from `primary_hosts` / `replica_hosts` or live discovery,
+  never list position;
+- `primary` requires a healthy writable primary;
+- `replica` requires an observed healthy replica;
+- `auto` prefers writable primary and otherwise may select a healthy read-only
+  endpoint;
+- the selected endpoint overrides only host/port in the base DSN, preserving
+  database, credentials and TLS settings;
+- writable mounts stay pinned to the selected primary in FOD 3.2.65.

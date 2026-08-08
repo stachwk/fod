@@ -13,6 +13,7 @@ mod write_payload;
 use clap::Parser;
 use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, env_var_with_legacy_alias, RuntimeConfig,
+    RuntimeEndpointRoutingSettings,
 };
 use log::LevelFilter;
 use rust_hotpath::pg::DbRepo;
@@ -59,7 +60,10 @@ fn main() {
         std::process::exit(1);
     });
 
-    if env_var_truthy_with_legacy_alias(pg_lanes::PG_POOL_LANES_ENV, false) {
+    let endpoint_routing_enabled = RuntimeEndpointRoutingSettings::from_env().enabled;
+    if env_var_truthy_with_legacy_alias(pg_lanes::PG_POOL_LANES_ENV, false)
+        || endpoint_routing_enabled
+    {
         if let Err(err) =
             pg_lanes::mount_with_lanes(&conninfo, &runtime, args.readonly, &args.mountpoint)
         {

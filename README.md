@@ -883,3 +883,18 @@ deadlocking the process.
 FOD 3.2.64 also prevents Makefile recipe echo from exposing PostgreSQL and
 schema-admin password values. `make test-makefile-secret-echo-audit` checks this
 property for current Makefile recipes.
+
+## Role-aware PostgreSQL startup routing
+
+FOD 3.2.65 activates safe startup endpoint selection for configured
+`primary_hosts` / `replica_hosts` or discovered `hosts`.
+
+A writable `primary` mount selects only a healthy verified writable primary.
+A `replica` mount selects only a healthy observed replica. `auto` prefers a
+writable primary and otherwise may select a healthy read-only endpoint; the
+startup snapshot then keeps that mount read-only.
+
+Writable mounts remain pinned to one selected primary in this stage, so normal
+reads are not sent to a potentially lagging replica and read-after-write
+consistency is preserved. Runtime failover after a mounted endpoint later
+fails is intentionally deferred.

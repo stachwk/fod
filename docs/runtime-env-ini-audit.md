@@ -41,15 +41,16 @@ Generated from quoted `FOD_*` literals in production Rust sources. Rust identifi
 | `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` | `[fod] persist_copy_send_buffer_bytes` | intentional-env-only | - | - | rust_hotpath/src/pg.rs | experimental libpq COPY send-buffer tuning; default 1 MiB |
 | `FOD_PG_CONTROL_TRANSACTION_LIMIT` | `[fod] pg_control_transaction_limit` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | - |
 | `FOD_PG_DBNAME` | `[database] dbname` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
+| `FOD_PG_ENDPOINT_ROUTING_ENABLED` | `[fod] pg_endpoint_routing_enabled` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | - |
 | `FOD_PG_HOST` | `[database] host` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs, rust_runtime/src/lib.rs | - |
-| `FOD_PG_HOSTS` | `[database] hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs | - |
+| `FOD_PG_HOSTS` | `[database] hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_mkfs/src/bin/fod-bootstrap.rs, rust_runtime/src/ini_config/pg_endpoints.rs | - |
 | `FOD_PG_OBSERVABILITY_INTERVAL_MS` | `[fod] pg_observability_interval_ms` | intentional-env-only | - | - | rust_fuse/src/pg_lanes.rs | PostgreSQL lane observability sampler; default 5000 ms, valid 100..3600000 ms |
 | `FOD_PG_PASSWORD` | `[database] password` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES` | `[fod] pg_payload_in_flight_limit_bytes` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | - |
 | `FOD_PG_POOL_LANES_ENABLED` | `[fod] pg_pool_lanes_enabled` | intentional-env-only | - | - | rust_fuse/src/pg_lanes.rs | temporary opt-in for dedicated PostgreSQL read/write/control/lease pools |
 | `FOD_PG_PORT` | `[database] port` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs, rust_runtime/src/lib.rs | - |
-| `FOD_PG_PRIMARY_HOSTS` | `[database] primary_hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs | - |
-| `FOD_PG_REPLICA_HOSTS` | `[database] replica_hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/ini_config/pg_endpoints.rs | - |
+| `FOD_PG_PRIMARY_HOSTS` | `[database] primary_hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_mkfs/src/bin/fod-bootstrap.rs, rust_runtime/src/ini_config/pg_endpoints.rs | - |
+| `FOD_PG_REPLICA_HOSTS` | `[database] replica_hosts` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_mkfs/src/bin/fod-bootstrap.rs, rust_runtime/src/ini_config/pg_endpoints.rs | - |
 | `FOD_PG_SSLCERT` | `[database] sslcert` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PG_SSLKEY` | `[database] sslkey` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_PG_SSLMODE` | `[database] sslmode` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
@@ -64,7 +65,7 @@ Generated from quoted `FOD_*` literals in production Rust sources. Rust identifi
 | `FOD_READ_AHEAD_BLOCKS` | `[fod] read_ahead_blocks` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_READ_CACHE_BLOCKS` | `[fod] read_cache_blocks` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_READ_CACHE_EVICTION_POLICY` | `[fod] read_cache_eviction_policy` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
-| `FOD_ROLE` | `[fod] role` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
+| `FOD_ROLE` | `[fod] role` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_fuse/src/pg_lanes.rs, rust_runtime/src/lib.rs | - |
 | `FOD_RUST_FUSE_READONLY` | `[fod] force_read_only` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/bin/fod-bootstrap.rs, rust_runtime/src/lib.rs | - |
 | `FOD_SELINUX` | `[fod] selinux` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_SELINUX_CONTEXT` | `[fod] selinux_context` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |

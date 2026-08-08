@@ -868,3 +868,18 @@ zakleszczenia.
 FOD 3.2.64 wycisza również linie poleceń Makefile zawierające hasła PostgreSQL
 lub hasło administratora schematu. Kontrolę regresji wykonuje
 `make test-makefile-secret-echo-audit`.
+
+## Routing endpointów PostgreSQL zależny od roli
+
+FOD 3.2.65 uruchamia bezpieczny wybór endpointu podczas startu dla
+`primary_hosts` / `replica_hosts` albo odkrywanej listy `hosts`.
+
+Zapisywalny mount `primary` wybiera wyłącznie zdrowy, zweryfikowany zapisywalny
+primary. Mount `replica` wybiera zdrową rozpoznaną replikę. Tryb `auto`
+preferuje zapisywalny primary, a przy jego braku może wybrać zdrowy endpoint
+tylko do odczytu; snapshot startowy pozostawia wtedy cały mount read-only.
+
+Zapisywalny mount pozostaje w tej wersji przypięty do jednego wybranego primary,
+więc zwykłe odczyty nie trafiają na potencjalnie opóźnioną replikę i zachowana
+jest spójność odczytu po zapisie. Dynamiczne przełączenie podczas pracy mountu
+pozostaje następnym etapem.

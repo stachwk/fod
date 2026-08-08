@@ -281,3 +281,73 @@ fn opt_in_pg_lanes_mount_and_serve_basic_filesystem_operations() -> Result<(), S
 
     Ok(())
 }
+
+#[test]
+fn endpoint_routing_skips_unreachable_primary_and_mounts_selected_primary() -> Result<(), String> {
+    let postgres_port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+    let good_authority = format!("127.0.0.1:{postgres_port}");
+    let primary_hosts = format!("127.0.0.1:1,{good_authority}");
+
+    let mounted = MountedFs::start_with_env(
+        "pg-endpoint-routing-failover",
+        &[
+            ("FOD_PG_ENDPOINT_ROUTING_ENABLED", "1".to_string()),
+            ("FOD_PG_PRIMARY_HOSTS", primary_hosts),
+            ("FOD_ROLE", "primary".to_string()),
+            ("FOD_LOG_LEVEL", "debug".to_string()),
+        ],
+    )?;
+
+    let expected_lane = format!(
+        "routing_enabled=true endpoint_mode=explicit-roles routing_candidate_count=2 selected_authority={} startup_failovers=1 selected_read_only=false",
+        good_authority
+    );
+    let expected_bad = "FOD PostgreSQL endpoint health: authority=127.0.0.1:1 state=degraded";
+    let expected_good = format!(
+        "FOD PostgreSQL endpoint health: authority={} state=healthy",
+        good_authority
+    );
+
+    for _ in 0..50 {
+        let log = mounted.log_tail(500);
+        if log.contains(&expected_lane)
+            && log.contains(expected_bad)
+            && log.contains(&expected_good)
+        {
+            break;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    let log = mounted.log_tail(500);
+    if !log.contains(&expected_lane) || !log.contains(expected_bad) || !log.contains(&expected_good)
+    {
+        return Err(format!(
+            "missing endpoint-routing startup diagnostics\n{}",
+            log
+        ));
+    }
+
+    let path = mounted
+        .mountpoint
+        .join(format!("routing-{}.txt", unique_suffix()));
+    let payload = b"role-aware endpoint routing\n";
+    with_mount_log(
+        &mounted,
+        fs::write(&path, payload).map_err(|err| format!("write {} failed: {err}", path.display())),
+    )?;
+    let observed = with_mount_log(
+        &mounted,
+        fs::read(&path).map_err(|err| format!("read {} failed: {err}", path.display())),
+    )?;
+    if observed != payload {
+        return Err(format!(
+            "endpoint-routing payload mismatch\n{}",
+            mounted.log_tail(500)
+        ));
+    }
+    with_mount_log(
+        &mounted,
+        fs::remove_file(&path).map_err(|err| format!("remove {} failed: {err}", path.display())),
+    )?;
+    Ok(())
+}

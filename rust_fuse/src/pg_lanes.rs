@@ -6,11 +6,16 @@ use fod_rust_monitor::{
     LaneObservabilitySource,
 };
 use fod_rust_runtime::ini_config::{
-    PgConnectionPurpose, PgEndpointHealthRegistry, PgEndpointHealthSnapshot, PgEndpointProbe,
-    PgEndpointRole, PgPoolIsolationMode, PgPoolPlan,
+    resolve_pg_endpoint_config, PgConnectionPurpose, PgEndpoint, PgEndpointConfig,
+    PgEndpointHealthRegistry, PgEndpointHealthSnapshot, PgEndpointMode, PgEndpointProbe,
+    PgEndpointRole, PgObservedEndpointRole, PgPoolIsolationMode, PgPoolPlan,
 };
-use fod_rust_runtime::{env_var_truthy_with_legacy_alias, RuntimeConfig, RuntimePayloadSettings};
+use fod_rust_runtime::{
+    env_var_truthy_with_legacy_alias, MountRole, RuntimeConfig, RuntimeEndpointRoutingSettings,
+    RuntimePayloadSettings,
+};
 use rust_hotpath::pg::DbRepo;
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
@@ -63,6 +68,190 @@ pub struct DbRepoLaneDiagnostics {
     pub lease_limit: usize,
     pub legacy_dsn_only: bool,
     pub routing_enabled: bool,
+    pub endpoint_mode: PgEndpointMode,
+    pub routing_candidate_count: usize,
+    pub selected_authority: Option<String>,
+    pub startup_failovers: usize,
+    pub selected_read_only: bool,
+}
+
+#[derive(Debug, Clone)]
+struct EndpointRoutingSelection {
+    endpoint: PgEndpoint,
+    health: PgEndpointHealthSnapshot,
+    startup_failovers: usize,
+    read_only: bool,
+}
+
+struct EndpointRoutingResolution {
+    conninfo: String,
+    health: PgEndpointHealthRegistry,
+    endpoint_mode: PgEndpointMode,
+    candidate_count: usize,
+    selected: Option<EndpointRoutingSelection>,
+}
+
+fn quote_conninfo_value(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("'{escaped}'")
+}
+
+fn conninfo_for_endpoint(base_conninfo: &str, endpoint: &PgEndpoint) -> String {
+    format!(
+        "{} host={} port={}",
+        base_conninfo.trim(),
+        quote_conninfo_value(&endpoint.host),
+        endpoint.port
+    )
+}
+
+fn health_for_endpoint(
+    endpoint: &PgEndpoint,
+    snapshots: &[PgEndpointHealthSnapshot],
+) -> Option<PgEndpointHealthSnapshot> {
+    let authority = endpoint.authority();
+    snapshots
+        .iter()
+        .find(|snapshot| snapshot.authority == authority)
+        .cloned()
+}
+
+fn choose_endpoint(
+    config: &PgEndpointConfig,
+    snapshots: &[PgEndpointHealthSnapshot],
+    purpose: PgConnectionPurpose,
+    roles: &[PgEndpointRole],
+    observed_replica_only: bool,
+) -> Option<EndpointRoutingSelection> {
+    let mut failed_candidates = 0usize;
+    for endpoint in &config.endpoints {
+        if !roles.contains(&endpoint.role) {
+            continue;
+        }
+        let eligible = health_for_endpoint(endpoint, snapshots).filter(|snapshot| {
+            snapshot.eligible_for(purpose)
+                && (!observed_replica_only
+                    || snapshot.observed_role == Some(PgObservedEndpointRole::Replica))
+        });
+        if let Some(health) = eligible {
+            return Some(EndpointRoutingSelection {
+                endpoint: endpoint.clone(),
+                health,
+                startup_failovers: failed_candidates,
+                read_only: purpose == PgConnectionPurpose::Read,
+            });
+        }
+        failed_candidates = failed_candidates.saturating_add(1);
+    }
+    None
+}
+
+fn effective_mount_role(runtime: &RuntimeConfig) -> Result<MountRole, String> {
+    match std::env::var("FOD_ROLE") {
+        Ok(value) if !value.trim().is_empty() => MountRole::parse(&value),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(runtime.role),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err("FOD_ROLE must contain valid UTF-8".to_string())
+        }
+    }
+}
+
+fn select_endpoint_for_mount(
+    config: &PgEndpointConfig,
+    mount_role: MountRole,
+    snapshots: &[PgEndpointHealthSnapshot],
+) -> Result<EndpointRoutingSelection, String> {
+    let primary_roles = [PgEndpointRole::Primary, PgEndpointRole::Unknown];
+    let replica_roles = [PgEndpointRole::Replica, PgEndpointRole::Unknown];
+
+    let selected = match mount_role {
+        MountRole::Primary => choose_endpoint(
+            config,
+            snapshots,
+            PgConnectionPurpose::Write,
+            &primary_roles,
+            false,
+        ),
+        MountRole::Replica => choose_endpoint(
+            config,
+            snapshots,
+            PgConnectionPurpose::Read,
+            &replica_roles,
+            true,
+        ),
+        MountRole::Auto => choose_endpoint(
+            config,
+            snapshots,
+            PgConnectionPurpose::Write,
+            &primary_roles,
+            false,
+        )
+        .or_else(|| {
+            choose_endpoint(
+                config,
+                snapshots,
+                PgConnectionPurpose::Read,
+                &[
+                    PgEndpointRole::Replica,
+                    PgEndpointRole::Primary,
+                    PgEndpointRole::Unknown,
+                ],
+                false,
+            )
+        }),
+    };
+
+    selected.ok_or_else(|| {
+        let states = snapshots
+            .iter()
+            .map(|snapshot| format!("{}:{}", snapshot.authority, snapshot.state.as_str()))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "no eligible PostgreSQL endpoint for mount role {} (endpoint states: {})",
+            mount_role.as_str(),
+            states
+        )
+    })
+}
+
+fn resolve_endpoint_routing(
+    base_conninfo: &str,
+    runtime: &RuntimeConfig,
+) -> Result<EndpointRoutingResolution, String> {
+    let settings = RuntimeEndpointRoutingSettings::from_env();
+    let config = resolve_pg_endpoint_config(&HashMap::new())?;
+    if !settings.enabled || config.mode == PgEndpointMode::LegacySingle {
+        return Ok(EndpointRoutingResolution {
+            conninfo: base_conninfo.to_string(),
+            health: PgEndpointHealthRegistry::default(),
+            endpoint_mode: config.mode,
+            candidate_count: config.endpoints.len(),
+            selected: None,
+        });
+    }
+
+    let health = PgEndpointHealthRegistry::default();
+    let mut snapshots = Vec::with_capacity(config.endpoints.len());
+    for endpoint in &config.endpoints {
+        let endpoint_conninfo = conninfo_for_endpoint(base_conninfo, endpoint);
+        snapshots.push(health.record_probe_result(
+            &endpoint.authority(),
+            endpoint.role,
+            postgres_endpoint_probe(&endpoint_conninfo),
+        )?);
+    }
+
+    let mount_role = effective_mount_role(runtime)?;
+    let selected = select_endpoint_for_mount(&config, mount_role, &snapshots)?;
+    let conninfo = conninfo_for_endpoint(base_conninfo, &selected.endpoint);
+    Ok(EndpointRoutingResolution {
+        conninfo,
+        health,
+        endpoint_mode: config.mode,
+        candidate_count: config.endpoints.len(),
+        selected: Some(selected),
+    })
 }
 
 enum DbRepoLaneStorage {
@@ -90,6 +279,12 @@ pub struct DbRepoLanes {
     plan: PgPoolPlan,
     opt_in_enabled: bool,
     health: PgEndpointHealthRegistry,
+    endpoint_mode: PgEndpointMode,
+    routing_candidate_count: usize,
+    selected_endpoint: Option<PgEndpoint>,
+    selected_health: Option<PgEndpointHealthSnapshot>,
+    startup_failovers: usize,
+    selected_read_only: bool,
 }
 
 impl DbRepoLanes {
@@ -103,8 +298,11 @@ impl DbRepoLanes {
         runtime: &RuntimeConfig,
         opt_in_enabled: bool,
     ) -> Result<Self, String> {
-        let plan = PgPoolPlan::from_total_limit(runtime.pool_max_connections);
+        let mut plan = PgPoolPlan::from_total_limit(runtime.pool_max_connections);
+        let routing = resolve_endpoint_routing(conninfo, runtime)?;
+        let effective_conninfo = routing.conninfo.as_str();
         let dedicated = opt_in_enabled && plan.mode == PgPoolIsolationMode::DedicatedLanes;
+        plan.routing_enabled = routing.selected.is_some();
         let payload_settings = RuntimePayloadSettings::from_env()?;
         let global_payload_observability =
             Arc::new(DbRepoPayloadObservability::with_in_flight_limit_bytes(
@@ -114,28 +312,28 @@ impl DbRepoLanes {
         let storage = if dedicated {
             DbRepoLaneStorage::Dedicated {
                 read: build_lane_repo(
-                    conninfo,
+                    effective_conninfo,
                     runtime,
                     &plan,
                     PgConnectionPurpose::Read,
                     Arc::clone(&global_payload_observability),
                 )?,
                 write: build_lane_repo(
-                    conninfo,
+                    effective_conninfo,
                     runtime,
                     &plan,
                     PgConnectionPurpose::Write,
                     Arc::clone(&global_payload_observability),
                 )?,
                 control: build_lane_repo(
-                    conninfo,
+                    effective_conninfo,
                     runtime,
                     &plan,
                     PgConnectionPurpose::Control,
                     Arc::clone(&global_payload_observability),
                 )?,
                 lease: build_lane_repo(
-                    conninfo,
+                    effective_conninfo,
                     runtime,
                     &plan,
                     PgConnectionPurpose::Lease,
@@ -144,17 +342,41 @@ impl DbRepoLanes {
             }
         } else {
             DbRepoLaneStorage::Shared(DbRepo::with_runtime_and_global_payload_observability(
-                conninfo,
+                effective_conninfo,
                 runtime,
                 global_payload_observability,
             )?)
         };
 
+        let selected_endpoint = routing
+            .selected
+            .as_ref()
+            .map(|selection| selection.endpoint.clone());
+        let selected_health = routing
+            .selected
+            .as_ref()
+            .map(|selection| selection.health.clone());
+        let startup_failovers = routing
+            .selected
+            .as_ref()
+            .map(|selection| selection.startup_failovers)
+            .unwrap_or(0);
+        let selected_read_only = routing
+            .selected
+            .as_ref()
+            .is_some_and(|selection| selection.read_only);
+
         Ok(Self {
             storage,
             plan,
             opt_in_enabled,
-            health: PgEndpointHealthRegistry::default(),
+            health: routing.health,
+            endpoint_mode: routing.endpoint_mode,
+            routing_candidate_count: routing.candidate_count,
+            selected_endpoint,
+            selected_health,
+            startup_failovers,
+            selected_read_only,
         })
     }
 
@@ -239,23 +461,40 @@ impl DbRepoLanes {
             write_limit: self.plan.write_limit,
             control_limit: self.plan.control_limit,
             lease_limit: self.plan.lease_limit,
-            legacy_dsn_only: true,
-            routing_enabled: false,
+            legacy_dsn_only: !self.plan.routing_enabled,
+            routing_enabled: self.plan.routing_enabled,
+            endpoint_mode: self.endpoint_mode,
+            routing_candidate_count: self.routing_candidate_count,
+            selected_authority: self.selected_endpoint.as_ref().map(PgEndpoint::authority),
+            startup_failovers: self.startup_failovers,
+            selected_read_only: self.selected_read_only,
         }
     }
 
     pub fn probe_health(&self, conninfo: &str) -> Result<PgEndpointHealthSnapshot, String> {
+        if let Some(health) = &self.selected_health {
+            return Ok(health.clone());
+        }
         let result = postgres_endpoint_probe(conninfo);
         self.health
             .record_probe_result(LEGACY_DSN_AUTHORITY, PgEndpointRole::Unknown, result)
+    }
+
+    pub fn health_snapshots(&self) -> Result<Vec<PgEndpointHealthSnapshot>, String> {
+        self.health.snapshots()
     }
 
     pub fn record_connection_failure(
         &self,
         error: &str,
     ) -> Result<PgEndpointHealthSnapshot, String> {
-        self.health
-            .record_failure(LEGACY_DSN_AUTHORITY, PgEndpointRole::Unknown, error)
+        if let Some(endpoint) = &self.selected_endpoint {
+            self.health
+                .record_failure(&endpoint.authority(), endpoint.role, error)
+        } else {
+            self.health
+                .record_failure(LEGACY_DSN_AUTHORITY, PgEndpointRole::Unknown, error)
+        }
     }
 }
 
@@ -274,7 +513,7 @@ pub fn mount_with_lanes(
         .map_err(|err| format!("failed to create PostgreSQL repository lanes: {err}"))?;
     let diagnostics = lanes.diagnostics();
     log::info!(
-        "FOD PostgreSQL lanes: opt_in_enabled={} dedicated_lanes_active={} mode={} total={} read={} write={} control={} lease={} legacy_dsn_only={} routing_enabled={}",
+        "FOD PostgreSQL lanes: opt_in_enabled={} dedicated_lanes_active={} mode={} total={} read={} write={} control={} lease={} legacy_dsn_only={} routing_enabled={} endpoint_mode={} routing_candidate_count={} selected_authority={} startup_failovers={} selected_read_only={}",
         diagnostics.opt_in_enabled,
         diagnostics.dedicated_lanes_active,
         diagnostics.mode.as_str(),
@@ -285,9 +524,39 @@ pub fn mount_with_lanes(
         diagnostics.lease_limit,
         diagnostics.legacy_dsn_only,
         diagnostics.routing_enabled,
+        diagnostics.endpoint_mode.as_str(),
+        diagnostics.routing_candidate_count,
+        diagnostics.selected_authority.as_deref().unwrap_or("none"),
+        diagnostics.startup_failovers,
+        diagnostics.selected_read_only,
     );
 
-    match lanes.probe_health(conninfo) {
+    if diagnostics.routing_enabled {
+        for health in lanes.health_snapshots()? {
+            let eligible = health
+                .eligible_purposes
+                .iter()
+                .map(|purpose| purpose.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            let automatic_routing_enabled = diagnostics
+                .selected_authority
+                .as_deref()
+                .is_some_and(|authority| authority == health.authority);
+            log::info!(
+                "FOD PostgreSQL endpoint health: authority={} state={} configured_role={} observed_role={:?} successes={} failures={} eligible_purposes={} automatic_routing_enabled={}",
+                health.authority,
+                health.state.as_str(),
+                health.configured_role.as_str(),
+                health.observed_role.map(|role| role.as_str()),
+                health.total_successes,
+                health.total_failures,
+                eligible,
+                automatic_routing_enabled,
+            );
+        }
+    } else {
+        match lanes.probe_health(conninfo) {
         Ok(health) => {
             let eligible = health
                 .eligible_purposes
@@ -307,10 +576,11 @@ pub fn mount_with_lanes(
                 health.automatic_routing_enabled,
             );
         }
-        Err(err) => log::warn!(
-            "FOD PostgreSQL lane health probe unavailable; continuing with normal startup checks: {}",
-            err
-        ),
+            Err(err) => log::warn!(
+                "FOD PostgreSQL lane health probe unavailable; continuing with normal startup checks: {}",
+                err
+            ),
+        }
     }
 
     let observability_repositories = lanes.observability_repositories();
@@ -586,5 +856,146 @@ mod tests {
         for purpose in PgConnectionPurpose::ALL {
             let _ = lanes.repo_for(purpose);
         }
+    }
+}
+
+#[cfg(test)]
+mod endpoint_routing_tests {
+    use super::*;
+
+    fn config(endpoints: Vec<PgEndpoint>) -> PgEndpointConfig {
+        PgEndpointConfig {
+            mode: PgEndpointMode::ExplicitRoles,
+            role_discovery_required: false,
+            endpoints,
+        }
+    }
+
+    #[test]
+    fn explicit_fod_role_overrides_runtime_role_for_endpoint_selection() {
+        let previous = std::env::var_os("FOD_ROLE");
+        std::env::set_var("FOD_ROLE", "primary");
+        let runtime = RuntimeConfig::from_runtime_map(&HashMap::new()).unwrap();
+        assert_eq!(effective_mount_role(&runtime).unwrap(), MountRole::Primary);
+        match previous {
+            Some(value) => std::env::set_var("FOD_ROLE", value),
+            None => std::env::remove_var("FOD_ROLE"),
+        }
+    }
+
+    #[test]
+    fn auto_prefers_writable_primary_over_healthy_replica() {
+        let config = config(vec![
+            PgEndpoint {
+                host: "replica".to_string(),
+                port: 5432,
+                role: PgEndpointRole::Replica,
+            },
+            PgEndpoint {
+                host: "primary".to_string(),
+                port: 5432,
+                role: PgEndpointRole::Primary,
+            },
+        ]);
+        let health = PgEndpointHealthRegistry::default();
+        let replica = health
+            .record_probe_at(
+                "replica:5432",
+                PgEndpointRole::Replica,
+                PgEndpointProbe::from_flags(true, true),
+                1,
+            )
+            .unwrap();
+        let primary = health
+            .record_probe_at(
+                "primary:5432",
+                PgEndpointRole::Primary,
+                PgEndpointProbe::from_flags(false, false),
+                2,
+            )
+            .unwrap();
+
+        let selected =
+            select_endpoint_for_mount(&config, MountRole::Auto, &[replica, primary]).unwrap();
+        assert_eq!(selected.endpoint.authority(), "primary:5432");
+        assert!(!selected.read_only);
+        assert_eq!(selected.startup_failovers, 0);
+    }
+
+    #[test]
+    fn primary_selection_counts_unreachable_primary_before_healthy_fallback() {
+        let config = config(vec![
+            PgEndpoint {
+                host: "primary-a".to_string(),
+                port: 5432,
+                role: PgEndpointRole::Primary,
+            },
+            PgEndpoint {
+                host: "primary-b".to_string(),
+                port: 5432,
+                role: PgEndpointRole::Primary,
+            },
+        ]);
+        let health = PgEndpointHealthRegistry::default();
+        let failed = health
+            .record_failure_at(
+                "primary-a:5432",
+                PgEndpointRole::Primary,
+                "connection refused",
+                1,
+            )
+            .unwrap();
+        let healthy = health
+            .record_probe_at(
+                "primary-b:5432",
+                PgEndpointRole::Primary,
+                PgEndpointProbe::from_flags(false, false),
+                2,
+            )
+            .unwrap();
+
+        let selected =
+            select_endpoint_for_mount(&config, MountRole::Primary, &[failed, healthy]).unwrap();
+        assert_eq!(selected.endpoint.authority(), "primary-b:5432");
+        assert_eq!(selected.startup_failovers, 1);
+        assert!(!selected.read_only);
+    }
+
+    #[test]
+    fn replica_role_selects_only_observed_replica() {
+        let config = config(vec![
+            PgEndpoint {
+                host: "primary".to_string(),
+                port: 5432,
+                role: PgEndpointRole::Primary,
+            },
+            PgEndpoint {
+                host: "replica".to_string(),
+                port: 5432,
+                role: PgEndpointRole::Replica,
+            },
+        ]);
+        let health = PgEndpointHealthRegistry::default();
+        let primary = health
+            .record_probe_at(
+                "primary:5432",
+                PgEndpointRole::Primary,
+                PgEndpointProbe::from_flags(false, false),
+                1,
+            )
+            .unwrap();
+        let replica = health
+            .record_probe_at(
+                "replica:5432",
+                PgEndpointRole::Replica,
+                PgEndpointProbe::from_flags(true, true),
+                2,
+            )
+            .unwrap();
+
+        let selected =
+            select_endpoint_for_mount(&config, MountRole::Replica, &[primary, replica]).unwrap();
+        assert_eq!(selected.endpoint.authority(), "replica:5432");
+        assert!(selected.read_only);
     }
 }

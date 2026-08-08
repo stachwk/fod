@@ -658,3 +658,18 @@ dedicated lane pools cannot independently consume the full process budget.
 This is still process-local. A later multi-endpoint/global fairness stage may
 need coordination across mounts or processes, but it should preserve the
 separation between connection capacity, transaction capacity and byte capacity.
+
+## FOD 3.2.65 safe startup routing activation
+
+Phase 4 routing is active at mount startup. FOD probes configured candidates
+with `pg_is_in_recovery()` and `transaction_read_only`; connection failures,
+role mismatches and inconsistent recovery state are excluded before selection.
+
+Primary mounts use one verified writable primary for all current repository
+pools. Replica mounts select an observed replica. Auto mounts prefer primary and
+can fall back to a read-only endpoint. This is endpoint failover priority, not
+load balancing.
+
+The next stage must re-evaluate endpoints during runtime and route reads to
+replicas only together with explicit primary-pinning or WAL/replay-LSN
+read-after-write consistency.

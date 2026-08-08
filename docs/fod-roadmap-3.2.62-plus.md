@@ -80,15 +80,32 @@ Acceptance:
 - hot-path fio/strace and telemetry smoke continue to pass;
 - Makefile audit finds no echoable password-bearing recipe command.
 
-## FOD 3.2.65+ — Role-aware multi-endpoint routing
+## FOD 3.2.65 — Role-aware startup routing and failover
 
-Continue the existing multi-endpoint roadmap:
-- verified primary-only write/control/lease routing;
-- replica-eligible read routing with read-after-write consistency;
-- endpoint health, latency, lag and pool-pressure scoring;
-- hysteresis/circuit breaker behavior;
-- promotion/failover and split-brain safety tests;
-- cross-process fairness where required.
+Status: implemented.
+
+- bootstrap propagates configured endpoint lists to Rust FUSE;
+- startup probes all candidates before repository pools are created;
+- `primary` selects only a healthy writable primary;
+- `replica` selects only an observed healthy replica;
+- `auto` prefers writable primary and can fall back to a healthy read-only endpoint;
+- writable mounts remain primary-pinned for read-after-write consistency;
+- startup failover skips unavailable/ineligible candidates in configured order;
+- diagnostics expose endpoint mode, candidate count, selected authority and
+  startup failover count;
+- a real mount test refuses the first primary and proves write/read through the
+  second primary.
+
+## FOD 3.2.66+ — Runtime routing, replica consistency and failover
+
+- route eligible reads to replicas only with primary pinning or WAL/replay-LSN
+  read-after-write consistency;
+- re-evaluate endpoints after connection failures and support runtime failover
+  without weakening replay-confirmation guarantees;
+- add endpoint latency, replica lag and pool-pressure scoring;
+- add hysteresis/circuit-breaker behavior;
+- cover promotion/failover and split-brain safety;
+- add cross-process fairness where required.
 
 The confirmed `8/4` FUSE admission configuration remains the production
 candidate while these later layers are implemented.

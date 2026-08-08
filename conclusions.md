@@ -811,3 +811,20 @@ those command lines must be treated as sensitive. FOD 3.2.64 silences
 password-bearing Makefile recipe commands and adds an audit that blocks future
 echo regressions. This protects Makefile command echo; child tools must still
 avoid printing secrets themselves.
+
+## 2026-08-08 — FOD 3.2.65 role-aware startup routing
+
+Multi-endpoint configuration now changes the actual PostgreSQL endpoint used by
+the mount instead of remaining parser/health-only metadata. Candidate endpoints
+are role-probed before repository pools are created. Endpoint-routing enablement
+itself enters the `pg_lanes` startup path, so routing does not depend on the
+separate dedicated-pool-lanes opt-in.
+
+The safety policy remains deliberately conservative. A writable mount pins all
+current repository pools to one verified writable primary, preserving
+read-after-write consistency. `auto` can fall back to a healthy read-only
+endpoint, but the startup snapshot then makes the mount read-only.
+
+This stage provides startup failover only. Transparent endpoint replacement
+after a mounted path fails must preserve transaction replay confirmation,
+lock/lease ownership and read consistency, so it remains the next stage.

@@ -2834,3 +2834,25 @@ smoke with the base `64MiB` payload budget.
 The Makefile audit treats password-bearing logical recipe commands as sensitive
 and requires the recipe command to be silent (`@`). It prevents Make itself
 from echoing expanded password values into logs.
+
+## FOD 3.2.65 PostgreSQL endpoint routing
+
+```bash
+make test-postgresql-endpoint-routing
+```
+
+The regression configures an unreachable first primary (`127.0.0.1:1`) and the
+local PostgreSQL endpoint as the second primary. FOD must report one startup
+failover, select the second endpoint and complete a mounted write/read/remove
+cycle.
+
+Base configuration enables routing for multi-endpoint fields:
+
+```ini
+[fod]
+pg_endpoint_routing_enabled = true
+
+[database]
+primary_hosts = db-a:5432,db-b:5432
+replica_hosts = db-r1:5432,db-r2:5432
+```

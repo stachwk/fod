@@ -152,6 +152,35 @@ fn rust_fuse_binary() -> Option<PathBuf> {
     None
 }
 
+const PG_ENDPOINT_ENV_KEYS: &[(&str, &str)] = &[
+    ("primary_hosts", "FOD_PG_PRIMARY_HOSTS"),
+    ("replica_hosts", "FOD_PG_REPLICA_HOSTS"),
+    ("hosts", "FOD_PG_HOSTS"),
+];
+
+fn configured_pg_endpoint_env(
+    db_section: &std::collections::HashMap<String, String>,
+) -> Vec<(&'static str, String)> {
+    PG_ENDPOINT_ENV_KEYS
+        .iter()
+        .filter_map(|(key, env_name)| {
+            db_section
+                .get(*key)
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(|value| (*env_name, value.to_string()))
+        })
+        .collect()
+}
+
+fn apply_pg_endpoint_env(db_section: &std::collections::HashMap<String, String>) {
+    for (env_name, value) in configured_pg_endpoint_env(db_section) {
+        if env::var_os(env_name).is_none() {
+            env::set_var(env_name, value);
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let rust_fuse = match rust_fuse_binary() {
@@ -229,6 +258,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    apply_pg_endpoint_env(&db_section);
     let params = resolve_pg_connection_params(&db_section, &config_dir);
     let conninfo = make_conninfo(&params);
     env::set_var("FOD_DSN_CONNINFO", conninfo);
@@ -259,6 +289,25 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn extracts_endpoint_lists_for_fuse_environment() {
+        let db = std::collections::HashMap::from([
+            (
+                "primary_hosts".to_string(),
+                "db-a:5432,db-b:5432".to_string(),
+            ),
+            ("replica_hosts".to_string(), "db-r:5432".to_string()),
+            ("host".to_string(), "legacy".to_string()),
+        ]);
+        assert_eq!(
+            configured_pg_endpoint_env(&db),
+            vec![
+                ("FOD_PG_PRIMARY_HOSTS", "db-a:5432,db-b:5432".to_string()),
+                ("FOD_PG_REPLICA_HOSTS", "db-r:5432".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn find_in_path_prefers_first_executable_candidate() {

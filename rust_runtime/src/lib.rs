@@ -565,6 +565,21 @@ impl RuntimePayloadSettings {
     }
 }
 
+/// Role-aware PostgreSQL endpoint routing startup control.
+/// Direct fod-rust-fuse execution remains legacy unless explicitly enabled.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeEndpointRoutingSettings {
+    pub enabled: bool,
+}
+
+impl RuntimeEndpointRoutingSettings {
+    pub fn from_env() -> Self {
+        Self {
+            enabled: env_var_truthy_with_legacy_alias("FOD_PG_ENDPOINT_ROUTING_ENABLED", false),
+        }
+    }
+}
+
 fn active_limit_from_env(name: &str) -> Result<u64, String> {
     let Some(value) = env::var_os(name) else {
         return Ok(0);
