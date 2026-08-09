@@ -698,6 +698,18 @@ pub struct DbRepoConnectionRoutingSnapshot {
     pub connection_failures: u64,
     pub role_rejections: u64,
     pub last_failed_authority: Option<String>,
+    pub replica_read_routing_enabled: bool,
+    pub replica_target_count: usize,
+    pub replica_active_authority: Option<String>,
+    pub required_primary_wal_lsn: Option<String>,
+    pub primary_wal_lsn_updates: u64,
+    pub primary_wal_lsn_capture_failures: u64,
+    pub replica_consistency_checks: u64,
+    pub replica_consistency_passes: u64,
+    pub replica_reads: u64,
+    pub replica_lag_fallbacks: u64,
+    pub replica_read_failures: u64,
+    pub primary_read_fallbacks: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1337,7 +1349,7 @@ pub fn log_lane_observability(
                 let routing = snapshot.routing;
                 let payload = snapshot.payload;
                 log::info!(
-                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} stale_connection_discards={} transaction_count={} transaction_failures={} transaction_micros_total={} transaction_micros_max={} write_transaction_limit={} write_active_transactions={} write_queued_transactions={} write_peak_active_transactions={} write_peak_queued_transactions={} write_transaction_admission_count={} write_transaction_backpressure_events={} write_transaction_fairness_yields={} write_transaction_accounting_errors={} control_transaction_limit={} control_active_transactions={} control_queued_transactions={} control_peak_active_transactions={} control_peak_queued_transactions={} control_transaction_admission_count={} control_transaction_backpressure_events={} control_transaction_fairness_yields={} control_transaction_accounting_errors={} heartbeat_count={} heartbeat_failures={} heartbeat_schedule_delay_micros_total={} heartbeat_schedule_delay_micros_max={} heartbeat_execution_micros_total={} heartbeat_execution_micros_max={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled={} runtime_failover_enabled={} routing_target_count={} routing_active_authority={} routing_generation={} runtime_failover_count={} routing_connection_failures={} routing_role_rejections={} routing_last_failed_authority={}",
+                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} stale_connection_discards={} transaction_count={} transaction_failures={} transaction_micros_total={} transaction_micros_max={} write_transaction_limit={} write_active_transactions={} write_queued_transactions={} write_peak_active_transactions={} write_peak_queued_transactions={} write_transaction_admission_count={} write_transaction_backpressure_events={} write_transaction_fairness_yields={} write_transaction_accounting_errors={} control_transaction_limit={} control_active_transactions={} control_queued_transactions={} control_peak_active_transactions={} control_peak_queued_transactions={} control_transaction_admission_count={} control_transaction_backpressure_events={} control_transaction_fairness_yields={} control_transaction_accounting_errors={} heartbeat_count={} heartbeat_failures={} heartbeat_schedule_delay_micros_total={} heartbeat_schedule_delay_micros_max={} heartbeat_execution_micros_total={} heartbeat_execution_micros_max={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled={} runtime_failover_enabled={} routing_target_count={} routing_active_authority={} routing_generation={} runtime_failover_count={} routing_connection_failures={} routing_role_rejections={} routing_last_failed_authority={} replica_read_routing_enabled={} replica_target_count={} replica_active_authority={} required_primary_wal_lsn={} primary_wal_lsn_updates={} primary_wal_lsn_capture_failures={} replica_consistency_checks={} replica_consistency_passes={} replica_reads={} replica_lag_fallbacks={} replica_read_failures={} primary_read_fallbacks={}",
                     stage,
                     lane,
                     pool.connection_limit,
@@ -1412,6 +1424,18 @@ pub fn log_lane_observability(
                     routing.connection_failures,
                     routing.role_rejections,
                     routing.last_failed_authority.as_deref().unwrap_or("none"),
+                    routing.replica_read_routing_enabled,
+                    routing.replica_target_count,
+                    routing.replica_active_authority.as_deref().unwrap_or("none"),
+                    routing.required_primary_wal_lsn.as_deref().unwrap_or("none"),
+                    routing.primary_wal_lsn_updates,
+                    routing.primary_wal_lsn_capture_failures,
+                    routing.replica_consistency_checks,
+                    routing.replica_consistency_passes,
+                    routing.replica_reads,
+                    routing.replica_lag_fallbacks,
+                    routing.replica_read_failures,
+                    routing.primary_read_fallbacks,
                 );
                 if !global_payload_logged {
                     let global_payload = snapshot.global_payload;

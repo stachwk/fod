@@ -492,6 +492,18 @@ impl DbRepoConnectionTargets {
             connection_failures: state.connection_failures,
             role_rejections: state.role_rejections,
             last_failed_authority: state.last_failed_authority.clone(),
+            replica_read_routing_enabled: false,
+            replica_target_count: 0,
+            replica_active_authority: None,
+            required_primary_wal_lsn: None,
+            primary_wal_lsn_updates: 0,
+            primary_wal_lsn_capture_failures: 0,
+            replica_consistency_checks: 0,
+            replica_consistency_passes: 0,
+            replica_reads: 0,
+            replica_lag_fallbacks: 0,
+            replica_read_failures: 0,
+            primary_read_fallbacks: 0,
         })
     }
 
@@ -563,6 +575,148 @@ impl DbRepoConnectionTargets {
             "PostgreSQL connection targets exhausted: {}",
             errors.join(" | ")
         ))
+    }
+}
+
+#[derive(Debug, Default)]
+struct ReplicaReadConsistencyState {
+    required_primary_wal_lsn: Option<u64>,
+    required_primary_wal_lsn_text: Option<String>,
+    force_primary: bool,
+    primary_wal_lsn_updates: u64,
+    primary_wal_lsn_capture_failures: u64,
+    replica_consistency_checks: u64,
+    replica_consistency_passes: u64,
+    replica_reads: u64,
+    replica_lag_fallbacks: u64,
+    replica_read_failures: u64,
+    primary_read_fallbacks: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplicaReadConsistencySnapshot {
+    required_primary_wal_lsn: Option<String>,
+    force_primary: bool,
+    primary_wal_lsn_updates: u64,
+    primary_wal_lsn_capture_failures: u64,
+    replica_consistency_checks: u64,
+    replica_consistency_passes: u64,
+    replica_reads: u64,
+    replica_lag_fallbacks: u64,
+    replica_read_failures: u64,
+    primary_read_fallbacks: u64,
+}
+
+#[derive(Debug, Default)]
+struct ReplicaReadConsistency {
+    state: Mutex<ReplicaReadConsistencyState>,
+}
+
+fn parse_pg_lsn(value: &str) -> Result<u64, String> {
+    let value = value.trim();
+    let (high, low) = value
+        .split_once('/')
+        .ok_or_else(|| format!("invalid PostgreSQL LSN `{value}`"))?;
+    let high =
+        u64::from_str_radix(high, 16).map_err(|_| format!("invalid PostgreSQL LSN `{value}`"))?;
+    let low =
+        u64::from_str_radix(low, 16).map_err(|_| format!("invalid PostgreSQL LSN `{value}`"))?;
+    if high > u64::from(u32::MAX) || low > u64::from(u32::MAX) {
+        return Err(format!("PostgreSQL LSN component overflow `{value}`"));
+    }
+    Ok((high << 32) | low)
+}
+
+impl ReplicaReadConsistency {
+    fn record_primary_wal_lsn(&self, value: &str) -> Result<(), String> {
+        let parsed = parse_pg_lsn(value)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "replica consistency state is poisoned".to_string())?;
+        state.required_primary_wal_lsn = Some(parsed);
+        state.required_primary_wal_lsn_text = Some(value.trim().to_ascii_uppercase());
+        state.force_primary = false;
+        state.primary_wal_lsn_updates = state.primary_wal_lsn_updates.saturating_add(1);
+        Ok(())
+    }
+
+    fn record_primary_wal_lsn_capture_failure(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.force_primary = true;
+            state.primary_wal_lsn_capture_failures =
+                state.primary_wal_lsn_capture_failures.saturating_add(1);
+        }
+    }
+
+    fn required_lsn(&self) -> Result<Option<u64>, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "replica consistency state is poisoned".to_string())?;
+        if state.force_primary {
+            Ok(None)
+        } else {
+            Ok(state.required_primary_wal_lsn)
+        }
+    }
+
+    fn force_primary(&self) -> Result<bool, String> {
+        self.state
+            .lock()
+            .map(|state| state.force_primary)
+            .map_err(|_| "replica consistency state is poisoned".to_string())
+    }
+
+    fn record_consistency_check(&self, passed: bool) {
+        if let Ok(mut state) = self.state.lock() {
+            state.replica_consistency_checks = state.replica_consistency_checks.saturating_add(1);
+            if passed {
+                state.replica_consistency_passes =
+                    state.replica_consistency_passes.saturating_add(1);
+            } else {
+                state.replica_lag_fallbacks = state.replica_lag_fallbacks.saturating_add(1);
+                state.primary_read_fallbacks = state.primary_read_fallbacks.saturating_add(1);
+            }
+        }
+    }
+
+    fn record_replica_read(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.replica_reads = state.replica_reads.saturating_add(1);
+        }
+    }
+
+    fn record_replica_failure_fallback(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.replica_read_failures = state.replica_read_failures.saturating_add(1);
+            state.primary_read_fallbacks = state.primary_read_fallbacks.saturating_add(1);
+        }
+    }
+
+    fn record_forced_primary_fallback(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.primary_read_fallbacks = state.primary_read_fallbacks.saturating_add(1);
+        }
+    }
+
+    fn snapshot(&self) -> Result<ReplicaReadConsistencySnapshot, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "replica consistency state is poisoned".to_string())?;
+        Ok(ReplicaReadConsistencySnapshot {
+            required_primary_wal_lsn: state.required_primary_wal_lsn_text.clone(),
+            force_primary: state.force_primary,
+            primary_wal_lsn_updates: state.primary_wal_lsn_updates,
+            primary_wal_lsn_capture_failures: state.primary_wal_lsn_capture_failures,
+            replica_consistency_checks: state.replica_consistency_checks,
+            replica_consistency_passes: state.replica_consistency_passes,
+            replica_reads: state.replica_reads,
+            replica_lag_fallbacks: state.replica_lag_fallbacks,
+            replica_read_failures: state.replica_read_failures,
+            primary_read_fallbacks: state.primary_read_fallbacks,
+        })
     }
 }
 
@@ -2586,6 +2740,9 @@ where
 /// lease/session maintenance so long flushes do not starve heartbeats or cleanup.
 pub struct DbRepo {
     connection_targets: Arc<DbRepoConnectionTargets>,
+    replica_read_targets: Option<Arc<DbRepoConnectionTargets>>,
+    replica_read_pool: Option<Arc<SharedConnectionPool>>,
+    replica_consistency: Arc<ReplicaReadConsistency>,
     connection_tuning: ConnectionTuning,
     persist_buffer_chunk_blocks: u64,
     persist_block_transport: PersistBlockTransport,
@@ -2602,6 +2759,9 @@ impl Clone for DbRepo {
     fn clone(&self) -> Self {
         Self {
             connection_targets: Arc::clone(&self.connection_targets),
+            replica_read_targets: self.replica_read_targets.as_ref().map(Arc::clone),
+            replica_read_pool: self.replica_read_pool.as_ref().map(Arc::clone),
+            replica_consistency: Arc::clone(&self.replica_consistency),
             connection_tuning: self.connection_tuning.clone(),
             persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,
             persist_block_transport: self.persist_block_transport,
@@ -3604,6 +3764,44 @@ impl DbRepo {
         )
     }
 
+    pub fn with_runtime_connection_targets_and_replica_read_targets(
+        connection_targets: Arc<DbRepoConnectionTargets>,
+        replica_read_targets: Option<Arc<DbRepoConnectionTargets>>,
+        replica_read_pool_limit: usize,
+        runtime: &RuntimeConfig,
+    ) -> Result<Self, String> {
+        let payload_settings = RuntimePayloadSettings::from_env()?;
+        let global_payload_observability =
+            Arc::new(DbRepoPayloadObservability::with_in_flight_limit_bytes(
+                payload_settings.in_flight_limit_bytes,
+            ));
+        Self::with_runtime_observability_targets_and_replica(
+            connection_targets,
+            replica_read_targets,
+            replica_read_pool_limit,
+            runtime,
+            Arc::new(DbRepoPayloadObservability::default()),
+            global_payload_observability,
+        )
+    }
+
+    pub fn with_runtime_connection_targets_and_replica_read_targets_and_global_payload_observability(
+        connection_targets: Arc<DbRepoConnectionTargets>,
+        replica_read_targets: Option<Arc<DbRepoConnectionTargets>>,
+        replica_read_pool_limit: usize,
+        runtime: &RuntimeConfig,
+        global_payload_observability: Arc<DbRepoPayloadObservability>,
+    ) -> Result<Self, String> {
+        Self::with_runtime_observability_targets_and_replica(
+            connection_targets,
+            replica_read_targets,
+            replica_read_pool_limit,
+            runtime,
+            Arc::new(DbRepoPayloadObservability::default()),
+            global_payload_observability,
+        )
+    }
+
     pub fn with_runtime_connection_targets_and_global_payload_observability(
         connection_targets: Arc<DbRepoConnectionTargets>,
         runtime: &RuntimeConfig,
@@ -3623,11 +3821,31 @@ impl DbRepo {
         payload_observability: Arc<DbRepoPayloadObservability>,
         global_payload_observability: Arc<DbRepoPayloadObservability>,
     ) -> Result<Self, String> {
+        Self::with_runtime_observability_targets_and_replica(
+            connection_targets,
+            None,
+            1,
+            runtime,
+            payload_observability,
+            global_payload_observability,
+        )
+    }
+
+    fn with_runtime_observability_targets_and_replica(
+        connection_targets: Arc<DbRepoConnectionTargets>,
+        replica_read_targets: Option<Arc<DbRepoConnectionTargets>>,
+        replica_read_pool_limit: usize,
+        runtime: &RuntimeConfig,
+        payload_observability: Arc<DbRepoPayloadObservability>,
+        global_payload_observability: Arc<DbRepoPayloadObservability>,
+    ) -> Result<Self, String> {
         let core = runtime.core_settings();
         let storage = runtime.storage_settings();
         let transaction_settings = RuntimeTransactionSettings::from_env()?;
-        Self::new_with_tuning_targets(
+        Self::new_with_tuning_targets_and_replica(
             connection_targets,
+            replica_read_targets,
+            replica_read_pool_limit,
             ConnectionTuning::from_storage(&storage),
             storage.persist_buffer_chunk_blocks,
             storage.persist_block_transport,
@@ -3665,6 +3883,7 @@ impl DbRepo {
         )
     }
 
+    #[cfg(test)]
     fn new_with_tuning_targets(
         connection_targets: Arc<DbRepoConnectionTargets>,
         connection_tuning: ConnectionTuning,
@@ -3676,8 +3895,45 @@ impl DbRepo {
         payload_observability: Arc<DbRepoPayloadObservability>,
         global_payload_observability: Arc<DbRepoPayloadObservability>,
     ) -> Result<Self, String> {
+        Self::new_with_tuning_targets_and_replica(
+            connection_targets,
+            None,
+            1,
+            connection_tuning,
+            persist_buffer_chunk_blocks,
+            persist_block_transport,
+            data_object_swap_cleanup,
+            connection_limit,
+            transaction_settings,
+            payload_observability,
+            global_payload_observability,
+        )
+    }
+
+    fn new_with_tuning_targets_and_replica(
+        connection_targets: Arc<DbRepoConnectionTargets>,
+        replica_read_targets: Option<Arc<DbRepoConnectionTargets>>,
+        replica_read_pool_limit: usize,
+        connection_tuning: ConnectionTuning,
+        persist_buffer_chunk_blocks: u64,
+        persist_block_transport: PersistBlockTransport,
+        data_object_swap_cleanup: DataObjectSwapCleanup,
+        connection_limit: usize,
+        transaction_settings: RuntimeTransactionSettings,
+        payload_observability: Arc<DbRepoPayloadObservability>,
+        global_payload_observability: Arc<DbRepoPayloadObservability>,
+    ) -> Result<Self, String> {
+        let replica_read_pool = replica_read_targets.as_ref().map(|_| {
+            Arc::new(SharedConnectionPool::new(
+                replica_read_pool_limit.max(1),
+                transaction_settings,
+            ))
+        });
         Ok(Self {
             connection_targets,
+            replica_read_targets,
+            replica_read_pool,
+            replica_consistency: Arc::new(ReplicaReadConsistency::default()),
             connection_tuning,
             persist_buffer_chunk_blocks: persist_buffer_chunk_blocks.max(1),
             persist_block_transport,
@@ -3692,6 +3948,152 @@ impl DbRepo {
             lock_schema_ready: Mutex::new(false),
             owner_session_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn refresh_primary_wal_lsn(&self, conn: *mut PGconn) {
+        if self.replica_read_targets.is_none() {
+            return;
+        }
+        let Ok(sql) = CString::new("SELECT pg_current_wal_lsn()::text") else {
+            self.replica_consistency
+                .record_primary_wal_lsn_capture_failure();
+            return;
+        };
+        match unsafe { query_scalar_text_on_conn(conn, &sql) } {
+            Ok(value) => {
+                if self
+                    .replica_consistency
+                    .record_primary_wal_lsn(&value)
+                    .is_err()
+                {
+                    self.replica_consistency
+                        .record_primary_wal_lsn_capture_failure();
+                }
+            }
+            Err(_) => self
+                .replica_consistency
+                .record_primary_wal_lsn_capture_failure(),
+        }
+    }
+
+    fn replica_is_caught_up(&self, conn: *mut PGconn) -> Result<bool, String> {
+        if self.replica_consistency.force_primary()? {
+            return Ok(false);
+        }
+        let Some(required_lsn) = self.replica_consistency.required_lsn()? else {
+            return Ok(true);
+        };
+        let sql = CString::new("SELECT COALESCE(pg_last_wal_replay_lsn()::text, '')")
+            .map_err(|_| "replica replay LSN SQL contains NUL byte".to_string())?;
+        let replay_lsn = unsafe { query_scalar_text_on_conn(conn, &sql) }?;
+        let replay_lsn = replay_lsn.trim();
+        let caught_up = if replay_lsn.is_empty() {
+            false
+        } else {
+            parse_pg_lsn(replay_lsn)? >= required_lsn
+        };
+        self.replica_consistency.record_consistency_check(caught_up);
+        Ok(caught_up)
+    }
+
+    fn with_read_connection<T, F>(&self, mut f: F) -> Result<T, String>
+    where
+        F: FnMut(*mut PGconn) -> Result<T, String>,
+    {
+        let (Some(targets), Some(pool)) = (
+            self.replica_read_targets.as_ref(),
+            self.replica_read_pool.as_ref(),
+        ) else {
+            return self.with_connection(ConnectionLane::Write, f);
+        };
+
+        if self.replica_consistency.force_primary()? {
+            self.replica_consistency.record_forced_primary_fallback();
+            return self.with_connection(ConnectionLane::Write, f);
+        }
+
+        let generation = targets.generation()?;
+        let acquisition = match pool.acquire(ConnectionLane::Write, generation) {
+            Ok(value) => value,
+            Err(_) => {
+                self.replica_consistency.record_replica_failure_fallback();
+                return self.with_connection(ConnectionLane::Write, f);
+            }
+        };
+        let (conn, generation) = match acquisition {
+            ConnectionAcquisition::Cached { conn, generation } => (conn, generation),
+            ConnectionAcquisition::ReservedSlot => {
+                let started = Instant::now();
+                match targets.connect_new(&self.connection_tuning) {
+                    Ok((conn, generation)) => {
+                        if let Err(err) = pool.record_connection_created(started.elapsed()) {
+                            unsafe { PQfinish(conn) };
+                            return Err(err);
+                        }
+                        (conn, generation)
+                    }
+                    Err(_) => {
+                        let _ = pool.release_unconnected_slot(started.elapsed());
+                        self.replica_consistency.record_replica_failure_fallback();
+                        return self.with_connection(ConnectionLane::Write, f);
+                    }
+                }
+            }
+        };
+
+        let started = Instant::now();
+        match self.replica_is_caught_up(conn) {
+            Ok(true) => {}
+            Ok(false) => {
+                let current_generation = targets.generation()?;
+                match pool.return_cached(
+                    ConnectionLane::Write,
+                    conn,
+                    generation,
+                    current_generation,
+                    started.elapsed(),
+                ) {
+                    Ok(true) => {}
+                    Ok(false) | Err(_) => unsafe { PQfinish(conn) },
+                }
+                return self.with_connection(ConnectionLane::Write, f);
+            }
+            Err(_) => {
+                let _ = pool.release_failed_operation(started.elapsed());
+                unsafe { PQfinish(conn) };
+                self.replica_consistency.record_replica_failure_fallback();
+                return self.with_connection(ConnectionLane::Write, f);
+            }
+        }
+
+        match f(conn) {
+            Ok(value) => {
+                let current_generation = targets.generation()?;
+                match pool.return_cached(
+                    ConnectionLane::Write,
+                    conn,
+                    generation,
+                    current_generation,
+                    started.elapsed(),
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => unsafe { PQfinish(conn) },
+                    Err(err) => {
+                        unsafe { PQfinish(conn) };
+                        return Err(err);
+                    }
+                }
+                self.replica_consistency.record_replica_read();
+                Ok(value)
+            }
+            Err(_) => {
+                let _ = pool.release_failed_operation(started.elapsed());
+                unsafe { PQfinish(conn) };
+                let _ = targets.mark_operation_connection_failure(generation);
+                self.replica_consistency.record_replica_failure_fallback();
+                self.with_connection(ConnectionLane::Write, f)
+            }
+        }
     }
 
     fn with_connection<T, F>(&self, lane: ConnectionLane, mut f: F) -> Result<T, String>
@@ -3742,6 +4144,9 @@ impl DbRepo {
             let operation_elapsed = operation_started.elapsed();
             match result {
                 Ok(value) => {
+                    if lane == ConnectionLane::Write {
+                        self.refresh_primary_wal_lsn(conn);
+                    }
                     let current_generation = self.connection_targets.generation()?;
                     match self.pool.return_cached(
                         lane,
@@ -3801,9 +4206,26 @@ impl DbRepo {
     }
 
     pub fn observability_snapshot(&self) -> Result<DbRepoObservabilitySnapshot, String> {
+        let mut routing = self.connection_targets.snapshot()?;
+        let consistency = self.replica_consistency.snapshot()?;
+        routing.replica_read_routing_enabled = self.replica_read_targets.is_some();
+        if let Some(replica_targets) = &self.replica_read_targets {
+            let replica = replica_targets.snapshot()?;
+            routing.replica_target_count = replica.target_count;
+            routing.replica_active_authority = Some(replica.active_authority);
+        }
+        routing.required_primary_wal_lsn = consistency.required_primary_wal_lsn;
+        routing.primary_wal_lsn_updates = consistency.primary_wal_lsn_updates;
+        routing.primary_wal_lsn_capture_failures = consistency.primary_wal_lsn_capture_failures;
+        routing.replica_consistency_checks = consistency.replica_consistency_checks;
+        routing.replica_consistency_passes = consistency.replica_consistency_passes;
+        routing.replica_reads = consistency.replica_reads;
+        routing.replica_lag_fallbacks = consistency.replica_lag_fallbacks;
+        routing.replica_read_failures = consistency.replica_read_failures;
+        routing.primary_read_fallbacks = consistency.primary_read_fallbacks;
         Ok(DbRepoObservabilitySnapshot {
             pool: self.pool.snapshot()?,
-            routing: self.connection_targets.snapshot()?,
+            routing,
             payload: self.payload_observability.snapshot()?,
             global_payload: self.global_payload_observability.snapshot()?,
             persist_buffer_chunk_blocks: self.persist_buffer_chunk_blocks,
@@ -4696,7 +5118,7 @@ impl DbRepo {
     }
 
     pub fn file_data_object_id(&self, file_id: u64) -> Result<Option<u64>, String> {
-        self.with_cached_connection(|conn| self.file_data_object_id_on_conn(conn, file_id))
+        self.with_read_connection(|conn| self.file_data_object_id_on_conn(conn, file_id))
     }
 
     pub fn file_size(&self, file_id: u64) -> Result<Option<u64>, String> {
@@ -4705,7 +5127,7 @@ impl DbRepo {
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql, &params)?;
             let text = fetch_single_text(res)?;
@@ -4733,7 +5155,7 @@ impl DbRepo {
             .map_err(|_| "block index contains NUL byte".to_string())?;
         let block_size = block_size.max(1) as usize;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&file_id_text, &block_index_text];
             let res = exec_prepared_params_binary_result(
                 conn,
@@ -4783,7 +5205,7 @@ impl DbRepo {
             .map_err(|_| "block index contains NUL byte".to_string())?;
         let block_size = block_size.max(1) as usize;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&file_id_text, &first_block_text, &last_block_text];
             let res = exec_prepared_params_binary_result(
                 conn,
@@ -5630,6 +6052,14 @@ impl DbRepo {
                 Ok(rows.len() as u64)
             })
         })
+    }
+
+    pub fn query_scalar_text_stale_sensitive(&self, sql: &str) -> Result<String, String> {
+        let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
+        if !sql_is_read_only(&sql) {
+            return Err("stale-sensitive replica routing accepts read-only SQL only".to_string());
+        }
+        self.with_read_connection(|conn| unsafe { query_scalar_text_on_conn(conn, &sql) })
     }
 
     pub fn query_scalar_text(&self, sql: &str) -> Result<String, String> {
@@ -7686,7 +8116,7 @@ impl DbRepo {
     pub fn get_dir_id(&self, path: &str) -> Result<Option<u64>, String> {
         let path = CString::new(path).map_err(|_| "path contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let result = {
                 let params = [&path];
                 let res = exec_prepared_params(conn, PreparedStatement::GetDirId, &params)?;
@@ -7741,7 +8171,7 @@ impl DbRepo {
             })
             .transpose()?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let result = {
                 let res = if let Some(ref parent_id_text) = parent_id_text {
                     let params = [&file_name, parent_id_text];
@@ -7801,7 +8231,7 @@ impl DbRepo {
             })
             .transpose()?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let result = {
                 let res = if let Some(ref parent_id_text) = parent_id_text {
                     let params = [&file_name, parent_id_text];
@@ -7859,7 +8289,7 @@ impl DbRepo {
             })
             .transpose()?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let result = {
                 let res = if let Some(ref parent_id_text) = parent_id_text {
                     let params = [&link_name, parent_id_text];
@@ -7905,7 +8335,7 @@ impl DbRepo {
         let hardlink_id = CString::new(hardlink_id.to_string())
             .map_err(|_| "hardlink id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let result = {
                 let params = [&hardlink_id];
                 let res =
@@ -7950,7 +8380,7 @@ impl DbRepo {
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let result = {
                 let params = [&file_id];
                 let res =
@@ -10331,7 +10761,7 @@ impl DbRepo {
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql, &params)?;
             let rows = PQntuples(res);
@@ -10377,7 +10807,7 @@ impl DbRepo {
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql_extent, &params)?;
             let extent_result = fetch_single_text(res)?.trim().parse::<u64>().unwrap_or(0);
@@ -10432,7 +10862,7 @@ impl DbRepo {
         let directory_id = CString::new(directory_id.to_string())
             .map_err(|_| "directory id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&directory_id];
             let res = exec_params(conn, &sql, &params)?;
             let rows = PQntuples(res);
@@ -10457,7 +10887,7 @@ impl DbRepo {
         let directory_id = CString::new(directory_id.to_string())
             .map_err(|_| "directory id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&directory_id];
             let res = exec_params(conn, &sql, &params)?;
             let text = fetch_single_text(res)?;
@@ -10475,7 +10905,7 @@ impl DbRepo {
         let directory_id = CString::new(directory_id.to_string())
             .map_err(|_| "directory id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&directory_id];
             let res = exec_params(conn, &sql, &params)?;
             let text = fetch_single_text(res)?;
@@ -10497,7 +10927,7 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let res = exec_params(conn, &sql, &[])?;
             let text = fetch_single_text(res)?;
             let value = text
@@ -10512,7 +10942,7 @@ impl DbRepo {
         let sql = CString::new("SELECT COUNT(*) FROM symlinks")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let res = exec_params(conn, &sql, &[])?;
             let text = fetch_single_text(res)?;
             let value = text
@@ -10527,7 +10957,7 @@ impl DbRepo {
         let sql = CString::new("SELECT COUNT(*) FROM files")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let res = exec_params(conn, &sql, &[])?;
             let text = fetch_single_text(res)?;
             let value = text
@@ -10542,7 +10972,7 @@ impl DbRepo {
         let sql = CString::new("SELECT COUNT(*) FROM directories")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let res = exec_params(conn, &sql, &[])?;
             let text = fetch_single_text(res)?;
             let value = text
@@ -10557,7 +10987,7 @@ impl DbRepo {
         let sql = CString::new("SELECT COALESCE(SUM(LENGTH(data)), 0) FROM data_blocks")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let res = exec_params(conn, &sql, &[])?;
             let text = fetch_single_text(res)?;
             let value = text
@@ -10569,7 +10999,7 @@ impl DbRepo {
     }
 
     pub fn statfs_snapshot(&self) -> Result<(u64, u64, u64, u64, u64, Option<u64>), String> {
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let res = exec_prepared_params(conn, PreparedStatement::StatfsSnapshot, &[])?;
             let values = fetch_first_row_texts(res)?;
             if values.len() < 6 {
@@ -10614,7 +11044,7 @@ impl DbRepo {
         let symlink_id = CString::new(symlink_id.to_string())
             .map_err(|_| "symlink id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&symlink_id];
             let res = exec_prepared_params(conn, PreparedStatement::LoadSymlinkTarget, &params)?;
             let text = fetch_single_text(res)?;
@@ -10634,7 +11064,7 @@ impl DbRepo {
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res =
                 exec_prepared_params(conn, PreparedStatement::GetSpecialFileMetadata, &params)?;
@@ -10692,7 +11122,7 @@ impl DbRepo {
             })
             .transpose()?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let result = {
                 let res = if let Some(ref parent_id_text) = parent_id_text {
                     let params = [&link_name, parent_id_text];
@@ -10760,7 +11190,7 @@ impl DbRepo {
             })
             .transpose()?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let result = {
                 let res = if let Some(ref parent_id_text) = parent_id_text {
                     let params = [&name, parent_id_text];
@@ -10843,7 +11273,7 @@ impl DbRepo {
             .map_err(|_| "owner id contains NUL byte".to_string())?;
         let name = CString::new(name).map_err(|_| "xattr name contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id, &name];
             let res = exec_params(conn, &sql, &params)?;
             let rows = PQntuples(res);
@@ -10903,7 +11333,7 @@ impl DbRepo {
         let owner_id = CString::new(owner_id.to_string())
             .map_err(|_| "owner id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id];
             let res = exec_params(conn, &sql, &params)?;
             let rows = PQntuples(res);
@@ -11037,7 +11467,7 @@ impl DbRepo {
             )
         };
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let param_refs = params.iter().collect::<Vec<_>>();
             let res = exec_params(conn, &sql, &param_refs)?;
             let names = fetch_first_column_texts(res)?;
@@ -11058,7 +11488,7 @@ impl DbRepo {
         let entry_id = CString::new(entry_id.to_string())
             .map_err(|_| "entry id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let res = {
                 let res = match kind {
                     "file" => {
@@ -11365,7 +11795,7 @@ impl DbRepo {
         let owner_id = CString::new(owner_id.to_string())
             .map_err(|_| "owner id contains NUL byte".to_string())?;
 
-        self.with_cached_connection(|conn| unsafe {
+        self.with_read_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id];
             let res = exec_params(conn, &sql, &params)?;
             let rows = PQntuples(res);
@@ -11918,5 +12348,47 @@ mod tests {
         assert_eq!(crc_len, 8);
         let crc32 = i64::from_be_bytes(out[cursor..cursor + 8].try_into().unwrap());
         assert_eq!(crc32, 99);
+    }
+}
+
+#[cfg(test)]
+mod replica_read_consistency_tests {
+    use super::*;
+
+    #[test]
+    fn parses_and_orders_postgresql_lsn_values() {
+        assert_eq!(parse_pg_lsn("0/0").unwrap(), 0);
+        assert_eq!(parse_pg_lsn("0/10").unwrap(), 16);
+        assert!(parse_pg_lsn("1/0").unwrap() > parse_pg_lsn("0/FFFFFFFF").unwrap());
+        assert!(parse_pg_lsn("invalid").is_err());
+    }
+
+    #[test]
+    fn primary_lsn_capture_sets_replica_barrier() {
+        let tracker = ReplicaReadConsistency::default();
+        assert_eq!(tracker.required_lsn().unwrap(), None);
+        tracker.record_primary_wal_lsn("0/16B6C50").unwrap();
+        assert_eq!(
+            tracker.required_lsn().unwrap(),
+            Some(parse_pg_lsn("0/16B6C50").unwrap())
+        );
+        let snapshot = tracker.snapshot().unwrap();
+        assert_eq!(
+            snapshot.required_primary_wal_lsn.as_deref(),
+            Some("0/16B6C50")
+        );
+        assert_eq!(snapshot.primary_wal_lsn_updates, 1);
+        assert!(!snapshot.force_primary);
+    }
+
+    #[test]
+    fn lsn_capture_failure_forces_primary_reads() {
+        let tracker = ReplicaReadConsistency::default();
+        tracker.record_primary_wal_lsn_capture_failure();
+        assert!(tracker.force_primary().unwrap());
+        assert_eq!(
+            tracker.snapshot().unwrap().primary_wal_lsn_capture_failures,
+            1
+        );
     }
 }

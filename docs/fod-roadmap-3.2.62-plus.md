@@ -113,14 +113,25 @@ Status: implemented.
 - verify runtime failover by terminating a live PostgreSQL backend and requiring
   the replayed query to complete through the second primary target.
 
-## FOD 3.2.67+ — Replica consistency, read routing and advanced failover
+## FOD 3.2.67 — WAL-gated replica read routing
 
-- add primary write-LSN capture and replica replay-LSN checks;
-- route eligible reads to replicas only after read-after-write consistency can
-  be proved or after explicit stale-tolerant classification;
-- add endpoint latency, replica lag and pool-pressure scoring;
+Status: implemented as opt-in.
+
+- build a separate read-only target set from healthy observed replicas;
+- keep replica connections separate from primary write/control work;
+- capture the current primary WAL LSN after successful primary write-lane work;
+- check replica replay LSN before stale-sensitive reads;
+- fall back to primary on unknown barrier, lag, role mismatch or replica error;
+- keep writes, control/lease and replay-confirmation primary-only;
+- expose WAL-barrier, replica-read and fallback observability;
+- keep automatic replica reads disabled by default pending real-standby tests.
+
+## FOD 3.2.68+ — Replica scoring and stronger consistency
+
+- rank multiple caught-up replicas by replay lag, latency and pool pressure;
 - add hysteresis/circuit-breaker cooldown behavior;
-- cover promotion, split-brain prevention and lock/lease safety across failover;
+- cover promotion, split-brain prevention and lock/lease safety;
+- design cross-process/global consistency where multiple writers require it;
 - add cross-process fairness where required.
 
 The confirmed `8/4` FUSE admission configuration remains the production

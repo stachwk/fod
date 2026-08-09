@@ -71,6 +71,11 @@ const STARTUP_PASSTHROUGH_SPECS: &[(&str, &str, StartupPassthroughKind)] = &[
         StartupPassthroughKind::Bool,
     ),
     (
+        "pg_replica_read_routing_enabled",
+        "FOD_PG_REPLICA_READ_ROUTING_ENABLED",
+        StartupPassthroughKind::Bool,
+    ),
+    (
         "allow_other",
         "FOD_ALLOW_OTHER",
         StartupPassthroughKind::Bool,

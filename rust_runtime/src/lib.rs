@@ -571,6 +571,7 @@ impl RuntimePayloadSettings {
 pub struct RuntimeEndpointRoutingSettings {
     pub enabled: bool,
     pub runtime_failover_enabled: bool,
+    pub replica_read_routing_enabled: bool,
 }
 
 impl RuntimeEndpointRoutingSettings {
@@ -579,6 +580,10 @@ impl RuntimeEndpointRoutingSettings {
             enabled: env_var_truthy_with_legacy_alias("FOD_PG_ENDPOINT_ROUTING_ENABLED", false),
             runtime_failover_enabled: env_var_truthy_with_legacy_alias(
                 "FOD_PG_RUNTIME_FAILOVER_ENABLED",
+                false,
+            ),
+            replica_read_routing_enabled: env_var_truthy_with_legacy_alias(
+                "FOD_PG_REPLICA_READ_ROUTING_ENABLED",
                 false,
             ),
         }

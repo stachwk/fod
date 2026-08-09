@@ -848,3 +848,17 @@ primary. This is not a general multi-primary protocol: configured primary
 entrypoints must still refer to the same authoritative PostgreSQL primary/HA
 cluster. Replica read routing remains deferred until WAL/replay-LSN consistency
 is available.
+
+## 2026-08-08 — FOD 3.2.67 WAL-gated replica reads
+
+Replica routing cannot safely be implemented by only renaming the existing
+read pool lane. The mounted `DbRepo` now owns a separate replica target set and
+read pool.
+
+Each successful primary write-lane operation refreshes a process-local
+`pg_current_wal_lsn()` barrier. A stale-sensitive read uses a replica only when
+its replay LSN reaches that barrier. Any uncertainty falls back to primary.
+
+This gives process/session-local read-after-write behavior. It does not claim
+global linearizability for writes performed by other FOD processes. Multiple
+replica scoring and stronger cross-process consistency remain later work.

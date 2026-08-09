@@ -215,3 +215,17 @@ When enabled together with multi-endpoint routing on a writable mount:
 The setting must only be enabled for HA/proxy primary entrypoints representing
 the same authoritative PostgreSQL primary/cluster. FOD 3.2.66 does not claim
 safe independent multi-primary operation.
+
+## PostgreSQL replica read consistency routing
+
+`pg_replica_read_routing_enabled` maps to
+`FOD_PG_REPLICA_READ_ROUTING_ENABLED` and defaults to `false`.
+
+When enabled on a writable multi-endpoint mount, only healthy observed replicas
+enter the read target set. Replica connections are role-validated and isolated
+from the primary pool. Successful primary write-lane work captures
+`pg_current_wal_lsn()`. Stale-sensitive reads compare the replica replay LSN
+with that barrier and fall back to primary on lag or uncertainty.
+
+The barrier is process-local; another FOD writer does not automatically advance
+it.

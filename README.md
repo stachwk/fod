@@ -915,3 +915,22 @@ target is live-validated as `pg_is_in_recovery() = false` and
 Existing replay-confirmation semantics remain responsible for ambiguous lost
 COMMIT acknowledgements. Replica read routing is intentionally not enabled in
 this stage.
+
+## WAL-gated replica reads
+
+FOD 3.2.67 adds opt-in stale-sensitive read routing to healthy PostgreSQL
+standbys. After successful primary write-lane work FOD records
+`pg_current_wal_lsn()`. A replica may serve a stale-sensitive lookup only when
+`pg_last_wal_replay_lsn()` is at or beyond that process-local barrier.
+
+Unknown barrier, replica lag, role-validation failure or replica read failure
+falls back to the authoritative primary. Writes, control/lease,
+replay-confirmation and generic diagnostic SQL remain primary-only.
+
+```ini
+[fod]
+pg_replica_read_routing_enabled = true
+```
+
+This stage provides process/session-local read-after-write consistency, not
+global linearizability across independent writers.

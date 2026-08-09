@@ -58,6 +58,7 @@ pg_control_transaction_limit = 2
 pg_payload_in_flight_limit_bytes = 64MiB
 pg_endpoint_routing_enabled = true
 pg_runtime_failover_enabled = true
+pg_replica_read_routing_enabled = false
 allow_other = false
 entry_timeout_seconds = 1
 attr_timeout_seconds = 2
@@ -118,6 +119,7 @@ fn fod_config_command() -> Command {
         "FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES",
         "FOD_PG_ENDPOINT_ROUTING_ENABLED",
         "FOD_PG_RUNTIME_FAILOVER_ENABLED",
+        "FOD_PG_REPLICA_READ_ROUTING_ENABLED",
         "FOD_ALLOW_OTHER",
         "FOD_ENTRY_TIMEOUT_SECONDS",
         "FOD_ATTR_TIMEOUT_SECONDS",
@@ -206,6 +208,7 @@ fn resolve_path_and_runtime_config_and_connection_params() {
     assert_eq!(runtime["pg_payload_in_flight_limit_bytes"], "64MiB");
     assert_eq!(runtime["pg_endpoint_routing_enabled"], "true");
     assert_eq!(runtime["pg_runtime_failover_enabled"], "true");
+    assert_eq!(runtime["pg_replica_read_routing_enabled"], "false");
     assert_eq!(runtime["allow_other"], "false");
     assert_eq!(runtime["entry_timeout_seconds"], "1");
     assert_eq!(runtime["attr_timeout_seconds"], "2");
@@ -259,6 +262,7 @@ fn resolve_path_and_runtime_config_and_connection_params() {
         .env("FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES", "32MiB")
         .env("FOD_PG_ENDPOINT_ROUTING_ENABLED", "false")
         .env("FOD_PG_RUNTIME_FAILOVER_ENABLED", "false")
+        .env("FOD_PG_REPLICA_READ_ROUTING_ENABLED", "true")
         .arg("runtime-config")
         .output()
         .unwrap();
@@ -271,6 +275,7 @@ fn resolve_path_and_runtime_config_and_connection_params() {
     assert_eq!(overridden["pg_payload_in_flight_limit_bytes"], "32MiB");
     assert_eq!(overridden["pg_endpoint_routing_enabled"], "false");
     assert_eq!(overridden["pg_runtime_failover_enabled"], "false");
+    assert_eq!(overridden["pg_replica_read_routing_enabled"], "true");
 
     match _old_config {
         Some(value) => env::set_var("FOD_CONFIG", value),

@@ -2882,3 +2882,28 @@ primary_hosts = db-a:5432,db-b:5432
 
 `primary_hosts` must identify HA/proxy entrypoints for the same authoritative
 PostgreSQL primary/cluster.
+
+## FOD 3.2.67 replica read consistency
+
+```bash
+make test-postgresql-replica-read-consistency
+```
+
+The local acceptance database is not misrepresented as a real standby. The
+first test proves selection of a synthetic read target, then establishes a
+primary WAL barrier and requires fallback because a primary has no replay LSN.
+The second test verifies that production `ReadOnlyReplica` role validation
+rejects the local primary and falls back safely.
+
+Real topology:
+
+```ini
+[fod]
+pg_endpoint_routing_enabled = true
+pg_runtime_failover_enabled = true
+pg_replica_read_routing_enabled = true
+
+[database]
+primary_hosts = db-primary-a:5432,db-primary-b:5432
+replica_hosts = db-replica-a:5432,db-replica-b:5432
+```

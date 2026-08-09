@@ -901,3 +901,21 @@ sprawdzane: `pg_is_in_recovery() = false` oraz
 Dotychczasowy mechanizm potwierdzania replay nadal obsługuje niejednoznaczne
 przypadki utraty potwierdzenia COMMIT. Routing odczytów na repliki nie jest
 jeszcze włączony.
+
+## Odczyty z repliki chronione barierą WAL
+
+FOD 3.2.67 dodaje opcjonalny routing odczytów wymagających świeżych danych na
+zdrowe repliki PostgreSQL. Po poprawnej pracy na zapisywalnym primary FOD
+zapamiętuje `pg_current_wal_lsn()`. Replika może obsłużyć taki odczyt tylko,
+gdy `pg_last_wal_replay_lsn()` osiągnął co najmniej tę pozycję.
+
+Nieznana bariera, opóźnienie repliki, zła rola albo błąd odczytu powodują
+automatyczny fallback na primary. Zapisy, control/lease, potwierdzanie replay i
+ogólne zapytania diagnostyczne pozostają primary-only.
+
+```ini
+[fod]
+pg_replica_read_routing_enabled = true
+```
+
+Gwarancja read-after-write jest na tym etapie procesowa/sesyjna.

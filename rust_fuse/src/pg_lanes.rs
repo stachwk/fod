@@ -77,6 +77,8 @@ pub struct DbRepoLaneDiagnostics {
     pub selected_read_only: bool,
     pub runtime_failover_enabled: bool,
     pub runtime_failover_target_count: usize,
+    pub replica_read_routing_enabled: bool,
+    pub replica_read_target_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +97,8 @@ struct EndpointRoutingResolution {
     selected: Option<EndpointRoutingSelection>,
     runtime_failover_enabled: bool,
     runtime_failover_target_count: usize,
+    replica_read_targets: Option<Arc<DbRepoConnectionTargets>>,
+    replica_read_target_count: usize,
 }
 
 fn quote_conninfo_value(value: &str) -> String {
@@ -261,6 +265,41 @@ fn build_connection_targets(
     )?))
 }
 
+fn build_replica_read_targets(
+    base_conninfo: &str,
+    config: &PgEndpointConfig,
+    snapshots: &[PgEndpointHealthSnapshot],
+) -> Result<Option<Arc<DbRepoConnectionTargets>>, String> {
+    let endpoints = config
+        .endpoints
+        .iter()
+        .filter(|endpoint| {
+            health_for_endpoint(endpoint, snapshots).is_some_and(|snapshot| {
+                snapshot.observed_role == Some(PgObservedEndpointRole::Replica)
+                    && snapshot.eligible_for(PgConnectionPurpose::Read)
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if endpoints.is_empty() {
+        return Ok(None);
+    }
+    let targets = endpoints
+        .into_iter()
+        .map(|endpoint| DbRepoConnectionTarget {
+            authority: endpoint.authority(),
+            conninfo: conninfo_for_endpoint(base_conninfo, &endpoint),
+        })
+        .collect::<Vec<_>>();
+    let multiple = targets.len() > 1;
+    Ok(Some(Arc::new(DbRepoConnectionTargets::new(
+        targets,
+        DbRepoConnectionTargetRequirement::ReadOnlyReplica,
+        true,
+        multiple,
+    )?)))
+}
+
 fn resolve_endpoint_routing(
     base_conninfo: &str,
     runtime: &RuntimeConfig,
@@ -276,6 +315,8 @@ fn resolve_endpoint_routing(
             selected: None,
             runtime_failover_enabled: false,
             runtime_failover_target_count: 1,
+            replica_read_targets: None,
+            replica_read_target_count: 0,
         });
     }
 
@@ -300,6 +341,16 @@ fn resolve_endpoint_routing(
         requested_runtime_failover,
     )?;
     let target_snapshot = connection_targets.snapshot()?;
+    let replica_read_targets = if settings.replica_read_routing_enabled && !selected.read_only {
+        build_replica_read_targets(base_conninfo, &config, &snapshots)?
+    } else {
+        None
+    };
+    let replica_read_target_count = replica_read_targets
+        .as_ref()
+        .map(|targets| targets.snapshot().map(|snapshot| snapshot.target_count))
+        .transpose()?
+        .unwrap_or(0);
     Ok(EndpointRoutingResolution {
         connection_targets,
         health,
@@ -308,6 +359,8 @@ fn resolve_endpoint_routing(
         selected: Some(selected),
         runtime_failover_enabled: target_snapshot.runtime_failover_enabled,
         runtime_failover_target_count: target_snapshot.target_count,
+        replica_read_targets,
+        replica_read_target_count,
     })
 }
 
@@ -344,6 +397,8 @@ pub struct DbRepoLanes {
     selected_read_only: bool,
     runtime_failover_enabled: bool,
     runtime_failover_target_count: usize,
+    replica_read_routing_enabled: bool,
+    replica_read_target_count: usize,
 }
 
 impl DbRepoLanes {
@@ -368,7 +423,10 @@ impl DbRepoLanes {
                 payload_settings.in_flight_limit_bytes,
             ));
 
+        let replica_read_targets = routing.replica_read_targets.as_ref().map(Arc::clone);
         let storage = if dedicated {
+            let mut write_runtime = runtime.clone();
+            write_runtime.pool_max_connections = plan.write_limit as u64;
             DbRepoLaneStorage::Dedicated {
                 read: build_lane_repo(
                     Arc::clone(&connection_targets),
@@ -377,11 +435,11 @@ impl DbRepoLanes {
                     PgConnectionPurpose::Read,
                     Arc::clone(&global_payload_observability),
                 )?,
-                write: build_lane_repo(
+                write: DbRepo::with_runtime_connection_targets_and_replica_read_targets_and_global_payload_observability(
                     Arc::clone(&connection_targets),
-                    runtime,
-                    &plan,
-                    PgConnectionPurpose::Write,
+                    replica_read_targets,
+                    plan.read_limit.max(1),
+                    &write_runtime,
                     Arc::clone(&global_payload_observability),
                 )?,
                 control: build_lane_repo(
@@ -400,10 +458,17 @@ impl DbRepoLanes {
                 )?,
             }
         } else {
+            let mut primary_runtime = runtime.clone();
+            if replica_read_targets.is_some() {
+                primary_runtime.pool_max_connections =
+                    plan.total_limit.saturating_sub(plan.read_limit).max(1) as u64;
+            }
             DbRepoLaneStorage::Shared(
-                DbRepo::with_runtime_connection_targets_and_global_payload_observability(
+                DbRepo::with_runtime_connection_targets_and_replica_read_targets_and_global_payload_observability(
                     connection_targets,
-                    runtime,
+                    replica_read_targets,
+                    plan.read_limit.max(1),
+                    &primary_runtime,
                     global_payload_observability,
                 )?,
             )
@@ -440,6 +505,8 @@ impl DbRepoLanes {
             selected_read_only,
             runtime_failover_enabled: routing.runtime_failover_enabled,
             runtime_failover_target_count: routing.runtime_failover_target_count,
+            replica_read_routing_enabled: routing.replica_read_target_count > 0,
+            replica_read_target_count: routing.replica_read_target_count,
         })
     }
 
@@ -533,6 +600,8 @@ impl DbRepoLanes {
             selected_read_only: self.selected_read_only,
             runtime_failover_enabled: self.runtime_failover_enabled,
             runtime_failover_target_count: self.runtime_failover_target_count,
+            replica_read_routing_enabled: self.replica_read_routing_enabled,
+            replica_read_target_count: self.replica_read_target_count,
         }
     }
 
@@ -578,7 +647,7 @@ pub fn mount_with_lanes(
         .map_err(|err| format!("failed to create PostgreSQL repository lanes: {err}"))?;
     let diagnostics = lanes.diagnostics();
     log::info!(
-        "FOD PostgreSQL lanes: opt_in_enabled={} dedicated_lanes_active={} mode={} total={} read={} write={} control={} lease={} legacy_dsn_only={} routing_enabled={} endpoint_mode={} routing_candidate_count={} selected_authority={} startup_failovers={} selected_read_only={} runtime_failover_enabled={} runtime_failover_target_count={}",
+        "FOD PostgreSQL lanes: opt_in_enabled={} dedicated_lanes_active={} mode={} total={} read={} write={} control={} lease={} legacy_dsn_only={} routing_enabled={} endpoint_mode={} routing_candidate_count={} selected_authority={} startup_failovers={} selected_read_only={} runtime_failover_enabled={} runtime_failover_target_count={} replica_read_routing_enabled={} replica_read_target_count={}",
         diagnostics.opt_in_enabled,
         diagnostics.dedicated_lanes_active,
         diagnostics.mode.as_str(),
@@ -596,6 +665,8 @@ pub fn mount_with_lanes(
         diagnostics.selected_read_only,
         diagnostics.runtime_failover_enabled,
         diagnostics.runtime_failover_target_count,
+        diagnostics.replica_read_routing_enabled,
+        diagnostics.replica_read_target_count,
     );
 
     if diagnostics.routing_enabled {
@@ -1026,6 +1097,62 @@ mod endpoint_routing_tests {
         assert_eq!(selected.endpoint.authority(), "primary-b:5432");
         assert_eq!(selected.startup_failovers, 1);
         assert!(!selected.read_only);
+    }
+
+    #[test]
+    fn replica_read_targets_include_only_healthy_observed_replicas() {
+        let config = config(vec![
+            PgEndpoint {
+                host: "primary".to_string(),
+                port: 5432,
+                role: PgEndpointRole::Primary,
+            },
+            PgEndpoint {
+                host: "replica-a".to_string(),
+                port: 5432,
+                role: PgEndpointRole::Replica,
+            },
+            PgEndpoint {
+                host: "replica-b".to_string(),
+                port: 5432,
+                role: PgEndpointRole::Replica,
+            },
+        ]);
+        let health = PgEndpointHealthRegistry::default();
+        let primary = health
+            .record_probe_at(
+                "primary:5432",
+                PgEndpointRole::Primary,
+                PgEndpointProbe::from_flags(false, false),
+                1,
+            )
+            .unwrap();
+        let replica_a = health
+            .record_probe_at(
+                "replica-a:5432",
+                PgEndpointRole::Replica,
+                PgEndpointProbe::from_flags(true, true),
+                2,
+            )
+            .unwrap();
+        let replica_b = health
+            .record_failure_at(
+                "replica-b:5432",
+                PgEndpointRole::Replica,
+                "connection refused",
+                3,
+            )
+            .unwrap();
+        let targets = build_replica_read_targets(
+            "dbname=foddbname",
+            &config,
+            &[primary, replica_a, replica_b],
+        )
+        .unwrap()
+        .unwrap();
+        let snapshot = targets.snapshot().unwrap();
+        assert_eq!(snapshot.target_count, 1);
+        assert_eq!(snapshot.active_authority, "replica-a:5432");
     }
 
     #[test]

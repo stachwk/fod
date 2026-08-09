@@ -690,3 +690,18 @@ primary/cluster. It does not make independent writable PostgreSQL nodes safe.
 Read traffic stays primary-pinned. The next phase must capture a write-side WAL
 LSN and compare replica replay LSN before any stale-sensitive read can move to a
 replica.
+
+## FOD 3.2.67 WAL-gated replica read routing
+
+Phase 4 now has a distinct replica read path. Healthy observed standby
+endpoints use a separate connection pool. Filesystem lookups classified as
+stale-sensitive can use that pool only after the standby replay LSN satisfies
+the process's latest observed primary WAL LSN.
+
+The fallback is deliberately one-way: uncertainty routes to primary. The local
+deterministic test validates router selection, WAL-barrier fallback and
+production role rejection without pretending the local single PostgreSQL
+instance is a physical replica.
+
+The next phase should rank multiple caught-up replicas by lag distance, latency
+and pool pressure and add hysteresis/circuit-breaker behavior.

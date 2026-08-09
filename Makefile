@@ -2192,3 +2192,15 @@ test-postgresql-runtime-failover:
 	POSTGRES_USER="$(FOD_PG_USER)" \
 	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
 	cargo test --locked -p fod-rust-hotpath --test runtime_failover -- --test-threads=1
+
+.PHONY: test-postgresql-replica-read-consistency
+test-postgresql-replica-read-consistency:
+	@$(MAKE) --no-print-directory up
+	@$(MAKE) --no-print-directory wait
+	@$(MAKE) --no-print-directory init
+	@POSTGRES_HOST="$(FOD_PG_HOST)" \
+	POSTGRES_PORT="$(FOD_PG_PORT)" \
+	POSTGRES_DB="$(FOD_PG_DBNAME)" \
+	POSTGRES_USER="$(FOD_PG_USER)" \
+	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
+	cargo test --locked -p fod-rust-hotpath --test replica_read_consistency -- --test-threads=1
