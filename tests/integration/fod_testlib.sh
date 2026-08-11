@@ -232,7 +232,7 @@ fod_test_start_mount() {
   local mountpoint="$1"
   fod_test_build_args
   mkdir -p "${mountpoint}"
-  local start_cmd=("${FOD_BOOTSTRAP_BIN}" "${FOD_ARGS[@]}" -f "${mountpoint}")
+  local start_cmd=("${FOD_BOOTSTRAP_BIN}" --config "${FOD_CONFIG}" "${FOD_ARGS[@]}" -f "${mountpoint}")
   local -a trace_prefix=()
   fod_trace_env_prefix trace_prefix
   if [[ -n "${FOD_STRACE_SUMMARY_FILE:-}" ]]; then

@@ -126,7 +126,19 @@ Status: implemented as opt-in.
 - expose WAL-barrier, replica-read and fallback observability;
 - keep automatic replica reads disabled by default pending real-standby tests.
 
-## FOD 3.2.68+ — Replica scoring and stronger consistency
+## FOD 3.2.68 — Explicit per-mount INI binding
+
+Status: implemented.
+
+- require an explicit `ini=/absolute/path.ini` mount option;
+- make that INI authoritative over an inherited `FOD_CONFIG` selector;
+- remove implicit current-directory/system config discovery from mount.fod;
+- pass the selected file explicitly into `fod-bootstrap --config`;
+- validate absolute path, regular-file existence and readability before mount;
+- cover two mounts selecting two different INI files;
+- keep `config=` and `fod_config=` only as deprecated explicit aliases.
+
+## FOD 3.2.69+ — Replica scoring and stronger consistency
 
 - rank multiple caught-up replicas by replay lag, latency and pool pressure;
 - add hysteresis/circuit-breaker cooldown behavior;

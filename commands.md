@@ -2907,3 +2907,38 @@ pg_replica_read_routing_enabled = true
 primary_hosts = db-primary-a:5432,db-primary-b:5432
 replica_hosts = db-replica-a:5432,db-replica-b:5432
 ```
+
+## FOD 3.2.68 explicit mount INI
+
+Direct helper:
+
+```bash
+mount.fod /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini
+```
+
+System mount helper:
+
+```bash
+mount -t fod none /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini,_netdev
+```
+
+Multiple independent filesystems:
+
+```bash
+mount -t fod none /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini,_netdev
+mount -t fod none /mnt/fod.db02 -o ini=/etc/fod/fod.db02.ini,_netdev
+```
+
+`/etc/fstab`:
+
+```fstab
+none /mnt/fod.db01 fod ini=/etc/fod/fod.db01.ini,_netdev 0 0
+none /mnt/fod.db02 fod ini=/etc/fod/fod.db02.ini,_netdev 0 0
+```
+
+Validation:
+
+```bash
+make test-mount-wrapper-options
+cargo test --locked -p fod-rust-mkfs --test fod_config -- --test-threads=1
+```

@@ -229,3 +229,21 @@ with that barrier and fall back to primary on lag or uncertainty.
 
 The barrier is process-local; another FOD writer does not automatically advance
 it.
+
+## Per-mount configuration identity
+
+Filesystem mounts have a stricter configuration contract than general FOD
+administrative tools. `mount.fod` requires `ini=/absolute/path.ini`, validates
+that file before creating the mountpoint, exports the selected path as
+`FOD_CONFIG`, and passes the same path to `fod-bootstrap --config`.
+
+This makes the configuration identity part of the mount request. Environment
+or current-directory configuration discovery cannot substitute for the missing
+mount option.
+
+Example:
+
+```bash
+mount -t fod none /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini
+mount -t fod none /mnt/fod.db02 -o ini=/etc/fod/fod.db02.ini
+```

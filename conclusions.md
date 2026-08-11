@@ -862,3 +862,16 @@ its replay LSN reaches that barrier. Any uncertainty falls back to primary.
 This gives process/session-local read-after-write behavior. It does not claim
 global linearizability for writes performed by other FOD processes. Multiple
 replica scoring and stronger cross-process consistency remain later work.
+
+## 2026-08-09 — FOD 3.2.68 explicit INI per mount
+
+Implicit configuration discovery is inappropriate for a mount helper because
+the filesystem-to-database relationship must be deterministic. A host may mount
+`fod.db01` and `fod.db02` simultaneously and each must remain bound to its own
+PostgreSQL settings.
+
+The mount helper therefore requires an absolute `ini=` path and passes that
+selection to `fod-bootstrap --config`. An inherited `FOD_CONFIG` cannot silently
+redirect the mount, and cwd-based `./fod_config.ini` fallback is removed from
+the mount path. General administrative tools may continue using the existing
+configuration resolver independently of this stricter mount contract.

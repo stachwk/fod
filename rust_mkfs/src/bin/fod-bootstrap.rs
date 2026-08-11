@@ -28,6 +28,8 @@ use std::process::Command;
 struct Cli {
     #[arg(short = 'f', long = "mountpoint")]
     mountpoint: String,
+    #[arg(long = "config", value_name = "INI")]
+    config: PathBuf,
     #[arg(long, default_value = "auto")]
     role: String,
     #[arg(long)]
@@ -198,13 +200,17 @@ fn main() {
     let env_log_level =
         env_var_with_legacy_alias("FOD_LOG_LEVEL").filter(|value| !value.trim().is_empty());
     let env_debug = env_var_truthy_with_legacy_alias("FOD_DEBUG", false);
-    let config_path = match resolve_config_path(None) {
+    // Mount configuration is deliberately explicit. Override any inherited
+    // FOD_CONFIG selector with the CLI-selected INI before resolving it.
+    env::set_var("FOD_CONFIG", &cli.config);
+    let config_path = match resolve_config_path(Some(&cli.config)) {
         Ok(path) => path,
         Err(err) => {
             eprintln!("{}", err);
             std::process::exit(1);
         }
     };
+    env::set_var("FOD_CONFIG", &config_path);
     let (config, config_dir) = match load_config_parser(Some(&config_path)) {
         Ok(value) => value,
         Err(err) => {

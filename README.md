@@ -934,3 +934,38 @@ pg_replica_read_routing_enabled = true
 
 This stage provides process/session-local read-after-write consistency, not
 global linearizability across independent writers.
+
+## Explicit INI binding per mount
+
+FOD 3.2.68 requires every filesystem mount to select its configuration file
+explicitly. This allows one host to mount several independent FOD filesystems
+against different PostgreSQL instances without relying on a process-global
+configuration lookup.
+
+Canonical helper form:
+
+```bash
+mount.fod /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini
+mount.fod /mnt/fod.db02 -o ini=/etc/fod/fod.db02.ini
+```
+
+System `mount` form:
+
+```bash
+mount -t fod none /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini,_netdev
+mount -t fod none /mnt/fod.db02 -o ini=/etc/fod/fod.db02.ini,_netdev
+```
+
+For `/etc/fstab`:
+
+```fstab
+none /mnt/fod.db01 fod ini=/etc/fod/fod.db01.ini,_netdev 0 0
+none /mnt/fod.db02 fod ini=/etc/fod/fod.db02.ini,_netdev 0 0
+```
+
+Then `mount /mnt/fod.db01` uses the INI declared in that fstab entry.
+
+The `ini=` path must be absolute, must name a readable regular file, and is
+authoritative for that mount. An inherited `FOD_CONFIG` value and an incidental
+`./fod_config.ini` no longer satisfy the mount contract. `config=` and
+`fod_config=` remain temporary deprecated aliases for an explicit file.

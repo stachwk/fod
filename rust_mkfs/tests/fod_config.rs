@@ -131,6 +131,17 @@ fn fod_config_command() -> Command {
 }
 
 #[test]
+fn bootstrap_requires_explicit_mount_config() {
+    let output = Command::new(env!("CARGO_BIN_EXE_fod-bootstrap"))
+        .args(["-f", "/tmp/fod-explicit-config-required"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("--config"));
+}
+
+#[test]
 fn version_matches_bootstrap_and_mkfs() {
     let _guard = env_guard();
     let bootstrap = Command::new(env!("CARGO_BIN_EXE_fod-bootstrap"))

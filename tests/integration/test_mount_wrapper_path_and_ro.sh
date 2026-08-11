@@ -39,7 +39,7 @@ printf '[database]\n' >"${tmpdir}/fod_config.ini"
 
 (
   cd "${tmpdir}"
-  PATH="${tmpdir}/bin:${PATH}" ./mount.fod "${tmpdir}/mnt" -o role=auto,ro,allow_other
+  PATH="${tmpdir}/bin:${PATH}" ./mount.fod "${tmpdir}/mnt" -o "ini=${tmpdir}/fod_config.ini,role=auto,ro,allow_other"
 ) >"${tmpdir}/output.txt"
 
 [[ -d "${tmpdir}/mnt" ]]
@@ -52,6 +52,6 @@ fi
 grep -Fq "FOD_ROLE=auto" "${tmpdir}/output.txt"
 grep -Fq "FOD_RUST_FUSE_READONLY=1" "${tmpdir}/output.txt"
 grep -Fq "FOD_CONFIG=${tmpdir}/fod_config.ini" "${tmpdir}/output.txt"
-grep -Fq "ARGS=-f ${tmpdir}/mnt" "${tmpdir}/output.txt"
+grep -Fq "ARGS=-f ${tmpdir}/mnt --config ${tmpdir}/fod_config.ini" "${tmpdir}/output.txt"
 
 echo "OK mount-wrapper-path-and-ro"

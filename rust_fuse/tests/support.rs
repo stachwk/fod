@@ -421,6 +421,8 @@ impl MountedFs {
         let mut command = Command::new(bootstrap);
         command
             .current_dir(repo_root())
+            .arg("--config")
+            .arg(config_path())
             .arg("--debug")
             .arg("--role")
             .arg(role)

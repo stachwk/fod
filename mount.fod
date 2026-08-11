@@ -14,7 +14,8 @@ DEFAULT_PERMISSIONS="${FOD_DEFAULT_PERMISSIONS:-1}"
 ALLOW_OTHER="${FOD_ALLOW_OTHER:-0}"
 LOG_LEVEL="${FOD_LOG_LEVEL:-}"
 DEBUG="${FOD_DEBUG:-0}"
-CONFIG_FILE="${FOD_CONFIG:-}"
+CONFIG_FILE=""
+CONFIG_OPTION_NAME=""
 POSITIONAL=()
 
 usage() {
@@ -22,11 +23,15 @@ usage() {
 Usage:
   mount.fod [source] <mountpoint> [mount-options]
 
-FOD-specific options can be passed via -o, for example:
-  mount.fod /mnt/fod -o role=auto,selinux=off,acl=off,default_permissions
+Every mount must explicitly bind one INI file:
+  mount.fod /mnt/fod -o ini=/etc/fod/fod.db01.ini,role=auto
 
-If you want to override the config file, use:
-  FOD_CONFIG=/path/to/fod_config.ini mount.fod /mnt/fod
+With the system mount command:
+  mount -t fod none /mnt/fod -o ini=/etc/fod/fod.db01.ini,_netdev
+
+The legacy config= and fod_config= aliases remain accepted temporarily but emit
+a deprecation warning. FOD_CONFIG and implicit ./fod_config.ini lookup are not
+accepted as a substitute for the required mount option.
 
 Unrecognized FOD-like options print a warning to stderr instead of failing
 silently. System passthrough options such as _netdev, nofail, and x-systemd.*
@@ -149,11 +154,19 @@ translate_option() {
     log-level=*)
       LOG_LEVEL="${opt#log-level=}"
       ;;
+    ini=*)
+      CONFIG_FILE="${opt#ini=}"
+      CONFIG_OPTION_NAME="ini"
+      ;;
     config=*)
       CONFIG_FILE="${opt#config=}"
+      CONFIG_OPTION_NAME="config"
+      echo "mount.fod: option 'config=' is deprecated; use 'ini='" >&2
       ;;
     fod_config=*)
       CONFIG_FILE="${opt#fod_config=}"
+      CONFIG_OPTION_NAME="fod_config"
+      echo "mount.fod: option 'fod_config=' is deprecated; use 'ini='" >&2
       ;;
     ro)
       READONLY="1"
@@ -174,7 +187,7 @@ warn_unknown_option() {
       return
       ;;
   esac
-  echo "mount.fod: ignoring unrecognized option '${opt}'; FOD options include role=..., selinux=..., acl=..., atime-policy=..., config=..., fod_config=..." >&2
+  echo "mount.fod: ignoring unrecognized option '${opt}'; FOD options include ini=/absolute/path.ini, role=..., selinux=..., acl=..., atime-policy=..." >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -215,6 +228,25 @@ fi
 
 MOUNTPOINT="${POSITIONAL[-1]}"
 
+if [[ -z "${CONFIG_FILE}" ]]; then
+  echo "mount.fod: missing required mount option 'ini=/absolute/path/to/fod.ini'" >&2
+  exit 2
+fi
+if [[ "${CONFIG_FILE}" != /* ]]; then
+  echo "mount.fod: ini path must be absolute: ${CONFIG_FILE}" >&2
+  exit 2
+fi
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+  echo "mount.fod: ini file does not exist or is not a regular file: ${CONFIG_FILE}" >&2
+  exit 2
+fi
+if [[ ! -r "${CONFIG_FILE}" ]]; then
+  echo "mount.fod: ini file is not readable: ${CONFIG_FILE}" >&2
+  exit 2
+fi
+CONFIG_DIR="$(cd -P -- "$(dirname -- "${CONFIG_FILE}")" && pwd)"
+CONFIG_FILE="${CONFIG_DIR}/$(basename -- "${CONFIG_FILE}")"
+
 export FOD_ROLE="${ROLE}"
 if [[ -n "${READONLY}" ]]; then
   export FOD_RUST_FUSE_READONLY="${READONLY}"
@@ -231,11 +263,7 @@ export FOD_ALLOW_OTHER="${ALLOW_OTHER}"
 if [[ -n "${LOG_LEVEL}" ]]; then
   export FOD_LOG_LEVEL="${LOG_LEVEL}"
 fi
-if [[ -n "${CONFIG_FILE}" ]]; then
-  export FOD_CONFIG="${CONFIG_FILE}"
-elif [[ -z "${FOD_CONFIG:-}" && -f "${PWD}/fod_config.ini" ]]; then
-  export FOD_CONFIG="${PWD}/fod_config.ini"
-fi
+export FOD_CONFIG="${CONFIG_FILE}"
 if [[ "${DEBUG}" != "0" ]]; then
   export FOD_DEBUG="1"
 fi
@@ -258,7 +286,7 @@ FOD_BOOTSTRAP_CMD=("${resolved_bootstrap}")
 
 ensure_mountpoint_dir
 
-FOD_ARGS=("-f" "${MOUNTPOINT}")
+FOD_ARGS=("-f" "${MOUNTPOINT}" "--config" "${CONFIG_FILE}")
 if [[ -n "${PROFILE}" ]]; then
   FOD_ARGS+=("--profile" "${PROFILE}")
 fi

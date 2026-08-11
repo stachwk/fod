@@ -919,3 +919,37 @@ pg_replica_read_routing_enabled = true
 ```
 
 Gwarancja read-after-write jest na tym etapie procesowa/sesyjna.
+
+## Jawne przypisanie pliku INI do każdego mounta
+
+FOD 3.2.68 wymaga jawnego wskazania pliku konfiguracyjnego przy każdym
+montowaniu. Dzięki temu jeden host może utrzymywać kilka niezależnych
+filesystemów FOD podłączonych do różnych instancji/klastrów PostgreSQL.
+
+Przykład:
+
+```bash
+mount.fod /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini
+mount.fod /mnt/fod.db02 -o ini=/etc/fod/fod.db02.ini
+```
+
+Przez systemowy `mount`:
+
+```bash
+mount -t fod none /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini,_netdev
+mount -t fod none /mnt/fod.db02 -o ini=/etc/fod/fod.db02.ini,_netdev
+```
+
+W `/etc/fstab`:
+
+```fstab
+none /mnt/fod.db01 fod ini=/etc/fod/fod.db01.ini,_netdev 0 0
+none /mnt/fod.db02 fod ini=/etc/fod/fod.db02.ini,_netdev 0 0
+```
+
+Po takim wpisie wystarczy `mount /mnt/fod.db01`.
+
+Ścieżka `ini=` musi być bezwzględna oraz wskazywać istniejący, czytelny zwykły
+plik. Dziedziczony `FOD_CONFIG` ani przypadkowy `./fod_config.ini` nie zastępują
+już opcji mounta. `config=` i `fod_config=` pozostają przejściowo jako jawne,
+ale przestarzałe aliasy.
