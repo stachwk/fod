@@ -969,3 +969,29 @@ The `ini=` path must be absolute, must name a readable regular file, and is
 authoritative for that mount. An inherited `FOD_CONFIG` value and an incidental
 `./fod_config.ini` no longer satisfy the mount contract. `config=` and
 `fod_config=` remain temporary deprecated aliases for an explicit file.
+
+## Adaptive replica scoring
+
+FOD 3.2.69 ranks replica candidates without weakening the WAL consistency gate
+introduced in 3.2.67. The score combines:
+
+- observed replica replay lag;
+- EWMA connection/role-validation latency;
+- EWMA successful read latency;
+- penalties for consecutive target failures.
+
+A lagging replica is never allowed to serve a stale-sensitive read. FOD first
+records its lag and can try another replica; primary fallback happens only when
+no safe replica succeeds.
+
+Replica selection also has conservative anti-flapping behavior:
+- a small score improvement is ignored by hysteresis;
+- two consecutive target failures open a 5-second circuit-breaker cooldown;
+- targets in cooldown are skipped;
+- if the replica connection pool is materially more pressured than the primary
+  pool, the read can fall back to primary before queueing behind the replica
+  pool.
+
+The scoring policy is process-local and uses runtime observations. It does not
+replace PostgreSQL role validation, WAL replay checks, promotion fencing, or
+global cross-process consistency.

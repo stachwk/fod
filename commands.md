@@ -2942,3 +2942,23 @@ Validation:
 make test-mount-wrapper-options
 cargo test --locked -p fod-rust-mkfs --test fod_config -- --test-threads=1
 ```
+
+## FOD 3.2.69 adaptive replica scoring
+
+Focused scoring tests:
+
+```bash
+make test-postgresql-replica-scoring
+```
+
+Replica consistency and failover regressions:
+
+```bash
+make test-postgresql-replica-read-consistency
+make test-postgresql-runtime-failover
+make test-postgresql-endpoint-routing
+```
+
+The scoring layer does not bypass the WAL gate. A stale-sensitive read can move
+from one replica candidate to another, but only a caught-up replica may return
+the result.

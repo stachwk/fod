@@ -2202,3 +2202,8 @@ test-postgresql-replica-read-consistency:
 	POSTGRES_USER="$(FOD_PG_USER)" \
 	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
 	cargo test --locked -p fod-rust-hotpath --test replica_read_consistency -- --test-threads=1
+
+
+.PHONY: test-postgresql-replica-scoring
+test-postgresql-replica-scoring:
+	@cargo test --locked -p fod-rust-hotpath replica_scoring_tests -- --test-threads=1

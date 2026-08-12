@@ -8,7 +8,7 @@ Generated from quoted `FOD_*` literals in production Rust sources. Rust identifi
 | `FOD_ALLOW_OTHER` | `[fod] allow_other` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_fuse/src/startup.rs, rust_mkfs/src/config.rs | - |
 | `FOD_ATIME_POLICY` | `[fod] atime_policy` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_ATTR_TIMEOUT_SECONDS` | `[fod] attr_timeout_seconds` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_fuse/src/startup.rs, rust_mkfs/src/config.rs | - |
-| `FOD_CONFIG` | `[fod] config` | intentional-env-only | - | - | rust_runtime/src/ini_config.rs | config file selector |
+| `FOD_CONFIG` | `[fod] config` | intentional-env-only | - | - | rust_mkfs/src/bin/fod-bootstrap.rs, rust_runtime/src/ini_config.rs | config file selector |
 | `FOD_COPY_DEDUPE_CRC_TABLE` | `[fod] copy_dedupe_crc_table` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_hotpath/src/ffi.rs, rust_runtime/src/lib.rs | - |
 | `FOD_COPY_DEDUPE_ENABLED` | `[fod] copy_dedupe_enabled` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | - |
 | `FOD_COPY_DEDUPE_MAX_BLOCKS` | `[fod] copy_dedupe_max_blocks` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |

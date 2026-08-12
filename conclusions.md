@@ -875,3 +875,23 @@ selection to `fod-bootstrap --config`. An inherited `FOD_CONFIG` cannot silently
 redirect the mount, and cwd-based `./fod_config.ini` fallback is removed from
 the mount path. General administrative tools may continue using the existing
 configuration resolver independently of this stricter mount contract.
+
+## 2026-08-12 — FOD 3.2.69 adaptive replica scoring
+
+Replica routing now separates eligibility from preference. WAL replay position
+is an eligibility requirement; score is only a preference among candidates that
+may be tried.
+
+The adaptive score uses replay lag, connection/validation latency, successful
+operation latency and recent failures. Hysteresis prevents small differences
+from invalidating cached connections, while a short circuit-breaker cooldown
+keeps repeatedly failing targets out of the hot path.
+
+Pool pressure is evaluated at the route level because the current architecture
+uses one replica connection pool shared across replica targets. Per-target pool
+pressure would require per-target pools and is intentionally not fabricated.
+
+A stale-generation failure is still counted globally, but is ignored for
+per-target attribution. This prevents an old in-flight connection from
+incorrectly replacing `last_failed_authority` or penalizing the current target
+after another thread already advanced the generation.

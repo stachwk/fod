@@ -705,3 +705,19 @@ instance is a physical replica.
 
 The next phase should rank multiple caught-up replicas by lag distance, latency
 and pool pressure and add hysteresis/circuit-breaker behavior.
+
+## FOD 3.2.69 adaptive replica scoring
+
+The replica path now distinguishes a hard consistency gate from a soft routing
+score. `pg_last_wal_replay_lsn()` must still satisfy the process-local primary
+WAL barrier. A lagging target is scored with its observed lag and FOD may move
+to another replica candidate instead of immediately falling back to primary.
+
+Preference incorporates EWMA connection/role-validation latency, EWMA read
+operation latency and failure penalties. Hysteresis suppresses low-value target
+switches. Consecutive failures open a short circuit-breaker cooldown, and
+cooling targets are skipped. Route-level pool pressure can prefer primary when
+the shared replica pool is materially more congested.
+
+This stage does not implement promotion or fencing. Those remain prerequisites
+before automatic primary-role changes can be considered safe.

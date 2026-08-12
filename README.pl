@@ -953,3 +953,29 @@ Po takim wpisie wystarczy `mount /mnt/fod.db01`.
 plik. Dziedziczony `FOD_CONFIG` ani przypadkowy `./fod_config.ini` nie zastępują
 już opcji mounta. `config=` i `fod_config=` pozostają przejściowo jako jawne,
 ale przestarzałe aliasy.
+
+## Adaptacyjne ocenianie replik
+
+FOD 3.2.69 ocenia kandydatów na repliki bez osłabiania bariery WAL wprowadzonej
+w 3.2.67. Wynik uwzględnia:
+
+- obserwowane opóźnienie replay WAL;
+- EWMA czasu zestawienia/walidacji połączenia;
+- EWMA czasu poprawnych operacji odczytu;
+- karę za kolejne błędy danego endpointu.
+
+Replika pozostająca za wymaganą pozycją WAL nigdy nie obsłuży odczytu
+wymagającego świeżych danych. FOD zapisuje jej lag i może sprawdzić kolejną
+replikę; fallback na primary następuje dopiero, gdy nie uda się znaleźć
+bezpiecznej repliki.
+
+Mechanizm ogranicza również przełączanie tam i z powrotem:
+- mała poprawa wyniku nie przełącza repliki dzięki hysteresis (histerezie);
+- dwa kolejne błędy otwierają circuit breaker (wyłącznik awaryjny) na 5 sekund;
+- endpoint w cooldown jest pomijany;
+- jeżeli pula replik jest wyraźnie bardziej obciążona od puli primary, odczyt
+  może od razu wrócić na primary zamiast czekać w kolejce repliki.
+
+Scoring jest lokalny dla procesu i nie zastępuje walidacji roli PostgreSQL,
+kontroli replay WAL, zabezpieczeń promocji ani spójności globalnej pomiędzy
+wieloma procesami FOD.

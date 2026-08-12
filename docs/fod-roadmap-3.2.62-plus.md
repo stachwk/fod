@@ -138,13 +138,32 @@ Status: implemented.
 - cover two mounts selecting two different INI files;
 - keep `config=` and `fod_config=` only as deprecated explicit aliases.
 
-## FOD 3.2.69+ — Replica scoring and stronger consistency
+## FOD 3.2.69 — Adaptive replica scoring and cooldown
 
-- rank multiple caught-up replicas by replay lag, latency and pool pressure;
-- add hysteresis/circuit-breaker cooldown behavior;
+Status: implemented.
+
+- preserve the 3.2.67 WAL gate as the hard consistency requirement;
+- score replica candidates from replay lag, connection latency, operation
+  latency and consecutive failures;
+- try another replica when the active replica is behind the required WAL LSN;
+- use hysteresis to avoid score-driven flapping;
+- open a 5-second circuit-breaker cooldown after two consecutive target
+  failures and skip cooling targets;
+- compare replica-pool pressure with primary-pool pressure before queueing a
+  stale-sensitive read;
+- expose score, lag, latency, switch/hysteresis/circuit and pressure-fallback
+  counters;
+- keep global stale-generation failure counting while preventing those stale
+  failures from overwriting the current target's authority/score attribution.
+
+## FOD 3.2.70+ — Promotion safety and stronger cross-process consistency
+
 - cover promotion, split-brain prevention and lock/lease safety;
+- bind failover decisions to authoritative cluster identity/fencing;
 - design cross-process/global consistency where multiple writers require it;
-- add cross-process fairness where required.
+- add cross-process fairness where required;
+- consider making scoring weights/cooldowns configurable after real-standby
+  production measurements.
 
 The confirmed `8/4` FUSE admission configuration remains the production
 candidate while these later layers are implemented.

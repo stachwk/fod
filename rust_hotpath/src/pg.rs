@@ -55,6 +55,14 @@ const INDEX_IMPORT_PLANS_STAGE_TABLE: &str = "index_import_plans_stage";
 const INDEX_IMPORT_PLAN_ENTRIES_STAGE_TABLE: &str = "index_import_plan_entries_stage";
 const REPLAYABLE_SQL_ERROR_PREFIX: &str = "__FOD_REPLAYABLE_SQL_ERROR__: ";
 const UNIQUE_VIOLATION_ERROR_PREFIX: &str = "SQLSTATE 23505:";
+const REPLICA_SCORE_UNKNOWN_LATENCY_MICROS: u64 = 5_000;
+const REPLICA_SCORE_LATENCY_DIVISOR: u64 = 100;
+const REPLICA_SCORE_LAG_DIVISOR_BYTES: u64 = 4_096;
+const REPLICA_SCORE_FAILURE_PENALTY: u64 = 10_000;
+const REPLICA_SCORE_HYSTERESIS_MARGIN: u64 = 25;
+const REPLICA_CIRCUIT_BREAKER_FAILURE_THRESHOLD: u64 = 2;
+const REPLICA_CIRCUIT_BREAKER_COOLDOWN_MS: u64 = 5_000;
+const REPLICA_POOL_PRESSURE_MARGIN_MILLI: u64 = 250;
 
 static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 
@@ -389,6 +397,104 @@ pub struct DbRepoConnectionTarget {
     pub conninfo: String,
 }
 
+#[derive(Debug, Clone)]
+struct DbRepoConnectionTargetMetric {
+    connection_latency_micros_ewma: Option<u64>,
+    operation_latency_micros_ewma: Option<u64>,
+    replay_lag_bytes: Option<u64>,
+    consecutive_failures: u64,
+    circuit_open_until: Option<Instant>,
+}
+
+impl Default for DbRepoConnectionTargetMetric {
+    fn default() -> Self {
+        Self {
+            connection_latency_micros_ewma: None,
+            operation_latency_micros_ewma: None,
+            replay_lag_bytes: None,
+            consecutive_failures: 0,
+            circuit_open_until: None,
+        }
+    }
+}
+
+impl DbRepoConnectionTargetMetric {
+    fn observe_ewma(slot: &mut Option<u64>, sample: u64) {
+        *slot = Some(match *slot {
+            Some(previous) => previous.saturating_mul(3).saturating_add(sample) / 4,
+            None => sample,
+        });
+    }
+
+    fn score(&self, now: Instant) -> Option<u64> {
+        if self
+            .circuit_open_until
+            .as_ref()
+            .is_some_and(|until| *until > now)
+        {
+            return None;
+        }
+        let connection_latency = self
+            .connection_latency_micros_ewma
+            .unwrap_or(REPLICA_SCORE_UNKNOWN_LATENCY_MICROS)
+            / REPLICA_SCORE_LATENCY_DIVISOR;
+        let operation_latency = self
+            .operation_latency_micros_ewma
+            .unwrap_or(REPLICA_SCORE_UNKNOWN_LATENCY_MICROS)
+            / REPLICA_SCORE_LATENCY_DIVISOR;
+        let replay_lag = self.replay_lag_bytes.unwrap_or(0) / REPLICA_SCORE_LAG_DIVISOR_BYTES;
+        let failure_penalty = self
+            .consecutive_failures
+            .saturating_mul(REPLICA_SCORE_FAILURE_PENALTY);
+        Some(
+            connection_latency
+                .saturating_add(operation_latency)
+                .saturating_add(replay_lag)
+                .saturating_add(failure_penalty),
+        )
+    }
+
+    fn record_connection_success(&mut self, elapsed: Duration) {
+        Self::observe_ewma(
+            &mut self.connection_latency_micros_ewma,
+            elapsed.as_micros().min(u128::from(u64::MAX)) as u64,
+        );
+        self.consecutive_failures = 0;
+        self.circuit_open_until = None;
+    }
+
+    fn record_operation_success(&mut self, elapsed: Duration) {
+        Self::observe_ewma(
+            &mut self.operation_latency_micros_ewma,
+            elapsed.as_micros().min(u128::from(u64::MAX)) as u64,
+        );
+        self.consecutive_failures = 0;
+        self.circuit_open_until = None;
+    }
+
+    fn record_failure(&mut self) {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if self.consecutive_failures >= REPLICA_CIRCUIT_BREAKER_FAILURE_THRESHOLD {
+            self.circuit_open_until =
+                Some(Instant::now() + Duration::from_millis(REPLICA_CIRCUIT_BREAKER_COOLDOWN_MS));
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DbRepoConnectionTargetScoringSnapshot {
+    enabled: bool,
+    active_score: Option<u64>,
+    active_replay_lag_bytes: Option<u64>,
+    active_connection_latency_micros: Option<u64>,
+    active_operation_latency_micros: Option<u64>,
+    score_selections: u64,
+    score_switches: u64,
+    hysteresis_keeps: u64,
+    circuit_breaker_skips: u64,
+    circuit_open_targets: usize,
+}
+
 #[derive(Debug)]
 struct DbRepoConnectionTargetState {
     active_index: usize,
@@ -397,6 +503,11 @@ struct DbRepoConnectionTargetState {
     connection_failures: u64,
     role_rejections: u64,
     last_failed_authority: Option<String>,
+    target_metrics: Vec<DbRepoConnectionTargetMetric>,
+    score_selections: u64,
+    score_switches: u64,
+    hysteresis_keeps: u64,
+    circuit_breaker_skips: u64,
 }
 
 impl Default for DbRepoConnectionTargetState {
@@ -408,6 +519,11 @@ impl Default for DbRepoConnectionTargetState {
             connection_failures: 0,
             role_rejections: 0,
             last_failed_authority: None,
+            target_metrics: Vec::new(),
+            score_selections: 0,
+            score_switches: 0,
+            hysteresis_keeps: 0,
+            circuit_breaker_skips: 0,
         }
     }
 }
@@ -455,12 +571,16 @@ impl DbRepoConnectionTargets {
                 ));
             }
         }
+        let target_count = targets.len();
         Ok(Self {
-            runtime_failover_enabled: runtime_failover_enabled && targets.len() > 1,
+            runtime_failover_enabled: runtime_failover_enabled && target_count > 1,
             targets,
             requirement,
             endpoint_routing_enabled,
-            state: Mutex::new(DbRepoConnectionTargetState::default()),
+            state: Mutex::new(DbRepoConnectionTargetState {
+                target_metrics: vec![DbRepoConnectionTargetMetric::default(); target_count],
+                ..DbRepoConnectionTargetState::default()
+            }),
             transition: Mutex::new(()),
         })
     }
@@ -478,6 +598,202 @@ impl DbRepoConnectionTargets {
 
     pub fn generation(&self) -> Result<u64, String> {
         Ok(self.state()?.generation)
+    }
+
+    fn target_count(&self) -> usize {
+        self.targets.len()
+    }
+
+    fn replica_scoring_enabled(&self) -> bool {
+        self.requirement == DbRepoConnectionTargetRequirement::ReadOnlyReplica
+    }
+
+    fn best_replica_candidate_locked(
+        &self,
+        state: &mut DbRepoConnectionTargetState,
+        exclude_current: bool,
+    ) -> Option<(usize, u64)> {
+        if !self.replica_scoring_enabled() {
+            return Some((state.active_index, 0));
+        }
+        let now = Instant::now();
+        let current = state.active_index;
+        let mut best: Option<(usize, u64)> = None;
+        let mut circuit_skips = 0u64;
+        for index in 0..state.target_metrics.len() {
+            if exclude_current && index == current {
+                continue;
+            }
+            match state.target_metrics[index].score(now) {
+                Some(score) => {
+                    if best
+                        .as_ref()
+                        .map_or(true, |(_, best_score)| score < *best_score)
+                    {
+                        best = Some((index, score));
+                    }
+                }
+                None => circuit_skips = circuit_skips.saturating_add(1),
+            }
+        }
+        state.circuit_breaker_skips = state.circuit_breaker_skips.saturating_add(circuit_skips);
+        best
+    }
+
+    fn select_scored_replica_locked(
+        &self,
+        state: &mut DbRepoConnectionTargetState,
+        exclude_current: bool,
+        force_switch: bool,
+    ) -> bool {
+        if !self.replica_scoring_enabled() {
+            return false;
+        }
+        state.score_selections = state.score_selections.saturating_add(1);
+        let current = state.active_index;
+        let current_score = state.target_metrics[current].score(Instant::now());
+        let Some((best_index, best_score)) =
+            self.best_replica_candidate_locked(state, exclude_current)
+        else {
+            return false;
+        };
+        if best_index == current {
+            return false;
+        }
+        let should_switch = force_switch
+            || current_score.is_none()
+            || best_score.saturating_add(REPLICA_SCORE_HYSTERESIS_MARGIN)
+                < current_score.unwrap_or(u64::MAX);
+        if should_switch {
+            state.active_index = best_index;
+            state.score_switches = state.score_switches.saturating_add(1);
+            true
+        } else {
+            state.hysteresis_keeps = state.hysteresis_keeps.saturating_add(1);
+            false
+        }
+    }
+
+    fn prepare_scored_replica(&self) -> Result<Option<u64>, String> {
+        if !self.replica_scoring_enabled() {
+            return Ok(Some(self.generation()?));
+        }
+        let _transition = self
+            .transition
+            .lock()
+            .map_err(|_| "PostgreSQL connection target transition is poisoned".to_string())?;
+        let mut state = self.state()?;
+        if self.select_scored_replica_locked(&mut state, false, false) {
+            state.generation = state.generation.saturating_add(1);
+        }
+        if state.target_metrics[state.active_index]
+            .score(Instant::now())
+            .is_some()
+        {
+            Ok(Some(state.generation))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn record_target_connection_success(
+        &self,
+        generation: u64,
+        elapsed: Duration,
+    ) -> Result<(), String> {
+        if !self.replica_scoring_enabled() {
+            return Ok(());
+        }
+        let mut state = self.state()?;
+        if state.generation == generation {
+            let active_index = state.active_index;
+            state.target_metrics[active_index].record_connection_success(elapsed);
+        }
+        Ok(())
+    }
+
+    fn record_replica_replay(
+        &self,
+        generation: u64,
+        replay_lag_bytes: u64,
+    ) -> Result<bool, String> {
+        if !self.replica_scoring_enabled() {
+            return Ok(false);
+        }
+        let _transition = self
+            .transition
+            .lock()
+            .map_err(|_| "PostgreSQL connection target transition is poisoned".to_string())?;
+        let mut state = self.state()?;
+        if state.generation != generation {
+            return Ok(false);
+        }
+        let active_index = state.active_index;
+        state.target_metrics[active_index].replay_lag_bytes = Some(replay_lag_bytes);
+        if replay_lag_bytes == 0 {
+            return Ok(false);
+        }
+        let switched = self.select_scored_replica_locked(&mut state, true, true);
+        if switched {
+            state.generation = state.generation.saturating_add(1);
+        }
+        Ok(switched)
+    }
+
+    fn record_replica_operation_success(
+        &self,
+        generation: u64,
+        elapsed: Duration,
+    ) -> Result<(), String> {
+        if !self.replica_scoring_enabled() {
+            return Ok(());
+        }
+        let mut state = self.state()?;
+        if state.generation == generation {
+            let active_index = state.active_index;
+            state.target_metrics[active_index].record_operation_success(elapsed);
+        }
+        Ok(())
+    }
+
+    fn scoring_snapshot(&self) -> Result<DbRepoConnectionTargetScoringSnapshot, String> {
+        let state = self.state()?;
+        let enabled = self.replica_scoring_enabled();
+        let now = Instant::now();
+        let active_metric = &state.target_metrics[state.active_index];
+        let circuit_open_targets = state
+            .target_metrics
+            .iter()
+            .filter(|metric| metric.score(now).is_none())
+            .count();
+        Ok(DbRepoConnectionTargetScoringSnapshot {
+            enabled,
+            active_score: if enabled {
+                active_metric.score(now)
+            } else {
+                None
+            },
+            active_replay_lag_bytes: if enabled {
+                active_metric.replay_lag_bytes
+            } else {
+                None
+            },
+            active_connection_latency_micros: if enabled {
+                active_metric.connection_latency_micros_ewma
+            } else {
+                None
+            },
+            active_operation_latency_micros: if enabled {
+                active_metric.operation_latency_micros_ewma
+            } else {
+                None
+            },
+            score_selections: state.score_selections,
+            score_switches: state.score_switches,
+            hysteresis_keeps: state.hysteresis_keeps,
+            circuit_breaker_skips: state.circuit_breaker_skips,
+            circuit_open_targets,
+        })
     }
 
     pub fn snapshot(&self) -> Result<DbRepoConnectionRoutingSnapshot, String> {
@@ -504,6 +820,17 @@ impl DbRepoConnectionTargets {
             replica_lag_fallbacks: 0,
             replica_read_failures: 0,
             primary_read_fallbacks: 0,
+            replica_scoring_enabled: false,
+            replica_active_score: None,
+            replica_active_replay_lag_bytes: None,
+            replica_active_connection_latency_micros: None,
+            replica_active_operation_latency_micros: None,
+            replica_score_selections: 0,
+            replica_score_switches: 0,
+            replica_hysteresis_keeps: 0,
+            replica_circuit_breaker_skips: 0,
+            replica_circuit_open_targets: 0,
+            replica_pool_pressure_fallbacks: 0,
         })
     }
 
@@ -518,14 +845,25 @@ impl DbRepoConnectionTargets {
         if role_rejection {
             state.role_rejections = state.role_rejections.saturating_add(1);
         }
-        state.last_failed_authority = Some(authority.to_string());
         if state.generation != expected_generation {
             return Ok(state.generation);
         }
+        state.last_failed_authority = Some(authority.to_string());
+        let failed_index = state.active_index;
+        if self.replica_scoring_enabled() {
+            state.target_metrics[failed_index].record_failure();
+        }
         state.generation = state.generation.saturating_add(1);
         if self.runtime_failover_enabled {
-            state.active_index = (state.active_index + 1) % self.targets.len();
-            state.failover_count = state.failover_count.saturating_add(1);
+            let previous_index = state.active_index;
+            if self.replica_scoring_enabled() {
+                let _ = self.select_scored_replica_locked(&mut state, true, true);
+            } else {
+                state.active_index = (state.active_index + 1) % self.targets.len();
+            }
+            if state.active_index != previous_index {
+                state.failover_count = state.failover_count.saturating_add(1);
+            }
         }
         Ok(state.generation)
     }
@@ -551,11 +889,37 @@ impl DbRepoConnectionTargets {
         };
         let mut errors = Vec::new();
         for _ in 0..attempts {
+            if self.replica_scoring_enabled() {
+                let mut state = self.state()?;
+                if self.select_scored_replica_locked(&mut state, false, false) {
+                    state.generation = state.generation.saturating_add(1);
+                }
+                let active_index = state.active_index;
+                if state.target_metrics[active_index]
+                    .score(Instant::now())
+                    .is_none()
+                {
+                    errors.push("all replica circuits are cooling down".to_string());
+                    break;
+                }
+            }
             let (target, generation) = self.current_target()?;
+            let connect_started = Instant::now();
             match connect(&target.conninfo, tuning) {
                 Ok(conn) => {
                     match unsafe { validate_connection_target_role(conn, self.requirement) } {
-                        Ok(()) => return Ok((conn, generation)),
+                        Ok(()) => {
+                            if let Err(err) = self.record_target_connection_success(
+                                generation,
+                                connect_started.elapsed(),
+                            ) {
+                                unsafe {
+                                    PQfinish(conn);
+                                }
+                                return Err(err);
+                            }
+                            return Ok((conn, generation));
+                        }
                         Err(err) => {
                             unsafe {
                                 PQfinish(conn);
@@ -591,6 +955,7 @@ struct ReplicaReadConsistencyState {
     replica_lag_fallbacks: u64,
     replica_read_failures: u64,
     primary_read_fallbacks: u64,
+    replica_pool_pressure_fallbacks: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -605,6 +970,7 @@ struct ReplicaReadConsistencySnapshot {
     replica_lag_fallbacks: u64,
     replica_read_failures: u64,
     primary_read_fallbacks: u64,
+    replica_pool_pressure_fallbacks: u64,
 }
 
 #[derive(Debug, Default)]
@@ -676,7 +1042,6 @@ impl ReplicaReadConsistency {
                     state.replica_consistency_passes.saturating_add(1);
             } else {
                 state.replica_lag_fallbacks = state.replica_lag_fallbacks.saturating_add(1);
-                state.primary_read_fallbacks = state.primary_read_fallbacks.saturating_add(1);
             }
         }
     }
@@ -687,15 +1052,26 @@ impl ReplicaReadConsistency {
         }
     }
 
-    fn record_replica_failure_fallback(&self) {
+    fn record_replica_failure(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.replica_read_failures = state.replica_read_failures.saturating_add(1);
+        }
+    }
+
+    fn record_primary_fallback(&self) {
+        if let Ok(mut state) = self.state.lock() {
             state.primary_read_fallbacks = state.primary_read_fallbacks.saturating_add(1);
         }
     }
 
     fn record_forced_primary_fallback(&self) {
+        self.record_primary_fallback();
+    }
+
+    fn record_pool_pressure_fallback(&self) {
         if let Ok(mut state) = self.state.lock() {
+            state.replica_pool_pressure_fallbacks =
+                state.replica_pool_pressure_fallbacks.saturating_add(1);
             state.primary_read_fallbacks = state.primary_read_fallbacks.saturating_add(1);
         }
     }
@@ -716,6 +1092,7 @@ impl ReplicaReadConsistency {
             replica_lag_fallbacks: state.replica_lag_fallbacks,
             replica_read_failures: state.replica_read_failures,
             primary_read_fallbacks: state.primary_read_fallbacks,
+            replica_pool_pressure_fallbacks: state.replica_pool_pressure_fallbacks,
         })
     }
 }
@@ -3699,6 +4076,27 @@ impl SharedConnectionPool {
     }
 }
 
+fn pool_pressure_milli(
+    active_connections: usize,
+    connection_limit: usize,
+    queued_acquisitions: usize,
+) -> u64 {
+    let limit = u64::try_from(connection_limit.max(1)).unwrap_or(u64::MAX);
+    let active = u64::try_from(active_connections).unwrap_or(u64::MAX);
+    let queued = u64::try_from(queued_acquisitions).unwrap_or(u64::MAX);
+    active
+        .saturating_mul(1_000)
+        .checked_div(limit)
+        .unwrap_or(u64::MAX)
+        .saturating_add(queued.saturating_mul(1_000))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReplicaReplayStatus {
+    caught_up: bool,
+    lag_bytes: u64,
+}
+
 impl DbRepo {
     pub fn new(conninfo: &str) -> Result<Self, String> {
         let runtime = RuntimeConfig::from_env()?;
@@ -3976,24 +4374,56 @@ impl DbRepo {
         }
     }
 
-    fn replica_is_caught_up(&self, conn: *mut PGconn) -> Result<bool, String> {
+    fn replica_is_caught_up(&self, conn: *mut PGconn) -> Result<ReplicaReplayStatus, String> {
         if self.replica_consistency.force_primary()? {
-            return Ok(false);
+            return Ok(ReplicaReplayStatus {
+                caught_up: false,
+                lag_bytes: u64::MAX,
+            });
         }
         let Some(required_lsn) = self.replica_consistency.required_lsn()? else {
-            return Ok(true);
+            return Ok(ReplicaReplayStatus {
+                caught_up: true,
+                lag_bytes: 0,
+            });
         };
         let sql = CString::new("SELECT COALESCE(pg_last_wal_replay_lsn()::text, '')")
             .map_err(|_| "replica replay LSN SQL contains NUL byte".to_string())?;
         let replay_lsn = unsafe { query_scalar_text_on_conn(conn, &sql) }?;
         let replay_lsn = replay_lsn.trim();
-        let caught_up = if replay_lsn.is_empty() {
-            false
+        let (caught_up, lag_bytes) = if replay_lsn.is_empty() {
+            (false, u64::MAX)
         } else {
-            parse_pg_lsn(replay_lsn)? >= required_lsn
+            let replay_lsn = parse_pg_lsn(replay_lsn)?;
+            (
+                replay_lsn >= required_lsn,
+                required_lsn.saturating_sub(replay_lsn),
+            )
         };
         self.replica_consistency.record_consistency_check(caught_up);
-        Ok(caught_up)
+        Ok(ReplicaReplayStatus {
+            caught_up,
+            lag_bytes,
+        })
+    }
+
+    fn replica_pool_pressure_prefers_primary(
+        &self,
+        replica_pool: &SharedConnectionPool,
+    ) -> Result<bool, String> {
+        let replica = replica_pool.snapshot()?;
+        let primary = self.pool.snapshot()?;
+        let replica_pressure = pool_pressure_milli(
+            replica.active_connections,
+            replica.connection_limit,
+            replica.queued_acquisitions,
+        );
+        let primary_pressure = pool_pressure_milli(
+            primary.active_connections,
+            primary.connection_limit,
+            primary.queued_acquisitions,
+        );
+        Ok(replica_pressure > primary_pressure.saturating_add(REPLICA_POOL_PRESSURE_MARGIN_MILLI))
     }
 
     fn with_read_connection<T, F>(&self, mut f: F) -> Result<T, String>
@@ -4012,88 +4442,113 @@ impl DbRepo {
             return self.with_connection(ConnectionLane::Write, f);
         }
 
-        let generation = targets.generation()?;
-        let acquisition = match pool.acquire(ConnectionLane::Write, generation) {
-            Ok(value) => value,
-            Err(_) => {
-                self.replica_consistency.record_replica_failure_fallback();
-                return self.with_connection(ConnectionLane::Write, f);
+        if self.replica_pool_pressure_prefers_primary(pool)? {
+            self.replica_consistency.record_pool_pressure_fallback();
+            return self.with_connection(ConnectionLane::Write, f);
+        }
+
+        let max_attempts = targets.target_count().max(1);
+        let mut attempts = 0usize;
+
+        while attempts < max_attempts {
+            let Some(generation) = targets.prepare_scored_replica()? else {
+                break;
+            };
+            attempts = attempts.saturating_add(1);
+
+            let acquisition = match pool.acquire(ConnectionLane::Write, generation) {
+                Ok(value) => value,
+                Err(_) => {
+                    self.replica_consistency.record_replica_failure();
+                    break;
+                }
+            };
+            let (conn, generation) = match acquisition {
+                ConnectionAcquisition::Cached { conn, generation } => (conn, generation),
+                ConnectionAcquisition::ReservedSlot => {
+                    let started = Instant::now();
+                    match targets.connect_new(&self.connection_tuning) {
+                        Ok((conn, generation)) => {
+                            if let Err(err) = pool.record_connection_created(started.elapsed()) {
+                                unsafe { PQfinish(conn) };
+                                return Err(err);
+                            }
+                            (conn, generation)
+                        }
+                        Err(_) => {
+                            let _ = pool.release_unconnected_slot(started.elapsed());
+                            self.replica_consistency.record_replica_failure();
+                            break;
+                        }
+                    }
+                }
+            };
+
+            let started = Instant::now();
+            match self.replica_is_caught_up(conn) {
+                Ok(status) if status.caught_up => {
+                    targets.record_replica_replay(generation, status.lag_bytes)?;
+                }
+                Ok(status) => {
+                    let switched = targets.record_replica_replay(generation, status.lag_bytes)?;
+                    let current_generation = targets.generation()?;
+                    match pool.return_cached(
+                        ConnectionLane::Write,
+                        conn,
+                        generation,
+                        current_generation,
+                        started.elapsed(),
+                    ) {
+                        Ok(true) => {}
+                        Ok(false) | Err(_) => unsafe { PQfinish(conn) },
+                    }
+                    if switched {
+                        continue;
+                    }
+                    break;
+                }
+                Err(_) => {
+                    let _ = pool.release_failed_operation(started.elapsed());
+                    unsafe { PQfinish(conn) };
+                    let _ = targets.mark_operation_connection_failure(generation);
+                    self.replica_consistency.record_replica_failure();
+                    continue;
+                }
             }
-        };
-        let (conn, generation) = match acquisition {
-            ConnectionAcquisition::Cached { conn, generation } => (conn, generation),
-            ConnectionAcquisition::ReservedSlot => {
-                let started = Instant::now();
-                match targets.connect_new(&self.connection_tuning) {
-                    Ok((conn, generation)) => {
-                        if let Err(err) = pool.record_connection_created(started.elapsed()) {
+
+            match f(conn) {
+                Ok(value) => {
+                    let elapsed = started.elapsed();
+                    let current_generation = targets.generation()?;
+                    match pool.return_cached(
+                        ConnectionLane::Write,
+                        conn,
+                        generation,
+                        current_generation,
+                        elapsed,
+                    ) {
+                        Ok(true) => {}
+                        Ok(false) => unsafe { PQfinish(conn) },
+                        Err(err) => {
                             unsafe { PQfinish(conn) };
                             return Err(err);
                         }
-                        (conn, generation)
                     }
-                    Err(_) => {
-                        let _ = pool.release_unconnected_slot(started.elapsed());
-                        self.replica_consistency.record_replica_failure_fallback();
-                        return self.with_connection(ConnectionLane::Write, f);
-                    }
+                    targets.record_replica_operation_success(generation, elapsed)?;
+                    self.replica_consistency.record_replica_read();
+                    return Ok(value);
                 }
-            }
-        };
-
-        let started = Instant::now();
-        match self.replica_is_caught_up(conn) {
-            Ok(true) => {}
-            Ok(false) => {
-                let current_generation = targets.generation()?;
-                match pool.return_cached(
-                    ConnectionLane::Write,
-                    conn,
-                    generation,
-                    current_generation,
-                    started.elapsed(),
-                ) {
-                    Ok(true) => {}
-                    Ok(false) | Err(_) => unsafe { PQfinish(conn) },
+                Err(_) => {
+                    let _ = pool.release_failed_operation(started.elapsed());
+                    unsafe { PQfinish(conn) };
+                    let _ = targets.mark_operation_connection_failure(generation);
+                    self.replica_consistency.record_replica_failure();
                 }
-                return self.with_connection(ConnectionLane::Write, f);
-            }
-            Err(_) => {
-                let _ = pool.release_failed_operation(started.elapsed());
-                unsafe { PQfinish(conn) };
-                self.replica_consistency.record_replica_failure_fallback();
-                return self.with_connection(ConnectionLane::Write, f);
             }
         }
 
-        match f(conn) {
-            Ok(value) => {
-                let current_generation = targets.generation()?;
-                match pool.return_cached(
-                    ConnectionLane::Write,
-                    conn,
-                    generation,
-                    current_generation,
-                    started.elapsed(),
-                ) {
-                    Ok(true) => {}
-                    Ok(false) => unsafe { PQfinish(conn) },
-                    Err(err) => {
-                        unsafe { PQfinish(conn) };
-                        return Err(err);
-                    }
-                }
-                self.replica_consistency.record_replica_read();
-                Ok(value)
-            }
-            Err(_) => {
-                let _ = pool.release_failed_operation(started.elapsed());
-                unsafe { PQfinish(conn) };
-                let _ = targets.mark_operation_connection_failure(generation);
-                self.replica_consistency.record_replica_failure_fallback();
-                self.with_connection(ConnectionLane::Write, f)
-            }
-        }
+        self.replica_consistency.record_primary_fallback();
+        self.with_connection(ConnectionLane::Write, f)
     }
 
     fn with_connection<T, F>(&self, lane: ConnectionLane, mut f: F) -> Result<T, String>
@@ -4211,8 +4666,21 @@ impl DbRepo {
         routing.replica_read_routing_enabled = self.replica_read_targets.is_some();
         if let Some(replica_targets) = &self.replica_read_targets {
             let replica = replica_targets.snapshot()?;
+            let scoring = replica_targets.scoring_snapshot()?;
             routing.replica_target_count = replica.target_count;
             routing.replica_active_authority = Some(replica.active_authority);
+            routing.replica_scoring_enabled = scoring.enabled;
+            routing.replica_active_score = scoring.active_score;
+            routing.replica_active_replay_lag_bytes = scoring.active_replay_lag_bytes;
+            routing.replica_active_connection_latency_micros =
+                scoring.active_connection_latency_micros;
+            routing.replica_active_operation_latency_micros =
+                scoring.active_operation_latency_micros;
+            routing.replica_score_selections = scoring.score_selections;
+            routing.replica_score_switches = scoring.score_switches;
+            routing.replica_hysteresis_keeps = scoring.hysteresis_keeps;
+            routing.replica_circuit_breaker_skips = scoring.circuit_breaker_skips;
+            routing.replica_circuit_open_targets = scoring.circuit_open_targets;
         }
         routing.required_primary_wal_lsn = consistency.required_primary_wal_lsn;
         routing.primary_wal_lsn_updates = consistency.primary_wal_lsn_updates;
@@ -4223,6 +4691,7 @@ impl DbRepo {
         routing.replica_lag_fallbacks = consistency.replica_lag_fallbacks;
         routing.replica_read_failures = consistency.replica_read_failures;
         routing.primary_read_fallbacks = consistency.primary_read_fallbacks;
+        routing.replica_pool_pressure_fallbacks = consistency.replica_pool_pressure_fallbacks;
         Ok(DbRepoObservabilitySnapshot {
             pool: self.pool.snapshot()?,
             routing,
@@ -12390,5 +12859,132 @@ mod replica_read_consistency_tests {
             tracker.snapshot().unwrap().primary_wal_lsn_capture_failures,
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod replica_scoring_tests {
+    use super::*;
+
+    fn target(authority: &str) -> DbRepoConnectionTarget {
+        DbRepoConnectionTarget {
+            authority: authority.to_string(),
+            conninfo: format!("host={authority}"),
+        }
+    }
+
+    fn replica_targets() -> DbRepoConnectionTargets {
+        DbRepoConnectionTargets::new(
+            vec![target("replica-a"), target("replica-b")],
+            DbRepoConnectionTargetRequirement::ReadOnlyReplica,
+            true,
+            true,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn lagged_replica_forces_switch_to_another_candidate() {
+        let targets = replica_targets();
+        let generation = targets.generation().unwrap();
+        assert_eq!(targets.snapshot().unwrap().active_authority, "replica-a");
+        let switched = targets
+            .record_replica_replay(generation, 1024 * 1024)
+            .unwrap();
+        assert!(switched);
+        assert_eq!(targets.snapshot().unwrap().active_authority, "replica-b");
+        assert_eq!(targets.scoring_snapshot().unwrap().score_switches, 1);
+    }
+
+    #[test]
+    fn hysteresis_keeps_current_replica_for_small_score_difference() {
+        let targets = replica_targets();
+        {
+            let mut state = targets.state().unwrap();
+            state.target_metrics[0].connection_latency_micros_ewma = Some(1_000);
+            state.target_metrics[0].operation_latency_micros_ewma = Some(1_000);
+            state.target_metrics[0].replay_lag_bytes = Some(0);
+            state.target_metrics[1].connection_latency_micros_ewma = Some(900);
+            state.target_metrics[1].operation_latency_micros_ewma = Some(900);
+            state.target_metrics[1].replay_lag_bytes = Some(0);
+        }
+        let generation = targets.generation().unwrap();
+        assert_eq!(targets.prepare_scored_replica().unwrap(), Some(generation));
+        assert_eq!(targets.snapshot().unwrap().active_authority, "replica-a");
+        assert!(targets.scoring_snapshot().unwrap().hysteresis_keeps >= 1);
+    }
+
+    #[test]
+    fn large_score_improvement_switches_replica() {
+        let targets = replica_targets();
+        let generation = targets.generation().unwrap();
+        {
+            let mut state = targets.state().unwrap();
+            state.target_metrics[0].connection_latency_micros_ewma = Some(20_000);
+            state.target_metrics[0].operation_latency_micros_ewma = Some(20_000);
+            state.target_metrics[0].replay_lag_bytes = Some(0);
+            state.target_metrics[1].connection_latency_micros_ewma = Some(100);
+            state.target_metrics[1].operation_latency_micros_ewma = Some(100);
+            state.target_metrics[1].replay_lag_bytes = Some(0);
+        }
+        let selected = targets.prepare_scored_replica().unwrap().unwrap();
+        assert!(selected > generation);
+        assert_eq!(targets.snapshot().unwrap().active_authority, "replica-b");
+    }
+
+    #[test]
+    fn open_circuit_is_skipped() {
+        let targets = replica_targets();
+        {
+            let mut state = targets.state().unwrap();
+            state.target_metrics[0].circuit_open_until =
+                Some(Instant::now() + Duration::from_secs(30));
+        }
+        let _ = targets.prepare_scored_replica().unwrap().unwrap();
+        assert_eq!(targets.snapshot().unwrap().active_authority, "replica-b");
+        let scoring = targets.scoring_snapshot().unwrap();
+        assert_eq!(scoring.circuit_open_targets, 1);
+        assert!(scoring.circuit_breaker_skips >= 1);
+    }
+
+    #[test]
+    fn stale_failure_generation_does_not_misattribute_current_authority() {
+        let targets = DbRepoConnectionTargets::new(
+            vec![target("primary-a"), target("primary-b")],
+            DbRepoConnectionTargetRequirement::WritablePrimary,
+            true,
+            true,
+        )
+        .unwrap();
+
+        let old_generation = targets.generation().unwrap();
+        targets
+            .mark_operation_connection_failure(old_generation)
+            .unwrap();
+        let after_first = targets.snapshot().unwrap();
+        assert_eq!(after_first.active_authority, "primary-b");
+        assert_eq!(
+            after_first.last_failed_authority.as_deref(),
+            Some("primary-a")
+        );
+        assert_eq!(after_first.connection_failures, 1);
+
+        targets
+            .mark_operation_connection_failure(old_generation)
+            .unwrap();
+        let after_stale = targets.snapshot().unwrap();
+        assert_eq!(after_stale.active_authority, "primary-b");
+        assert_eq!(
+            after_stale.last_failed_authority.as_deref(),
+            Some("primary-a")
+        );
+        assert_eq!(after_stale.connection_failures, 2);
+    }
+
+    #[test]
+    fn pool_pressure_score_counts_utilization_and_queue() {
+        assert_eq!(pool_pressure_milli(0, 4, 0), 0);
+        assert_eq!(pool_pressure_milli(2, 4, 0), 500);
+        assert_eq!(pool_pressure_milli(2, 4, 1), 1_500);
     }
 }

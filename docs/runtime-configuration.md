@@ -247,3 +247,22 @@ Example:
 mount -t fod none /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini
 mount -t fod none /mnt/fod.db02 -o ini=/etc/fod/fod.db02.ini
 ```
+
+## Replica scoring runtime policy
+
+FOD 3.2.69 automatically activates adaptive scoring whenever production replica
+targets use the `ReadOnlyReplica` requirement. No new INI keys are introduced
+in this stage.
+
+The initial conservative policy is:
+- score = replay-lag component + EWMA connection latency + EWMA operation
+  latency + consecutive-failure penalty;
+- score hysteresis prevents switching for small improvements;
+- two consecutive failures open a 5-second circuit-breaker cooldown;
+- cooling targets are skipped;
+- replica-pool pressure is compared with primary-pool pressure before the read
+  queues on the replica pool.
+
+These constants are intentionally fixed until measurements from a real standby
+topology justify exposing tuning knobs. `pg_replica_read_routing_enabled` still
+controls whether replica reads exist at all.
