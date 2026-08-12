@@ -995,3 +995,30 @@ Replica selection also has conservative anti-flapping behavior:
 The scoring policy is process-local and uses runtime observations. It does not
 replace PostgreSQL role validation, WAL replay checks, promotion fencing, or
 global cross-process consistency.
+
+## Primary promotion guard
+
+FOD 3.2.70 adds a fail-closed guard around runtime primary transitions. FOD
+still does not promote PostgreSQL itself. Promotion remains the responsibility
+of an external HA/fencing system.
+
+When runtime primary failover needs to select a new writable target, FOD scans
+the configured primary entrypoints and records PostgreSQL cluster identity from
+`pg_control_system().system_identifier`. It also builds a server fingerprint
+from the server address/port and postmaster start time.
+
+The transition is accepted only when:
+- exactly one PostgreSQL cluster identity is writable;
+- exactly one distinct writable server fingerprint exists for that cluster;
+- aliases/HA entrypoints that resolve to the same writable server are treated
+  as one server, not as split brain.
+
+FOD fails closed when no writable primary exists, when a writable target belongs
+to another PostgreSQL cluster, or when two distinct server identities are
+simultaneously writable. A change in the backend fingerprint behind the active
+entrypoint forces a fresh guard scan before the connection is accepted.
+
+The shared routing generation still invalidates stale cached write/control/lease
+connections after a transition. This is not a replacement for external STONITH
+or consensus fencing: an already in-flight operation cannot be revoked by FOD
+after it has reached an old primary.

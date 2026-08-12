@@ -156,13 +156,33 @@ Status: implemented.
 - keep global stale-generation failure counting while preventing those stale
   failures from overwriting the current target's authority/score attribution.
 
-## FOD 3.2.70+ — Promotion safety and stronger cross-process consistency
+## FOD 3.2.70 — Primary promotion guard
 
-- cover promotion, split-brain prevention and lock/lease safety;
-- bind failover decisions to authoritative cluster identity/fencing;
-- design cross-process/global consistency where multiple writers require it;
+Status: implemented.
+
+- keep PostgreSQL promotion outside FOD;
+- identify a PostgreSQL cluster with `pg_control_system().system_identifier`;
+- fingerprint the concrete writable server by server address/port and postmaster
+  start time;
+- scan configured primary entrypoints before the first guarded runtime primary
+  and after a failed or identity-changing primary connection;
+- deduplicate multiple aliases that resolve to the same concrete writable server;
+- fail closed if there is no writable primary, if a writable foreign cluster is
+  present, or if two distinct server fingerprints are writable simultaneously;
+- invalidate cached lane connections through the existing routing generation;
+- expose guard scans, identity/split-brain/no-primary rejections and the active
+  cluster/server identity in observability.
+
+## FOD 3.2.71+ — External fencing and stronger cross-process consistency
+
+- integrate an authoritative external fencing/lease epoch before declaring an
+  old primary unusable and a promoted primary safe for writes;
+- cover in-flight write/control/lease operations during a real split-brain
+  transition;
+- design cross-process/global consistency where multiple FOD writers require it;
 - add cross-process fairness where required;
-- consider making scoring weights/cooldowns configurable after real-standby
+- validate promotion ancestry/timeline handling against a real standby cluster;
+- consider making replica-scoring weights/cooldowns configurable after
   production measurements.
 
 The confirmed `8/4` FUSE admission configuration remains the production

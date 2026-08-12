@@ -979,3 +979,31 @@ Mechanizm ogranicza również przełączanie tam i z powrotem:
 Scoring jest lokalny dla procesu i nie zastępuje walidacji roli PostgreSQL,
 kontroli replay WAL, zabezpieczeń promocji ani spójności globalnej pomiędzy
 wieloma procesami FOD.
+
+## Ochrona promocji primary
+
+FOD 3.2.70 dodaje mechanizm fail-closed chroniący zmianę aktywnego primary.
+FOD nadal sam nie promuje PostgreSQL. Promocja pozostaje zadaniem zewnętrznego
+systemu HA/fencing.
+
+Gdy runtime failover musi wybrać nowy zapisywalny endpoint, FOD skanuje
+skonfigurowane wejścia primary i odczytuje identyfikator klastra PostgreSQL z
+`pg_control_system().system_identifier`. Tworzony jest również fingerprint
+serwera z adresu/portu serwera i czasu startu postmastera.
+
+Przejście jest dozwolone tylko wtedy, gdy:
+- zapisywalny jest dokładnie jeden klaster PostgreSQL;
+- dla tego klastra istnieje dokładnie jedna odrębna tożsamość zapisywalnego
+  serwera;
+- aliasy/entrypointy HA prowadzące do tego samego serwera nie są błędnie
+  traktowane jako split brain.
+
+FOD zatrzymuje failover, gdy nie ma primary, pojawi się zapisywalny endpoint
+obcego klastra albo równocześnie dwa różne serwery są writable. Zmiana
+fingerprintu serwera za aktywnym entrypointem wymusza ponowny pełny skan przed
+zaakceptowaniem połączenia.
+
+Wspólna generacja routingu nadal unieważnia stare połączenia write/control/lease
+po zmianie primary. Mechanizm nie zastępuje zewnętrznego STONITH ani fencing
+opartego o konsensus: operacji już wykonywanej na starym primary FOD nie może
+cofnąć po fakcie.

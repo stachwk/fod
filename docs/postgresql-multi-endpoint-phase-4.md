@@ -721,3 +721,19 @@ the shared replica pool is materially more congested.
 
 This stage does not implement promotion or fencing. Those remain prerequisites
 before automatic primary-role changes can be considered safe.
+
+## FOD 3.2.70 primary promotion guard
+
+Primary runtime transitions now have an explicit safety scan. Cluster identity
+comes from `pg_control_system().system_identifier`; concrete server identity is
+derived from server address/port and postmaster start time.
+
+The scan groups aliases that reach the same concrete server. One such writable
+server is acceptable. Zero writable servers, a writable foreign cluster, or two
+different writable server fingerprints cause fail-closed rejection.
+
+This closes the unsafe assumption that "writable" alone is sufficient for
+runtime failover. It still does not solve the distributed fencing problem for an
+operation already in flight on an old primary. The next phase must integrate an
+external authoritative epoch/fence and validate it across real promotion and
+partition scenarios.

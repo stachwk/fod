@@ -2962,3 +2962,72 @@ make test-postgresql-endpoint-routing
 The scoring layer does not bypass the WAL gate. A stale-sensitive read can move
 from one replica candidate to another, but only a caught-up replica may return
 the result.
+
+## FOD 3.2.70 primary promotion safety
+
+Focused promotion-guard and real runtime-failover regression:
+
+```bash
+make test-postgresql-primary-promotion-safety
+```
+
+Related regressions:
+
+```bash
+make test-postgresql-runtime-failover
+make test-postgresql-endpoint-routing
+make test-postgresql-replica-read-consistency
+make test-postgresql-replica-scoring
+```
+
+The guard does not execute PostgreSQL promotion. It validates the result of an
+external promotion/failover decision and refuses ambiguous or split-brain
+writable states.
+
+## 2026-08-12T23:39:07+02:00 commit aeed371
+
+Detached patch recovery after `fod_3_2_70_primary_promotion_guard.zip` stopped
+at `cargo fmt --all` because `rust_hotpath/src/pg.rs` had an extra closing
+brace:
+
+```bash
+sed -n '1,240p' /home/wojtek/.codex/attachments/ed7f4dca-d2b6-4e1a-9f19-d6de6450c822/pasted-text.txt
+git status --short
+git rev-parse --short HEAD
+sed -n '1p' fod_version.txt
+nl -ba rust_hotpath/src/pg.rs | sed -n '620,720p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '1260,1345p'
+git diff -- rust_hotpath/src/pg.rs | sed -n '1,260p'
+cargo fmt --all
+cargo check --workspace
+git diff --stat
+git diff -- rust_hotpath/src/pg.rs | sed -n '1,360p'
+date -Iseconds
+```
+
+Validation after freeing Cargo artifacts:
+
+```bash
+make test-postgresql-primary-promotion-safety
+df -h . /tmp
+du -sh target /tmp/fod-target 2>/dev/null
+CARGO_TARGET_DIR=/tmp/fod-target cargo check --workspace
+CARGO_TARGET_DIR=/tmp/fod-target make test-postgresql-primary-promotion-safety
+make test-postgresql-primary-promotion-safety
+date -Iseconds
+```
+
+Results:
+
+- `cargo fmt --all`: passed.
+- `cargo check --workspace`: passed before cleanup.
+- `make test-postgresql-primary-promotion-safety`: first retry failed while
+  building `fod-indexer` because `/media/wojtek/virtdata` had no free space.
+- `cargo clean`: removed 48.1GiB of local Cargo artifacts.
+- `CARGO_TARGET_DIR=/tmp/fod-target cargo check --workspace`: passed.
+- `CARGO_TARGET_DIR=/tmp/fod-target make test-postgresql-primary-promotion-safety`:
+  failed because the Makefile stamp/build rules assume the default local
+  `target` path.
+- `make test-postgresql-primary-promotion-safety`: passed after `cargo clean`;
+  promotion guard unit tests and
+  `replayable_connection_failure_rotates_to_second_primary_target` passed.

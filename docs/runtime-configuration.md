@@ -266,3 +266,22 @@ The initial conservative policy is:
 These constants are intentionally fixed until measurements from a real standby
 topology justify exposing tuning knobs. `pg_replica_read_routing_enabled` still
 controls whether replica reads exist at all.
+
+## Primary promotion guard runtime policy
+
+FOD 3.2.70 enables the promotion guard automatically when runtime failover is
+active for multiple `WritablePrimary` targets. No new INI key is required.
+
+The guard records:
+- PostgreSQL `system_identifier` as the cluster identity;
+- server address/port plus `pg_postmaster_start_time()` as a concrete server
+  fingerprint;
+- scan and rejection counters in PostgreSQL lane observability.
+
+A changed backend fingerprint, connection failure, or role rejection forces a
+fresh scan. The scan must resolve to one cluster identity and one concrete
+writable server. Multiple aliases to that same server are allowed.
+
+The policy is intentionally fail-closed. External HA software must perform the
+actual promotion and, where required, STONITH/fencing. FOD only validates that
+the observed writable state is unambiguous before routing new work to it.

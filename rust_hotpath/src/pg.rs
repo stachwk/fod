@@ -397,6 +397,121 @@ pub struct DbRepoConnectionTarget {
     pub conninfo: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DbRepoConnectionTargetProbe {
+    recovery: bool,
+    read_only: bool,
+    system_identifier: String,
+    server_fingerprint: String,
+}
+
+impl DbRepoConnectionTargetProbe {
+    fn accepts(&self, requirement: DbRepoConnectionTargetRequirement) -> bool {
+        match requirement {
+            DbRepoConnectionTargetRequirement::Any => true,
+            DbRepoConnectionTargetRequirement::WritablePrimary => !self.recovery && !self.read_only,
+            DbRepoConnectionTargetRequirement::ReadOnlyReplica => self.recovery && self.read_only,
+        }
+    }
+
+    fn writable_primary(&self) -> bool {
+        self.accepts(DbRepoConnectionTargetRequirement::WritablePrimary)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrimarySafetyCandidate {
+    target_index: usize,
+    authority: String,
+    system_identifier: String,
+    server_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrimarySafetyErrorKind {
+    NoWritablePrimary,
+    ClusterIdentityMismatch,
+    SplitBrain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrimarySafetyError {
+    kind: PrimarySafetyErrorKind,
+    message: String,
+}
+
+fn choose_safe_primary_candidate(
+    candidates: &[PrimarySafetyCandidate],
+    expected_system_identifier: Option<&str>,
+    avoid_target_index: Option<usize>,
+) -> Result<usize, PrimarySafetyError> {
+    if candidates.is_empty() {
+        return Err(PrimarySafetyError {
+            kind: PrimarySafetyErrorKind::NoWritablePrimary,
+            message: "PostgreSQL promotion guard found no writable primary".to_string(),
+        });
+    }
+
+    if let Some(expected) = expected_system_identifier {
+        if let Some(foreign) = candidates
+            .iter()
+            .find(|candidate| candidate.system_identifier.as_str() != expected)
+        {
+            return Err(PrimarySafetyError {
+                kind: PrimarySafetyErrorKind::ClusterIdentityMismatch,
+                message: format!(
+                    "PostgreSQL promotion guard rejected writable target {} from foreign cluster system_identifier={} expected={}",
+                    foreign.authority, foreign.system_identifier, expected
+                ),
+            });
+        }
+    } else {
+        let first = &candidates[0].system_identifier;
+        if let Some(other) = candidates
+            .iter()
+            .find(|candidate| candidate.system_identifier != *first)
+        {
+            return Err(PrimarySafetyError {
+                kind: PrimarySafetyErrorKind::ClusterIdentityMismatch,
+                message: format!(
+                    "PostgreSQL promotion guard found writable targets from multiple cluster identities: {} and {}",
+                    first, other.system_identifier
+                ),
+            });
+        }
+    }
+
+    let mut fingerprints: Vec<&str> = Vec::new();
+    for candidate in candidates {
+        if !fingerprints
+            .iter()
+            .any(|fingerprint| *fingerprint == candidate.server_fingerprint.as_str())
+        {
+            fingerprints.push(candidate.server_fingerprint.as_str());
+        }
+    }
+    if fingerprints.len() > 1 {
+        return Err(PrimarySafetyError {
+            kind: PrimarySafetyErrorKind::SplitBrain,
+            message: format!(
+                "PostgreSQL promotion guard detected {} simultaneously writable server identities for one cluster",
+                fingerprints.len()
+            ),
+        });
+    }
+
+    if let Some(avoid) = avoid_target_index {
+        if let Some((index, _)) = candidates
+            .iter()
+            .enumerate()
+            .find(|(_, candidate)| candidate.target_index != avoid)
+        {
+            return Ok(index);
+        }
+    }
+    Ok(0)
+}
+
 #[derive(Debug, Clone)]
 struct DbRepoConnectionTargetMetric {
     connection_latency_micros_ewma: Option<u64>,
@@ -508,6 +623,17 @@ struct DbRepoConnectionTargetState {
     score_switches: u64,
     hysteresis_keeps: u64,
     circuit_breaker_skips: u64,
+    primary_system_identifier: Option<String>,
+    primary_server_fingerprint: Option<String>,
+    primary_revalidation_required: bool,
+    primary_last_failed_index: Option<usize>,
+    primary_guard_scans: u64,
+    primary_guard_unreachable_candidates: u64,
+    primary_guard_role_rejections: u64,
+    primary_guard_cluster_identity_rejections: u64,
+    primary_guard_split_brain_rejections: u64,
+    primary_guard_no_primary_rejections: u64,
+    primary_guard_last_error: Option<String>,
 }
 
 impl Default for DbRepoConnectionTargetState {
@@ -524,6 +650,17 @@ impl Default for DbRepoConnectionTargetState {
             score_switches: 0,
             hysteresis_keeps: 0,
             circuit_breaker_skips: 0,
+            primary_system_identifier: None,
+            primary_server_fingerprint: None,
+            primary_revalidation_required: false,
+            primary_last_failed_index: None,
+            primary_guard_scans: 0,
+            primary_guard_unreachable_candidates: 0,
+            primary_guard_role_rejections: 0,
+            primary_guard_cluster_identity_rejections: 0,
+            primary_guard_split_brain_rejections: 0,
+            primary_guard_no_primary_rejections: 0,
+            primary_guard_last_error: None,
         }
     }
 }
@@ -606,6 +743,138 @@ impl DbRepoConnectionTargets {
 
     fn replica_scoring_enabled(&self) -> bool {
         self.requirement == DbRepoConnectionTargetRequirement::ReadOnlyReplica
+    }
+
+    fn primary_promotion_guard_enabled(&self) -> bool {
+        self.requirement == DbRepoConnectionTargetRequirement::WritablePrimary
+            && self.runtime_failover_enabled
+    }
+
+    fn record_primary_guard_error_locked(
+        state: &mut DbRepoConnectionTargetState,
+        error: &PrimarySafetyError,
+    ) {
+        match error.kind {
+            PrimarySafetyErrorKind::NoWritablePrimary => {
+                state.primary_guard_no_primary_rejections =
+                    state.primary_guard_no_primary_rejections.saturating_add(1);
+            }
+            PrimarySafetyErrorKind::ClusterIdentityMismatch => {
+                state.primary_guard_cluster_identity_rejections = state
+                    .primary_guard_cluster_identity_rejections
+                    .saturating_add(1);
+            }
+            PrimarySafetyErrorKind::SplitBrain => {
+                state.primary_guard_split_brain_rejections =
+                    state.primary_guard_split_brain_rejections.saturating_add(1);
+            }
+        }
+        state.primary_guard_last_error = Some(error.message.clone());
+    }
+
+    fn connect_primary_guarded(
+        &self,
+        tuning: &ConnectionTuning,
+        avoid_target_index: Option<usize>,
+    ) -> Result<(*mut PGconn, u64), String> {
+        let expected_system_identifier = {
+            let mut state = self.state()?;
+            state.primary_guard_scans = state.primary_guard_scans.saturating_add(1);
+            state.primary_system_identifier.clone()
+        };
+
+        let mut live: Vec<(PrimarySafetyCandidate, *mut PGconn)> = Vec::new();
+        let mut unreachable = 0u64;
+        let mut role_rejections = 0u64;
+
+        for (target_index, target) in self.targets.iter().enumerate() {
+            match connect(&target.conninfo, tuning) {
+                Ok(conn) => match unsafe { probe_connection_target(conn) } {
+                    Ok(probe) if probe.writable_primary() => {
+                        live.push((
+                            PrimarySafetyCandidate {
+                                target_index,
+                                authority: target.authority.clone(),
+                                system_identifier: probe.system_identifier,
+                                server_fingerprint: probe.server_fingerprint,
+                            },
+                            conn,
+                        ));
+                    }
+                    Ok(_) => {
+                        role_rejections = role_rejections.saturating_add(1);
+                        unsafe { PQfinish(conn) };
+                    }
+                    Err(_) => {
+                        role_rejections = role_rejections.saturating_add(1);
+                        unsafe { PQfinish(conn) };
+                    }
+                },
+                Err(_) => {
+                    unreachable = unreachable.saturating_add(1);
+                }
+            }
+        }
+
+        let candidates = live
+            .iter()
+            .map(|(candidate, _)| candidate.clone())
+            .collect::<Vec<_>>();
+        let decision = choose_safe_primary_candidate(
+            &candidates,
+            expected_system_identifier.as_deref(),
+            avoid_target_index,
+        );
+
+        let selected_position = match decision {
+            Ok(index) => index,
+            Err(error) => {
+                for (_, conn) in live {
+                    unsafe { PQfinish(conn) };
+                }
+                let mut state = self.state()?;
+                state.primary_guard_unreachable_candidates = state
+                    .primary_guard_unreachable_candidates
+                    .saturating_add(unreachable);
+                state.primary_guard_role_rejections = state
+                    .primary_guard_role_rejections
+                    .saturating_add(role_rejections);
+                Self::record_primary_guard_error_locked(&mut state, &error);
+                state.primary_revalidation_required = true;
+                return Err(error.message);
+            }
+        };
+
+        let selected_candidate = live[selected_position].0.clone();
+        let selected_conn = live[selected_position].1;
+        for (index, (_, conn)) in live.into_iter().enumerate() {
+            if index != selected_position {
+                unsafe { PQfinish(conn) };
+            }
+        }
+
+        let mut state = self.state()?;
+        state.primary_guard_unreachable_candidates = state
+            .primary_guard_unreachable_candidates
+            .saturating_add(unreachable);
+        state.primary_guard_role_rejections = state
+            .primary_guard_role_rejections
+            .saturating_add(role_rejections);
+        let was_revalidation = state.primary_revalidation_required;
+        let previous_index = state.active_index;
+        if previous_index != selected_candidate.target_index {
+            state.active_index = selected_candidate.target_index;
+            state.failover_count = state.failover_count.saturating_add(1);
+            if !was_revalidation {
+                state.generation = state.generation.saturating_add(1);
+            }
+        }
+        state.primary_system_identifier = Some(selected_candidate.system_identifier);
+        state.primary_server_fingerprint = Some(selected_candidate.server_fingerprint);
+        state.primary_revalidation_required = false;
+        state.primary_last_failed_index = None;
+        state.primary_guard_last_error = None;
+        Ok((selected_conn, state.generation))
     }
 
     fn best_replica_candidate_locked(
@@ -831,6 +1100,17 @@ impl DbRepoConnectionTargets {
             replica_circuit_breaker_skips: 0,
             replica_circuit_open_targets: 0,
             replica_pool_pressure_fallbacks: 0,
+            primary_promotion_guard_enabled: self.primary_promotion_guard_enabled(),
+            primary_system_identifier: state.primary_system_identifier.clone(),
+            primary_server_fingerprint: state.primary_server_fingerprint.clone(),
+            primary_guard_scans: state.primary_guard_scans,
+            primary_guard_unreachable_candidates: state.primary_guard_unreachable_candidates,
+            primary_guard_role_rejections: state.primary_guard_role_rejections,
+            primary_guard_cluster_identity_rejections: state
+                .primary_guard_cluster_identity_rejections,
+            primary_guard_split_brain_rejections: state.primary_guard_split_brain_rejections,
+            primary_guard_no_primary_rejections: state.primary_guard_no_primary_rejections,
+            primary_guard_last_error: state.primary_guard_last_error.clone(),
         })
     }
 
@@ -854,7 +1134,10 @@ impl DbRepoConnectionTargets {
             state.target_metrics[failed_index].record_failure();
         }
         state.generation = state.generation.saturating_add(1);
-        if self.runtime_failover_enabled {
+        if self.primary_promotion_guard_enabled() {
+            state.primary_revalidation_required = true;
+            state.primary_last_failed_index = Some(failed_index);
+        } else if self.runtime_failover_enabled {
             let previous_index = state.active_index;
             if self.replica_scoring_enabled() {
                 let _ = self.select_scored_replica_locked(&mut state, true, true);
@@ -882,6 +1165,105 @@ impl DbRepoConnectionTargets {
             .transition
             .lock()
             .map_err(|_| "PostgreSQL connection target transition is poisoned".to_string())?;
+
+        if self.primary_promotion_guard_enabled() {
+            let (needs_scan, avoid_target_index, expected_system_identifier, expected_fingerprint) = {
+                let state = self.state()?;
+                (
+                    state.primary_revalidation_required
+                        || state.primary_system_identifier.is_none()
+                        || state.primary_server_fingerprint.is_none(),
+                    state.primary_last_failed_index,
+                    state.primary_system_identifier.clone(),
+                    state.primary_server_fingerprint.clone(),
+                )
+            };
+            if needs_scan {
+                return self.connect_primary_guarded(tuning, avoid_target_index);
+            }
+
+            let (target, generation) = self.current_target()?;
+            let active_index = self.state()?.active_index;
+            match connect(&target.conninfo, tuning) {
+                Ok(conn) => {
+                    let probe = match unsafe { probe_connection_target(conn) } {
+                        Ok(probe) => probe,
+                        Err(err) => {
+                            unsafe { PQfinish(conn) };
+                            self.advance_after_failure(generation, &target.authority, true)?;
+                            return self
+                                .connect_primary_guarded(tuning, Some(active_index))
+                                .map_err(|guard_err| {
+                                    format!(
+                                        "{}: {}; promotion guard: {}",
+                                        target.authority, err, guard_err
+                                    )
+                                });
+                        }
+                    };
+                    if !probe.writable_primary() {
+                        unsafe { PQfinish(conn) };
+                        let err = format!(
+                            "PostgreSQL target role rejected: recovery={} transaction_read_only={}",
+                            probe.recovery, probe.read_only
+                        );
+                        self.advance_after_failure(generation, &target.authority, true)?;
+                        return self
+                            .connect_primary_guarded(tuning, Some(active_index))
+                            .map_err(|guard_err| {
+                                format!(
+                                    "{}: {}; promotion guard: {}",
+                                    target.authority, err, guard_err
+                                )
+                            });
+                    }
+
+                    if expected_system_identifier.as_deref()
+                        != Some(probe.system_identifier.as_str())
+                    {
+                        unsafe { PQfinish(conn) };
+                        let mut state = self.state()?;
+                        state.primary_guard_last_error = Some(format!(
+                            "PostgreSQL promotion guard observed changed cluster identity on {}: observed={} expected={}",
+                            target.authority,
+                            probe.system_identifier,
+                            expected_system_identifier.as_deref().unwrap_or("none")
+                        ));
+                        state.primary_revalidation_required = true;
+                        state.primary_last_failed_index = Some(active_index);
+                        state.generation = state.generation.saturating_add(1);
+                        drop(state);
+                        return self.connect_primary_guarded(tuning, Some(active_index));
+                    }
+
+                    if expected_fingerprint.as_deref() != Some(probe.server_fingerprint.as_str()) {
+                        unsafe { PQfinish(conn) };
+                        let mut state = self.state()?;
+                        if state.generation == generation {
+                            state.primary_revalidation_required = true;
+                            state.primary_last_failed_index = Some(active_index);
+                            state.generation = state.generation.saturating_add(1);
+                        }
+                        drop(state);
+                        return self.connect_primary_guarded(tuning, Some(active_index));
+                    }
+
+                    return Ok((conn, generation));
+                }
+                Err(err) => {
+                    self.advance_after_failure(generation, &target.authority, false)?;
+                    return self
+                        .connect_primary_guarded(tuning, Some(active_index))
+                        .map_err(|guard_err| {
+                            format!(
+                                "{}: {}; promotion guard: {}",
+                                target.authority, err, guard_err
+                            )
+                        });
+                }
+            }
+        }
+
         let attempts = if self.runtime_failover_enabled {
             self.targets.len()
         } else {
@@ -1097,15 +1479,16 @@ impl ReplicaReadConsistency {
     }
 }
 
-unsafe fn validate_connection_target_role(
+unsafe fn probe_connection_target(
     conn: *mut PGconn,
-    requirement: DbRepoConnectionTargetRequirement,
-) -> Result<(), String> {
-    if requirement == DbRepoConnectionTargetRequirement::Any {
-        return Ok(());
-    }
+) -> Result<DbRepoConnectionTargetProbe, String> {
     let sql = CString::new(
-        "SELECT pg_is_in_recovery()::text || '|' || current_setting('transaction_read_only')",
+        "SELECT pg_is_in_recovery()::text || '|' || \
+         current_setting('transaction_read_only') || '|' || \
+         (SELECT system_identifier::text FROM pg_control_system()) || '|' || \
+         COALESCE(inet_server_addr()::text, 'local') || ':' || \
+         COALESCE(inet_server_port()::text, 'local') || '|' || \
+         EXTRACT(EPOCH FROM pg_postmaster_start_time())::text",
     )
     .map_err(|_| "PostgreSQL target validation SQL contains NUL byte".to_string())?;
     let res = PQexec(conn, sql.as_ptr());
@@ -1118,10 +1501,12 @@ unsafe fn validate_connection_target_role(
         return Err(err);
     }
     let value = fetch_single_text(res)?;
-    let (recovery, read_only) = value
-        .trim()
-        .split_once('|')
-        .ok_or_else(|| format!("invalid PostgreSQL target role probe `{value}`"))?;
+    let fields = value.trim().split('|').collect::<Vec<_>>();
+    if fields.len() != 5 {
+        return Err(format!(
+            "invalid PostgreSQL target identity probe `{value}`"
+        ));
+    }
     let parse_bool = |value: &str| -> Result<bool, String> {
         match value.trim().to_ascii_lowercase().as_str() {
             "t" | "true" | "1" | "on" => Ok(true),
@@ -1129,19 +1514,38 @@ unsafe fn validate_connection_target_role(
             other => Err(format!("invalid PostgreSQL boolean `{other}`")),
         }
     };
-    let recovery = parse_bool(recovery)?;
-    let read_only = parse_bool(read_only)?;
-    let accepted = match requirement {
-        DbRepoConnectionTargetRequirement::Any => true,
-        DbRepoConnectionTargetRequirement::WritablePrimary => !recovery && !read_only,
-        DbRepoConnectionTargetRequirement::ReadOnlyReplica => recovery && read_only,
-    };
-    if accepted {
+    let recovery = parse_bool(fields[0])?;
+    let read_only = parse_bool(fields[1])?;
+    let system_identifier = fields[2].trim().to_string();
+    let server_endpoint = fields[3].trim();
+    let postmaster_start = fields[4].trim();
+    if system_identifier.is_empty() || server_endpoint.is_empty() || postmaster_start.is_empty() {
+        return Err(format!(
+            "incomplete PostgreSQL target identity probe `{value}`"
+        ));
+    }
+    Ok(DbRepoConnectionTargetProbe {
+        recovery,
+        read_only,
+        system_identifier,
+        server_fingerprint: format!("{server_endpoint}|{postmaster_start}"),
+    })
+}
+
+unsafe fn validate_connection_target_role(
+    conn: *mut PGconn,
+    requirement: DbRepoConnectionTargetRequirement,
+) -> Result<(), String> {
+    if requirement == DbRepoConnectionTargetRequirement::Any {
+        return Ok(());
+    }
+    let probe = probe_connection_target(conn)?;
+    if probe.accepts(requirement) {
         Ok(())
     } else {
         Err(format!(
             "PostgreSQL target role rejected: recovery={} transaction_read_only={}",
-            recovery, read_only
+            probe.recovery, probe.read_only
         ))
     }
 }
@@ -12986,5 +13390,74 @@ mod replica_scoring_tests {
         assert_eq!(pool_pressure_milli(0, 4, 0), 0);
         assert_eq!(pool_pressure_milli(2, 4, 0), 500);
         assert_eq!(pool_pressure_milli(2, 4, 1), 1_500);
+    }
+}
+
+#[cfg(test)]
+mod primary_promotion_guard_tests {
+    use super::*;
+
+    fn candidate(
+        target_index: usize,
+        authority: &str,
+        system_identifier: &str,
+        server_fingerprint: &str,
+    ) -> PrimarySafetyCandidate {
+        PrimarySafetyCandidate {
+            target_index,
+            authority: authority.to_string(),
+            system_identifier: system_identifier.to_string(),
+            server_fingerprint: server_fingerprint.to_string(),
+        }
+    }
+
+    #[test]
+    fn aliases_to_same_writable_primary_are_not_split_brain() {
+        let candidates = vec![
+            candidate(0, "entry-a", "cluster-1", "10.0.0.1:5432|start-a"),
+            candidate(1, "entry-b", "cluster-1", "10.0.0.1:5432|start-a"),
+        ];
+        assert_eq!(
+            choose_safe_primary_candidate(&candidates, None, None).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn failed_alias_prefers_another_alias_to_same_primary() {
+        let candidates = vec![
+            candidate(0, "entry-a", "cluster-1", "10.0.0.1:5432|start-a"),
+            candidate(1, "entry-b", "cluster-1", "10.0.0.1:5432|start-a"),
+        ];
+        assert_eq!(
+            choose_safe_primary_candidate(&candidates, Some("cluster-1"), Some(0)).unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn two_distinct_writable_servers_are_rejected_as_split_brain() {
+        let candidates = vec![
+            candidate(0, "primary-a", "cluster-1", "10.0.0.1:5432|start-a"),
+            candidate(1, "primary-b", "cluster-1", "10.0.0.2:5432|start-b"),
+        ];
+        let err = choose_safe_primary_candidate(&candidates, Some("cluster-1"), None).unwrap_err();
+        assert_eq!(err.kind, PrimarySafetyErrorKind::SplitBrain);
+    }
+
+    #[test]
+    fn foreign_writable_cluster_is_rejected() {
+        let candidates = vec![
+            candidate(0, "primary-a", "cluster-1", "10.0.0.1:5432|start-a"),
+            candidate(1, "foreign", "cluster-2", "10.0.0.2:5432|start-b"),
+        ];
+        let err = choose_safe_primary_candidate(&candidates, Some("cluster-1"), None).unwrap_err();
+        assert_eq!(err.kind, PrimarySafetyErrorKind::ClusterIdentityMismatch);
+    }
+
+    #[test]
+    fn no_writable_candidate_is_rejected() {
+        let err = choose_safe_primary_candidate(&[], Some("cluster-1"), None).unwrap_err();
+        assert_eq!(err.kind, PrimarySafetyErrorKind::NoWritablePrimary);
     }
 }

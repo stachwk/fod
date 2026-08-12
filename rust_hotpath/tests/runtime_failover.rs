@@ -79,6 +79,15 @@ fn replayable_connection_failure_rotates_to_second_primary_target() {
     let snapshot = repo.observability_snapshot().expect("observability");
     assert!(snapshot.routing.endpoint_routing_enabled);
     assert!(snapshot.routing.runtime_failover_enabled);
+    assert!(snapshot.routing.primary_promotion_guard_enabled);
+    assert!(snapshot.routing.primary_system_identifier.is_some());
+    assert!(snapshot.routing.primary_server_fingerprint.is_some());
+    assert!(snapshot.routing.primary_guard_scans >= 2);
+    assert_eq!(snapshot.routing.primary_guard_split_brain_rejections, 0);
+    assert_eq!(
+        snapshot.routing.primary_guard_cluster_identity_rejections,
+        0
+    );
     assert_eq!(snapshot.routing.target_count, 2);
     assert_eq!(snapshot.routing.active_authority, "primary-entry-b");
     assert!(snapshot.routing.generation >= 2);

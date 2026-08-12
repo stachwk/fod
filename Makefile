@@ -2207,3 +2207,9 @@ test-postgresql-replica-read-consistency:
 .PHONY: test-postgresql-replica-scoring
 test-postgresql-replica-scoring:
 	@cargo test --locked -p fod-rust-hotpath replica_scoring_tests -- --test-threads=1
+
+
+.PHONY: test-postgresql-primary-promotion-safety
+test-postgresql-primary-promotion-safety:
+	@cargo test --locked -p fod-rust-hotpath primary_promotion_guard_tests -- --test-threads=1
+	@$(MAKE) --no-print-directory test-postgresql-runtime-failover

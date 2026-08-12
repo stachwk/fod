@@ -895,3 +895,35 @@ A stale-generation failure is still counted globally, but is ignored for
 per-target attribution. This prevents an old in-flight connection from
 incorrectly replacing `last_failed_authority` or penalizing the current target
 after another thread already advanced the generation.
+
+## 2026-08-12 — FOD 3.2.70 primary promotion guard
+
+Runtime failover can no longer treat any writable endpoint as an acceptable
+replacement primary. The target must belong to the same PostgreSQL
+`system_identifier`, and a guard scan must see only one concrete writable server
+identity.
+
+Multiple configured aliases are intentionally allowed when they resolve to the
+same server fingerprint. This preserves HA/proxy entrypoint layouts while still
+rejecting two distinct writable servers from the same cluster as split brain.
+
+A backend fingerprint change behind an existing entrypoint is treated as a
+primary identity transition and forces a guard scan. The existing routing
+generation invalidates cached write/control/lease connections after the
+transition.
+
+This is a fail-closed detection/fencing gate inside FOD, not external fencing.
+A process-local guard cannot revoke a transaction already executing on an old
+primary. Real STONITH/consensus fencing and cross-process write epochs remain
+required before FOD can claim full split-brain safety.
+
+## 2026-08-12 — FOD 3.2.70 validation environment
+
+`make test-postgresql-primary-promotion-safety` needs the repository-local
+`target` directory because the Makefile uses a local build stamp. Moving Cargo
+artifacts with `CARGO_TARGET_DIR=/tmp/fod-target` is valid for plain
+`cargo check --workspace`, but it is not compatible with this Makefile target.
+
+The full promotion-safety target passed after clearing stale local Cargo
+artifacts with `cargo clean`; the earlier failure was caused by a full
+`/media/wojtek/virtdata` filesystem during compilation, not by a test failure.
