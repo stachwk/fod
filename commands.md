@@ -3031,3 +3031,72 @@ Results:
 - `make test-postgresql-primary-promotion-safety`: passed after `cargo clean`;
   promotion guard unit tests and
   `replayable_connection_failure_rotates_to_second_primary_target` passed.
+
+## 2026-08-14T11:55:07+02:00 commit dca6688
+
+FUSE fio, `FOD_PROFILE_IO`, strace, and PostgreSQL observability run:
+
+```bash
+git status --short
+git rev-parse --short HEAD
+sed -n '1p' fod_version.txt
+rg -n "test-fio|FOD_PROFILE_IO|strace|perf|profile|benchmark|fio" Makefile docs README.md README.pl commands.md conclusions.md
+nl -ba Makefile | sed -n '130,230p'
+nl -ba Makefile | sed -n '1960,2240p'
+sed -n '150,190p' docs/performance.md
+sed -n '239,256p' docs/performance.md
+nl -ba Makefile | sed -n '520,760p'
+nl -ba Makefile | sed -n '1340,1545p'
+nl -ba Makefile | sed -n '1760,1815p'
+df -h . /tmp
+command -v fio
+command -v strace
+command -v perf
+make PROFILE_RUN_ID=fio-profile-20260814T094852Z profile-env
+make PROFILE_RUN_ID=fio-profile-20260814T094852Z profile-fuse-sequential-io
+rg -n "FIO_FILE_SIZE|fio/sequential|fio/mixed|fio/random" tests Makefile
+find artifacts/perf/dca6688/lt7300-fio-profile-20260814T094852Z -maxdepth 1 -type f -printf '%f %s\n' | sort
+nl -ba Makefile | sed -n '1100,1140p'
+sed -n '1,170p' tests/integration/test_fio_mixed_io.sh
+sed -n '1,155p' tests/integration/test_fio_sequential_io.sh
+make PROFILE_RUN_ID=fio-profile-20260814T094852Z PROFILE_CAPTURE_LABEL=seq4m FIO_FILE_SIZE=4M profile-fuse-sequential-io
+make PROFILE_RUN_ID=fio-profile-20260814T094852Z PROFILE_CAPTURE_LABEL=mixed8m PROFILE_FUSE_WORKLOAD=test-fio-mixed-io FIO_FILE_SIZE=8M profile-fuse-sequential-io
+make PROFILE_RUN_ID=fio-profile-20260814T094852Z PROFILE_CAPTURE_LABEL=random8m PROFILE_FUSE_WORKLOAD=test-fio-random-mixed-io FIO_FILE_SIZE=8M profile-fuse-sequential-io
+perf stat -d -o /tmp/fod-perf-probe.txt -- true
+make PROFILE_RUN_ID=fio-profile-20260814T094852Z PROFILE_CAPTURE_LABEL=after-fio profile-pg-top-io-wal profile-pg-wal profile-pg-metadata-top
+make PROFILE_RUN_ID=fio-profile-20260814T094852Z PROFILE_CAPTURE_LABEL=after-fio profile-pg-wal profile-pg-activity
+rg -n "^(  (read|write):|   READ:|  WRITE:|OK fio|FOD strace profile summary|\\| [0-9.]+ \\| .* \\| (read|futex|wait4|restart_syscall|total) \\||2026-.*fuse_(read|write)_total_us=|2026-.*repo_(persist_blocks|persist_extents|fetch_block_range)_us=|2026-.*prepare_persist_extent_rows_peak_payload_bytes=|2026-.*segment_count=|2026-.*segment_payload_bytes=)" artifacts/perf/dca6688/lt7300-fio-profile-20260814T094852Z/fuse-*.txt
+date -Iseconds
+git add commands.md conclusions.md
+git commit -m "FOD 3.2.70: record fio profiling baseline"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff HEAD~1..HEAD --check
+git status --short
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing myai --agent codex
+ps -fp 1864004 -o pid,ppid,stat,etime,time,pcpu,pmem,args
+ps -ef | rg 'mempalace|mine'
+```
+
+Results and artifacts:
+
+- Artifact directory:
+  `artifacts/perf/dca6688/lt7300-fio-profile-20260814T094852Z`.
+- `profile-fuse-sequential-io`: passed with default
+  `test-fio-sequential-io-strace` and `FIO_FILE_SIZE=64k`.
+- `profile-fuse-sequential-io` with `FIO_FILE_SIZE=4M`: passed and captured
+  strace summaries for block and extent paths.
+- `profile-fuse-sequential-io PROFILE_FUSE_WORKLOAD=test-fio-mixed-io
+  FIO_FILE_SIZE=8M`: passed.
+- `profile-fuse-sequential-io PROFILE_FUSE_WORKLOAD=test-fio-random-mixed-io
+  FIO_FILE_SIZE=8M`: passed.
+- `perf stat`: blocked by `perf_event_paranoid=4`; no unprivileged perf
+  counters were captured.
+- `profile-pg-top-io-wal`: failed because `pg_stat_statements` is not
+  installed in the local PostgreSQL test database.
+- `profile-pg-wal` and `profile-pg-activity`: passed; WAL counters are
+  cumulative since the PostgreSQL stats reset and are not isolated to this fio
+  run.
+- CLI `mempalace mine` was blocked by an existing `mempalace-mcp` lock holder
+  (`PID 1864004`), but MCP reconnect succeeded and MCP `mempalace_mine`
+  refreshed the project index: 2 changed files processed, 256 skipped,
+  718 drawers filed.

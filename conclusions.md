@@ -927,3 +927,65 @@ artifacts with `CARGO_TARGET_DIR=/tmp/fod-target` is valid for plain
 The full promotion-safety target passed after clearing stale local Cargo
 artifacts with `cargo clean`; the earlier failure was caused by a full
 `/media/wojtek/virtdata` filesystem during compilation, not by a test failure.
+
+## 2026-08-14 — FOD 3.2.70 fio/strace profiling baseline
+
+Metadata:
+
+- Commit: `dca6688`.
+- Run id: `fio-profile-20260814T094852Z`.
+- Artifact directory:
+  `artifacts/perf/dca6688/lt7300-fio-profile-20260814T094852Z`.
+- Tools present: `fio`, `strace`, `perf`; unprivileged `perf stat` was blocked
+  by `perf_event_paranoid=4`.
+
+Representative fio results:
+
+| Workload | Path | Size | Read BW | Write BW | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| sequential + strace | block | 64KiB | 271KiB/s | 239KiB/s | smoke-size strace baseline |
+| sequential + strace | extent | 64KiB | 132KiB/s | 508KiB/s | one 64KiB segment |
+| sequential + strace | block | 4MiB | 275KiB/s | 1221KiB/s | 1024 read/write callbacks |
+| sequential + strace | extent | 4MiB | 268KiB/s | 1857KiB/s | direct sequential path, 4 segments |
+| mixed sequential rw | block | 8MiB | 216KiB/s | 229KiB/s | cache-hot reads; writes dominate wall time |
+| mixed sequential rw | extent | 8MiB | 144KiB/s | 153KiB/s | no direct segment mode for mixed writes |
+| random mixed rw | block | 8MiB | 147KiB/s | 156KiB/s | negative-control random workload |
+| random mixed rw | extent | 8MiB | 116KiB/s | 123KiB/s | slower than block under random writes |
+
+FOD profile highlights:
+
+- The pure 4MiB sequential extent write used the intended bounded direct
+  segment path: `segment_payload_bytes=4194304`, `segment_count=4`, and
+  `prepare_persist_extent_rows_peak_payload_bytes=1048576`.
+- The 4MiB sequential extent write had lower FUSE write time than block
+  (`1.636s` vs `2.734s`) and lower persistence time (`repo_persist_extents_us`
+  `211499` vs block `repo_persist_blocks_us` `524592`).
+- Sequential reads remained similarly slow for block and extent at this size:
+  fio read bandwidth was `275KiB/s` for block and `268KiB/s` for extent.
+  Extent read spent `3.111s` in `repo_fetch_block_range_us`, so read-side
+  extent lookup/reassembly remains a visible cost.
+- Mixed and random-mixed workloads did not enter direct segment mode
+  (`segment_count=0`). In those cases the extent path was slower than block,
+  which matches the current opt-in contract: extents are a sequential write/read
+  PoC, not the default random-write path.
+
+Strace highlights:
+
+- The 4MiB sequential block strace table was dominated by `read` (`51.97%`,
+  `18.921s`) and `futex` (`35.94%`, `13.084s`), with `53,987` total syscalls.
+- The 4MiB sequential extent strace table had the same shape: `read`
+  (`51.86%`, `20.228s`) and `futex` (`35.91%`, `14.006s`), with `58,785`
+  total syscalls.
+- This points at synchronous 4KiB FUSE request/response overhead and waiting
+  time as a major part of the measured wall time. A single throughput number is
+  not enough to justify tuning; repeat runs and an iodepth/block-size matrix are
+  needed before changing FUSE concurrency or cache policy.
+
+PostgreSQL profiling limits:
+
+- `profile-pg-top-io-wal` could not run because `pg_stat_statements` is not
+  installed in the local PostgreSQL test database.
+- `profile-pg-wal` captured WAL/checkpointer state successfully, but the
+  counters are cumulative since `2026-08-08 01:27:41+00`, not isolated to this
+  fio run. The snapshot reported `wal_bytes=105553788`, but it must not be used
+  as a per-run WAL cost.
