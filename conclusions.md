@@ -1021,3 +1021,20 @@ This run is a validation baseline for enabled instrumentation, not a tuning
 decision. It differs from the strace/FOD-profile run because it does not set
 `FOD_PROFILE_IO=1` and does not trace every syscall, so read timings are much
 more cache-hot.
+
+## 2026-08-14 — Persistent perf sysctl
+
+The sysctl key must be written as `kernel.perf_event_paranoid`. Writing
+`perf_event_paranoid=0` is invalid on this host because it targets the
+nonexistent `/proc/sys/perf_event_paranoid` path.
+
+The local host now has `/etc/sysctl.d/99-fod-perf.conf` with:
+
+```text
+kernel.perf_event_paranoid = 0
+```
+
+Loading that file with `sudo sysctl -p /etc/sysctl.d/99-fod-perf.conf`
+sets `/proc/sys/kernel/perf_event_paranoid` to `0`, and `perf stat -d -- true`
+collects counters successfully. This is still intentionally narrower than
+`-1`; current FOD perf targets do not require the more permissive setting.

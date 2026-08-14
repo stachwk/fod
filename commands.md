@@ -3165,3 +3165,35 @@ Results:
   `git diff HEAD~1..HEAD --check` passed.
 - MemPalace MCP refresh after the commit succeeded: 3 changed files processed,
   255 skipped, 755 drawers filed.
+
+## 2026-08-14T21:02:49+02:00 commit 044e619
+
+Fix local host perf sysctl after manual command typos:
+
+```bash
+cat /proc/sys/kernel/perf_event_paranoid
+sysctl kernel.perf_event_paranoid 2>/dev/null || true
+grep -R "^[[:space:]]*kernel\\.perf_event_paranoid" /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null || true
+git status --short
+git rev-parse --short HEAD
+sed -n '1p' fod_version.txt
+sudo -n sysctl -w kernel.perf_event_paranoid=0
+printf '%s\n' '# FOD local profiling: allow unprivileged perf stat counters needed by Makefile profile-perf-stat.' 'kernel.perf_event_paranoid = 0' | sudo -n tee /etc/sysctl.d/99-fod-perf.conf >/dev/null
+sudo -n sysctl -p /etc/sysctl.d/99-fod-perf.conf
+cat /proc/sys/kernel/perf_event_paranoid
+perf stat -d -o /tmp/fod-perf-probe-fixed.txt -- true
+cat /tmp/fod-perf-probe-fixed.txt
+grep -R "^[[:space:]]*kernel\\.perf_event_paranoid" /etc/sysctl.conf /etc/sysctl.d/*.conf 2>/dev/null || true
+ls -l /etc/sysctl.d/99-fod-perf.conf
+sed -n '1,20p' /etc/sysctl.d/99-fod-perf.conf
+date -Iseconds
+```
+
+Results:
+
+- Correct runtime command is `sudo sysctl -w kernel.perf_event_paranoid=0`.
+- Correct persistent file content is `kernel.perf_event_paranoid = 0`.
+- `/etc/sysctl.d/99-fod-perf.conf` was created and loaded successfully.
+- `perf stat -d -- true` passed after the setting was applied.
+- The shorter key `perf_event_paranoid=0` is wrong for `sysctl -w`; it maps to
+  `/proc/sys/perf_event_paranoid`, which does not exist on this host.
