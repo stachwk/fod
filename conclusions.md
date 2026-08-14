@@ -989,3 +989,35 @@ PostgreSQL profiling limits:
   counters are cumulative since `2026-08-08 01:27:41+00`, not isolated to this
   fio run. The snapshot reported `wal_bytes=105553788`, but it must not be used
   as a per-run WAL cost.
+
+## 2026-08-14 — FOD 3.2.70 perf and pg_stat_statements enablement
+
+`kernel.perf_event_paranoid=0` is sufficient for the current unprivileged
+`perf stat -d` targets. The previous value `4` blocked all perf event access.
+There is no need to lower it to `-1` for the current tests because
+`perf stat -d -- true` and the fio `profile-perf-stat` workload both collected
+counters at `0`.
+
+The local Docker PostgreSQL server was already started with
+`shared_preload_libraries=pg_stat_statements`, but the extension was missing
+inside `foddbname`. After `make enable-pg-stat-statements`, PostgreSQL reports
+`pg_stat_statements:1.10`, and both `profile-pg-top-io-wal` and
+`profile-pg-metadata-top` return statement data.
+
+The statement-profile Makefile targets now create
+`pg_stat_statements` automatically before reading from it. This avoids stale
+database-volume failures where the server preloads the library but the database
+does not yet contain the extension. If preload itself is missing, the target
+should still fail explicitly rather than hiding the server configuration error.
+
+The first perf-backed fio profile after enabling counters used commit
+`74e84d2`, run id `perf-pgstat-after-makefile-20260814T100648Z`, workload
+`test-fio-sequential-io`, and `FIO_FILE_SIZE=4M`. Perf completed five repeats
+with `21.253 +- 0.304 seconds` elapsed, `10,001,464,643` task-clock,
+`6,704,631,624` instructions, `7,937,396,605` cycles, and `22,017` context
+switches.
+
+This run is a validation baseline for enabled instrumentation, not a tuning
+decision. It differs from the strace/FOD-profile run because it does not set
+`FOD_PROFILE_IO=1` and does not trace every syscall, so read timings are much
+more cache-hot.

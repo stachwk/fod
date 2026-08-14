@@ -3100,3 +3100,68 @@ Results and artifacts:
   (`PID 1864004`), but MCP reconnect succeeded and MCP `mempalace_mine`
   refreshed the project index: 2 changed files processed, 256 skipped,
   718 drawers filed.
+
+## 2026-08-14T12:09:05+02:00 commit 74e84d2
+
+Enable local perf counters and `pg_stat_statements` for profiling:
+
+```bash
+git status --short
+git rev-parse --short HEAD
+sed -n '1p' fod_version.txt
+rg -n "shared_preload_libraries|pg_stat_statements|POSTGRES_.*TUNING|command:|postgres" docker-compose*.yml Makefile scripts docs README.md README.pl
+cat /proc/sys/kernel/perf_event_paranoid
+sysctl kernel.perf_event_paranoid
+sudo -n true
+nl -ba docker-compose.yml | sed -n '1,45p'
+nl -ba Makefile | sed -n '240,275p'
+nl -ba Makefile | sed -n '850,872p'
+COMPOSE_PROJECT_NAME=fod POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza docker compose -f docker-compose.yml ps
+PGPASSWORD=cichosza psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U foduser -d foddbname -c "SHOW shared_preload_libraries;" -c "SELECT extname, extversion FROM pg_extension WHERE extname='pg_stat_statements';"
+sudo -n sysctl -w kernel.perf_event_paranoid=0
+cat /proc/sys/kernel/perf_event_paranoid
+perf stat -d -o /tmp/fod-perf-probe-after.txt -- true
+make enable-pg-stat-statements
+PGPASSWORD=cichosza psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U foduser -d foddbname -c "SHOW shared_preload_libraries;" -c "SELECT extname, extversion FROM pg_extension WHERE extname='pg_stat_statements';" -c "SELECT count(*) >= 0 AS pg_stat_statements_readable FROM pg_stat_statements;"
+nl -ba Makefile | sed -n '276,335p'
+make PROFILE_RUN_ID=perf-pgstat-verify-$(date -u +%Y%m%dT%H%M%SZ) PROFILE_CAPTURE_LABEL=verify profile-pg-top-io-wal profile-pg-metadata-top
+make PROFILE_RUN_ID=perf-pgstat-after-makefile-$(date -u +%Y%m%dT%H%M%SZ) PROFILE_CAPTURE_LABEL=verify profile-pg-top-io-wal profile-pg-metadata-top
+make PROFILE_RUN_ID=perf-pgstat-after-makefile-20260814T100648Z PROFILE_WORKLOAD=test-fio-sequential-io FIO_FILE_SIZE=4M profile-perf-stat
+cat artifacts/perf/74e84d2/lt7300-perf-pgstat-after-makefile-20260814T100648Z/perf-stat-test-fio-sequential-io.txt
+find artifacts/perf/74e84d2/lt7300-perf-pgstat-after-makefile-20260814T100648Z -maxdepth 1 -type f -printf '%f %s\n' | sort
+cat /proc/sys/kernel/perf_event_paranoid
+PGPASSWORD=cichosza psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U foduser -d foddbname -tAc "SHOW shared_preload_libraries; SELECT extname || ':' || extversion FROM pg_extension WHERE extname='pg_stat_statements';"
+date -Iseconds
+git diff --stat
+git diff --check
+git diff -- Makefile docs/performance.md | sed -n '1,240p'
+git status --short
+git add Makefile commands.md conclusions.md docs/performance.md
+git commit -m "FOD 3.2.70: enable profiling prerequisites"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff HEAD~1..HEAD --check
+git status --short
+cat /proc/sys/kernel/perf_event_paranoid
+# MCP: mempalace_mine source=/media/wojtek/virtdata/home/wojtek/git/fod mode=projects wing=myai agent=codex
+```
+
+Results:
+
+- `kernel.perf_event_paranoid` changed from `4` to `0` with `sudo sysctl -w`.
+  `perf stat -d -- true` passed at `0`, so `-1` was not needed for the current
+  perf tests.
+- Local PostgreSQL already had `shared_preload_libraries=pg_stat_statements`;
+  `make enable-pg-stat-statements` created extension `pg_stat_statements 1.10`.
+- Makefile now runs `CREATE EXTENSION IF NOT EXISTS pg_stat_statements` before
+  `profile-pg-top`, `profile-pg-top-io-wal`, `profile-pg-metadata-top`, and
+  `profile-pg-reset`.
+- `profile-pg-top-io-wal` and `profile-pg-metadata-top` passed after the
+  extension was installed.
+- `profile-perf-stat PROFILE_WORKLOAD=test-fio-sequential-io FIO_FILE_SIZE=4M`
+  passed with five perf repeats. Perf reported `21.253 +- 0.304 seconds`
+  elapsed, `10,001,464,643` task-clock, `6,704,631,624` instructions,
+  `7,937,396,605` cycles, and `22,017` context switches.
+- Commit prepared with message `FOD 3.2.70: enable profiling prerequisites`;
+  `git diff HEAD~1..HEAD --check` passed.
+- MemPalace MCP refresh after the commit succeeded: 3 changed files processed,
+  255 skipped, 755 drawers filed.

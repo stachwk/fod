@@ -1360,7 +1360,7 @@ postgres-benchmarks-planner-preset:
 		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
 		postgres-benchmarks-compare
 
-.PHONY: profile-env profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-indexer-alloc profile-fuse-sequential-io profile-fuse-sudo-perf-stat profile-fuse-sudo-bpftrace-syscalls profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-copy-buffer-matrix-local profile-data-blocks-copy-buffer-matrix-qnap profile-data-blocks-copy-buffer-matrix-compare profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
+.PHONY: profile-env profile-pg-stat-statements-ready profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-indexer-alloc profile-fuse-sequential-io profile-fuse-sudo-perf-stat profile-fuse-sudo-bpftrace-syscalls profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-copy-buffer-matrix-local profile-data-blocks-copy-buffer-matrix-qnap profile-data-blocks-copy-buffer-matrix-compare profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
 
 profile-env:
 	@mkdir -p $(ARTIFACTS_DIR)
@@ -1378,20 +1378,23 @@ profile-env:
 	} > $(ARTIFACTS_DIR)/env.txt
 	@printf '%s\n' "Wrote $(ARTIFACTS_DIR)/env.txt"
 
-profile-pg-reset:
+profile-pg-stat-statements-ready:
+	$(PSQL) -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+
+profile-pg-reset: profile-pg-stat-statements-ready
 	$(PSQL) -f scripts/perf/pg/reset.sql
 
-profile-pg-top:
+profile-pg-top: profile-pg-stat-statements-ready
 	@mkdir -p $(ARTIFACTS_DIR)
 	$(PSQL) -f scripts/perf/pg/top_statements.sql > $(ARTIFACTS_DIR)/pg_top_statements$(PROFILE_CAPTURE_SUFFIX).txt
 	@cat $(ARTIFACTS_DIR)/pg_top_statements$(PROFILE_CAPTURE_SUFFIX).txt
 
-profile-pg-top-io-wal:
+profile-pg-top-io-wal: profile-pg-stat-statements-ready
 	@mkdir -p $(ARTIFACTS_DIR)
 	$(PSQL) -f scripts/perf/pg/top_statements_io_wal.sql > $(ARTIFACTS_DIR)/pg_top_io_wal$(PROFILE_CAPTURE_SUFFIX).txt
 	@cat $(ARTIFACTS_DIR)/pg_top_io_wal$(PROFILE_CAPTURE_SUFFIX).txt
 
-profile-pg-metadata-top:
+profile-pg-metadata-top: profile-pg-stat-statements-ready
 	@mkdir -p $(ARTIFACTS_DIR)
 	$(PSQL) -f scripts/perf/pg/top_metadata_statements.sql > $(ARTIFACTS_DIR)/pg_top_metadata$(PROFILE_CAPTURE_SUFFIX).txt
 	@cat $(ARTIFACTS_DIR)/pg_top_metadata$(PROFILE_CAPTURE_SUFFIX).txt

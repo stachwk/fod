@@ -44,7 +44,7 @@ make profile-pg-top PROFILE_CAPTURE_LABEL=rollback
 make profile-pg-wal PROFILE_CAPTURE_LABEL=rollback
 ```
 
-`profile-pg-reset` and `profile-pg-top` require `pg_stat_statements`. If PostgreSQL reports that the extension must be loaded through `shared_preload_libraries`, restart the database with the existing project setting instead of ignoring the failure.
+`profile-pg-reset` and `profile-pg-top` require `pg_stat_statements`. The PostgreSQL statement-profile targets create the extension automatically before reading it, but the server must still preload the library. If PostgreSQL reports that the extension must be loaded through `shared_preload_libraries`, restart the database with the existing project setting instead of ignoring the failure.
 
 `profile-pg-top-io-wal` uses the same extension but includes local buffer counters and per-statement WAL counters. Use it when separating server-side `COPY` into a temporary staging table from the target-table merge cost. PostgreSQL exposes `wal_records`, `wal_fpi`, and `wal_bytes` per statement there; `wal_buffers_full` remains a cluster-level counter from `pg_stat_wal`. This capture expects a PostgreSQL/`pg_stat_statements` version that exposes the local-buffer and WAL columns.
 
