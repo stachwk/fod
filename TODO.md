@@ -780,6 +780,6 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
 - [x] Decide from measured 128 MiB profiling that extent PoC should not remain a production storage path.
 - [x] FOD 3.2.71: force production FUSE persistence to the canonical `data_blocks` path while keeping legacy extent configuration parse-compatible.
 - [x] FOD 3.2.71: update sequential fio/runtime-profile tests so `enable_extents=true` is a retirement guard, not an extent benchmark.
-- [ ] FOD 3.2.72: add explicit migration of existing `data_extents` to `data_blocks`, including integrity checks.
-- [ ] FOD 3.2.73: remove extent planner/payload/read/persist code and retired configuration after migration.
+- [x] FOD 3.2.72: add explicit migration of existing `data_extents` to `data_blocks`, including integrity checks.
+- [x] FOD 3.2.73: remove extent planner/payload/read/persist code and retired configuration after migration.
 - [ ] Re-profile block-only 4 MiB/128 MiB workloads and optimize repeated hardlink-count SQL round trips.

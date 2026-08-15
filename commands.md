@@ -3272,3 +3272,45 @@ Notes:
   migrations.
 - The block-only fio strace gate passed with `effective_extents=0`; the ordinary
   4 MiB sequential fio gate also passed with `effective_extents=0`.
+
+## 2026-08-16 commit 834737e working tree FOD 3.2.73 candidate
+
+Physical extent removal work:
+
+```bash
+git status --short && git rev-parse --short HEAD && tr -d '\n' < fod_version.txt
+mempalace search "FOD 3.2.73 physical removal extent fallback data_extents runtime hot path" --wing myai
+rg -n "data_extents|PersistExtentRow|persist_file_extents|persist_new_object_extents|persist_extent|extent_rows|delete_extent|reject_extent|LoadExtent|FetchExtent|extent_to_blocks|append_only_extents|enable_extents|extent_target|SequentialSegment|PendingSegment|ExtentPoC|plan_extent|extent_poc" rust_hotpath/src rust_hotpath/tests rust_fuse/src rust_runtime/src rust_mkfs/src rust_mkfs/tests tests/integration Makefile fod_config.ini scripts/perf docs README.md README.pl
+cargo update --workspace --locked
+cargo fmt --all
+cargo check --workspace --locked
+cargo test -p fod-rust-runtime
+cargo test -p fod-rust-hotpath --test helper_parity
+python3 -m py_compile scripts/perf/pg/table_dml_delta.py tests/integration/test_runtime_profile.py tests/integration/test_copy_file_range.py tests/integration/test_two_mount_quota.py tests/integration/test_fod_indexer_cleanup_failed.py
+make test-schema-upgrade
+make test-rust-pg-query
+make reset && make test-rust-pg-query
+make test-schema-status
+make reset && make test-fio-sequential-io-strace
+FOD_PROFILE_IO=1 make test-fio-mixed-io
+make test-runtime-profile
+FOD_PROFILE_IO=1 make test-fio-random-mixed-io
+cargo test -p fod-rust-hotpath --test transactional_replay_smoke
+cargo fmt --all && cargo check --workspace --locked
+make help | rg -i "extent|profile-storage-extent|FOD_ENABLE_EXTENTS|extent_poc" || true
+rg -n "PersistExtentRow|persist_file_extents|persist_new_object_extents|SequentialSegment|PendingSegment|enable_extents|extent_target|FOD_ENABLE_EXTENTS|FOD_EXTENT_TARGET_BYTES|profile-storage-extent|storage_extent|extent_poc" rust_hotpath rust_fuse rust_runtime tests/integration Makefile scripts fod_config.ini fod_config.example.ini docker/selinux-acl/fod_config.ini --glob '!target/**'
+git status --short
+git diff --check
+git diff --stat
+sed -n '1,220p' migrations/0021_drop_data_extents.sql
+rg -n "data_extents|enable_extents|FOD_ENABLE_EXTENTS|extent_target|storage_extent|extent_poc|PersistExtentRow|persist_file_extents|SequentialSegment|PendingSegment" --glob '!target/**'
+```
+
+Notes:
+
+- The first `make test-rust-pg-query` failed because the preceding mkfs schema
+  test left the shared local PostgreSQL schema without `config.block_size`; after
+  `make reset`, the same test passed. This was a stale local test database state,
+  not a pg_query regression.
+- The final scans found no active extent runtime/API/test target names in Rust,
+  integration tests, Makefile, scripts, or active config files.

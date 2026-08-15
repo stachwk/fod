@@ -2,7 +2,7 @@
 // Licensed under BSL 1.1
 
 use fuser::{mount as fuser_mount, Config, MountOption, SessionACL};
-use log::{info, warn};
+use log::info;
 use rust_hotpath::pg::{DbRepo, StartupSnapshot};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -27,8 +27,6 @@ pub struct FuseStorageSettings {
     pub copy_dedupe_min_blocks: u64,
     pub copy_dedupe_max_blocks: u64,
     pub copy_dedupe_crc_table: bool,
-    pub enable_extents: bool,
-    pub extent_target_bytes: u64,
 }
 
 #[allow(dead_code)]
@@ -91,11 +89,6 @@ impl FodFuseSettings {
         let lock = runtime.lock_settings(read_only);
         let cache = runtime.cache_settings();
         let storage = runtime.storage_settings();
-        if storage.enable_extents {
-            warn!(
-                "FOD extent PoC is retired: enable_extents=true is accepted for compatibility but ignored; block persistence is enforced"
-            );
-        }
         Self {
             storage: FuseStorageSettings {
                 block_size: snapshot.block_size.unwrap_or(4096) as u64,
@@ -106,8 +99,6 @@ impl FodFuseSettings {
                 copy_dedupe_min_blocks: storage.copy_dedupe_min_blocks,
                 copy_dedupe_max_blocks: storage.copy_dedupe_max_blocks,
                 copy_dedupe_crc_table: storage.copy_dedupe_crc_table,
-                enable_extents: false,
-                extent_target_bytes: storage.extent_target_bytes,
             },
             cache: FuseCacheSettings {
                 metadata_cache_ttl: cache.metadata_cache_ttl,
@@ -307,7 +298,7 @@ fn log_mount_status(
         security.selinux_rootcontext
     );
     info!(
-        "FOD storage block_size={} write_flush_threshold={} bytes max_fs_size_bytes={:?} pg_visible_path={:?} workers_read={} workers_read_min_blocks={} workers_write={} workers_write_min_blocks={} persist_buffer_chunk_blocks={} persist_block_transport={} data_object_swap_cleanup={} synchronous_commit={} copy_dedupe_enabled={} copy_dedupe_min_blocks={} copy_dedupe_max_blocks={} copy_dedupe_crc_table={} enable_extents_requested={} enable_extents_effective={} extent_target_bytes={}",
+        "FOD storage block_size={} write_flush_threshold={} bytes max_fs_size_bytes={:?} pg_visible_path={:?} workers_read={} workers_read_min_blocks={} workers_write={} workers_write_min_blocks={} persist_buffer_chunk_blocks={} persist_block_transport={} data_object_swap_cleanup={} synchronous_commit={} copy_dedupe_enabled={} copy_dedupe_min_blocks={} copy_dedupe_max_blocks={} copy_dedupe_crc_table={}",
         fs.block_size,
         storage.write_flush_threshold_bytes,
         storage.max_fs_size_bytes,
@@ -326,10 +317,7 @@ fn log_mount_status(
         storage.copy_dedupe_enabled,
         storage.copy_dedupe_min_blocks,
         storage.copy_dedupe_max_blocks,
-        storage.copy_dedupe_crc_table,
-        storage.enable_extents,
-        fs.enable_extents,
-        storage.extent_target_bytes
+        storage.copy_dedupe_crc_table
     );
     let (task_read_active_limit, task_write_active_limit) = fs.logical_task_active_limits();
     info!(

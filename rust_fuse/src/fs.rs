@@ -17,7 +17,7 @@ use fuser::{
 use libc::{EIO, ENOENT, ENOSPC, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
-use rust_hotpath::pg::{DbRepo, PersistBlockRow, PersistExtentRow, STORAGE_QUOTA_EXCEEDED_PREFIX};
+use rust_hotpath::pg::{DbRepo, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::ffi::OsStr;
@@ -497,7 +497,6 @@ pub(crate) struct FodFuseProfileCounters {
     repo_fetch_block_range_us: AtomicU64,
     repo_assemble_file_slice_us: AtomicU64,
     repo_persist_blocks_us: AtomicU64,
-    repo_persist_extents_us: AtomicU64,
     read_cache_lock_us: AtomicU64,
     read_block_cache_lock_us: AtomicU64,
     cached_read_block_us: AtomicU64,
@@ -508,13 +507,6 @@ pub(crate) struct FodFuseProfileCounters {
     update_write_buffer_us: AtomicU64,
     flush_write_state_us: AtomicU64,
     prepare_persist_rows_from_block_plan_us: AtomicU64,
-    prepare_persist_extent_rows_from_extent_ranges_us: AtomicU64,
-    prepare_persist_extent_rows_peak_payload_bytes: AtomicU64,
-    prepare_persist_segment_rows_us: AtomicU64,
-    segment_mode_entries: AtomicU64,
-    segment_mode_downgrades: AtomicU64,
-    segment_payload_bytes: AtomicU64,
-    segment_count: AtomicU64,
     clear_read_cache_for_file_us: AtomicU64,
     store_recent_write_blocks_us: AtomicU64,
     reply_data_us: AtomicU64,
@@ -570,10 +562,6 @@ impl FodFuseProfileCounters {
 
     pub(crate) fn record_repo_persist_blocks_elapsed(&self, elapsed: Duration) {
         Self::add(&self.repo_persist_blocks_us, elapsed);
-    }
-
-    pub(crate) fn record_repo_persist_extents_elapsed(&self, elapsed: Duration) {
-        Self::add(&self.repo_persist_extents_us, elapsed);
     }
 
     pub(crate) fn record_read_block_map_elapsed(&self, elapsed: Duration) {
@@ -632,42 +620,6 @@ impl FodFuseProfileCounters {
         Self::add(&self.prepare_persist_rows_from_block_plan_us, elapsed);
     }
 
-    pub(crate) fn record_prepare_persist_extent_rows_from_extent_ranges_elapsed(
-        &self,
-        elapsed: Duration,
-    ) {
-        Self::add(
-            &self.prepare_persist_extent_rows_from_extent_ranges_us,
-            elapsed,
-        );
-    }
-
-    pub(crate) fn record_prepare_persist_extent_rows_peak_payload_bytes(&self, bytes: u64) {
-        self.prepare_persist_extent_rows_peak_payload_bytes
-            .fetch_max(bytes, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_prepare_persist_segment_rows_elapsed(&self, elapsed: Duration) {
-        Self::add(&self.prepare_persist_segment_rows_us, elapsed);
-    }
-
-    pub(crate) fn record_segment_mode_entry(&self) {
-        self.segment_mode_entries.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_segment_mode_downgrade(&self) {
-        self.segment_mode_downgrades.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_segment_payload_bytes(&self, bytes: u64) {
-        self.segment_payload_bytes
-            .fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    pub(crate) fn record_segment_count(&self, count: u64) {
-        self.segment_count.fetch_add(count, Ordering::Relaxed);
-    }
-
     pub(crate) fn record_clear_read_cache_for_file_elapsed(&self, elapsed: Duration) {
         Self::add(&self.clear_read_cache_for_file_us, elapsed);
     }
@@ -694,7 +646,6 @@ impl FodFuseProfileCounters {
             || self.repo_fetch_block_range_us.load(Ordering::Relaxed) > 0
             || self.repo_assemble_file_slice_us.load(Ordering::Relaxed) > 0
             || self.repo_persist_blocks_us.load(Ordering::Relaxed) > 0
-            || self.repo_persist_extents_us.load(Ordering::Relaxed) > 0
             || self.read_cache_lock_us.load(Ordering::Relaxed) > 0
             || self.read_block_cache_lock_us.load(Ordering::Relaxed) > 0
             || self.cached_read_block_us.load(Ordering::Relaxed) > 0
@@ -708,19 +659,6 @@ impl FodFuseProfileCounters {
                 .prepare_persist_rows_from_block_plan_us
                 .load(Ordering::Relaxed)
                 > 0
-            || self
-                .prepare_persist_extent_rows_from_extent_ranges_us
-                .load(Ordering::Relaxed)
-                > 0
-            || self
-                .prepare_persist_extent_rows_peak_payload_bytes
-                .load(Ordering::Relaxed)
-                > 0
-            || self.prepare_persist_segment_rows_us.load(Ordering::Relaxed) > 0
-            || self.segment_mode_entries.load(Ordering::Relaxed) > 0
-            || self.segment_mode_downgrades.load(Ordering::Relaxed) > 0
-            || self.segment_payload_bytes.load(Ordering::Relaxed) > 0
-            || self.segment_count.load(Ordering::Relaxed) > 0
             || self.clear_read_cache_for_file_us.load(Ordering::Relaxed) > 0
             || self.store_recent_write_blocks_us.load(Ordering::Relaxed) > 0
             || self.reply_data_us.load(Ordering::Relaxed) > 0
@@ -766,10 +704,6 @@ impl FodFuseProfileCounters {
                 self.repo_persist_blocks_us.load(Ordering::Relaxed)
             ),
             format!(
-                "repo_persist_extents_us={}",
-                self.repo_persist_extents_us.load(Ordering::Relaxed)
-            ),
-            format!(
                 "read_cache_lock_us={}",
                 self.read_cache_lock_us.load(Ordering::Relaxed)
             ),
@@ -811,36 +745,6 @@ impl FodFuseProfileCounters {
                     .load(Ordering::Relaxed)
             ),
             format!(
-                "prepare_persist_extent_rows_from_extent_ranges_us={}",
-                self.prepare_persist_extent_rows_from_extent_ranges_us
-                    .load(Ordering::Relaxed)
-            ),
-            format!(
-                "prepare_persist_extent_rows_peak_payload_bytes={}",
-                self.prepare_persist_extent_rows_peak_payload_bytes
-                    .load(Ordering::Relaxed)
-            ),
-            format!(
-                "prepare_persist_segment_rows_us={}",
-                self.prepare_persist_segment_rows_us.load(Ordering::Relaxed)
-            ),
-            format!(
-                "segment_mode_entries={}",
-                self.segment_mode_entries.load(Ordering::Relaxed)
-            ),
-            format!(
-                "segment_mode_downgrades={}",
-                self.segment_mode_downgrades.load(Ordering::Relaxed)
-            ),
-            format!(
-                "segment_payload_bytes={}",
-                self.segment_payload_bytes.load(Ordering::Relaxed)
-            ),
-            format!(
-                "segment_count={}",
-                self.segment_count.load(Ordering::Relaxed)
-            ),
-            format!(
                 "clear_read_cache_for_file_us={}",
                 self.clear_read_cache_for_file_us.load(Ordering::Relaxed)
             ),
@@ -870,8 +774,6 @@ pub struct FodFuse {
     pub lock_heartbeat_interval: Duration,
     pub lock_poll_interval: Duration,
     pub atime_policy: AtimePolicy,
-    pub enable_extents: bool,
-    pub extent_target_bytes: u64,
     reloadable_runtime: Arc<RwLock<RuntimeReloadableSettings>>,
     pub read_only: bool,
     pub use_fuse_context: bool,
@@ -966,8 +868,6 @@ impl FodFuse {
             lock_heartbeat_interval: locks.lock_heartbeat_interval,
             lock_poll_interval: locks.lock_poll_interval,
             atime_policy,
-            enable_extents: storage.enable_extents,
-            extent_target_bytes: storage.extent_target_bytes,
             reloadable_runtime: Arc::new(RwLock::new(runtime.reloadable_settings())),
             read_only,
             use_fuse_context,
@@ -1110,47 +1010,9 @@ impl FodFuse {
         self.profile.record_repo_persist_blocks_elapsed(elapsed);
     }
 
-    fn record_repo_persist_extents_elapsed(&self, elapsed: Duration) {
-        self.profile.record_repo_persist_extents_elapsed(elapsed);
-    }
-
     pub(crate) fn record_prepare_persist_rows_from_block_plan_elapsed(&self, elapsed: Duration) {
         self.profile
             .record_prepare_persist_rows_from_block_plan_elapsed(elapsed);
-    }
-
-    pub(crate) fn record_prepare_persist_extent_rows_from_extent_ranges_elapsed(
-        &self,
-        elapsed: Duration,
-    ) {
-        self.profile
-            .record_prepare_persist_extent_rows_from_extent_ranges_elapsed(elapsed);
-    }
-
-    pub(crate) fn record_prepare_persist_extent_rows_peak_payload_bytes(&self, bytes: u64) {
-        self.profile
-            .record_prepare_persist_extent_rows_peak_payload_bytes(bytes);
-    }
-
-    pub(crate) fn record_prepare_persist_segment_rows_elapsed(&self, elapsed: Duration) {
-        self.profile
-            .record_prepare_persist_segment_rows_elapsed(elapsed);
-    }
-
-    pub(crate) fn record_segment_mode_entry(&self) {
-        self.profile.record_segment_mode_entry();
-    }
-
-    pub(crate) fn record_segment_mode_downgrade(&self) {
-        self.profile.record_segment_mode_downgrade();
-    }
-
-    pub(crate) fn record_segment_payload_bytes(&self, bytes: u64) {
-        self.profile.record_segment_payload_bytes(bytes);
-    }
-
-    pub(crate) fn record_segment_count(&self, count: u64) {
-        self.profile.record_segment_count(count);
     }
 
     pub(crate) fn record_clear_read_cache_for_file_elapsed(&self, elapsed: Duration) {
@@ -1250,56 +1112,6 @@ impl FodFuse {
             capacity_reservation_token,
         );
         self.record_repo_persist_blocks_elapsed(started.elapsed());
-        result
-    }
-
-    pub(crate) fn persist_file_extents_profiled(
-        &self,
-        file_id: u64,
-        file_size: u64,
-        block_size: u64,
-        total_blocks: u64,
-        truncate_pending: bool,
-        extents: &[PersistExtentRow],
-        maintain_copy_crc_table: bool,
-        capacity_reservation_token: Option<&str>,
-    ) -> Result<(), String> {
-        let started = Instant::now();
-        let result = self
-            .repo
-            .persist_file_extents_with_crc_flag_and_reservation(
-                file_id,
-                file_size,
-                block_size,
-                total_blocks,
-                truncate_pending,
-                extents,
-                maintain_copy_crc_table,
-                capacity_reservation_token,
-            );
-        self.record_repo_persist_extents_elapsed(started.elapsed());
-        result
-    }
-
-    pub(crate) fn persist_new_object_extents_profiled(
-        &self,
-        file_id: u64,
-        file_size: u64,
-        block_size: u64,
-        total_blocks: u64,
-        extents: &[PersistExtentRow],
-        maintain_copy_crc_table: bool,
-    ) -> Result<u64, String> {
-        let started = Instant::now();
-        let result = self.repo.persist_new_object_extents(
-            file_id,
-            file_size,
-            block_size,
-            total_blocks,
-            extents,
-            maintain_copy_crc_table,
-        );
-        self.record_repo_persist_extents_elapsed(started.elapsed());
         result
     }
 
@@ -1453,7 +1265,7 @@ impl FodFuse {
             }
         }
         format!(
-            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, enable_extents={}, extent_target_bytes={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, samples=[{}]}}",
+            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, samples=[{}]}}",
             self.read_only,
             self.use_fuse_context,
             self.fopen_direct_io,
@@ -1476,8 +1288,6 @@ impl FodFuse {
             live.copy_dedupe_min_blocks,
             live.copy_dedupe_max_blocks,
             live.copy_dedupe_crc_table,
-            self.enable_extents,
-            self.extent_target_bytes,
             self.selinux_enabled,
             self.acl_enabled,
             inode_count,
@@ -6857,39 +6667,5 @@ mod tests {
         assert!(super::FodFuse::write_state_has_pending_changes(&buffered));
         assert!(super::FodFuse::write_state_has_pending_changes(&truncated));
         assert!(super::FodFuse::write_state_has_pending_changes(&blocked));
-    }
-
-    #[test]
-    fn extent_payload_profile_records_the_largest_payload() {
-        let counters = FodFuseProfileCounters::default();
-        counters.record_prepare_persist_extent_rows_peak_payload_bytes(1024 * 1024);
-        counters.record_prepare_persist_extent_rows_peak_payload_bytes(256 * 1024);
-
-        assert!(counters.has_activity());
-        assert!(counters
-            .snapshot_lines()
-            .iter()
-            .any(|line| line == "prepare_persist_extent_rows_peak_payload_bytes=1048576"));
-    }
-
-    #[test]
-    fn segment_profile_records_entries_downgrades_payload_and_rows() {
-        let counters = FodFuseProfileCounters::default();
-        counters.record_segment_mode_entry();
-        counters.record_segment_mode_downgrade();
-        counters.record_segment_payload_bytes(64 * 1024);
-        counters.record_segment_count(4);
-        counters.record_prepare_persist_segment_rows_elapsed(Duration::from_micros(17));
-
-        let lines = counters.snapshot_lines();
-        assert!(lines.iter().any(|line| line == "segment_mode_entries=1"));
-        assert!(lines.iter().any(|line| line == "segment_mode_downgrades=1"));
-        assert!(lines
-            .iter()
-            .any(|line| line == "segment_payload_bytes=65536"));
-        assert!(lines.iter().any(|line| line == "segment_count=4"));
-        assert!(lines
-            .iter()
-            .any(|line| line == "prepare_persist_segment_rows_us=17"));
     }
 }

@@ -67,10 +67,6 @@ with connection.cursor() as cursor:
             (SELECT value FROM fod.config WHERE key = 'max_fs_size_bytes'),
             (SELECT COUNT(*)::bigint FROM fod.data_blocks)
                 * (SELECT value FROM fod.config WHERE key = 'block_size')
-                + COALESCE(
-                    (SELECT SUM(used_bytes)::bigint FROM fod.data_extents),
-                    0
-                )
         """
     )
     original_limit, used_bytes = cursor.fetchone()
@@ -188,11 +184,7 @@ with connection.cursor() as cursor:
         """
         SELECT
             (SELECT COUNT(*)::bigint FROM fod.data_blocks)
-                * (SELECT value FROM fod.config WHERE key = 'block_size')
-                + COALESCE(
-                    (SELECT SUM(used_bytes)::bigint FROM fod.data_extents),
-                    0
-                ),
+                * (SELECT value FROM fod.config WHERE key = 'block_size'),
             COALESCE(
                 (SELECT SUM(reserved_bytes)::bigint
                  FROM fod.payload_capacity_reservations

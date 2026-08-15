@@ -4,27 +4,22 @@
 
 Storage Engine v2 is an incremental redesign of the FOD storage hot path. It
 does not replace the runtime, the FUSE API, or the default block-storage path.
-The existing extension boundary remains:
+After the FOD 3.2.73 cleanup, the active persistence boundary is block-only:
 
 ```text
 WriteState
     -> PersistPlan
        -> Blocks
-       -> Extents
     -> PersistExecutionPlan
     -> DbRepo
     -> PostgreSQL
 ```
 
-The redesign is limited to write buffering, persistence planning, physical
-payload representation, extent persistence, read assembly, and storage GC.
-The logical filesystem block size remains 4 KiB. The physical persistence unit
-for large sequential writes should become a bounded extent or segment in the
-64 KiB to 4 MiB range.
-
-The extent path remains opt-in through `enable_extents = true` until correctness
-tests and repeated benchmarks prove that it is safe and useful. The block path
-must remain the default and must not read extent-only tuning values.
+The earlier extent experiment remains documented below as historical context and
+as migration background. It is no longer an active runtime storage path. The
+remaining redesign scope is write buffering, block persistence planning,
+physical `data_blocks` representation, read assembly, storage GC, and measured
+block-only performance work. The logical filesystem block size remains 4 KiB.
 
 Implementation status:
 
@@ -66,8 +61,10 @@ Implementation status:
   index catalogue snapshots, and schema version 20 migrates legacy
   `data_extents` payload rows to canonical `data_blocks` without adding a
   separate storage-format marker;
-- production writes use canonical `data_blocks`; legacy extent rows are an
-  administrative migration input only.
+- schema version 21 drops `data_extents` after migration 20 leaves no legacy
+  extent rows;
+- production writes and reads use canonical `data_blocks`; legacy extent rows
+  are an administrative migration input only.
 
 ## Original problem and remaining copy issue
 
@@ -438,16 +435,17 @@ Implementation sequence:
    - FUSE block writes now reject unmigrated extent objects instead of running
      extent-to-block conversion in the hot path.
 3. **FOD 3.2.73 — physical removal**
-   - remove sequential-segment/extent planner and payload code;
-   - remove extent read fallbacks and extent persist APIs;
-   - remove retired runtime knobs and extent-only tests/observability;
-   - drop `data_extents` only after the migration gate proves no rows remain.
+   - removed sequential-segment/extent planner and payload code;
+   - removed extent read fallbacks and extent persist APIs;
+   - removed retired runtime knobs and extent-only tests/observability;
+   - added schema migration 21, which drops `data_extents` only after the
+     migration gate proves no rows remain.
 4. **Post-removal performance work**
    - re-profile 4 MiB and 128 MiB block-only sequential/mixed/random workloads;
    - remove per-I/O PostgreSQL round trips such as repeated
      `SELECT 1 + COUNT(*) FROM hardlinks WHERE id_file = $1`;
    - optimize COPY/merge and caching only from measured profiles.
 
-Safety rule: existing extent-backed data remains readable until the explicit
-migration phase is complete. No schema drop belongs in the production-retirement
-commit.
+Safety rule: existing extent-backed data is handled only by the explicit
+administrative migration chain. Runtime read/write paths do not carry extent
+fallbacks after FOD 3.2.73.

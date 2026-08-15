@@ -48,7 +48,6 @@ with conn, conn.cursor() as cur:
     data_object_ids = [row[1] for row in file_rows]
     if data_object_ids:
         cur.execute("DELETE FROM data_blocks WHERE data_object_id = ANY(%s)", (data_object_ids,))
-        cur.execute("DELETE FROM data_extents WHERE data_object_id = ANY(%s)", (data_object_ids,))
         cur.execute("DELETE FROM copy_block_crc WHERE data_object_id = ANY(%s)", (data_object_ids,))
         cur.execute("DELETE FROM files WHERE id_file = ANY(%s)", (file_ids,))
         cur.execute("DELETE FROM data_objects WHERE id_data_object = ANY(%s)", (data_object_ids,))

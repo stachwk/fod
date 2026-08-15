@@ -85,7 +85,6 @@ for run_index in $(seq 1 "${REPEAT}"); do
     export FOD_TASK_OBSERVABILITY_INTERVAL_MS=100
     export FOD_FOPEN_DIRECT_IO=1
     export FOD_PROFILE_IO=1
-    export FOD_ENABLE_EXTENTS="${FIFO_FUSE_FAIRNESS_ENABLE_EXTENTS:-1}"
     export FOD_LOG_LEVEL="${FOD_LOG_LEVEL:-info}"
     export FOD_TEST_LOG_ARCHIVE="${mount_log}"
 

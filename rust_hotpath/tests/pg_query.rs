@@ -1,9 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use fod_rust_hotpath::pg::{
-    DbRepo, PersistBlockRow, PersistExtentRow, STORAGE_QUOTA_EXCEEDED_PREFIX,
-};
+use fod_rust_hotpath::pg::{DbRepo, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX};
 use fod_rust_runtime::{DataObjectSwapCleanup, RuntimeConfig};
 use std::env;
 use std::sync::Mutex;
@@ -51,7 +49,6 @@ fn payload_capacity_reservations_serialize_across_repositories() -> Result<(), S
             "SELECT (\
                 (SELECT COUNT(*)::bigint FROM data_blocks) \
                     * (SELECT value FROM config WHERE key = 'block_size') \
-                + COALESCE((SELECT SUM(used_bytes)::bigint FROM data_extents), 0)\
              )::text",
         )?
         .trim()
@@ -102,25 +99,7 @@ fn expired_payload_capacity_reservation_is_renewed_before_persistence() -> Resul
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
     let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
-    for storage in [ReservationStorage::Block, ReservationStorage::Extent] {
-        verify_expired_reservation_renewal(&repo, block_size, storage)?;
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum ReservationStorage {
-    Block,
-    Extent,
-}
-
-impl ReservationStorage {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Block => "block",
-            Self::Extent => "extent",
-        }
-    }
+    verify_expired_reservation_renewal(&repo, block_size)
 }
 
 fn persist_reservation_payload(
@@ -128,56 +107,29 @@ fn persist_reservation_payload(
     file_id: u64,
     block_size: usize,
     marker: u8,
-    storage: ReservationStorage,
     reservation_token: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let block_size_u64 = block_size as u64;
     let payload = repeated_block(marker, block_size);
-    match storage {
-        ReservationStorage::Block => {
-            let rows = [PersistBlockRow {
-                block_index: 0,
-                data: &payload,
-                used_len: block_size_u64,
-            }];
-            repo.persist_file_blocks_with_crc_flag_and_reservation(
-                file_id,
-                block_size_u64,
-                block_size_u64,
-                1,
-                false,
-                &rows,
-                true,
-                reservation_token,
-            )?;
-        }
-        ReservationStorage::Extent => {
-            let rows = [PersistExtentRow {
-                start_block: 0,
-                block_count: 1,
-                used_bytes: block_size_u64,
-                payload: payload.clone(),
-            }];
-            repo.persist_file_extents_with_crc_flag_and_reservation(
-                file_id,
-                block_size_u64,
-                block_size_u64,
-                1,
-                false,
-                &rows,
-                true,
-                reservation_token,
-            )?;
-        }
-    }
+    let rows = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: block_size_u64,
+    }];
+    repo.persist_file_blocks_with_crc_flag_and_reservation(
+        file_id,
+        block_size_u64,
+        block_size_u64,
+        1,
+        false,
+        &rows,
+        true,
+        reservation_token,
+    )?;
     Ok(payload)
 }
 
-fn verify_expired_reservation_renewal(
-    repo: &DbRepo,
-    block_size: usize,
-    storage: ReservationStorage,
-) -> Result<(), String> {
+fn verify_expired_reservation_renewal(repo: &DbRepo, block_size: usize) -> Result<(), String> {
     let block_size_u64 = block_size as u64;
     let original_limit = repo
         .query_config_value("max_fs_size_bytes")?
@@ -185,10 +137,7 @@ fn verify_expired_reservation_renewal(
     let used_bytes = persisted_payload_bytes(&repo)?;
     let dir_id = repo.create_directory(
         None,
-        &unique_name(&format!(
-            "rust_pg_reservation_renew_{}_dir",
-            storage.label()
-        )),
+        &unique_name("rust_pg_reservation_renew_dir"),
         0o755,
         1000,
         1000,
@@ -196,10 +145,7 @@ fn verify_expired_reservation_renewal(
     )?;
     let file_id = repo.create_file(
         Some(dir_id),
-        &unique_name(&format!(
-            "rust_pg_reservation_renew_{}_file",
-            storage.label()
-        )),
+        &unique_name("rust_pg_reservation_renew_file"),
         0o644,
         1000,
         1000,
@@ -222,8 +168,7 @@ fn verify_expired_reservation_renewal(
              WHERE request_token = '{token}'"
         ))?;
 
-        let payload =
-            persist_reservation_payload(repo, file_id, block_size, b'R', storage, Some(&token))?;
+        let payload = persist_reservation_payload(repo, file_id, block_size, b'R', Some(&token))?;
 
         let active_count = repo.query_scalar_text(&format!(
             "SELECT COUNT(*) FROM payload_capacity_reservations \
@@ -254,17 +199,10 @@ fn expired_payload_capacity_reservation_cannot_reclaim_committed_capacity() -> R
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
     let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
-    for storage in [ReservationStorage::Block, ReservationStorage::Extent] {
-        verify_expired_reservation_rejection(&repo, block_size, storage)?;
-    }
-    Ok(())
+    verify_expired_reservation_rejection(&repo, block_size)
 }
 
-fn verify_expired_reservation_rejection(
-    repo: &DbRepo,
-    block_size: usize,
-    storage: ReservationStorage,
-) -> Result<(), String> {
+fn verify_expired_reservation_rejection(repo: &DbRepo, block_size: usize) -> Result<(), String> {
     let block_size_u64 = block_size as u64;
     let original_limit = repo
         .query_config_value("max_fs_size_bytes")?
@@ -272,10 +210,7 @@ fn verify_expired_reservation_rejection(
     let used_bytes = persisted_payload_bytes(&repo)?;
     let dir_id = repo.create_directory(
         None,
-        &unique_name(&format!(
-            "rust_pg_reservation_reclaim_{}_dir",
-            storage.label()
-        )),
+        &unique_name("rust_pg_reservation_reclaim_dir"),
         0o755,
         1000,
         1000,
@@ -283,10 +218,7 @@ fn verify_expired_reservation_rejection(
     )?;
     let reserved_file_id = repo.create_file(
         Some(dir_id),
-        &unique_name(&format!(
-            "rust_pg_reservation_reclaim_{}_reserved",
-            storage.label()
-        )),
+        &unique_name("rust_pg_reservation_reclaim_reserved"),
         0o644,
         1000,
         1000,
@@ -294,10 +226,7 @@ fn verify_expired_reservation_rejection(
     )?;
     let competing_file_id = repo.create_file(
         Some(dir_id),
-        &unique_name(&format!(
-            "rust_pg_reservation_reclaim_{}_competing",
-            storage.label()
-        )),
+        &unique_name("rust_pg_reservation_reclaim_competing"),
         0o644,
         1000,
         1000,
@@ -320,16 +249,10 @@ fn verify_expired_reservation_rejection(
              WHERE request_token = '{token}'"
         ))?;
 
-        persist_reservation_payload(repo, competing_file_id, block_size, b'C', storage, None)?;
+        persist_reservation_payload(repo, competing_file_id, block_size, b'C', None)?;
 
-        let rejected = persist_reservation_payload(
-            repo,
-            reserved_file_id,
-            block_size,
-            b'X',
-            storage,
-            Some(&token),
-        );
+        let rejected =
+            persist_reservation_payload(repo, reserved_file_id, block_size, b'X', Some(&token));
         if !matches!(
             rejected,
             Err(ref err) if err.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX)
@@ -341,10 +264,8 @@ fn verify_expired_reservation_rejection(
 
         let reserved_state = repo.query_scalar_text(&format!(
             "SELECT size::text || ':' || \
-                ((SELECT COUNT(*) FROM data_blocks \
-                  WHERE data_object_id = files.data_object_id) + \
-                 (SELECT COUNT(*) FROM data_extents \
-                  WHERE data_object_id = files.data_object_id))::text \
+                (SELECT COUNT(*) FROM data_blocks \
+                  WHERE data_object_id = files.data_object_id)::text \
              FROM files WHERE id_file = {reserved_file_id}"
         ))?;
         if reserved_state.trim() != "0:0" {
@@ -370,7 +291,7 @@ fn verify_expired_reservation_rejection(
 }
 
 #[test]
-fn append_only_extents_detach_shared_object_and_preserve_hardlink() -> Result<(), String> {
+fn full_block_rewrite_detaches_shared_object_and_preserves_hardlink() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_swap_cleanup(DataObjectSwapCleanup::Immediate)?;
     let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
@@ -436,27 +357,35 @@ fn append_only_extents_detach_shared_object_and_preserve_hardlink() -> Result<()
 
     let new_block0 = repeated_block(b'B', block_size);
     let new_block1 = repeated_block(b'C', block_size);
-    let new_payload = [new_block0.clone(), new_block1.clone()].concat();
-    let extent_rows = [PersistExtentRow {
-        start_block: 0,
-        block_count: 2,
-        used_bytes: new_payload.len() as u64,
-        payload: new_payload,
-    }];
-    let new_data_object_id = repo.persist_new_object_extents(
+    let new_rows = [
+        PersistBlockRow {
+            block_index: 0,
+            data: &new_block0,
+            used_len: block_size_u64,
+        },
+        PersistBlockRow {
+            block_index: 1,
+            data: &new_block1,
+            used_len: block_size_u64,
+        },
+    ];
+    repo.persist_file_blocks(
         dst_file_id,
         2 * block_size_u64,
         block_size_u64,
         2,
-        &extent_rows,
-        true,
+        false,
+        &new_rows,
     )?;
+    let new_data_object_id = repo
+        .file_data_object_id(dst_file_id)?
+        .ok_or_else(|| "missing replacement data object".to_string())?;
 
     if new_data_object_id == shared_data_object_id
         || repo.file_data_object_id(dst_file_id)? != Some(new_data_object_id)
         || repo.file_data_object_id(src_file_id)? != Some(shared_data_object_id)
     {
-        return Err("append-only write did not detach the shared object".to_string());
+        return Err("full block rewrite did not detach the shared object".to_string());
     }
     assert_block_range_matches(
         &repo,
@@ -483,7 +412,7 @@ fn append_only_extents_detach_shared_object_and_preserve_hardlink() -> Result<()
         "SELECT COUNT(*) FROM copy_block_crc WHERE data_object_id = {new_data_object_id}"
     ))?;
     if crc_rows.trim() != "2" {
-        return Err(format!("expected two append-only CRC rows, got {crc_rows}"));
+        return Err(format!("expected two replacement CRC rows, got {crc_rows}"));
     }
 
     repo.delete_hardlink_entry(hardlink_id)?;
@@ -494,7 +423,7 @@ fn append_only_extents_detach_shared_object_and_preserve_hardlink() -> Result<()
 }
 
 #[test]
-fn append_only_extents_follow_immediate_and_deferred_cleanup() -> Result<(), String> {
+fn full_block_rewrites_follow_immediate_and_deferred_cleanup() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
 
     for cleanup in [
@@ -534,22 +463,17 @@ fn append_only_extents_follow_immediate_and_deferred_cleanup() -> Result<(), Str
             .ok_or_else(|| "missing old data object".to_string())?;
 
         let new_payload = repeated_block(b'E', block_size);
-        let extent_rows = [PersistExtentRow {
-            start_block: 0,
-            block_count: 1,
-            used_bytes: block_size_u64,
-            payload: new_payload.clone(),
+        let new_rows = [PersistBlockRow {
+            block_index: 0,
+            data: &new_payload,
+            used_len: block_size_u64,
         }];
-        let new_data_object_id = repo.persist_new_object_extents(
-            file_id,
-            block_size_u64,
-            block_size_u64,
-            1,
-            &extent_rows,
-            false,
-        )?;
+        repo.persist_file_blocks(file_id, block_size_u64, block_size_u64, 1, false, &new_rows)?;
+        let new_data_object_id = repo
+            .file_data_object_id(file_id)?
+            .ok_or_else(|| "missing replacement data object".to_string())?;
         if new_data_object_id == old_data_object_id {
-            return Err("append-only write reused the old data object".to_string());
+            return Err("full block rewrite reused the old data object".to_string());
         }
 
         let old_object = repo.query_scalar_text(&format!(
@@ -582,7 +506,7 @@ fn append_only_extents_follow_immediate_and_deferred_cleanup() -> Result<(), Str
         repo.purge_primary_file(file_id)?;
         if cleanup == DataObjectSwapCleanup::Deferred {
             repo.exec(&format!(
-                "DELETE FROM data_blocks WHERE data_object_id = {old_data_object_id}; DELETE FROM data_extents WHERE data_object_id = {old_data_object_id}; DELETE FROM copy_block_crc WHERE data_object_id = {old_data_object_id}; DELETE FROM data_objects WHERE id_data_object = {old_data_object_id}"
+                "DELETE FROM data_blocks WHERE data_object_id = {old_data_object_id}; DELETE FROM copy_block_crc WHERE data_object_id = {old_data_object_id}; DELETE FROM data_objects WHERE id_data_object = {old_data_object_id}"
             ))?;
         }
         repo.delete_directory_entry(dir_id)?;
@@ -696,25 +620,11 @@ fn persisted_payload_bytes(repo: &DbRepo) -> Result<u64, String> {
         "SELECT (\
             (SELECT COUNT(*)::bigint FROM data_blocks) \
                 * (SELECT value FROM config WHERE key = 'block_size') \
-            + COALESCE((SELECT SUM(used_bytes)::bigint FROM data_extents), 0)\
          )::text",
     )?
     .trim()
     .parse::<u64>()
     .map_err(|_| "invalid payload usage".to_string())
-}
-
-fn table_row_count_for_file(repo: &DbRepo, table: &str, file_id: u64) -> Result<u64, String> {
-    let data_object_id = repo
-        .file_data_object_id(file_id)?
-        .ok_or_else(|| format!("missing data object id for file {file_id}"))?;
-    let count = repo.query_scalar_text(&format!(
-        "SELECT COUNT(*) FROM {table} WHERE data_object_id = {data_object_id}"
-    ))?;
-    count
-        .trim()
-        .parse::<u64>()
-        .map_err(|err| format!("parse {table} row count: {err}"))
 }
 
 fn assert_block_range_matches(
@@ -1066,313 +976,6 @@ fn persist_file_blocks_updates_existing_block_data() -> Result<(), String> {
 
     Ok(())
 }
-
-#[test]
-fn switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent(
-) -> Result<(), String> {
-    let _guard = ENV_LOCK.lock().unwrap();
-    let repo = repo_with_runtime()?;
-    let snapshot = repo.startup_snapshot()?;
-    let block_size = snapshot.block_size.unwrap_or(4096) as usize;
-    let block_size_u64 = block_size as u64;
-
-    let dirname = unique_name("rust_pg_switch_dir");
-    let dir_id = repo
-        .create_directory(None, &dirname, 0o755, 1000, 1000, &unique_name("dir_seed"))
-        .map_err(|err| format!("create directory: {err}"))?;
-
-    let extent_file_name = unique_name("rust_pg_extent_to_block");
-    let extent_file_id = repo
-        .create_file(
-            Some(dir_id),
-            &extent_file_name,
-            0o644,
-            1000,
-            1000,
-            &unique_name("extent_seed"),
-        )
-        .map_err(|err| format!("create extent-backed file: {err}"))?;
-
-    let extent_block0 = repeated_block(b'A', block_size);
-    let extent_block1 = repeated_block(b'B', block_size);
-    let extent_tail_len = block_size / 2 + 1;
-    let mut extent_block2 = vec![0; block_size];
-    extent_block2[..extent_tail_len].fill(b'C');
-    let extent_payload = [
-        extent_block0.clone(),
-        extent_block1.clone(),
-        extent_block2[..extent_tail_len].to_vec(),
-    ]
-    .concat();
-    let extent_rows = vec![PersistExtentRow {
-        start_block: 0,
-        block_count: 3,
-        used_bytes: extent_payload.len() as u64,
-        payload: extent_payload.clone(),
-    }];
-    repo.persist_file_extents_native(
-        extent_file_id,
-        extent_payload.len() as u64,
-        block_size_u64,
-        3,
-        false,
-        &extent_rows,
-        false,
-    )
-    .map_err(|err| format!("persist initial extents: {err}"))?;
-
-    assert_block_range_matches(
-        &repo,
-        extent_file_id,
-        block_size_u64,
-        &[
-            (0, extent_block0.as_slice()),
-            (1, extent_block1.as_slice()),
-            (2, extent_block2.as_slice()),
-        ],
-    )?;
-
-    let extent_object_id = repo
-        .file_data_object_id(extent_file_id)
-        .map_err(|err| format!("extent file data object id: {err}"))?
-        .ok_or_else(|| "missing extent file data object id".to_string())?;
-    if table_row_count_for_file(&repo, "data_extents", extent_file_id)? != 1 {
-        return Err("extent-backed file should have exactly one extent row".to_string());
-    }
-    if table_row_count_for_file(&repo, "data_blocks", extent_file_id)? != 0 {
-        return Err("extent-backed file should not have block rows".to_string());
-    }
-
-    let partial_block1 = repeated_block(b'P', block_size);
-    let partial_rows = [PersistBlockRow {
-        block_index: 1,
-        data: &partial_block1,
-        used_len: block_size_u64,
-    }];
-    let partial_error = repo
-        .persist_file_blocks(
-            extent_file_id,
-            extent_payload.len() as u64,
-            block_size_u64,
-            3,
-            false,
-            &partial_rows,
-        )
-        .expect_err("partial block update of an unmigrated extent object must fail");
-    if !partial_error.contains("hot-path extent-to-block conversion is disabled") {
-        return Err(format!(
-            "partial extent-backed update returned unexpected error: {partial_error}"
-        ));
-    }
-
-    if repo.file_data_object_id(extent_file_id)? != Some(extent_object_id) {
-        return Err(
-            "rejected partial block update should keep the original data object".to_string(),
-        );
-    }
-    assert_block_range_matches(
-        &repo,
-        extent_file_id,
-        block_size_u64,
-        &[
-            (0, extent_block0.as_slice()),
-            (1, extent_block1.as_slice()),
-            (2, extent_block2.as_slice()),
-        ],
-    )?;
-    if table_row_count_for_file(&repo, "data_extents", extent_file_id)? != 1 {
-        return Err("rejected partial update should preserve the extent row".to_string());
-    }
-    if table_row_count_for_file(&repo, "data_blocks", extent_file_id)? != 0 {
-        return Err("rejected partial update should not create block rows".to_string());
-    }
-
-    let block_block0 = repeated_block(b'X', block_size);
-    let block_block1 = repeated_block(b'Y', block_size);
-    let block_block2 = repeated_block(b'Z', block_size);
-    let block_payload = [
-        block_block0.clone(),
-        block_block1.clone(),
-        block_block2.clone(),
-    ]
-    .concat();
-    let block_rows = vec![
-        PersistBlockRow {
-            block_index: 0,
-            data: &block_block0,
-            used_len: block_size_u64,
-        },
-        PersistBlockRow {
-            block_index: 1,
-            data: &block_block1,
-            used_len: block_size_u64,
-        },
-        PersistBlockRow {
-            block_index: 2,
-            data: &block_block2,
-            used_len: block_size_u64,
-        },
-    ];
-    repo.persist_file_blocks(
-        extent_file_id,
-        block_payload.len() as u64,
-        block_size_u64,
-        3,
-        false,
-        &block_rows,
-    )
-    .map_err(|err| format!("switch extent-backed file to blocks: {err}"))?;
-
-    let block_replacement_object_id = repo
-        .file_data_object_id(extent_file_id)
-        .map_err(|err| format!("extent file data object id after block write: {err}"))?
-        .ok_or_else(|| "missing replacement data object after block write".to_string())?;
-    assert_ne!(block_replacement_object_id, extent_object_id);
-    assert_block_range_matches(
-        &repo,
-        extent_file_id,
-        block_size_u64,
-        &[
-            (0, block_block0.as_slice()),
-            (1, block_block1.as_slice()),
-            (2, block_block2.as_slice()),
-        ],
-    )?;
-    if table_row_count_for_file(&repo, "data_extents", extent_file_id)? != 0 {
-        return Err("block-backed rewrite should remove stale extent rows".to_string());
-    }
-    if table_row_count_for_file(&repo, "data_blocks", extent_file_id)? != 3 {
-        return Err("block-backed rewrite should leave three block rows".to_string());
-    }
-
-    let block_file_name = unique_name("rust_pg_block_to_extent");
-    let block_file_id = repo
-        .create_file(
-            Some(dir_id),
-            &block_file_name,
-            0o644,
-            1000,
-            1000,
-            &unique_name("block_seed"),
-        )
-        .map_err(|err| format!("create block-backed file: {err}"))?;
-
-    let block_initial0 = repeated_block(b'D', block_size);
-    let block_initial1 = repeated_block(b'E', block_size);
-    let block_initial2 = repeated_block(b'F', block_size);
-    let block_initial_payload = [
-        block_initial0.clone(),
-        block_initial1.clone(),
-        block_initial2.clone(),
-    ]
-    .concat();
-    let block_initial_rows = vec![
-        PersistBlockRow {
-            block_index: 0,
-            data: &block_initial0,
-            used_len: block_size_u64,
-        },
-        PersistBlockRow {
-            block_index: 1,
-            data: &block_initial1,
-            used_len: block_size_u64,
-        },
-        PersistBlockRow {
-            block_index: 2,
-            data: &block_initial2,
-            used_len: block_size_u64,
-        },
-    ];
-    repo.persist_file_blocks(
-        block_file_id,
-        block_initial_payload.len() as u64,
-        block_size_u64,
-        3,
-        false,
-        &block_initial_rows,
-    )
-    .map_err(|err| format!("persist initial blocks: {err}"))?;
-
-    assert_block_range_matches(
-        &repo,
-        block_file_id,
-        block_size_u64,
-        &[
-            (0, block_initial0.as_slice()),
-            (1, block_initial1.as_slice()),
-            (2, block_initial2.as_slice()),
-        ],
-    )?;
-
-    let block_object_id = repo
-        .file_data_object_id(block_file_id)
-        .map_err(|err| format!("block file data object id: {err}"))?
-        .ok_or_else(|| "missing block file data object id".to_string())?;
-    if table_row_count_for_file(&repo, "data_blocks", block_file_id)? != 3 {
-        return Err("block-backed file should have three block rows".to_string());
-    }
-    if table_row_count_for_file(&repo, "data_extents", block_file_id)? != 0 {
-        return Err("block-backed file should not have extent rows".to_string());
-    }
-
-    let extent_swap_block0 = repeated_block(b'G', block_size);
-    let extent_swap_block1 = repeated_block(b'H', block_size);
-    let extent_swap_block2 = repeated_block(b'I', block_size);
-    let extent_swap_payload = [
-        extent_swap_block0.clone(),
-        extent_swap_block1.clone(),
-        extent_swap_block2.clone(),
-    ]
-    .concat();
-    let extent_swap_rows = vec![PersistExtentRow {
-        start_block: 0,
-        block_count: 3,
-        used_bytes: extent_swap_payload.len() as u64,
-        payload: extent_swap_payload.clone(),
-    }];
-    repo.persist_file_extents_native(
-        block_file_id,
-        extent_swap_payload.len() as u64,
-        block_size_u64,
-        3,
-        false,
-        &extent_swap_rows,
-        false,
-    )
-    .map_err(|err| format!("switch block-backed file to extents: {err}"))?;
-
-    assert_eq!(
-        repo.file_data_object_id(block_file_id)
-            .map_err(|err| format!("block file data object id after extent write: {err}"))?,
-        Some(block_object_id)
-    );
-    assert_block_range_matches(
-        &repo,
-        block_file_id,
-        block_size_u64,
-        &[
-            (0, extent_swap_block0.as_slice()),
-            (1, extent_swap_block1.as_slice()),
-            (2, extent_swap_block2.as_slice()),
-        ],
-    )?;
-    if table_row_count_for_file(&repo, "data_blocks", block_file_id)? != 0 {
-        return Err("extent-backed rewrite should remove stale block rows".to_string());
-    }
-    if table_row_count_for_file(&repo, "data_extents", block_file_id)? != 1 {
-        return Err("extent-backed rewrite should leave one extent row".to_string());
-    }
-
-    repo.purge_primary_file(extent_file_id)
-        .map_err(|err| format!("purge extent-switch file: {err}"))?;
-    repo.purge_primary_file(block_file_id)
-        .map_err(|err| format!("purge block-switch file: {err}"))?;
-    repo.delete_directory_entry(dir_id)
-        .map_err(|err| format!("delete directory: {err}"))?;
-
-    Ok(())
-}
-
 #[test]
 fn create_data_object_reuses_matching_hash_and_size() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();

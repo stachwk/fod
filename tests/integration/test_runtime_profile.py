@@ -117,10 +117,9 @@ def main() -> None:
     config_path = ROOT / "fod_config.ini"
     original_profile = os.environ.get("FOD_PROFILE")
     original_sync_commit = os.environ.get("FOD_SYNCHRONOUS_COMMIT")
-    mount_profile = original_profile or "metadata_heavy"
+    mount_profile = "metadata_heavy"
     os.environ.pop("FOD_SYNCHRONOUS_COMMIT", None)
     os.environ.pop("FOD_PROFILE", None)
-    base_runtime_config = load_fod_runtime_config(config_path)
 
     profile_expectations = [
         (
@@ -136,7 +135,6 @@ def main() -> None:
                 "workers_write": "8",
                 "workers_write_min_blocks": "16",
                 "persist_buffer_chunk_blocks": "512",
-                "enable_extents": "false",
                 "metadata_cache_ttl_seconds": "1",
                 "statfs_cache_ttl_seconds": "1",
                 "lock_poll_interval_seconds": "0.1",
@@ -155,7 +153,6 @@ def main() -> None:
                 "workers_write": "2",
                 "workers_write_min_blocks": "16",
                 "persist_buffer_chunk_blocks": "64",
-                "enable_extents": "false",
                 "metadata_cache_ttl_seconds": "10",
                 "statfs_cache_ttl_seconds": "10",
                 "lock_poll_interval_seconds": "0.1",
@@ -169,16 +166,9 @@ def main() -> None:
                 "workers_write": "1",
                 "workers_write_min_blocks": "16",
                 "persist_buffer_chunk_blocks": "64",
-                "enable_extents": "false",
                 "metadata_cache_ttl_seconds": "1",
                 "statfs_cache_ttl_seconds": "1",
                 "lock_poll_interval_seconds": "0.05",
-            },
-        ),
-        (
-            "extents",
-            {
-                "enable_extents": "true",
             },
         ),
     ]
@@ -195,16 +185,6 @@ def main() -> None:
                     attr_name,
                     runtime_config[attr_name],
                 )
-            if profile_name == "extents":
-                for attr_name, expected_value in base_runtime_config.items():
-                    if attr_name in {"profile", "enable_extents"}:
-                        continue
-                    assert runtime_config[attr_name] == expected_value, (
-                        profile_name,
-                        attr_name,
-                        runtime_config[attr_name],
-                        expected_value,
-                    )
             with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
                 cur.execute("SHOW synchronous_commit")
                 assert cur.fetchone()[0] == "on", profile_name
@@ -229,24 +209,16 @@ def main() -> None:
             log_text = wait_for_log_contains(launcher.config.log_file, "FOD storage block_size=")
             assert f'profile=Some("{mount_profile}")' in log_text, log_text
             expected_cache_line = (
-                "FOD cache metadata_cache_ttl=7s statfs_cache_ttl=11s read_cache_blocks=2048 read_cache_eviction_policy=fifo read_ahead_blocks=4 "
-                "sequential_read_ahead_blocks=8 small_file_read_threshold_blocks=16"
-                if mount_profile == "metadata_heavy"
-                else "FOD cache metadata_cache_ttl=7s statfs_cache_ttl=11s read_cache_blocks=4096 read_cache_eviction_policy=fifo read_ahead_blocks=4 "
-                "sequential_read_ahead_blocks=8 small_file_read_threshold_blocks=8"
+                "FOD cache metadata_cache_ttl=7s statfs_cache_ttl=11s read_cache_blocks=2048 "
+                "read_cache_eviction_policy=fifo read_ahead_blocks=4 sequential_read_ahead_blocks=8 "
+                "small_file_read_threshold_blocks=16"
             )
             expected_storage_line = (
                 f'pg_visible_path=Some("{visible_dir.name}") workers_read=3 workers_read_min_blocks=16 '
                 "workers_write=5 workers_write_min_blocks=16 persist_buffer_chunk_blocks=64 "
                 "persist_block_transport=copy_binary_staging data_object_swap_cleanup=immediate synchronous_commit=on "
                 "copy_dedupe_enabled=false copy_dedupe_min_blocks=16 copy_dedupe_max_blocks=0 "
-                f"copy_dedupe_crc_table=false enable_extents_requested=false enable_extents_effective=false extent_target_bytes=1048576"
-                if mount_profile == "metadata_heavy"
-                else f'pg_visible_path=Some("{visible_dir.name}") workers_read=3 workers_read_min_blocks=8 '
-                "workers_write=5 workers_write_min_blocks=8 persist_buffer_chunk_blocks=128 "
-                "persist_block_transport=copy_binary_staging data_object_swap_cleanup=immediate synchronous_commit=on "
-                "copy_dedupe_enabled=false copy_dedupe_min_blocks=16 copy_dedupe_max_blocks=0 "
-                f"copy_dedupe_crc_table=false enable_extents_requested=true enable_extents_effective=false extent_target_bytes=1048576"
+                "copy_dedupe_crc_table=false"
             )
             assert (
                 expected_cache_line
@@ -452,12 +424,6 @@ def main() -> None:
                 assert "force_read_only=false" in recovery_log_text, recovery_log_text
                 assert "FOD mount read_only=true" in recovery_log_text, recovery_log_text
                 assert "FOD lock backend=Memory" in recovery_log_text, recovery_log_text
-                expected_requested_extents = "true" if mount_profile == "extents" else "false"
-                assert (
-                    f"enable_extents_requested={expected_requested_extents} "
-                    "enable_extents_effective=false"
-                    in recovery_log_text
-                ), recovery_log_text
                 assert "FOD mount options:" in recovery_log_text, recovery_log_text
                 print("OK runtime-profile-auto-recovery")
             finally:

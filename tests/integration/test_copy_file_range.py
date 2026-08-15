@@ -41,7 +41,6 @@ def payload_usage_and_limit(connection):
                 (
                     (SELECT COUNT(*)::bigint FROM fod.data_blocks)
                         * (SELECT value FROM fod.config WHERE key = 'block_size')
-                    + COALESCE((SELECT SUM(used_bytes)::bigint FROM fod.data_extents), 0)
                 ),
                 (SELECT value FROM fod.config WHERE key = 'max_fs_size_bytes')
             """

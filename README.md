@@ -306,11 +306,6 @@ lock_backend = postgres_lease
 lock_lease_ttl_seconds = 30
 lock_heartbeat_interval_seconds = 10
 lock_poll_interval_seconds = 0.05
-
-[fod.profile.extents]
-# Opt-in sequential-only extent PoC preset.
-enable_extents = true
-extent_target_bytes = 1048576
 ```
 
 ## First Run
@@ -487,7 +482,7 @@ The canonical runtime value-range rules live in [`rust_runtime/src/lib.rs`](/med
 
 `mkfs.fod` supports:
 
-`init` applies the fresh-install bootstrap from `migrations/base_schema.sql` into the dedicated `fod` schema and refuses to run if FOD objects already exist; `upgrade` first verifies the schema-admin password, then applies any missing migrations to the existing `fod` schema; `clean` drops the entire `fod` schema and leaves unrelated `public` objects intact. `clean` verifies the existing schema-admin secret and fails instead of recreating it if the secret table or row is missing. The schema tool uses a single explicit source for the schema-admin password: `--schema-admin-password`. If the password is missing, `init`, `upgrade`, and `clean` fail fast instead of prompting or generating a secret implicitly. `mkfs.fod status` reports `FOD version`, `FOD schema name`, `FOD schema version`, active schema, whether FOD objects exist, whether the schema is ready, and pending migrations without revealing the secret itself. The current schema version is exported by `mkfs.fod status`; schema version 17 made `data_objects` the exclusive payload owner, schema version 18 added transactional payload-capacity reservations, schema version 19 added immutable index catalogue snapshots, and schema version 20 migrates legacy `data_extents` payload rows into canonical `data_blocks`. If the version row is missing from an otherwise complete latest schema, `upgrade` restores it only after a strict structural and data-migration gate.
+`init` applies the fresh-install bootstrap from `migrations/base_schema.sql` into the dedicated `fod` schema and refuses to run if FOD objects already exist; `upgrade` first verifies the schema-admin password, then applies any missing migrations to the existing `fod` schema; `clean` drops the entire `fod` schema and leaves unrelated `public` objects intact. `clean` verifies the existing schema-admin secret and fails instead of recreating it if the secret table or row is missing. The schema tool uses a single explicit source for the schema-admin password: `--schema-admin-password`. If the password is missing, `init`, `upgrade`, and `clean` fail fast instead of prompting or generating a secret implicitly. `mkfs.fod status` reports `FOD version`, `FOD schema name`, `FOD schema version`, active schema, whether FOD objects exist, whether the schema is ready, and pending migrations without revealing the secret itself. The current schema version is exported by `mkfs.fod status`; schema version 17 made `data_objects` the exclusive payload owner, schema version 18 added transactional payload-capacity reservations, schema version 19 added immutable index catalogue snapshots, schema version 20 migrates legacy `data_extents` payload rows into canonical `data_blocks`, and schema version 21 drops the retired `data_extents` table after the migration gate. If the version row is missing from an otherwise complete latest schema, `upgrade` restores it only after a strict structural and data-migration gate.
 
 | Parameter | Type | Default | Effect |
 | --- | --- | --- | --- |
@@ -671,7 +666,7 @@ If you need `allow_other`, run the mount with `FOD_ALLOW_OTHER=1`, but only if y
 `/etc/fod/fod_config.ini` can also include a `[fod]` section with `pool_max_connections = N` to control the PostgreSQL connection budget the runtime uses for its cached lanes. The same section can also set storage and read-tuning defaults such as `write_flush_threshold_bytes`, `max_fs_size_bytes`, `read_cache_blocks`, `read_ahead_blocks`, `sequential_read_ahead_blocks`, `small_file_read_threshold_blocks`, `metadata_cache_ttl_seconds`, and `statfs_cache_ttl_seconds`. `max_fs_size_bytes` accepts plain bytes as well as binary size strings like `50GiB` or `1TiB`, and `pg_visible_path` can point FOD at the path that PostgreSQL can actually see on disk for `statfs()` capping. If that file does not exist, FOD falls back to `fod_config.ini` in the project root.
 The same section may also set threaded read/write knobs such as `workers_read`, `workers_read_min_blocks`, `workers_write`, and `workers_write_min_blocks`, plus `persist_buffer_chunk_blocks` for larger or smaller flush batches. `persist_block_transport` selects how file block writes are serialized: `copy_binary_staging` (default), `binary_bytea`, or `legacy_hex`. `data_object_swap_cleanup` controls cleanup after full-overwrite data-object swaps: `immediate` keeps the current default behavior and deletes the old object's rows inside the write transaction, while `deferred` is an opt-in profiling/maintenance mode that leaves unreferenced old objects for `make profile-pg-data-object-gc`. `workers_read` is only used when a read misses split into multiple disjoint block ranges, and `workers_write` is only used for copy operations that can be split into multiple source segments. `block_size` still matters here because the worker heuristics operate in blocks, not in raw bytes, so a smaller or larger block size can change when parallelism becomes worthwhile without directly turning "4 KiB" into "one thread". For rsync-like or repeated copy workloads, `copy_dedupe_enabled` can compare destination blocks and skip unchanged ranges during `copy_file_range()`. `copy_dedupe_min_blocks` is the lower gate, `copy_dedupe_max_blocks` is an optional upper cap for very large files, and `copy_dedupe_crc_table` can keep a PostgreSQL-side CRC cache for those comparisons and populate it lazily on demand. Keep the copy dedupe knobs off by default unless you know the workload benefits from them. `lock_heartbeat_interval_seconds` drives both the PostgreSQL lock-lease refresh and the `client_sessions` heartbeat on writable primary mounts, so the backend can detect dead mounts and reclaim their state once TTL expires. When a dead `client_sessions` row is deleted, PostgreSQL trigger cleanup reaps the lock leases and range leases for that session's owner keys. It can also set `synchronous_commit` to control PostgreSQL session durability per connection; valid values are `on`, `off`, `local`, `remote_write`, and `remote_apply`.
 Unless noted otherwise, numeric runtime knobs are non-negative; `0` disables the related cache or cap where the code supports that. `lock_lease_ttl_seconds`, `lock_heartbeat_interval_seconds`, `lock_poll_interval_seconds`, and `persist_buffer_chunk_blocks` must stay above zero. `max_fs_size_bytes` accepts a positive size, or you can omit it to leave the filesystem uncapped.
-If you want a production-style preset, set `FOD_PROFILE=bulk_write`, `FOD_PROFILE=metadata_heavy`, or `FOD_PROFILE=pg_locking` before mount. If you want the opt-in sequential-only extent PoC preset, set `FOD_PROFILE=extents` instead. The selected profile overrides the base `[fod]` values from `fod_config.ini`.
+If you want a production-style preset, set `FOD_PROFILE=bulk_write`, `FOD_PROFILE=metadata_heavy`, or `FOD_PROFILE=pg_locking` before mount. The selected profile overrides the base `[fod]` values from `fod_config.ini`.
 You can also pass the profile explicitly as `--profile bulk_write` to `fod-bootstrap`, or as `-o profile=bulk_write` to `mount.fod`.
 The same `FOD_PROFILE` variable works with `make mount`, `make mount-user`, and `make demo`.
 For live reload tuning, use `make change-runtime-list`, `make change-runtime-get`, and `make change-runtime-set` to inspect or update the reloadable snapshot through `fod.change`; the `change-runtime-set` target expects `FOD_CHANGE_KEY`, `FOD_CHANGE_VALUE`, and `FOD_CHANGE_PASSWORD`.
@@ -685,7 +680,7 @@ At mount start FOD logs the effective runtime profile, FOD version, FOD schema n
 `metadata_cache_ttl_seconds` controls the short TTL cache for `getattr()` and `readdir()` metadata lookups. The default is `1` second.
 `statfs_cache_ttl_seconds` controls the short TTL cache for `statfs()`. The default is `2` seconds.
 `FOD_METADATA_CACHE_TTL_SECONDS` and `FOD_STATFS_CACHE_TTL_SECONDS` override the matching `fod_config.ini` values if you want to tune those caches per environment.
-`FOD_PROFILE` selects a named runtime profile from `fod_config.ini`, such as `bulk_write`, `metadata_heavy`, or `extents`.
+`FOD_PROFILE` selects a named runtime profile from `fod_config.ini`, such as `bulk_write`, `metadata_heavy`, or `pg_locking`.
 `FOD_ATIME_POLICY` is an internal FOD behavior selector, not a raw FUSE mount option. It controls when FOD updates `atime` in its own read path; `noatime`, `nodiratime`, `relatime`, and `strictatime` are handled inside FOD instead of being forwarded to the mount frontend.
 To avoid continuously rewriting the same timestamp row during a single open/read or open/readdir sequence, FOD touches `access_date` only once per handle and then suppresses duplicate touches until the handle is released.
 The same principle applies to write-side timestamp persistence: repeated writes on the same open file update `mtime`/`ctime` only when the dirty buffer is persisted, not on every intermediate write call.
@@ -752,7 +747,6 @@ Mount-time visibility options:
 | `bulk_write` | Large sequential ingest, `copy_file_range()`, throughput runs, remount durability checks | Larger write flush batches and more aggressive write-side tuning. |
 | `metadata_heavy` | `ls`, `find`, `stat`, browsing deep trees, many small metadata-only operations | Longer metadata cache TTL and more conservative write pressure. |
 | `pg_locking` | Multi-client coordination and lock regression tests | Lock backend tuning only, with a shorter poll interval for lease checks. |
-| `extents` | Opt-in sequential-only extent PoC smoke and comparison runs | Keeps `enable_extents = true` explicit while leaving the rest of the baseline unchanged. |
 
 ## Anti-Patterns
 
@@ -761,8 +755,6 @@ Mount-time visibility options:
 - Do not use `fod-relaxed` for multi-user or production-like mounts that need Linux-like permission semantics.
 - Do not treat `synchronous_commit=off` as a default durability setting; use it only when the workload accepts the trade-off and the benchmark says it is worthwhile.
 - Do not expect the `pg_locking` profile to improve write throughput by itself; it is about coordination semantics, not data-path speed.
-- Do not use `extents` as a default production preset; it is an explicit PoC profile for sequential-only extent coverage.
-
 ## Historical Architecture Note
 
 The current runtime is Rust-backed end to end. The notes below are kept for migration context only and do not describe an active Python fallback path.
@@ -1023,20 +1015,12 @@ connections after a transition. This is not a replacement for external STONITH
 or consensus fencing: an already in-flight operation cannot be revoked by FOD
 after it has reached an old primary.
 
-## Storage path simplification in FOD 3.2.71
+## Storage path simplification in FOD 3.2.73
 
-The extent storage experiment is being retired. Production FUSE persistence is
-forced to the canonical `data_blocks` path; legacy `enable_extents` /
-`extent_target_bytes` settings remain parse-compatible temporarily but cannot
-activate extent persistence. Existing extent-backed data is kept readable until
-the explicit migration phase converts it safely to `data_blocks`.
-
-## Controlled extent migration in FOD 3.2.72
-
-Schema migration 20 converts remaining legacy `data_extents` rows to
-`data_blocks` during `mkfs.fod upgrade`. The migration locks payload tables,
-rejects hybrid block/extent objects, validates logical size and contiguous block
-coverage, writes canonical block rows, clears migrated CRC cache rows, and only
-then deletes the old extent rows. FUSE no longer expands extent rows to blocks
-inside the write hot path; partial writes to an unmigrated extent object fail
-with an explicit upgrade instruction instead.
+The extent storage experiment is retired. Production FUSE persistence uses only
+the canonical `data_blocks` path; `enable_extents` and `extent_target_bytes` are
+no longer runtime settings. Schema migration 20 converts any remaining legacy
+`data_extents` rows to `data_blocks` during `mkfs.fod upgrade`, and schema
+migration 21 drops `data_extents` after confirming migration 20 left no rows.
+There is no extent read fallback and no extent-to-block conversion in the FUSE
+hot path.

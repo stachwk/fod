@@ -168,7 +168,10 @@ make profile-fuse-sequential-io
 
 The default workload is `test-fio-sequential-io-strace`. It captures the full workload output, including `FOD_PROFILE_IO` boundary summaries and strace syscall tables, under `artifacts/perf/<commit>/<host>-<run-id>/fuse-test-fio-sequential-io-strace.txt`.
 
-Extent captures include `prepare_persist_extent_rows_peak_payload_bytes`. This is the largest single extent payload assembled during the run and must not exceed `FOD_EXTENT_TARGET_BYTES`. Direct segment persistence also records `prepare_persist_segment_rows_us`, `segment_mode_entries`, `segment_mode_downgrades`, `segment_payload_bytes`, and `segment_count`. Debug logs identify the selected payload state as `write_state_mode=block` or `write_state_mode=sequential_segment` and the semantic operation as `persist_write_class=new_object_sequential`, `existing_object_patch`, or `truncate_only`. A direct-I/O smoke can report no complete segment when each small write is flushed before a full-file plan forms; use a buffered sequential case such as the following to validate the real bounded-segment path:
+Debug logs identify the selected payload state as `write_state_mode=block` and
+the semantic operation as `persist_write_class=existing_object_patch` for normal
+block flushes. Use a buffered sequential case such as the following to validate
+the current block path:
 
 ```bash
 FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make test-fio-sequential-io
@@ -189,32 +192,6 @@ make profile-fuse-sudo-bpftrace-syscalls PROFILE_FUSE_WORKLOAD=test-fio-sequenti
 ```
 
 Use these captures before changing FUSE cache or timeout knobs. A single throughput number is not enough; compare boundary timings, syscall shape, and system counters together.
-
-## Storage Extent Size Matrix
-
-Run the repeated Storage Engine v2 matrix on local PostgreSQL:
-
-```bash
-PROFILE_RUN_ID=storage-extent-$(date -u +%Y%m%dT%H%M%SZ) \
-make profile-storage-extent-size-matrix-local
-```
-
-The default run compares the block path with 64 KiB, 256 KiB, 1 MiB, and 4 MiB extent targets, repeats each sample three times, and runs large-file, large-copy, sequential fio, mixed fio, random-mixed fio, and remount-durability workloads. Each sample captures environment data, workload output, maximum RSS, `FOD_PROFILE_IO`, PostgreSQL DML/WAL deltas, top SQL IO/WAL, and block/extent relation sizes. The generated Markdown summary includes segment entries, downgrades, payload bytes, segment count, and segment preparation time so the direct path can be distinguished from block-to-extent payload rebuilding. A Markdown summary is written under `artifacts/perf/<commit>/`.
-
-Use a smaller workload list for a focused repeated core comparison:
-
-```bash
-PROFILE_STORAGE_EXTENT_WORKLOADS=test-large-file-multiblock-benchmark \
-make profile-storage-extent-size-matrix-local
-```
-
-Run the same profile against the configured QNAP backend with:
-
-```bash
-make profile-storage-extent-size-matrix-qnap
-```
-
-Do not compare a first sample that compiled test binaries inside the measured command. The matrix prebuilds debug binaries and FUSE test executables before starting `/usr/bin/time` so maximum RSS and elapsed workload data exclude compilation.
 
 ## Indexer Allocation Profiling
 

@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 20;
-const MIGRATION_FILES: [&str; 20] = [
+const SCHEMA_VERSION: u64 = 21;
+const MIGRATION_FILES: [&str; 21] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -46,9 +46,10 @@ const MIGRATION_FILES: [&str; 20] = [
     "0018_payload_capacity_reservations.sql",
     "0019_index_catalog_snapshots.sql",
     "0020_migrate_extents_to_blocks.sql",
+    "0021_drop_data_extents.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 20] = [
+const MIGRATION_DESCRIPTIONS: [&str; 21] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -69,6 +70,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 20] = [
     "Add transactional payload capacity reservations",
     "Add immutable index catalogue snapshots",
     "Migrate legacy extent payload rows to canonical data blocks",
+    "Drop retired data_extents table",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -218,6 +220,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0020_migrate_extents_to_blocks.sql"
         )),
+        21 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0021_drop_data_extents.sql"
+        )),
         _ => "",
     }
 }
@@ -244,6 +250,7 @@ fn migration_description(version: u64) -> &'static str {
         18 => MIGRATION_DESCRIPTIONS[17],
         19 => MIGRATION_DESCRIPTIONS[18],
         20 => MIGRATION_DESCRIPTIONS[19],
+        21 => MIGRATION_DESCRIPTIONS[20],
         _ => "Migration",
     }
 }
@@ -270,6 +277,7 @@ fn migration_filename(version: u64) -> &'static str {
         18 => MIGRATION_FILES[17],
         19 => MIGRATION_FILES[18],
         20 => MIGRATION_FILES[19],
+        21 => MIGRATION_FILES[20],
         _ => "unknown.sql",
     }
 }
@@ -365,7 +373,6 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                     ('hardlinks'),
                     ('symlinks'),
                     ('data_blocks'),
-                    ('data_extents'),
                     ('config'),
                     ('schema_version'),
                     ('schema_admin'),
@@ -396,15 +403,15 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                 SELECT COUNT(*)
                 FROM information_schema.columns
                 WHERE table_schema = 'fod'
-                  AND table_name IN ('files', 'data_blocks', 'data_extents', 'copy_block_crc')
+                  AND table_name IN ('files', 'data_blocks', 'copy_block_crc')
                   AND column_name = 'data_object_id'
                   AND is_nullable = 'NO'
-            ) = 4
+            ) = 3
             AND NOT EXISTS (
                 SELECT 1
                 FROM information_schema.columns
                 WHERE table_schema = 'fod'
-                  AND table_name IN ('data_blocks', 'data_extents', 'copy_block_crc')
+                  AND table_name IN ('data_blocks', 'copy_block_crc')
                   AND column_name = 'id_file'
             )
             AND EXISTS (
@@ -435,15 +442,6 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
             AND EXISTS (
                 SELECT 1
                 FROM pg_constraint
-                WHERE conname = 'data_extents_data_object_id_fkey'
-                  AND conrelid = 'fod.data_extents'::regclass
-                  AND confrelid = 'fod.data_objects'::regclass
-                  AND contype = 'f'
-                  AND confdeltype = 'c'
-            )
-            AND EXISTS (
-                SELECT 1
-                FROM pg_constraint
                 WHERE conname = 'copy_block_crc_data_object_id_fkey'
                   AND conrelid = 'fod.copy_block_crc'::regclass
                   AND confrelid = 'fod.data_objects'::regclass
@@ -452,7 +450,7 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
             )
             AND NOT EXISTS (
                 SELECT 1
-                FROM fod.data_extents
+                WHERE to_regclass('fod.data_extents') IS NOT NULL
             )",
     )
 }

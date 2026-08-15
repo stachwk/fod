@@ -89,12 +89,12 @@ implements the corresponding callback.
 
 ## PostgreSQL storage
 
-- Current schema version: 20.
+- Current schema version: 21.
 - Fresh installs use `migrations/base_schema.sql`; numbered files preserve the
   upgrade path.
 - Payload rows are owned by `data_object_id`.
-- Existing payload rows must be canonical `data_blocks`; `data_extents` is a
-  temporary compatibility table that must be empty after schema migration 20.
+- Existing payload rows must be canonical `data_blocks`; `data_extents` is
+  removed by schema migration 21 after migration 20 converts any legacy rows.
 - Exact whole-object adoption may share one data object between independent file
   rows and update reference counts instead of copying payload.
 - Missing block positions represent sparse or zero logical ranges; they are not
@@ -135,8 +135,9 @@ implements the corresponding callback.
 
 ## Storage-format evolution
 
-- Current physical layout is canonical `data_blocks` under schema version 20.
-  Legacy `data_extents` rows are migrated administratively before normal writes.
+- Current physical layout is canonical `data_blocks` under schema version 21.
+  Legacy `data_extents` rows are migrated administratively and the table is
+  dropped before normal writes.
 - Incompatible structure or interpretation changes require a schema migration.
 - Per-object format markers are appropriate only when multiple layouts must
   coexist and readers can dispatch safely.

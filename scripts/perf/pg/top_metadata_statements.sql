@@ -17,7 +17,6 @@ SELECT
         WHEN query ILIKE '%SELECT encode(value,%FROM xattrs%' THEN 'xattr_value'
         WHEN query ILIKE '%SELECT name FROM xattrs%' THEN 'xattr_names'
         WHEN query ILIKE '%JOIN data_blocks%' THEN 'block_lookup'
-        WHEN query ILIKE '%JOIN data_extents%' THEN 'extent_lookup'
         WHEN query ILIKE '%SELECT data_object_id FROM files WHERE id_file%' THEN 'data_object_lookup'
         ELSE 'other_metadata'
     END AS category,
@@ -46,7 +45,6 @@ WHERE
     OR query ILIKE '%SELECT encode(value,%FROM xattrs%'
     OR query ILIKE '%SELECT name FROM xattrs%'
     OR query ILIKE '%JOIN data_blocks%'
-    OR query ILIKE '%JOIN data_extents%'
     OR query ILIKE '%SELECT data_object_id FROM files WHERE id_file%'
 ORDER BY total_exec_time DESC
 LIMIT 40;

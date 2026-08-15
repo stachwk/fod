@@ -1109,3 +1109,60 @@ The first hotpath test attempt failed because it ran concurrently with the
 `rust_mkfs` schema upgrade tests against the same local PostgreSQL schema. This
 matches the existing rule that PostgreSQL schema-rebuilding suites must run
 sequentially; it was not a migration regression.
+
+## 2026-08-16 — FOD 3.2.73 physical extent removal
+
+Working tree based on commit `834737e` removes the remaining runtime extent
+paths after the controlled migration:
+
+- schema version 21 drops `data_extents` after verifying migration 20 left no
+  rows;
+- production schema bootstrap no longer creates `data_extents`;
+- runtime config, FUSE startup diagnostics, write buffering, hotpath persist
+  planning, and PostgreSQL read/write code no longer expose extent knobs,
+  segment state, extent persist APIs, or extent read fallbacks;
+- fio, runtime-profile, PostgreSQL DML, space-accounting, and docs now use the
+  block-only contract.
+
+Validation from the FOD 3.2.73 candidate:
+
+```bash
+cargo check --workspace --locked
+cargo test -p fod-rust-runtime
+cargo test -p fod-rust-hotpath --test helper_parity
+cargo test -p fod-rust-hotpath --test transactional_replay_smoke
+make test-schema-upgrade
+make test-schema-status
+make reset && make test-rust-pg-query
+make reset && make test-fio-sequential-io-strace
+FOD_PROFILE_IO=1 make test-fio-mixed-io
+FOD_PROFILE_IO=1 make test-fio-random-mixed-io
+make test-runtime-profile
+```
+
+Results:
+
+- `cargo check --workspace --locked` passed with workspace packages at `3.2.73`.
+- Runtime, helper parity, transactional replay, schema upgrade/status, and
+  PostgreSQL hotpath query tests passed. The first `make test-rust-pg-query`
+  attempt failed only because a previous mkfs test left the shared local schema
+  in a stale state without `config.block_size`; rerunning after `make reset`
+  passed all 14 pg_query tests.
+- `make test-fio-sequential-io-strace` passed on 2026-08-16 from the
+  `834737e`-based candidate. With `FOD_PROFILE_IO=1`, 64 KiB block sequential
+  fio reported write `566 KiB/s`, read `381 KiB/s`,
+  `repo_persist_blocks_us=58037`, and strace total `4702` calls in `1.297626 s`.
+- `FOD_PROFILE_IO=1 make test-fio-mixed-io` passed. The 4 MiB mixed block fio
+  run reported read `453 KiB/s`, write `482 KiB/s`, and
+  `repo_persist_blocks_us=282072`.
+- `FOD_PROFILE_IO=1 make test-fio-random-mixed-io` passed. The 4 MiB random
+  mixed block fio run reported read `301 KiB/s`, write `320 KiB/s`, and
+  `repo_persist_blocks_us=292731`.
+- `make test-runtime-profile` passed; SELinux label mounting was skipped as
+  unsupported on this host, and auto-recovery profile coverage passed with
+  schema version `21`.
+- Final active-code scans found no `PersistExtentRow`, extent persist APIs,
+  sequential segment state, `FOD_ENABLE_EXTENTS`, `FOD_EXTENT_TARGET_BYTES`, or
+  `profile-storage-extent` targets outside historical documentation/migrations.
+- The active Storage Engine v2 plan and TODO checklist now mark FOD 3.2.72 and
+  FOD 3.2.73 as completed and describe the post-removal boundary as block-only.

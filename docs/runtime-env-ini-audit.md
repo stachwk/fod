@@ -19,9 +19,7 @@ Generated from quoted `FOD_*` literals in production Rust sources. Rust identifi
 | `FOD_DEFAULT_PERMISSIONS` | `[fod] default_permissions` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_DIRSYNC` | `[fod] dirsync` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_DSN_CONNINFO` | `[fod] dsn_conninfo` | intentional-env-only | - | - | rust_fuse/src/main.rs, rust_mkfs/src/bin/fod-bootstrap.rs | internal bootstrap-to-FUSE PostgreSQL handoff |
-| `FOD_ENABLE_EXTENTS` | `[fod] enable_extents` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_ENTRY_TIMEOUT_SECONDS` | `[fod] entry_timeout_seconds` | documented-in-both-ini | - | fod_config.ini, fod_config.example.ini | rust_fuse/src/startup.rs, rust_mkfs/src/config.rs | - |
-| `FOD_EXTENT_TARGET_BYTES` | `[fod] extent_target_bytes` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_FOPEN_DIRECT_IO` | `[fod] fopen_direct_io` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/config.rs, rust_runtime/src/lib.rs | - |
 | `FOD_FUSE_CLONE_FD` | `[fod] fuse_clone_fd` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_fuse/src/startup.rs, rust_mkfs/src/config.rs | - |
 | `FOD_FUSE_EVENT_THREADS` | `[fod] fuse_event_threads` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_fuse/src/startup.rs, rust_mkfs/src/config.rs | - |

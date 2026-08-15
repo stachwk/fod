@@ -23,7 +23,7 @@ SELECT
     column_default
 FROM information_schema.columns
 WHERE table_schema = 'fod'
-  AND table_name IN ('data_blocks', 'data_extents', 'copy_block_crc')
+  AND table_name IN ('data_blocks', 'copy_block_crc')
 ORDER BY table_name, ordinal_position;
 
 SELECT 'payload constraints' AS section;
@@ -37,7 +37,7 @@ FROM pg_constraint con
 JOIN pg_class rel ON rel.oid = con.conrelid
 JOIN pg_namespace ns ON ns.oid = rel.relnamespace
 WHERE ns.nspname = 'fod'
-  AND rel.relname IN ('data_blocks', 'data_extents', 'copy_block_crc')
+  AND rel.relname IN ('data_blocks', 'copy_block_crc')
 ORDER BY rel.relname, con.conname;
 
 SELECT 'payload indexes' AS section;
@@ -48,8 +48,12 @@ SELECT
     indexdef
 FROM pg_indexes
 WHERE schemaname = 'fod'
-  AND tablename IN ('data_blocks', 'data_extents', 'copy_block_crc')
+  AND tablename IN ('data_blocks', 'copy_block_crc')
 ORDER BY tablename, indexname;
+
+SELECT 'retired extent table' AS section;
+
+SELECT to_regclass('fod.data_extents') IS NULL AS data_extents_dropped;
 
 SELECT 'row counts' AS section;
 
@@ -58,8 +62,6 @@ SELECT
     (SELECT count(*) FROM files) AS files_rows,
     (SELECT count(*) FROM data_blocks) AS data_blocks_rows,
     (SELECT count(DISTINCT data_object_id) FROM data_blocks) AS data_blocks_objects,
-    (SELECT count(*) FROM data_extents) AS data_extents_rows,
-    (SELECT count(DISTINCT data_object_id) FROM data_extents) AS data_extents_objects,
     (SELECT count(*) FROM copy_block_crc) AS copy_block_crc_rows,
     (SELECT count(DISTINCT data_object_id) FROM copy_block_crc) AS copy_block_crc_objects;
 
@@ -74,10 +76,6 @@ SELECT
      FROM data_blocks b
      LEFT JOIN data_objects o ON o.id_data_object = b.data_object_id
      WHERE o.id_data_object IS NULL) AS orphan_blocks,
-    (SELECT count(*)
-     FROM data_extents e
-     LEFT JOIN data_objects o ON o.id_data_object = e.data_object_id
-     WHERE o.id_data_object IS NULL) AS orphan_extents,
     (SELECT count(*)
      FROM copy_block_crc c
      LEFT JOIN data_objects o ON o.id_data_object = c.data_object_id
@@ -106,23 +104,13 @@ WITH block_rows AS (
     SELECT data_object_id, count(*) AS row_count
     FROM data_blocks
     GROUP BY data_object_id
-),
-extent_rows AS (
-    SELECT data_object_id, count(*) AS row_count
-    FROM data_extents
-    GROUP BY data_object_id
 )
 SELECT
     count(*) FILTER (WHERE coalesce(b.row_count, 0) > 0) AS block_objects,
-    count(*) FILTER (WHERE coalesce(e.row_count, 0) > 0) AS extent_objects,
-    count(*) FILTER (
-        WHERE coalesce(b.row_count, 0) > 0 AND coalesce(e.row_count, 0) > 0
-    ) AS hybrid_objects,
-    max(coalesce(b.row_count, 0)) AS max_blocks_per_object,
-    max(coalesce(e.row_count, 0)) AS max_extents_per_object
+    count(*) FILTER (WHERE coalesce(b.row_count, 0) = 0) AS objects_without_block_rows,
+    max(coalesce(b.row_count, 0)) AS max_blocks_per_object
 FROM data_objects o
-LEFT JOIN block_rows b ON b.data_object_id = o.id_data_object
-LEFT JOIN extent_rows e ON e.data_object_id = o.id_data_object;
+LEFT JOIN block_rows b ON b.data_object_id = o.id_data_object;
 
 SELECT 'interpretation guide' AS section;
 
@@ -133,4 +121,4 @@ SELECT
     'reference_count_mismatches should be investigated before object GC or dedupe decisions.'
 UNION ALL
 SELECT
-    'hybrid_objects should stay zero because reads prefer extents and block patches convert the complete object before removing extent rows.';
+    'data_extents_dropped must be true after schema version 21; payload rows must live in data_blocks.';

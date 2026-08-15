@@ -34,14 +34,12 @@ cleanup() {
 
 run_case() {
   local label="$1"
-  local enable_extents="$2"
   local block_size="${FIO_BLOCK_SIZE:-4k}"
   local file_size="${FIO_FILE_SIZE:-64k}"
   local file_size_slug="${file_size//[^[:alnum:]]/}"
   local expected_size
   expected_size="$(size_to_bytes "${file_size}")"
 
-  export FOD_ENABLE_EXTENTS="${enable_extents}"
   export FOD_LOG_LEVEL="${FOD_LOG_LEVEL:-debug}"
   if [[ "${FOD_STRACE:-0}" =~ ^(1|true|True|yes|on)$ ]]; then
     export FOD_STRACE_LABEL="${label}"
@@ -85,12 +83,6 @@ run_case() {
   actual_size="$(fod_stat "${file}" '%s')"
   fod_assert_eq "${actual_size}" "${expected_size}" "fio ${label} file size"
 
-  if [[ "${enable_extents}" == "1" ]]; then
-    fod_assert_contains "${LOG_FILE}" "enable_extents_requested=true enable_extents_effective=false"
-  else
-    fod_assert_contains "${LOG_FILE}" "enable_extents_requested=false enable_extents_effective=false"
-  fi
-
   for forbidden in \
     "FOD extent PoC execution" \
     "FOD sequential segment state entered" \
@@ -107,7 +99,7 @@ run_case() {
   fod_assert_contains "${LOG_FILE}" "FOD write_state_mode=block"
   fod_assert_contains "${LOG_FILE}" "persist_write_class=existing_object_patch"
 
-  echo "OK fio/sequential ${label} requested_extents=${enable_extents} effective_extents=0 size=${expected_size} block_size=${block_size}"
+  echo "OK fio/sequential ${label} size=${expected_size} block_size=${block_size}"
   rm -f "${file}"
   fod_test_cleanup
 }
@@ -115,18 +107,11 @@ run_case() {
 trap cleanup EXIT
 
 case "${FIO_CASES:-block}" in
-  both)
-    run_case block 0
-    run_case extent-retired 1
-    ;;
   block)
-    run_case block 0
-    ;;
-  extent)
-    run_case extent-retired 1
+    run_case block
     ;;
   *)
-    echo "Unsupported FIO_CASES=${FIO_CASES}; use block, extent, or both" >&2
+    echo "Unsupported FIO_CASES=${FIO_CASES}; use block" >&2
     exit 2
     ;;
 esac

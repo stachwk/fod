@@ -274,7 +274,6 @@ unsafe extern "C" {
     fn PQntuples(res: *const PGresult) -> c_int;
     fn PQnfields(res: *const PGresult) -> c_int;
     fn PQgetvalue(res: *const PGresult, row_number: c_int, field_number: c_int) -> *const c_char;
-    fn PQgetlength(res: *const PGresult, row_number: c_int, field_number: c_int) -> c_int;
     fn PQclear(res: *mut PGresult);
     fn PQfinish(conn: *mut PGconn);
 }
@@ -1566,8 +1565,6 @@ enum PreparedStatement {
     ChoosePrimaryHardlink,
     LoadBlock,
     FetchBlockRange,
-    LoadExtentBlock,
-    FetchExtentRange,
     ResolvePathRoot,
     ResolvePathNested,
     FetchPathAttrsBlobFile,
@@ -1598,8 +1595,6 @@ impl PreparedStatement {
             PreparedStatement::ChoosePrimaryHardlink,
             PreparedStatement::LoadBlock,
             PreparedStatement::FetchBlockRange,
-            PreparedStatement::LoadExtentBlock,
-            PreparedStatement::FetchExtentRange,
             PreparedStatement::ResolvePathRoot,
             PreparedStatement::ResolvePathNested,
             PreparedStatement::FetchPathAttrsBlobFile,
@@ -1630,8 +1625,6 @@ impl PreparedStatement {
             PreparedStatement::ChoosePrimaryHardlink => "fod_choose_primary_hardlink",
             PreparedStatement::LoadBlock => "fod_load_block",
             PreparedStatement::FetchBlockRange => "fod_fetch_block_range",
-            PreparedStatement::LoadExtentBlock => "fod_load_extent_block",
-            PreparedStatement::FetchExtentRange => "fod_fetch_extent_range",
             PreparedStatement::ResolvePathRoot => "fod_resolve_path_root",
             PreparedStatement::ResolvePathNested => "fod_resolve_path_nested",
             PreparedStatement::FetchPathAttrsBlobFile => "fod_fetch_path_attrs_blob_file",
@@ -1761,29 +1754,6 @@ impl PreparedStatement {
                 ORDER BY db._order ASC
                 "
             }
-            PreparedStatement::LoadExtentBlock => {
-                "
-                SELECT de.start_block, de.block_count, de.used_bytes, de.payload
-                FROM files f
-                JOIN data_extents de ON de.data_object_id = f.data_object_id
-                WHERE f.id_file = $1
-                  AND de.start_block <= $2
-                  AND $2 < de.start_block + de.block_count
-                ORDER BY de.start_block DESC
-                LIMIT 1
-                "
-            }
-            PreparedStatement::FetchExtentRange => {
-                "
-                SELECT de.start_block, de.block_count, de.used_bytes, de.payload
-                FROM files f
-                JOIN data_extents de ON de.data_object_id = f.data_object_id
-                WHERE f.id_file = $1
-                  AND de.start_block <= $3
-                  AND de.start_block + de.block_count - 1 >= $2
-                ORDER BY de.start_block ASC
-                "
-            }
             PreparedStatement::ResolvePathRoot => {
                 "
                 SELECT kind, entry_id FROM (
@@ -1846,10 +1816,6 @@ impl PreparedStatement {
                         SELECT COUNT(*) * (SELECT value FROM config WHERE key = 'block_size')
                         FROM data_blocks db
                         WHERE db.data_object_id = f.data_object_id
-                    ) + (
-                        SELECT COALESCE(SUM(de.used_bytes), 0)
-                        FROM data_extents de
-                        WHERE de.data_object_id = f.data_object_id
                     )
                 FROM files f
                 WHERE f.id_file = $1
@@ -1877,10 +1843,6 @@ impl PreparedStatement {
                         SELECT COUNT(*) * (SELECT value FROM config WHERE key = 'block_size')
                         FROM data_blocks db
                         WHERE db.data_object_id = f.data_object_id
-                    ) + (
-                        SELECT COALESCE(SUM(de.used_bytes), 0)
-                        FROM data_extents de
-                        WHERE de.data_object_id = f.data_object_id
                     )
                 FROM hardlinks h
                 JOIN files f ON h.id_file = f.id_file
@@ -1888,7 +1850,7 @@ impl PreparedStatement {
                 "
             }
             PreparedStatement::StatfsSnapshot => {
-                "SELECT (SELECT COUNT(*) FROM files)::text, (SELECT COUNT(*) FROM directories)::text, (SELECT COUNT(*) FROM symlinks)::text, (((SELECT COUNT(*) FROM data_blocks) * (SELECT value FROM config WHERE key = 'block_size')) + (SELECT COALESCE(SUM(used_bytes), 0) FROM data_extents))::text, (SELECT COALESCE(SUM(reserved_bytes), 0) FROM payload_capacity_reservations WHERE expires_at > NOW())::text, COALESCE((SELECT value FROM config WHERE key = 'max_fs_size_bytes'), 0)::text"
+                "SELECT (SELECT COUNT(*) FROM files)::text, (SELECT COUNT(*) FROM directories)::text, (SELECT COUNT(*) FROM symlinks)::text, ((SELECT COUNT(*) FROM data_blocks) * (SELECT value FROM config WHERE key = 'block_size'))::text, (SELECT COALESCE(SUM(reserved_bytes), 0) FROM payload_capacity_reservations WHERE expires_at > NOW())::text, COALESCE((SELECT value FROM config WHERE key = 'max_fs_size_bytes'), 0)::text"
             }
             PreparedStatement::LoadSymlinkTarget => {
                 "SELECT target FROM symlinks WHERE id_symlink = $1"
@@ -1923,8 +1885,6 @@ impl PreparedStatement {
             | PreparedStatement::ChoosePrimaryHardlink
             | PreparedStatement::LoadBlock
             | PreparedStatement::FetchBlockRange
-            | PreparedStatement::LoadExtentBlock
-            | PreparedStatement::FetchExtentRange
             | PreparedStatement::ResolvePathRoot
             | PreparedStatement::ResolvePathNested
             | PreparedStatement::FetchPathAttrsBlobFile
@@ -1965,8 +1925,6 @@ impl PreparedStatement {
             | PreparedStatement::GetSymlinkIdNested
             | PreparedStatement::LoadBlock => 2,
             PreparedStatement::FetchBlockRange => 3,
-            PreparedStatement::LoadExtentBlock => 2,
-            PreparedStatement::FetchExtentRange => 3,
             PreparedStatement::StatfsSnapshot => 0,
         }
     }
@@ -2072,14 +2030,6 @@ unsafe fn exec_prepared_params_with_result_format(
     } else {
         Ok(res)
     }
-}
-
-unsafe fn exec_prepared_params_binary_result(
-    conn: *mut PGconn,
-    statement: PreparedStatement,
-    params: &[&CString],
-) -> Result<*mut PGresult, String> {
-    exec_prepared_params_with_result_format(conn, statement, params, 1)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2424,94 +2374,6 @@ unsafe fn fetch_block_range_rows_shared(
     };
     PQclear(res);
     result
-}
-
-unsafe fn binary_column_u64(
-    res: *mut PGresult,
-    row: c_int,
-    col: c_int,
-    field_name: &str,
-) -> Result<u64, String> {
-    let value_ptr = PQgetvalue(res, row, col);
-    let value_len = PQgetlength(res, row, col);
-    if value_ptr.is_null() || value_len != std::mem::size_of::<u64>() as c_int {
-        return Err(format!("invalid {field_name} value"));
-    }
-    let bytes = std::slice::from_raw_parts(value_ptr as *const u8, value_len as usize);
-    let mut raw = [0u8; std::mem::size_of::<u64>()];
-    raw.copy_from_slice(bytes);
-    Ok(u64::from_be_bytes(raw))
-}
-
-unsafe fn binary_column_bytes(
-    res: *mut PGresult,
-    row: c_int,
-    col: c_int,
-) -> Result<Vec<u8>, String> {
-    let value_ptr = PQgetvalue(res, row, col);
-    let value_len = PQgetlength(res, row, col);
-    if value_ptr.is_null() || value_len < 0 {
-        return Err("invalid extent payload value".to_string());
-    }
-    let bytes = std::slice::from_raw_parts(value_ptr as *const u8, value_len as usize);
-    Ok(bytes.to_vec())
-}
-
-unsafe fn fetch_extent_rows(res: *mut PGresult) -> Result<Vec<PersistExtentRow>, String> {
-    let result = match PQresultStatus(res) {
-        PGRES_TUPLES_OK => {
-            let rows = PQntuples(res);
-            let cols = PQnfields(res);
-            if rows < 1 || cols < 4 {
-                Ok(Vec::new())
-            } else {
-                let mut extents = Vec::with_capacity(rows as usize);
-                for row in 0..rows {
-                    let start_block = binary_column_u64(res, row, 0, "extent start_block")?;
-                    let block_count = binary_column_u64(res, row, 1, "extent block_count")?;
-                    let used_bytes = binary_column_u64(res, row, 2, "extent used_bytes")?;
-                    let payload = binary_column_bytes(res, row, 3)?;
-                    extents.push(PersistExtentRow {
-                        start_block,
-                        block_count,
-                        used_bytes,
-                        payload,
-                    });
-                }
-                Ok(extents)
-            }
-        }
-        _ => Err("unexpected PostgreSQL result status".to_string()),
-    };
-    PQclear(res);
-    result
-}
-
-fn expand_extent_rows_to_block_arcs(
-    extents: &[PersistExtentRow],
-    first_block: u64,
-    last_block: u64,
-    block_size: usize,
-) -> Vec<(u64, Arc<[u8]>)> {
-    if block_size == 0 || last_block < first_block {
-        return Vec::new();
-    }
-    let mut blocks = Vec::new();
-    for extent in extents {
-        let range_start = extent.start_block.max(first_block);
-        let range_end = extent.end_block().min(last_block);
-        if range_end < range_start {
-            continue;
-        }
-        for block_index in range_start..=range_end {
-            let Some(bytes) = extent.block_bytes_arc(block_index, block_size) else {
-                break;
-            };
-            blocks.push((block_index, bytes));
-        }
-    }
-    blocks.sort_unstable_by_key(|(block_index, _)| *block_index);
-    blocks
 }
 
 fn join_nul_text(values: &[String]) -> Vec<u8> {
@@ -3066,51 +2928,6 @@ fn persist_blocks_cover_full_file(
     true
 }
 
-fn persist_extents_cover_full_file(
-    file_size: u64,
-    block_size: u64,
-    total_blocks: u64,
-    extents: &[PersistExtentRow],
-) -> bool {
-    if file_size == 0 || extents.is_empty() {
-        return false;
-    }
-
-    let block_size = block_size.max(1);
-    let expected_total_blocks = 1 + (file_size - 1) / block_size;
-    if total_blocks != expected_total_blocks {
-        return false;
-    }
-
-    let mut expected_start_block = 0u64;
-    for extent in extents {
-        if extent.start_block != expected_start_block || extent.block_count == 0 {
-            return false;
-        }
-        let Some(end_block) = extent.start_block.checked_add(extent.block_count) else {
-            return false;
-        };
-        if end_block > expected_total_blocks {
-            return false;
-        }
-        let Some(start_offset) = extent.start_block.checked_mul(block_size) else {
-            return false;
-        };
-        let Some(end_offset) = end_block.checked_mul(block_size) else {
-            return false;
-        };
-        let expected_used_bytes = file_size.min(end_offset).saturating_sub(start_offset);
-        if extent.used_bytes != expected_used_bytes
-            || usize::try_from(extent.used_bytes).ok() != Some(extent.payload.len())
-        {
-            return false;
-        }
-        expected_start_block = end_block;
-    }
-
-    expected_start_block == expected_total_blocks
-}
-
 fn append_copy_binary_i16(out: &mut Vec<u8>, value: i16) {
     out.extend_from_slice(&value.to_be_bytes());
 }
@@ -3126,11 +2943,6 @@ fn append_copy_binary_i64(out: &mut Vec<u8>, value: i64) {
 fn append_copy_binary_i64_field(out: &mut Vec<u8>, value: i64) {
     append_copy_binary_i32(out, 8);
     append_copy_binary_i64(out, value);
-}
-
-fn append_copy_binary_i32_field(out: &mut Vec<u8>, value: i32) {
-    append_copy_binary_i32(out, 4);
-    append_copy_binary_i32(out, value);
 }
 
 fn append_copy_binary_null_field(out: &mut Vec<u8>) {
@@ -3149,13 +2961,6 @@ fn append_copy_binary_padded_bytes_field(
     if payload_len < target_len {
         out.resize(out.len() + (target_len - payload_len), 0);
     }
-    Ok(())
-}
-
-fn append_copy_binary_bytes_field(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), String> {
-    let len = i32::try_from(bytes.len()).map_err(|_| "copy field too large".to_string())?;
-    append_copy_binary_i32(out, len);
-    out.extend_from_slice(bytes);
     Ok(())
 }
 
@@ -3196,52 +3001,6 @@ fn append_persist_block_copy_binary_row(
         append_copy_binary_null_field(out);
     }
 
-    Ok(())
-}
-
-fn append_persist_copy_block_crc_copy_binary_row(
-    out: &mut Vec<u8>,
-    data_object_id: i64,
-    block_index: i64,
-    crc32: Option<i64>,
-) -> Result<(), String> {
-    let data_object_id = i32::try_from(data_object_id)
-        .map_err(|_| "data object id out of range for copy crc staging".to_string())?;
-    let block_index = i32::try_from(block_index)
-        .map_err(|_| "block index out of range for copy crc staging".to_string())?;
-
-    append_copy_binary_i16(out, 3);
-    append_copy_binary_i32_field(out, data_object_id);
-    append_copy_binary_i32_field(out, block_index);
-    if let Some(crc32) = crc32 {
-        append_copy_binary_i64_field(out, crc32);
-    } else {
-        append_copy_binary_null_field(out);
-    }
-
-    Ok(())
-}
-
-fn append_persist_extent_copy_binary_row(
-    out: &mut Vec<u8>,
-    data_object_id: i64,
-    extent: &PersistExtentRow,
-) -> Result<(), String> {
-    let data_object_id = i32::try_from(data_object_id)
-        .map_err(|_| "data object id out of range for extent copy staging".to_string())?;
-    let start_block = i64::try_from(extent.start_block)
-        .map_err(|_| "extent start block out of range for copy staging".to_string())?;
-    let block_count = i64::try_from(extent.block_count)
-        .map_err(|_| "extent block count out of range for copy staging".to_string())?;
-    let used_bytes = i64::try_from(extent.used_bytes)
-        .map_err(|_| "extent used bytes out of range for copy staging".to_string())?;
-
-    append_copy_binary_i16(out, 5);
-    append_copy_binary_i32_field(out, data_object_id);
-    append_copy_binary_i64_field(out, start_block);
-    append_copy_binary_i64_field(out, block_count);
-    append_copy_binary_i64_field(out, used_bytes);
-    append_copy_binary_bytes_field(out, &extent.payload)?;
     Ok(())
 }
 
@@ -3604,23 +3363,9 @@ struct DataObjectWriteTarget {
     replaced: Option<ReplacedDataObject>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PersistExtentRow {
-    pub start_block: u64,
-    pub block_count: u64,
-    pub used_bytes: u64,
-    pub payload: Vec<u8>,
-}
-
 fn persist_block_input_bytes(blocks: &[PersistBlockRow<'_>]) -> u64 {
     blocks.iter().fold(0u64, |total, block| {
         total.saturating_add(block.data.len() as u64)
-    })
-}
-
-fn persist_extent_input_bytes(extents: &[PersistExtentRow]) -> u64 {
-    extents.iter().fold(0u64, |total, extent| {
-        total.saturating_add(extent.payload.len() as u64)
     })
 }
 
@@ -3696,90 +3441,6 @@ pub struct DuplicateSetStageRow {
     pub file_size: u64,
     pub file_count: u64,
     pub total_bytes: u64,
-}
-
-impl PersistExtentRow {
-    pub fn end_block(&self) -> u64 {
-        self.start_block
-            .saturating_add(self.block_count.saturating_sub(1))
-    }
-
-    pub fn block_bytes_ref(&self, block_index: u64, block_size: usize) -> Option<&[u8]> {
-        if block_size == 0 {
-            return None;
-        }
-        if self.block_count == 0 {
-            return None;
-        }
-        if block_index < self.start_block || block_index > self.end_block() {
-            return None;
-        }
-
-        let block_offset = block_index.saturating_sub(self.start_block);
-        let payload_offset = block_offset.saturating_mul(block_size as u64);
-        if payload_offset >= self.payload.len() as u64 {
-            return None;
-        }
-
-        let payload_offset = payload_offset as usize;
-        let remaining = self.payload.len().saturating_sub(payload_offset);
-        let used_len = remaining.min(block_size);
-        Some(&self.payload[payload_offset..payload_offset + used_len])
-    }
-
-    pub fn block_bytes(&self, block_index: u64, block_size: usize) -> Option<Vec<u8>> {
-        let mut bytes = self.block_bytes_ref(block_index, block_size)?.to_vec();
-        if bytes.len() < block_size {
-            bytes.resize(block_size, 0);
-        }
-        Some(bytes)
-    }
-
-    pub fn block_bytes_arc(&self, block_index: u64, block_size: usize) -> Option<Arc<[u8]>> {
-        let bytes = self.block_bytes_ref(block_index, block_size)?;
-        if bytes.len() == block_size {
-            Some(Arc::from(bytes))
-        } else {
-            let mut padded = Vec::with_capacity(block_size);
-            padded.extend_from_slice(bytes);
-            padded.resize(block_size, 0);
-            Some(Arc::from(padded))
-        }
-    }
-
-    pub fn blocks(&self, block_size: usize) -> Vec<(u64, Vec<u8>)> {
-        if block_size == 0 {
-            return Vec::new();
-        }
-        if self.block_count == 0 {
-            return Vec::new();
-        }
-        let mut blocks = Vec::new();
-        for block_index in self.start_block..=self.end_block() {
-            let Some(bytes) = self.block_bytes(block_index, block_size) else {
-                break;
-            };
-            blocks.push((block_index, bytes));
-        }
-        blocks
-    }
-
-    pub fn blocks_arc(&self, block_size: usize) -> Vec<(u64, Arc<[u8]>)> {
-        if block_size == 0 {
-            return Vec::new();
-        }
-        if self.block_count == 0 {
-            return Vec::new();
-        }
-        let mut blocks = Vec::new();
-        for block_index in self.start_block..=self.end_block() {
-            let Some(bytes) = self.block_bytes_arc(block_index, block_size) else {
-                break;
-            };
-            blocks.push((block_index, bytes));
-        }
-        blocks
-    }
 }
 
 fn is_all_zero_block(data: &[u8]) -> bool {
@@ -5606,169 +5267,6 @@ impl DbRepo {
         Ok(())
     }
 
-    unsafe fn persist_copy_block_crc_extent_rows_on_conn(
-        &self,
-        conn: *mut PGconn,
-        data_object_id: u64,
-        block_size: u64,
-        extents: &[PersistExtentRow],
-    ) -> Result<(), String> {
-        if extents.is_empty() {
-            return Ok(());
-        }
-        let block_size = block_size.max(1) as usize;
-        let data_object_id_i64 = i64::try_from(data_object_id)
-            .map_err(|_| "data object id out of range for copy staging".to_string())?;
-        let copy_sql = CString::new(format!(
-            "COPY {} (data_object_id, _order, crc32) FROM STDIN BINARY",
-            "copy_block_crc"
-        ))
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let mut copy = CopyInSession::start(conn, &copy_sql)?;
-        let mut copy_buffer = Vec::with_capacity(1024);
-        append_copy_binary_header(&mut copy_buffer);
-        for extent in extents {
-            for block_index in extent.start_block..=extent.end_block() {
-                let Some(block) = extent.block_bytes_ref(block_index, block_size) else {
-                    break;
-                };
-                let payload_offset =
-                    block_index.saturating_sub(extent.start_block) as usize * block_size;
-                let used_len = extent.used_bytes.saturating_sub(payload_offset as u64);
-                let used_len = used_len.min(block_size as u64) as usize;
-                let block_index_i64 = i64::try_from(block_index)
-                    .map_err(|_| "block index out of range for copy staging".to_string())?;
-                let crc32 = if used_len >= block_size && !is_all_zero_block(block) {
-                    Some(i64::from(crc32_bytes(block)))
-                } else {
-                    None
-                };
-                let Some(crc32) = crc32 else {
-                    continue;
-                };
-                append_persist_copy_block_crc_copy_binary_row(
-                    &mut copy_buffer,
-                    data_object_id_i64,
-                    block_index_i64,
-                    Some(crc32),
-                )?;
-            }
-        }
-        copy.send(&copy_buffer)?;
-        copy.finish()?;
-        Ok(())
-    }
-
-    unsafe fn copy_extent_rows_on_conn(
-        &self,
-        conn: *mut PGconn,
-        data_object_id: u64,
-        extents: &[PersistExtentRow],
-    ) -> Result<(), String> {
-        let data_object_id_i64 = i64::try_from(data_object_id)
-            .map_err(|_| "data object id out of range for extent copy".to_string())?;
-        let copy_sql = CString::new(
-            "COPY data_extents (data_object_id, start_block, block_count, used_bytes, payload) FROM STDIN BINARY",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let mut copy = CopyInSession::start(conn, &copy_sql)?;
-        let mut copy_buffer = Vec::with_capacity(128);
-        append_copy_binary_header(&mut copy_buffer);
-        copy.send(&copy_buffer)?;
-        for extent in extents {
-            if extent.payload.len() != extent.used_bytes as usize {
-                return Err("extent payload length does not match used_bytes".to_string());
-            }
-            if extent.block_count == 0 {
-                return Err("extent block count must be greater than zero".to_string());
-            }
-            copy_buffer.clear();
-            append_persist_extent_copy_binary_row(&mut copy_buffer, data_object_id_i64, extent)?;
-            copy.send(&copy_buffer)?;
-        }
-        copy.finish()
-    }
-
-    unsafe fn delete_extent_rows_on_conn(
-        &self,
-        conn: *mut PGconn,
-        data_object_id_text: &CString,
-    ) -> Result<(), String> {
-        let sql_delete_extents = CString::new("DELETE FROM data_extents WHERE data_object_id = $1")
-            .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let params = [data_object_id_text];
-        exec_command_params(conn, &sql_delete_extents, &params)
-    }
-
-    unsafe fn file_has_extent_rows_on_conn(
-        &self,
-        conn: *mut PGconn,
-        file_id: u64,
-    ) -> Result<bool, String> {
-        let sql = CString::new(
-            "
-            SELECT EXISTS (
-                SELECT 1
-                FROM files f
-                JOIN data_extents de ON de.data_object_id = f.data_object_id
-                WHERE f.id_file = $1
-                LIMIT 1
-            )
-            ",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let file_id = CString::new(file_id.to_string())
-            .map_err(|_| "file id contains NUL byte".to_string())?;
-        let params = [&file_id];
-        let res = exec_params(conn, &sql, &params)?;
-        let value = fetch_single_text(res)?;
-        Ok(matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        ))
-    }
-
-    unsafe fn reject_extent_rows_in_block_hot_path_on_conn(
-        &self,
-        conn: *mut PGconn,
-        file_id: u64,
-    ) -> Result<(), String> {
-        if self.file_has_extent_rows_on_conn(conn, file_id)? {
-            return Err(
-                "data object still has data_extents rows; run mkfs.fod upgrade to migrate extents to data_blocks before block writes because hot-path extent-to-block conversion is disabled"
-                    .to_string(),
-            );
-        }
-        Ok(())
-    }
-
-    unsafe fn clear_extent_native_rows_on_conn(
-        &self,
-        conn: *mut PGconn,
-        data_object_id: u64,
-        maintain_copy_crc_table: bool,
-    ) -> Result<(), String> {
-        let sql = if maintain_copy_crc_table {
-            CString::new(format!(
-                "
-                DELETE FROM data_extents WHERE data_object_id = {data_object_id};
-                DELETE FROM data_blocks WHERE data_object_id = {data_object_id};
-                DELETE FROM copy_block_crc WHERE data_object_id = {data_object_id}
-                "
-            ))
-            .map_err(|_| "SQL contains NUL byte".to_string())?
-        } else {
-            CString::new(format!(
-                "
-                DELETE FROM data_extents WHERE data_object_id = {data_object_id};
-                DELETE FROM data_blocks WHERE data_object_id = {data_object_id}
-                "
-            ))
-            .map_err(|_| "SQL contains NUL byte".to_string())?
-        };
-        exec_command(conn, &sql)
-    }
-
     unsafe fn update_file_sizes_on_conn(
         &self,
         conn: *mut PGconn,
@@ -5917,21 +5415,6 @@ impl DbRepo {
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_copy_extents = CString::new(
-            "
-            INSERT INTO data_extents (
-                data_object_id,
-                start_block,
-                block_count,
-                used_bytes,
-                payload
-            )
-            SELECT $2, start_block, block_count, used_bytes, payload
-            FROM data_extents
-            WHERE data_object_id = $1
-            ",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_copy_crc = CString::new(
             "
             INSERT INTO copy_block_crc (data_object_id, _order, crc32)
@@ -5978,7 +5461,6 @@ impl DbRepo {
 
             let params = [&old_data_object_id, &new_data_object_id_text];
             exec_command_params(conn, &sql_copy_blocks, &params)?;
-            exec_command_params(conn, &sql_copy_extents, &params)?;
             if maintain_copy_crc_table {
                 exec_command_params(conn, &sql_copy_crc, &params)?;
             }
@@ -6033,18 +5515,6 @@ impl DbRepo {
 
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id_text, &block_index_text];
-            let res = exec_prepared_params_binary_result(
-                conn,
-                PreparedStatement::LoadExtentBlock,
-                &params,
-            )?;
-            let extent_rows = fetch_extent_rows(res)?;
-            if let Some(extent) = extent_rows.first() {
-                if let Some(bytes) = extent.block_bytes(block_index, block_size) {
-                    return Ok(Some(bytes));
-                }
-            }
-
             let res = exec_prepared_params(conn, PreparedStatement::LoadBlock, &params)?;
             let text = fetch_single_text(res)?;
             if text.is_empty() {
@@ -6083,25 +5553,6 @@ impl DbRepo {
 
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id_text, &first_block_text, &last_block_text];
-            let res = exec_prepared_params_binary_result(
-                conn,
-                PreparedStatement::FetchExtentRange,
-                &params,
-            )?;
-            let extent_rows = fetch_extent_rows(res)?;
-            if !extent_rows.is_empty() {
-                let blocks = expand_extent_rows_to_block_arcs(
-                    &extent_rows,
-                    first_block,
-                    last_block,
-                    block_size,
-                );
-                let expected_blocks = last_block.saturating_sub(first_block).saturating_add(1);
-                if blocks.len() as u64 == expected_blocks {
-                    return Ok(blocks);
-                }
-            }
-
             let res = exec_prepared_params(conn, PreparedStatement::FetchBlockRange, &params)?;
             fetch_block_range_rows_shared(res, block_size)
         })
@@ -10319,9 +9770,6 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let prefer_replacement =
             persist_blocks_cover_full_file(file_size, block_size, total_blocks, blocks);
-        if !prefer_replacement {
-            self.reject_extent_rows_in_block_hot_path_on_conn(conn, file_id)?;
-        }
         let target = match self.data_object_write_target_on_conn(
             conn,
             file_id,
@@ -10433,9 +9881,6 @@ impl DbRepo {
 
         let prefer_replacement =
             persist_blocks_cover_full_file(file_size, block_size, total_blocks, blocks);
-        if !prefer_replacement {
-            self.reject_extent_rows_in_block_hot_path_on_conn(conn, file_id)?;
-        }
         let target = match self.data_object_write_target_on_conn(
             conn,
             file_id,
@@ -10543,9 +9988,6 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let prefer_replacement = file_size > 0;
-        if !prefer_replacement {
-            self.reject_extent_rows_in_block_hot_path_on_conn(conn, file_id)?;
-        }
         let target = match self.data_object_write_target_on_conn(
             conn,
             file_id,
@@ -10559,9 +10001,6 @@ impl DbRepo {
         let data_object_id = target.data_object_id;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
-        // Switching a file back to block storage must drop stale extent rows so
-        // extent-first reads cannot shadow the fresh block rows.
-        self.delete_extent_rows_on_conn(conn, &data_object_id_text)?;
         if truncate_pending {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
@@ -11026,7 +10465,6 @@ impl DbRepo {
             "SELECT (\
                 COALESCE((SELECT COUNT(*)::numeric FROM data_blocks), 0) \
                     * (SELECT value::numeric FROM config WHERE key = 'block_size') \
-                + COALESCE((SELECT SUM(used_bytes)::numeric FROM data_extents), 0) \
                 + COALESCE((SELECT SUM(reserved_bytes)::numeric \
                             FROM payload_capacity_reservations \
                             WHERE expires_at > NOW() \
@@ -11168,202 +10606,6 @@ impl DbRepo {
                 exec_command_params(conn, &sql, &[&request_token])
             })
         })
-    }
-
-    pub fn persist_file_extents_with_crc_flag(
-        &self,
-        file_id: u64,
-        file_size: u64,
-        block_size: u64,
-        _total_blocks: u64,
-        _truncate_pending: bool,
-        extents: &[PersistExtentRow],
-        maintain_copy_crc_table: bool,
-    ) -> Result<(), String> {
-        self.persist_file_extents_with_crc_flag_and_reservation(
-            file_id,
-            file_size,
-            block_size,
-            _total_blocks,
-            _truncate_pending,
-            extents,
-            maintain_copy_crc_table,
-            None,
-        )
-    }
-
-    pub fn persist_file_extents_with_crc_flag_and_reservation(
-        &self,
-        file_id: u64,
-        file_size: u64,
-        block_size: u64,
-        _total_blocks: u64,
-        _truncate_pending: bool,
-        extents: &[PersistExtentRow],
-        maintain_copy_crc_table: bool,
-        capacity_reservation_token: Option<&str>,
-    ) -> Result<(), String> {
-        if extents.is_empty() {
-            return Ok(());
-        }
-
-        let mut payload_guard =
-            self.payload_persist_guard(persist_extent_input_bytes(extents), extents.len() as u64);
-        let result = self.with_cached_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| {
-                let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
-                self.refresh_payload_reservation_on_conn(
-                    conn,
-                    quota_bytes,
-                    capacity_reservation_token,
-                )?;
-                let data_object_id = match self.detach_shared_data_object_on_conn(
-                    conn,
-                    file_id,
-                    file_size,
-                    maintain_copy_crc_table,
-                )? {
-                    Some(value) => value,
-                    None => return Ok(()),
-                };
-                self.clear_extent_native_rows_on_conn(
-                    conn,
-                    data_object_id,
-                    maintain_copy_crc_table,
-                )?;
-                self.copy_extent_rows_on_conn(conn, data_object_id, extents)?;
-
-                if maintain_copy_crc_table {
-                    self.persist_copy_block_crc_extent_rows_on_conn(
-                        conn,
-                        data_object_id,
-                        block_size,
-                        extents,
-                    )?;
-                }
-
-                self.update_file_sizes_on_conn(conn, file_id, data_object_id, file_size)?;
-                self.enforce_payload_quota_on_conn(conn, quota_bytes, capacity_reservation_token)
-            })
-        });
-        if result.is_ok() {
-            payload_guard.mark_success();
-        }
-        result
-    }
-
-    pub fn persist_new_object_extents(
-        &self,
-        file_id: u64,
-        file_size: u64,
-        block_size: u64,
-        total_blocks: u64,
-        extents: &[PersistExtentRow],
-        maintain_copy_crc_table: bool,
-    ) -> Result<u64, String> {
-        if !persist_extents_cover_full_file(file_size, block_size, total_blocks, extents) {
-            return Err(
-                "append-only extent persistence requires exact full-file coverage".to_string(),
-            );
-        }
-
-        let request_token = CString::new(generate_request_token("sequential-object-persist"))
-            .map_err(|_| "request token contains NUL byte".to_string())?;
-        let file_id_text = CString::new(file_id.to_string())
-            .map_err(|_| "file id contains NUL byte".to_string())?;
-        let sql_lookup_request_token = CString::new(
-            "SELECT COALESCE((SELECT t.id_data_object::text FROM data_object_request_tokens t JOIN files f ON f.data_object_id = t.id_data_object WHERE t.request_token = $1 AND f.id_file = $2 LIMIT 1), '')",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_store_request_token = CString::new(
-            "INSERT INTO data_object_request_tokens (request_token, id_data_object, created_at, updated_at) \
-             VALUES ($1, $2, NOW(), NOW()) \
-             ON CONFLICT (request_token) DO UPDATE SET updated_at = NOW() \
-             RETURNING id_data_object",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-
-        let mut payload_guard =
-            self.payload_persist_guard(persist_extent_input_bytes(extents), extents.len() as u64);
-        let result = self.with_cached_connection(|conn| unsafe {
-            transactional_replay_confirmed(
-                conn,
-                |conn| {
-                    let params = [&request_token, &file_id_text];
-                    let res = exec_params(conn, &sql_lookup_request_token, &params)?;
-                    match fetch_single_text_option(res)? {
-                        Some(value) => value
-                            .parse::<u64>()
-                            .map(Some)
-                            .map_err(|_| "invalid sequential persist request token".to_string()),
-                        None => Ok(None),
-                    }
-                },
-                |conn| {
-                    let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
-                    let target = self
-                        .data_object_write_target_on_conn(
-                            conn,
-                            file_id,
-                            file_size,
-                            true,
-                            maintain_copy_crc_table,
-                        )?
-                        .ok_or_else(|| {
-                            "file is missing for append-only extent persistence".to_string()
-                        })?;
-                    self.copy_extent_rows_on_conn(conn, target.data_object_id, extents)?;
-                    if maintain_copy_crc_table {
-                        self.persist_copy_block_crc_extent_rows_on_conn(
-                            conn,
-                            target.data_object_id,
-                            block_size,
-                            extents,
-                        )?;
-                    }
-                    self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
-
-                    let data_object_id = CString::new(target.data_object_id.to_string())
-                        .map_err(|_| "data object id contains NUL byte".to_string())?;
-                    let params = [&request_token, &data_object_id];
-                    let res = exec_params(conn, &sql_store_request_token, &params)?;
-                    let stored_data_object_id = fetch_single_text(res)?
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|_| "invalid stored sequential persist token".to_string())?;
-                    if stored_data_object_id != target.data_object_id {
-                        return Err("sequential persist token mapped to another object".to_string());
-                    }
-                    self.enforce_payload_quota_on_conn(conn, quota_bytes, None)?;
-                    Ok(target.data_object_id)
-                },
-            )
-        });
-        if result.is_ok() {
-            payload_guard.mark_success();
-        }
-        result
-    }
-
-    pub fn persist_file_extents_native(
-        &self,
-        file_id: u64,
-        file_size: u64,
-        block_size: u64,
-        total_blocks: u64,
-        truncate_pending: bool,
-        extents: &[PersistExtentRow],
-        maintain_copy_crc_table: bool,
-    ) -> Result<(), String> {
-        self.persist_file_extents_with_crc_flag(
-            file_id,
-            file_size,
-            block_size,
-            total_blocks,
-            truncate_pending,
-            extents,
-            maintain_copy_crc_table,
-        )
     }
 
     pub fn adopt_source_data_object(
@@ -11667,15 +10909,6 @@ impl DbRepo {
     }
 
     pub fn count_file_blocks(&self, file_id: u64) -> Result<u64, String> {
-        let sql_extent = CString::new(
-            "
-            SELECT COALESCE(SUM(de.block_count), 0)
-            FROM data_extents de
-            JOIN files f ON f.data_object_id = de.data_object_id
-            WHERE f.id_file = $1
-            ",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_blocks = CString::new(
             "
             SELECT COUNT(*)
@@ -11690,12 +10923,6 @@ impl DbRepo {
 
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
-            let res = exec_params(conn, &sql_extent, &params)?;
-            let extent_result = fetch_single_text(res)?.trim().parse::<u64>().unwrap_or(0);
-            if extent_result > 0 {
-                return Ok(extent_result);
-            }
-
             let res = exec_params(conn, &sql_blocks, &params)?;
             let rows = PQntuples(res);
             let cols = PQnfields(res);
@@ -12756,34 +11983,6 @@ mod tests {
     }
 
     #[test]
-    fn append_only_extents_require_exact_full_file_coverage() {
-        let rows = vec![
-            PersistExtentRow {
-                start_block: 0,
-                block_count: 2,
-                used_bytes: 8,
-                payload: vec![b'A'; 8],
-            },
-            PersistExtentRow {
-                start_block: 2,
-                block_count: 1,
-                used_bytes: 2,
-                payload: vec![b'B'; 2],
-            },
-        ];
-        assert!(persist_extents_cover_full_file(10, 4, 3, &rows));
-        assert!(!persist_extents_cover_full_file(10, 4, 2, &rows));
-
-        let mut gapped = rows.clone();
-        gapped[1].start_block = 3;
-        assert!(!persist_extents_cover_full_file(10, 4, 3, &gapped));
-
-        let mut short_payload = rows;
-        short_payload[1].payload.pop();
-        assert!(!persist_extents_cover_full_file(10, 4, 3, &short_payload));
-    }
-
-    #[test]
     fn recognizes_read_only_sql_for_replay() {
         let select_sql = std::ffi::CString::new("SELECT 1").unwrap();
         let recursive_sql =
@@ -12827,10 +12026,6 @@ mod tests {
             "INSERT INTO data_blocks (data_object_id, _order, data) SELECT $2, _order, data FROM data_blocks WHERE data_object_id = $1",
         )
         .unwrap();
-        let extent_to_blocks_sql = std::ffi::CString::new(
-            "INSERT INTO data_blocks (data_object_id, _order, data) SELECT de.data_object_id, (de.start_block + offsets.block_offset)::integer, substring(de.payload FROM 1 FOR $2::integer) FROM data_extents de CROSS JOIN LATERAL generate_series(0::bigint, de.block_count - 1) AS offsets(block_offset) ON CONFLICT (data_object_id, _order) DO NOTHING",
-        )
-        .unwrap();
         let copy_block_crc_upsert_sql = std::ffi::CString::new(
             "INSERT INTO copy_block_crc (data_object_id, _order, crc32) SELECT data_object_id, _order, crc32 FROM staging_blocks ON CONFLICT (data_object_id, _order) DO UPDATE SET crc32 = EXCLUDED.crc32, updated_at = NOW()",
         )
@@ -12868,7 +12063,6 @@ mod tests {
         assert!(sql_is_replayable_command(&import_plan_insert_sql));
         assert!(sql_is_replayable_command(&capacity_reservation_insert_sql));
         assert!(!sql_is_replayable_command(&data_blocks_copy_sql));
-        assert!(!sql_is_replayable_command(&extent_to_blocks_sql));
         assert!(sql_is_replayable_command(&copy_block_crc_upsert_sql));
         assert!(!sql_is_replayable_command(&copy_block_crc_copy_sql));
         assert!(sql_is_replayable_command(&range_state_insert_sql));
@@ -13187,48 +12381,6 @@ mod tests {
 
         let crc_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
         assert_eq!(crc_len, -1);
-    }
-
-    #[test]
-    fn encodes_copy_block_crc_binary_rows_with_integer_fields() {
-        let mut out = Vec::new();
-        append_copy_binary_header(&mut out);
-        append_persist_copy_block_crc_copy_binary_row(&mut out, 11, 3, Some(99)).unwrap();
-
-        let signature = &out[..COPY_BINARY_SIGNATURE.len()];
-        assert_eq!(signature, COPY_BINARY_SIGNATURE);
-
-        let mut cursor = COPY_BINARY_SIGNATURE.len();
-        let flags = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        let header_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        assert_eq!(flags, 0);
-        assert_eq!(header_len, 0);
-
-        let field_count = i16::from_be_bytes(out[cursor..cursor + 2].try_into().unwrap());
-        cursor += 2;
-        assert_eq!(field_count, 3);
-
-        let data_object_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        assert_eq!(data_object_len, 4);
-        let data_object_id = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        assert_eq!(data_object_id, 11);
-
-        let block_index_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        assert_eq!(block_index_len, 4);
-        let block_index = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        assert_eq!(block_index, 3);
-
-        let crc_len = i32::from_be_bytes(out[cursor..cursor + 4].try_into().unwrap());
-        cursor += 4;
-        assert_eq!(crc_len, 8);
-        let crc32 = i64::from_be_bytes(out[cursor..cursor + 8].try_into().unwrap());
-        assert_eq!(crc32, 99);
     }
 }
 

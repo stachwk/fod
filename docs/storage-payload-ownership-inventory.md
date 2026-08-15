@@ -2,11 +2,11 @@
 
 ## Status
 
-The Storage Engine v2 ownership transition is complete in schema version 17.
+The Storage Engine v2 ownership transition is complete in schema version 21.
 `data_objects.id_data_object` is the exclusive owner key for rows in
-`data_blocks`, `data_extents`, and `copy_block_crc`. The representative
-payload-table `id_file` columns have been removed without a runtime
-compatibility branch.
+`data_blocks` and `copy_block_crc`. The representative payload-table `id_file`
+columns have been removed without a runtime compatibility branch, and
+`data_extents` is removed after the controlled migration to `data_blocks`.
 
 The implementation was completed and validated on 2026-07-11 from a worktree
 based on commit `a23bfbb`.
@@ -16,14 +16,12 @@ based on commit `a23bfbb`.
 - `files.data_object_id` selects the payload visible through a file.
 - `files.data_object_id` has a non-cascading foreign key to `data_objects`, so
   PostgreSQL rejects deletion of an object still attached to a file.
-- `data_blocks.data_object_id`, `data_extents.data_object_id`, and
-  `copy_block_crc.data_object_id` are non-null foreign keys with
-  `ON DELETE CASCADE`.
+- `data_blocks.data_object_id` and `copy_block_crc.data_object_id` are non-null
+  foreign keys with `ON DELETE CASCADE`.
 - Block uniqueness is `(data_object_id, _order)`.
-- Extent uniqueness is `(data_object_id, start_block)`.
 - CRC uniqueness and its primary key are `(data_object_id, _order)`.
-- Object deletion is the single cleanup operation for an object's block,
-  extent, and CRC payload rows.
+- Object deletion is the single cleanup operation for an object's block and CRC
+  payload rows.
 - Shared files reference one object directly; payload rows do not identify or
   depend on a representative file.
 
@@ -47,10 +45,9 @@ marker. It does not infer the latest version from a partial shape.
 
 - Block staging and direct block upserts carry only `data_object_id`, block
   order, payload, and optional CRC.
-- Extent and CRC binary COPY encoders match the final PostgreSQL column types
-  and no longer encode `id_file`.
+- CRC encoders match the final PostgreSQL column types and no longer encode
+  `id_file`.
 - Shared-object detach copies payload rows from one object key to another.
-- Extent-to-block conversion preserves the same object key.
 - Replay classification matches the object-owned insert and update forms.
 
 ### Delete and cleanup
@@ -70,9 +67,9 @@ marker. It does not infer the latest version from a partial shape.
 
 `scripts/perf/pg/data_blocks_semantics.sql` now reports the final payload
 columns, object foreign keys, orphan counts, reference-count mismatches, shared
-objects, and hybrid block/extent objects. The merge EXPLAIN scripts reproduce
-the current object-keyed staging and conflict update shape without an
-`id_file` column.
+objects, and the absence of `data_extents`. The merge EXPLAIN scripts reproduce
+the current object-keyed staging and conflict update shape without an `id_file`
+column.
 
 ## Pre-migration inventory
 

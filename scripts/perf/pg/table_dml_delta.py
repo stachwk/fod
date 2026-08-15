@@ -12,7 +12,6 @@ from metric_snapshot import delta_value, format_decimal, parse_snapshot
 
 TABLES = [
     "data_blocks",
-    "data_extents",
     "copy_block_crc",
     "files",
     "data_objects",
@@ -41,8 +40,6 @@ TABLE_METRICS = [
 INDEXES = [
     "idx_data_blocks_object_order",
     "idx_data_blocks_data_object_id",
-    "idx_data_extents_object_start",
-    "idx_data_extents_data_object_id",
     "idx_copy_block_crc_object_order",
     "idx_copy_block_crc_data_object_id",
 ]
@@ -55,14 +52,11 @@ INDEX_METRICS = [
 
 RELATIONS = [
     "data_blocks",
-    "data_extents",
     "copy_block_crc",
     "files",
     "data_objects",
     "idx_data_blocks_object_order",
     "idx_data_blocks_data_object_id",
-    "idx_data_extents_object_start",
-    "idx_data_extents_data_object_id",
     "idx_copy_block_crc_object_order",
     "idx_copy_block_crc_data_object_id",
 ]

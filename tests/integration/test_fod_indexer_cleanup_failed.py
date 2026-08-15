@@ -67,7 +67,6 @@ def cleanup_shared_reference(dsn: dict[str, str], file_id: int, data_object_id: 
     with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
         cur.execute("SET search_path TO fod, public")
         cur.execute("DELETE FROM data_blocks WHERE data_object_id = %s", (data_object_id,))
-        cur.execute("DELETE FROM data_extents WHERE data_object_id = %s", (data_object_id,))
         cur.execute("DELETE FROM copy_block_crc WHERE data_object_id = %s", (data_object_id,))
         cur.execute("DELETE FROM files WHERE id_file = %s", (file_id,))
         cur.execute("DELETE FROM data_objects WHERE id_data_object = %s", (data_object_id,))
@@ -218,10 +217,6 @@ def main() -> None:
                             )
                             cur.execute(
                                 "DELETE FROM data_blocks WHERE data_object_id = %s",
-                                (shared_data_object_id,),
-                            )
-                            cur.execute(
-                                "DELETE FROM data_extents WHERE data_object_id = %s",
                                 (shared_data_object_id,),
                             )
                             cur.execute(

@@ -2,15 +2,13 @@
 // Licensed under BSL 1.1
 
 use crate::fs::{persist_error_errno, FodFuse};
-use crate::write_payload::{PendingSegment, SequentialSegmentState, WritePayloadState};
+use crate::write_payload::WritePayloadState;
 use libc::EIO;
 use log::{debug, warn};
-use rust_hotpath::pg::{PersistBlockRow, PersistExtentRow};
+use rust_hotpath::pg::PersistBlockRow;
 use rust_hotpath::{
-    choose_persist_execution_plan, classify_persist_write, dirty_block_size,
-    plan_sequential_segment_persist, PersistBlockPlanEntry, PersistExecutionPlan,
-    PersistPayloadPlan, PersistPlanInput, PersistSegmentInput, PersistSegmentPlan,
-    PersistWriteClass, PersistWriteClassInput,
+    choose_persist_execution_plan, PersistBlockPlanEntry, PersistExecutionPlan, PersistPayloadPlan,
+    PersistPlanInput,
 };
 use std::time::Instant;
 
@@ -44,111 +42,6 @@ impl WriteState {
     pub(crate) fn clear_payload(&mut self) {
         self.payload.clear();
     }
-}
-
-fn aligned_segment_target_bytes(extent_target_bytes: u64, block_size: u64) -> Option<u64> {
-    let block_size = block_size.max(1);
-    if extent_target_bytes < block_size {
-        return None;
-    }
-    Some((extent_target_bytes / block_size).saturating_mul(block_size))
-}
-
-fn persist_extent_rows_from_segments(
-    plan: &PersistSegmentPlan,
-    segments: Vec<PendingSegment>,
-) -> Vec<PersistExtentRow> {
-    debug_assert_eq!(plan.entries.len(), segments.len());
-    plan.entries
-        .iter()
-        .zip(segments)
-        .map(|(entry, segment)| {
-            debug_assert_eq!(entry.used_bytes, segment.payload.len() as u64);
-            PersistExtentRow {
-                start_block: entry.start_block,
-                block_count: entry.block_count,
-                used_bytes: entry.used_bytes,
-                payload: segment.payload,
-            }
-        })
-        .collect()
-}
-
-fn sequential_state_from_persist_rows(
-    rows: Vec<PersistExtentRow>,
-    block_size: u64,
-) -> SequentialSegmentState {
-    SequentialSegmentState::from_segments(
-        rows.into_iter()
-            .map(|row| PendingSegment {
-                start_offset: row.start_block.saturating_mul(block_size),
-                payload: row.payload,
-            })
-            .collect(),
-    )
-}
-
-fn build_persist_extent_rows_from_ranges(
-    state: &WriteState,
-    block_size: u64,
-    extents: &[(u64, u64)],
-) -> Result<Vec<PersistExtentRow>, String> {
-    let mut rows = Vec::with_capacity(extents.len());
-
-    for (start_block, end_block) in extents {
-        if start_block > end_block {
-            return Err(format!(
-                "invalid extent range {}..{}",
-                start_block, end_block
-            ));
-        }
-
-        let mut used_bytes = 0u64;
-        let mut segments = Vec::new();
-        for block_index in *start_block..=*end_block {
-            let block = state.blocks().get(&block_index).ok_or_else(|| {
-                format!("missing buffered block {block_index} for extent persistence")
-            })?;
-            let used_len = dirty_block_size(state.file_size, block_index, block_size);
-            if used_len == 0 {
-                continue;
-            }
-            let used_len = usize::try_from(used_len)
-                .map_err(|_| format!("block {block_index} used length is too large"))?;
-            if block.len() < used_len {
-                return Err(format!(
-                    "buffered block {block_index} is shorter than its used length"
-                ));
-            }
-            used_bytes = used_bytes
-                .checked_add(used_len as u64)
-                .ok_or_else(|| "extent payload size overflow".to_string())?;
-            segments.push((used_len, block.as_slice()));
-        }
-
-        if used_bytes == 0 {
-            continue;
-        }
-
-        let payload_capacity = usize::try_from(used_bytes)
-            .map_err(|_| "extent payload exceeds addressable memory".to_string())?;
-        let mut payload = Vec::with_capacity(payload_capacity);
-        for (used_len, block) in segments {
-            payload.extend_from_slice(&block[..used_len]);
-        }
-
-        rows.push(PersistExtentRow {
-            start_block: *start_block,
-            block_count: end_block
-                .checked_sub(*start_block)
-                .and_then(|count| count.checked_add(1))
-                .ok_or_else(|| "extent block count overflow".to_string())?,
-            used_bytes,
-            payload,
-        });
-    }
-
-    Ok(rows)
 }
 
 impl FodFuse {
@@ -225,51 +118,6 @@ impl FodFuse {
         let original_file_size = state.file_size;
 
         let end = offset.saturating_add(data.len() as u64);
-        let segment_target_bytes =
-            aligned_segment_target_bytes(self.extent_target_bytes, block_size);
-
-        if let Some(sequential) = state.payload.as_sequential_mut() {
-            if segment_target_bytes
-                .map(|target_bytes| sequential.append(offset, data, target_bytes))
-                .unwrap_or(false)
-            {
-                self.record_segment_payload_bytes(data.len() as u64);
-                state.file_size = state.file_size.max(end);
-                self.clear_read_cache_for_file(state.file_id);
-                self.record_update_write_buffer_elapsed(started.elapsed());
-                return Ok(());
-            }
-            debug!(
-                "FOD sequential segment state downgraded file_id={} expected_offset={} write_offset={}",
-                state.file_id, sequential.next_offset, offset
-            );
-            self.record_segment_mode_downgrade();
-            state.ensure_block_overlay(block_size);
-        } else if self.enable_extents
-            && state.payload.is_empty()
-            && original_file_size == 0
-            && offset == 0
-        {
-            let mut sequential = SequentialSegmentState::new(0);
-            if segment_target_bytes
-                .map(|target_bytes| sequential.append(offset, data, target_bytes))
-                .unwrap_or(false)
-            {
-                debug!(
-                    "FOD sequential segment state entered file_id={} target_bytes={} segment_count={}",
-                    state.file_id,
-                    self.extent_target_bytes,
-                    sequential.segment_count()
-                );
-                self.record_segment_mode_entry();
-                self.record_segment_payload_bytes(data.len() as u64);
-                state.payload = WritePayloadState::SequentialSegments(sequential);
-                state.file_size = end;
-                self.clear_read_cache_for_file(state.file_id);
-                self.record_update_write_buffer_elapsed(started.elapsed());
-                return Ok(());
-            }
-        }
 
         state.ensure_block_overlay(block_size);
         if end > state.file_size {
@@ -356,53 +204,31 @@ impl FodFuse {
             return Err(EIO);
         }
         let block_size = self.block_size.max(1);
-        if capacity_reservation_token.is_some() && state.payload.as_sequential().is_some() {
-            self.record_flush_write_state_elapsed(started.elapsed());
-            return Err(EIO);
-        }
-        let direct_segment_persisted = match self.try_persist_sequential_segments(state, block_size)
+        state.ensure_block_overlay(block_size);
+        debug!(
+            "FOD write_state_mode=block file_id={} buffered_bytes={}",
+            state.file_id, state.buffered_bytes
+        );
+        let dirty_blocks = state.blocks().keys().copied().collect::<Vec<_>>();
+        let persist_plan = choose_persist_execution_plan(PersistPlanInput {
+            file_size: state.file_size,
+            block_size,
+            truncate_pending: state.truncate_pending,
+            dirty_blocks: &dirty_blocks,
+        });
+        if let Err(errno) =
+            self.execute_persist_plan(state, block_size, persist_plan, capacity_reservation_token)
         {
-            Ok(persisted) => persisted,
-            Err(errno) => {
-                self.record_flush_write_state_elapsed(started.elapsed());
-                return Err(errno);
-            }
-        };
-
-        if direct_segment_persisted {
-            self.clear_recent_write_blocks_for_file(state.file_id);
-        } else {
-            state.ensure_block_overlay(block_size);
-            debug!(
-                "FOD write_state_mode=block file_id={} buffered_bytes={}",
-                state.file_id, state.buffered_bytes
-            );
-            let dirty_blocks = state.blocks().keys().copied().collect::<Vec<_>>();
-            let persist_plan = choose_persist_execution_plan(PersistPlanInput {
-                enable_extents: self.enable_extents,
-                extent_target_bytes: self.extent_target_bytes,
-                file_size: state.file_size,
-                block_size,
-                truncate_pending: state.truncate_pending,
-                dirty_blocks: &dirty_blocks,
-            });
-            if let Err(errno) = self.execute_persist_plan(
-                state,
-                block_size,
-                persist_plan,
-                capacity_reservation_token,
-            ) {
-                self.record_flush_write_state_elapsed(started.elapsed());
-                return Err(errno);
-            }
-            let flushed_blocks = state.payload.take_blocks();
-            self.store_recent_write_blocks(
-                state.file_id,
-                state.file_size,
-                state.truncate_pending,
-                flushed_blocks,
-            );
+            self.record_flush_write_state_elapsed(started.elapsed());
+            return Err(errno);
         }
+        let flushed_blocks = state.payload.take_blocks();
+        self.store_recent_write_blocks(
+            state.file_id,
+            state.file_size,
+            state.truncate_pending,
+            flushed_blocks,
+        );
         self.maybe_touch_client_session_write();
         self.clear_read_cache_for_file(state.file_id);
         self.invalidate_statfs_cache();
@@ -411,99 +237,6 @@ impl FodFuse {
         state.load_error = false;
         self.record_flush_write_state_elapsed(started.elapsed());
         Ok(())
-    }
-
-    fn try_persist_sequential_segments(
-        &self,
-        state: &mut WriteState,
-        block_size: u64,
-    ) -> Result<bool, libc::c_int> {
-        let Some(sequential) = state.payload.as_sequential() else {
-            return Ok(false);
-        };
-        let segment_target_bytes =
-            aligned_segment_target_bytes(self.extent_target_bytes, block_size).ok_or(EIO)?;
-        let segment_inputs = sequential
-            .segment_descriptors()
-            .into_iter()
-            .map(|(start_offset, payload_bytes)| PersistSegmentInput {
-                start_offset,
-                payload_bytes,
-            })
-            .collect::<Vec<_>>();
-        let plan = match plan_sequential_segment_persist(
-            state.file_size,
-            block_size,
-            segment_target_bytes,
-            &segment_inputs,
-        ) {
-            Ok(plan) => plan,
-            Err(err) => {
-                debug!(
-                    "FOD direct segment persistence downgraded file_id={} err={}",
-                    state.file_id, err
-                );
-                self.record_segment_mode_downgrade();
-                return Ok(false);
-            }
-        };
-
-        let sequential = state
-            .payload
-            .take_sequential()
-            .expect("sequential payload disappeared after planning");
-        let prepare_started = Instant::now();
-        let rows = persist_extent_rows_from_segments(&plan, sequential.into_segments());
-        let peak_payload_bytes = rows
-            .iter()
-            .map(|row| row.payload.len() as u64)
-            .max()
-            .unwrap_or(0);
-        self.record_prepare_persist_extent_rows_peak_payload_bytes(peak_payload_bytes);
-        self.record_segment_count(rows.len() as u64);
-        self.record_prepare_persist_segment_rows_elapsed(prepare_started.elapsed());
-        let write_class = classify_persist_write(PersistWriteClassInput {
-            new_object_sequential: true,
-            truncate_pending: state.truncate_pending,
-            has_payload: !rows.is_empty(),
-        });
-        debug_assert_eq!(write_class, PersistWriteClass::NewObjectSequential);
-
-        debug!(
-            "FOD direct segment persistence write_state_mode=sequential_segment persist_write_class={} file_id={} segment_count={} payload_bytes={}",
-            write_class.as_str(),
-            state.file_id,
-            rows.len(),
-            rows.iter().map(|row| row.used_bytes).sum::<u64>()
-        );
-        let live = self.reloadable_runtime();
-        let new_data_object_id = match self.persist_new_object_extents_profiled(
-            state.file_id,
-            state.file_size,
-            block_size,
-            plan.total_blocks,
-            &rows,
-            live.copy_dedupe_crc_table,
-        ) {
-            Ok(data_object_id) => data_object_id,
-            Err(err) => {
-                let errno = persist_error_errno(&err);
-                state
-                    .payload
-                    .restore_sequential(sequential_state_from_persist_rows(rows, block_size));
-                warn!(
-                    "FOD direct segment persistence failed file_id={} err={}",
-                    state.file_id, err
-                );
-                return Err(errno);
-            }
-        };
-        debug!(
-            "FOD append-only sequential object persisted file_id={} data_object_id={}",
-            state.file_id, new_data_object_id
-        );
-
-        Ok(true)
     }
 
     fn persist_row_for_block<'a>(
@@ -539,43 +272,6 @@ impl FodFuse {
         rows
     }
 
-    fn prepare_persist_extent_rows_from_extent_ranges(
-        &self,
-        state: &WriteState,
-        block_size: u64,
-        extents: &[(u64, u64)],
-    ) -> Result<Vec<PersistExtentRow>, libc::c_int> {
-        let started = Instant::now();
-        let rows = match build_persist_extent_rows_from_ranges(state, block_size, extents) {
-            Ok(rows) => rows,
-            Err(err) => {
-                warn!(
-                    "FOD extent payload preparation failed file_id={} err={}",
-                    state.file_id, err
-                );
-                self.record_prepare_persist_extent_rows_from_extent_ranges_elapsed(
-                    started.elapsed(),
-                );
-                return Err(EIO);
-            }
-        };
-        let peak_payload_bytes = rows
-            .iter()
-            .map(|row| row.payload.len() as u64)
-            .max()
-            .unwrap_or(0);
-        self.record_prepare_persist_extent_rows_peak_payload_bytes(peak_payload_bytes);
-        self.record_prepare_persist_extent_rows_from_extent_ranges_elapsed(started.elapsed());
-        if peak_payload_bytes > self.extent_target_bytes {
-            warn!(
-                "FOD extent payload exceeds configured maximum file_id={} payload_bytes={} extent_target_bytes={}",
-                state.file_id, peak_payload_bytes, self.extent_target_bytes
-            );
-            return Err(EIO);
-        }
-        Ok(rows)
-    }
-
     fn execute_persist_plan(
         &self,
         state: &WriteState,
@@ -590,73 +286,32 @@ impl FodFuse {
             state.file_id,
             state.truncate_pending
         );
-        match execution_plan.payload {
-            PersistPayloadPlan::Blocks(blocks) => {
-                let rows = self.prepare_persist_rows_from_block_plan(state, &blocks);
-                self.persist_file_blocks_profiled(
-                    state.file_id,
-                    state.file_size,
-                    block_size,
-                    execution_plan.total_blocks,
-                    state.truncate_pending,
-                    &rows,
-                    live.copy_dedupe_crc_table,
-                    capacity_reservation_token,
-                )
-                .map_err(|err| {
-                    let errno = persist_error_errno(&err);
-                    warn!(
-                        "FOD block persistence failed file_id={} file_size={} total_blocks={} truncate_pending={} rows={} errno={} err={}",
-                        state.file_id,
-                        state.file_size,
-                        execution_plan.total_blocks,
-                        state.truncate_pending,
-                        rows.len(),
-                        errno,
-                        err
-                    );
-                    errno
-                })
-            }
-            PersistPayloadPlan::Extents(extents) => {
-                let rows = self.prepare_persist_extent_rows_from_extent_ranges(
-                    state,
-                    block_size,
-                    &extents.into_ranges(),
-                )?;
-                debug!(
-                    "FOD extent PoC execution file_id={} extent_rows={:?}",
-                    state.file_id,
-                    rows.iter()
-                        .map(|row| (row.start_block, row.block_count, row.used_bytes))
-                        .collect::<Vec<_>>()
-                );
-                self.persist_file_extents_profiled(
-                    state.file_id,
-                    state.file_size,
-                    block_size,
-                    execution_plan.total_blocks,
-                    state.truncate_pending,
-                    &rows,
-                    live.copy_dedupe_crc_table,
-                    capacity_reservation_token,
-                )
-                .map_err(|err| {
-                    let errno = persist_error_errno(&err);
-                    warn!(
-                        "FOD extent persistence failed file_id={} file_size={} total_blocks={} truncate_pending={} rows={} errno={} err={}",
-                        state.file_id,
-                        state.file_size,
-                        execution_plan.total_blocks,
-                        state.truncate_pending,
-                        rows.len(),
-                        errno,
-                        err
-                    );
-                    errno
-                })
-            }
-        }
+        let PersistPayloadPlan::Blocks(blocks) = execution_plan.payload;
+        let rows = self.prepare_persist_rows_from_block_plan(state, &blocks);
+        self.persist_file_blocks_profiled(
+            state.file_id,
+            state.file_size,
+            block_size,
+            execution_plan.total_blocks,
+            state.truncate_pending,
+            &rows,
+            live.copy_dedupe_crc_table,
+            capacity_reservation_token,
+        )
+        .map_err(|err| {
+            let errno = persist_error_errno(&err);
+            warn!(
+                "FOD block persistence failed file_id={} file_size={} total_blocks={} truncate_pending={} rows={} errno={} err={}",
+                state.file_id,
+                state.file_size,
+                execution_plan.total_blocks,
+                state.truncate_pending,
+                rows.len(),
+                errno,
+                err
+            );
+            errno
+        })
     }
 
     pub(crate) fn read_from_write_state(
@@ -670,9 +325,6 @@ impl FodFuse {
             return Ok(Vec::new());
         }
         let end_offset = offset.saturating_add(size).min(state.file_size);
-        if let Some(sequential) = state.payload.as_sequential() {
-            return sequential.read_range(offset, end_offset).ok_or(EIO);
-        }
         let mut output = vec![0u8; (end_offset - offset) as usize];
         let first_block = offset / block_size;
         let last_block = (end_offset.saturating_sub(1)) / block_size;
@@ -862,9 +514,6 @@ impl FodFuse {
         // Zachowujemy efekt wczesniejszych zapisow z innych fh.
         // Potem aktualny write() naklada swoje dane na zmergowany blok.
         let block_size = block_size.max(1);
-        if target.payload.as_sequential().is_some() || source.payload.as_sequential().is_some() {
-            self.record_segment_mode_downgrade();
-        }
         target.ensure_block_overlay(block_size);
         source.ensure_block_overlay(block_size);
 
@@ -900,7 +549,6 @@ impl FodFuse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_hotpath::{plan_extent_poc, ExtentPoCMode, ExtentPoCSettings};
 
     #[test]
     fn load_write_block_from_repo_returns_zero_block_for_missing_row() {
@@ -914,120 +562,5 @@ mod tests {
         let err = FodFuse::load_write_block_from_repo(7, 2, 4, Err("boom".to_string()))
             .expect_err("database error should not be masked as zeroes");
         assert_eq!(err, EIO);
-    }
-
-    #[test]
-    fn bounded_extent_ranges_build_bounded_payload_rows() {
-        let block_size = 4096u64;
-        let block_count = 16_384u64;
-        let target_bytes = 1024 * 1024u64;
-        let dirty_blocks = (0..block_count).collect::<Vec<_>>();
-        let plan = plan_extent_poc(
-            ExtentPoCSettings {
-                enabled: true,
-                mode: ExtentPoCMode::SequentialOnly,
-            },
-            &dirty_blocks,
-            block_size,
-            target_bytes,
-            target_bytes,
-        )
-        .expect("bounded extent plan");
-        let state = WriteState {
-            file_id: 9,
-            file_size: block_count * block_size,
-            truncate_pending: true,
-            buffered_bytes: block_count * block_size,
-            load_error: false,
-            payload: WritePayloadState::BlockOverlay(crate::write_payload::BlockWriteState {
-                blocks: dirty_blocks
-                    .iter()
-                    .map(|block_index| {
-                        (*block_index, vec![*block_index as u8; block_size as usize])
-                    })
-                    .collect(),
-            }),
-        };
-
-        let rows = build_persist_extent_rows_from_ranges(&state, block_size, &plan.into_ranges())
-            .expect("bounded extent rows");
-
-        assert_eq!(rows.len(), 64);
-        assert!(rows
-            .iter()
-            .all(|row| row.used_bytes == target_bytes && row.payload.len() as u64 <= target_bytes));
-        assert_eq!(rows.first().map(|row| row.start_block), Some(0));
-        assert_eq!(rows.last().map(|row| row.start_block), Some(16_128));
-    }
-
-    #[test]
-    fn bounded_extent_rows_preserve_partial_final_block() {
-        let block_size = 4096u64;
-        let state = WriteState {
-            file_id: 10,
-            file_size: 2 * block_size + 123,
-            truncate_pending: true,
-            buffered_bytes: 2 * block_size + 123,
-            load_error: false,
-            payload: WritePayloadState::BlockOverlay(crate::write_payload::BlockWriteState {
-                blocks: [
-                    (0, vec![b'A'; block_size as usize]),
-                    (1, vec![b'B'; block_size as usize]),
-                    (2, vec![b'C'; block_size as usize]),
-                ]
-                .into_iter()
-                .collect(),
-            }),
-        };
-
-        let rows = build_persist_extent_rows_from_ranges(&state, block_size, &[(0, 1), (2, 2)])
-            .expect("partial final extent rows");
-
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].used_bytes, 2 * block_size);
-        assert_eq!(rows[0].payload.len(), (2 * block_size) as usize);
-        assert_eq!(rows[1].used_bytes, 123);
-        assert_eq!(rows[1].payload, vec![b'C'; 123]);
-    }
-
-    #[test]
-    fn direct_segment_rows_move_bounded_payloads_without_reassembly() {
-        let plan = plan_sequential_segment_persist(
-            10,
-            4,
-            8,
-            &[
-                PersistSegmentInput {
-                    start_offset: 0,
-                    payload_bytes: 8,
-                },
-                PersistSegmentInput {
-                    start_offset: 8,
-                    payload_bytes: 2,
-                },
-            ],
-        )
-        .expect("direct segment plan");
-        let rows = persist_extent_rows_from_segments(
-            &plan,
-            vec![
-                PendingSegment {
-                    start_offset: 0,
-                    payload: b"abcdefgh".to_vec(),
-                },
-                PendingSegment {
-                    start_offset: 8,
-                    payload: b"ij".to_vec(),
-                },
-            ],
-        );
-
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].start_block, 0);
-        assert_eq!(rows[0].block_count, 2);
-        assert_eq!(rows[0].payload, b"abcdefgh");
-        assert_eq!(rows[1].start_block, 2);
-        assert_eq!(rows[1].block_count, 1);
-        assert_eq!(rows[1].payload, b"ij");
     }
 }

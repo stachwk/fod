@@ -82,17 +82,6 @@ CREATE TABLE IF NOT EXISTS data_blocks (
     data BYTEA NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS data_extents (
-    id_extent SERIAL PRIMARY KEY,
-    data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
-    start_block BIGINT NOT NULL,
-    block_count BIGINT NOT NULL,
-    used_bytes BIGINT NOT NULL,
-    payload BYTEA NOT NULL,
-    creation_date TIMESTAMP NOT NULL DEFAULT NOW(),
-    modification_date TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS config (
     key VARCHAR(50) PRIMARY KEY,
     value BIGINT
@@ -157,8 +146,6 @@ WHERE NOT EXISTS (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_data_blocks_object_order ON data_blocks (data_object_id, _order);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_data_extents_object_start ON data_extents (data_object_id, start_block);
-CREATE INDEX IF NOT EXISTS idx_data_extents_data_object_id ON data_extents (data_object_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_directories_root_name ON directories (name) WHERE id_parent IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_directories_parent_name ON directories (id_parent, name) WHERE id_parent IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_files_root_name ON files (name) WHERE id_directory IS NULL;

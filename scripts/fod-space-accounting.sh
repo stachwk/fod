@@ -59,16 +59,10 @@ SELECT 'logical_file_bytes', COALESCE(SUM(size), 0)::bigint
 FROM ${SCHEMA_NAME}.files;
 SELECT 'block_payload_column_bytes', COALESCE(SUM(octet_length(data)), 0)::bigint
 FROM ${SCHEMA_NAME}.data_blocks;
-SELECT 'extent_payload_column_bytes', COALESCE(SUM(octet_length(payload)), 0)::bigint
-FROM ${SCHEMA_NAME}.data_extents;
 SELECT 'payload_column_bytes',
-       (SELECT COALESCE(SUM(octet_length(data)), 0) FROM ${SCHEMA_NAME}.data_blocks)
-       +
-       (SELECT COALESCE(SUM(octet_length(payload)), 0) FROM ${SCHEMA_NAME}.data_extents);
+       (SELECT COALESCE(SUM(octet_length(data)), 0) FROM ${SCHEMA_NAME}.data_blocks);
 SELECT 'payload_relation_bytes',
-       pg_total_relation_size('${SCHEMA_NAME}.data_blocks'::regclass)
-       +
-       pg_total_relation_size('${SCHEMA_NAME}.data_extents'::regclass);
+       pg_total_relation_size('${SCHEMA_NAME}.data_blocks'::regclass);
 SELECT 'file_rows', COUNT(*)::bigint FROM ${SCHEMA_NAME}.files;
 SELECT 'distinct_data_objects', COUNT(DISTINCT data_object_id)::bigint
 FROM ${SCHEMA_NAME}.files

@@ -3,6 +3,11 @@
 This document freezes the correctness and performance baseline that must be
 preserved when FOD moves from `fuser 0.14` to `fuser 0.17`.
 
+Note: this is an archived July 2026 baseline. Its extent measurements describe
+the retired experiment and are not active runtime guidance for FOD 3.2.73, where
+payload persistence is block-only and `data_extents` is dropped by schema
+migration 21.
+
 Measurement date: `2026-07-11`
 
 Measured production base commit:

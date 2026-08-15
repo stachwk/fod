@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 20;
+const SCHEMA_VERSION: u64 = 21;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -148,17 +148,18 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                     SELECT COUNT(*)
                     FROM information_schema.columns
                     WHERE table_schema = 'fod'
-                      AND table_name IN ('files', 'data_blocks', 'data_extents', 'copy_block_crc')
+                      AND table_name IN ('files', 'data_blocks', 'copy_block_crc')
                       AND column_name = 'data_object_id'
                       AND is_nullable = 'NO'
-                ) = 4
+                ) = 3
                 AND NOT EXISTS (
                     SELECT 1
                     FROM information_schema.columns
                     WHERE table_schema = 'fod'
-                      AND table_name IN ('data_blocks', 'data_extents', 'copy_block_crc')
+                      AND table_name IN ('data_blocks', 'copy_block_crc')
                       AND column_name = 'id_file'
                 )
+                AND to_regclass('fod.data_extents') IS NULL
                 AND EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conname = 'files_data_object_id_fkey'
@@ -171,14 +172,6 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                     SELECT 1 FROM pg_constraint
                     WHERE conname = 'data_blocks_data_object_id_fkey'
                       AND conrelid = 'fod.data_blocks'::regclass
-                      AND confrelid = 'fod.data_objects'::regclass
-                      AND contype = 'f'
-                      AND confdeltype = 'c'
-                )
-                AND EXISTS (
-                    SELECT 1 FROM pg_constraint
-                    WHERE conname = 'data_extents_data_object_id_fkey'
-                      AND conrelid = 'fod.data_extents'::regclass
                       AND confrelid = 'fod.data_objects'::regclass
                       AND contype = 'f'
                       AND confdeltype = 'c'
@@ -199,8 +192,7 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                 )
                 AND to_regclass('fod.payload_capacity_reservations') IS NOT NULL
                 AND to_regclass('fod.index_catalog_snapshots') IS NOT NULL
-                AND to_regclass('fod.index_catalog_snapshot_files') IS NOT NULL
-                AND NOT EXISTS (SELECT 1 FROM fod.data_extents)",
+                AND to_regclass('fod.index_catalog_snapshot_files') IS NOT NULL",
         )
         .expect("inspect payload ownership schema");
     assert!(matches, "payload tables must be owned by data objects");
@@ -226,6 +218,20 @@ fn prepare_version_16_payload_fixture(conn: &DbConn) {
               NOW(), NOW(), NOW(), NOW());
          INSERT INTO data_blocks (data_object_id, _order, data)
          VALUES ({LEGACY_BLOCK_OBJECT_ID}, 0, convert_to('legacy-block', 'UTF8'));
+         CREATE TABLE data_extents (
+             id_extent SERIAL PRIMARY KEY,
+             data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
+             start_block BIGINT NOT NULL,
+             block_count BIGINT NOT NULL,
+             used_bytes BIGINT NOT NULL,
+             payload BYTEA NOT NULL,
+             creation_date TIMESTAMP NOT NULL DEFAULT NOW(),
+             modification_date TIMESTAMP NOT NULL DEFAULT NOW()
+         );
+         CREATE UNIQUE INDEX idx_data_extents_object_start
+             ON data_extents (data_object_id, start_block);
+         CREATE INDEX idx_data_extents_data_object_id
+             ON data_extents (data_object_id);
          INSERT INTO data_extents
              (data_object_id, start_block, block_count, used_bytes, payload)
          VALUES ({LEGACY_EXTENT_OBJECT_ID}, 0, 1, 13, convert_to('legacy-extent', 'UTF8'));
@@ -280,10 +286,7 @@ fn assert_legacy_extent_payload_migrated(conn: &DbConn) {
                       AND octet_length(data) = 4096
                       AND substring(data FROM 1 FOR 13) = convert_to('legacy-extent', 'UTF8')
                 )
-                AND NOT EXISTS (
-                    SELECT 1 FROM fod.data_extents
-                    WHERE data_object_id = {LEGACY_EXTENT_OBJECT_ID}
-                )
+                AND to_regclass('fod.data_extents') IS NULL
                 AND NOT EXISTS (
                     SELECT 1 FROM fod.copy_block_crc
                     WHERE data_object_id = {LEGACY_EXTENT_OBJECT_ID}
@@ -310,9 +313,6 @@ fn assert_payload_delete_cascades(conn: &DbConn) {
          VALUES ({CASCADE_OBJECT_ID}, 1, NULL, 0, NOW(), NOW());
          INSERT INTO data_blocks (data_object_id, _order, data)
          VALUES ({CASCADE_OBJECT_ID}, 7, decode('01', 'hex'));
-         INSERT INTO data_extents
-             (data_object_id, start_block, block_count, used_bytes, payload)
-         VALUES ({CASCADE_OBJECT_ID}, 7, 1, 1, decode('01', 'hex'));
          INSERT INTO copy_block_crc (data_object_id, _order, crc32)
          VALUES ({CASCADE_OBJECT_ID}, 7, 1);
          DELETE FROM data_objects WHERE id_data_object = {CASCADE_OBJECT_ID};"
@@ -322,7 +322,6 @@ fn assert_payload_delete_cascades(conn: &DbConn) {
         .query_exists(&format!(
             "SELECT
                 EXISTS (SELECT 1 FROM fod.data_blocks WHERE data_object_id = {CASCADE_OBJECT_ID})
-                OR EXISTS (SELECT 1 FROM fod.data_extents WHERE data_object_id = {CASCADE_OBJECT_ID})
                 OR EXISTS (SELECT 1 FROM fod.copy_block_crc WHERE data_object_id = {CASCADE_OBJECT_ID})"
         ))
         .expect("inspect cascading payload delete");
@@ -458,7 +457,7 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
     assert!(
         String::from_utf8_lossy(&upgrade_result.stdout).contains(
-            "Schema version row was missing; recovered version 20 from the verified schema shape."
+            "Schema version row was missing; recovered version 21 from the verified schema shape."
         ),
         "{}",
         String::from_utf8_lossy(&upgrade_result.stdout)
@@ -691,10 +690,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 20",
+        "FOD schema version: 21",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 20",
+        "Latest migration version: 21",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -718,6 +717,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0018: 0018_payload_capacity_reservations.sql",
         "0019: 0019_index_catalog_snapshots.sql",
         "0020: 0020_migrate_extents_to_blocks.sql",
+        "0021: 0021_drop_data_extents.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -737,10 +737,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 20",
+        "Latest migration version: 21",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021",
     ] {
         assert!(
             status_without_version.contains(needle),

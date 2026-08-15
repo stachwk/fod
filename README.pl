@@ -298,10 +298,6 @@ lock_backend = postgres_lease
 lock_lease_ttl_seconds = 30
 lock_heartbeat_interval_seconds = 10
 lock_poll_interval_seconds = 0.05
-
-[fod.profile.extents]
-# Opt-in sequential-only extent PoC preset.
-enable_extents = true
 ```
 
 ## Pierwsze uruchomienie
@@ -476,7 +472,7 @@ Kanoniczne reguły zakresów dla wartości runtime są w [`rust_runtime/src/lib.
 
 `mkfs.fod` obsługuje:
 
-`init` stosuje świeży bootstrap z `migrations/base_schema.sql` do dedykowanego schematu `fod` i odmawia działania, jeśli obiekty FOD już istnieją; `upgrade` najpierw weryfikuje hasło schema-admin, a potem stosuje brakujące migracje do istniejącego schematu `fod`; `clean` usuwa cały schemat `fod` i zostawia obce obiekty w `public` nietknięte. `clean` weryfikuje istniejący sekret schema-admin i zamiast go odtwarzać kończy się błędem, jeśli tabela lub wpis sekretu zniknęły. Narzędzie schematu używa jednego jawnego źródła hasła administracyjnego schematu: `--schema-admin-password`. Jeśli hasła brakuje, `init`, `upgrade` i `clean` kończą się natychmiast, bez promptu i bez ukrytej generacji sekretu. `mkfs.fod status` pokazuje `FOD version`, `FOD schema name`, `FOD schema version`, aktywny schemat, to czy obiekty FOD istnieją, to czy schemat jest gotowy, oraz zaległe migracje, bez ujawniania samego sekretu. Bieżąca wersja schematu jest eksportowana przez `mkfs.fod status`; wersja 17 przeniosła własność payloadu do `data_objects`, wersja 18 dodała transakcyjne rezerwacje pojemności payloadu, wersja 19 dodała niezmienne snapshoty katalogu indexera, a wersja 20 migruje stare wiersze `data_extents` do kanonicznych `data_blocks`.
+`init` stosuje świeży bootstrap z `migrations/base_schema.sql` do dedykowanego schematu `fod` i odmawia działania, jeśli obiekty FOD już istnieją; `upgrade` najpierw weryfikuje hasło schema-admin, a potem stosuje brakujące migracje do istniejącego schematu `fod`; `clean` usuwa cały schemat `fod` i zostawia obce obiekty w `public` nietknięte. `clean` weryfikuje istniejący sekret schema-admin i zamiast go odtwarzać kończy się błędem, jeśli tabela lub wpis sekretu zniknęły. Narzędzie schematu używa jednego jawnego źródła hasła administracyjnego schematu: `--schema-admin-password`. Jeśli hasła brakuje, `init`, `upgrade` i `clean` kończą się natychmiast, bez promptu i bez ukrytej generacji sekretu. `mkfs.fod status` pokazuje `FOD version`, `FOD schema name`, `FOD schema version`, aktywny schemat, to czy obiekty FOD istnieją, to czy schemat jest gotowy, oraz zaległe migracje, bez ujawniania samego sekretu. Bieżąca wersja schematu jest eksportowana przez `mkfs.fod status`; wersja 17 przeniosła własność payloadu do `data_objects`, wersja 18 dodała transakcyjne rezerwacje pojemności payloadu, wersja 19 dodała niezmienne snapshoty katalogu indexera, wersja 20 migruje stare wiersze `data_extents` do kanonicznych `data_blocks`, a wersja 21 usuwa wycofaną tabelę `data_extents` po bramce migracyjnej.
 
 | Parametr | Typ | Domyślnie | Efekt |
 | --- | --- | --- | --- |
@@ -654,7 +650,7 @@ W `/etc/fod/fod_config.ini` można też dodać sekcję `[fod]` z `pool_max_conne
 Ta sama sekcja może też ustawiać parametry wielowątkowości dla większych odczytów i kopiowania, takie jak `workers_read`, `workers_read_min_blocks`, `workers_write` i `workers_write_min_blocks`, oraz `persist_buffer_chunk_blocks`, które decyduje o wielkości paczek flushu. `persist_block_transport` wybiera sposób zapisu bloków: `copy_binary_staging` (domyślnie), `binary_bytea` albo `legacy_hex`. `workers_read` jest używane tylko wtedy, gdy brakujące bloki w odczycie dzielą się na kilka rozłącznych zakresów, a `workers_write` tylko wtedy, gdy kopiowanie można podzielić na kilka segmentów źródłowych. `block_size` nadal ma znaczenie, bo heurystyki workerów działają na blokach, a nie na surowych bajtach, więc mniejszy albo większy blok zmienia moment, w którym wielowątkowość zaczyna mieć sens, ale nie oznacza automatycznie "4 KiB = jeden wątek". Dla powtarzanych kopii typu rsync można też włączyć `copy_dedupe_enabled`, żeby porównywać bloki docelowe i pomijać niezmienione zakresy podczas `copy_file_range()`. `copy_dedupe_min_blocks` jest dolną bramką, `copy_dedupe_max_blocks` opcjonalnym górnym limitem dla bardzo dużych plików, a `copy_dedupe_crc_table` może przy tym utrzymywać tabelę CRC w PostgreSQL i uzupełniać ją lazy podczas porównań. Knoby dedupe zostają domyślnie wyłączone, jeśli nie wiesz, że workload faktycznie na tym korzysta. `lock_heartbeat_interval_seconds` steruje zarówno odświeżaniem lease'ów locków PostgreSQL, jak i heartbeatem `client_sessions` na writable primary mountach. Dzięki temu backend może wykrywać martwe mounty i zwalniać ich stan po wygaśnięciu TTL. Gdy martwy `client_sessions` zostanie usunięty, trigger w PostgreSQL czyści lock leases i range leases dla jego `owner_key`'ów. Może też ustawiać `synchronous_commit`, żeby sterować trwałością sesji PostgreSQL dla każdego połączenia; dozwolone wartości to `on`, `off`, `local`, `remote_write` i `remote_apply`.
 O ile nie zaznaczono inaczej, numeryczne parametry runtime są nieujemne; `0` wyłącza odpowiedni cache albo limit tam, gdzie kod to obsługuje. `lock_lease_ttl_seconds`, `lock_heartbeat_interval_seconds`, `lock_poll_interval_seconds` i `persist_buffer_chunk_blocks` muszą być większe od zera. `max_fs_size_bytes` przyjmuje dodatni rozmiar albo może zostać pominięty, jeśli filesystem ma działać bez limitu.
 Przy starcie mounta FOD loguje aktywny profil runtime, `FOD version`, `FOD schema name`, `FOD schema version`, ustawienia PostgreSQL TLS, trwałość sesji PostgreSQL (`synchronous_commit`), strojenie storage, opcje mounta i backend locków, żebyś mógł sprawdzić aktywną konfigurację bez zgadywania, które domyślne wartości zostały użyte.
-Jeśli chcesz gotowy preset produkcyjny, ustaw `FOD_PROFILE=bulk_write`, `FOD_PROFILE=metadata_heavy` albo `FOD_PROFILE=pg_locking` przed mountem. Jeśli chcesz opt-in preset dla sekwencyjnego PoC extentów, ustaw `FOD_PROFILE=extents`. Wybrany profil nadpisuje bazowe wartości z `[fod]` w `fod_config.ini`.
+Jeśli chcesz gotowy preset produkcyjny, ustaw `FOD_PROFILE=bulk_write`, `FOD_PROFILE=metadata_heavy` albo `FOD_PROFILE=pg_locking` przed mountem. Wybrany profil nadpisuje bazowe wartości z `[fod]` w `fod_config.ini`.
 Profil możesz też podać jawnie jako `--profile bulk_write` do `fod-bootstrap` albo jako `-o profile=bulk_write` do `mount.fod`.
 Ta sama zmienna `FOD_PROFILE` działa też z `make mount`, `make mount-user` i `make demo`.
 Do dynamicznego strojenia użyj `make change-runtime-list`, `make change-runtime-get` i `make change-runtime-set`, które korzystają z `fod.change`; target `change-runtime-set` oczekuje `FOD_CHANGE_KEY`, `FOD_CHANGE_VALUE` i `FOD_CHANGE_PASSWORD`.
@@ -670,7 +666,7 @@ Przy starcie FOD loguje efektywny profil runtime, wersję schematu, ustawienia T
 `metadata_cache_ttl_seconds` steruje krótkim cache TTL dla odczytów metadanych `getattr()` i `readdir()`. Domyślna wartość to `1` sekunda.
 `statfs_cache_ttl_seconds` steruje krótkim cache TTL dla `statfs()`. Domyślna wartość to `2` sekundy.
 `FOD_METADATA_CACHE_TTL_SECONDS` i `FOD_STATFS_CACHE_TTL_SECONDS` nadpisują odpowiednie wartości z `fod_config.ini`, jeśli chcesz stroić te cache per środowisko.
-`FOD_PROFILE` wybiera nazwany profil runtime z `fod_config.ini`, na przykład `bulk_write`, `metadata_heavy` albo `extents`.
+`FOD_PROFILE` wybiera nazwany profil runtime z `fod_config.ini`, na przykład `bulk_write`, `metadata_heavy` albo `pg_locking`.
 `FOD_ATIME_POLICY` jest wewnętrznym przełącznikiem FOD, a nie surową opcją mounta FUSE. Steruje tym, kiedy FOD aktualizuje `atime` w swoim własnym read path; `noatime`, `nodiratime`, `relatime` i `strictatime` są obsługiwane wewnętrznie i nie są przekazywane do frontendu mounta.
 Dla jednego uchwytu FOD zapisuje `access_date` tylko raz, aby nie przepisywać ciągle tego samego rekordu podczas pojedynczej sekwencji open/read lub open/readdir. Kolejne dotknięcia są pomijane aż do zwolnienia uchwytu.
 Ten sam model dotyczy też zapisu `mtime`/`ctime`: wiele zapisów na tym samym otwartym pliku aktualizuje te znaczniki dopiero przy persystencji dirty bufora, a nie przy każdym pośrednim wywołaniu `write()`.
@@ -737,7 +733,6 @@ Opcje widoczne w mount:
 | `bulk_write` | Duży ingest sekwencyjny, `copy_file_range()`, testy throughputu, durability po remount | Większe batchowanie flush i bardziej agresywne strojenie strony zapisu. |
 | `metadata_heavy` | `ls`, `find`, `stat`, przeglądanie głębokich drzew, operacje tylko na metadanych | Dłuższy TTL cache metadanych i bardziej zachowawcza presja na write path. |
 | `pg_locking` | Koordynacja wielu klientów i testy regresji locków | Strojenie backendu locków z krótszym poll interval do sprawdzania lease'ów. |
-| `extents` | Opt-in sekwencyjny PoC extentów i smoke porównawczy | Trzyma `enable_extents = true` jawnie, bez zmiany reszty baseline'u. |
 
 ## Antywzorce
 
@@ -746,8 +741,6 @@ Opcje widoczne w mount:
 - Nie używaj `fod-relaxed` dla wieloużytkowych albo produkcyjnych mountów, gdzie potrzebujesz bardziej linuksowej semantyki uprawnień.
 - Nie traktuj `synchronous_commit=off` jako domyślnego ustawienia trwałości; stosuj je tylko wtedy, gdy workload akceptuje kompromis i benchmark pokazuje sens.
 - Nie oczekuj, że `pg_locking` sam poprawi throughput zapisu; ten profil dotyczy koordynacji i semantyki, a nie przyspieszania data path.
-- Nie używaj `extents` jako domyślnego presetu produkcyjnego; to jawny profil PoC dla sekwencyjnych extentów.
-
 ## Historyczna Notatka Architektury
 
 Aktualny runtime jest w pełni Rustowy. Notatki poniżej są zachowane wyłącznie jako kontekst migracyjny i nie opisują aktywnej ścieżki fallback w Pythonie.
@@ -1008,21 +1001,12 @@ po zmianie primary. Mechanizm nie zastępuje zewnętrznego STONITH ani fencing
 opartego o konsensus: operacji już wykonywanej na starym primary FOD nie może
 cofnąć po fakcie.
 
-## Uproszczenie ścieżki danych w FOD 3.2.71
+## Uproszczenie ścieżki danych w FOD 3.2.73
 
-Eksperymentalna obsługa extentów jest wycofywana. Produkcyjny FUSE wymusza
-kanoniczną persystencję w `data_blocks`; stare ustawienia `enable_extents` /
-`extent_target_bytes` są tymczasowo nadal parsowane dla zgodności, ale nie mogą
-włączyć zapisu extentowego. Istniejące dane zapisane jako extenty pozostają
-czytelne do czasu osobnej, kontrolowanej migracji do `data_blocks`.
-
-## Kontrolowana migracja extentów w FOD 3.2.72
-
-Migracja schematu 20 działa przez `mkfs.fod upgrade` i przenosi pozostałe stare
-wiersze `data_extents` do `data_blocks`. Migracja blokuje tabele payloadu,
-odrzuca hybrydowe obiekty z jednoczesnymi blokami i extentami, waliduje rozmiar
-logiczny oraz ciągłe pokrycie bloków, zapisuje kanoniczne bloki, czyści cache CRC
-dla migrowanych obiektów i dopiero potem usuwa stare extenty. FUSE nie rozwija już
-extentów do bloków w hot path (ścieżce krytycznej); częściowy zapis do
-niezmigrowanego obiektu extentowego kończy się jawną instrukcją uruchomienia
-upgrade.
+Eksperymentalna obsługa extentów jest wycofana. Produkcyjny FUSE używa wyłącznie
+kanonicznej persystencji w `data_blocks`; `enable_extents` i
+`extent_target_bytes` nie są już ustawieniami runtime. Migracja schematu 20
+przenosi pozostałe stare wiersze `data_extents` do `data_blocks`, a migracja
+schematu 21 usuwa tabelę `data_extents` po potwierdzeniu, że migracja 20 nie
+zostawiła w niej wierszy. Nie ma już fallbacku odczytu extentów ani konwersji
+extentów do bloków w hot path (ścieżce krytycznej) FUSE.

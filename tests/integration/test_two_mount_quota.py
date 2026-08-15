@@ -44,10 +44,6 @@ def payload_bytes(connection) -> int:
             SELECT
                 (SELECT COUNT(*)::bigint FROM fod.data_blocks)
                     * (SELECT value FROM fod.config WHERE key = 'block_size')
-                + COALESCE(
-                    (SELECT SUM(used_bytes)::bigint FROM fod.data_extents),
-                    0
-                )
             """
         )
         return int(cursor.fetchone()[0])
@@ -105,8 +101,6 @@ def file_storage_state(connection, names: list[str]) -> dict[str, tuple[int, int
                 files.size,
                 (SELECT COUNT(*) FROM fod.data_blocks
                  WHERE data_object_id = files.data_object_id)
-                    + (SELECT COUNT(*) FROM fod.data_extents
-                       WHERE data_object_id = files.data_object_id)
             FROM fod.files
             WHERE files.name = ANY(%s)
             """,

@@ -76,7 +76,6 @@ These wrappers are already close enough to idempotent replay to stay in the curr
 | `persist_lock_range_state_blob()` | delete + reinsert | Replaces the range-lease blob for the current scope. |
 | `replace_lock_range_state_blob_for_owner()` | delete + reinsert | Same as above, but scoped to one owner key. |
 | `persist_file_blocks_with_crc_flag()` | delete + upsert / COPY staging | The block persist path rewrites deterministic rows and now has commit-disconnect smoke coverage. |
-| `persist_file_extents_with_crc_flag()` | COPY-based extent materialization | The extent persist path rewrites deterministic rows and now has commit-disconnect smoke coverage. |
 | `acquire_flock_lease()` | advisory lock + request-token-backed upsert | The lease row is keyed and the durable request token confirms a replayed commit before the body runs again. |
 | `persist_copy_block_crc_rows()` | delete + upsert | CRC rows are rewritten deterministically for the file/block set. |
 | `set_file_size()` | single-row update | The write is keyed by `id_file` and only sets the current size. |
@@ -148,7 +147,6 @@ The transactional replay smoke suite now lives in `rust_hotpath/tests/transactio
 - commit-disconnect replay for `set_file_size()`
 - commit-disconnect replay for `persist_copy_block_crc_rows()`
 - commit-disconnect replay for `persist_file_blocks_with_crc_flag()`
-- commit-disconnect replay for `persist_file_extents_with_crc_flag()`
 - commit-disconnect replay for `promote_hardlink_to_primary()`
 - commit-disconnect replay for `touch_client_session_owner_key()`
 - commit-disconnect replay for lock-lease pruning and lock-range blob replacement

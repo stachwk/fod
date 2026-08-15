@@ -20,11 +20,11 @@ been applied. A storage-format boundary is narrower: it exists only when
 persisted payload cannot be interpreted safely by both sides of an upgrade
 without an explicit conversion or compatibility decision.
 
-Schema version 20 is the current database shape and migration gate. Payload
-ownership is rooted in `data_objects`; `data_blocks`, `data_extents`, and
-`copy_block_crc` refer to the object; migration 20 converts remaining
-`data_extents` rows to canonical `data_blocks`; payload-capacity reservations
-are control records rather than file data; and immutable index catalogue
+Schema version 21 is the current database shape and migration gate. Payload
+ownership is rooted in `data_objects`; `data_blocks` and `copy_block_crc` refer
+to the object; migration 20 converts remaining `data_extents` rows to canonical
+`data_blocks`; migration 21 drops the retired `data_extents` table;
+payload-capacity reservations are control records rather than file data; and immutable index catalogue
 snapshots are part of the schema contract. There is no separate storage-format
 column or marker today.
 
@@ -74,5 +74,6 @@ on unsupported states.
 Future storage redesigns cannot add an ad hoc marker or schema column before
 updating this ADR or replacing it with a more specific accepted decision.
 
-The current schema version 20 requires no new storage-format marker because the
-ordered schema migration fully defines the legacy extent conversion.
+The current schema version 21 requires no new storage-format marker because the
+ordered schema migrations fully define the legacy extent conversion and table
+removal.

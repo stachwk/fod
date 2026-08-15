@@ -30,7 +30,6 @@ cleanup() {
 
 run_case() {
   local label="$1"
-  local enable_extents="$2"
   local rw_mode="${FIO_RW_MODE:-rw}"
   local block_size="${FIO_BLOCK_SIZE:-4k}"
   local file_size="${FIO_FILE_SIZE:-4M}"
@@ -39,7 +38,6 @@ run_case() {
   local expected_size
   expected_size="$(size_to_bytes "${file_size}")"
 
-  export FOD_ENABLE_EXTENTS="${enable_extents}"
   export FOD_LOG_LEVEL="${FOD_LOG_LEVEL:-debug}"
 
   fod_test_make_mountpoint "/tmp/fod-fio-mixed-${label}"
@@ -71,35 +69,24 @@ run_case() {
   actual_size="$(fod_stat "${file}" '%s')"
   fod_assert_eq "${actual_size}" "${expected_size}" "fio ${label} mixed file size"
 
-  if [[ "${enable_extents}" == "1" ]]; then
-    fod_assert_contains "${LOG_FILE}" "enable_extents=true"
-  else
-    if grep -Fq "FOD extent PoC execution" "${LOG_FILE}"; then
-      echo "unexpected extent PoC log in block-storage mode"
-      return 1
-    fi
+  if grep -Fq "FOD extent PoC execution" "${LOG_FILE}"; then
+    echo "unexpected extent PoC log in block-storage mode"
+    return 1
   fi
 
-  echo "OK fio/mixed ${label} rw=${rw_mode} extents=${enable_extents} size=${expected_size} block_size=${block_size}"
+  echo "OK fio/mixed ${label} rw=${rw_mode} size=${expected_size} block_size=${block_size}"
   rm -f "${file}"
   fod_test_cleanup
 }
 
 trap cleanup EXIT
 
-case "${FIO_CASES:-both}" in
-  both)
-    run_case block 0
-    run_case extent 1
-    ;;
+case "${FIO_CASES:-block}" in
   block)
-    run_case block 0
-    ;;
-  extent)
-    run_case extent 1
+    run_case block
     ;;
   *)
-    echo "Unsupported FIO_CASES=${FIO_CASES}; use both, block, or extent" >&2
+    echo "Unsupported FIO_CASES=${FIO_CASES}; use block" >&2
     exit 2
     ;;
 esac

@@ -22,14 +22,6 @@ WITH deleted AS (
 SELECT 'deleted_copy_block_crc=' || COUNT(*) FROM deleted;
 
 WITH deleted AS (
-    DELETE FROM data_extents e
-    USING fod_gc_data_objects g
-    WHERE e.data_object_id = g.id_data_object
-    RETURNING 1
-)
-SELECT 'deleted_data_extents=' || COUNT(*) FROM deleted;
-
-WITH deleted AS (
     DELETE FROM data_blocks b
     USING fod_gc_data_objects g
     WHERE b.data_object_id = g.id_data_object
