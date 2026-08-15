@@ -1038,3 +1038,19 @@ Loading that file with `sudo sysctl -p /etc/sysctl.d/99-fod-perf.conf`
 sets `/proc/sys/kernel/perf_event_paranoid` to `0`, and `perf stat -d -- true`
 collects counters successfully. This is still intentionally narrower than
 `-1`; current FOD perf targets do not require the more permissive setting.
+
+## 2026-08-15 — extent PoC retirement decision
+
+The extent PoC is retired as a production storage direction. In the profiled
+128 MiB sequential case, FOD split persistence into two 64 MiB operations. The
+later block-path operation spent about 13.65 s in the SQL conversion from
+`data_extents` to 4 KiB `data_blocks` via `generate_series()`, while block COPY,
+set-based merge and COMMIT were substantially cheaper. Maintaining two physical
+representations therefore adds conversion cost and branching without a stable
+mixed/random workload win.
+
+The performance baseline is now one canonical `data_blocks` representation.
+FOD 3.2.71 first disables production extent execution without dropping legacy
+data. Migration and physical code/schema removal follow only after integrity
+checks. Repeated per-I/O hardlink-count SQL is the next measured optimization
+candidate after the block-only baseline is restored.

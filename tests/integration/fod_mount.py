@@ -109,8 +109,15 @@ class FODMount:
             "fod-bootstrap binary not found; build rust_mkfs first",
         )
 
+    def _config_path(self) -> Path:
+        configured = os.environ.get("FOD_CONFIG", "").strip()
+        path = Path(configured) if configured else self.root / "fod_config.ini"
+        if not path.is_absolute():
+            path = self.root / path
+        return path.resolve()
+
     def build_mount_args(self) -> list[str]:
-        args = []
+        args = ["--config", str(self._config_path())]
         profile = os.environ.get("FOD_PROFILE", "").strip()
         if profile:
             args.extend(["--profile", profile])

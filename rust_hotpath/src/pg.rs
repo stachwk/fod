@@ -13366,12 +13366,18 @@ mod replica_scoring_tests {
             .mark_operation_connection_failure(old_generation)
             .unwrap();
         let after_first = targets.snapshot().unwrap();
-        assert_eq!(after_first.active_authority, "primary-b");
+        assert_eq!(after_first.active_authority, "primary-a");
         assert_eq!(
             after_first.last_failed_authority.as_deref(),
             Some("primary-a")
         );
         assert_eq!(after_first.connection_failures, 1);
+        {
+            let mut state = targets.state().unwrap();
+            assert!(state.primary_revalidation_required);
+            state.active_index = 1;
+            state.primary_revalidation_required = false;
+        }
 
         targets
             .mark_operation_connection_failure(old_generation)

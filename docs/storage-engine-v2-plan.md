@@ -405,3 +405,45 @@ Post-gate decisions and cleanup use separate commits:
 
 Manifest and ownership changes require separate decisions after measured
 results from the earlier phases.
+
+## 2026-08-15 decision: retire the extent PoC
+
+The extent experiment has completed its purpose and is no longer a production
+storage direction. Profiling of a 128 MiB sequential write showed that a later
+block flush had to materialize existing `data_extents` back into `data_blocks`.
+The single SQL statement using `generate_series()` consumed about 13.65 s of a
+roughly 16.08 s persist operation, while COPY/merge and COMMIT were much smaller.
+
+The performance direction is therefore a single canonical `data_blocks`
+representation with COPY BINARY staging and set-based merge.
+
+Implementation sequence:
+
+1. **FOD 3.2.71 — production retirement**
+   - force effective FUSE persistence to block-only;
+   - keep `enable_extents` and `extent_target_bytes` parsing temporarily for
+     compatibility with existing INI files and tests;
+   - expose requested vs effective extent state in startup diagnostics;
+   - make the normal sequential fio test block-only;
+   - keep a compatibility guard proving `enable_extents=true` cannot activate
+     the retired extent path.
+2. **FOD 3.2.72 — migration**
+   - add an explicit offline/administrative migration that converts any
+     remaining `data_extents` rows to `data_blocks`;
+   - verify logical size, block coverage and data integrity before deleting the
+     old extent rows;
+   - do not run extent-to-block conversion in the FUSE hot-path.
+3. **FOD 3.2.73 — physical removal**
+   - remove sequential-segment/extent planner and payload code;
+   - remove extent read fallbacks and extent persist APIs;
+   - remove retired runtime knobs and extent-only tests/observability;
+   - drop `data_extents` only after the migration gate proves no rows remain.
+4. **Post-removal performance work**
+   - re-profile 4 MiB and 128 MiB block-only sequential/mixed/random workloads;
+   - remove per-I/O PostgreSQL round trips such as repeated
+     `SELECT 1 + COUNT(*) FROM hardlinks WHERE id_file = $1`;
+   - optimize COPY/merge and caching only from measured profiles.
+
+Safety rule: existing extent-backed data remains readable until the explicit
+migration phase is complete. No schema drop belongs in the production-retirement
+commit.

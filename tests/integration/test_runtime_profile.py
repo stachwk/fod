@@ -118,7 +118,6 @@ def main() -> None:
     original_profile = os.environ.get("FOD_PROFILE")
     original_sync_commit = os.environ.get("FOD_SYNCHRONOUS_COMMIT")
     mount_profile = original_profile or "metadata_heavy"
-    mounted_enable_extents_text = "true" if mount_profile == "extents" else "false"
     os.environ.pop("FOD_SYNCHRONOUS_COMMIT", None)
     os.environ.pop("FOD_PROFILE", None)
     base_runtime_config = load_fod_runtime_config(config_path)
@@ -241,22 +240,19 @@ def main() -> None:
                 "workers_write=5 workers_write_min_blocks=16 persist_buffer_chunk_blocks=64 "
                 "persist_block_transport=copy_binary_staging data_object_swap_cleanup=immediate synchronous_commit=on "
                 "copy_dedupe_enabled=false copy_dedupe_min_blocks=16 copy_dedupe_max_blocks=0 "
-                f"copy_dedupe_crc_table=false enable_extents=false extent_target_bytes=1048576"
+                f"copy_dedupe_crc_table=false enable_extents_requested=false enable_extents_effective=false extent_target_bytes=1048576"
                 if mount_profile == "metadata_heavy"
                 else f'pg_visible_path=Some("{visible_dir.name}") workers_read=3 workers_read_min_blocks=8 '
                 "workers_write=5 workers_write_min_blocks=8 persist_buffer_chunk_blocks=128 "
                 "persist_block_transport=copy_binary_staging data_object_swap_cleanup=immediate synchronous_commit=on "
                 "copy_dedupe_enabled=false copy_dedupe_min_blocks=16 copy_dedupe_max_blocks=0 "
-                f"copy_dedupe_crc_table=false enable_extents=true extent_target_bytes=1048576"
+                f"copy_dedupe_crc_table=false enable_extents_requested=true enable_extents_effective=false extent_target_bytes=1048576"
             )
             assert (
                 expected_cache_line
                 in log_text
             ), log_text
-            assert (
-                expected_storage_line.replace("enable_extents=false", f"enable_extents={mounted_enable_extents_text}")
-                in log_text
-            ), log_text
+            assert expected_storage_line in log_text, log_text
             print("OK runtime-profile-mount")
         finally:
             if launcher is not None:
@@ -456,7 +452,12 @@ def main() -> None:
                 assert "force_read_only=false" in recovery_log_text, recovery_log_text
                 assert "FOD mount read_only=true" in recovery_log_text, recovery_log_text
                 assert "FOD lock backend=Memory" in recovery_log_text, recovery_log_text
-                assert f"enable_extents={mounted_enable_extents_text}" in recovery_log_text, recovery_log_text
+                expected_requested_extents = "true" if mount_profile == "extents" else "false"
+                assert (
+                    f"enable_extents_requested={expected_requested_extents} "
+                    "enable_extents_effective=false"
+                    in recovery_log_text
+                ), recovery_log_text
                 assert "FOD mount options:" in recovery_log_text, recovery_log_text
                 print("OK runtime-profile-auto-recovery")
             finally:

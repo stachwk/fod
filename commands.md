@@ -3197,3 +3197,41 @@ Results:
 - `perf stat -d -- true` passed after the setting was applied.
 - The shorter key `perf_event_paranoid=0` is wrong for `sysctl -w`; it maps to
   `/proc/sys/perf_event_paranoid`, which does not exist on this host.
+
+## FOD 3.2.71 — extent PoC production retirement
+
+Validation after applying the change:
+
+```bash
+cargo fmt --all
+cargo check --workspace
+cargo check --workspace --locked
+cargo test --locked -p fod-rust-runtime
+cargo test --locked -p fod-rust-hotpath
+cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse
+make test-runtime-profile-extents
+make test-fio-sequential-io FIO_FILE_SIZE=4M
+FOD_PROFILE_IO=1 make test-fio-sequential-io-strace FIO_CASES=block FIO_FILE_SIZE=4M
+make test-version
+git diff --check
+```
+
+The legacy `extents` profile is now a compatibility/retirement guard: runtime
+configuration may request it, but startup diagnostics must report
+`enable_extents_effective=false` and FUSE must use the block path.
+
+
+### 3.2.71 validation repairs
+
+The first validation pass exposed two pre-existing harness/test assumptions:
+
+- `tests/integration/fod_mount.py` still launched `fod-bootstrap` without the
+  explicit `--config` required since FOD 3.2.68. The helper now always passes
+  either `FOD_CONFIG` or the repository `fod_config.ini` explicitly.
+- `stale_failure_generation_does_not_misattribute_current_authority` still
+  expected pre-3.2.70 blind writable-primary rotation. The promotion guard now
+  requires revalidation instead, so the unit test simulates the validated
+  authority change before checking that a stale generation cannot overwrite
+  current routing attribution.
+
+These are validation repairs; they do not re-enable extent persistence.

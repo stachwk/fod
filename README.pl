@@ -1007,3 +1007,11 @@ Wspólna generacja routingu nadal unieważnia stare połączenia write/control/l
 po zmianie primary. Mechanizm nie zastępuje zewnętrznego STONITH ani fencing
 opartego o konsensus: operacji już wykonywanej na starym primary FOD nie może
 cofnąć po fakcie.
+
+## Uproszczenie ścieżki danych w FOD 3.2.71
+
+Eksperymentalna obsługa extentów jest wycofywana. Produkcyjny FUSE wymusza
+kanoniczną persystencję w `data_blocks`; stare ustawienia `enable_extents` /
+`extent_target_bytes` są tymczasowo nadal parsowane dla zgodności, ale nie mogą
+włączyć zapisu extentowego. Istniejące dane zapisane jako extenty pozostają
+czytelne do czasu osobnej, kontrolowanej migracji do `data_blocks`.

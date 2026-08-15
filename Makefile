@@ -496,7 +496,7 @@ help:
 		'  make test-runtime-validation - verify runtime config rejects invalid values in Rust' \
 		'  make test-runtime-profile - verify named runtime profiles against fod_config.ini' \
 		'  make test-runtime-reload - verify live reload accepts safe knobs and rejects mount-only ones' \
-		'  make test-runtime-profile-extents - verify named runtime profiles with the extents preset' \
+		'  make test-runtime-profile-extents - verify the legacy extents preset is forced to block-only FUSE' \
 		'  make change-runtime - alias for make change-runtime-set' \
 		'  make change-runtime-sync - alias for make reload-runtime' \
 		'  make test-mkfs-pg-tls - verify PostgreSQL TLS path resolution and generated client pair handling' \

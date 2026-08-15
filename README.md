@@ -1022,3 +1022,11 @@ The shared routing generation still invalidates stale cached write/control/lease
 connections after a transition. This is not a replacement for external STONITH
 or consensus fencing: an already in-flight operation cannot be revoked by FOD
 after it has reached an old primary.
+
+## Storage path simplification in FOD 3.2.71
+
+The extent storage experiment is being retired. Production FUSE persistence is
+forced to the canonical `data_blocks` path; legacy `enable_extents` /
+`extent_target_bytes` settings remain parse-compatible temporarily but cannot
+activate extent persistence. Existing extent-backed data is kept readable until
+the explicit migration phase converts it safely to `data_blocks`.

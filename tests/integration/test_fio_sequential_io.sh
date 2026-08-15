@@ -86,53 +86,47 @@ run_case() {
   fod_assert_eq "${actual_size}" "${expected_size}" "fio ${label} file size"
 
   if [[ "${enable_extents}" == "1" ]]; then
-    fod_assert_contains "${LOG_FILE}" "enable_extents=true"
-    fod_assert_contains "${LOG_FILE}" "FOD sequential segment state entered"
-    fod_assert_contains "${LOG_FILE}" "write_state_mode=sequential_segment"
-    fod_assert_contains "${LOG_FILE}" "persist_write_class=new_object_sequential"
-    fod_assert_contains "${LOG_FILE}" "FOD direct segment persistence"
-    fod_assert_contains "${LOG_FILE}" "FOD append-only sequential object persisted"
+    fod_assert_contains "${LOG_FILE}" "enable_extents_requested=true enable_extents_effective=false"
   else
-    if grep -Fq "FOD extent PoC execution" "${LOG_FILE}"; then
-      echo "unexpected extent PoC log in block-storage mode"
-      return 1
-    fi
-    if grep -Fq "FOD sequential segment state entered" "${LOG_FILE}"; then
-      echo "unexpected sequential segment state in block-storage mode"
-      return 1
-    fi
-    if grep -Fq "FOD direct segment persistence" "${LOG_FILE}"; then
-      echo "unexpected direct segment persistence in block-storage mode"
-      return 1
-    fi
-    if grep -Fq "FOD append-only sequential object persisted" "${LOG_FILE}"; then
-      echo "unexpected append-only object persistence in block-storage mode"
-      return 1
-    fi
-    fod_assert_contains "${LOG_FILE}" "FOD write_state_mode=block"
-    fod_assert_contains "${LOG_FILE}" "persist_write_class=existing_object_patch"
+    fod_assert_contains "${LOG_FILE}" "enable_extents_requested=false enable_extents_effective=false"
   fi
 
-  echo "OK fio/sequential ${label} extents=${enable_extents} size=${expected_size} block_size=${block_size}"
+  for forbidden in \
+    "FOD extent PoC execution" \
+    "FOD sequential segment state entered" \
+    "write_state_mode=sequential_segment" \
+    "persist_write_class=new_object_sequential" \
+    "FOD direct segment persistence" \
+    "FOD append-only sequential object persisted"
+  do
+    if grep -Fq "${forbidden}" "${LOG_FILE}"; then
+      echo "unexpected retired extent-path marker: ${forbidden}"
+      return 1
+    fi
+  done
+  fod_assert_contains "${LOG_FILE}" "FOD write_state_mode=block"
+  fod_assert_contains "${LOG_FILE}" "persist_write_class=existing_object_patch"
+
+  echo "OK fio/sequential ${label} requested_extents=${enable_extents} effective_extents=0 size=${expected_size} block_size=${block_size}"
   rm -f "${file}"
   fod_test_cleanup
 }
 
 trap cleanup EXIT
 
-case "${FIO_CASES:-both}" in
+case "${FIO_CASES:-block}" in
   both)
     run_case block 0
-    run_case extent 1
+    run_case extent-retired 1
     ;;
   block)
     run_case block 0
     ;;
   extent)
-    run_case extent 1
+    run_case extent-retired 1
     ;;
   *)
-    echo "Unsupported FIO_CASES=${FIO_CASES}; use both, block, or extent" >&2
+    echo "Unsupported FIO_CASES=${FIO_CASES}; use block, extent, or both" >&2
     exit 2
     ;;
 esac
