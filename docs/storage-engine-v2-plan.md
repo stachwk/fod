@@ -62,10 +62,12 @@ Implementation status:
   removes representative `id_file` columns from all payload tables, and uses
   object-level cascading deletion in the runtime and indexer cleanup paths;
 - later schema versions build on that ownership model: schema version 18 adds
-  transactional payload-capacity reservations, and schema version 19 adds
-  immutable index catalogue snapshots without adding a separate storage-format
-  marker;
-- extents remain opt-in because mixed and random workloads still regress.
+  transactional payload-capacity reservations, schema version 19 adds immutable
+  index catalogue snapshots, and schema version 20 migrates legacy
+  `data_extents` payload rows to canonical `data_blocks` without adding a
+  separate storage-format marker;
+- production writes use canonical `data_blocks`; legacy extent rows are an
+  administrative migration input only.
 
 ## Original problem and remaining copy issue
 
@@ -310,8 +312,9 @@ Consequently Phase C is complete without changing the default storage path.
 The decision is recorded in
 `docs/adr/storage-object-segment-manifest.md`: do not implement a manifest now.
 Whole-object adoption solves exact full copies without destination payload
-rows, and bounded extents plus safe extent-to-block conversion cover the
-current measured paths.
+rows. At the time, bounded extents plus safe extent-to-block conversion covered
+the measured paths; the 2026-08-15 retirement decision supersedes that runtime
+conversion path in favor of administrative migration and canonical blocks.
 
 If large extent rewrites, partial-overwrite amplification, duplicate payload
 storage, `copy_file_range` payload copies, or GC complexity remain material,
@@ -428,11 +431,12 @@ Implementation sequence:
    - keep a compatibility guard proving `enable_extents=true` cannot activate
      the retired extent path.
 2. **FOD 3.2.72 — migration**
-   - add an explicit offline/administrative migration that converts any
-     remaining `data_extents` rows to `data_blocks`;
-   - verify logical size, block coverage and data integrity before deleting the
-     old extent rows;
-   - do not run extent-to-block conversion in the FUSE hot-path.
+   - added schema migration 20 as the explicit offline/administrative migration
+     that converts remaining `data_extents` rows to `data_blocks`;
+   - the migration verifies logical size, block coverage and inserted block data
+     before deleting old extent rows;
+   - FUSE block writes now reject unmigrated extent objects instead of running
+     extent-to-block conversion in the hot path.
 3. **FOD 3.2.73 — physical removal**
    - remove sequential-segment/extent planner and payload code;
    - remove extent read fallbacks and extent persist APIs;

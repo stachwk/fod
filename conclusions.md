@@ -1054,3 +1054,58 @@ FOD 3.2.71 first disables production extent execution without dropping legacy
 data. Migration and physical code/schema removal follow only after integrity
 checks. Repeated per-I/O hardlink-count SQL is the next measured optimization
 candidate after the block-only baseline is restored.
+
+## 2026-08-15 — FOD 3.2.72 controlled extent migration
+
+Working tree based on commit `ad75fce` implements schema version 20 as the
+controlled migration from legacy `data_extents` rows to canonical `data_blocks`.
+The migration is administrative: it runs through `mkfs.fod upgrade`, locks the
+payload tables, rejects hybrid objects, validates logical file size and
+contiguous block coverage, inserts canonical block rows, clears migrated CRC
+cache rows, and deletes `data_extents` only after validating the inserted block
+data.
+
+The FUSE write hot path no longer materializes extent rows through the previous
+`generate_series()` SQL conversion. Partial block writes to an unmigrated
+extent-backed object now fail with an explicit upgrade instruction. Full
+block-backed replacement can still use a new data object and does not need
+runtime extent conversion.
+
+Validation from the FOD 3.2.72 candidate:
+
+```bash
+cargo fmt --all
+git diff --check
+cargo check --workspace
+cargo check --workspace --locked
+cargo test --locked -p fod-rust-hotpath
+cargo test --locked -p fod-rust-mkfs -- --nocapture
+make test-version
+POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza target/debug/fod-rust-mkfs status | sed -n '1,24p'
+```
+
+Results:
+
+- `cargo check --workspace --locked` passed with workspace packages at
+  `3.2.72`.
+- `cargo test --locked -p fod-rust-hotpath` passed after rerunning
+  sequentially.
+- `cargo test --locked -p fod-rust-mkfs -- --nocapture` passed, including the
+  schema upgrade fixture that now verifies extent rows are migrated to blocks.
+- `make test-version` passed.
+- After the final `make reset`, `mkfs.fod status` reported FOD version
+  `FOD 3.2.72`, schema version `20`, latest migration version `20`,
+  `FOD ready: yes`, and no pending migrations.
+- `FOD_PROFILE_IO=1 make test-fio-sequential-io-strace FIO_CASES=block
+  FIO_FILE_SIZE=4M` passed on 2026-08-15 from the same `ad75fce`-based candidate.
+  It reported `effective_extents=0`, 4 MiB block write bandwidth `1859 KiB/s`,
+  4 MiB block read bandwidth `329 KiB/s`, `repo_persist_blocks_us=516507`, and
+  `repo_persist_extents_us=0`.
+- `make test-fio-sequential-io FIO_FILE_SIZE=4M` passed on 2026-08-15 from the
+  same candidate. It reported `effective_extents=0`, 4 MiB block write bandwidth
+  `665 KiB/s`, and cache-hot 4 MiB block read bandwidth `36.4 MiB/s`.
+
+The first hotpath test attempt failed because it ran concurrently with the
+`rust_mkfs` schema upgrade tests against the same local PostgreSQL schema. This
+matches the existing rule that PostgreSQL schema-rebuilding suites must run
+sequentially; it was not a migration regression.

@@ -2540,9 +2540,7 @@ fn sql_is_read_only(sql: &CString) -> bool {
 
 fn sql_is_replayable_data_blocks_upsert(sql: &str) -> bool {
     sql.starts_with("INSERT INTO data_blocks ")
-        && (sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET data = EXCLUDED.data")
-            || sql.contains("FROM data_extents de CROSS JOIN LATERAL generate_series")
-                && sql.contains("ON CONFLICT (data_object_id, _order) DO NOTHING"))
+        && sql.contains("ON CONFLICT (data_object_id, _order) DO UPDATE SET data = EXCLUDED.data")
 }
 
 fn sql_is_replayable_copy_block_crc_upsert(sql: &str) -> bool {
@@ -5702,41 +5700,46 @@ impl DbRepo {
         exec_command_params(conn, &sql_delete_extents, &params)
     }
 
-    unsafe fn convert_extent_rows_to_blocks_on_conn(
+    unsafe fn file_has_extent_rows_on_conn(
         &self,
         conn: *mut PGconn,
-        data_object_id: u64,
-        block_size: u64,
-    ) -> Result<(), String> {
+        file_id: u64,
+    ) -> Result<bool, String> {
         let sql = CString::new(
             "
-            INSERT INTO data_blocks (data_object_id, _order, data)
-            SELECT
-                de.data_object_id,
-                (de.start_block + offsets.block_offset)::integer,
-                substring(
-                    de.payload
-                    FROM (offsets.block_offset * $2::bigint + 1)::integer
-                    FOR $2::integer
-                )
-            FROM data_extents de
-            CROSS JOIN LATERAL generate_series(
-                0::bigint,
-                de.block_count - 1
-            ) AS offsets(block_offset)
-            WHERE de.data_object_id = $1::integer
-              AND offsets.block_offset * $2::bigint < de.used_bytes
-            ON CONFLICT (data_object_id, _order) DO NOTHING
+            SELECT EXISTS (
+                SELECT 1
+                FROM files f
+                JOIN data_extents de ON de.data_object_id = f.data_object_id
+                WHERE f.id_file = $1
+                LIMIT 1
+            )
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let data_object_id_text = CString::new(data_object_id.to_string())
-            .map_err(|_| "data object id contains NUL byte".to_string())?;
-        let block_size_text = CString::new(block_size.max(1).to_string())
-            .map_err(|_| "block size contains NUL byte".to_string())?;
-        let params = [&data_object_id_text, &block_size_text];
-        exec_command_params(conn, &sql, &params)?;
-        self.delete_extent_rows_on_conn(conn, &data_object_id_text)
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let params = [&file_id];
+        let res = exec_params(conn, &sql, &params)?;
+        let value = fetch_single_text(res)?;
+        Ok(matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "t" | "true" | "1" | "on"
+        ))
+    }
+
+    unsafe fn reject_extent_rows_in_block_hot_path_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+    ) -> Result<(), String> {
+        if self.file_has_extent_rows_on_conn(conn, file_id)? {
+            return Err(
+                "data object still has data_extents rows; run mkfs.fod upgrade to migrate extents to data_blocks before block writes because hot-path extent-to-block conversion is disabled"
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 
     unsafe fn clear_extent_native_rows_on_conn(
@@ -10316,6 +10319,9 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let prefer_replacement =
             persist_blocks_cover_full_file(file_size, block_size, total_blocks, blocks);
+        if !prefer_replacement {
+            self.reject_extent_rows_in_block_hot_path_on_conn(conn, file_id)?;
+        }
         let target = match self.data_object_write_target_on_conn(
             conn,
             file_id,
@@ -10329,9 +10335,6 @@ impl DbRepo {
         let data_object_id = target.data_object_id;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
-        // A partial block patch must preserve data outside the dirty range before
-        // extent-first reads are disabled for this object.
-        self.convert_extent_rows_to_blocks_on_conn(conn, data_object_id, block_size)?;
         if truncate_pending {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
@@ -10430,6 +10433,9 @@ impl DbRepo {
 
         let prefer_replacement =
             persist_blocks_cover_full_file(file_size, block_size, total_blocks, blocks);
+        if !prefer_replacement {
+            self.reject_extent_rows_in_block_hot_path_on_conn(conn, file_id)?;
+        }
         let target = match self.data_object_write_target_on_conn(
             conn,
             file_id,
@@ -10443,7 +10449,6 @@ impl DbRepo {
         let data_object_id = target.data_object_id;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
-        self.convert_extent_rows_to_blocks_on_conn(conn, data_object_id, block_size)?;
         if truncate_pending {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
@@ -10538,6 +10543,9 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let prefer_replacement = file_size > 0;
+        if !prefer_replacement {
+            self.reject_extent_rows_in_block_hot_path_on_conn(conn, file_id)?;
+        }
         let target = match self.data_object_write_target_on_conn(
             conn,
             file_id,
@@ -12860,7 +12868,7 @@ mod tests {
         assert!(sql_is_replayable_command(&import_plan_insert_sql));
         assert!(sql_is_replayable_command(&capacity_reservation_insert_sql));
         assert!(!sql_is_replayable_command(&data_blocks_copy_sql));
-        assert!(sql_is_replayable_command(&extent_to_blocks_sql));
+        assert!(!sql_is_replayable_command(&extent_to_blocks_sql));
         assert!(sql_is_replayable_command(&copy_block_crc_upsert_sql));
         assert!(!sql_is_replayable_command(&copy_block_crc_copy_sql));
         assert!(sql_is_replayable_command(&range_state_insert_sql));

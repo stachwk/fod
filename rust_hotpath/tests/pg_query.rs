@@ -1149,18 +1149,26 @@ fn switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent
         data: &partial_block1,
         used_len: block_size_u64,
     }];
-    repo.persist_file_blocks(
-        extent_file_id,
-        extent_payload.len() as u64,
-        block_size_u64,
-        3,
-        false,
-        &partial_rows,
-    )
-    .map_err(|err| format!("partially update extent-backed file: {err}"))?;
+    let partial_error = repo
+        .persist_file_blocks(
+            extent_file_id,
+            extent_payload.len() as u64,
+            block_size_u64,
+            3,
+            false,
+            &partial_rows,
+        )
+        .expect_err("partial block update of an unmigrated extent object must fail");
+    if !partial_error.contains("hot-path extent-to-block conversion is disabled") {
+        return Err(format!(
+            "partial extent-backed update returned unexpected error: {partial_error}"
+        ));
+    }
 
     if repo.file_data_object_id(extent_file_id)? != Some(extent_object_id) {
-        return Err("partial block update should keep the unshared data object".to_string());
+        return Err(
+            "rejected partial block update should keep the original data object".to_string(),
+        );
     }
     assert_block_range_matches(
         &repo,
@@ -1168,15 +1176,15 @@ fn switching_between_block_and_extent_storage_keeps_reads_and_cleanup_consistent
         block_size_u64,
         &[
             (0, extent_block0.as_slice()),
-            (1, partial_block1.as_slice()),
+            (1, extent_block1.as_slice()),
             (2, extent_block2.as_slice()),
         ],
     )?;
-    if table_row_count_for_file(&repo, "data_extents", extent_file_id)? != 0 {
-        return Err("partial block update should remove converted extent rows".to_string());
+    if table_row_count_for_file(&repo, "data_extents", extent_file_id)? != 1 {
+        return Err("rejected partial update should preserve the extent row".to_string());
     }
-    if table_row_count_for_file(&repo, "data_blocks", extent_file_id)? != 3 {
-        return Err("partial block update should preserve all three blocks".to_string());
+    if table_row_count_for_file(&repo, "data_blocks", extent_file_id)? != 0 {
+        return Err("rejected partial update should not create block rows".to_string());
     }
 
     let block_block0 = repeated_block(b'X', block_size);

@@ -487,7 +487,7 @@ The canonical runtime value-range rules live in [`rust_runtime/src/lib.rs`](/med
 
 `mkfs.fod` supports:
 
-`init` applies the fresh-install bootstrap from `migrations/base_schema.sql` into the dedicated `fod` schema and refuses to run if FOD objects already exist; `upgrade` first verifies the schema-admin password, then applies any missing migrations to the existing `fod` schema; `clean` drops the entire `fod` schema and leaves unrelated `public` objects intact. `clean` verifies the existing schema-admin secret and fails instead of recreating it if the secret table or row is missing. The schema tool uses a single explicit source for the schema-admin password: `--schema-admin-password`. If the password is missing, `init`, `upgrade`, and `clean` fail fast instead of prompting or generating a secret implicitly. `mkfs.fod status` reports `FOD version`, `FOD schema name`, `FOD schema version`, active schema, whether FOD objects exist, whether the schema is ready, and pending migrations without revealing the secret itself. The current schema version is exported by `mkfs.fod status`; schema version 17 made `data_objects` the exclusive payload owner, schema version 18 added transactional payload-capacity reservations, and schema version 19 added immutable index catalogue snapshots. If the version row is missing from an otherwise complete latest schema, `upgrade` restores it only after a strict structural check.
+`init` applies the fresh-install bootstrap from `migrations/base_schema.sql` into the dedicated `fod` schema and refuses to run if FOD objects already exist; `upgrade` first verifies the schema-admin password, then applies any missing migrations to the existing `fod` schema; `clean` drops the entire `fod` schema and leaves unrelated `public` objects intact. `clean` verifies the existing schema-admin secret and fails instead of recreating it if the secret table or row is missing. The schema tool uses a single explicit source for the schema-admin password: `--schema-admin-password`. If the password is missing, `init`, `upgrade`, and `clean` fail fast instead of prompting or generating a secret implicitly. `mkfs.fod status` reports `FOD version`, `FOD schema name`, `FOD schema version`, active schema, whether FOD objects exist, whether the schema is ready, and pending migrations without revealing the secret itself. The current schema version is exported by `mkfs.fod status`; schema version 17 made `data_objects` the exclusive payload owner, schema version 18 added transactional payload-capacity reservations, schema version 19 added immutable index catalogue snapshots, and schema version 20 migrates legacy `data_extents` payload rows into canonical `data_blocks`. If the version row is missing from an otherwise complete latest schema, `upgrade` restores it only after a strict structural and data-migration gate.
 
 | Parameter | Type | Default | Effect |
 | --- | --- | --- | --- |
@@ -1030,3 +1030,13 @@ forced to the canonical `data_blocks` path; legacy `enable_extents` /
 `extent_target_bytes` settings remain parse-compatible temporarily but cannot
 activate extent persistence. Existing extent-backed data is kept readable until
 the explicit migration phase converts it safely to `data_blocks`.
+
+## Controlled extent migration in FOD 3.2.72
+
+Schema migration 20 converts remaining legacy `data_extents` rows to
+`data_blocks` during `mkfs.fod upgrade`. The migration locks payload tables,
+rejects hybrid block/extent objects, validates logical size and contiguous block
+coverage, writes canonical block rows, clears migrated CRC cache rows, and only
+then deletes the old extent rows. FUSE no longer expands extent rows to blocks
+inside the write hot path; partial writes to an unmigrated extent object fail
+with an explicit upgrade instruction instead.

@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 19;
+const SCHEMA_VERSION: u64 = 20;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -199,7 +199,8 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                 )
                 AND to_regclass('fod.payload_capacity_reservations') IS NOT NULL
                 AND to_regclass('fod.index_catalog_snapshots') IS NOT NULL
-                AND to_regclass('fod.index_catalog_snapshot_files') IS NOT NULL",
+                AND to_regclass('fod.index_catalog_snapshot_files') IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM fod.data_extents)",
         )
         .expect("inspect payload ownership schema");
     assert!(matches, "payload tables must be owned by data objects");
@@ -262,8 +263,8 @@ fn prepare_version_16_payload_fixture(conn: &DbConn) {
     .expect("prepare schema version 16 payload fixture");
 }
 
-fn assert_legacy_payload_rows_preserved(conn: &DbConn) {
-    let preserved = conn
+fn assert_legacy_extent_payload_migrated(conn: &DbConn) {
+    let migrated = conn
         .query_exists(&format!(
             "SELECT
                 EXISTS (
@@ -273,12 +274,19 @@ fn assert_legacy_payload_rows_preserved(conn: &DbConn) {
                       AND data = convert_to('legacy-block', 'UTF8')
                 )
                 AND EXISTS (
+                    SELECT 1 FROM fod.data_blocks
+                    WHERE data_object_id = {LEGACY_EXTENT_OBJECT_ID}
+                      AND _order = 0
+                      AND octet_length(data) = 4096
+                      AND substring(data FROM 1 FOR 13) = convert_to('legacy-extent', 'UTF8')
+                )
+                AND NOT EXISTS (
                     SELECT 1 FROM fod.data_extents
                     WHERE data_object_id = {LEGACY_EXTENT_OBJECT_ID}
-                      AND start_block = 0
-                      AND block_count = 1
-                      AND used_bytes = 13
-                      AND payload = convert_to('legacy-extent', 'UTF8')
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM fod.copy_block_crc
+                    WHERE data_object_id = {LEGACY_EXTENT_OBJECT_ID}
                 )
                 AND EXISTS (
                     SELECT 1 FROM fod.copy_block_crc
@@ -288,7 +296,10 @@ fn assert_legacy_payload_rows_preserved(conn: &DbConn) {
                 )"
         ))
         .expect("inspect migrated payload rows");
-    assert!(preserved, "migration 17 must preserve payload rows");
+    assert!(
+        migrated,
+        "migration 20 must migrate legacy extent payload rows"
+    );
 }
 
 fn assert_payload_delete_cascades(conn: &DbConn) {
@@ -447,7 +458,7 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
     assert!(
         String::from_utf8_lossy(&upgrade_result.stdout).contains(
-            "Schema version row was missing; recovered version 19 from the verified schema shape."
+            "Schema version row was missing; recovered version 20 from the verified schema shape."
         ),
         "{}",
         String::from_utf8_lossy(&upgrade_result.stdout)
@@ -576,7 +587,7 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_password_source(&String::from_utf8_lossy(&upgrade_result.stdout), "cli");
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
     assert_latest_payload_schema(&conn);
-    assert_legacy_payload_rows_preserved(&conn);
+    assert_legacy_extent_payload_migrated(&conn);
     assert_payload_delete_cascades(&conn);
 
     conn.exec("DROP SCHEMA IF EXISTS fod CASCADE")
@@ -680,10 +691,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 19",
+        "FOD schema version: 20",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 19",
+        "Latest migration version: 20",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -706,6 +717,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0017: 0017_data_object_payload_ownership.sql",
         "0018: 0018_payload_capacity_reservations.sql",
         "0019: 0019_index_catalog_snapshots.sql",
+        "0020: 0020_migrate_extents_to_blocks.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -725,10 +737,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 19",
+        "Latest migration version: 20",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020",
     ] {
         assert!(
             status_without_version.contains(needle),

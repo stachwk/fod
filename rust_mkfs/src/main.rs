@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 19;
-const MIGRATION_FILES: [&str; 19] = [
+const SCHEMA_VERSION: u64 = 20;
+const MIGRATION_FILES: [&str; 20] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -45,9 +45,10 @@ const MIGRATION_FILES: [&str; 19] = [
     "0017_data_object_payload_ownership.sql",
     "0018_payload_capacity_reservations.sql",
     "0019_index_catalog_snapshots.sql",
+    "0020_migrate_extents_to_blocks.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 19] = [
+const MIGRATION_DESCRIPTIONS: [&str; 20] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -67,6 +68,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 19] = [
     "Make data objects own payload rows",
     "Add transactional payload capacity reservations",
     "Add immutable index catalogue snapshots",
+    "Migrate legacy extent payload rows to canonical data blocks",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -212,6 +214,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0019_index_catalog_snapshots.sql"
         )),
+        20 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0020_migrate_extents_to_blocks.sql"
+        )),
         _ => "",
     }
 }
@@ -237,6 +243,7 @@ fn migration_description(version: u64) -> &'static str {
         17 => MIGRATION_DESCRIPTIONS[16],
         18 => MIGRATION_DESCRIPTIONS[17],
         19 => MIGRATION_DESCRIPTIONS[18],
+        20 => MIGRATION_DESCRIPTIONS[19],
         _ => "Migration",
     }
 }
@@ -262,6 +269,7 @@ fn migration_filename(version: u64) -> &'static str {
         17 => MIGRATION_FILES[16],
         18 => MIGRATION_FILES[17],
         19 => MIGRATION_FILES[18],
+        20 => MIGRATION_FILES[19],
         _ => "unknown.sql",
     }
 }
@@ -441,6 +449,10 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                   AND confrelid = 'fod.data_objects'::regclass
                   AND contype = 'f'
                   AND confdeltype = 'c'
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM fod.data_extents
             )",
     )
 }

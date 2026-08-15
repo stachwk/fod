@@ -89,11 +89,12 @@ implements the corresponding callback.
 
 ## PostgreSQL storage
 
-- Current schema version: 19.
+- Current schema version: 20.
 - Fresh installs use `migrations/base_schema.sql`; numbered files preserve the
   upgrade path.
 - Payload rows are owned by `data_object_id`.
-- One data object uses block payload or extent payload, never both.
+- Existing payload rows must be canonical `data_blocks`; `data_extents` is a
+  temporary compatibility table that must be empty after schema migration 20.
 - Exact whole-object adoption may share one data object between independent file
   rows and update reference counts instead of copying payload.
 - Missing block positions represent sparse or zero logical ranges; they are not
@@ -104,8 +105,8 @@ implements the corresponding callback.
 
 - `config.max_fs_size_bytes` is the canonical payload limit and the `statfs`
   capacity ceiling. Zero disables the configured quota.
-- Block and extent persistence use one PostgreSQL transaction-scoped advisory
-  lock for the capacity decision.
+- Block persistence uses one PostgreSQL transaction-scoped advisory lock for the
+  capacity decision.
 - Exceeding the limit returns `ENOSPC` and rolls back the complete payload
   transaction.
 - `payload_capacity_reservations` stores expiring copy admission tokens.
@@ -126,7 +127,7 @@ implements the corresponding callback.
   file data object. Sparse positions without payload rows do not contribute.
 - Independent files sharing one data object can each expose attributed
   allocation, so summed `du` may count shared payload more than once.
-- `df` reports persisted block/extent payload plus active reservations against
+- `df` reports persisted block payload plus active reservations against
   canonical capacity.
 - PostgreSQL relation size is a separate physical metric affected by indexes,
   tuple overhead, TOAST, compression, dead tuples, and free space.
@@ -134,7 +135,8 @@ implements the corresponding callback.
 
 ## Storage-format evolution
 
-- Current physical layouts are blocks and opt-in extents under schema version 19.
+- Current physical layout is canonical `data_blocks` under schema version 20.
+  Legacy `data_extents` rows are migrated administratively before normal writes.
 - Incompatible structure or interpretation changes require a schema migration.
 - Per-object format markers are appropriate only when multiple layouts must
   coexist and readers can dispatch safely.
@@ -149,6 +151,6 @@ implements the corresponding callback.
 | Rust | minimum 1.85, Edition 2021 |
 | Automation | no active GitHub Actions workflow |
 | Hotpath ABI | internal Rust interface; no supported public C ABI |
-| Database schema | version 19 |
+| Database schema | version 20 |
 | Capacity | canonical DB quota, advisory-lock admission, expiring reservations |
-| Layout | block or extent payload per object |
+| Layout | canonical block payload; legacy extents only before migration 20 |

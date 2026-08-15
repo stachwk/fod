@@ -3235,3 +3235,40 @@ The first validation pass exposed two pre-existing harness/test assumptions:
   current routing attribution.
 
 These are validation repairs; they do not re-enable extent persistence.
+
+## 2026-08-15T23:21:41+02:00 commit ad75fce working tree FOD 3.2.72 candidate
+
+Controlled extent-to-block migration work:
+
+```bash
+git status --short && git rev-parse --short HEAD && sed -n '1p' fod_version.txt
+rg --files migrations rust_mkfs/src rust_hotpath/src rust_runtime/src rust_fuse/src docs scripts | sort
+source ~/.venv/bin/activate 2>/dev/null || true; mempalace search "FOD 3.2.72 data_extents data_blocks migration integrity hot-path" --wing myai
+rg -n "data_extents|data_blocks|schema_version|base_schema|migrations|migration|apply|upgrade" rust_mkfs/src rust_hotpath/src rust_fuse/src migrations docs README.pl
+cargo fmt --all
+git diff --check
+cargo check --workspace
+cargo check --workspace --locked
+cargo test --locked -p fod-rust-hotpath
+cargo test --locked -p fod-rust-mkfs --test schema_upgrade -- --nocapture
+make reset
+cargo test --locked -p fod-rust-hotpath --test pg_query -- --nocapture
+cargo test --locked -p fod-rust-hotpath
+cargo test --locked -p fod-rust-mkfs -- --nocapture
+make test-version
+make reset
+POSTGRES_DB=foddbname POSTGRES_USER=foduser POSTGRES_PASSWORD=cichosza target/debug/fod-rust-mkfs status | sed -n '1,24p'
+FOD_PROFILE_IO=1 make test-fio-sequential-io-strace FIO_CASES=block FIO_FILE_SIZE=4M
+make test-fio-sequential-io FIO_FILE_SIZE=4M
+```
+
+Notes:
+
+- The first `cargo test --locked -p fod-rust-hotpath` was intentionally repeated
+  because it overlapped with `rust_mkfs` schema tests and failed when both suites
+  modified the shared local PostgreSQL schema at the same time.
+- The final schema status after reset reported FOD version `FOD 3.2.72`, schema
+  version `20`, latest migration version `20`, `FOD ready: yes`, and no pending
+  migrations.
+- The block-only fio strace gate passed with `effective_extents=0`; the ordinary
+  4 MiB sequential fio gate also passed with `effective_extents=0`.
