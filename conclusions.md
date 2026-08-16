@@ -1376,3 +1376,25 @@ Additional profiling for the 128 MiB / 8-worker direct benchmark:
 | --- | --- |
 | `perf stat -d -d -d` | elapsed `2.997395838 s`, task-clock `1636084892`, instructions `10810655605`, cycles `5624560314`, context switches `2061` |
 | `strace -f -c` | total `1.518181 s` / `37434` calls; dominant calls: `mprotect` `1.130065 s` / `32884`, `futex` `0.374142 s` / `250`, `read` `0.002344 s` / `543`, `sendto` `0.002331 s` / `554` |
+
+## 2026-08-16 — FOD 3.2.74 block-only plan review
+
+Reviewed commit `24a1cb5`, `docs/block-only-performance-plan.md`, and the
+subordinate `docs/quota-lock-concurrency-plan.md`. The next executable
+storage-performance work is not hardlink counting, COPY/merge tuning, worker
+default tuning, block-size changes, or any extent-style payload representation.
+
+The active order is:
+
+1. instrument quota critical-section timing;
+2. move ordinary block-persist advisory-lock serialization to the final quota
+   validation section;
+3. prove two-process/two-mount quota correctness and rollback behavior;
+4. re-profile direct concurrent block persistence for 1/2/4/8 workers on 4 MiB
+   and 128 MiB;
+5. choose the next bottleneck from that new profile.
+
+The current acceptance criterion is to remove artificial global serialization
+around long COPY/merge work while preserving database-wide quota correctness.
+It is not required that 8 workers beat 4 workers before the post-change profile
+proves that is the real optimum.

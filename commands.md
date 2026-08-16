@@ -3660,3 +3660,27 @@ cat "$ART_DIR/strace-summary-direct-128m-jobs8.txt"
 du -sh "$LOG_DIR" "$ART_DIR"
 find "$ART_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
 ```
+
+## 2026-08-16 commit 24a1cb5 block-only plan review
+
+Commands:
+
+```bash
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search "FOD block-only performance plan next steps quota advisory lock data_blocks merge concurrent persist" --wing fod
+sed -n '1,280p' docs/block-only-performance-plan.md
+rg -n "TODO|Next|next|open|pending|do wykonania|quota|advisory|data_blocks|merge|COPY|FOD 3\\.2|FileAttr|hardlink" docs/block-only-performance-plan.md TODO.md conclusions.md
+sed -n '280,340p' docs/block-only-performance-plan.md
+sed -n '1,320p' docs/quota-lock-concurrency-plan.md
+git log --oneline --decorate -6 -- docs/block-only-performance-plan.md docs/quota-lock-concurrency-plan.md TODO.md conclusions.md commands.md
+git status --short --branch && git rev-parse --short HEAD
+```
+
+Plan finding:
+
+- `docs/block-only-performance-plan.md` marks the active next work as the
+  quota-lock concurrency sequence, with `docs/quota-lock-concurrency-plan.md`
+  as the detailed subordinate plan.
+- Worker defaults, hardlink counting, COPY/merge tuning, block-size changes and
+  alternate payload formats are explicitly deferred until after quota-lock
+  narrowing and re-profiling.
