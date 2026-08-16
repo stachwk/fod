@@ -1,451 +1,209 @@
-# Storage Engine v2 Plan
+# Storage Engine v2 — historical record
 
-## Status and scope
+## Status
 
-Storage Engine v2 is an incremental redesign of the FOD storage hot path. It
-does not replace the runtime, the FUSE API, or the default block-storage path.
-After the FOD 3.2.73 cleanup, the active persistence boundary is block-only:
+This document is no longer an active implementation plan.
+
+The extent-based Storage Engine v2 experiment was completed and retired in
+FOD 3.2.71-3.2.73. The current authoritative storage-performance plan is:
+
+- [`block-only-performance-plan.md`](block-only-performance-plan.md)
+
+The current quota/concurrency implementation subplan is:
+
+- [`quota-lock-concurrency-plan.md`](quota-lock-concurrency-plan.md)
+
+Nothing in this historical document may be used to re-enable extent planning,
+`data_extents`, sequential-segment extent persistence, extent-first reads or an
+extent fallback in production runtime code.
+
+## Current storage boundary
+
+The production storage path after FOD 3.2.73 is:
 
 ```text
-WriteState
-    -> PersistPlan
-       -> Blocks
-    -> PersistExecutionPlan
-    -> DbRepo
+FUSE write/read
+    -> block-oriented write/read state
+    -> COPY BINARY staging / set-based block merge
+    -> canonical data_blocks
     -> PostgreSQL
 ```
 
-The earlier extent experiment remains documented below as historical context and
-as migration background. It is no longer an active runtime storage path. The
-remaining redesign scope is write buffering, block persistence planning,
-physical `data_blocks` representation, read assembly, storage GC, and measured
-block-only performance work. The logical filesystem block size remains 4 KiB.
+The logical filesystem block size remains 4 KiB.
 
-Implementation status:
+The production schema no longer contains `data_extents` after migration 21.
+Legacy extent payload was converted administratively by migration 20 before the
+retired table was dropped.
 
-- direction documented in commit `3fe5590`;
-- bounded planning and `extent_target_bytes` added in commit `93f1ab9`;
-- bounded payload-row enforcement and peak-payload profiling added in commit
-  `38af786`;
-- the repeated local and QNAP extent-size matrices passed for the 64 MiB core
-  workload;
-- Phase A is complete and Phase B may begin while extents remain opt-in and the
-  block path remains the default;
-- Phase B1 now buffers new empty-file writes from offset zero in a bounded
-  `SequentialSegmentState`, with gaps, backward writes, existing-file writes,
-  and state merging downgraded to `BlockOverlay`;
-- Phase B2 moves eligible bounded segment buffers directly into
-  `PersistExtentRow`, restores them after a failed repository call, and records
-  segment-mode diagnostics without changing the default block path;
-- Phase C classifies persistence semantics and routes eligible full sequential
-  payloads through one replay-confirmed append-only data-object transaction;
-- the append-only transaction passed disconnect replay, shared-object,
-  hardlink, CRC, cleanup-policy, remount, and mounted FUSE regression coverage;
-- FUSE ABI 7.31 now exposes the implemented `copy_file_range` callback, and an
-  exact clean whole-file copy into an empty destination adopts the source data
-  object without copying payload rows;
-- chunked 4 MiB copy requests remain payload copies, but the corrected extent
-  path is both data-safe and faster than the block baseline in the repeated
-  local 64 MiB matrix;
-- Phase D is closed by `docs/adr/storage-object-segment-manifest.md`: a segment
-  manifest is deferred until a measured partial-clone, patch-amplification,
-  chunk-dedupe, snapshot, or compression workload requires it;
-- the payload ownership inventory is recorded in
-  `docs/storage-payload-ownership-inventory.md` before the schema migration
-  removes representative `id_file` columns;
-- schema version 17 now makes `data_object_id` the exclusive payload owner,
-  removes representative `id_file` columns from all payload tables, and uses
-  object-level cascading deletion in the runtime and indexer cleanup paths;
-- later schema versions build on that ownership model: schema version 18 adds
-  transactional payload-capacity reservations, schema version 19 adds immutable
-  index catalogue snapshots, and schema version 20 migrates legacy
-  `data_extents` payload rows to canonical `data_blocks` without adding a
-  separate storage-format marker;
-- schema version 21 drops `data_extents` after migration 20 leaves no legacy
-  extent rows;
-- production writes and reads use canonical `data_blocks`; legacy extent rows
-  are an administrative migration input only.
+## Why the extent experiment was retired
 
-## Original problem and remaining copy issue
+The extent PoC was useful because it tested whether fewer, larger physical
+payload rows could improve large sequential writes. Several intermediate local
+benchmarks showed that bounded extent persistence could reduce row count and
+payload preparation cost for selected sequential workloads.
 
-The block path splits a large sequential stream into 4 KiB allocations and
-persists thousands of PostgreSQL rows. Before Phase A, the extent proof of
-concept avoided those physical rows but coalesced a full contiguous file into
-one extent and rebuilt one payload `Vec` proportional to the whole file. A
-64 MiB write could therefore become one 64 MiB `PersistExtentRow`.
+The decisive later profile exposed the architectural cost of maintaining two
+physical representations. A 128 MiB sequential write crossed a 64 MiB flush
+boundary, entered the block patch path and materialized existing extents back to
+4 KiB blocks. The server-side extent-to-block expansion alone consumed about
+`13.65 s` of a roughly `16.08 s` persist operation.
 
-Phase A bounds each physical extent payload. Phase B1 buffers eligible new-file
-writes as bounded segments. Phase B2 removes the compatibility conversion at
-flush: owned segment vectors now become extent rows directly, so bounded
-segment payloads no longer coexist with a reconstructed 4 KiB block map. On a
-repository error, ownership is moved back into `SequentialSegmentState` before
-the FUSE operation returns `EIO`.
+That result established the final decision:
 
-The earlier large-copy result came from a FUSE build that advertised ABI 7.17,
-so the kernel never dispatched `FUSE_COPY_FILE_RANGE` to the implemented
-callback. ABI 7.31 makes the callback reachable. An exact whole-file request
-now adopts the source data object, while chunked requests still read and write
-payload. The corrected three-run 64 MiB chunked matrix averaged `26.68 MiB/s`
-with 1 MiB extents versus `17.74 MiB/s` on blocks. Partial destination patches
-are made safe by converting existing extent rows to blocks inside the write
-transaction before applying the dirty range.
+- one canonical payload representation is preferable to dual block/extent
+  runtime state;
+- extent-to-block conversion must not exist in the hot path;
+- performance work continues on the block-only representation and PostgreSQL
+  transaction/query shape;
+- another physical representation requires a new measured problem and a new
+  architecture decision, not reuse of the old PoC.
 
-## Measured bottlenecks
+## Closed historical phases
 
-Existing FOD profiles show that the 64 MiB block path is dominated by
-server-side staging `COPY` plus the `data_blocks` insert/merge. The first local
-baseline measured about 2259 ms of PostgreSQL execution in those statements
-against 3.892 s of workload time. Later 64 MiB profiles remained insert-heavy:
-32768 `data_blocks` rows, no target-table updates, and visible conflict-index
-lookup cost.
+The following phases are closed historical work. They are intentionally not
+active tasks anymore.
 
-Client-side `COPY` send-buffer tuning did not create a stable local winner.
-Local matrix results stayed around 18.01-18.38 MiB/s, and three repeated
-`default` versus 4 MiB buffer samples overlapped. A single QNAP matrix improved
-from 2.46 MiB/s to 3.18 MiB/s, but it still needs repeatability evidence before
-any default change.
+### Bounded extent planning
 
-These results justify changing physical row and payload shape before spending
-more effort on fillfactor, extra `ON CONFLICT` predicates, or client-side
-`PQputCopyData` micro-tuning.
+Historical work added bounded extent planning and tested several payload sizes
+instead of creating one whole-file extent. This reduced peak payload assembly
+and physical row count for sequential PoC workloads.
 
-## Current storage paths
+It does **not** imply that an extent planner belongs in the current runtime.
 
-### Block path
+### Sequential segment builder
 
-```text
-write stream
-    -> 4 KiB Vec values
-    -> WriteState.blocks BTreeMap
-    -> PersistBlockPlan
-    -> binary COPY staging
-    -> data_blocks insert/merge
-```
+Historical work introduced a sequential-segment write state for eligible new
+files and moved owned buffers directly into extent persistence.
 
-This path owns partial writes, random writes, sparse writes, mixed writes,
-truncate behavior, CRC behavior, and the current safe fallback. Storage Engine
-v2 must not weaken those semantics.
+This state and its extent execution path were removed in FOD 3.2.73. There is
+no active requirement to restore `SequentialSegmentState`, `PersistExtentRow`
+or segment-mode observability.
 
-### Bounded extent path
+### Append-only extent persistence
 
-```text
-full contiguous dirty block set
-    -> bounded extent plan
-    -> bounded payload Vec values
-    -> PersistExtentRow values
-    -> data_extents
-```
+Historical work classified sequential new-object persistence and evaluated an
+append-only replacement-object path backed by extents.
 
-The planner selects this path only for full-file sequential coverage while
-`enable_extents = true`. Non-contiguous writes fall back to block storage.
+The useful semantic lesson was that whole-object replacement/adoption can avoid
+unnecessary payload copying. The extent-backed implementation itself is retired.
+Current copy/object-adoption semantics must operate with canonical
+`data_blocks` and the current data-object ownership model.
 
-## Phase A: bounded extents
+### Extent-to-block compatibility conversion
 
-### A1. Bounded planning
+The earlier compatibility conversion preserved bytes when a partial patch hit
+an extent-backed object. It was correctness-first but caused severe write
+amplification and became the decisive reason to remove the dual representation.
 
-Add a planner with the following contract:
+This conversion is permanently excluded from the production hot path. Legacy
+conversion exists only as the completed administrative migration history.
 
-```rust
-pub struct BoundedExtentPlanner {
-    pub target_bytes: u64,
-    pub max_bytes: u64,
-}
-```
+## Schema and ownership history
 
-It must coalesce the logical block input according to the existing contract,
-then split every contiguous range into bounded extents. No output extent may
-exceed `max_bytes`; the final extent preserves the remaining block count.
+Storage ownership work remains valid independently of extent retirement:
 
-Add opt-in runtime tuning:
+- schema version 17 made `data_object_id` the payload owner;
+- schema version 18 added transactional payload-capacity reservations;
+- schema version 19 added immutable index catalogue snapshots;
+- schema version 20 migrated legacy extent payload into `data_blocks`;
+- schema version 21 dropped `data_extents` after the migration gate verified no
+  legacy rows remained.
 
-```text
-FOD_EXTENT_TARGET_BYTES
-```
-
-The extent proof-of-concept default is 1 MiB. Initial test values are 64 KiB,
-256 KiB, 1 MiB, and 4 MiB. The value only affects planning when
-`enable_extents = true`.
-
-Do not add merge, overlap resolution, or split-on-patch semantics in this step.
-
-### A2. Bounded execution
-
-`prepare_persist_extent_rows_from_extent_ranges()` must build one bounded
-payload for each bounded range. For a 64 MiB write with a 1 MiB target, the
-expected result is 64 rows rather than one row.
-
-Add an I/O profile diagnostic for the largest payload prepared during a run.
-The measured value must never exceed the configured maximum extent size.
-
-### A3. Benchmark matrix
-
-Add `profile-storage-extent-size-matrix` and compare:
-
-- the default block path;
-- extents at 64 KiB, 256 KiB, 1 MiB, and 4 MiB.
-
-Use sequential write/read, large copy, fio sequential, fio mixed, fio random
-mixed, and remount durability workloads. Capture elapsed time, throughput,
-`FOD_PROFILE_IO`, PostgreSQL statement and WAL counters, extent row count,
-relation/index growth, dead tuples, maximum RSS, and largest extent payload.
-
-Run at least three local repetitions. Run at least three QNAP repetitions when
-the backend is available. Do not change a default from one sample.
-
-Phase A succeeds only if bounded extents improve sequential write or large copy,
-preserve correctness and remount durability, avoid catastrophic read/RSS
-regressions, and materially reduce physical row count. Mixed and random paths
-do not need to win because they retain the block fallback.
-
-## Phase B: sequential segment builder
-
-Phase B starts only after Phase A passes its benchmark gate.
-
-Phase B1 introduced the state boundary. Eligible new empty-file writes enter
-`SequentialSegmentState`; unsupported writes and merges downgrade to
-`BlockOverlay`. Phase B2 now validates complete bounded segment coverage with
-`PersistSegmentPlan` and moves the owned payload vectors directly into the
-existing replay-safe extent transaction. No 4 KiB block map is rebuilt on this
-path.
-
-Introduce an internal write-payload state without changing the FUSE API:
-
-```rust
-enum WritePayloadState {
-    BlockOverlay(BlockWriteState),
-    SequentialSegments(SequentialSegmentState),
-}
-```
-
-`BlockOverlay` preserves the current partial/random/sparse/mixed semantics.
-`SequentialSegmentState` accepts writes while each offset equals the expected
-next offset and builds bounded pending segments directly. A backward write,
-random write, unsupported gap, or patch of existing content initially
-downgrades the state to `BlockOverlay`.
-
-The direct persist path should become:
-
-```text
-sequential stream
-    -> bounded segment builder
-    -> PersistSegmentPlan
-    -> PersistExtentRow or future segment row
-    -> binary COPY
-```
-
-Profile segment-mode entries, downgrades, payload bytes, segment count, payload
-preparation CPU, memory copies, and maximum RSS. Phase B succeeds only when the
-real large-copy path shows a measurable reduction in preparation cost or memory
-pressure without correctness regressions.
-
-The 2026-07-11 local gate based on commit `f0e0a1c` showed:
-
-- 64 MiB large-file extent throughput of `98.81 MiB/s`, compared with the
-  earlier bounded-extent baseline of `94.51 MiB/s`;
-- segment-row preparation averaging `12.33 us`, compared with roughly `32 ms`
-  for block-to-extent payload rebuilding;
-- one segment-mode entry, zero downgrades, 64 bounded 1 MiB segments, and no
-  block-row inserts per run;
-- 64 MiB large-copy throughput of `14.07 MiB/s` on extents versus
-  `18.50 MiB/s` on blocks, despite only `18 us` of segment preparation.
-
-Phase B therefore closes the payload-rebuild bottleneck, but not the copy read
-amplification. Extents remain opt-in. Phase C adds semantic classification and
-append-only persistence, but the large-copy class must not be widened until
-range-oriented extent reads or data-object adoption remove the repeated fetch
-cost.
-
-## Phase C: append-only new-object persistence
-
-After the segment builder is stable, classify persistence semantics:
-
-```rust
-enum PersistWriteClass {
-    NewObjectSequential,
-    ExistingObjectPatch,
-    TruncateOnly,
-}
-```
-
-The classification boundary is implemented. `PersistExecutionPlan` now carries
-`PersistWriteClass` instead of an indirect execution-only `truncate_only`
-flag. Direct sequential segments are classified as `NewObjectSequential`,
-ordinary block/extent payloads as `ExistingObjectPatch`, and a pending truncate
-without payload as `TruncateOnly`. Runtime debug logs expose
-`persist_write_class=<class>` so integration profiles verify the real choice.
-
-`NewObjectSequential` creates a new data object, inserts bounded payload rows
-without generic conflict updates, attaches or swaps ownership atomically,
-adjusts reference counts, and cleans up the old object according to policy.
-
-`ExistingObjectPatch` retains the safe block staging/merge path and its CRC and
-partial-write semantics. `TruncateOnly` remains a separate metadata/storage
-boundary.
-
-The append-only transaction now uses the existing
-`transactional_replay_confirmed()` infrastructure and a durable request token.
-It creates a replacement `data_object`, streams bounded rows directly to
-`data_extents`, optionally creates block CRC rows, swaps `files.data_object_id`,
-updates reference counts, and applies immediate or deferred cleanup in one
-transaction. A lost commit acknowledgement is confirmed by joining the request
-token to the target file's currently attached object; a body disconnect rolls
-back and replays through the existing bounded mechanism.
-
-Coverage now includes body and commit disconnects, durable retry confirmation,
-shared data objects, hardlinks, full overwrite, CRC maintenance, remount
-durability, and immediate/deferred cleanup. The full 2026-07-11 local gate
-passed.
-
-The repeated 64 MiB large-file profile based on commit `42c5edf` measured
-`94.55 MiB/s` for append-only 1 MiB extents versus `46.39 MiB/s` for blocks,
-with 64 extent inserts, bounded payloads, and about `1.03 MB` mean WAL. The
-matching large-copy profile measured `12.14 MiB/s` for extents versus
-`16.07 MiB/s` for blocks. SQL profiles continue to attribute the copy
-regression to repeated extent reads, not append-only payload persistence.
-Consequently Phase C is complete without changing the default storage path.
-
-## Phase D: object segment manifest decision
-
-The decision is recorded in
-`docs/adr/storage-object-segment-manifest.md`: do not implement a manifest now.
-Whole-object adoption solves exact full copies without destination payload
-rows. At the time, bounded extents plus safe extent-to-block conversion covered
-the measured paths; the 2026-08-15 retirement decision supersedes that runtime
-conversion path in favor of administrative migration and canonical blocks.
-
-If large extent rewrites, partial-overwrite amplification, duplicate payload
-storage, `copy_file_range` payload copies, or GC complexity remain material,
-prepare `docs/adr/storage-object-segment-manifest.md` for this model:
+The current payload ownership model is:
 
 ```text
 files
     -> data_objects
-    -> object_segments
-    -> payload_chunks
+       -> data_blocks
+       -> copy_block_crc
 ```
 
-The deferred design allows copy-on-write segments, chunk reuse, aligned
-`copy_file_range`, chunk-level deduplication, compression, snapshots, and
-versioning. Reopen it only after a real partial-copy, patch-amplification,
-dedupe, snapshot, compression, or GC workload proves that the current object
-model is insufficient.
+Do not add `data_extents` back to this model.
 
-## Storage ownership completion
+## Object segment manifest decision
 
-Schema version 17 completes the ownership follow-up described in
-`docs/storage-payload-ownership-inventory.md`. The fresh schema and the upgrade
-path now use only `data_object_id` in `data_blocks`, `data_extents`, and
-`copy_block_crc`. Each payload table has an `ON DELETE CASCADE` foreign key to
-`data_objects`, while `files.data_object_id` remains a non-cascading reference
-that prevents deletion of an object still attached to a file.
+The object-segment/payload-chunk manifest remains deferred. Exact whole-object
+adoption already addresses the main zero-copy full-file case without adding a
+new payload hierarchy.
 
-The migration verifies object references under an exclusive table lock,
-removes the representative file columns in one transaction, and restores the
-object-keyed CRC primary key. Runtime persistence, shared-object detach,
-full-object adoption, file purge, object GC, and failed materialization cleanup
-no longer reassign payload rows to a representative file. There is no runtime
-compatibility branch for the removed schema.
+If a future measured workload demonstrates a real need for partial clone reuse,
+chunk-level deduplication, compression, snapshots, immutable versioning or a
+similar capability, reopen the manifest decision through a new ADR.
 
-## Verification gates
+Do not reopen it merely to recreate extents under another name.
 
-Every storage hot-path change runs:
+## Historical benchmark interpretation
+
+Old benchmark documents may still contain comparisons between blocks and
+extents. Treat those as historical evidence only.
+
+They are useful for understanding why experiments were performed and why the
+architecture changed, but they must not be used as current default-selection
+criteria. Current performance decisions must be based on the block-only profiles
+recorded after FOD 3.2.73.
+
+## Current optimization direction
+
+Active work is defined by `block-only-performance-plan.md`.
+
+At the time this historical plan was archived, the current measured sequence
+was:
+
+1. FOD 3.2.74 removed the repeated `COUNT(data_blocks)` allocation query from
+   normal `read()`;
+2. concurrent write profiling showed that the global transaction-scoped quota
+   advisory lock serializes long COPY/merge work;
+3. the next write-side task is to narrow that quota critical section while
+   preserving database-wide quota correctness;
+4. only after that change should worker counts and the next PostgreSQL
+   bottleneck be selected from fresh measurements.
+
+This ordering supersedes earlier statements in this file that proposed extent
+size tuning, extent defaults, extent read work, hardlink-count optimization or
+COPY/merge tuning as the immediate next task.
+
+## Current verification boundary
+
+Storage hot-path changes should use the targeted subset during development and
+then cover the relevant block-only gates before completion, including:
 
 ```bash
 cargo fmt --all
-cargo check --workspace
+cargo check --workspace --locked
 cargo test -p fod-rust-hotpath
 cargo test -p fod-rust-fuse
 make test-copy-block-crc-table
 make test-remount-durability-benchmark
 make test-persist-buffer-chunking
 make test-unlink-after-write
-make test-rust-hotpath-copy-dedupe
-FOD_PROFILE_IO=1 make test-fio-sequential-io-strace
-make test-fio-sequential-io
+FOD_PROFILE_IO=1 make test-fio-sequential-io
 make test-fio-mixed-io
 make test-fio-random-mixed-io
 ```
 
-Use the smallest targeted subset while developing, then run the complete gate
-before closing a phase.
+Quota/concurrency changes additionally require the database-wide quota,
+reservation, replay and independent-connection/mount regressions documented in
+`quota-lock-concurrency-plan.md`.
 
-Stop and do not enable a new default if CRC, remount durability, shared object,
-hardlink, partial-write, or replay behavior regresses; random/mixed writes are
-forced onto the extent path; RSS grows with whole-file size; or one extent
-payload exceeds the configured maximum.
+## Non-goals retained from the experiment
 
-## Explicit non-goals
+The following restrictions remain valid:
 
-- Do not restore `FOD_DATA_BLOCKS_MERGE_DO_NOTHING` experiments.
-- Do not change `DEFAULT_PERSIST_COPY_SEND_BUFFER_BYTES` from current evidence.
-- Do not make fillfactor, extra conflict predicates, or client-side COPY buffer
-  variants the primary direction.
-- Do not remove the block path or globally enable extents.
-- Do not implement extent merge/split in Phase A.
-- Do not change partial-write, truncate, sparse-block, `copy_file_range`, CRC,
-  remount durability, or data-object reference-count semantics as a side effect.
+- do not restore alternate payload-format experiments without new measured
+  evidence;
+- do not change the 4 KiB logical block size as a side effect;
+- do not weaken partial-write, sparse, truncate, CRC, remount, replay,
+  data-object ownership or quota semantics for throughput;
+- do not choose production defaults from a single noisy sample;
+- do not optimize a historical bottleneck after a newer profile has shown a
+  different dominant cost.
 
-## Stage commits
+## Documentation authority
 
-The planned delivery boundaries are:
+For current work, use this order:
 
-1. `FOD 3.2.1: document storage engine v2 direction`
-2. `FOD 3.2.1: add bounded extent planning`
-3. `FOD 3.2.1: persist bounded extent payloads`
-4. `FOD 3.2.1: record bounded extent benchmark matrix`
-5. `FOD 3.2.1: add sequential segment write state`
-6. `FOD 3.2.1: persist sequential segments directly`
-7. `FOD 3.2.1: classify storage persistence operations`
-8. `FOD 3.2.1: add append-only sequential object persistence`
-
-Post-gate decisions and cleanup use separate commits:
-
-9. `FOD 3.2.1: optimize whole-object FUSE copies`
-10. `FOD 3.2.1: make data objects own payload rows`
-
-Manifest and ownership changes require separate decisions after measured
-results from the earlier phases.
-
-## 2026-08-15 decision: retire the extent PoC
-
-The extent experiment has completed its purpose and is no longer a production
-storage direction. Profiling of a 128 MiB sequential write showed that a later
-block flush had to materialize existing `data_extents` back into `data_blocks`.
-The single SQL statement using `generate_series()` consumed about 13.65 s of a
-roughly 16.08 s persist operation, while COPY/merge and COMMIT were much smaller.
-
-The performance direction is therefore a single canonical `data_blocks`
-representation with COPY BINARY staging and set-based merge.
-
-Implementation sequence:
-
-1. **FOD 3.2.71 — production retirement**
-   - force effective FUSE persistence to block-only;
-   - keep `enable_extents` and `extent_target_bytes` parsing temporarily for
-     compatibility with existing INI files and tests;
-   - expose requested vs effective extent state in startup diagnostics;
-   - make the normal sequential fio test block-only;
-   - keep a compatibility guard proving `enable_extents=true` cannot activate
-     the retired extent path.
-2. **FOD 3.2.72 — migration**
-   - added schema migration 20 as the explicit offline/administrative migration
-     that converts remaining `data_extents` rows to `data_blocks`;
-   - the migration verifies logical size, block coverage and inserted block data
-     before deleting old extent rows;
-   - FUSE block writes now reject unmigrated extent objects instead of running
-     extent-to-block conversion in the hot path.
-3. **FOD 3.2.73 — physical removal**
-   - removed sequential-segment/extent planner and payload code;
-   - removed extent read fallbacks and extent persist APIs;
-   - removed retired runtime knobs and extent-only tests/observability;
-   - added schema migration 21, which drops `data_extents` only after the
-     migration gate proves no rows remain.
-4. **Post-removal performance work**
-   - re-profile 4 MiB and 128 MiB block-only sequential/mixed/random workloads;
-   - remove per-I/O PostgreSQL round trips such as repeated
-     `SELECT 1 + COUNT(*) FROM hardlinks WHERE id_file = $1`;
-   - optimize COPY/merge and caching only from measured profiles.
-
-Safety rule: existing extent-backed data is handled only by the explicit
-administrative migration chain. Runtime read/write paths do not carry extent
-fallbacks after FOD 3.2.73.
+1. `block-only-performance-plan.md` — canonical active storage-performance plan;
+2. `quota-lock-concurrency-plan.md` — current quota/concurrency subplan;
+3. `conclusions.md` — measured results and durable conclusions;
+4. this file — historical rationale only.
