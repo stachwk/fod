@@ -3314,3 +3314,35 @@ Notes:
   not a pg_query regression.
 - The final scans found no active extent runtime/API/test target names in Rust,
   integration tests, Makefile, scripts, or active config files.
+
+## 2026-08-16 commit a6a6a19 performance comparison against 834737e
+
+Commands:
+
+```bash
+git status --short
+git rev-parse --short HEAD && tr -d '\n' < fod_version.txt
+rg -n "FOD 3\\.2\\.72|FOD 3\\.2\\.73|test-fio-sequential-io-strace|test-fio-mixed-io|test-fio-random-mixed-io|repo_persist_blocks_us|KiB/s|MiB/s" conclusions.md commands.md BENCHMARKS.md docs/performance.md
+rg -n "test-fio|fio-sequential|fio-mixed|random-mixed|FIO_FILE_SIZE|FOD_PROFILE_IO" Makefile tests/integration/test_fio_*.sh tests/integration/fod_testlib.sh
+prev_tree=$(mktemp -d /tmp/fod-prev-3.2.72-XXXXXX) && git worktree add --detach "$prev_tree" HEAD~1 && printf '%s\n' "$prev_tree"
+bash -o pipefail -c 'make reset && make test-fio-sequential-io-strace 2>&1 | tee /tmp/fod-prev-3.2.72-seq-strace.log'
+bash -o pipefail -c 'FOD_PROFILE_IO=1 make test-fio-mixed-io 2>&1 | tee /tmp/fod-prev-3.2.72-mixed.log && FOD_PROFILE_IO=1 make test-fio-random-mixed-io 2>&1 | tee /tmp/fod-prev-3.2.72-random.log'
+bash -o pipefail -c 'make reset && make test-fio-sequential-io-strace 2>&1 | tee /tmp/fod-head-3.2.73-seq-strace.log && FOD_PROFILE_IO=1 make test-fio-mixed-io 2>&1 | tee /tmp/fod-head-3.2.73-mixed.log && FOD_PROFILE_IO=1 make test-fio-random-mixed-io 2>&1 | tee /tmp/fod-head-3.2.73-random.log'
+bash -o pipefail -c 'make reset && make test-fio-sequential-io-strace 2>&1 | tee /tmp/fod-prev-3.2.72-run2-seq-strace.log && FOD_PROFILE_IO=1 make test-fio-mixed-io 2>&1 | tee /tmp/fod-prev-3.2.72-run2-mixed.log && FOD_PROFILE_IO=1 make test-fio-random-mixed-io 2>&1 | tee /tmp/fod-prev-3.2.72-run2-random.log'
+bash -o pipefail -c 'make reset && make test-fio-sequential-io-strace 2>&1 | tee /tmp/fod-head-3.2.73-run2-seq-strace.log && FOD_PROFILE_IO=1 make test-fio-mixed-io 2>&1 | tee /tmp/fod-head-3.2.73-run2-mixed.log && FOD_PROFILE_IO=1 make test-fio-random-mixed-io 2>&1 | tee /tmp/fod-head-3.2.73-run2-random.log'
+rg -n "Run status|READ: bw=|WRITE: bw=|repo_persist_blocks_us=|\\| 100\\.00 .* total \\|" /tmp/fod-prev-3.2.72-seq-strace.log /tmp/fod-head-3.2.73-seq-strace.log /tmp/fod-prev-3.2.72-run2-seq-strace.log /tmp/fod-head-3.2.73-run2-seq-strace.log
+rg -n "mix-block|OK fio|Run status|READ: bw=|WRITE: bw=|repo_persist_blocks_us=" /tmp/fod-prev-3.2.72-mixed.log /tmp/fod-head-3.2.73-mixed.log /tmp/fod-prev-3.2.72-run2-mixed.log /tmp/fod-head-3.2.73-run2-mixed.log /tmp/fod-prev-3.2.72-random.log /tmp/fod-head-3.2.73-random.log /tmp/fod-prev-3.2.72-run2-random.log /tmp/fod-head-3.2.73-run2-random.log
+rg -n "large-file|large_file|test-large-file|LARGE_FILE|MULTIBLOCK|BLOCK_COUNT|test-large-file-multiblock" Makefile tests scripts docs/performance.md BENCHMARKS.md
+git worktree remove --force /tmp/fod-prev-3.2.72-AzUH8K
+git status --short
+```
+
+Notes:
+
+- The direct comparison used the current commit `a6a6a19` and the immediate
+  predecessor `834737e` in a detached temporary worktree.
+- Each commit was run twice with a fresh `make reset` before the sequential
+  strace run; mixed and random-mixed then ran with the initialized schema from
+  that reset.
+- Raw logs were kept under `/tmp/fod-prev-3.2.72*.log` and
+  `/tmp/fod-head-3.2.73*.log` for this local run.

@@ -1166,3 +1166,29 @@ Results:
   `profile-storage-extent` targets outside historical documentation/migrations.
 - The active Storage Engine v2 plan and TODO checklist now mark FOD 3.2.72 and
   FOD 3.2.73 as completed and describe the post-removal boundary as block-only.
+
+## 2026-08-16 — FOD 3.2.73 performance comparison after extent removal
+
+Compared current commit `a6a6a19` against immediate predecessor `834737e` on the
+same host. Each side ran two local samples with Docker PostgreSQL reset before
+the sequential strace smoke; mixed and random-mixed ran after that reset with
+`FOD_PROFILE_IO=1`. The 3.2.72 tests still emitted a requested-extent case, but
+the comparison below uses the explicit block case only.
+
+| workload | 834737e samples | a6a6a19 samples | result |
+| --- | --- | --- | --- |
+| sequential 64 KiB strace write/read | `640/489`, `2065/1730 KiB/s` | `667/561`, `577/354 KiB/s` | inconclusive; this micro-smoke was dominated by variance |
+| sequential strace total | `0.824293s / 4534 calls`, `0.357320s / 4556 calls` | `0.767739s / 4573 calls`, `0.970467s / 4586 calls` | no syscall-count improvement; total time too noisy |
+| mixed 4 MiB read/write | `1223/1302`, `1261/1343 KiB/s` | `1418/1510`, `1418/1510 KiB/s` | improvement: about `+14%` read and `+14%` write |
+| mixed `repo_persist_blocks_us` | `147925`, `101379` | `105186`, `101714` | improvement: average dropped from about `124.7 ms` to `103.5 ms` |
+| random mixed 4 MiB read/write | `910/968`, `910/969 KiB/s` | `939/1000`, `923/982 KiB/s` | small improvement: about `+2%`, likely near noise floor |
+| random mixed `repo_persist_blocks_us` | `110555`, `111089` | `109171`, `104328` | small improvement: average dropped from about `110.8 ms` to `106.7 ms` |
+
+Conclusion: FOD 3.2.73 did bring a measurable improvement in the 4 MiB mixed
+sequential rw smoke, probably because the active write/flush path no longer
+carries retired extent branch checks and observability fields. The random mixed
+workload shows only a small positive signal, and the 64 KiB strace smoke should
+be treated as a correctness/syscall-shape gate rather than a throughput
+baseline. There is no evidence yet that the removal improves large 64 MiB or
+128 MiB sequential throughput; that still needs a dedicated repeated
+`test-large-file-multiblock-benchmark` run.
