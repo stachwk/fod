@@ -203,6 +203,7 @@ impl FodFuse {
             self.record_flush_write_state_elapsed(started.elapsed());
             return Err(EIO);
         }
+        let prepare_started = Instant::now();
         let block_size = self.block_size.max(1);
         state.ensure_block_overlay(block_size);
         debug!(
@@ -216,12 +217,18 @@ impl FodFuse {
             truncate_pending: state.truncate_pending,
             dirty_blocks: &dirty_blocks,
         });
-        if let Err(errno) =
-            self.execute_persist_plan(state, block_size, persist_plan, capacity_reservation_token)
-        {
+        self.record_flush_prepare_plan_elapsed(prepare_started.elapsed());
+
+        let persist_started = Instant::now();
+        let persist_result =
+            self.execute_persist_plan(state, block_size, persist_plan, capacity_reservation_token);
+        self.record_flush_execute_persist_plan_elapsed(persist_started.elapsed());
+        if let Err(errno) = persist_result {
             self.record_flush_write_state_elapsed(started.elapsed());
             return Err(errno);
         }
+
+        let post_persist_started = Instant::now();
         let flushed_blocks = state.payload.take_blocks();
         self.store_recent_write_blocks(
             state.file_id,
@@ -235,6 +242,7 @@ impl FodFuse {
         state.truncate_pending = false;
         state.buffered_bytes = 0;
         state.load_error = false;
+        self.record_flush_post_persist_elapsed(post_persist_started.elapsed());
         self.record_flush_write_state_elapsed(started.elapsed());
         Ok(())
     }

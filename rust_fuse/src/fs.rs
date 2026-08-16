@@ -519,8 +519,23 @@ pub(crate) struct FodFuseProfileCounters {
     recent_write_block_us: AtomicU64,
     write_state_lock_us: AtomicU64,
     write_state_clone_us: AtomicU64,
+    write_admission_us: AtomicU64,
+    write_preflight_us: AtomicU64,
+    write_handle_lookup_us: AtomicU64,
+    write_start_log_us: AtomicU64,
+    write_drain_sibling_states_us: AtomicU64,
+    write_take_state_us: AtomicU64,
+    write_existing_size_lookup_us: AtomicU64,
+    write_unchanged_probe_us: AtomicU64,
+    write_merge_sibling_states_us: AtomicU64,
+    write_flush_decision_us: AtomicU64,
+    write_state_update_us: AtomicU64,
+    write_task_complete_us: AtomicU64,
     update_write_buffer_us: AtomicU64,
     flush_write_state_us: AtomicU64,
+    flush_prepare_plan_us: AtomicU64,
+    flush_execute_persist_plan_us: AtomicU64,
+    flush_post_persist_us: AtomicU64,
     prepare_persist_rows_from_block_plan_us: AtomicU64,
     clear_read_cache_for_file_us: AtomicU64,
     store_recent_write_blocks_us: AtomicU64,
@@ -623,12 +638,72 @@ impl FodFuseProfileCounters {
         Self::add(&self.write_state_clone_us, elapsed);
     }
 
+    pub(crate) fn record_write_admission_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_admission_us, elapsed);
+    }
+
+    pub(crate) fn record_write_preflight_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_preflight_us, elapsed);
+    }
+
+    pub(crate) fn record_write_handle_lookup_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_handle_lookup_us, elapsed);
+    }
+
+    pub(crate) fn record_write_start_log_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_start_log_us, elapsed);
+    }
+
+    pub(crate) fn record_write_drain_sibling_states_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_drain_sibling_states_us, elapsed);
+    }
+
+    pub(crate) fn record_write_take_state_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_take_state_us, elapsed);
+    }
+
+    pub(crate) fn record_write_existing_size_lookup_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_existing_size_lookup_us, elapsed);
+    }
+
+    pub(crate) fn record_write_unchanged_probe_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_unchanged_probe_us, elapsed);
+    }
+
+    pub(crate) fn record_write_merge_sibling_states_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_merge_sibling_states_us, elapsed);
+    }
+
+    pub(crate) fn record_write_flush_decision_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_flush_decision_us, elapsed);
+    }
+
+    pub(crate) fn record_write_state_update_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_state_update_us, elapsed);
+    }
+
+    pub(crate) fn record_write_task_complete_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.write_task_complete_us, elapsed);
+    }
+
     pub(crate) fn record_update_write_buffer_elapsed(&self, elapsed: Duration) {
         Self::add(&self.update_write_buffer_us, elapsed);
     }
 
     pub(crate) fn record_flush_write_state_elapsed(&self, elapsed: Duration) {
         Self::add(&self.flush_write_state_us, elapsed);
+    }
+
+    pub(crate) fn record_flush_prepare_plan_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.flush_prepare_plan_us, elapsed);
+    }
+
+    pub(crate) fn record_flush_execute_persist_plan_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.flush_execute_persist_plan_us, elapsed);
+    }
+
+    pub(crate) fn record_flush_post_persist_elapsed(&self, elapsed: Duration) {
+        Self::add(&self.flush_post_persist_us, elapsed);
     }
 
     pub(crate) fn record_prepare_persist_rows_from_block_plan_elapsed(&self, elapsed: Duration) {
@@ -668,8 +743,23 @@ impl FodFuseProfileCounters {
             || self.recent_write_block_us.load(Ordering::Relaxed) > 0
             || self.write_state_lock_us.load(Ordering::Relaxed) > 0
             || self.write_state_clone_us.load(Ordering::Relaxed) > 0
+            || self.write_admission_us.load(Ordering::Relaxed) > 0
+            || self.write_preflight_us.load(Ordering::Relaxed) > 0
+            || self.write_handle_lookup_us.load(Ordering::Relaxed) > 0
+            || self.write_start_log_us.load(Ordering::Relaxed) > 0
+            || self.write_drain_sibling_states_us.load(Ordering::Relaxed) > 0
+            || self.write_take_state_us.load(Ordering::Relaxed) > 0
+            || self.write_existing_size_lookup_us.load(Ordering::Relaxed) > 0
+            || self.write_unchanged_probe_us.load(Ordering::Relaxed) > 0
+            || self.write_merge_sibling_states_us.load(Ordering::Relaxed) > 0
+            || self.write_flush_decision_us.load(Ordering::Relaxed) > 0
+            || self.write_state_update_us.load(Ordering::Relaxed) > 0
+            || self.write_task_complete_us.load(Ordering::Relaxed) > 0
             || self.update_write_buffer_us.load(Ordering::Relaxed) > 0
             || self.flush_write_state_us.load(Ordering::Relaxed) > 0
+            || self.flush_prepare_plan_us.load(Ordering::Relaxed) > 0
+            || self.flush_execute_persist_plan_us.load(Ordering::Relaxed) > 0
+            || self.flush_post_persist_us.load(Ordering::Relaxed) > 0
             || self
                 .prepare_persist_rows_from_block_plan_us
                 .load(Ordering::Relaxed)
@@ -747,12 +837,72 @@ impl FodFuseProfileCounters {
                 self.write_state_clone_us.load(Ordering::Relaxed)
             ),
             format!(
+                "write_admission_us={}",
+                self.write_admission_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_preflight_us={}",
+                self.write_preflight_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_handle_lookup_us={}",
+                self.write_handle_lookup_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_start_log_us={}",
+                self.write_start_log_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_drain_sibling_states_us={}",
+                self.write_drain_sibling_states_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_take_state_us={}",
+                self.write_take_state_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_existing_size_lookup_us={}",
+                self.write_existing_size_lookup_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_unchanged_probe_us={}",
+                self.write_unchanged_probe_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_merge_sibling_states_us={}",
+                self.write_merge_sibling_states_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_flush_decision_us={}",
+                self.write_flush_decision_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_state_update_us={}",
+                self.write_state_update_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "write_task_complete_us={}",
+                self.write_task_complete_us.load(Ordering::Relaxed)
+            ),
+            format!(
                 "update_write_buffer_us={}",
                 self.update_write_buffer_us.load(Ordering::Relaxed)
             ),
             format!(
                 "flush_write_state_us={}",
                 self.flush_write_state_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "flush_prepare_plan_us={}",
+                self.flush_prepare_plan_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "flush_execute_persist_plan_us={}",
+                self.flush_execute_persist_plan_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "flush_post_persist_us={}",
+                self.flush_post_persist_us.load(Ordering::Relaxed)
             ),
             format!(
                 "prepare_persist_rows_from_block_plan_us={}",
@@ -996,12 +1146,76 @@ impl FodFuse {
         cloned
     }
 
+    fn record_write_admission_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_admission_elapsed(elapsed);
+    }
+
+    fn record_write_preflight_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_preflight_elapsed(elapsed);
+    }
+
+    fn record_write_handle_lookup_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_handle_lookup_elapsed(elapsed);
+    }
+
+    fn record_write_start_log_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_start_log_elapsed(elapsed);
+    }
+
+    fn record_write_drain_sibling_states_elapsed(&self, elapsed: Duration) {
+        self.profile
+            .record_write_drain_sibling_states_elapsed(elapsed);
+    }
+
+    fn record_write_take_state_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_take_state_elapsed(elapsed);
+    }
+
+    fn record_write_existing_size_lookup_elapsed(&self, elapsed: Duration) {
+        self.profile
+            .record_write_existing_size_lookup_elapsed(elapsed);
+    }
+
+    fn record_write_unchanged_probe_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_unchanged_probe_elapsed(elapsed);
+    }
+
+    fn record_write_merge_sibling_states_elapsed(&self, elapsed: Duration) {
+        self.profile
+            .record_write_merge_sibling_states_elapsed(elapsed);
+    }
+
+    fn record_write_flush_decision_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_flush_decision_elapsed(elapsed);
+    }
+
+    fn record_write_state_update_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_state_update_elapsed(elapsed);
+    }
+
+    fn record_write_task_complete_elapsed(&self, elapsed: Duration) {
+        self.profile.record_write_task_complete_elapsed(elapsed);
+    }
+
     pub(crate) fn record_update_write_buffer_elapsed(&self, elapsed: Duration) {
         self.profile.record_update_write_buffer_elapsed(elapsed);
     }
 
     pub(crate) fn record_flush_write_state_elapsed(&self, elapsed: Duration) {
         self.profile.record_flush_write_state_elapsed(elapsed);
+    }
+
+    pub(crate) fn record_flush_prepare_plan_elapsed(&self, elapsed: Duration) {
+        self.profile.record_flush_prepare_plan_elapsed(elapsed);
+    }
+
+    pub(crate) fn record_flush_execute_persist_plan_elapsed(&self, elapsed: Duration) {
+        self.profile
+            .record_flush_execute_persist_plan_elapsed(elapsed);
+    }
+
+    pub(crate) fn record_flush_post_persist_elapsed(&self, elapsed: Duration) {
+        self.profile.record_flush_post_persist_elapsed(elapsed);
     }
 
     pub(crate) fn record_read_block_map_elapsed(&self, elapsed: Duration) {
@@ -5739,18 +5953,26 @@ impl Filesystem for FodFuse {
         let fh = fh.0;
         let req_id = self.next_request_id();
         let _write_profile = self.start_fuse_write_profile();
+        let admission_started = Instant::now();
         let (_write_permit, write_task) = self.logical_write_gate.observe_task(
             &self.logical_write_tasks,
             data.len() as u64,
             false,
         );
+        self.record_write_admission_elapsed(admission_started.elapsed());
+        let preflight_started = Instant::now();
         if self.read_only {
+            self.record_write_preflight_elapsed(preflight_started.elapsed());
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
-        let file_id = match self.file_id_for_handle_or_errno(fh, ino) {
+        let handle_lookup_started = Instant::now();
+        let file_id_result = self.file_id_for_handle_or_errno(fh, ino);
+        self.record_write_handle_lookup_elapsed(handle_lookup_started.elapsed());
+        let file_id = match file_id_result {
             Ok(value) => value,
             Err(errno) => {
+                self.record_write_preflight_elapsed(preflight_started.elapsed());
                 self.log_request_error(
                     req_id,
                     "write",
@@ -5761,6 +5983,7 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        let start_log_started = Instant::now();
         self.log_request_start(
             req_id,
             "write",
@@ -5773,12 +5996,21 @@ impl Filesystem for FodFuse {
                 data.len()
             ),
         );
+        self.record_write_start_log_elapsed(start_log_started.elapsed());
         if data.is_empty() {
+            self.record_write_preflight_elapsed(preflight_started.elapsed());
+            let complete_started = Instant::now();
             write_task.complete(0, 0);
+            self.record_write_task_complete_elapsed(complete_started.elapsed());
             self.reply_written_profiled(reply, 0);
             return;
         }
-        let sibling_states = match self.drain_pending_write_states_for_file_except(file_id, fh) {
+        self.record_write_preflight_elapsed(preflight_started.elapsed());
+
+        let drain_started = Instant::now();
+        let sibling_states_result = self.drain_pending_write_states_for_file_except(file_id, fh);
+        self.record_write_drain_sibling_states_elapsed(drain_started.elapsed());
+        let sibling_states = match sibling_states_result {
             Ok(states) => states,
             Err(errno) => {
                 self.log_request_error(
@@ -5791,11 +6023,16 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        let take_state_started = Instant::now();
         let existing_state = self.take_write_state_for_handle(fh);
+        self.record_write_take_state_elapsed(take_state_started.elapsed());
         let existing_size = if let Some(state) = existing_state.as_ref() {
             state.file_size
         } else {
-            match self.entry_attrs_for_ino(ino) {
+            let attrs_started = Instant::now();
+            let attrs_result = self.entry_attrs_for_ino(ino);
+            self.record_write_existing_size_lookup_elapsed(attrs_started.elapsed());
+            match attrs_result {
                 Ok((_, attrs)) => attrs.file_attr.size,
                 Err(errno) => {
                     if let Some(existing_state) = existing_state {
@@ -5830,14 +6067,17 @@ impl Filesystem for FodFuse {
         {
             let first_block = offset / self.block_size;
             let last_block = (end_offset.saturating_sub(1)) / self.block_size;
-            if let Ok(existing) = self.repo.assemble_file_slice(
+            let probe_started = Instant::now();
+            let existing = self.assemble_file_slice_profiled(
                 file_id,
                 first_block,
                 last_block,
                 offset,
                 end_offset,
                 self.block_size,
-            ) {
+            );
+            self.record_write_unchanged_probe_elapsed(probe_started.elapsed());
+            if let Ok(existing) = existing {
                 if existing == data {
                     debug!(
                         "FOD req={} op=write skipped unchanged slice ino={} fh={} offset={} len={}",
@@ -5847,7 +6087,9 @@ impl Filesystem for FodFuse {
                         offset,
                         data.len()
                     );
+                    let complete_started = Instant::now();
                     write_task.complete(0, data.len() as u64);
+                    self.record_write_task_complete_elapsed(complete_started.elapsed());
                     self.reply_written_profiled(reply, data.len() as u32);
                     return;
                 }
@@ -5856,10 +6098,12 @@ impl Filesystem for FodFuse {
         let mut state =
             existing_state.unwrap_or_else(|| Self::new_write_state(file_id, existing_size, false));
         state.file_id = file_id;
+        let merge_started = Instant::now();
         for (_sibling_fh, sibling_state) in sibling_states.iter() {
             let sibling_state = self.clone_write_state_profiled(sibling_state);
             self.merge_write_state_into(&mut state, sibling_state, self.block_size);
         }
+        self.record_write_merge_sibling_states_elapsed(merge_started.elapsed());
         if let Err(errno) = self.update_write_buffer(&mut state, offset, data) {
             self.log_request_error(req_id, "write", errno, format!("fh={} update", fh));
             fuse_reply_error!(reply, errno);
@@ -5867,6 +6111,7 @@ impl Filesystem for FodFuse {
         }
         state.buffered_bytes = state.buffered_bytes.saturating_add(data.len() as u64);
 
+        let flush_decision_started = Instant::now();
         let shared_open_handles = self.open_handle_count_for_file(file_id);
         let block_size = self.block_size.max(1);
         let write_len = data.len() as u64;
@@ -5881,14 +6126,17 @@ impl Filesystem for FodFuse {
             shared_open_handles,
             partial_block_visibility_write,
         );
+        self.record_write_flush_decision_elapsed(flush_decision_started.elapsed());
         let mut flushed_now = false;
 
         if should_flush_now {
             if let Err(errno) = self.flush_write_state(&mut state) {
+                let state_update_started = Instant::now();
                 self.update_write_state(fh, state);
                 for (sibling_fh, sibling_state) in sibling_states {
                     self.update_write_state(sibling_fh, sibling_state);
                 }
+                self.record_write_state_update_elapsed(state_update_started.elapsed());
                 self.log_request_error(req_id, "write", errno, format!("fh={} flush", fh));
                 fuse_reply_error!(reply, errno);
                 return;
@@ -5897,8 +6145,12 @@ impl Filesystem for FodFuse {
             flushed_now = true;
         }
 
+        let state_update_started = Instant::now();
         if has_sibling_states {
-            if let Ok(mut guard) = self.write_states.lock() {
+            let lock_started = Instant::now();
+            let result = self.write_states.lock();
+            self.record_write_state_lock_elapsed(lock_started.elapsed());
+            if let Ok(mut guard) = result {
                 for (sibling_fh, _) in sibling_states.iter() {
                     guard.remove(sibling_fh);
                 }
@@ -5908,12 +6160,16 @@ impl Filesystem for FodFuse {
         // Po auto-flushu nie zostawiamy pustego WriteState pod tym fh.
         // Inaczej read() moze wejsc w read_from_write_state() zamiast czytac normalnie z repo.
         if flushed_now && !Self::write_state_has_pending_changes(&state) {
-            if let Ok(mut guard) = self.write_states.lock() {
+            let lock_started = Instant::now();
+            let result = self.write_states.lock();
+            self.record_write_state_lock_elapsed(lock_started.elapsed());
+            if let Ok(mut guard) = result {
                 guard.remove(&fh);
             }
         } else {
             self.update_write_state(fh, state);
         }
+        self.record_write_state_update_elapsed(state_update_started.elapsed());
 
         debug!(
             "FOD req={} op=write buffered ino={} fh={} bytes={}",
@@ -5922,7 +6178,9 @@ impl Filesystem for FodFuse {
             fh,
             data.len()
         );
+        let complete_started = Instant::now();
         write_task.complete(0, data.len() as u64);
+        self.record_write_task_complete_elapsed(complete_started.elapsed());
         self.reply_written_profiled(reply, data.len() as u32);
     }
 

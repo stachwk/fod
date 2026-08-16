@@ -2,7 +2,7 @@
 
 ## Status
 
-This is the canonical active storage-performance plan after FOD 3.2.71-3.2.76.
+This is the canonical active storage-performance plan after FOD 3.2.71-3.2.77.
 Older storage-engine plans and ADRs may retain benchmark history, but they must
 not define an active runtime path or optimization order that conflicts with this
 document.
@@ -108,12 +108,14 @@ problem.
 
 ## Current measured problem
 
-Direct PostgreSQL hotpath and mounted FUSE no longer point to exactly the same
-next optimization.
+FOD 3.2.77 added missing mounted-FUSE write-stage instrumentation and confirmed
+that the next production optimization target is still the persist plan: COPY
+BINARY staging plus the set-based `data_blocks` merge.
 
-The direct 128 MiB workload shows COPY + merge as the largest PostgreSQL work.
-However, the mounted 128 MiB direct-I/O fio profile on commit `d6e356f` measured
-about:
+Earlier direct and mounted profiles showed that COPY + merge was the largest
+PostgreSQL work, but the complete mounted write was materially longer than
+COPY + merge alone. The mounted 128 MiB direct-I/O fio profile on commit
+`d6e356f` measured about:
 
 - write `18.2 MiB/s`;
 - read `17.6 MiB/s`;
@@ -123,10 +125,22 @@ about:
 - quota held `8.492 ms`;
 - final quota check `7.788 ms`.
 
-The complete mounted write takes materially longer than COPY + merge alone.
-Therefore the next production optimization must **not** assume that COPY or
-merge is the dominant end-to-end FUSE cost merely because it dominates the
-direct repository profile.
+The FOD 3.2.77 instrumentation run on a working tree based on commit `d72a23d`
+then split the callback and flush path. For the 128 MiB mounted write:
+
+- fio write was `15.6 MiB/s` over `8225 ms`;
+- `fuse_write_total_us` was `4925080`;
+- `flush_execute_persist_plan_us` was `2009858`;
+- `repo_persist_blocks_us` was `1991349`;
+- PostgreSQL COPY BINARY staging totaled `1167.429 ms`;
+- the two `data_blocks` merge statements totaled `398.600 ms` and `382.562 ms`;
+- `write_start_log_us` was `892042` under `FOD_PROFILE_IO=1`, which makes it
+  profiling overhead rather than the next production storage target.
+
+Therefore the next production optimization is COPY BINARY staging plus the
+`data_blocks` set-based merge inside the persist plan. Do not tune worker
+defaults, hardlink counts, quota locking, or debug request-start logging before
+that measured persist-plan work.
 
 The active detailed subplan is:
 
@@ -140,7 +154,8 @@ The completed quota redesign record is:
 
 ### Phase 1 — decompose real mounted 128 MiB write wall time
 
-Measure the complete path:
+Status: completed by the FOD 3.2.77 instrumentation run. The complete path now
+has named counters for:
 
 ```text
 FUSE callback/admission
@@ -157,34 +172,34 @@ FUSE callback/admission
     -> callback completion
 ```
 
-Reuse existing observability first. Add only missing timing boundaries needed to
-explain the wall-clock gap.
-
-At minimum separate:
+The profile now separates:
 
 - callback entry-to-return time;
+- logical-task admission;
+- file-handle lookup and request-start logging;
 - write-state preparation;
-- flush queue wait and flush execution;
-- logical-task admission wait;
-- PostgreSQL transaction-admission wait;
-- pool checkout wait;
-- pre-COPY metadata work;
-- COPY staging;
-- merge;
-- post-merge metadata/CRC/object-finalization;
-- quota wait/held/check;
-- COMMIT/replay confirmation;
-- post-commit invalidation.
+- dirty-buffer update;
+- flush decision and flush execution;
+- flush plan preparation;
+- persist-plan execution;
+- post-persist cache/recent-block work;
+- FUSE reply completion.
+
+The remaining PostgreSQL internals for COPY, merge, quota and metadata are
+covered by the FOD 3.2.75+ persist counters and `pg_stat_statements`.
 
 Do not change scheduling or batching in the same commit that establishes a
 missing timing baseline.
 
 ### Phase 2 — pin repeated mounted baselines
 
+Status: completed for the baseline phase before FOD 3.2.77. Keep using the same
+methodology for before/after checks of the next optimization.
+
 Use the already proven sudo-capable Docker/chroot path because the native
 restricted process has `NoNewPrivs: 1`.
 
-Run at least three comparable samples of:
+Run comparable samples of:
 
 ```text
 4 MiB sequential fio with direct I/O
@@ -199,24 +214,27 @@ queue/admission metrics and persist-stage timings for the same workload.
 
 ### Phase 3 — reconcile direct repository and mounted FUSE results
 
-Produce one 128 MiB timing summary that explains most of mounted wall time and
-explicitly marks overlapping counters.
+Status: completed enough to select the next target. The mounted FUSE profile
+shows material profile-only request-start logging, but the largest production
+storage component remains `flush_execute_persist_plan_us`, which maps to
+PostgreSQL COPY BINARY staging and `data_blocks` merge.
 
-Separate:
+Future comparisons must still mark overlapping counters explicitly:
 
 - CPU work versus blocked/wait time;
 - per-file serialization versus global serialization;
 - PostgreSQL server execution versus client/FUSE time;
 - work that can overlap across workers versus work that cannot.
 
-Only after this reconciliation choose the next production optimization.
-
 ### Phase 4 — optimize one measured dominant component
 
-Possible outcomes include:
+Current selected target:
 
 1. COPY BINARY staging;
 2. `data_blocks` set-based merge;
+
+Possible later outcomes include:
+
 3. FUSE callback/write-state preparation;
 4. flush scheduling / queue handoff / futex wait;
 5. transaction or pool admission;

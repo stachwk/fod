@@ -1549,3 +1549,72 @@ staging plus `data_blocks` merge, not quota serialization.
 quota. This closes the previously blocked mounted two-FUSE quota validation for
 this commit, with the caveat that the native Codex process still cannot run
 setuid FUSE helpers directly.
+
+## 2026-08-16 — FOD 3.2.77 mounted FUSE write-stage instrumentation
+
+Measured working tree: FOD 3.2.77 based on commit `d72a23d`
+(`FOD 3.2.76: record sudo chroot FUSE profiles`). The instrumentation adds
+observational counters only; it does not change write scheduling, block format,
+quota behavior, COPY/merge SQL, or FUSE reply semantics.
+
+Artifacts are under
+`artifacts/perf/d72a23d/lt7300-mounted-fuse-stage2-d72a23d-wt-3.2.77-20260816T194621Z/`.
+
+The 128 MiB mounted direct-I/O fio run passed:
+
+| workload | fio write | fio read | callbacks |
+| --- | ---: | ---: | ---: |
+| 128 MiB | `15.6 MiB/s` / `8225 ms` | `19.3 MiB/s` / `6625 ms` | read `32768`, write `32768` |
+
+The new write-stage counters decompose the write callback:
+
+| counter | value |
+| --- | ---: |
+| `fuse_write_total_us` | `4925080` |
+| `write_admission_us` | `119764` |
+| `write_preflight_us` | `987697` |
+| `write_handle_lookup_us` | `66885` |
+| `write_start_log_us` | `892042` |
+| `update_write_buffer_us` | `301164` |
+| `flush_write_state_us` | `2126251` |
+| `flush_prepare_plan_us` | `5144` |
+| `flush_execute_persist_plan_us` | `2009858` |
+| `flush_post_persist_us` | `111244` |
+| `repo_persist_blocks_us` | `1991349` |
+| `store_recent_write_blocks_us` | `108903` |
+| `reply_write_us` | `181687` |
+
+The preflight split shows that `write_start_log_us` is about `892 ms` under
+`FOD_PROFILE_IO=1`, so debug request-start logging is material in profiling
+runs. It is not the next production optimization target because it is diagnostic
+verbosity rather than normal hot-path storage work.
+
+PostgreSQL top statements for the same 128 MiB run show COPY plus merge as the
+largest production stage: COPY BINARY staging totaled `1167.429 ms`, and the two
+`data_blocks` merge statements totaled `398.600 ms` plus `382.562 ms`.
+`flush_execute_persist_plan_us=2009858` closely matches
+`repo_persist_blocks_us=1991349`, so the next measured production bottleneck is
+inside the persist plan, not quota or write-state bookkeeping.
+
+The required mounted strace smoke also passed through the same privileged
+Docker/chroot path with `FOD_PROFILE_IO=1`, `FOD_FOPEN_DIRECT_IO=1` and 4 MiB
+fio: write `9.80 MiB/s` / `408 ms`, read `8000 KiB/s` / `512 ms`, callbacks
+read `1024` and write `1024`. Strace total was `2.105410 s` / `19508` calls,
+dominated by `read` `1.061298 s`, `futex` `0.656300 s`, `wait4` `0.180653 s`
+and `restart_syscall` `0.158213 s`.
+
+Validation passed with `cargo fmt --all`, `cargo check --workspace --locked`,
+`git diff --check`, `cargo test --manifest-path Cargo.toml -p fod-rust-fuse
+--bins -- --nocapture` (`26/26`), mounted 128 MiB
+`make test-fio-sequential-io`, and mounted 4 MiB
+`make test-fio-sequential-io-strace` through the privileged Docker/chroot
+wrapper. The unrestricted package test `cargo test --manifest-path Cargo.toml -p
+fod-rust-fuse -- --nocapture` also ran the FUSE integration benchmark and failed
+at native mount startup with `fusermount3: Operation not permitted`; this is the
+known native `NoNewPrivs: 1` limitation, not a Rust unit-test failure.
+
+Conclusion: the next FOD performance step should optimize COPY BINARY staging
+plus the set-based `data_blocks` merge in the persist plan, then repeat the same
+mounted 128 MiB and 4 MiB strace profile. Do not optimize hardlink count, quota
+locking, worker defaults, or debug request-start logging before that measured
+persist-plan work.

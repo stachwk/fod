@@ -255,7 +255,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "fod-rust-fuse"
-version = "3.2.76"
+version = "3.2.77"
 dependencies = [
  "chrono",
  "clap",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "fod-rust-hotpath"
-version = "3.2.76"
+version = "3.2.77"
 dependencies = [
  "base64",
  "fod-rust-monitor",
@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "fod-rust-indexer"
-version = "3.2.76"
+version = "3.2.77"
 dependencies = [
  "base64",
  "clap",
@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "fod-rust-mkfs"
-version = "3.2.76"
+version = "3.2.77"
 dependencies = [
  "base64",
  "clap",
@@ -310,14 +310,14 @@ dependencies = [
 
 [[package]]
 name = "fod-rust-monitor"
-version = "3.2.76"
+version = "3.2.77"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "fod-rust-runtime"
-version = "3.2.76"
+version = "3.2.77"
 dependencies = [
  "libc",
  "serde_json",

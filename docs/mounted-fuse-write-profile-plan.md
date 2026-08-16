@@ -5,6 +5,17 @@
 This is the active performance subplan after FOD 3.2.76 removed the artificial
 quota-lock serialization from ordinary block persistence.
 
+2026-08-16 status: FOD 3.2.77 adds the missing write-stage timing boundaries
+needed by this plan. The profiling run was executed from a working tree based on
+commit `d72a23d`; artifacts are under
+`artifacts/perf/d72a23d/lt7300-mounted-fuse-stage2-d72a23d-wt-3.2.77-20260816T194621Z/`.
+
+The measured 128 MiB direct-I/O mounted write selected the next production
+target: COPY BINARY staging plus the set-based `data_blocks` merge inside
+`flush_execute_persist_plan_us`. The debug request-start log is also visible
+under `FOD_PROFILE_IO=1`, but it is profile-only overhead and is not the next
+production optimization target.
+
 The canonical architecture remains defined by
 [`block-only-performance-plan.md`](block-only-performance-plan.md). This document
 only decomposes the next measured problem: the gap between direct PostgreSQL
@@ -117,6 +128,12 @@ Capture at minimum:
 Do not add broad instrumentation if existing counters already explain a stage.
 Add focused timing only where the mounted wall-clock gap remains unaccounted.
 
+Status: completed for FOD 3.2.77. The new FUSE profile counters split write
+callback admission, preflight, file-handle lookup, request-start logging,
+pending sibling state drain, existing write-state take, size lookup, unchanged
+overwrite probe, sibling merge, flush decision, state update, task completion,
+and flush prepare/execute/post-persist stages.
+
 Priority candidates are:
 
 1. FUSE callback entry-to-return time split into read/write/flush/fsync;
@@ -157,6 +174,11 @@ adding them as if they were disjoint.
 
 Choose the next production change from the measured largest end-to-end
 component.
+
+Status: selected from the FOD 3.2.77 mounted profile. The next optimization is
+COPY BINARY staging plus the `data_blocks` set-based merge; do not optimize the
+debug request-start logging path first because its cost is tied to profiling
+verbosity.
 
 Possible outcomes include:
 

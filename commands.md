@@ -3550,6 +3550,94 @@ git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-16 commit d72a23d working tree FOD 3.2.77 mounted-FUSE write-stage instrumentation
+
+Context and plan lookup:
+
+```bash
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search "FOD mounted FUSE write profile stage instrumentation callback flush write_state" --wing fod
+sed -n '1,280p' docs/mounted-fuse-write-profile-plan.md
+rg -n "fn (drain_pending_write_states_for_file_except|take_write_state_for_handle|update_write_state|merge_write_state_into|should_flush_write_state|flush_write_state|execute_persist_plan|open_handle_count_for_file|clone_write_state_profiled)|snapshot_lines|prepare_persist_rows_from_block_plan" rust_fuse/src/fs.rs rust_fuse/src/write_buffer.rs
+sed -n '480,790p' rust_fuse/src/fs.rs
+sed -n '900,1185p' rust_fuse/src/fs.rs
+sed -n '5735,6165p' rust_fuse/src/fs.rs
+sed -n '120,545p' rust_fuse/src/write_buffer.rs
+```
+
+Instrumentation and validation:
+
+```bash
+cargo fmt --all
+cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse --lib -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse --bins -- --nocapture
+git diff --check
+```
+
+The `--lib` command failed because `fod-rust-fuse` has no library target. The
+unrestricted package test passed the 26 binary unit tests, then failed when its
+FUSE integration benchmark tried to mount natively under `NoNewPrivs: 1`.
+
+Mounted 128 MiB instrumentation profile and 4 MiB strace smoke:
+
+```bash
+RUN_ID="mounted-fuse-stage2-$(git rev-parse --short HEAD)-wt-3.2.77-$(date -u +%Y%m%dT%H%M%SZ)"
+ART_DIR="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s)-${RUN_ID}"
+mkdir -p "$ART_DIR"
+printf '%s\n' "$RUN_ID" > /tmp/fod_mounted_fuse_stage_run_id
+printf '%s\n' "$ART_DIR" > /tmp/fod_mounted_fuse_stage_art_dir
+docker run --rm --privileged --net=host --pid=host -v /:/host -w /host/media/wojtek/virtdata/home/wojtek/git/fod postgres:16-alpine chroot /host /bin/bash -lc '
+cd /media/wojtek/virtdata/home/wojtek/git/fod
+RUN_ID=$(cat /tmp/fod_mounted_fuse_stage_run_id)
+ART_DIR=$(cat /tmp/fod_mounted_fuse_stage_art_dir)
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" profile-env > "$ART_DIR/env.txt" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-pg-reset > "$ART_DIR/pg-reset-instrumented-128m.log" 2>&1
+FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FIO_FILE_SIZE=128M make --no-print-directory test-fio-sequential-io > "$ART_DIR/fuse-128m-instrumented.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_CAPTURE_LABEL="instrumented-128m" profile-pg-top-io-wal > "$ART_DIR/pg-top-instrumented-128m.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-pg-reset > "$ART_DIR/pg-reset-strace-4m.log" 2>&1
+FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FIO_FILE_SIZE=4M make --no-print-directory test-fio-sequential-io-strace > "$ART_DIR/fuse-4m-strace.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_CAPTURE_LABEL="strace-4m" profile-pg-top-io-wal > "$ART_DIR/pg-top-strace-4m.log" 2>&1
+'
+```
+
+Result extraction:
+
+```bash
+ART_DIR=$(cat /tmp/fod_mounted_fuse_stage_art_dir)
+rg -n "WRITE:|READ:|FOD callback counts|FOD boundary profile:|fuse_write_total_us|write_admission_us|write_preflight_us|write_handle_lookup_us|write_start_log_us|write_drain_sibling_states_us|write_take_state_us|write_existing_size_lookup_us|write_unchanged_probe_us|write_merge_sibling_states_us|write_flush_decision_us|write_state_update_us|write_task_complete_us|update_write_buffer_us|flush_write_state_us|flush_prepare_plan_us|flush_execute_persist_plan_us|flush_post_persist_us|repo_persist_blocks_us|store_recent_write_blocks_us|reply_write_us|logical task observability: stage=shutdown lane=write|% time|seconds|read|futex|wait4|writev" "$ART_DIR/fuse-128m-instrumented.log" "$ART_DIR/fuse-4m-strace.log"
+sed -n '1,30p' "$ART_DIR/pg-top-instrumented-128m.log"
+sed -n '1,18p' "$ART_DIR/pg-top-strace-4m.log"
+findmnt -rn -t fuse.fod,fuse3,fuse | rg 'fod|tmp/fod' || true
+pgrep -af 'fod-rust-fuse|fod-bootstrap' || true
+```
+
+Final review and commit:
+
+```bash
+date -Is && git rev-parse --short HEAD && cat fod_version.txt && git status --short
+git diff --stat
+cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse --bins -- --nocapture
+git diff --check
+git status --short --branch && git diff --stat
+git diff -- Cargo.toml fod_version.txt Cargo.lock | sed -n '1,220p'
+git diff -- rust_fuse/src/fs.rs rust_fuse/src/write_buffer.rs | sed -n '1,420p'
+git diff -- TODO.md conclusions.md commands.md docs/block-only-performance-plan.md docs/mounted-fuse-write-profile-plan.md | sed -n '1,520p'
+rg -n "3\\.2\\.76|3\\.2\\.77|next production|selected target|Phase 1|Phase 2|Phase 3|Phase 4" docs/block-only-performance-plan.md docs/mounted-fuse-write-profile-plan.md TODO.md
+rg -n "write_admission_us|write_start_log_us|flush_execute_persist_plan_us|flush_prepare_plan_us|flush_post_persist_us" rust_fuse/src/fs.rs rust_fuse/src/write_buffer.rs
+git diff --check && git status --short --branch
+git add Cargo.lock Cargo.toml TODO.md commands.md conclusions.md docs/block-only-performance-plan.md docs/mounted-fuse-write-profile-plan.md fod_version.txt rust_fuse/src/fs.rs rust_fuse/src/write_buffer.rs
+git diff --cached --check
+git commit -m "FOD 3.2.77: instrument mounted FUSE write stages"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD && git diff --stat HEAD~1..HEAD
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+git show --name-only --format='%h %s' HEAD
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-16 commit d6e356f sudo-capable FUSE fio through Docker/chroot
 
 Host sudo/FUSE diagnostics:
