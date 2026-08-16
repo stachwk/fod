@@ -1434,3 +1434,75 @@ not a successful fio measurement.
 Next implementation step remains moving the ordinary block-persist advisory
 lock from the start of the long COPY/merge transaction body to the final quota
 validation gate while preserving cross-process quota correctness.
+
+## 2026-08-16 — FOD 3.2.76 late quota gate for ordinary block persist
+
+Measured working tree: FOD 3.2.76 based on commit `2f95155`
+(`FOD 3.2.75: instrument quota persist timings`). Direct profile logs are under
+`/tmp/fod-direct-concurrent-persist-2f95155-wt-3.2.76-20260816T103304Z/`.
+Profiler artifacts are under
+`artifacts/perf/2f95155/lt7300-direct-concurrent-persist-2f95155-wt-3.2.76-20260816T103304Z/`.
+
+FOD 3.2.76 moves ordinary block persistence to a late quota gate:
+COPY/merge now runs before `pg_advisory_xact_lock`, then the transaction takes
+the advisory lock, rereads `max_fs_size_bytes`, performs the final
+persisted+reserved quota count, and commits or rolls back. Reservation-token
+paths intentionally remain conservative and still hold the quota lock across
+reservation refresh and payload persistence.
+
+The new direct regression
+`ordinary_persist_copy_merge_completes_before_final_quota_gate` passed. It
+starts two independent `DbRepo` instances, holds the quota advisory lock from a
+third connection, verifies both writers reach advisory-lock wait only after
+COPY/merge metrics have been recorded, releases the lock, and checks that one
+writer commits while the other rolls back with `FOD_ENOSPC` leaving zero
+payload rows.
+
+Direct concurrent block-persist profile after the change:
+
+| workload | workers | elapsed | throughput | quota advisory-lock total |
+| --- | ---: | ---: | ---: | ---: |
+| 4 MiB total | 1 | `0.134806 s` | `29.672 MiB/s` | `0.011 ms` |
+| 4 MiB total | 2 | `0.086771 s` | `46.098 MiB/s` | `0.018 ms` |
+| 4 MiB total | 4 | `0.088379 s` | `45.260 MiB/s` | `0.038 ms` |
+| 4 MiB total | 8 | `0.168180 s` | `23.784 MiB/s` | `0.077 ms` |
+| 128 MiB total | 1 | `2.466857 s` | `51.888 MiB/s` | `0.014 ms` |
+| 128 MiB total | 2 | `1.490450 s` | `85.880 MiB/s` | `0.018 ms` |
+| 128 MiB total | 4 | `1.041978 s` | `122.843 MiB/s` | `0.049 ms` |
+| 128 MiB total | 8 | `0.974978 s` | `131.285 MiB/s` | `9.742 ms` |
+
+Compared with the pre-change FOD 3.2.74 direct profile, the 128 MiB / 4-worker
+case improved from `51.522 MiB/s` to `122.843 MiB/s`, and aggregate advisory
+lock SQL time fell from `3517.839 ms` to `0.049 ms`. The 128 MiB / 8-worker
+case improved from `34.046 MiB/s` to `131.285 MiB/s`, and aggregate advisory
+lock SQL time fell from `12683.113 ms` to `9.742 ms`.
+
+The new 128 MiB / 8-worker SQL profile is dominated by COPY and merge, not the
+quota lock: COPY BINARY staging totaled `3240.165 ms`, the eight
+`data_blocks` merge statements totaled about `2662.982 ms`, final quota checks
+totaled `16.563 ms`, and advisory-lock SQL totaled `9.742 ms`.
+
+Additional 128 MiB profiling:
+
+| profile | result |
+| --- | --- |
+| `perf stat -d -d -d`, 1 worker | elapsed `2.437911013 s`, task-clock `1214271388`, instructions `10437846992`, cycles `4366561114`, context switches `94` |
+| `perf stat -d -d -d`, 8 workers | elapsed `1.142070629 s`, task-clock `2329900405`, instructions `10777817667`, cycles `7299629263`, context switches `3985` |
+| `strace -f -c`, 1 worker | total `0.275117 s` / `35827` calls; dominant calls: `futex` `0.180365 s` / `173`, `mprotect` `0.068900 s` / `32739` |
+| `strace -f -c`, 8 workers | total `1.660953 s` / `37427` calls; dominant calls: `mprotect` `1.174470 s` / `32851`, `futex` `0.380897 s` / `243`, `poll` `0.073117 s` / `445` |
+
+Validation passed with `cargo fmt --all`, `cargo check --workspace --locked`,
+the focused quota regression, the focused monitor timing test, and hotpath
+library tests `81/81`. The hotpath run still emits the existing two
+`unreachable pattern` warnings in `rust_hotpath/src/persist_plan.rs`.
+
+FUSE end-to-end validation remains blocked in this execution session:
+`FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make test-fio-sequential-io-strace` failed
+before workload execution because `sudo-rs` lacks uid-0 ownership/setuid, and
+`make test-two-mount-quota` failed at mount startup with `fusermount3:
+Operation not permitted`.
+
+Conclusion: the artificial quota advisory-lock serialization has been removed
+from ordinary block persist. Do not tune worker defaults from this single host
+yet; the next measured bottleneck is COPY BINARY staging plus the set-based
+`data_blocks` merge under concurrent writes.

@@ -3741,3 +3741,130 @@ git diff --check HEAD~1..HEAD
 git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
+
+## 2026-08-16 commit 2f95155 working tree FOD 3.2.76 late quota gate
+
+Context and inspection commands:
+
+```bash
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search "FOD 3.2.76 move quota advisory lock final validation block persist READ COMMITTED quota correctness" --wing fod
+rg -n "lock_payload_quota_on_conn|enforce_payload_quota_on_conn|persist_file_blocks_from_path|persist_file_blocks_with_crc_flag_and_reservation|reserve_payload_capacity|persisted_and_reserved_payload_bytes_on_conn|transactional_replayable|payload_capacity_reservations|READ COMMITTED|transaction_isolation" rust_hotpath/src/pg.rs rust_monitor/src/lib.rs rust_runtime docs TODO.md
+sed -n '1,320p' docs/quota-lock-concurrency-plan.md
+sed -n '70,180p' docs/block-only-performance-plan.md
+sed -n '10380,10810p' rust_hotpath/src/pg.rs
+sed -n '11920,12560p' rust_hotpath/src/pg.rs
+sed -n '1,260p' tests/integration/test_two_mount_quota.py
+sed -n '1,230p' rust_runtime/src/postgres_requirements.rs
+```
+
+Edit and validation commands:
+
+```bash
+cargo fmt --all && cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath ordinary_persist_copy_merge_completes_before_final_quota_gate -- --nocapture
+# First focused test compile failed until the test module imported
+# DbRepoPayloadObservabilitySnapshot.
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath ordinary_persist_copy_merge_completes_before_final_quota_gate -- --nocapture
+cargo fmt --all && cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-monitor payload_persist_quota_timings_are_reported -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --lib -- --nocapture
+```
+
+FUSE validation attempts:
+
+```bash
+FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make --no-print-directory test-fio-sequential-io-strace
+# Result: built Rust debug binaries, then failed before workload execution:
+# sudo-rs: sudo must be owned by uid 0 and have the setuid bit set.
+
+make --no-print-directory test-two-mount-quota
+# Result: reached FOD mount startup, then failed with
+# fusermount3: mount failed: Operation not permitted.
+```
+
+Direct concurrent block-persist profile:
+
+```bash
+RUN_ID="direct-concurrent-persist-$(git rev-parse --short HEAD)-wt-3.2.76-$(date -u +%Y%m%dT%H%M%SZ)"
+LOG_DIR="/tmp/fod-${RUN_ID}"
+ART_DIR="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s)-${RUN_ID}"
+TMP_PROJECT="/tmp/fod-direct-concurrent-persist-direct-concurrent-persist-6797299-20260816T080429Z"
+mkdir -p "$LOG_DIR" "$ART_DIR"
+printf '%s\n' "$RUN_ID" > /tmp/fod_direct_concurrent_3276_run_id
+printf '%s\n' "$LOG_DIR" > /tmp/fod_direct_concurrent_3276_log_dir
+printf '%s\n' "$ART_DIR" > /tmp/fod_direct_concurrent_3276_art_dir
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-env > "$LOG_DIR/profile-env.log"
+cargo build --manifest-path "$TMP_PROJECT/Cargo.toml" > "$LOG_DIR/cargo-build.log" 2>&1
+for size in 4M 128M; do
+  for jobs in 1 2 4 8; do
+    case "$size" in
+      4M) total_bytes=4194304 ;;
+      128M) total_bytes=134217728 ;;
+    esac
+    label="direct-${size,,}-jobs${jobs}"
+    make --no-print-directory reset > "$LOG_DIR/reset-${label}.log" 2>&1
+    make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-pg-reset > "$LOG_DIR/pg-reset-${label}.log" 2>&1
+    FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES=0 FOD_PG_WRITE_TRANSACTION_LIMIT="$jobs" FOD_TASK_WRITE_ACTIVE_LIMIT="$jobs" FOD_WORKERS_WRITE="$jobs" FOD_WORKERS_WRITE_MIN_BLOCKS=1 FOD_PERSIST_BUFFER_CHUNK_BLOCKS=1024 TOTAL_BYTES="$total_bytes" JOBS="$jobs" BLOCK_SIZE=4096 cargo run --manifest-path "$TMP_PROJECT/Cargo.toml" --quiet > "$LOG_DIR/${label}.log" 2>&1
+    make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_CAPTURE_LABEL="$label" profile-pg-top-io-wal > "$LOG_DIR/pg-top-${label}.log" 2>&1
+    make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_CAPTURE_LABEL="$label" profile-pg-metadata-top > "$LOG_DIR/pg-metadata-${label}.log" 2>&1
+    PGPASSWORD="${POSTGRES_PASSWORD:-cichosza}" psql -h "${POSTGRES_HOST:-${FOD_PG_HOST:-127.0.0.1}}" -p "${POSTGRES_PORT:-${FOD_PG_PORT:-5432}}" -U "${POSTGRES_USER:-foduser}" -d "${POSTGRES_DB:-foddbname}" -v ON_ERROR_STOP=1 -P pager=off -c "SELECT calls, round(total_exec_time::numeric, 3) AS total_exec_ms, round(mean_exec_time::numeric, 3) AS mean_exec_ms, rows, left(regexp_replace(query, '\\s+', ' ', 'g'), 180) AS query FROM pg_stat_statements WHERE query ILIKE '%data_blocks%' OR query ILIKE 'COPY fod_persist_block_stage%' OR query ILIKE '%pg_advisory_xact_lock%' OR query ILIKE '%max_fs_size_bytes%' ORDER BY total_exec_time DESC LIMIT 16;" > "$LOG_DIR/sql-filter-${label}.log" 2>&1
+  done
+done
+```
+
+Perf/strace commands:
+
+```bash
+RUN_ID=$(cat /tmp/fod_direct_concurrent_3276_run_id)
+LOG_DIR=$(cat /tmp/fod_direct_concurrent_3276_log_dir)
+ART_DIR=$(cat /tmp/fod_direct_concurrent_3276_art_dir)
+TMP_PROJECT="/tmp/fod-direct-concurrent-persist-direct-concurrent-persist-6797299-20260816T080429Z"
+for jobs in 1 8; do
+  label="direct-128m-jobs${jobs}"
+  make --no-print-directory reset > "$LOG_DIR/reset-${label}-perf.log" 2>&1
+  make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-pg-reset > "$LOG_DIR/pg-reset-${label}-perf.log" 2>&1
+  FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES=0 FOD_PG_WRITE_TRANSACTION_LIMIT="$jobs" FOD_TASK_WRITE_ACTIVE_LIMIT="$jobs" FOD_WORKERS_WRITE="$jobs" FOD_WORKERS_WRITE_MIN_BLOCKS=1 FOD_PERSIST_BUFFER_CHUNK_BLOCKS=1024 TOTAL_BYTES=134217728 JOBS="$jobs" BLOCK_SIZE=4096 perf stat -d -d -d -o "$ART_DIR/perf-stat-${label}.txt" cargo run --manifest-path "$TMP_PROJECT/Cargo.toml" --quiet > "$LOG_DIR/${label}-perf-run.log" 2>&1
+  make --no-print-directory reset > "$LOG_DIR/reset-${label}-strace.log" 2>&1
+  make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-pg-reset > "$LOG_DIR/pg-reset-${label}-strace.log" 2>&1
+  FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES=0 FOD_PG_WRITE_TRANSACTION_LIMIT="$jobs" FOD_TASK_WRITE_ACTIVE_LIMIT="$jobs" FOD_WORKERS_WRITE="$jobs" FOD_WORKERS_WRITE_MIN_BLOCKS=1 FOD_PERSIST_BUFFER_CHUNK_BLOCKS=1024 TOTAL_BYTES=134217728 JOBS="$jobs" BLOCK_SIZE=4096 strace -f -c -o "$ART_DIR/strace-summary-${label}.txt" cargo run --manifest-path "$TMP_PROJECT/Cargo.toml" --quiet > "$LOG_DIR/${label}-strace-run.log" 2>&1
+done
+```
+
+Extraction commands:
+
+```bash
+LOG_DIR=$(cat /tmp/fod_direct_concurrent_3276_log_dir)
+ART_DIR=$(cat /tmp/fod_direct_concurrent_3276_art_dir)
+for f in "$LOG_DIR"/direct-*.log; do printf '%s\n' "--- $(basename "$f") ---"; rg "OK direct-hotpath" "$f" || cat "$f"; done
+for label in direct-4m-jobs1 direct-4m-jobs2 direct-4m-jobs4 direct-4m-jobs8 direct-128m-jobs1 direct-128m-jobs2 direct-128m-jobs4 direct-128m-jobs8; do printf '%s\n' "--- $label sql filter ---"; sed -n '1,24p' "$LOG_DIR/sql-filter-${label}.log"; done
+for f in "$LOG_DIR"/direct-128m-jobs{1,8}-perf-run.log "$LOG_DIR"/direct-128m-jobs{1,8}-strace-run.log; do printf '%s\n' "--- $(basename "$f") ---"; rg "OK direct-hotpath" "$f" || cat "$f"; done
+for f in "$ART_DIR"/perf-stat-direct-128m-jobs{1,8}.txt; do printf '%s\n' "--- $(basename "$f") ---"; rg "seconds time elapsed|task-clock|instructions|cycles|context-switches|cpu-migrations|page-faults" "$f"; done
+for f in "$ART_DIR"/strace-summary-direct-128m-jobs{1,8}.txt; do printf '%s\n' "--- $(basename "$f") ---"; sed -n '1,18p' "$f"; tail -5 "$f"; done
+```
+
+Commands log ordering and final validation commands:
+
+```bash
+perl -0pi -e 'my $block; if (s/\n(## 2026-08-16 commit 2f95155 working tree FOD 3\.2\.76 late quota gate\n.*?)(?=\n## 2026-08-16 commit 6797299 concurrent block persist profiles\n)/\n/sm) { $block = $1; s/\s*\z/\n$block\n/; }' commands.md
+rg -n "^## 2026-08-16 commit (2f95155|6797299|24a1cb5|e11c81a)" commands.md
+cargo fmt --all
+cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath ordinary_persist_copy_merge_completes_before_final_quota_gate -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-monitor payload_persist_quota_timings_are_reported -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --lib -- --nocapture
+git diff --check
+git diff --stat
+git diff -- Cargo.toml fod_version.txt Cargo.lock | sed -n '1,220p'
+git diff -- rust_hotpath/src/pg.rs | sed -n '1,760p'
+git diff -- docs/block-only-performance-plan.md docs/quota-lock-concurrency-plan.md TODO.md conclusions.md | sed -n '1,360p'
+git diff -- commands.md | sed -n '1,220p'
+git status --short --branch
+git add Cargo.lock Cargo.toml TODO.md commands.md conclusions.md docs/block-only-performance-plan.md docs/quota-lock-concurrency-plan.md fod_version.txt rust_hotpath/src/pg.rs
+git diff --cached --check
+git commit -m "FOD 3.2.76: move quota gate after block persist"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```

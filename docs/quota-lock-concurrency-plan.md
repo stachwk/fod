@@ -8,6 +8,8 @@ The active storage architecture remains block-only. Do not change the 4 KiB logi
 
 FOD 3.2.75 completes the first implementation step by adding quota/persist timing observability only. It does not move the advisory lock yet and therefore does not claim a throughput improvement.
 
+FOD 3.2.76 moves ordinary block-persist writes to the short final quota gate. Reservation-token writes remain conservative and still acquire the quota lock before reservation refresh/payload persistence until their expiry/reconciliation semantics are reviewed separately.
+
 ## Why worker tuning is not the next step
 
 The 2026-08-16 direct concurrent block-persist profile on commit `6797299` showed that increasing write parallelism makes the current persistence path slower because all payload transactions serialize on the quota advisory lock.
@@ -25,9 +27,9 @@ At 128 MiB, raising concurrency from 4 to 8 workers reduced throughput while agg
 
 Therefore do not tune `workers_write`, write transaction limits, or task write admission limits as the primary optimization yet. Their useful operating point cannot be measured while a global quota lock serializes the long persistence transaction.
 
-## Current quota lock scope
+## Historical quota lock scope
 
-The current ordinary block-persist path effectively has this shape:
+Before FOD 3.2.76, the ordinary block-persist path effectively had this shape:
 
 ```text
 BEGIN
@@ -175,6 +177,8 @@ Apply the smallest change first:
 
 Keep reservation-token paths conservative until their refresh/expiry semantics are separately reviewed.
 
+Status: implemented in FOD 3.2.76 for ordinary `persist_file_blocks*` paths without a capacity reservation token. `persist_file_blocks_from_path` and normal block-row persistence now perform COPY/merge before taking the quota advisory lock, then acquire the lock immediately before rereading `max_fs_size_bytes` and running the final persisted+reserved quota check. The final quota query relies on FOD's session setup pinning PostgreSQL `READ COMMITTED`, which is already part of runtime requirements.
+
 ### Step 3 — prove two-process/two-mount quota safety
 
 The existing concurrent quota regression must continue to prove the database-wide invariant.
@@ -187,6 +191,8 @@ Add or strengthen cases for:
 - rejected writer leaves zero unexpected `data_blocks` rows and no leaked reservation;
 - same test using independent repository connections/processes;
 - mounted two-FUSE-instance regression when the host environment permits it.
+
+Status: partially implemented in FOD 3.2.76. The new direct hotpath regression `ordinary_persist_copy_merge_completes_before_final_quota_gate` uses two independent `DbRepo` instances, forces both writers to reach the final advisory-lock wait after COPY/merge, verifies one writer commits and one rolls back with quota failure, and checks the rejected file leaves no `data_blocks` rows. The mounted two-FUSE-instance regression remains required on a host that permits FUSE mounting.
 
 ### Step 4 — measure concurrency before worker tuning
 
@@ -211,6 +217,8 @@ Capture:
 - `perf stat` and `strace -f -c` for the best and worst 128 MiB cases.
 
 Only after the long quota serialization is removed should FOD choose or tune write worker defaults.
+
+Status: direct hotpath profile completed for FOD 3.2.76 working tree based on commit `2f95155`; FUSE fio/two-mount profiles were blocked by the local host's `sudo-rs`/`fusermount3` permissions.
 
 ### Step 5 — decide whether ordinary writes need pre-reservation
 

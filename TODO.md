@@ -785,7 +785,8 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
 - [x] Re-profile block-only 4 MiB/128 MiB workloads and verify that repeated hardlink-count SQL is not the dominant cost on those profiles.
 - [x] Optimize the file-attribute payload allocation query that repeatedly counts `data_blocks` for the same file object; FOD 3.2.74 moved normal `read()` away from the full `FileAttr.blocks` query, reducing the 128 MiB large-file profile from 1031 calls / about `3570 ms` to 5 calls / about `12 ms`.
 - [x] FOD 3.2.75: instrument quota critical-section timing for persist transactions, COPY staging, `data_blocks` merge, advisory-lock wait/held time and final quota check without changing lock scope.
-- [ ] FOD 3.2.76+: move ordinary block-persist quota advisory-lock serialization to the final quota validation gate, keeping reservation-token paths conservative until refresh/expiry semantics are reviewed.
-- [ ] After the quota lock moves, prove two-process/two-mount quota safety and rollback behavior, then re-profile 4 MiB/128 MiB direct concurrent block persistence for 1/2/4/8 workers.
+- [x] FOD 3.2.76: move ordinary block-persist quota advisory-lock serialization to the final quota validation gate, keeping reservation-token paths conservative until refresh/expiry semantics are reviewed.
+- [x] FOD 3.2.76: prove direct two-repository quota safety and rollback behavior, then re-profile 4 MiB/128 MiB direct concurrent block persistence for 1/2/4/8 workers.
+- [ ] Re-run mounted two-FUSE-instance quota and fio/strace profiles on a host that permits `fusermount3` and has working `sudo`/strace permissions.
 - [ ] Revisit the remaining read metadata round trip only with a correctness-preserving design. The FOD 3.2.74 fix intentionally does not cache file size in `fh` without cross-mount/truncate invalidation; if this becomes material, fold size metadata into the block-read query or add a cache with a proven invalidation contract.
-- [ ] Profile and optimize the next measured 128 MiB block-only bottleneck: COPY BINARY staging plus the `data_blocks` set-based merge still cost about `2.24-2.36 s` per 128 MiB write profile after the allocation-query fix.
+- [ ] Optimize the next measured 128 MiB block-only bottleneck after FOD 3.2.76: COPY BINARY staging plus the `data_blocks` set-based merge under concurrent writes.

@@ -2,7 +2,7 @@
 
 ## Status
 
-This is the canonical active storage-performance plan after FOD 3.2.71-3.2.75.
+This is the canonical active storage-performance plan after FOD 3.2.71-3.2.76.
 Older storage-engine plans and ADRs may retain benchmark history, but they must
 not define an active runtime path that conflicts with this document.
 
@@ -84,6 +84,14 @@ FOD 3.2.75 adds the observability needed for the next comparison:
 `quota_lock_wait_*`, `quota_lock_held_*`, and `quota_final_check_*`. This is an
 instrumentation step only; the ordinary block-persist transaction shape is
 unchanged until the quota lock is moved to the final validation gate.
+
+FOD 3.2.76 moves ordinary block-persist writes to that final validation gate
+and keeps reservation-token writes conservative. The direct 128 MiB profile now
+scales from `51.888 MiB/s` at 1 worker to `131.285 MiB/s` at 8 workers, while
+the aggregate advisory-lock SQL time at 8 workers drops from the old
+`12683.113 ms` to `9.742 ms`. The next measured bottleneck is no longer quota
+serialization; it is COPY BINARY staging plus the set-based `data_blocks`
+merge under real concurrency.
 
 The detailed implementation subplan is:
 

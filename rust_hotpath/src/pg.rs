@@ -10471,7 +10471,6 @@ impl DbRepo {
         let result = self.with_cached_connection(|conn| unsafe {
             let transaction_started = Instant::now();
             let result = transactional_replayable(conn, |conn| {
-                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
                 self.persist_file_blocks_streaming_on_conn(
                     conn,
                     file_id,
@@ -10483,6 +10482,10 @@ impl DbRepo {
                     expected_hash,
                     maintain_copy_crc_table,
                 )?;
+                // FOD connection setup pins READ COMMITTED; the final quota
+                // query relies on seeing writers committed while this
+                // transaction waited for the advisory lock.
+                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
                 self.enforce_payload_quota_on_conn(conn, &quota_lock, None)
             });
             self.record_persist_transaction_elapsed(transaction_started.elapsed(), result.is_err());
@@ -10552,38 +10555,45 @@ impl DbRepo {
         let result = self.with_cached_connection(|conn| unsafe {
             let transaction_started = Instant::now();
             let result = transactional_replayable(conn, |conn| {
-                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
-                self.refresh_payload_reservation_on_conn(
+                if capacity_reservation_token.is_some() {
+                    let quota_lock = self.lock_payload_quota_on_conn(conn)?;
+                    self.refresh_payload_reservation_on_conn(
+                        conn,
+                        quota_lock.quota_bytes(),
+                        capacity_reservation_token,
+                    )?;
+                    self.persist_file_blocks_rows_on_conn(
+                        conn,
+                        file_id,
+                        file_size,
+                        block_size,
+                        total_blocks,
+                        truncate_pending,
+                        blocks,
+                        maintain_copy_crc_table,
+                    )?;
+                    return self.enforce_payload_quota_on_conn(
+                        conn,
+                        &quota_lock,
+                        capacity_reservation_token,
+                    );
+                }
+
+                self.persist_file_blocks_rows_on_conn(
                     conn,
-                    quota_lock.quota_bytes(),
-                    capacity_reservation_token,
+                    file_id,
+                    file_size,
+                    block_size,
+                    total_blocks,
+                    truncate_pending,
+                    blocks,
+                    maintain_copy_crc_table,
                 )?;
-                match self.persist_block_transport {
-                    PersistBlockTransport::CopyBinaryStaging => self
-                        .persist_file_blocks_copy_binary_staging_on_conn(
-                            conn,
-                            file_id,
-                            file_size,
-                            block_size,
-                            total_blocks,
-                            truncate_pending,
-                            blocks,
-                            maintain_copy_crc_table,
-                        ),
-                    PersistBlockTransport::BinaryBytea | PersistBlockTransport::LegacyHex => self
-                        .persist_file_blocks_direct_on_conn(
-                            conn,
-                            file_id,
-                            file_size,
-                            block_size,
-                            total_blocks,
-                            truncate_pending,
-                            blocks,
-                            maintain_copy_crc_table,
-                            self.persist_block_transport,
-                        ),
-                }?;
-                self.enforce_payload_quota_on_conn(conn, &quota_lock, capacity_reservation_token)
+                // FOD connection setup pins READ COMMITTED; the final quota
+                // query relies on seeing writers committed while this
+                // transaction waited for the advisory lock.
+                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
+                self.enforce_payload_quota_on_conn(conn, &quota_lock, None)
             });
             self.record_persist_transaction_elapsed(transaction_started.elapsed(), result.is_err());
             result
@@ -10592,6 +10602,44 @@ impl DbRepo {
             payload_guard.mark_success();
         }
         result
+    }
+
+    unsafe fn persist_file_blocks_rows_on_conn<'a>(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+        file_size: u64,
+        block_size: u64,
+        total_blocks: u64,
+        truncate_pending: bool,
+        blocks: &[PersistBlockRow<'a>],
+        maintain_copy_crc_table: bool,
+    ) -> Result<(), String> {
+        match self.persist_block_transport {
+            PersistBlockTransport::CopyBinaryStaging => self
+                .persist_file_blocks_copy_binary_staging_on_conn(
+                    conn,
+                    file_id,
+                    file_size,
+                    block_size,
+                    total_blocks,
+                    truncate_pending,
+                    blocks,
+                    maintain_copy_crc_table,
+                ),
+            PersistBlockTransport::BinaryBytea | PersistBlockTransport::LegacyHex => self
+                .persist_file_blocks_direct_on_conn(
+                    conn,
+                    file_id,
+                    file_size,
+                    block_size,
+                    total_blocks,
+                    truncate_pending,
+                    blocks,
+                    maintain_copy_crc_table,
+                    self.persist_block_transport,
+                ),
+        }
     }
 
     unsafe fn lock_payload_quota_on_conn(
@@ -12108,8 +12156,11 @@ impl LaneObservabilitySource for DbRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fod_rust_monitor::DbRepoPayloadObservabilitySnapshot;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
+
+    const TEST_BLOCK_SIZE: u64 = 4096;
 
     fn conninfo() -> String {
         let dbname = std::env::var("POSTGRES_DB").unwrap_or_else(|_| "foddbname".to_string());
@@ -12120,6 +12171,245 @@ mod tests {
         let port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
         format!(
             "host={host} port={port} dbname={dbname} user={user} password={password} connect_timeout=5"
+        )
+    }
+
+    fn repo_with_global_payload(global: Arc<DbRepoPayloadObservability>) -> DbRepo {
+        let runtime = RuntimeConfig::from_runtime_map(&HashMap::new()).unwrap();
+        let storage = runtime.storage_settings();
+        DbRepo::new_with_tuning(
+            &conninfo(),
+            ConnectionTuning::from_storage(&storage),
+            storage.persist_buffer_chunk_blocks,
+            PersistBlockTransport::CopyBinaryStaging,
+            storage.data_object_swap_cleanup,
+            4,
+            RuntimeTransactionSettings {
+                write_active_limit: 2,
+                control_active_limit: 1,
+            },
+            Arc::new(DbRepoPayloadObservability::default()),
+            global,
+        )
+        .unwrap()
+    }
+
+    fn quoted_list(values: &[String]) -> String {
+        values
+            .iter()
+            .map(|value| DbRepo::quote_literal(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn cleanup_files_by_name(repo: &DbRepo, names: &[String]) {
+        if names.is_empty() {
+            return;
+        }
+        let names_sql = quoted_list(names);
+        let ids = repo
+            .query_rows_text(&format!(
+                "SELECT data_object_id::text FROM files WHERE name IN ({names_sql})"
+            ))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|row| row.into_iter().next())
+            .filter(|value| value.chars().all(|ch| ch.is_ascii_digit()))
+            .collect::<Vec<_>>();
+        let id_list = if ids.is_empty() {
+            "NULL".to_string()
+        } else {
+            ids.join(", ")
+        };
+        let _ = repo.exec(&format!(
+            "
+            DELETE FROM copy_block_crc WHERE data_object_id IN ({id_list});
+            DELETE FROM data_blocks WHERE data_object_id IN ({id_list});
+            DELETE FROM files WHERE name IN ({names_sql});
+            DELETE FROM data_objects WHERE id_data_object IN ({id_list});
+            "
+        ));
+    }
+
+    struct TestFilesCleanup {
+        repo: DbRepo,
+        names: Vec<String>,
+    }
+
+    impl Drop for TestFilesCleanup {
+        fn drop(&mut self) {
+            cleanup_files_by_name(&self.repo, &self.names);
+        }
+    }
+
+    struct ConfigValueGuard {
+        repo: DbRepo,
+        key: String,
+        original_value: String,
+    }
+
+    impl ConfigValueGuard {
+        fn set(repo: &DbRepo, key: &str, value: &str) -> Self {
+            let key_sql = DbRepo::quote_literal(key);
+            let original_value = repo
+                .query_scalar_text(&format!("SELECT value FROM config WHERE key = {key_sql}"))
+                .expect("failed to read original config value");
+            repo.exec(&format!(
+                "UPDATE config SET value = {} WHERE key = {key_sql}",
+                DbRepo::quote_literal(value)
+            ))
+            .expect("failed to update config value");
+            Self {
+                repo: repo.clone(),
+                key: key.to_string(),
+                original_value,
+            }
+        }
+    }
+
+    impl Drop for ConfigValueGuard {
+        fn drop(&mut self) {
+            let _ = self.repo.exec(&format!(
+                "UPDATE config SET value = {} WHERE key = {}",
+                DbRepo::quote_literal(&self.original_value),
+                DbRepo::quote_literal(&self.key)
+            ));
+        }
+    }
+
+    fn current_payload_bytes(repo: &DbRepo) -> u64 {
+        repo.query_scalar_text(
+            "
+            SELECT (
+                (SELECT COUNT(*)::bigint FROM data_blocks)
+                * (SELECT value::bigint FROM config WHERE key = 'block_size')
+            )::text
+            ",
+        )
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+    }
+
+    fn current_quota_accounted_bytes(repo: &DbRepo) -> u64 {
+        repo.query_scalar_text(
+            "
+            SELECT (
+                (SELECT COUNT(*)::bigint FROM data_blocks)
+                * (SELECT value::bigint FROM config WHERE key = 'block_size')
+                + COALESCE((
+                    SELECT SUM(reserved_bytes)::bigint
+                    FROM payload_capacity_reservations
+                    WHERE expires_at > NOW()
+                ), 0)
+            )::text
+            ",
+        )
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+    }
+
+    fn wait_for_advisory_waiters(repo: &DbRepo, expected: u64) -> Result<u64, String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let sql = "
+            SELECT COUNT(*)::text
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND wait_event = 'advisory'
+        ";
+        loop {
+            let waiting = repo
+                .query_scalar_text(sql)?
+                .trim()
+                .parse::<u64>()
+                .unwrap_or(0);
+            if waiting >= expected {
+                return Ok(waiting);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "expected {expected} advisory-lock waiters, observed {waiting}"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn wait_for_copy_merge_metrics(
+        global: &DbRepoPayloadObservability,
+        expected: u64,
+    ) -> Result<DbRepoPayloadObservabilitySnapshot, String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let snapshot = global.snapshot()?;
+            if snapshot.persist_copy_stage_count >= expected
+                && snapshot.persist_data_blocks_merge_count >= expected
+            {
+                return Ok(snapshot);
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "expected {expected} COPY/merge observations, got copy={} merge={}",
+                    snapshot.persist_copy_stage_count, snapshot.persist_data_blocks_merge_count
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn file_storage_state(repo: &DbRepo, names: &[String]) -> HashMap<String, (u64, u64)> {
+        let names_sql = quoted_list(names);
+        repo.query_rows_text(&format!(
+            "
+            SELECT
+                name,
+                size::text,
+                (SELECT COUNT(*)::text
+                 FROM data_blocks
+                 WHERE data_object_id = files.data_object_id)
+            FROM files
+            WHERE name IN ({names_sql})
+            "
+        ))
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            (
+                row[0].clone(),
+                (
+                    row[1].trim().parse().unwrap(),
+                    row[2].trim().parse().unwrap(),
+                ),
+            )
+        })
+        .collect()
+    }
+
+    fn run_single_block_persist(
+        repo: DbRepo,
+        file_id: u64,
+        fill: u8,
+        barrier: Arc<std::sync::Barrier>,
+    ) -> Result<(), String> {
+        let block = vec![fill; TEST_BLOCK_SIZE as usize];
+        let rows = [PersistBlockRow {
+            block_index: 0,
+            data: &block,
+            used_len: TEST_BLOCK_SIZE,
+        }];
+        barrier.wait();
+        repo.persist_file_blocks_with_crc_flag(
+            file_id,
+            TEST_BLOCK_SIZE,
+            TEST_BLOCK_SIZE,
+            1,
+            false,
+            &rows,
+            false,
         )
     }
 
@@ -12378,6 +12668,155 @@ mod tests {
         assert_eq!(final_snapshot.queued_requests, 0);
         assert_eq!(final_snapshot.budget_accounting_errors, 0);
         assert_eq!(final_snapshot.accounting_errors, 0);
+    }
+
+    #[test]
+    fn ordinary_persist_copy_merge_completes_before_final_quota_gate() {
+        let global = Arc::new(DbRepoPayloadObservability::default());
+        let observer = repo_with_global_payload(Arc::clone(&global));
+        assert!(
+            observer.schema_is_initialized().unwrap(),
+            "FOD schema must be initialized before running the quota concurrency test"
+        );
+
+        let suffix = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let names = vec![
+            format!("late-quota-a-{suffix}.bin"),
+            format!("late-quota-b-{suffix}.bin"),
+        ];
+        cleanup_files_by_name(&observer, &names);
+        let _cleanup = TestFilesCleanup {
+            repo: observer.clone(),
+            names: names.clone(),
+        };
+
+        let repo_a = repo_with_global_payload(Arc::clone(&global));
+        let repo_b = repo_with_global_payload(Arc::clone(&global));
+        let file_ids = [
+            repo_a
+                .create_file(None, &names[0], 0o644, 1000, 1000, &format!("{suffix}-a"))
+                .unwrap(),
+            repo_b
+                .create_file(None, &names[1], 0o644, 1000, 1000, &format!("{suffix}-b"))
+                .unwrap(),
+        ];
+
+        let baseline_payload = current_payload_bytes(&observer);
+        let quota_accounted = current_quota_accounted_bytes(&observer);
+        let _limit_guard = ConfigValueGuard::set(
+            &observer,
+            "max_fs_size_bytes",
+            &quota_accounted.saturating_add(TEST_BLOCK_SIZE).to_string(),
+        );
+
+        let blocker = repo_with_global_payload(Arc::clone(&global));
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let mut handles = vec![
+            {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    run_single_block_persist(repo_a, file_ids[0], b'A', barrier)
+                })
+            },
+            {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    run_single_block_persist(repo_b, file_ids[1], b'B', barrier)
+                })
+            },
+        ];
+
+        let before_release = blocker
+            .with_cached_connection(|conn| unsafe {
+                let begin = CString::new("BEGIN").unwrap();
+                let rollback = CString::new("ROLLBACK").unwrap();
+                let commit = CString::new("COMMIT").unwrap();
+                let lock = CString::new("SELECT pg_advisory_xact_lock(4607812, 1)").unwrap();
+                exec_command(conn, &begin)?;
+                query_scalar_text_on_conn(conn, &lock)?;
+                barrier.wait();
+
+                let result = (|| {
+                    let waiting = wait_for_advisory_waiters(&observer, 2)?;
+                    let snapshot = wait_for_copy_merge_metrics(&global, 2)?;
+                    if snapshot.quota_final_check_count != 0 {
+                        return Err(format!(
+                            "final quota check ran before the external advisory lock was released: {}",
+                            snapshot.quota_final_check_count
+                        ));
+                    }
+                    Ok((waiting, snapshot))
+                })();
+
+                let release = if result.is_ok() {
+                    exec_command(conn, &commit)
+                } else {
+                    exec_command(conn, &rollback)
+                };
+                release?;
+                result
+            })
+            .unwrap();
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles.drain(..) {
+            results.push(
+                handle
+                    .join()
+                    .unwrap_or_else(|_| Err("quota writer panicked".to_string())),
+            );
+        }
+
+        let winners = results
+            .iter()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().ok().map(|_| index))
+            .collect::<Vec<_>>();
+        let rejected = results
+            .iter()
+            .enumerate()
+            .filter_map(|(index, result)| match result {
+                Err(err) if err.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) => Some(index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            winners.len(),
+            1,
+            "expected one successful writer, got {results:?}"
+        );
+        assert_eq!(
+            rejected.len(),
+            1,
+            "expected one quota rejection, got {results:?}"
+        );
+
+        let after_payload = current_payload_bytes(&observer);
+        assert_eq!(after_payload, baseline_payload + TEST_BLOCK_SIZE);
+        let states = file_storage_state(&observer, &names);
+        let expected_states = HashMap::from([
+            (names[winners[0]].clone(), (TEST_BLOCK_SIZE, 1)),
+            (names[rejected[0]].clone(), (0, 0)),
+        ]);
+        assert_eq!(states, expected_states);
+
+        let final_snapshot = global.snapshot().unwrap();
+        assert!(before_release.0 >= 2);
+        assert!(before_release.1.persist_copy_stage_count >= 2);
+        assert!(before_release.1.persist_data_blocks_merge_count >= 2);
+        assert_eq!(before_release.1.quota_final_check_count, 0);
+        assert!(final_snapshot.quota_lock_wait_count >= 2);
+        assert!(final_snapshot.quota_lock_held_count >= 2);
+        assert!(final_snapshot.quota_final_check_count >= 2);
+        assert_eq!(final_snapshot.persist_transaction_count, 2);
+        assert_eq!(final_snapshot.persist_transaction_failures, 1);
     }
 
     #[test]
