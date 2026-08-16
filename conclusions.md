@@ -1321,3 +1321,58 @@ Final code validation passed with `cargo fmt --all`,
 `cargo check --workspace --locked`, FUSE atime tests `3/3`, and hotpath library
 tests `80/80`. The hotpath test run still emits two existing
 `unreachable pattern` warnings in `rust_hotpath/src/persist_plan.rs`.
+
+## 2026-08-16 — FOD 3.2.74 concurrent block persist profiles
+
+Measured commit: `6797299` (`FOD 3.2.74: reduce read attr allocation
+queries`). The requested concurrent fio-through-FUSE matrix could not run in
+this execution session: the first mount attempt failed with `fusermount3:
+mount failed: Operation not permitted`, and the sudo retry failed before mount
+with `sudo-rs: sudo must be owned by uid 0 and have the setuid bit set`.
+Those are environment blockers for this session, not a successful FOD workload.
+
+As a fallback, a temporary benchmark outside the repo called
+`DbRepo::persist_file_blocks_with_crc_flag` directly, split the payload into
+4 KiB `data_blocks`, and started 4 or 8 concurrent PostgreSQL persist workers.
+The benchmark set `FOD_PG_WRITE_TRANSACTION_LIMIT` to the worker count and
+disabled the PostgreSQL payload byte gate with
+`FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES=0`, so the result isolates the hotpath
+database persist contract rather than FUSE admission. Logs are under
+`/tmp/fod-direct-concurrent-persist-6797299-20260816T080429Z/`; profiler
+artifacts are under
+`artifacts/perf/6797299/lt7300-direct-concurrent-persist-6797299-20260816T080429Z/`.
+
+| workload | workers | blocks | elapsed | throughput | worker max |
+| --- | --- | --- | --- | --- | --- |
+| direct hotpath persist | 4, total 4 MiB | `1024` | `0.151831 s` | `26.345 MiB/s` | `150750 us` |
+| direct hotpath persist | 8, total 4 MiB | `1024` | `0.231268 s` | `17.296 MiB/s` | `230099 us` |
+| direct hotpath persist | 4, total 128 MiB | `32768` | `2.484365 s` | `51.522 MiB/s` | `2449177 us` |
+| direct hotpath persist | 8, total 128 MiB | `32768` | `3.759582 s` | `34.046 MiB/s` | `3715045 us` |
+
+`pg_stat_statements` shows that higher write parallelism does not improve the
+current hotpath shape. The dominant statement is the quota advisory lock before
+the actual COPY/merge work:
+
+| workload | advisory lock | COPY staging | data_blocks merge shape |
+| --- | --- | --- | --- |
+| 4 MiB / 4 workers | `4` calls / `117.372 ms` | `4` calls / `62.861 ms` | four merges, about `9.4-10.8 ms` each |
+| 4 MiB / 8 workers | `8` calls / `256.648 ms` | `8` calls / `73.312 ms` | eight merges, about `4.9-8.3 ms` each |
+| 128 MiB / 4 workers | `4` calls / `3517.839 ms` | `4` calls / `1198.963 ms` | four merges, about `284-307 ms` each |
+| 128 MiB / 8 workers | `8` calls / `12683.113 ms` | `8` calls / `1798.962 ms` | eight merges, about `152-349 ms` each |
+
+Conclusion: the current `persist_file_blocks*` contract serializes concurrent
+payload persists on `SELECT pg_advisory_xact_lock($1, $2)` for quota accounting,
+even when the payload in-flight gate is disabled and the PostgreSQL transaction
+limit is raised. For 128 MiB, 8 workers are slower than 4 workers on this host
+because total lock wait rises from about `3.5 s` to about `12.7 s`. The next
+write-side optimization should first narrow or remove the global quota lock
+from the long COPY/merge section while preserving quota correctness across
+multiple mounts/processes. Only after that does it make sense to tune worker
+counts or the data_blocks merge itself.
+
+Additional profiling for the 128 MiB / 8-worker direct benchmark:
+
+| profile | result |
+| --- | --- |
+| `perf stat -d -d -d` | elapsed `2.997395838 s`, task-clock `1636084892`, instructions `10810655605`, cycles `5624560314`, context switches `2061` |
+| `strace -f -c` | total `1.518181 s` / `37434` calls; dominant calls: `mprotect` `1.130065 s` / `32884`, `futex` `0.374142 s` / `250`, `read` `0.002344 s` / `543`, `sendto` `0.002331 s` / `554` |

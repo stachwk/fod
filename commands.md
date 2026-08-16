@@ -3549,3 +3549,114 @@ git diff --check HEAD~1..HEAD
 git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
+
+## 2026-08-16 commit 6797299 concurrent block persist profiles
+
+Context and inspection commands:
+
+```bash
+git status --short --branch && git rev-parse --short HEAD && printf 'version=' && tr -d '\n' < fod_version.txt && printf '\n'
+source ~/.venv/bin/activate && mempalace search "FOD workers_write parallel write database blocks fio 4M 128M" --wing fod
+rg -n "write_active_limit|WRITE_ACTIVE|active_limit|FOD_.*WRITE.*LIMIT|workers_write|WORKERS_WRITE|pool.*write|FOD_DB|PG.*POOL|PERSIST_BUFFER" rust_runtime rust_fuse rust_hotpath tests docs Makefile
+rg -n "profile-pg|test-fio|fio|strace|perf|workers-write|parallel" Makefile tests/integration scripts docs TODO.md conclusions.md commands.md
+sed -n '1,240p' tests/integration/fod_testlib.sh
+sed -n '1,130p' tests/integration/test_fio_sequential_io.sh
+sed -n '1,120p' docs/runtime-configuration.md && sed -n '130,175p' docs/runtime-configuration.md && sed -n '215,245p' docs/runtime-configuration.md
+findmnt -rn -t fuse.fod-rust-fuse,fuse.fod -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true; ps -eo pid,ppid,cmd | rg 'fod-rust-fuse|target/.*/fod-rust-fuse' || true
+```
+
+Failed fio-through-FUSE attempts in this execution session:
+
+```bash
+RUN_ID="concurrent-write-$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+LOG_DIR="/tmp/fod-${RUN_ID}"
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-env
+make --no-print-directory test-workers-write-parallel-copy
+# Custom concurrent fio mount+write matrix, first case 4M/4 workers.
+# Result: fusermount3: mount failed: Operation not permitted.
+
+RUN_ID="concurrent-write-$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+LOG_DIR="/tmp/fod-concurrent-write-${RUN_ID}"
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-env
+make --no-print-directory test-workers-write-parallel-copy
+# Retry with sudo around mount+fio.
+# Result: sudo-rs: sudo must be owned by uid 0 and have the setuid bit set.
+
+make --no-print-directory test-fio-sequential-io FIO_CASES=block FIO_FILE_SIZE=64k
+# Result: fusermount3: mount failed: Operation not permitted.
+```
+
+Direct hotpath concurrent persist benchmark commands:
+
+```bash
+RUN_ID="direct-concurrent-persist-$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+LOG_DIR="/tmp/fod-${RUN_ID}"
+ART_DIR="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s)-${RUN_ID}"
+TMP_PROJECT="/tmp/fod-direct-concurrent-persist-${RUN_ID}"
+mkdir -p "$LOG_DIR" "$ART_DIR" "$TMP_PROJECT/src"
+printf '%s\n' "$RUN_ID" > /tmp/fod_direct_concurrent_run_id
+printf '%s\n' "$(hostname -s)" > /tmp/fod_direct_concurrent_host
+printf '%s\n' "$LOG_DIR" > /tmp/fod_direct_concurrent_log_dir
+printf '%s\n' "$ART_DIR" > /tmp/fod_direct_concurrent_art_dir
+# Created temporary Cargo project under $TMP_PROJECT using path dependencies:
+# fod-rust-hotpath = { path = "$PWD/rust_hotpath" }
+# fod-rust-runtime = { path = "$PWD/rust_runtime" }
+# The temporary main program creates files through DbRepo, splits payload into
+# 4 KiB PersistBlockRow entries, and runs persist_file_blocks_with_crc_flag
+# concurrently.
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-env | tee "$LOG_DIR/profile-env.log"
+cargo build --manifest-path "$TMP_PROJECT/Cargo.toml"
+
+for case in "4M 4" "4M 8" "128M 4" "128M 8"; do
+  set -- $case
+  size="$1"
+  jobs="$2"
+  case "$size" in
+    4M) total_bytes=4194304 ;;
+    128M) total_bytes=134217728 ;;
+    *) echo "unsupported size $size" >&2; exit 2 ;;
+  esac
+  make --no-print-directory reset
+  make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-pg-reset
+  FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES=0 \
+    FOD_PG_WRITE_TRANSACTION_LIMIT="$jobs" \
+    FOD_TASK_WRITE_ACTIVE_LIMIT="$jobs" \
+    FOD_WORKERS_WRITE="$jobs" \
+    FOD_WORKERS_WRITE_MIN_BLOCKS=1 \
+    FOD_PERSIST_BUFFER_CHUNK_BLOCKS=1024 \
+    TOTAL_BYTES="$total_bytes" \
+    JOBS="$jobs" \
+    BLOCK_SIZE=4096 \
+    cargo run --manifest-path "$TMP_PROJECT/Cargo.toml" --quiet
+  make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_CAPTURE_LABEL="direct-${size,,}-jobs${jobs}" profile-pg-top-io-wal
+  make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_CAPTURE_LABEL="direct-${size,,}-jobs${jobs}" profile-pg-metadata-top
+  PGPASSWORD="${POSTGRES_PASSWORD:-cichosza}" psql \
+    -h "${POSTGRES_HOST:-${FOD_PG_HOST:-127.0.0.1}}" \
+    -p "${POSTGRES_PORT:-${FOD_PG_PORT:-5432}}" \
+    -U "${POSTGRES_USER:-foduser}" \
+    -d "${POSTGRES_DB:-foddbname}" \
+    -v ON_ERROR_STOP=1 \
+    -P pager=off \
+    -c "SELECT calls, round(total_exec_time::numeric, 3) AS total_exec_ms, round(mean_exec_time::numeric, 3) AS mean_exec_ms, rows, left(regexp_replace(query, '\\s+', ' ', 'g'), 180) AS query FROM pg_stat_statements WHERE query ILIKE '%data_blocks%' OR query ILIKE 'COPY fod_persist_block_stage%' OR query ILIKE '%pg_advisory_xact_lock%' ORDER BY total_exec_time DESC LIMIT 14;"
+done
+
+make --no-print-directory reset
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-pg-reset
+FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES=0 FOD_PG_WRITE_TRANSACTION_LIMIT=8 FOD_TASK_WRITE_ACTIVE_LIMIT=8 FOD_WORKERS_WRITE=8 FOD_WORKERS_WRITE_MIN_BLOCKS=1 FOD_PERSIST_BUFFER_CHUNK_BLOCKS=1024 TOTAL_BYTES=134217728 JOBS=8 BLOCK_SIZE=4096 perf stat -d -d -d -o "$ART_DIR/perf-stat-direct-128m-jobs8.txt" cargo run --manifest-path "$TMP_PROJECT/Cargo.toml" --quiet
+make --no-print-directory reset
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" profile-pg-reset
+FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES=0 FOD_PG_WRITE_TRANSACTION_LIMIT=8 FOD_TASK_WRITE_ACTIVE_LIMIT=8 FOD_WORKERS_WRITE=8 FOD_WORKERS_WRITE_MIN_BLOCKS=1 FOD_PERSIST_BUFFER_CHUNK_BLOCKS=1024 TOTAL_BYTES=134217728 JOBS=8 BLOCK_SIZE=4096 strace -f -c -o "$ART_DIR/strace-summary-direct-128m-jobs8.txt" cargo run --manifest-path "$TMP_PROJECT/Cargo.toml" --quiet
+```
+
+Extraction commands:
+
+```bash
+LOG_DIR="$(cat /tmp/fod_direct_concurrent_log_dir)"
+ART_DIR="$(cat /tmp/fod_direct_concurrent_art_dir)"
+for f in "$LOG_DIR"/direct-*.log "$LOG_DIR"/direct-128m-jobs8-perf-run.log "$LOG_DIR"/direct-128m-jobs8-strace-run.log; do echo "--- $(basename "$f") ---"; rg "OK direct-hotpath" "$f" || true; done
+for case in direct-4m-jobs4 direct-4m-jobs8 direct-128m-jobs4 direct-128m-jobs8; do echo "--- $case sql top ---"; awk 'NR>=3 && NR<=12 {print}' "$LOG_DIR/sql-filter-${case}.log"; done
+cat "$ART_DIR/perf-stat-direct-128m-jobs8.txt"
+cat "$ART_DIR/strace-summary-direct-128m-jobs8.txt"
+du -sh "$LOG_DIR" "$ART_DIR"
+find "$ART_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+```
