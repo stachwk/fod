@@ -4,9 +4,10 @@
 
 This is the canonical active storage-performance plan after FOD 3.2.71-3.2.76.
 Older storage-engine plans and ADRs may retain benchmark history, but they must
-not define an active runtime path that conflicts with this document.
+not define an active runtime path or optimization order that conflicts with this
+document.
 
-The active storage architecture is intentionally block-only:
+The production storage architecture is intentionally block-only:
 
 ```text
 FUSE write/read
@@ -24,12 +25,9 @@ Do not introduce another payload representation unless a later measured
 workload proves that the single `data_blocks` model is insufficient and a new
 ADR explicitly replaces this boundary.
 
-## Completed decisions
+## Completed performance decisions
 
-### Extent PoC retirement
-
-The extent PoC completed its purpose and was removed from the production
-architecture:
+### FOD 3.2.71-3.2.73 — retire the extent PoC
 
 - FOD 3.2.71 disabled production extent persistence;
 - FOD 3.2.72 migrated remaining `data_extents` rows to `data_blocks` with
@@ -37,225 +35,239 @@ architecture:
 - FOD 3.2.73 removed extent planner/payload/read/persist code and dropped the
   retired table after the migration gate.
 
-The deciding 128 MiB profile showed that converting existing extents back to
-4 KiB blocks cost about `13.65 s` inside a roughly `16.08 s` persist operation.
-That conversion and the dual-representation complexity are no longer acceptable
-hot-path tradeoffs.
+The deciding 128 MiB profile showed an extent-to-block conversion taking about
+`13.65 s` inside a roughly `16.08 s` persist operation. Dual block/extent
+representation is therefore not an acceptable production hot-path tradeoff.
 
-### Read-side allocation query
+### FOD 3.2.74 — remove repeated read-side allocation COUNT
 
-FOD 3.2.74 removed the repeated allocated-block COUNT from normal `read()`.
-Real `lookup`/`getattr` keep the exact `FileAttr.blocks` semantics, while normal
-reads use narrow by-file-id metadata.
+Normal `read()` no longer executes the full `FileAttr.blocks` allocation query.
+Real `lookup`/`getattr` keep exact allocation semantics, while reads use narrower
+by-file-id metadata.
 
-Measured change for the 128 MiB large-file profile:
+The 128 MiB large-file profile dropped from roughly `1031` allocation-query
+calls / `3570 ms` to about `5` calls / `12 ms`.
 
-- old allocation query: about `1031` calls / `3570 ms`;
-- after FOD 3.2.74: about `5` calls / `12 ms`;
-- large-file wall throughput stayed roughly flat, so the next limiting work is
-  on the write/concurrency side rather than the old allocation query.
+Do not replace this with a handle-local size cache unless cross-mount, truncate,
+copy-on-write, replay and remount invalidation are proven.
 
-Do not replace this with a handle-local file-size cache unless cross-mount,
-truncate, copy-on-write, replay and remount invalidation are proven.
+### FOD 3.2.75 — quota/persist observability
 
-## Current measured write-side problem
+FOD 3.2.75 added separate timings for:
 
-The 2026-08-16 concurrent direct block-persist profile on commit `6797299`
-showed that increasing write concurrency makes the current persistence path
-slower because payload transactions serialize on the global quota advisory
-lock.
+- total persist transaction;
+- COPY BINARY staging;
+- `data_blocks` merge;
+- quota advisory-lock wait;
+- quota lock held time;
+- final quota calculation.
 
-| workload | workers | throughput | quota advisory-lock total |
-| --- | ---: | ---: | ---: |
-| 4 MiB total | 4 | `26.345 MiB/s` | `117.372 ms` |
-| 4 MiB total | 8 | `17.296 MiB/s` | `256.648 ms` |
-| 128 MiB total | 4 | `51.522 MiB/s` | `3517.839 ms` |
-| 128 MiB total | 8 | `34.046 MiB/s` | `12683.113 ms` |
+This made the quota critical section measurable before behavior changed.
 
-At 128 MiB, moving from 4 to 8 workers reduced throughput while aggregate quota
-lock wait grew from about `3.5 s` to about `12.7 s`.
+### FOD 3.2.76 — late quota gate
 
-Therefore **do not tune write-worker defaults yet**. Worker-count measurements
-are distorted while a global transaction-scoped quota lock spans the long
-COPY/merge section.
+Ordinary block persistence now performs COPY/merge before taking the global
+quota advisory lock. The transaction takes the lock only for the final
+serialized quota decision, rereads `max_fs_size_bytes`, counts persisted payload
+plus active reservations and commits or rolls back with `ENOSPC`.
 
-FOD 3.2.75 adds the observability needed for the next comparison:
-`persist_transaction_*`, `persist_copy_stage_*`, `persist_data_blocks_merge_*`,
-`quota_lock_wait_*`, `quota_lock_held_*`, and `quota_final_check_*`. This is an
-instrumentation step only; the ordinary block-persist transaction shape is
-unchanged until the quota lock is moved to the final validation gate.
+Reservation-token paths intentionally remain conservative and still hold the
+quota lock across reservation refresh and payload persistence until their
+expiry/reconciliation semantics are reviewed separately.
 
-FOD 3.2.76 moves ordinary block-persist writes to that final validation gate
-and keeps reservation-token writes conservative. The direct 128 MiB profile now
-scales from `51.888 MiB/s` at 1 worker to `131.285 MiB/s` at 8 workers, while
-the aggregate advisory-lock SQL time at 8 workers drops from the old
-`12683.113 ms` to `9.742 ms`. The next measured bottleneck is no longer quota
-serialization; it is COPY BINARY staging plus the set-based `data_blocks`
-merge under real concurrency.
+The direct 128 MiB profile after the change was:
 
-The follow-up mounted validation for commit `d6e356f` used a temporary
-sudo-capable Docker/chroot wrapper because the native Codex process has
-`NoNewPrivs: 1`. Through that wrapper, `test-fio-sequential-io-strace` passed
-for 4 MiB and 128 MiB with `FOD_FOPEN_DIRECT_IO=1`, direct-io `perf stat`
-passed for both sizes, and `test-two-mount-quota` passed with two independent
-FUSE mounts and exactly one 4 KiB quota-admitted writer.
+| workers | throughput | advisory-lock SQL total |
+| ---: | ---: | ---: |
+| 1 | `51.888 MiB/s` | `0.014 ms` |
+| 2 | `85.880 MiB/s` | `0.018 ms` |
+| 4 | `122.843 MiB/s` | `0.049 ms` |
+| 8 | `131.285 MiB/s` | `9.742 ms` |
 
-The detailed implementation subplan is:
+Compared with the pre-change profile:
+
+- 4 workers improved from `51.522 MiB/s` to `122.843 MiB/s`;
+- 8 workers improved from `34.046 MiB/s` to `131.285 MiB/s`;
+- 8-worker advisory-lock SQL time fell from about `12683 ms` to about `9.7 ms`.
+
+For 128 MiB / 8 workers, the direct SQL profile is now dominated by COPY BINARY
+staging (`3240.165 ms` aggregate) plus the set-based `data_blocks` merge
+(`2662.982 ms` aggregate), not by quota serialization.
+
+Quota correctness was proven twice:
+
+1. a direct two-`DbRepo` regression forces both writers past COPY/merge and then
+   through the final quota gate, with one commit and one atomic `ENOSPC` rollback;
+2. mounted `test-two-mount-quota` passed through the privileged Docker/chroot
+   path with two independent FUSE mounts, two advisory-lock waiters, exactly one
+   committed writer and one rejected writer.
+
+The late quota gate is therefore considered complete for ordinary block
+persistence unless later evidence shows a correctness or measurable performance
+problem.
+
+## Current measured problem
+
+Direct PostgreSQL hotpath and mounted FUSE no longer point to exactly the same
+next optimization.
+
+The direct 128 MiB workload shows COPY + merge as the largest PostgreSQL work.
+However, the mounted 128 MiB direct-I/O fio profile on commit `d6e356f` measured
+about:
+
+- write `18.2 MiB/s`;
+- read `17.6 MiB/s`;
+- COPY stage `1.102 s`;
+- `data_blocks` merge `0.743 s`;
+- quota wait `0.611 ms`;
+- quota held `8.492 ms`;
+- final quota check `7.788 ms`.
+
+The complete mounted write takes materially longer than COPY + merge alone.
+Therefore the next production optimization must **not** assume that COPY or
+merge is the dominant end-to-end FUSE cost merely because it dominates the
+direct repository profile.
+
+The active detailed subplan is:
+
+- [`mounted-fuse-write-profile-plan.md`](mounted-fuse-write-profile-plan.md)
+
+The completed quota redesign record is:
 
 - [`quota-lock-concurrency-plan.md`](quota-lock-concurrency-plan.md)
 
-That document is subordinate to this canonical block-only architecture; it may
-change quota synchronization, but it may not introduce another payload format
-or weaken the storage correctness contracts below.
-
 ## Current optimization order
 
-### Phase 1 — narrow the quota critical section
+### Phase 1 — decompose real mounted 128 MiB write wall time
 
-For ordinary block persistence, change the transaction shape from:
-
-```text
-BEGIN
-  quota advisory lock
-  COPY BINARY staging
-  data_blocks merge
-  quota check
-COMMIT
-```
-
-toward:
+Measure the complete path:
 
 ```text
-BEGIN
-  COPY BINARY staging
-  data_blocks merge
-
-  short serialized quota gate
-    -> advisory lock
-    -> reread max_fs_size_bytes
-    -> calculate committed payload + this transaction + active reservations
-    -> commit or rollback/ENOSPC
+FUSE callback/admission
+    -> write-state/block preparation
+    -> buffer/flush scheduling
+    -> task/transaction/pool wait
+    -> PostgreSQL transaction
+       -> COPY
+       -> data_blocks merge
+       -> metadata/CRC/object-finalization
+       -> final quota gate
+       -> COMMIT/replay confirmation
+    -> post-commit invalidation
+    -> callback completion
 ```
 
-The final quota decision remains database-wide and serialized. COPY and merge
-must not be globally serialized merely because they happen before that decision.
+Reuse existing observability first. Add only missing timing boundaries needed to
+explain the wall-clock gap.
 
-This first design relies on a final quota query that sees a writer committed
-while the current transaction waited for the advisory lock. Pin and test the
-required PostgreSQL `READ COMMITTED` visibility; do not rely silently on server
-defaults.
+At minimum separate:
 
-Keep reservation-token paths conservative until refresh/expiry semantics are
-reviewed separately.
+- callback entry-to-return time;
+- write-state preparation;
+- flush queue wait and flush execution;
+- logical-task admission wait;
+- PostgreSQL transaction-admission wait;
+- pool checkout wait;
+- pre-COPY metadata work;
+- COPY staging;
+- merge;
+- post-merge metadata/CRC/object-finalization;
+- quota wait/held/check;
+- COMMIT/replay confirmation;
+- post-commit invalidation.
 
-### Phase 2 — prove quota correctness under real concurrency
+Do not change scheduling or batching in the same commit that establishes a
+missing timing baseline.
 
-Before performance tuning, preserve all existing quota invariants:
+### Phase 2 — pin repeated mounted baselines
 
-1. `max_fs_size_bytes` remains authoritative across independent FOD processes
-   and mounts sharing one database.
-2. Two concurrent writers near the limit cannot both commit beyond quota.
-3. A rejected transaction leaves no committed payload mutation.
-4. Active capacity reservations are counted exactly once.
-5. Reservation expiry/renewal cannot steal capacity already committed or
-   reserved elsewhere.
-6. `statfs` continues to account for active reservations.
-7. sparse writes, overwrite-only writes, truncate, shared objects,
-   `copy_file_range`, copy-on-write, GC and remount keep their allocation
-   semantics.
-8. replay and ambiguous-COMMIT handling do not duplicate accounting.
+Use the already proven sudo-capable Docker/chroot path because the native
+restricted process has `NoNewPrivs: 1`.
 
-Required regression shape:
-
-- two independent connections/processes begin payload work concurrently;
-- both reach the final quota gate only after COPY/merge work has begun;
-- the first valid writer commits;
-- the second writer then observes the first commit;
-- if the combined result is over quota, the second writer rolls back with
-  `ENOSPC` and leaves no unexpected `data_blocks` rows.
-
-Run the existing two-mount quota regression when the host environment permits
-FUSE mounting.
-
-### Phase 3 — re-profile before worker tuning
-
-After the long quota serialization is removed, repeat concurrent block-persist
-profiles for at least:
+Run at least three comparable samples of:
 
 ```text
-4 MiB total:   workers 1, 2, 4, 8
-128 MiB total: workers 1, 2, 4, 8
+4 MiB sequential fio with direct I/O
+128 MiB sequential fio with direct I/O
 ```
 
-Capture:
+Keep representative 128 MiB `perf stat` and `strace -f -c` captures. Do not
+compare strace throughput directly with non-strace throughput.
 
-- wall throughput;
-- per-worker maximum time;
-- advisory-lock wait total/max;
-- lock-held quota-check time;
-- COPY staging time;
-- `data_blocks` merge time;
-- transaction total time;
-- PostgreSQL top statements;
-- pool and transaction-admission pressure;
-- `perf stat` and `strace -f -c` for representative best/worst 128 MiB cases.
+Capture PostgreSQL top statements, WAL/checkpoint counters, callback counts,
+queue/admission metrics and persist-stage timings for the same workload.
 
-Only after this profile may `workers_write`, transaction limits or task write
-admission defaults be tuned.
+### Phase 3 — reconcile direct repository and mounted FUSE results
 
-Do not make “8 workers must beat 4 workers” an acceptance criterion. The goal
-is to remove artificial global serialization; the best worker count must be a
-measured result afterwards.
+Produce one 128 MiB timing summary that explains most of mounted wall time and
+explicitly marks overlapping counters.
 
-### Phase 4 — decide whether normal writes need pre-reservation
+Separate:
 
-FOD already has `payload_capacity_reservations`. If late quota rejection wastes
-material COPY/merge work near a full filesystem, extend reservations to normal
-large writes using the positive **physical allocation delta**, not logical dirty
-bytes.
+- CPU work versus blocked/wait time;
+- per-file serialization versus global serialization;
+- PostgreSQL server execution versus client/FUSE time;
+- work that can overlap across workers versus work that cannot.
 
-The accounting must distinguish at least:
+Only after this reconciliation choose the next production optimization.
 
-- overwrite allocated non-zero block with another non-zero block: usually `0`;
-- create a new non-zero block: positive allocation;
-- replace an allocated block with sparse zero: negative allocation;
-- sparse zero write: no payload allocation;
-- truncate: may release allocation;
-- shared-object/copy-on-write transition: depends on resulting ownership and
-  payload shape.
+### Phase 4 — optimize one measured dominant component
 
-A blanket `reservation = dirty_bytes` policy is not acceptable because it can
-return false `ENOSPC` for overwrite-only workloads on a full filesystem.
-
-### Phase 5 — choose the next bottleneck from the new profile
-
-Do not assume the previous single-writer ordering survives true concurrent
-persistence.
-
-Possible next targets include:
+Possible outcomes include:
 
 1. COPY BINARY staging;
 2. `data_blocks` set-based merge;
-3. PostgreSQL WAL/checkpoint cost under concurrent writes;
-4. connection/pool contention;
-5. remaining FUSE-side admission/worker overhead;
-6. remaining read-metadata round trips only if they become material again.
+3. FUSE callback/write-state preparation;
+4. flush scheduling / queue handoff / futex wait;
+5. transaction or pool admission;
+6. metadata/CRC/object-finalization;
+7. COMMIT/WAL/checkpoint cost;
+8. remaining read-side metadata work if it becomes material again.
 
-Hardlink-count optimization remains deferred unless a metadata-heavy profile
-shows it becoming significant. High call count alone is not sufficient evidence.
+Do not optimize multiple layers in one measurement step. Make one narrow change,
+re-run the same 4 MiB and 128 MiB baselines and compare stage timings.
+
+### Phase 5 — tune worker/admission defaults only after mounted scaling is known
+
+Direct results are workload-size dependent:
+
+- 4 MiB peaked around 2-4 workers and regressed at 8;
+- 128 MiB continued scaling through 8 workers.
+
+Therefore do not set one production `workers_write` value from the direct 128 MiB
+result alone. Choose worker, transaction and task-admission defaults only after
+mounted FUSE profiles show how the same workload classes scale end to end.
+
+An adaptive policy is acceptable only if fixed settings cannot cover measured
+workloads cleanly and the adaptive decision remains bounded, observable and
+regression-testable.
+
+### Phase 6 — evaluate ordinary-write pre-reservation only if needed
+
+The current late quota gate may waste work only when a large transaction reaches
+final validation near a full filesystem and is rejected after COPY/merge.
+
+Do not add more quota state preemptively. Evaluate reservation-backed ordinary
+writes only if a measured near-full workload shows material wasted work.
+
+Any reservation must represent positive **physical allocation delta**, not dirty
+logical bytes. Overwrite-only writes on a full filesystem must not receive false
+`ENOSPC` merely because they touched many bytes.
 
 ## Correctness gates for all block-only performance work
 
 Every optimization must preserve:
 
+- canonical `data_blocks` storage only;
 - 4 KiB logical block semantics;
-- sparse-file `st_blocks` behavior in 512-byte POSIX units;
+- sparse-file `st_blocks` behavior in POSIX 512-byte units;
 - exact allocation after overwrite and truncate;
 - shared `data_object_id` ownership without filesystem-wide double counting;
 - full-object adoption and copy-on-write behavior;
 - CRC behavior;
 - transaction rollback and replay confirmation;
 - database-wide quota and reservation semantics;
+- two-mount quota safety;
 - two-mount visibility according to the documented consistency contract;
 - remount durability;
 - primary/failover safety.
@@ -264,18 +276,23 @@ Do not trade these contracts for benchmark throughput.
 
 ## Performance acceptance gate
 
-For a write-side change, record at minimum:
+For a write-side optimization record at minimum:
 
 ```text
-4 MiB sequential fio, FOD_PROFILE_IO=1
-128 MiB sequential or large-file multiblock profile
-1/2/4/8 direct concurrent block-persist matrix when applicable
-PostgreSQL top statements/call counts
-quota advisory-lock wait and held time
+4 MiB mounted sequential fio, direct I/O, repeated samples
+128 MiB mounted sequential fio, direct I/O, repeated samples
+representative 128 MiB perf stat
+representative 128 MiB strace -f -c
+1/2/4/8 direct concurrent block-persist matrix when relevant
+PostgreSQL top statements and WAL/checkpoint counters
+FUSE callback counts
+flush_write_state_us
 repo_persist_blocks_us
-COPY stage time
-data_blocks merge time
-transaction total time
+persist transaction total
+COPY stage total/max/count
+data_blocks merge total/max/count
+quota wait/held/final-check timing
+queue/admission/pool wait metrics
 ```
 
 Use repeated samples when the difference is close to the noise floor. Do not
@@ -283,12 +300,14 @@ change production defaults from one noisy run.
 
 ## Documentation authority
 
-For active storage-performance decisions use, in this order:
+For active storage-performance decisions use this order:
 
-1. this file — canonical architecture and optimization order;
-2. `quota-lock-concurrency-plan.md` — detailed current quota-concurrency subplan;
-3. `conclusions.md` — measured conclusions and historical evidence;
-4. `performance-baselines.md` — recorded benchmark baselines.
+1. this file — canonical architecture and global optimization order;
+2. `mounted-fuse-write-profile-plan.md` — current detailed profiling subplan;
+3. `quota-lock-concurrency-plan.md` — completed quota redesign record and
+   reservation follow-up boundary;
+4. `conclusions.md` — measured conclusions and historical evidence;
+5. `performance-baselines.md` — recorded benchmark baselines.
 
 `storage-engine-v2-plan.md` is historical after FOD 3.2.73 and must not contain
 active extent phases. The object-segment-manifest ADR remains useful only for
@@ -300,18 +319,21 @@ superseded.
 - Do not restore extents or another alternate payload format.
 - Do not change the 4 KiB logical block size in this phase.
 - Do not weaken database-wide quota for concurrency.
+- Do not widen the quota lock again to solve an unrelated bottleneck.
 - Do not replace cross-process correctness with process-local accounting.
-- Do not tune worker defaults before re-profiling after quota-lock narrowing.
+- Do not tune worker defaults before mounted FUSE scaling is measured.
 - Do not add PostgreSQL per-block quota triggers without measured evidence.
 - Do not optimize hardlink counting merely because its call count is high.
-- Do not mix unrelated primary/replica routing, promotion/fencing or schema
-  redesign into a narrow storage-performance change.
+- Do not assume COPY/merge is the full-system bottleneck until mounted wall time
+  is decomposed.
+- Do not mix unrelated replica routing, promotion/fencing or schema redesign into
+  a narrow storage-performance change.
 
 ## Delivery rule
 
-Production-code changes use the next sequential FOD version, update the relevant
-documentation and tests, and are committed on `main` using
-`FOD <version>: <English description>`.
+Production-code or profiling-instrumentation changes use the next sequential FOD
+version, update the relevant documentation and tests, and are committed on
+`main` using `FOD <version>: <English description>`.
 
 After every commit, compare it with its parent using `git diff HEAD~1..HEAD` or
 `git show` and inspect accidental changes, missing files, regressions and
