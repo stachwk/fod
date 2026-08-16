@@ -1192,3 +1192,31 @@ be treated as a correctness/syscall-shape gate rather than a throughput
 baseline. There is no evidence yet that the removal improves large 64 MiB or
 128 MiB sequential throughput; that still needs a dedicated repeated
 `test-large-file-multiblock-benchmark` run.
+
+## 2026-08-16 — FOD 3.2.73 block-only 4 MiB and 128 MiB profiles
+
+Working tree based on commit `9616c50` fixed the Makefile follow-up from extent
+target removal and re-profiled clean block-only workloads:
+
+- the top-level `.PHONY` list now names `test-fod-indexer-parallel-smoke`
+  instead of the accidental `test-fod-indexer-parallel-smoke-local-qnap`;
+- the help output lines that inherited an extra tab during extent target
+  removal were normalized;
+- `make -qp test-fod-indexer-parallel-smoke` confirms the real target is phony,
+  `make help` prints the affected entries without the extra indentation, and
+  `make test-fod-indexer-parallel-smoke` passed after the cleanup.
+
+Block-only profile results:
+
+| workload | result | dominant PostgreSQL statements |
+| --- | --- | --- |
+| 4 MiB sequential fio, `FOD_PROFILE_IO=1` | write `3220 KiB/s`, read `54.1 MiB/s`, `repo_persist_blocks_us=111374` | COPY stage `54.785 ms`, child lookup `44.950 ms`, data_blocks merge `37.693 ms`; hardlink count `28` calls / `1.178 ms` |
+| 128 MiB large-file multiblock, `4M x 32` | `46.06 MiB/s`, `repo_persist_blocks_us=2320189`, `prepare_persist_rows_from_block_plan_us=19666` | file attrs query with `COUNT(*)` over `data_blocks` `1031` calls / `3570.578 ms`, data_blocks merge `1237.777 ms`, COPY stage `1062.855 ms`; hardlink count `1032` calls / `17.737 ms` |
+
+Conclusion: the repeated `COUNT(*) FROM hardlinks WHERE id_file = $1` query is
+visible, but it is not the dominant cost on either clean block-only profile.
+The 128 MiB profile instead points at the file-attribute allocation calculation,
+which repeatedly counts `data_blocks` for the same data object and costs more
+than COPY plus merge combined in this run. The next optimization should target
+that attr/allocation path first; hardlink nlink batching should wait until a
+metadata-heavy profile shows it dominating again.

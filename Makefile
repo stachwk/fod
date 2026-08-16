@@ -326,7 +326,7 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset test-db-restore-local smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke-local-qnap
+.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset test-db-restore-local smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke
 
 help:
 	@printf '%s\n' \
@@ -358,10 +358,10 @@ help:
 		'  make init       - create the FOD schema in local PostgreSQL with --schema-admin-password' \
 		'  make qnap-init  - create the FOD schema using the QNAP transport preset' \
 		'  make init-qnap  - create the FOD schema using the remote QNAP PostgreSQL preset' \
-			'  make qnap-smoke - run the PostgreSQL smoke check using QNAP=1' \
-			'  make reset      - down -v / up / wait / init for a clean start' \
-			'  make test-db-restore-local - reset only the local Docker test DB after mkfs schema tests' \
-			'  make qnap-reset - run reset using QNAP=1' \
+		'  make qnap-smoke - run the PostgreSQL smoke check using QNAP=1' \
+		'  make reset      - down -v / up / wait / init for a clean start' \
+		'  make test-db-restore-local - reset only the local Docker test DB after mkfs schema tests' \
+		'  make qnap-reset - run reset using QNAP=1' \
 		'  make enable-pg-stat-statements - create pg_stat_statements in the local PostgreSQL database for diagnostics' \
 		'  make install-config - install fod_config.ini to /etc/fod/fod_config.ini (warns if password is still cichosza)' \
 		'  make install-config-user - install fod_config.ini to $$HOME/.config/fod/fod_config.ini without sudo (warns if password is still cichosza)' \
@@ -410,7 +410,7 @@ help:
 		'  make profile-fuse-sudo-bpftrace-syscalls - run sudo bpftrace syscall sampling while PROFILE_FUSE_WORKLOAD runs as current user' \
 		'  make profile-data-blocks-copy-buffer-matrix - run large-copy matrix with DML/WAL/top-io-wal captures; set QNAP=1 for QNAP' \
 		'  make profile-data-blocks-copy-buffer-matrix-compare - run local matrix and optional QNAP matrix; set PROFILE_COPY_BUFFER_INCLUDE_QNAP=0/1/auto' \
-			'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
+		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
 		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
 		'  make profile-data-blocks-swap-repeat-dml - profile repeated full-overwrite data-object swaps; set PROFILE_DATA_BLOCKS_SWAP_REPEAT=N' \
 		'  make profile-pg-data-object-gc - purge unreferenced data objects for deferred cleanup experiments' \
@@ -478,7 +478,7 @@ help:
 		'  make test-runtime-validation - verify runtime config rejects invalid values in Rust' \
 		'  make test-runtime-profile - verify named runtime profiles against fod_config.ini' \
 		'  make test-runtime-reload - verify live reload accepts safe knobs and rejects mount-only ones' \
-			'  make change-runtime - alias for make change-runtime-set' \
+		'  make change-runtime - alias for make change-runtime-set' \
 		'  make change-runtime-sync - alias for make reload-runtime' \
 		'  make test-mkfs-pg-tls - verify PostgreSQL TLS path resolution and generated client pair handling' \
 		'  make test-schema-upgrade - verify schema version reporting for upgrade flow' \
@@ -501,7 +501,7 @@ help:
 		'  make test-rust-hotpath-copy-plan - Rust helper parity tests for copy planner and related helpers' \
 		'  make test-rust-hotpath-copy-dedupe - Rust helper parity tests for changed-copy dedupe' \
 		'  make test-rust-hotpath-copy-dedupe-benchmark - benchmark repeated copy dedupe in Rust hotpath' \
-			'  make test-rust-hotpath-copy-pack - Rust helper parity tests for changed-run packing' \
+		'  make test-rust-hotpath-copy-pack - Rust helper parity tests for changed-run packing' \
 		'  make test-rust-hotpath-persist-pad - Rust helper parity tests for block padding' \
 		'  make test-rust-hotpath-read-assemble - Rust helper parity tests for read assembly' \
 		'  make test-rust-pg-query - verify PostgreSQL query paths and metadata helpers through Rust' \
@@ -536,11 +536,11 @@ help:
 		'  make test-pool-connections - verify ThreadedConnectionPool configuration' \
 		'  make test-metadata-cache - verify short-TTL metadata and statfs cache behavior' \
 		'  make test-mount-suite - shared Python mount smoke runner' \
-			'  make test-fio-sequential-io - fio sequential read/write smoke for the block path' \
-			'  make test-fio-sequential-io-strace - fio sequential smoke with strace syscall tables for the block path' \
-			'  make test-admpanch-trace - run ADMP_TRACE_TARGET with ADMP_INI=$(ADMP_TRACE_INI_ABS) (override ADMP_TRACE_TARGET=...)' \
-			'  make test-fio-mixed-io - fio mixed sequential rw smoke for the block path' \
-			'  make test-fio-random-mixed-io - fio random mixed rw negative control for the block path' \
+		'  make test-fio-sequential-io - fio sequential read/write smoke for the block path' \
+		'  make test-fio-sequential-io-strace - fio sequential smoke with strace syscall tables for the block path' \
+		'  make test-admpanch-trace - run ADMP_TRACE_TARGET with ADMP_INI=$(ADMP_TRACE_INI_ABS) (override ADMP_TRACE_TARGET=...)' \
+		'  make test-fio-mixed-io - fio mixed sequential rw smoke for the block path' \
+		'  make test-fio-random-mixed-io - fio random mixed rw negative control for the block path' \
 		'  make test-all   - smoke + current integration suite' \
 		'  make db-shell   - open psql on local PostgreSQL' \
 		'  make clean      - remove .venv'

@@ -782,4 +782,5 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
 - [x] FOD 3.2.71: update sequential fio/runtime-profile tests so `enable_extents=true` is a retirement guard, not an extent benchmark.
 - [x] FOD 3.2.72: add explicit migration of existing `data_extents` to `data_blocks`, including integrity checks.
 - [x] FOD 3.2.73: remove extent planner/payload/read/persist code and retired configuration after migration.
-- [ ] Re-profile block-only 4 MiB/128 MiB workloads and optimize repeated hardlink-count SQL round trips.
+- [x] Re-profile block-only 4 MiB/128 MiB workloads and verify that repeated hardlink-count SQL is not the dominant cost on those profiles.
+- [ ] Optimize the file-attribute payload allocation query that repeatedly counts `data_blocks` for the same file object; the 128 MiB block-only profile showed it dominating the run at about `3570 ms` total.

@@ -3346,3 +3346,43 @@ Notes:
   that reset.
 - Raw logs were kept under `/tmp/fod-prev-3.2.72*.log` and
   `/tmp/fod-head-3.2.73*.log` for this local run.
+
+## 2026-08-16 commit 9616c50 working tree Makefile/profile follow-up
+
+Commands:
+
+```bash
+git status --short && git rev-parse --short HEAD && tr -d '\n' < fod_version.txt
+source ~/.venv/bin/activate && mempalace search "FOD 3.2.73 block-only profiling hardlinks count Makefile phony" --wing myai
+rg -n "test-fod-indexer-parallel-smoke|profile-storage-extent|profile-data-blocks-conflict-dml|help|COUNT\\(\\*\\).*hardlinks|hardlinks.*COUNT|COUNT\\(hardlinks|SELECT 1 \\+ COUNT|COUNT\\(\\*\\) FROM hardlinks" Makefile rust_fuse rust_hotpath rust_indexer scripts tests docs README.md README.pl --glob '!target/**'
+sed -n '320,430p' Makefile
+sed -n '480,530p' Makefile
+sed -n '790,835p' Makefile
+rg -n '^\t\t\t' Makefile
+make -qp test-fod-indexer-parallel-smoke 2>/tmp/fod-make-qp.err | awk '/^\\.PHONY:/{ if ($0 ~ /test-fod-indexer-parallel-smoke/) print }' && cat /tmp/fod-make-qp.err
+make help | rg -n "test-fod-indexer-parallel-smoke|profile-data-blocks-conflict-dml|test-fio-sequential-io|test-fio-mixed-io|change-runtime - alias|copy-pack"
+rg -n "large_file_multiblock|LARGE_FILE|MULTIBLOCK|BLOCK_COUNT|block_count|block_size|MiB|env::var|FOD_PROFILE_IO" rust_fuse/tests tests/integration Makefile
+sed -n '1,260p' rust_fuse/tests/large_file_multiblock_benchmark.rs
+sed -n '1,160p' tests/integration/test_fio_sequential_io.sh && sed -n '1100,1120p' Makefile && sed -n '1170,1185p' Makefile
+sed -n '1330,1515p' Makefile
+sed -n '1,220p' scripts/perf/pg/top_metadata_statements.sql && sed -n '1,220p' scripts/perf/pg/top_io_wal.sql 2>/dev/null || true && rg -n "profile-pg-top|profile-pg-metadata-top|pg_stat_statements|top_metadata|top_io" Makefile scripts/perf/pg docs/performance.md
+bash -o pipefail -c 'make reset && make profile-pg-reset && FIO_FILE_SIZE=4M FOD_PROFILE_IO=1 make test-fio-sequential-io 2>&1 | tee /tmp/fod-3.2.73-block-only-4m-seq.log && PROFILE_CAPTURE_LABEL=block4m make profile-pg-top-io-wal 2>&1 | tee /tmp/fod-3.2.73-block-only-4m-pg-top-io-wal.log && PROFILE_CAPTURE_LABEL=block4m make profile-pg-top 2>&1 | tee /tmp/fod-3.2.73-block-only-4m-pg-top.log'
+bash -o pipefail -c 'make profile-pg-reset && LARGE_FILE_CHUNK_SIZE=4M LARGE_FILE_CHUNK_COUNT=32 FOD_PROFILE_IO=1 make test-large-file-multiblock-benchmark 2>&1 | tee /tmp/fod-3.2.73-block-only-128m-large-file.log && PROFILE_CAPTURE_LABEL=block128m make profile-pg-top-io-wal 2>&1 | tee /tmp/fod-3.2.73-block-only-128m-pg-top-io-wal.log && PROFILE_CAPTURE_LABEL=block128m make profile-pg-top 2>&1 | tee /tmp/fod-3.2.73-block-only-128m-pg-top.log'
+PGPASSWORD="cichosza" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U foduser -d foddbname -c "SELECT calls, round(total_exec_time::numeric, 3) AS total_exec_ms, round(mean_exec_time::numeric, 3) AS mean_exec_ms, left(regexp_replace(query, '\\s+', ' ', 'g'), 220) AS query FROM pg_stat_statements WHERE query ILIKE '%COUNT(*) FROM hardlinks%' OR query ILIKE '%COUNT(*) * (SELECT value FROM config%' OR query ILIKE '%COUNT(*)::numeric FROM data_blocks%' ORDER BY total_exec_time DESC;" | tee /tmp/fod-3.2.73-block-only-128m-count-filter.log
+git diff --check
+rg -n "test-fod-indexer-parallel-smoke-local-qnap|^\t\t\t'" Makefile || true
+make -qp test-fod-indexer-parallel-smoke 2>/tmp/fod-make-qp-final.err | awk '/^\\.PHONY:/{ if ($0 ~ /test-fod-indexer-parallel-smoke/) print }' && cat /tmp/fod-make-qp-final.err
+make help | rg -n "test-fod-indexer-parallel-smoke|profile-data-blocks-conflict-dml|test-fio-sequential-io|test-fio-mixed-io|change-runtime - alias|copy-pack"
+make test-fod-indexer-parallel-smoke
+```
+
+Notes:
+
+- The Makefile cleanup removed `test-fod-indexer-parallel-smoke-local-qnap`
+  from the top-level `.PHONY` list and restored
+  `test-fod-indexer-parallel-smoke`.
+- The help text alignment was normalized for lines that picked up an extra tab
+  during the extent target removal.
+- Raw profiling logs for this local run were kept under
+  `/tmp/fod-3.2.73-block-only-*.log`.
+- `make test-fod-indexer-parallel-smoke` passed after the `.PHONY` cleanup.
