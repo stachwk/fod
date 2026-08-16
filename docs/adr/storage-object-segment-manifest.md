@@ -12,6 +12,10 @@ Current storage authority:
 
 - [`../block-only-performance-plan.md`](../block-only-performance-plan.md)
 
+Current detailed performance subplan:
+
+- [`../mounted-fuse-write-profile-plan.md`](../mounted-fuse-write-profile-plan.md)
+
 Historical Storage Engine v2 context:
 
 - [`../storage-engine-v2-plan.md`](../storage-engine-v2-plan.md)
@@ -97,8 +101,8 @@ the primary exact whole-file reuse case without adding:
 - another replay/accounting contract.
 
 The earlier argument that extents could serve as the intermediate physical
-format is superseded. Current performance work must improve the block-only path
-instead of recreating a second representation.
+format is superseded. Current performance work must improve and measure the
+block-only path instead of recreating a second representation.
 
 ## Conditions for reopening the manifest decision
 
@@ -112,9 +116,9 @@ efficiently enough, for example:
 - snapshots or object versioning require persistent immutable segment history;
 - garbage collection or copy-on-write sharing becomes measurably simpler and
   cheaper with a manifest;
-- a measured workload proves block-row granularity itself is the limiting
-  architecture after current PostgreSQL transaction/concurrency bottlenecks are
-  removed.
+- after current mounted FUSE and PostgreSQL costs are decomposed and optimized,
+  a measured workload still proves that block-row granularity itself is the
+  limiting architecture.
 
 Do not reopen the ADR merely because an old extent benchmark was faster on one
 sequential workload.
@@ -128,20 +132,33 @@ Any reopened design must include:
 - CRC/copy correctness;
 - shared-object and copy-on-write behavior;
 - local and remote PostgreSQL benchmarks;
+- mounted FUSE end-to-end benchmarks;
 - comparison against the then-current block-only baseline.
 
 ## Relationship to current performance work
 
 The current measured priority is not a manifest or physical-format redesign.
-FOD 3.2.74 removed the repeated read-side allocation COUNT, and concurrent write
-profiling then exposed the global transaction-scoped quota advisory lock as the
-next artificial serialization point.
+
+The sequence is now:
+
+1. FOD 3.2.74 removed the repeated read-side allocation COUNT;
+2. FOD 3.2.75 added persist/quota timing observability;
+3. FOD 3.2.76 moved the ordinary-write quota lock to the final gate and proved
+   direct plus mounted quota safety;
+4. direct concurrent block persistence now scales substantially better and quota
+   lock time is negligible relative to COPY/merge;
+5. mounted 128 MiB FUSE throughput still contains material time outside the
+   measured COPY + merge section;
+6. the active task is therefore to decompose mounted FUSE wall time before
+   choosing the next production optimization.
 
 Current implementation order is defined by:
 
 1. `docs/block-only-performance-plan.md`;
-2. `docs/quota-lock-concurrency-plan.md`.
+2. `docs/mounted-fuse-write-profile-plan.md`;
+3. `docs/quota-lock-concurrency-plan.md` only as the completed quota redesign
+   record and reservation follow-up boundary.
 
 A manifest decision must not interrupt that sequence unless new measurements
 show a structural block-only limitation that cannot be solved at the current
-transaction/query layer.
+FUSE/PostgreSQL transaction layer.
