@@ -1266,3 +1266,58 @@ from `516` to `32768` on 128 MiB and makes `read` plus `futex` dominate the
 syscall wall time. The next optimization target remains the block-only file
 attribute/allocation path that repeatedly counts `data_blocks`; these runs do
 not add evidence that `COUNT(hardlinks)` is the current large-file bottleneck.
+
+## 2026-08-16 — FOD 3.2.74 FileAttr allocation query optimization
+
+Measured working tree: FOD 3.2.74 based on commit `5855293`. Raw tee logs were
+kept under `/tmp/fod-file-read-metadata-20260816T071029Z/`; Makefile
+`pg_stat_statements` artifacts were written under
+`artifacts/perf/5855293/lt7300-file-read-metadata-20260816T071029Z/`.
+
+The repeated allocation query call path was `read()` ->
+`entry_attrs_for_ino()` -> `lookup_path()` -> `attrs_for_path()` ->
+`DbRepo::fetch_path_attrs_blob()` -> `FetchPathAttrsBlobFile`, whose SQL
+calculated `FileAttr.blocks` with `COUNT(data_blocks)`. FOD 3.2.74 keeps that
+full attr SQL for real `lookup`/`getattr`, but uses a narrow
+`file_read_metadata(file_id)` query in `read()` for file size and atime policy.
+
+| workload | fio/result | callbacks read/write | key SQL result |
+| --- | --- | --- | --- |
+| 4 MiB sequential fio, `FOD_PROFILE_IO=1` | write `3287 KiB/s`, read `90.9 MiB/s` | `20 / 1024` | old attr `COUNT(data_blocks)` query `7` calls / `1.938 ms`; new metadata query `20` calls / `2.464 ms` |
+| 128 MiB sequential fio, `FOD_PROFILE_IO=1` | write `3779 KiB/s`, read `481 MiB/s` | `516 / 32768` | old attr `COUNT(data_blocks)` query `8` calls / `24.136 ms`; new metadata query `516` calls / `14.523 ms` |
+| 128 MiB large-file multiblock, `4M x 32` | `46.97 MiB/s` | `1024 / 128` | old attr `COUNT(data_blocks)` query `5` calls / `12.109 ms`; new metadata query `1024` calls / `27.215 ms` |
+
+Compared with the FOD 3.2.73 128 MiB large-file profile, the attr allocation
+query dropped from `1031` calls / about `3570.578 ms` to `5` calls / about
+`12.109 ms`. The normal 128 MiB fio read improved from the previous recorded
+`109 MiB/s` to `481 MiB/s` in this run. The 128 MiB large-file wall throughput
+was nearly flat (`46.06` to `46.97 MiB/s`), which means the removed allocation
+query was real PostgreSQL work but not the limiting wall-clock path for that
+benchmark.
+
+The 128 MiB profile still shows COPY BINARY staging and the `data_blocks`
+merge as the next write-side bottleneck: large-file COPY took `1039.630 ms` and
+the merge took `1198.296 ms`; sequential fio recorded two COPY calls totaling
+`1174.739 ms` and two merge statements totaling about `1185.071 ms`. The
+remaining `file_read_metadata` query is deliberately not cached in the file
+handle because a handle-local file-size cache would need a proven invalidation
+contract for truncate, writes from another mount, shared objects,
+copy-on-write, remount, replay, and quota semantics.
+
+Additional profiles passed:
+
+| profile | size | result |
+| --- | --- | --- |
+| `make test-fio-sequential-io-strace` | 4 MiB | write `6861 KiB/s`, read `8533 KiB/s`, callbacks `1024 / 1024`, strace total `2.582191 s` / `20218` calls |
+| `make test-fio-sequential-io-strace` | 128 MiB | write `12.1 MiB/s`, read `11.3 MiB/s`, callbacks `32768 / 32768`, strace total `44.959186 s` / `509472` calls |
+| `perf stat -d -d -d` around fio | 4 MiB | elapsed `3.915978945 s`, task-clock `1569984944`, instructions `4677462637`, cycles `3874518131` |
+| `perf stat -d -d -d` around fio | 128 MiB | elapsed `42.396279710 s`, task-clock `19163662957`, instructions `65374421213`, cycles `61644399091` |
+
+All measured fio, strace, perf, and large-file workloads exited with status 0.
+The strace target again logged `Failed to umount filesystem: Invalid argument`;
+as before, the test still completed successfully.
+
+Final code validation passed with `cargo fmt --all`,
+`cargo check --workspace --locked`, FUSE atime tests `3/3`, and hotpath library
+tests `80/80`. The hotpath test run still emits two existing
+`unreachable pattern` warnings in `rust_hotpath/src/persist_plan.rs`.

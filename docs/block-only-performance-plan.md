@@ -51,6 +51,49 @@ allocation calculation that repeatedly counts `data_blocks` for the same data
 object. On the 128 MiB profile it cost more than COPY plus the block merge
 combined.
 
+## 2026-08-16 FOD 3.2.74 update
+
+The call path was:
+
+```text
+FUSE read()
+    -> entry_attrs_for_ino()
+    -> lookup_path()
+    -> attrs_for_path()
+    -> DbRepo::fetch_path_attrs_blob()
+    -> FetchPathAttrsBlobFile SQL
+    -> COUNT(data_blocks) for FileAttr.blocks
+```
+
+FOD 3.2.74 keeps `FileAttr.blocks` semantics unchanged for real `lookup` and
+`getattr`, but moves `read()` to a narrow by-`file_id` metadata query:
+
+```sql
+SELECT size, access_date, modification_date, change_date
+FROM files
+WHERE id_file = $1
+```
+
+This avoids the allocated-block COUNT during normal reads while preserving
+cross-mount size visibility through PostgreSQL. A pure handle-local size cache
+was not used because it would need a stronger invalidation contract for
+truncate, writes from another mount, copy-on-write, remount, and replay.
+
+Validation on the FOD 3.2.74 working tree based on commit `5855293`:
+
+| workload | result | allocation-query result |
+| --- | --- | --- |
+| 4 MiB sequential fio, `FOD_PROFILE_IO=1` | write `3287 KiB/s`, read `90.9 MiB/s`, callbacks `20 / 1024` | old `COUNT(data_blocks)` attr query `7` calls / `1.938 ms`; new metadata query `20` calls / `2.464 ms` |
+| 128 MiB sequential fio, `FOD_PROFILE_IO=1` | write `3779 KiB/s`, read `481 MiB/s`, callbacks `516 / 32768` | old `COUNT(data_blocks)` attr query `8` calls / `24.136 ms`; new metadata query `516` calls / `14.523 ms` |
+| 128 MiB large-file multiblock, `4M x 32` | `46.97 MiB/s`, callbacks `1024 / 128` | old `COUNT(data_blocks)` attr query `5` calls / `12.109 ms`; new metadata query `1024` calls / `27.215 ms` |
+
+Compared with the 3.2.73 128 MiB large-file profile, the repeated
+`COUNT(data_blocks)` path dropped from 1031 calls / about `3570.578 ms` to 5
+calls / about `12.109 ms`. The large-file wall throughput stayed essentially
+flat (`46.06` to `46.97 MiB/s`), so the next measured bottleneck remains the
+write-side COPY plus `data_blocks` merge. The normal 128 MiB fio read improved
+from the earlier `109 MiB/s` profile to `481 MiB/s` in this run.
+
 ## Corrected optimization order
 
 ### Phase 1 — identify and pin the attr/allocation call path

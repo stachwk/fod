@@ -783,4 +783,6 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
 - [x] FOD 3.2.72: add explicit migration of existing `data_extents` to `data_blocks`, including integrity checks.
 - [x] FOD 3.2.73: remove extent planner/payload/read/persist code and retired configuration after migration.
 - [x] Re-profile block-only 4 MiB/128 MiB workloads and verify that repeated hardlink-count SQL is not the dominant cost on those profiles.
-- [ ] Optimize the file-attribute payload allocation query that repeatedly counts `data_blocks` for the same file object; the 128 MiB block-only profile showed it dominating the run at about `3570 ms` total.
+- [x] Optimize the file-attribute payload allocation query that repeatedly counts `data_blocks` for the same file object; FOD 3.2.74 moved normal `read()` away from the full `FileAttr.blocks` query, reducing the 128 MiB large-file profile from 1031 calls / about `3570 ms` to 5 calls / about `12 ms`.
+- [ ] Revisit the remaining read metadata round trip only with a correctness-preserving design. The FOD 3.2.74 fix intentionally does not cache file size in `fh` without cross-mount/truncate invalidation; if this becomes material, fold size metadata into the block-read query or add a cache with a proven invalidation contract.
+- [ ] Profile and optimize the next measured 128 MiB block-only bottleneck: COPY BINARY staging plus the `data_blocks` set-based merge still cost about `2.24-2.36 s` per 128 MiB write profile after the allocation-query fix.

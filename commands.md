@@ -3438,3 +3438,114 @@ git diff --check HEAD~1..HEAD
 git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing myai --agent codex
 ```
+
+## 2026-08-16 commit 5855293 working tree FOD 3.2.74 FileAttr allocation query
+
+Commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search "FOD FileAttr blocks COUNT data_blocks allocation query call path block-only performance" --wing fod
+sed -n '1,260p' docs/block-only-performance-plan.md
+sed -n '760,805p' TODO.md
+rg -n "FetchPathAttrsBlobFile|COUNT\\(\\*\\).*data_blocks|entry_attrs_for_ino|attrs_for_path|fetch_path_attrs_blob|blocks:" rust_hotpath/src/pg.rs rust_fuse/src/fs.rs
+rg -n "test-large-file-multiblock-benchmark|profile-pg-reset|profile-pg-top-io-wal|profile-pg-top:" Makefile
+git diff -- rust_fuse/src/fs.rs rust_hotpath/src/pg.rs | sed -n '1,260p'
+cargo fmt --all && cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse --lib -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse atime -- --nocapture && cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --lib -- --nocapture
+cargo fmt --all && cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse atime -- --nocapture && cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --lib -- --nocapture
+rg -n "test-fio|strace|perf|profile-pg|large-file-multiblock|FOD_PROFILE_IO|PROFILE_RUN_ID" Makefile
+rg -n "pg_stat_statements|profile-pg-top|profile-pg-reset|profile-pg-top-io-wal" -S .
+sed -n '130,200p' Makefile
+sed -n '1096,1120p' Makefile
+sed -n '1168,1198p' Makefile
+sed -n '1668,1698p' Makefile
+```
+
+The attempted `cargo test --manifest-path Cargo.toml -p fod-rust-fuse --lib
+-- --nocapture` failed because `fod-rust-fuse` has no library target. The
+corrected targeted FUSE atime tests and hotpath library tests passed.
+
+Profile commands:
+
+```bash
+RUN_ID="file-read-metadata-$(date -u +%Y%m%dT%H%M%SZ)"
+HOST="$(hostname -s 2>/dev/null || hostname)"
+LOG_DIR="/tmp/fod-${RUN_ID}"
+mkdir -p "$LOG_DIR"
+printf '%s\n' "$RUN_ID" > /tmp/fod_file_read_metadata_run_id
+printf '%s\n' "$HOST" > /tmp/fod_file_read_metadata_host
+printf '%s\n' "$LOG_DIR" > /tmp/fod_file_read_metadata_log_dir
+make profile-env PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/profile-env.log"
+make reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/reset-before-fio-4m.log"
+make profile-pg-reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/pg-reset-fio-4m.log"
+FIO_FILE_SIZE=4M FOD_PROFILE_IO=1 make test-fio-sequential-io PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/fio-4m.log"
+make profile-pg-top-io-wal PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=fio4m 2>&1 | tee "$LOG_DIR/pg-top-io-wal-fio-4m.log"
+make profile-pg-metadata-top PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=fio4m 2>&1 | tee "$LOG_DIR/pg-metadata-top-fio-4m.log"
+PGPASSWORD="${POSTGRES_PASSWORD:-cichosza}" psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST:-127.0.0.1}" -p "${POSTGRES_PORT:-5432}" -U "${POSTGRES_USER:-foduser}" -d "${POSTGRES_DB:-foddbname}" -c "SELECT calls, round(total_exec_time::numeric, 3) AS total_exec_ms, round(mean_exec_time::numeric, 3) AS mean_exec_ms, left(regexp_replace(query, '\\s+', ' ', 'g'), 260) AS query FROM pg_stat_statements WHERE query ILIKE '%COUNT(*) * (SELECT value FROM config%data_blocks%' OR query ILIKE '%SELECT size, access_date, modification_date, change_date FROM files WHERE id_file%' ORDER BY total_exec_time DESC;" 2>&1 | tee "$LOG_DIR/count-filter-fio-4m.log"
+make reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/reset-before-fio-128m.log"
+make profile-pg-reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/pg-reset-fio-128m.log"
+FIO_FILE_SIZE=128M FOD_PROFILE_IO=1 make test-fio-sequential-io PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/fio-128m.log"
+make profile-pg-top-io-wal PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=fio128m 2>&1 | tee "$LOG_DIR/pg-top-io-wal-fio-128m.log"
+make profile-pg-metadata-top PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=fio128m 2>&1 | tee "$LOG_DIR/pg-metadata-top-fio-128m.log"
+PGPASSWORD="${POSTGRES_PASSWORD:-cichosza}" psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST:-127.0.0.1}" -p "${POSTGRES_PORT:-5432}" -U "${POSTGRES_USER:-foduser}" -d "${POSTGRES_DB:-foddbname}" -c "SELECT calls, round(total_exec_time::numeric, 3) AS total_exec_ms, round(mean_exec_time::numeric, 3) AS mean_exec_ms, left(regexp_replace(query, '\\s+', ' ', 'g'), 260) AS query FROM pg_stat_statements WHERE query ILIKE '%COUNT(*) * (SELECT value FROM config%data_blocks%' OR query ILIKE '%SELECT size, access_date, modification_date, change_date FROM files WHERE id_file%' ORDER BY total_exec_time DESC;" 2>&1 | tee "$LOG_DIR/count-filter-fio-128m.log"
+make reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/reset-before-strace-4m.log"
+FIO_FILE_SIZE=4M make test-fio-sequential-io-strace PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/strace-fio-4m.log"
+make reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/reset-before-strace-128m.log"
+FIO_FILE_SIZE=128M make test-fio-sequential-io-strace PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/strace-fio-128m.log"
+make reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/reset-before-perf-4m.log"
+perf stat -d -d -d -o "$LOG_DIR/perf-stat-fio-4m.txt" -- bash -lc "FIO_FILE_SIZE=4M FOD_PROFILE_IO=1 make test-fio-sequential-io PROFILE_RUN_ID='$RUN_ID' PROFILE_HOST='$HOST'" 2>&1 | tee "$LOG_DIR/perf-fio-4m-workload.log"
+cat "$LOG_DIR/perf-stat-fio-4m.txt"
+make reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/reset-before-perf-128m.log"
+perf stat -d -d -d -o "$LOG_DIR/perf-stat-fio-128m.txt" -- bash -lc "FIO_FILE_SIZE=128M FOD_PROFILE_IO=1 make test-fio-sequential-io PROFILE_RUN_ID='$RUN_ID' PROFILE_HOST='$HOST'" 2>&1 | tee "$LOG_DIR/perf-fio-128m-workload.log"
+cat "$LOG_DIR/perf-stat-fio-128m.txt"
+make reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/reset-before-large-file-128m.log"
+make profile-pg-reset PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/pg-reset-large-file-128m.log"
+LARGE_FILE_CHUNK_SIZE=4M LARGE_FILE_CHUNK_COUNT=32 FOD_PROFILE_IO=1 make test-large-file-multiblock-benchmark PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" 2>&1 | tee "$LOG_DIR/large-file-128m.log"
+make profile-pg-top-io-wal PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=large128m 2>&1 | tee "$LOG_DIR/pg-top-io-wal-large-file-128m.log"
+make profile-pg-metadata-top PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$HOST" PROFILE_CAPTURE_LABEL=large128m 2>&1 | tee "$LOG_DIR/pg-metadata-top-large-file-128m.log"
+PGPASSWORD="${POSTGRES_PASSWORD:-cichosza}" psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST:-127.0.0.1}" -p "${POSTGRES_PORT:-5432}" -U "${POSTGRES_USER:-foduser}" -d "${POSTGRES_DB:-foddbname}" -c "SELECT calls, round(total_exec_time::numeric, 3) AS total_exec_ms, round(mean_exec_time::numeric, 3) AS mean_exec_ms, left(regexp_replace(query, '\\s+', ' ', 'g'), 260) AS query FROM pg_stat_statements WHERE query ILIKE '%COUNT(*) * (SELECT value FROM config%data_blocks%' OR query ILIKE '%SELECT size, access_date, modification_date, change_date FROM files WHERE id_file%' ORDER BY total_exec_time DESC;" 2>&1 | tee "$LOG_DIR/count-filter-large-file-128m.log"
+```
+
+Follow-up inspection commands:
+
+```bash
+rg -n "Run status group|WRITE: bw=|READ: bw=|OK fio|FOD callback counts|fuse_read_total_us|fuse_write_total_us|repo_persist_blocks_us|flush_write_state_us|prepare_persist_rows_from_block_plan_us|store_recent_write_blocks_us|reply_data_us|FOD strace profile summary|\\| 100\\.00|Performance counter stats|task-clock|seconds time elapsed|SELECT size, access_date|COUNT\\(\\*\\).*data_blocks|COPY fod_persist_block_stage|INSERT INTO data_blocks" "$LOG_DIR"
+find "$LOG_DIR" -maxdepth 1 -type f -printf '%f\n' | sort
+find "artifacts/perf/5855293/${HOST}-${RUN_ID}" -maxdepth 1 -type f -printf '%f\n' | sort
+tail -80 conclusions.md
+tail -80 commands.md
+sed -n '760,805p' TODO.md
+rg -n "struct .*Handle|open\\(|fn open|read\\(|file_size_for_file_id_or_errno|data_object_id|handles|fh" rust_fuse/src/fs.rs
+sed -n '4300,4685p' rust_fuse/src/fs.rs
+sed -n '360,520p' rust_fuse/src/fs.rs
+rg -n "HashMap<.*fh|next_handle|open_files|file_handles|handle" rust_fuse/src/fs.rs | head -100
+sed -n '140,190p' rust_fuse/src/fs.rs
+sed -n '2188,2240p' rust_fuse/src/fs.rs
+sed -n '3028,3098p' rust_fuse/src/fs.rs
+sed -n '4096,4170p' rust_fuse/src/fs.rs && sed -n '5660,5725p' rust_fuse/src/fs.rs
+rg -n "fn read_block_map|pub fn read_block_map|ReadBlock|fetch_block_range|load_block" rust_fuse/src/fs.rs rust_hotpath/src/pg.rs
+sed -n '2850,2945p' rust_fuse/src/fs.rs
+sed -n '5540,5645p' rust_hotpath/src/pg.rs
+git status --short --branch
+git diff --check
+git diff --stat
+git diff -- TODO.md docs/block-only-performance-plan.md | sed -n '1,260p'
+cargo fmt --all && cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse atime -- --nocapture && cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --lib -- --nocapture
+```
+
+Finalization commands:
+
+```bash
+git add Cargo.lock Cargo.toml TODO.md commands.md conclusions.md docs/block-only-performance-plan.md fod_version.txt rust_fuse/src/fs.rs rust_hotpath/src/pg.rs && git diff --cached --check && git commit -m "FOD 3.2.74: reduce read attr allocation queries"
+git add commands.md && git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```

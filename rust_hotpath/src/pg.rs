@@ -1553,6 +1553,7 @@ unsafe fn validate_connection_target_role(
 enum PreparedStatement {
     FileDataObjectId,
     FileDataObjectInfo,
+    FileReadMetadata,
     DataObjectReferenceCount,
     GetDirId,
     GetFileIdRoot,
@@ -1583,6 +1584,7 @@ impl PreparedStatement {
         &[
             PreparedStatement::FileDataObjectId,
             PreparedStatement::FileDataObjectInfo,
+            PreparedStatement::FileReadMetadata,
             PreparedStatement::DataObjectReferenceCount,
             PreparedStatement::GetDirId,
             PreparedStatement::GetFileIdRoot,
@@ -1613,6 +1615,7 @@ impl PreparedStatement {
         match self {
             PreparedStatement::FileDataObjectId => "fod_file_data_object_id",
             PreparedStatement::FileDataObjectInfo => "fod_file_data_object_info",
+            PreparedStatement::FileReadMetadata => "fod_file_read_metadata",
             PreparedStatement::DataObjectReferenceCount => "fod_data_object_reference_count",
             PreparedStatement::GetDirId => "fod_get_dir_id",
             PreparedStatement::GetFileIdRoot => "fod_get_file_id_root",
@@ -1646,6 +1649,9 @@ impl PreparedStatement {
             }
             PreparedStatement::FileDataObjectInfo => {
                 "SELECT f.data_object_id, d.reference_count FROM files f JOIN data_objects d ON d.id_data_object = f.data_object_id WHERE f.id_file = $1"
+            }
+            PreparedStatement::FileReadMetadata => {
+                "SELECT size, access_date, modification_date, change_date FROM files WHERE id_file = $1"
             }
             PreparedStatement::DataObjectReferenceCount => {
                 "SELECT reference_count FROM data_objects WHERE id_data_object = $1"
@@ -1873,6 +1879,7 @@ impl PreparedStatement {
         match self {
             PreparedStatement::FileDataObjectId
             | PreparedStatement::FileDataObjectInfo
+            | PreparedStatement::FileReadMetadata
             | PreparedStatement::DataObjectReferenceCount
             | PreparedStatement::GetDirId
             | PreparedStatement::GetFileIdRoot
@@ -1903,6 +1910,7 @@ impl PreparedStatement {
         match self {
             PreparedStatement::FileDataObjectId
             | PreparedStatement::FileDataObjectInfo
+            | PreparedStatement::FileReadMetadata
             | PreparedStatement::DataObjectReferenceCount
             | PreparedStatement::GetDirId
             | PreparedStatement::GetFileIdRoot
@@ -3342,6 +3350,14 @@ pub struct ResolvedPath {
     pub parent_id: Option<u64>,
     pub kind: Option<String>,
     pub entry_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileReadMetadata {
+    pub size: u64,
+    pub access_date: String,
+    pub modification_date: String,
+    pub change_date: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5498,6 +5514,33 @@ impl DbRepo {
                     .map_err(|_| "invalid file size value".to_string())?;
                 Ok(Some(value))
             }
+        })
+    }
+
+    pub fn file_read_metadata(&self, file_id: u64) -> Result<Option<FileReadMetadata>, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file_id];
+            let res = exec_prepared_params(conn, PreparedStatement::FileReadMetadata, &params)?;
+            let row = fetch_first_row_texts(res)?;
+            if row.is_empty() {
+                return Ok(None);
+            }
+            if row.len() < 4 {
+                return Err("file read metadata row is missing fields".to_string());
+            }
+            let size = row[0]
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid file size value".to_string())?;
+            Ok(Some(FileReadMetadata {
+                size,
+                access_date: row[1].clone(),
+                modification_date: row[2].clone(),
+                change_date: row[3].clone(),
+            }))
         })
     }
 

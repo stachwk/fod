@@ -17,7 +17,7 @@ use fuser::{
 use libc::{EIO, ENOENT, ENOSPC, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
-use rust_hotpath::pg::{DbRepo, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX};
+use rust_hotpath::pg::{DbRepo, FileReadMetadata, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::ffi::OsStr;
@@ -479,6 +479,21 @@ impl AtimeStat for FileAttrTime<'_> {
 
     fn mtime(&self) -> SystemTime {
         self.0.mtime
+    }
+}
+
+struct FileReadMetadataTime {
+    atime: SystemTime,
+    mtime: SystemTime,
+}
+
+impl AtimeStat for FileReadMetadataTime {
+    fn atime(&self) -> SystemTime {
+        self.atime
+    }
+
+    fn mtime(&self) -> SystemTime {
+        self.mtime
     }
 }
 
@@ -2986,6 +3001,31 @@ impl FodFuse {
         }
     }
 
+    fn touch_file_access_time_from_read_metadata(&self, file_id: u64, metadata: &FileReadMetadata) {
+        let atime = Self::parse_time(&metadata.access_date);
+        let mtime = Self::parse_time(&metadata.modification_date);
+        if !self
+            .atime_policy
+            .should_update(false, &FileReadMetadataTime { atime, mtime })
+        {
+            return;
+        }
+        if self.atime_policy == AtimePolicy::Default {
+            if let Ok(age) = Self::current_time().duration_since(atime) {
+                if age < ATIME_TOUCH_INTERVAL {
+                    return;
+                }
+            }
+        }
+        let atime = Self::system_time_to_db_string(Self::current_time());
+        if let Err(err) = self.repo.update_file_access_date(file_id, &atime) {
+            warn!(
+                "FOD atime touch failed file_id={} change_date={} err={}",
+                file_id, metadata.change_date, err
+            );
+        }
+    }
+
     fn fopen_flags(&self) -> FopenFlags {
         // Domyslnie nie wymuszamy direct_io.
         // direct_io jest trybem diagnostycznym/zgodnosciowym, bo potrafi mocno spowolnic
@@ -4487,10 +4527,15 @@ impl Filesystem for FodFuse {
             return;
         }
         let size = size as u64;
-        let current_attrs = match self.entry_attrs_for_ino(ino) {
-            Ok((path, attrs)) => Some((path, attrs.file_attr)),
-            Err(errno) => {
-                self.log_request_error(req_id, "read", errno, format!("ino={} attrs skipped", ino));
+        let read_metadata = match self.repo.file_read_metadata(file_id) {
+            Ok(value) => value,
+            Err(err) => {
+                self.log_request_error(
+                    req_id,
+                    "read",
+                    EIO,
+                    format!("file_id={} read metadata skipped err={}", file_id, err),
+                );
                 None
             }
         };
@@ -4508,15 +4553,15 @@ impl Filesystem for FodFuse {
                     return;
                 }
             };
-            if let Some((path, attrs)) = current_attrs.as_ref() {
-                self.touch_access_time(path, attrs);
+            if let Some(metadata) = read_metadata.as_ref() {
+                self.touch_file_access_time_from_read_metadata(file_id, metadata);
             }
             read_task.complete(0, data.len() as u64);
             self.reply_data_profiled(reply, &data);
             return;
         }
-        let file_size = match current_attrs.as_ref() {
-            Some((_, attrs)) => attrs.size,
+        let file_size = match read_metadata.as_ref() {
+            Some(metadata) => metadata.size,
             None => match self.file_size_for_file_id_or_errno(file_id) {
                 Ok(value) => value,
                 Err(errno) => {
@@ -4549,8 +4594,8 @@ impl Filesystem for FodFuse {
                 if slice_end <= data.len() && slice_start <= slice_end {
                     read_task.complete(0, slice_end.saturating_sub(slice_start) as u64);
                     self.reply_data_profiled(reply, &data[slice_start..slice_end]);
-                    if let Some((path, attrs)) = current_attrs.as_ref() {
-                        self.touch_access_time(path, attrs);
+                    if let Some(metadata) = read_metadata.as_ref() {
+                        self.touch_file_access_time_from_read_metadata(file_id, metadata);
                     }
                     return;
                 }
@@ -4588,8 +4633,10 @@ impl Filesystem for FodFuse {
                             if slice_end <= data.len() && slice_start <= slice_end {
                                 read_task.complete(0, slice_end.saturating_sub(slice_start) as u64);
                                 self.reply_data_profiled(reply, &data[slice_start..slice_end]);
-                                if let Some((path, attrs)) = current_attrs.as_ref() {
-                                    self.touch_access_time(path, attrs);
+                                if let Some(metadata) = read_metadata.as_ref() {
+                                    self.touch_file_access_time_from_read_metadata(
+                                        file_id, metadata,
+                                    );
                                 }
                                 return;
                             }
@@ -4606,8 +4653,8 @@ impl Filesystem for FodFuse {
                     &blocks,
                 );
                 self.record_assemble_read_slice_elapsed(started.elapsed());
-                if let Some((path, attrs)) = current_attrs.as_ref() {
-                    self.touch_access_time(path, attrs);
+                if let Some(metadata) = read_metadata.as_ref() {
+                    self.touch_file_access_time_from_read_metadata(file_id, metadata);
                 }
                 read_task.complete(0, data.len() as u64);
                 self.reply_data_profiled(reply, &data)
@@ -6554,7 +6601,7 @@ impl Filesystem for FodFuse {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_update_atime, AtimePolicy, FodFuseProfileCounters, WriteState};
+    use super::{should_update_atime, AtimePolicy, WriteState};
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
     use std::collections::BTreeMap;
