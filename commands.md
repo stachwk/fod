@@ -3386,3 +3386,55 @@ Notes:
 - Raw profiling logs for this local run were kept under
   `/tmp/fod-3.2.73-block-only-*.log`.
 - `make test-fod-indexer-parallel-smoke` passed after the `.PHONY` cleanup.
+
+## 2026-08-16 commit 54970e3 fio/strace/perf 4M and 128M
+
+Commands:
+
+```bash
+git status --short && git rev-parse --short HEAD && tr -d '\n' < fod_version.txt
+sed -n '1,220p' /home/wojtek/.codex/attachments/ed7f4dca-d2b6-4e1a-9f19-d6de6450c822/pasted-text.txt
+rg -n "^(test-fio-sequential-io|test-fio-sequential-io-strace|profile-sudo-perf-stat-system|profile-perf-stat|profile-fuse-sudo-perf-stat):|FIO_FILE_SIZE|FOD_STRACE|PROFILE_WORKLOAD|PROFILE_CAPTURE_LABEL" Makefile tests/integration/test_fio_sequential_io.sh docs/performance.md
+mkdir -p /tmp/fod-bench-20260816-ff7fa68
+make reset 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/reset-before-fio-4m.log
+FIO_FILE_SIZE=4M FOD_PROFILE_IO=1 make test-fio-sequential-io 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/fio-4m.log
+make reset 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/reset-before-fio-128m.log
+FIO_FILE_SIZE=128M FOD_PROFILE_IO=1 make test-fio-sequential-io 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/fio-128m.log
+make reset 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/reset-before-strace-4m.log
+make test-fio-sequential-io-strace FIO_FILE_SIZE=4M 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/strace-4m.log
+make reset 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/reset-before-strace-128m.log
+make test-fio-sequential-io-strace FIO_FILE_SIZE=128M 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/strace-128m.log
+make reset 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/reset-before-perf-4m.log
+FIO_FILE_SIZE=4M FOD_PROFILE_IO=1 PROFILE_RUN_ID=20260816-fio-strace-perf-ff7fa68 make profile-sudo-perf-stat-system PROFILE_WORKLOAD=test-fio-sequential-io PROFILE_CAPTURE_LABEL=fio4m 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/perf-4m.log
+make reset 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/reset-before-perf-128m.log
+FIO_FILE_SIZE=128M FOD_PROFILE_IO=1 PROFILE_RUN_ID=20260816-fio-strace-perf-ff7fa68 make profile-sudo-perf-stat-system PROFILE_WORKLOAD=test-fio-sequential-io PROFILE_CAPTURE_LABEL=fio128m 2>&1 | tee /tmp/fod-bench-20260816-ff7fa68/perf-128m.log
+rg -n "Run status group|WRITE: bw=|READ: bw=|OK fio|FOD callback counts|repo_persist_blocks_us|fuse_read_total_us|fuse_write_total_us|FOD strace profile summary|\| 100\.00 .* total \||Performance counter stats|cpu-clock|context-switches|instructions|cycles|LLC-load-misses|seconds time elapsed|workload_status|perf_status|Failed to umount" /tmp/fod-bench-20260816-ff7fa68/*.log
+find artifacts -type f \( -name 'perf-stat-system-test-fio-sequential-io-fio4m.txt' -o -name 'perf-stat-system-test-fio-sequential-io-fio128m.txt' \) -print | sort
+git status --short --branch
+git log -6 --oneline --decorate
+git reflog -8 --date=iso
+git show --stat --oneline --decorate --no-renames HEAD
+rg -n "Failed to umount filesystem|umount.*Invalid argument|test-fio-sequential-io-strace" TODO.md conclusions.md docs/block-only-performance-plan.md
+```
+
+Notes:
+
+- The first status read in this interaction saw `ff7fa68`, then the local
+  branch fast-forwarded to `54970e3` before the measured workload started
+  (`git reflog` recorded `pull --tags origin main` at 2026-08-16 08:45:54
+  +0200). The actual test artifacts are therefore tied to commit `54970e3`.
+- Raw tee logs were kept in `/tmp/fod-bench-20260816-ff7fa68/`; the directory
+  name reflects the first observed commit, not the final measured commit.
+- `perf` artifacts were written under
+  `artifacts/perf/54970e3/lt7300-20260816-fio-strace-perf-ff7fa68/`.
+
+Finalization commands:
+
+```bash
+git add commands.md conclusions.md && git diff --cached --check && git commit -m "FOD 3.2.73: record fio strace perf profiles"
+git add commands.md && git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing myai --agent codex
+```

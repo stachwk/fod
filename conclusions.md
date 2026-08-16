@@ -1220,3 +1220,49 @@ which repeatedly counts `data_blocks` for the same data object and costs more
 than COPY plus merge combined in this run. The next optimization should target
 that attr/allocation path first; hardlink nlink batching should wait until a
 metadata-heavy profile shows it dominating again.
+
+## 2026-08-16 — FOD 3.2.73 fio, strace, and perf profiles for 4 MiB and 128 MiB
+
+Measured commit: `54970e3` (`FOD 3.2.73: update block-only performance plan`).
+The shell log directory is `/tmp/fod-bench-20260816-ff7fa68/`; that name came
+from the first observed commit before a local fast-forward, while the actual
+Makefile perf artifacts were written under
+`artifacts/perf/54970e3/lt7300-20260816-fio-strace-perf-ff7fa68/`.
+
+| profile | size | fio write | fio read | callbacks read/write | FOD timers |
+| --- | --- | --- | --- | --- | --- |
+| `FOD_PROFILE_IO=1 make test-fio-sequential-io` | 4 MiB | `3377 KiB/s` | `65.6 MiB/s` | `20 / 1024` | `fuse_read_total_us=873881`, `fuse_write_total_us=227958`, `repo_persist_blocks_us=103784` |
+| `FOD_PROFILE_IO=1 make test-fio-sequential-io` | 128 MiB | `3602 KiB/s` | `109 MiB/s` | `516 / 32768` | `fuse_read_total_us=27565089`, `fuse_write_total_us=5377967`, `repo_persist_blocks_us=2411285` |
+| `make test-fio-sequential-io-strace` | 4 MiB | `7923 KiB/s` | `1925 KiB/s` | `1024 / 1024` | `fuse_read_total_us=1996121`, `fuse_write_total_us=418261`, `repo_persist_blocks_us=101559` |
+| `make test-fio-sequential-io-strace` | 128 MiB | `12.3 MiB/s` | `997 KiB/s` | `32768 / 32768` | `fuse_read_total_us=127249534`, `fuse_write_total_us=7580028`, `repo_persist_blocks_us=2257411` |
+| `profile-sudo-perf-stat-system`, `FOD_PROFILE_IO=1` | 4 MiB | `3043 KiB/s` | `143 MiB/s` | `20 / 1024` | `fuse_read_total_us=944501`, `fuse_write_total_us=243419`, `repo_persist_blocks_us=112002` |
+| `profile-sudo-perf-stat-system`, `FOD_PROFILE_IO=1` | 128 MiB | `3299 KiB/s` | `93.2 MiB/s` | `516 / 32768` | `fuse_read_total_us=30172549`, `fuse_write_total_us=5833192`, `repo_persist_blocks_us=2616746` |
+
+`strace -f -c` summaries:
+
+| size | total | dominant syscalls |
+| --- | --- | --- |
+| 4 MiB | `5.539111 s`, `54187` calls, `40` errors | `read=2.874814 s / 2221 calls`, `futex=1.672791 s / 6310 calls`, `wait4=0.441334 s / 3 calls` |
+| 128 MiB | `151.946507 s`, `1594743` calls, `186` errors | `read=79.932722 s / 65938 calls`, `futex=56.538371 s / 197530 calls`, `wait4=11.434356 s / 3 calls` |
+
+System-wide `perf stat -a -d -d -d` summaries:
+
+| size | elapsed | cpu-clock | context switches | instructions | cycles | LLC load misses |
+| --- | --- | --- | --- | --- | --- | --- |
+| 4 MiB | `4.864275126 s` | `38897497426` | `119645` | `26484968615` | `30381588355` | `78887662` |
+| 128 MiB | `44.947420015 s` | `359576572717` | `2211091` | `242658835743` | `293409324450` | `326918480` |
+
+All six measured workloads finished with status 0. The `strace` target again
+logged `Failed to umount filesystem: Invalid argument`; this matches the known
+`fuser 0.17` double-unmount behavior already documented on 2026-07-12 and did
+not fail the test.
+
+Conclusion: clean block-only 128 MiB sequential write remains around
+`3.2-3.5 MiB/s` in the normal/perf path, with cache-hot reads around
+`93-109 MiB/s`. The write-side persistence timer stays near `2.3-2.6 s` for
+128 MiB and about `0.10-0.11 s` for 4 MiB. The strace/direct-IO profile is a
+diagnostic shape, not a throughput baseline: it changes read callback counts
+from `516` to `32768` on 128 MiB and makes `read` plus `futex` dominate the
+syscall wall time. The next optimization target remains the block-only file
+attribute/allocation path that repeatedly counts `data_blocks`; these runs do
+not add evidence that `COUNT(hardlinks)` is the current large-file bottleneck.
