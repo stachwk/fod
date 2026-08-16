@@ -6,6 +6,8 @@ This document records the next measured write-side optimization after FOD 3.2.74
 
 The active storage architecture remains block-only. Do not change the 4 KiB logical block size or introduce another payload representation as part of this work.
 
+FOD 3.2.75 completes the first implementation step by adding quota/persist timing observability only. It does not move the advisory lock yet and therefore does not claim a throughput improvement.
+
 ## Why worker tuning is not the next step
 
 The 2026-08-16 direct concurrent block-persist profile on commit `6797299` showed that increasing write parallelism makes the current persistence path slower because all payload transactions serialize on the quota advisory lock.
@@ -159,6 +161,8 @@ Before behavior changes, make the profile distinguish at least:
 
 This prevents a later speedup from merely moving wait time to another unlabeled statement.
 
+Status: implemented in FOD 3.2.75. PostgreSQL lane and global payload logs now report `persist_transaction_*`, `persist_copy_stage_*`, `persist_data_blocks_merge_*`, `quota_lock_wait_*`, `quota_lock_held_*`, and `quota_final_check_*` counters/totals/maxima in microseconds. The current lock-held timer intentionally measures the transaction-scoped quota lock from successful acquisition until the guard is dropped in the persist/reservation transaction body; it is diagnostic instrumentation, not a lock-scope behavior change.
+
 ### Step 2 — move ordinary block-persist lock to the final check
 
 Apply the smallest change first:
@@ -259,7 +263,7 @@ The next production-code change should use the next sequential FOD version and s
 
 Expected delivery sequence:
 
-1. add quota critical-section observability and focused tests;
+1. add quota critical-section observability and focused tests; completed in FOD 3.2.75;
 2. move ordinary block-persist quota serialization to the final validation section;
 3. run quota correctness, replay and two-process/two-mount regressions;
 4. run 1/2/4/8 concurrent persistence profiles;

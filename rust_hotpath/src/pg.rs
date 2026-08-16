@@ -3538,6 +3538,47 @@ impl Drop for PayloadPersistGuard {
     }
 }
 
+struct PayloadQuotaLockObservation {
+    quota_bytes: Option<u64>,
+    local: Arc<DbRepoPayloadObservability>,
+    global: Option<Arc<DbRepoPayloadObservability>>,
+    acquired_at: Instant,
+}
+
+impl PayloadQuotaLockObservation {
+    fn new(
+        local: Arc<DbRepoPayloadObservability>,
+        global: Arc<DbRepoPayloadObservability>,
+        acquired_at: Instant,
+    ) -> Self {
+        let global = (!Arc::ptr_eq(&local, &global)).then_some(global);
+        Self {
+            quota_bytes: None,
+            local,
+            global,
+            acquired_at,
+        }
+    }
+
+    fn quota_bytes(&self) -> Option<u64> {
+        self.quota_bytes
+    }
+
+    fn set_quota_bytes(&mut self, quota_bytes: Option<u64>) {
+        self.quota_bytes = quota_bytes;
+    }
+}
+
+impl Drop for PayloadQuotaLockObservation {
+    fn drop(&mut self) {
+        let elapsed = self.acquired_at.elapsed();
+        self.local.record_quota_lock_held(elapsed);
+        if let Some(global) = &self.global {
+            global.record_quota_lock_held(elapsed);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct TransactionAdmissionWaiter {
     ticket: u64,
@@ -4864,6 +4905,64 @@ impl DbRepo {
             input_bytes,
             input_rows,
         )
+    }
+
+    fn record_persist_transaction_elapsed(&self, elapsed: Duration, failed: bool) {
+        self.payload_observability
+            .record_persist_transaction(elapsed, failed);
+        if !Arc::ptr_eq(
+            &self.payload_observability,
+            &self.global_payload_observability,
+        ) {
+            self.global_payload_observability
+                .record_persist_transaction(elapsed, failed);
+        }
+    }
+
+    fn record_persist_copy_stage_elapsed(&self, elapsed: Duration) {
+        self.payload_observability
+            .record_persist_copy_stage(elapsed);
+        if !Arc::ptr_eq(
+            &self.payload_observability,
+            &self.global_payload_observability,
+        ) {
+            self.global_payload_observability
+                .record_persist_copy_stage(elapsed);
+        }
+    }
+
+    fn record_persist_data_blocks_merge_elapsed(&self, elapsed: Duration) {
+        self.payload_observability
+            .record_persist_data_blocks_merge(elapsed);
+        if !Arc::ptr_eq(
+            &self.payload_observability,
+            &self.global_payload_observability,
+        ) {
+            self.global_payload_observability
+                .record_persist_data_blocks_merge(elapsed);
+        }
+    }
+
+    fn record_quota_lock_wait_elapsed(&self, elapsed: Duration) {
+        self.payload_observability.record_quota_lock_wait(elapsed);
+        if !Arc::ptr_eq(
+            &self.payload_observability,
+            &self.global_payload_observability,
+        ) {
+            self.global_payload_observability
+                .record_quota_lock_wait(elapsed);
+        }
+    }
+
+    fn record_quota_final_check_elapsed(&self, elapsed: Duration) {
+        self.payload_observability.record_quota_final_check(elapsed);
+        if !Arc::ptr_eq(
+            &self.payload_observability,
+            &self.global_payload_observability,
+        ) {
+            self.global_payload_observability
+                .record_quota_final_check(elapsed);
+        }
     }
 
     pub fn postgres_runtime_requirements(&self) -> Result<PostgresRuntimeRequirements, String> {
@@ -9841,6 +9940,7 @@ impl DbRepo {
                 PERSIST_BLOCK_STAGE_TABLE
             ))
             .map_err(|_| "SQL contains NUL byte".to_string())?;
+            let copy_started = Instant::now();
             let mut copy = CopyInSession::start(conn, &copy_sql)?;
             let mut copy_buffer = Vec::with_capacity(persist_copy_send_buffer_bytes());
             append_copy_binary_header(&mut copy_buffer);
@@ -9858,7 +9958,10 @@ impl DbRepo {
             }
             flush_copy_send_buffer(&mut copy, &mut copy_buffer)?;
             copy.finish()?;
+            self.record_persist_copy_stage_elapsed(copy_started.elapsed());
+            let merge_started = Instant::now();
             merge_persist_block_stage_table(conn, maintain_copy_crc_table)?;
+            self.record_persist_data_blocks_merge_elapsed(merge_started.elapsed());
         }
 
         self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
@@ -10070,6 +10173,7 @@ impl DbRepo {
                     PERSIST_BLOCK_STAGE_TABLE
                 ))
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let copy_started = Instant::now();
                 let mut copy = CopyInSession::start(conn, &copy_sql)?;
                 let mut copy_buffer = Vec::with_capacity(persist_copy_send_buffer_bytes());
                 append_copy_binary_header(&mut copy_buffer);
@@ -10151,7 +10255,10 @@ impl DbRepo {
 
                 flush_copy_send_buffer(&mut copy, &mut copy_buffer)?;
                 copy.finish()?;
+                self.record_persist_copy_stage_elapsed(copy_started.elapsed());
+                let merge_started = Instant::now();
                 merge_persist_block_stage_table(conn, maintain_copy_crc_table)?;
+                self.record_persist_data_blocks_merge_elapsed(merge_started.elapsed());
             }
             PersistBlockTransport::BinaryBytea | PersistBlockTransport::LegacyHex => {
                 let sql_upsert_data_binary = CString::new(
@@ -10362,8 +10469,9 @@ impl DbRepo {
     ) -> Result<(), String> {
         let mut payload_guard = self.payload_persist_guard(file_size, total_blocks);
         let result = self.with_cached_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| {
-                let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
+            let transaction_started = Instant::now();
+            let result = transactional_replayable(conn, |conn| {
+                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
                 self.persist_file_blocks_streaming_on_conn(
                     conn,
                     file_id,
@@ -10375,8 +10483,10 @@ impl DbRepo {
                     expected_hash,
                     maintain_copy_crc_table,
                 )?;
-                self.enforce_payload_quota_on_conn(conn, quota_bytes, None)
-            })
+                self.enforce_payload_quota_on_conn(conn, &quota_lock, None)
+            });
+            self.record_persist_transaction_elapsed(transaction_started.elapsed(), result.is_err());
+            result
         });
         if result.is_ok() {
             payload_guard.mark_success();
@@ -10440,11 +10550,12 @@ impl DbRepo {
         let mut payload_guard =
             self.payload_persist_guard(persist_block_input_bytes(blocks), blocks.len() as u64);
         let result = self.with_cached_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| {
-                let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
+            let transaction_started = Instant::now();
+            let result = transactional_replayable(conn, |conn| {
+                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
                 self.refresh_payload_reservation_on_conn(
                     conn,
-                    quota_bytes,
+                    quota_lock.quota_bytes(),
                     capacity_reservation_token,
                 )?;
                 match self.persist_block_transport {
@@ -10472,8 +10583,10 @@ impl DbRepo {
                             self.persist_block_transport,
                         ),
                 }?;
-                self.enforce_payload_quota_on_conn(conn, quota_bytes, capacity_reservation_token)
-            })
+                self.enforce_payload_quota_on_conn(conn, &quota_lock, capacity_reservation_token)
+            });
+            self.record_persist_transaction_elapsed(transaction_started.elapsed(), result.is_err());
+            result
         });
         if result.is_ok() {
             payload_guard.mark_success();
@@ -10481,10 +10594,21 @@ impl DbRepo {
         result
     }
 
-    unsafe fn lock_payload_quota_on_conn(&self, conn: *mut PGconn) -> Result<Option<u64>, String> {
+    unsafe fn lock_payload_quota_on_conn(
+        &self,
+        conn: *mut PGconn,
+    ) -> Result<PayloadQuotaLockObservation, String> {
         let sql_lock = CString::new("SELECT pg_advisory_xact_lock(4607812, 1)")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let lock_started = Instant::now();
         query_scalar_text_on_conn(conn, &sql_lock)?;
+        let lock_acquired_at = Instant::now();
+        self.record_quota_lock_wait_elapsed(lock_acquired_at.duration_since(lock_started));
+        let mut observation = PayloadQuotaLockObservation::new(
+            Arc::clone(&self.payload_observability),
+            Arc::clone(&self.global_payload_observability),
+            lock_acquired_at,
+        );
 
         let sql_limit =
             CString::new("SELECT value::text FROM config WHERE key = 'max_fs_size_bytes'")
@@ -10494,7 +10618,8 @@ impl DbRepo {
             .trim()
             .parse::<u64>()
             .map_err(|_| "invalid config.max_fs_size_bytes value".to_string())?;
-        Ok((limit > 0).then_some(limit))
+        observation.set_quota_bytes((limit > 0).then_some(limit));
+        Ok(observation)
     }
 
     unsafe fn persisted_and_reserved_payload_bytes_on_conn(
@@ -10570,14 +10695,18 @@ impl DbRepo {
     unsafe fn enforce_payload_quota_on_conn(
         &self,
         conn: *mut PGconn,
-        quota_bytes: Option<u64>,
+        quota_lock: &PayloadQuotaLockObservation,
         excluded_reservation_token: Option<&str>,
     ) -> Result<(), String> {
+        let quota_bytes = quota_lock.quota_bytes();
         let Some(quota_bytes) = quota_bytes else {
             return Ok(());
         };
-        let used_bytes =
-            self.persisted_and_reserved_payload_bytes_on_conn(conn, excluded_reservation_token)?;
+        let check_started = Instant::now();
+        let used_result =
+            self.persisted_and_reserved_payload_bytes_on_conn(conn, excluded_reservation_token);
+        self.record_quota_final_check_elapsed(check_started.elapsed());
+        let used_bytes = used_result?;
         if used_bytes > quota_bytes {
             return Err(format!(
                 "{} persisted payload would use {} bytes, limit is {} bytes",
@@ -10611,14 +10740,14 @@ impl DbRepo {
 
         self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
-                let quota_bytes = self.lock_payload_quota_on_conn(conn)?;
-                if quota_bytes.is_none() {
+                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
+                if quota_lock.quota_bytes().is_none() {
                     return Ok(None);
                 }
                 exec_command(conn, &sql_delete_expired)?;
                 let committed_and_reserved =
                     self.persisted_and_reserved_payload_bytes_on_conn(conn, None)?;
-                let quota_bytes = quota_bytes.unwrap_or(0);
+                let quota_bytes = quota_lock.quota_bytes().unwrap_or(0);
                 if committed_and_reserved.saturating_add(reserved_bytes) > quota_bytes {
                     return Err(format!(
                         "{} copy requires {} reserved bytes, {} bytes are already committed or reserved, limit is {} bytes",

@@ -2,7 +2,7 @@
 
 ## Status
 
-This is the canonical active storage-performance plan after FOD 3.2.71-3.2.74.
+This is the canonical active storage-performance plan after FOD 3.2.71-3.2.75.
 Older storage-engine plans and ADRs may retain benchmark history, but they must
 not define an active runtime path that conflicts with this document.
 
@@ -78,6 +78,12 @@ lock wait grew from about `3.5 s` to about `12.7 s`.
 Therefore **do not tune write-worker defaults yet**. Worker-count measurements
 are distorted while a global transaction-scoped quota lock spans the long
 COPY/merge section.
+
+FOD 3.2.75 adds the observability needed for the next comparison:
+`persist_transaction_*`, `persist_copy_stage_*`, `persist_data_blocks_merge_*`,
+`quota_lock_wait_*`, `quota_lock_held_*`, and `quota_final_check_*`. This is an
+instrumentation step only; the ordinary block-persist transaction shape is
+unchanged until the quota lock is moved to the final validation gate.
 
 The detailed implementation subplan is:
 

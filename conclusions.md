@@ -1398,3 +1398,39 @@ The current acceptance criterion is to remove artificial global serialization
 around long COPY/merge work while preserving database-wide quota correctness.
 It is not required that 8 workers beat 4 workers before the post-change profile
 proves that is the real optimum.
+
+## 2026-08-16 — FOD 3.2.75 quota critical-section observability
+
+Measured working tree: FOD 3.2.75 based on commit `e11c81a`
+(`FOD 3.2.74: record block-only plan review`).
+
+FOD 3.2.75 adds diagnostic observability for the current quota-serialized
+persist path without changing quota behavior. PostgreSQL lane and global
+payload logs now expose:
+
+- `persist_transaction_*` for total persist transaction time and failures;
+- `persist_copy_stage_*` for COPY BINARY staging time;
+- `persist_data_blocks_merge_*` for set-based `data_blocks` merge time;
+- `quota_lock_wait_*` for advisory-lock wait time;
+- `quota_lock_held_*` for time from successful quota-lock acquisition until the
+  transaction-scoped lock guard is dropped;
+- `quota_final_check_*` for the final persisted+reserved payload count.
+
+Validation passed with `cargo fmt --all`, `cargo check --workspace --locked`,
+the focused monitor test `payload_persist_quota_timings_are_reported`, and
+hotpath library tests `80/80`. The hotpath test run still emits the existing
+two `unreachable pattern` warnings in `rust_hotpath/src/persist_plan.rs`.
+
+The required FUSE fio validation could not run in this execution session.
+`FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make test-fio-sequential-io-strace` built
+the Rust binaries and then failed before workload execution because `sudo-rs`
+is not installed with uid-0 ownership and setuid. The non-strace retry
+`FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make test-fio-sequential-io` reached FOD
+mount startup and exported the new quota/persist observability fields in the
+post-startup/post-mount logs, but `fusermount3` failed with `Operation not
+permitted`. This is an environment blocker for FUSE end-to-end benchmarking,
+not a successful fio measurement.
+
+Next implementation step remains moving the ordinary block-persist advisory
+lock from the start of the long COPY/merge transaction body to the final quota
+validation gate while preserving cross-process quota correctness.

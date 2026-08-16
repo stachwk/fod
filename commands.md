@@ -3684,3 +3684,60 @@ Plan finding:
 - Worker defaults, hardlink counting, COPY/merge tuning, block-size changes and
   alternate payload formats are explicitly deferred until after quota-lock
   narrowing and re-profiling.
+
+## 2026-08-16 commit e11c81a working tree FOD 3.2.75 quota timing observability
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+source ~/.venv/bin/activate && mempalace search "FOD quota critical section observability advisory lock timing persist_file_blocks" --wing fod
+rg -n "quota_lock|record_quota|enforce_payload_quota|lock_payload_quota|record_persist_transaction|persist_copy_stage|persist_data_blocks_merge|payload_persist_quota_timings" rust_hotpath/src/pg.rs rust_monitor/src/lib.rs docs/quota-lock-concurrency-plan.md docs/block-only-performance-plan.md TODO.md commands.md conclusions.md fod_version.txt Cargo.toml
+sed -n '3520,3725p' rust_hotpath/src/pg.rs
+sed -n '900,1160p' rust_monitor/src/lib.rs
+sed -n '10560,10745p' rust_hotpath/src/pg.rs
+sed -n '760,850p' rust_monitor/src/lib.rs
+sed -n '1190,1265p' rust_monitor/src/lib.rs
+sed -n '1790,1848p' rust_monitor/src/lib.rs
+sed -n '1,60p' Cargo.toml && cat fod_version.txt && rg -n '^version = "3\\.2\\.74"|name = "fod-' Cargo.lock | head -80
+```
+
+Edit and validation commands:
+
+```bash
+cargo fmt --all
+cargo check --workspace --locked
+# First check failed with Rust E0499 in rust_monitor/src/lib.rs because the
+# helper borrowed several fields of the same MutexGuard state at once.
+cargo fmt --all && cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-monitor payload_persist_quota_timings_are_reported -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --lib -- --nocapture
+cargo fmt --all && cargo check --workspace --locked && cargo test --manifest-path Cargo.toml -p fod-rust-monitor payload_persist_quota_timings_are_reported -- --nocapture && cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --lib -- --nocapture
+# Final validation after moving quota_lock_held start to the actual
+# post-pg_advisory_xact_lock acquisition timestamp: check passed, focused
+# monitor test passed, hotpath library tests passed 80/80 with the existing two
+# unreachable-pattern warnings in rust_hotpath/src/persist_plan.rs.
+```
+
+FUSE fio attempts:
+
+```bash
+FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make --no-print-directory test-fio-sequential-io-strace
+# Result: built fod-rust-mkfs, fod-rust-fuse, fod-indexer and fod-monitor, then
+# failed before workload execution: sudo-rs: sudo must be owned by uid 0 and have the setuid bit set.
+
+FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make --no-print-directory test-fio-sequential-io
+# Result: reached FOD mount startup and printed the new persist/quota
+# observability fields, then failed at fusermount3: Operation not permitted.
+git diff --check
+git diff --stat
+git diff -- Cargo.toml fod_version.txt docs/quota-lock-concurrency-plan.md docs/block-only-performance-plan.md TODO.md conclusions.md commands.md | sed -n '1,260p'
+git diff -- rust_monitor/src/lib.rs rust_hotpath/src/pg.rs | sed -n '1,280p'
+cargo check --workspace --locked
+git add Cargo.lock Cargo.toml TODO.md commands.md conclusions.md docs/block-only-performance-plan.md docs/quota-lock-concurrency-plan.md fod_version.txt rust_hotpath/src/pg.rs rust_monitor/src/lib.rs && git diff --cached --check && git commit -m "FOD 3.2.75: instrument quota persist timings"
+git add commands.md && git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```

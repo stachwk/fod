@@ -785,6 +785,25 @@ pub struct DbRepoPayloadObservabilitySnapshot {
     pub persist_input_bytes_max: u64,
     pub persist_micros_total: u64,
     pub persist_micros_max: u64,
+    pub persist_transaction_count: u64,
+    pub persist_transaction_failures: u64,
+    pub persist_transaction_micros_total: u64,
+    pub persist_transaction_micros_max: u64,
+    pub persist_copy_stage_count: u64,
+    pub persist_copy_stage_micros_total: u64,
+    pub persist_copy_stage_micros_max: u64,
+    pub persist_data_blocks_merge_count: u64,
+    pub persist_data_blocks_merge_micros_total: u64,
+    pub persist_data_blocks_merge_micros_max: u64,
+    pub quota_lock_wait_count: u64,
+    pub quota_lock_wait_micros_total: u64,
+    pub quota_lock_wait_micros_max: u64,
+    pub quota_lock_held_count: u64,
+    pub quota_lock_held_micros_total: u64,
+    pub quota_lock_held_micros_max: u64,
+    pub quota_final_check_count: u64,
+    pub quota_final_check_micros_total: u64,
+    pub quota_final_check_micros_max: u64,
 }
 
 #[derive(Debug, Default)]
@@ -800,6 +819,25 @@ struct DbRepoPayloadObservabilityState {
     persist_input_bytes_max: u64,
     persist_micros_total: u64,
     persist_micros_max: u64,
+    persist_transaction_count: u64,
+    persist_transaction_failures: u64,
+    persist_transaction_micros_total: u64,
+    persist_transaction_micros_max: u64,
+    persist_copy_stage_count: u64,
+    persist_copy_stage_micros_total: u64,
+    persist_copy_stage_micros_max: u64,
+    persist_data_blocks_merge_count: u64,
+    persist_data_blocks_merge_micros_total: u64,
+    persist_data_blocks_merge_micros_max: u64,
+    quota_lock_wait_count: u64,
+    quota_lock_wait_micros_total: u64,
+    quota_lock_wait_micros_max: u64,
+    quota_lock_held_count: u64,
+    quota_lock_held_micros_total: u64,
+    quota_lock_held_micros_max: u64,
+    quota_final_check_count: u64,
+    quota_final_check_micros_total: u64,
+    quota_final_check_micros_max: u64,
 }
 
 #[derive(Debug)]
@@ -1061,6 +1099,100 @@ impl DbRepoPayloadObservability {
         }
     }
 
+    pub fn record_persist_transaction(&self, elapsed: Duration, failed: bool) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let elapsed_micros = duration_micros(elapsed);
+        let mut accounting_error = !accumulate_observation(&mut state.persist_transaction_count, 1);
+        accounting_error |=
+            !accumulate_observation(&mut state.persist_transaction_micros_total, elapsed_micros);
+        state.persist_transaction_micros_max =
+            state.persist_transaction_micros_max.max(elapsed_micros);
+        if failed {
+            accounting_error |= !accumulate_observation(&mut state.persist_transaction_failures, 1);
+        }
+        if accounting_error {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+        }
+    }
+
+    pub fn record_persist_copy_stage(&self, elapsed: Duration) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let elapsed_micros = duration_micros(elapsed);
+        let mut accounting_error = !accumulate_observation(&mut state.persist_copy_stage_count, 1);
+        accounting_error |=
+            !accumulate_observation(&mut state.persist_copy_stage_micros_total, elapsed_micros);
+        state.persist_copy_stage_micros_max =
+            state.persist_copy_stage_micros_max.max(elapsed_micros);
+        if accounting_error {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+        }
+    }
+
+    pub fn record_persist_data_blocks_merge(&self, elapsed: Duration) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let elapsed_micros = duration_micros(elapsed);
+        let mut accounting_error =
+            !accumulate_observation(&mut state.persist_data_blocks_merge_count, 1);
+        accounting_error |= !accumulate_observation(
+            &mut state.persist_data_blocks_merge_micros_total,
+            elapsed_micros,
+        );
+        state.persist_data_blocks_merge_micros_max = state
+            .persist_data_blocks_merge_micros_max
+            .max(elapsed_micros);
+        if accounting_error {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+        }
+    }
+
+    pub fn record_quota_lock_wait(&self, elapsed: Duration) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let elapsed_micros = duration_micros(elapsed);
+        let mut accounting_error = !accumulate_observation(&mut state.quota_lock_wait_count, 1);
+        accounting_error |=
+            !accumulate_observation(&mut state.quota_lock_wait_micros_total, elapsed_micros);
+        state.quota_lock_wait_micros_max = state.quota_lock_wait_micros_max.max(elapsed_micros);
+        if accounting_error {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+        }
+    }
+
+    pub fn record_quota_lock_held(&self, elapsed: Duration) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let elapsed_micros = duration_micros(elapsed);
+        let mut accounting_error = !accumulate_observation(&mut state.quota_lock_held_count, 1);
+        accounting_error |=
+            !accumulate_observation(&mut state.quota_lock_held_micros_total, elapsed_micros);
+        state.quota_lock_held_micros_max = state.quota_lock_held_micros_max.max(elapsed_micros);
+        if accounting_error {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+        }
+    }
+
+    pub fn record_quota_final_check(&self, elapsed: Duration) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        let elapsed_micros = duration_micros(elapsed);
+        let mut accounting_error = !accumulate_observation(&mut state.quota_final_check_count, 1);
+        accounting_error |=
+            !accumulate_observation(&mut state.quota_final_check_micros_total, elapsed_micros);
+        state.quota_final_check_micros_max = state.quota_final_check_micros_max.max(elapsed_micros);
+        if accounting_error {
+            state.accounting_errors = state.accounting_errors.saturating_add(1);
+        }
+    }
+
     pub fn snapshot(&self) -> Result<DbRepoPayloadObservabilitySnapshot, String> {
         let state = self
             .state
@@ -1091,6 +1223,25 @@ impl DbRepoPayloadObservability {
             persist_input_bytes_max: state.persist_input_bytes_max,
             persist_micros_total: state.persist_micros_total,
             persist_micros_max: state.persist_micros_max,
+            persist_transaction_count: state.persist_transaction_count,
+            persist_transaction_failures: state.persist_transaction_failures,
+            persist_transaction_micros_total: state.persist_transaction_micros_total,
+            persist_transaction_micros_max: state.persist_transaction_micros_max,
+            persist_copy_stage_count: state.persist_copy_stage_count,
+            persist_copy_stage_micros_total: state.persist_copy_stage_micros_total,
+            persist_copy_stage_micros_max: state.persist_copy_stage_micros_max,
+            persist_data_blocks_merge_count: state.persist_data_blocks_merge_count,
+            persist_data_blocks_merge_micros_total: state.persist_data_blocks_merge_micros_total,
+            persist_data_blocks_merge_micros_max: state.persist_data_blocks_merge_micros_max,
+            quota_lock_wait_count: state.quota_lock_wait_count,
+            quota_lock_wait_micros_total: state.quota_lock_wait_micros_total,
+            quota_lock_wait_micros_max: state.quota_lock_wait_micros_max,
+            quota_lock_held_count: state.quota_lock_held_count,
+            quota_lock_held_micros_total: state.quota_lock_held_micros_total,
+            quota_lock_held_micros_max: state.quota_lock_held_micros_max,
+            quota_final_check_count: state.quota_final_check_count,
+            quota_final_check_micros_total: state.quota_final_check_micros_total,
+            quota_final_check_micros_max: state.quota_final_check_micros_max,
         })
     }
 }
@@ -1370,7 +1521,7 @@ pub fn log_lane_observability(
                 let routing = snapshot.routing;
                 let payload = snapshot.payload;
                 log::info!(
-                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} stale_connection_discards={} transaction_count={} transaction_failures={} transaction_micros_total={} transaction_micros_max={} write_transaction_limit={} write_active_transactions={} write_queued_transactions={} write_peak_active_transactions={} write_peak_queued_transactions={} write_transaction_admission_count={} write_transaction_backpressure_events={} write_transaction_fairness_yields={} write_transaction_accounting_errors={} control_transaction_limit={} control_active_transactions={} control_queued_transactions={} control_peak_active_transactions={} control_peak_queued_transactions={} control_transaction_admission_count={} control_transaction_backpressure_events={} control_transaction_fairness_yields={} control_transaction_accounting_errors={} heartbeat_count={} heartbeat_failures={} heartbeat_schedule_delay_micros_total={} heartbeat_schedule_delay_micros_max={} heartbeat_execution_micros_total={} heartbeat_execution_micros_max={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled={} runtime_failover_enabled={} routing_target_count={} routing_active_authority={} routing_generation={} runtime_failover_count={} routing_connection_failures={} routing_role_rejections={} routing_last_failed_authority={} replica_read_routing_enabled={} replica_target_count={} replica_active_authority={} required_primary_wal_lsn={} primary_wal_lsn_updates={} primary_wal_lsn_capture_failures={} replica_consistency_checks={} replica_consistency_passes={} replica_reads={} replica_lag_fallbacks={} replica_read_failures={} primary_read_fallbacks={} replica_scoring_enabled={} replica_active_score={:?} replica_active_replay_lag_bytes={:?} replica_active_connection_latency_micros={:?} replica_active_operation_latency_micros={:?} replica_score_selections={} replica_score_switches={} replica_hysteresis_keeps={} replica_circuit_breaker_skips={} replica_circuit_open_targets={} replica_pool_pressure_fallbacks={} primary_promotion_guard_enabled={} primary_system_identifier={} primary_server_fingerprint={} primary_guard_scans={} primary_guard_unreachable_candidates={} primary_guard_role_rejections={} primary_guard_cluster_identity_rejections={} primary_guard_split_brain_rejections={} primary_guard_no_primary_rejections={} primary_guard_last_error={}",
+                    "FOD PostgreSQL lane observability: stage={} lane={} connection_limit={} live_connections={} idle_connections={} idle_write_connections={} idle_control_connections={} active_connections={} queued_acquisitions={} peak_active_connections={} peak_queued_acquisitions={} acquisition_count={} acquisition_wait_micros_total={} acquisition_wait_micros_max={} connection_create_count={} connection_create_failures={} connection_create_micros_total={} connection_create_micros_max={} operation_count={} operation_failures={} operation_micros_total={} operation_micros_max={} replay_count={} stale_connection_discards={} transaction_count={} transaction_failures={} transaction_micros_total={} transaction_micros_max={} write_transaction_limit={} write_active_transactions={} write_queued_transactions={} write_peak_active_transactions={} write_peak_queued_transactions={} write_transaction_admission_count={} write_transaction_backpressure_events={} write_transaction_fairness_yields={} write_transaction_accounting_errors={} control_transaction_limit={} control_active_transactions={} control_queued_transactions={} control_peak_active_transactions={} control_peak_queued_transactions={} control_transaction_admission_count={} control_transaction_backpressure_events={} control_transaction_fairness_yields={} control_transaction_accounting_errors={} heartbeat_count={} heartbeat_failures={} heartbeat_schedule_delay_micros_total={} heartbeat_schedule_delay_micros_max={} heartbeat_execution_micros_total={} heartbeat_execution_micros_max={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_transaction_count={} persist_transaction_failures={} persist_transaction_micros_total={} persist_transaction_micros_max={} persist_copy_stage_count={} persist_copy_stage_micros_total={} persist_copy_stage_micros_max={} persist_data_blocks_merge_count={} persist_data_blocks_merge_micros_total={} persist_data_blocks_merge_micros_max={} quota_lock_wait_count={} quota_lock_wait_micros_total={} quota_lock_wait_micros_max={} quota_lock_held_count={} quota_lock_held_micros_total={} quota_lock_held_micros_max={} quota_final_check_count={} quota_final_check_micros_total={} quota_final_check_micros_max={} persist_buffer_chunk_blocks={} persist_copy_send_buffer_bytes={} routing_enabled={} runtime_failover_enabled={} routing_target_count={} routing_active_authority={} routing_generation={} runtime_failover_count={} routing_connection_failures={} routing_role_rejections={} routing_last_failed_authority={} replica_read_routing_enabled={} replica_target_count={} replica_active_authority={} required_primary_wal_lsn={} primary_wal_lsn_updates={} primary_wal_lsn_capture_failures={} replica_consistency_checks={} replica_consistency_passes={} replica_reads={} replica_lag_fallbacks={} replica_read_failures={} primary_read_fallbacks={} replica_scoring_enabled={} replica_active_score={:?} replica_active_replay_lag_bytes={:?} replica_active_connection_latency_micros={:?} replica_active_operation_latency_micros={:?} replica_score_selections={} replica_score_switches={} replica_hysteresis_keeps={} replica_circuit_breaker_skips={} replica_circuit_open_targets={} replica_pool_pressure_fallbacks={} primary_promotion_guard_enabled={} primary_system_identifier={} primary_server_fingerprint={} primary_guard_scans={} primary_guard_unreachable_candidates={} primary_guard_role_rejections={} primary_guard_cluster_identity_rejections={} primary_guard_split_brain_rejections={} primary_guard_no_primary_rejections={} primary_guard_last_error={}",
                     stage,
                     lane,
                     pool.connection_limit,
@@ -1434,6 +1585,25 @@ pub fn log_lane_observability(
                     payload.persist_input_bytes_max,
                     payload.persist_micros_total,
                     payload.persist_micros_max,
+                    payload.persist_transaction_count,
+                    payload.persist_transaction_failures,
+                    payload.persist_transaction_micros_total,
+                    payload.persist_transaction_micros_max,
+                    payload.persist_copy_stage_count,
+                    payload.persist_copy_stage_micros_total,
+                    payload.persist_copy_stage_micros_max,
+                    payload.persist_data_blocks_merge_count,
+                    payload.persist_data_blocks_merge_micros_total,
+                    payload.persist_data_blocks_merge_micros_max,
+                    payload.quota_lock_wait_count,
+                    payload.quota_lock_wait_micros_total,
+                    payload.quota_lock_wait_micros_max,
+                    payload.quota_lock_held_count,
+                    payload.quota_lock_held_micros_total,
+                    payload.quota_lock_held_micros_max,
+                    payload.quota_final_check_count,
+                    payload.quota_final_check_micros_total,
+                    payload.quota_final_check_micros_max,
                     snapshot.persist_buffer_chunk_blocks,
                     snapshot.persist_copy_send_buffer_bytes,
                     routing.endpoint_routing_enabled,
@@ -1482,7 +1652,7 @@ pub fn log_lane_observability(
                 if !global_payload_logged {
                     let global_payload = snapshot.global_payload;
                     log::info!(
-                        "FOD PostgreSQL global payload observability: stage={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_in_flight_limit_bytes={} payload_reserved_bytes={} payload_queued_bytes={} payload_peak_reserved_bytes={} payload_peak_queued_bytes={} payload_queued_requests={} payload_peak_queued_requests={} payload_admission_count={} payload_backpressure_events={} payload_fairness_yields={} payload_oversized_admissions={} payload_budget_accounting_errors={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={}",
+                        "FOD PostgreSQL global payload observability: stage={} payload_in_flight_bytes={} payload_peak_in_flight_bytes={} payload_in_flight_limit_bytes={} payload_reserved_bytes={} payload_queued_bytes={} payload_peak_reserved_bytes={} payload_peak_queued_bytes={} payload_queued_requests={} payload_peak_queued_requests={} payload_admission_count={} payload_backpressure_events={} payload_fairness_yields={} payload_oversized_admissions={} payload_budget_accounting_errors={} payload_accounting_errors={} persist_operation_count={} persist_operation_failures={} persist_input_rows_total={} persist_input_rows_max={} persist_input_bytes_total={} persist_input_bytes_max={} persist_micros_total={} persist_micros_max={} persist_transaction_count={} persist_transaction_failures={} persist_transaction_micros_total={} persist_transaction_micros_max={} persist_copy_stage_count={} persist_copy_stage_micros_total={} persist_copy_stage_micros_max={} persist_data_blocks_merge_count={} persist_data_blocks_merge_micros_total={} persist_data_blocks_merge_micros_max={} quota_lock_wait_count={} quota_lock_wait_micros_total={} quota_lock_wait_micros_max={} quota_lock_held_count={} quota_lock_held_micros_total={} quota_lock_held_micros_max={} quota_final_check_count={} quota_final_check_micros_total={} quota_final_check_micros_max={}",
                         stage,
                         global_payload.in_flight_bytes,
                         global_payload.peak_in_flight_bytes,
@@ -1507,6 +1677,25 @@ pub fn log_lane_observability(
                         global_payload.persist_input_bytes_max,
                         global_payload.persist_micros_total,
                         global_payload.persist_micros_max,
+                        global_payload.persist_transaction_count,
+                        global_payload.persist_transaction_failures,
+                        global_payload.persist_transaction_micros_total,
+                        global_payload.persist_transaction_micros_max,
+                        global_payload.persist_copy_stage_count,
+                        global_payload.persist_copy_stage_micros_total,
+                        global_payload.persist_copy_stage_micros_max,
+                        global_payload.persist_data_blocks_merge_count,
+                        global_payload.persist_data_blocks_merge_micros_total,
+                        global_payload.persist_data_blocks_merge_micros_max,
+                        global_payload.quota_lock_wait_count,
+                        global_payload.quota_lock_wait_micros_total,
+                        global_payload.quota_lock_wait_micros_max,
+                        global_payload.quota_lock_held_count,
+                        global_payload.quota_lock_held_micros_total,
+                        global_payload.quota_lock_held_micros_max,
+                        global_payload.quota_final_check_count,
+                        global_payload.quota_final_check_micros_total,
+                        global_payload.quota_final_check_micros_max,
                     );
                     global_payload_logged = true;
                 }
@@ -1605,6 +1794,41 @@ mod payload_budget_tests {
         assert_eq!(snapshot.admission_count, 1);
         drop(permit);
         assert_eq!(tracker.snapshot().unwrap().reserved_bytes, 0);
+    }
+
+    #[test]
+    fn payload_persist_quota_timings_are_reported() {
+        let tracker = DbRepoPayloadObservability::default();
+
+        tracker.record_persist_transaction(Duration::from_micros(100), false);
+        tracker.record_persist_transaction(Duration::from_micros(250), true);
+        tracker.record_persist_copy_stage(Duration::from_micros(30));
+        tracker.record_persist_data_blocks_merge(Duration::from_micros(40));
+        tracker.record_quota_lock_wait(Duration::from_micros(50));
+        tracker.record_quota_lock_held(Duration::from_micros(60));
+        tracker.record_quota_final_check(Duration::from_micros(70));
+
+        let snapshot = tracker.snapshot().unwrap();
+        assert_eq!(snapshot.persist_transaction_count, 2);
+        assert_eq!(snapshot.persist_transaction_failures, 1);
+        assert_eq!(snapshot.persist_transaction_micros_total, 350);
+        assert_eq!(snapshot.persist_transaction_micros_max, 250);
+        assert_eq!(snapshot.persist_copy_stage_count, 1);
+        assert_eq!(snapshot.persist_copy_stage_micros_total, 30);
+        assert_eq!(snapshot.persist_copy_stage_micros_max, 30);
+        assert_eq!(snapshot.persist_data_blocks_merge_count, 1);
+        assert_eq!(snapshot.persist_data_blocks_merge_micros_total, 40);
+        assert_eq!(snapshot.persist_data_blocks_merge_micros_max, 40);
+        assert_eq!(snapshot.quota_lock_wait_count, 1);
+        assert_eq!(snapshot.quota_lock_wait_micros_total, 50);
+        assert_eq!(snapshot.quota_lock_wait_micros_max, 50);
+        assert_eq!(snapshot.quota_lock_held_count, 1);
+        assert_eq!(snapshot.quota_lock_held_micros_total, 60);
+        assert_eq!(snapshot.quota_lock_held_micros_max, 60);
+        assert_eq!(snapshot.quota_final_check_count, 1);
+        assert_eq!(snapshot.quota_final_check_micros_total, 70);
+        assert_eq!(snapshot.quota_final_check_micros_max, 70);
+        assert_eq!(snapshot.accounting_errors, 0);
     }
 }
 
