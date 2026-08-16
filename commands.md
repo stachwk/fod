@@ -3550,6 +3550,108 @@ git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-16 commit d6e356f sudo-capable FUSE fio through Docker/chroot
+
+Host sudo/FUSE diagnostics:
+
+```bash
+id
+command -v sudo || true; command -v sudo-rs || true; command -v fusermount3 || true; command -v mount.fuse3 || true
+ls -l /usr/bin/sudo /usr/bin/sudo-rs /bin/sudo /bin/fusermount3 /usr/bin/fusermount3 2>/dev/null || true
+ls -l /dev/fuse 2>/dev/null || true; groups; findmnt -rn -t fuse.fod-rust-fuse,fuse.fod,fuse -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true
+ls -l /etc/alternatives/sudo /usr/lib/cargo/bin/sudo 2>/dev/null || true; readlink -f /usr/bin/sudo /etc/alternatives/sudo /usr/bin/sudo-rs 2>/dev/null || true
+stat -c '%n owner=%u:%g mode=%a type=%F' /usr/bin/sudo /etc/alternatives/sudo /usr/lib/cargo/bin/sudo /usr/bin/sudo-rs 2>/dev/null || true
+sudo -n true; printf 'sudo_exit=%s\n' $?
+findmnt -T /usr/lib/cargo/bin/sudo -no TARGET,SOURCE,FSTYPE,OPTIONS || true
+namei -l /usr/lib/cargo/bin/sudo /usr/bin/sudo /etc/alternatives/sudo
+grep -E 'NoNewPrivs|Cap(Eff|Prm|Bnd)|Seccomp' /proc/self/status
+cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || true; cat /proc/sys/user/max_user_namespaces 2>/dev/null || true
+docker ps --format '{{.Names}} {{.Status}}'
+lxc list --format compact 2>/dev/null || true
+sed -n '1,180p' tests/integration/test_fio_sequential_io.sh; sed -n '1,360p' tests/integration/fod_testlib.sh
+docker info --format 'rootless={{.SecurityOptions}} cgroup={{.CgroupDriver}} server={{.ServerVersion}}'
+docker run --rm --privileged --device /dev/fuse alpine:3.20 sh -c 'id && ls -l /dev/fuse && grep NoNewPrivs /proc/self/status && command -v fusermount3 || true'
+# Result: image pull was interrupted after it stalled.
+docker images --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}' | head -50
+command -v podman || true; command -v setpriv || true; command -v run0 || true; command -v pkexec || true; command -v su || true
+findmnt -T /media/wojtek/virtdata/home/wojtek/git/fod -no TARGET,SOURCE,FSTYPE,OPTIONS || true; mountpoint -q /tmp && findmnt -T /tmp -no TARGET,SOURCE,FSTYPE,OPTIONS || true
+docker inspect fod-postgres --format '{{json .NetworkSettings.Networks}}' | head -c 2000; printf '\n'
+docker run --rm --privileged --device /dev/fuse postgres:16-alpine sh -c 'id; ls -l /dev/fuse 2>/dev/null || true; grep NoNewPrivs /proc/self/status; grep CapEff /proc/self/status; uname -a'
+run0 true; printf 'run0_exit=%s\n' $?
+pkexec --disable-internal-agent true; printf 'pkexec_exit=%s\n' $?
+setpriv --no-new-privs false true; printf 'setpriv_exit=%s\n' $?
+timeout 5 run0 id; printf 'run0_timeout_exit=%s\n' $?
+docker run --rm --privileged --net=host --pid=host -v /:/host -w /host/media/wojtek/virtdata/home/wojtek/git/fod postgres:16-alpine chroot /host /bin/bash -lc 'cd /media/wojtek/virtdata/home/wojtek/git/fod; id; grep NoNewPrivs /proc/self/status || true; command -v sudo || true; sudo -n true; printf "sudo_exit=%s\n" $?; /usr/lib/cargo/bin/sudo -n true; printf "sudo_rs_direct_exit=%s\n" $?; command -v fusermount3; ls -l /dev/fuse; mountpoint -q /tmp; printf "tmp_mountpoint_exit=%s\n" $?'
+```
+
+Mounted FUSE fio/strace commands through the sudo-capable Docker/chroot path:
+
+```bash
+docker run --rm --privileged --net=host --pid=host -v /:/host -w /host/media/wojtek/virtdata/home/wojtek/git/fod postgres:16-alpine chroot /host /bin/bash -lc 'cd /media/wojtek/virtdata/home/wojtek/git/fod && FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M make --no-print-directory test-fio-sequential-io-strace'
+# Result: OK fio/sequential block size=4194304 block_size=4k.
+# fio write=9330 KiB/s, fio read=4556 KiB/s, callbacks read=1024 write=1024.
+# strace total=2.892121 s / 20321 calls; top calls read=1.494355 s,
+# futex=0.885495 s, wait4=0.236984 s.
+
+docker run --rm --privileged --net=host --pid=host -v /:/host -w /host/media/wojtek/virtdata/home/wojtek/git/fod postgres:16-alpine chroot /host /bin/bash -lc 'cd /media/wojtek/virtdata/home/wojtek/git/fod && FOD_PROFILE_IO=1 FIO_FILE_SIZE=128M make --no-print-directory test-fio-sequential-io-strace'
+# Result: OK fio/sequential block size=134217728 block_size=4k.
+# fio write=12.5 MiB/s, fio read=11.5 MiB/s, callbacks read=32768 write=32768.
+# strace total=42.492157 s / 508969 calls; top calls read=22.368723 s,
+# futex=15.551797 s, wait4=3.263271 s.
+```
+
+Mounted FUSE perf commands:
+
+```bash
+RUN_ID="fuse-fio-sudo-chroot-d6e356f-$(date -u +%Y%m%dT%H%M%SZ)"
+ART_DIR="artifacts/perf/d6e356f/$(hostname -s)-${RUN_ID}"
+mkdir -p "$ART_DIR"
+printf '%s\n' "$RUN_ID" > /tmp/fod_fuse_fio_sudo_run_id
+printf '%s\n' "$ART_DIR" > /tmp/fod_fuse_fio_sudo_art_dir
+
+set -o pipefail
+ART_DIR="$(cat /tmp/fod_fuse_fio_sudo_art_dir)"
+docker run --rm --privileged --net=host --pid=host -v /:/host -w /host/media/wojtek/virtdata/home/wojtek/git/fod postgres:16-alpine chroot /host /bin/bash -lc 'cd /media/wojtek/virtdata/home/wojtek/git/fod && FOD_PROFILE_IO=1 FIO_FILE_SIZE=4M perf stat -d -d -d -o "'"$ART_DIR"'/perf-stat-fuse-fio-4m.txt" make --no-print-directory test-fio-sequential-io' 2>&1 | tee "$ART_DIR/fuse-fio-4m-perf-run.log"
+docker run --rm --privileged --net=host --pid=host -v /:/host -w /host/media/wojtek/virtdata/home/wojtek/git/fod postgres:16-alpine chroot /host /bin/bash -lc 'cd /media/wojtek/virtdata/home/wojtek/git/fod && FOD_PROFILE_IO=1 FIO_FILE_SIZE=128M perf stat -d -d -d -o "'"$ART_DIR"'/perf-stat-fuse-fio-128m.txt" make --no-print-directory test-fio-sequential-io' 2>&1 | tee "$ART_DIR/fuse-fio-128m-perf-run.log"
+
+# The first perf runs did not set FOD_FOPEN_DIRECT_IO=1, so repeat the
+# canonical perf runs with the same direct-io setting as the strace Make target.
+docker run --rm --privileged --net=host --pid=host -v /:/host -w /host/media/wojtek/virtdata/home/wojtek/git/fod postgres:16-alpine chroot /host /bin/bash -lc 'cd /media/wojtek/virtdata/home/wojtek/git/fod && FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FIO_FILE_SIZE=4M perf stat -d -d -d -o "'"$ART_DIR"'/perf-stat-fuse-fio-4m-directio.txt" make --no-print-directory test-fio-sequential-io' 2>&1 | tee "$ART_DIR/fuse-fio-4m-directio-perf-run.log"
+docker run --rm --privileged --net=host --pid=host -v /:/host -w /host/media/wojtek/virtdata/home/wojtek/git/fod postgres:16-alpine chroot /host /bin/bash -lc 'cd /media/wojtek/virtdata/home/wojtek/git/fod && FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FIO_FILE_SIZE=128M perf stat -d -d -d -o "'"$ART_DIR"'/perf-stat-fuse-fio-128m-directio.txt" make --no-print-directory test-fio-sequential-io' 2>&1 | tee "$ART_DIR/fuse-fio-128m-directio-perf-run.log"
+```
+
+Mounted two-FUSE quota validation command:
+
+```bash
+set -o pipefail
+ART_DIR="$(cat /tmp/fod_fuse_fio_sudo_art_dir)"
+docker run --rm --privileged --net=host --pid=host -v /:/host -w /host/media/wojtek/virtdata/home/wojtek/git/fod postgres:16-alpine chroot /host /bin/bash -lc 'cd /media/wojtek/virtdata/home/wojtek/git/fod && make --no-print-directory test-two-mount-quota' 2>&1 | tee "$ART_DIR/test-two-mount-quota.log"
+# Result: OK two-mount quota waiters=2 winner=quota-b-bbcfb6c157a7.bin
+# rejected=quota-a-bbcfb6c157a7.bin payload_delta=4096.
+```
+
+Extraction and cleanup checks:
+
+```bash
+ART_DIR="$(cat /tmp/fod_fuse_fio_sudo_art_dir)"
+for f in "$ART_DIR"/perf-stat-fuse-fio-{4m,128m}-directio.txt; do printf '%s\n' "--- $(basename "$f") ---"; rg "seconds time elapsed|task-clock|instructions|cycles|context-switches|cpu-migrations|page-faults" "$f"; done
+for f in "$ART_DIR"/fuse-fio-{4m,128m}-directio-perf-run.log; do printf '%s\n' "--- $(basename "$f") ---"; rg "WRITE: bw=|READ: bw=|OK fio/sequential|FOD callback counts|persist_copy_stage_count|persist_data_blocks_merge_count|quota_lock_wait_count|quota_final_check_count|repo_persist_blocks_us|flush_write_state_us|file-read admitted_tasks|file-write admitted_tasks" "$f"; done
+findmnt -rn -t fuse.fod-rust-fuse,fuse.fod,fuse -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null || true
+ps -eo pid,ppid,cmd | rg 'fod-rust-fuse|target/.*/fod-rust-fuse|test_fio_sequential|fio-' || true
+find "$ART_DIR" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+git status --short --branch
+git diff --check
+git diff --stat
+git diff -- TODO.md conclusions.md docs/block-only-performance-plan.md docs/quota-lock-concurrency-plan.md commands.md | sed -n '1,360p'
+git add TODO.md commands.md conclusions.md docs/block-only-performance-plan.md docs/quota-lock-concurrency-plan.md
+git diff --cached --check
+git commit -m "FOD 3.2.76: record sudo chroot FUSE profiles"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-16 commit 6797299 concurrent block persist profiles
 
 Context and inspection commands:

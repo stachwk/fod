@@ -192,7 +192,7 @@ Add or strengthen cases for:
 - same test using independent repository connections/processes;
 - mounted two-FUSE-instance regression when the host environment permits it.
 
-Status: partially implemented in FOD 3.2.76. The new direct hotpath regression `ordinary_persist_copy_merge_completes_before_final_quota_gate` uses two independent `DbRepo` instances, forces both writers to reach the final advisory-lock wait after COPY/merge, verifies one writer commits and one rolls back with quota failure, and checks the rejected file leaves no `data_blocks` rows. The mounted two-FUSE-instance regression remains required on a host that permits FUSE mounting.
+Status: implemented in FOD 3.2.76. The new direct hotpath regression `ordinary_persist_copy_merge_completes_before_final_quota_gate` uses two independent `DbRepo` instances, forces both writers to reach the final advisory-lock wait after COPY/merge, verifies one writer commits and one rolls back with quota failure, and checks the rejected file leaves no `data_blocks` rows. The follow-up mounted `test-two-mount-quota` run on commit `d6e356f` passed through a temporary sudo-capable Docker/chroot wrapper with two advisory-lock waiters, one committed writer and one quota rejection.
 
 ### Step 4 — measure concurrency before worker tuning
 
@@ -218,7 +218,7 @@ Capture:
 
 Only after the long quota serialization is removed should FOD choose or tune write worker defaults.
 
-Status: direct hotpath profile completed for FOD 3.2.76 working tree based on commit `2f95155`; FUSE fio/two-mount profiles were blocked by the local host's `sudo-rs`/`fusermount3` permissions.
+Status: direct hotpath profile completed for FOD 3.2.76 working tree based on commit `2f95155`. The native Codex process still cannot execute setuid FUSE helpers because it has `NoNewPrivs: 1`, but commit `d6e356f` was additionally validated through a privileged Docker/chroot wrapper with `NoNewPrivs: 0`: mounted `test-fio-sequential-io-strace` passed for 4 MiB and 128 MiB, direct-io `perf stat` passed for both sizes, and `test-two-mount-quota` passed.
 
 ### Step 5 — decide whether ordinary writes need pre-reservation
 

@@ -93,6 +93,13 @@ the aggregate advisory-lock SQL time at 8 workers drops from the old
 serialization; it is COPY BINARY staging plus the set-based `data_blocks`
 merge under real concurrency.
 
+The follow-up mounted validation for commit `d6e356f` used a temporary
+sudo-capable Docker/chroot wrapper because the native Codex process has
+`NoNewPrivs: 1`. Through that wrapper, `test-fio-sequential-io-strace` passed
+for 4 MiB and 128 MiB with `FOD_FOPEN_DIRECT_IO=1`, direct-io `perf stat`
+passed for both sizes, and `test-two-mount-quota` passed with two independent
+FUSE mounts and exactly one 4 KiB quota-admitted writer.
+
 The detailed implementation subplan is:
 
 - [`quota-lock-concurrency-plan.md`](quota-lock-concurrency-plan.md)

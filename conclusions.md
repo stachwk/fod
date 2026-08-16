@@ -1506,3 +1506,46 @@ Conclusion: the artificial quota advisory-lock serialization has been removed
 from ordinary block persist. Do not tune worker defaults from this single host
 yet; the next measured bottleneck is COPY BINARY staging plus the set-based
 `data_blocks` merge under concurrent writes.
+
+## 2026-08-16 — FOD 3.2.76 mounted FUSE fio via sudo-capable Docker/chroot
+
+Measured commit: `d6e356f` (`FOD 3.2.76: move quota gate after block
+persist`). Native Codex execution still has `NoNewPrivs: 1`, so setuid helpers
+such as `sudo-rs`, `pkexec` and `fusermount3` cannot elevate there. A
+temporary privileged Docker/chroot wrapper using the host root filesystem ran
+with `NoNewPrivs: 0`; inside that wrapper `sudo -n true`, `fusermount3`,
+`fio`, `strace`, `perf` and `cargo` were available.
+
+Artifacts for the perf-backed mounted fio runs are under
+`artifacts/perf/d6e356f/lt7300-fuse-fio-sudo-chroot-d6e356f-20260816T105803Z/`.
+Those files are local benchmark artifacts and are not tracked by git.
+
+Mounted `test-fio-sequential-io-strace` passed for both requested sizes with
+`FOD_PROFILE_IO=1` and `FOD_FOPEN_DIRECT_IO=1` through the Makefile target:
+
+| workload | fio write | fio read | callbacks | strace total | dominant strace calls |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 4 MiB | `9330 KiB/s` | `4556 KiB/s` | read `1024`, write `1024` | `2.892121 s` / `20321` calls | `read` `1.494355 s`, `futex` `0.885495 s`, `wait4` `0.236984 s` |
+| 128 MiB | `12.5 MiB/s` | `11.5 MiB/s` | read `32768`, write `32768` | `42.492157 s` / `508969` calls | `read` `22.368723 s`, `futex` `15.551797 s`, `wait4` `3.263271 s` |
+
+Mounted `perf stat` was repeated without strace but with the same
+`FOD_FOPEN_DIRECT_IO=1` setting:
+
+| workload | fio write | fio read | perf elapsed | task-clock | instructions | cycles | context switches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 MiB | `12.4 MiB/s` | `9548 KiB/s` | `2.861060387 s` | `1291432582` | `4397684288` | `3366785658` | `7078` |
+| 128 MiB | `18.2 MiB/s` | `17.6 MiB/s` | `17.010141102 s` | `12215063491` | `54384577261` | `41520577057` | `168618` |
+
+The direct-io 128 MiB perf-backed mounted run kept the post-FOD-3.2.76 quota
+gate short: `persist_copy_stage_micros_total=1102431`,
+`persist_data_blocks_merge_micros_total=742712`,
+`quota_lock_wait_micros_total=611`,
+`quota_lock_held_micros_total=8492`, and
+`quota_final_check_micros_total=7788`. The measured hot part is still COPY
+staging plus `data_blocks` merge, not quota serialization.
+
+`make test-two-mount-quota` also passed through the same wrapper:
+`waiters=2`, `payload_delta=4096`, one writer committed and one was rejected by
+quota. This closes the previously blocked mounted two-FUSE quota validation for
+this commit, with the caveat that the native Codex process still cannot run
+setuid FUSE helpers directly.
