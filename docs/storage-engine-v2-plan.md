@@ -9,7 +9,11 @@ FOD 3.2.71-3.2.73. The current authoritative storage-performance plan is:
 
 - [`block-only-performance-plan.md`](block-only-performance-plan.md)
 
-The current quota/concurrency implementation subplan is:
+The current detailed performance subplan is:
+
+- [`mounted-fuse-write-profile-plan.md`](mounted-fuse-write-profile-plan.md)
+
+The completed quota-lock redesign record is:
 
 - [`quota-lock-concurrency-plan.md`](quota-lock-concurrency-plan.md)
 
@@ -53,8 +57,8 @@ That result established the final decision:
 - one canonical payload representation is preferable to dual block/extent
   runtime state;
 - extent-to-block conversion must not exist in the hot path;
-- performance work continues on the block-only representation and PostgreSQL
-  transaction/query shape;
+- performance work continues on the block-only representation and PostgreSQL/
+  FUSE transaction path;
 - another physical representation requires a new measured problem and a new
   architecture decision, not reuse of the old PoC.
 
@@ -140,32 +144,36 @@ extents. Treat those as historical evidence only.
 
 They are useful for understanding why experiments were performed and why the
 architecture changed, but they must not be used as current default-selection
-criteria. Current performance decisions must be based on the block-only profiles
-recorded after FOD 3.2.73.
+criteria. Current performance decisions must be based on block-only profiles
+recorded after FOD 3.2.73 and on the latest mounted/direct measurements.
 
 ## Current optimization direction
 
-Active work is defined by `block-only-performance-plan.md`.
+Active work is defined by `block-only-performance-plan.md` and
+`mounted-fuse-write-profile-plan.md`.
 
-At the time this historical plan was archived, the current measured sequence
-was:
+The measured sequence after the extent retirement is now:
 
 1. FOD 3.2.74 removed the repeated `COUNT(data_blocks)` allocation query from
    normal `read()`;
-2. concurrent write profiling showed that the global transaction-scoped quota
-   advisory lock serializes long COPY/merge work;
-3. the next write-side task is to narrow that quota critical section while
-   preserving database-wide quota correctness;
-4. only after that change should worker counts and the next PostgreSQL
-   bottleneck be selected from fresh measurements.
+2. FOD 3.2.75 added quota/persist timing observability;
+3. FOD 3.2.76 moved the ordinary-write quota advisory lock after COPY/merge and
+   proved direct plus mounted two-writer quota safety;
+4. direct 128 MiB persistence then scaled to about `131 MiB/s` at 8 workers and
+   quota-lock SQL time became negligible relative to COPY/merge;
+5. mounted 128 MiB direct-I/O fio remained much slower end to end, while the
+   measured COPY + merge section explains only part of the wall time;
+6. the current task is therefore to decompose mounted FUSE write time before
+   choosing COPY, merge, callback/write-state, flush/admission, WAL/COMMIT or
+   worker tuning as the next production optimization.
 
 This ordering supersedes earlier statements in this file that proposed extent
-size tuning, extent defaults, extent read work, hardlink-count optimization or
-COPY/merge tuning as the immediate next task.
+size tuning, extent defaults, extent read work, hardlink-count optimization,
+quota-lock narrowing or direct COPY/merge tuning as the immediate next task.
 
 ## Current verification boundary
 
-Storage hot-path changes should use the targeted subset during development and
+Storage hot-path changes should use a targeted subset during development and
 then cover the relevant block-only gates before completion, including:
 
 ```bash
@@ -182,9 +190,13 @@ make test-fio-mixed-io
 make test-fio-random-mixed-io
 ```
 
-Quota/concurrency changes additionally require the database-wide quota,
-reservation, replay and independent-connection/mount regressions documented in
+Quota-sensitive changes additionally require the database-wide quota,
+reservation, replay and independent-connection/mount regressions retained in
 `quota-lock-concurrency-plan.md`.
+
+Performance changes selected from the current mounted-FUSE plan additionally
+require repeated 4 MiB/128 MiB direct-I/O mounted baselines and the relevant
+`perf stat`, `strace`, PostgreSQL statement/WAL and stage-timing captures.
 
 ## Non-goals retained from the experiment
 
@@ -197,13 +209,16 @@ The following restrictions remain valid:
   data-object ownership or quota semantics for throughput;
 - do not choose production defaults from a single noisy sample;
 - do not optimize a historical bottleneck after a newer profile has shown a
-  different dominant cost.
+  different dominant cost;
+- do not assume a direct repository bottleneck is automatically the mounted FUSE
+  bottleneck.
 
 ## Documentation authority
 
 For current work, use this order:
 
 1. `block-only-performance-plan.md` — canonical active storage-performance plan;
-2. `quota-lock-concurrency-plan.md` — current quota/concurrency subplan;
-3. `conclusions.md` — measured results and durable conclusions;
-4. this file — historical rationale only.
+2. `mounted-fuse-write-profile-plan.md` — active detailed performance subplan;
+3. `quota-lock-concurrency-plan.md` — completed quota redesign record;
+4. `conclusions.md` — measured results and durable conclusions;
+5. this file — historical rationale only.
