@@ -17,6 +17,7 @@ use fod_rust_runtime::{
     MIN_POSTGRES_SERVER_VERSION_NUM, POSTGRES_REQUIREMENT_SETTINGS_SQL,
 };
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryFrom;
@@ -2899,6 +2900,15 @@ fn normalize_block_bytes(bytes: &[u8], target_len: usize) -> Vec<u8> {
     out
 }
 
+fn normalized_block_bytes_cow(bytes: &[u8], target_len: usize) -> Cow<'_, [u8]> {
+    let payload_len = bytes.len().min(target_len);
+    if payload_len == target_len {
+        Cow::Borrowed(&bytes[..target_len])
+    } else {
+        Cow::Owned(normalize_block_bytes(bytes, target_len))
+    }
+}
+
 fn persist_blocks_cover_full_file(
     file_size: u64,
     block_size: u64,
@@ -2987,10 +2997,11 @@ fn append_persist_block_copy_binary_row(
     let block_size = block_size.max(1);
     let block_index = i64::try_from(block.block_index)
         .map_err(|_| "block index out of range for copy staging".to_string())?;
-    let normalized = normalize_block_bytes(block.data, block_size as usize);
-    let sparse = is_all_zero_block(&normalized);
+    let normalized = normalized_block_bytes_cow(block.data, block_size as usize);
+    let normalized = normalized.as_ref();
+    let sparse = is_all_zero_block(normalized);
     let crc32 = if !sparse && block.used_len >= block_size {
-        Some(i64::from(crc32_bytes(&normalized)))
+        Some(i64::from(crc32_bytes(normalized)))
     } else {
         None
     };
@@ -3001,7 +3012,7 @@ fn append_persist_block_copy_binary_row(
     if sparse {
         append_copy_binary_null_field(out);
     } else {
-        append_copy_binary_padded_bytes_field(out, &normalized, block_size as usize)?;
+        append_copy_binary_padded_bytes_field(out, normalized, block_size as usize)?;
     }
     if let Some(crc32) = crc32 {
         append_copy_binary_i64_field(out, crc32);
@@ -3024,9 +3035,21 @@ unsafe fn create_persist_block_stage_table(conn: *mut PGconn) -> Result<(), Stri
 unsafe fn merge_persist_block_stage_table(
     conn: *mut PGconn,
     maintain_copy_crc_table: bool,
+    target_data_object_is_empty: bool,
 ) -> Result<(), String> {
-    let sql_insert_data = CString::new(format!(
-        "
+    let sql_insert_data = if target_data_object_is_empty {
+        CString::new(format!(
+            "
+        INSERT INTO data_blocks (data_object_id, _order, data)
+        SELECT data_object_id, _order, data
+        FROM {}
+        WHERE data IS NOT NULL
+        ",
+            PERSIST_BLOCK_STAGE_TABLE
+        ))
+    } else {
+        CString::new(format!(
+            "
         INSERT INTO data_blocks (data_object_id, _order, data)
         SELECT data_object_id, _order, data
         FROM {}
@@ -3035,8 +3058,9 @@ unsafe fn merge_persist_block_stage_table(
         DO UPDATE SET data = EXCLUDED.data
         WHERE data_blocks.data IS DISTINCT FROM EXCLUDED.data
         ",
-        PERSIST_BLOCK_STAGE_TABLE
-    ))
+            PERSIST_BLOCK_STAGE_TABLE
+        ))
+    }
     .map_err(|_| "SQL contains NUL byte".to_string())?;
     let sql_delete_data = CString::new(format!(
         "
@@ -3052,8 +3076,19 @@ unsafe fn merge_persist_block_stage_table(
         PERSIST_BLOCK_STAGE_TABLE
     ))
     .map_err(|_| "SQL contains NUL byte".to_string())?;
-    let sql_insert_crc = CString::new(format!(
-        "
+    let sql_insert_crc = if target_data_object_is_empty {
+        CString::new(format!(
+            "
+        INSERT INTO copy_block_crc (data_object_id, _order, crc32)
+        SELECT data_object_id, _order, crc32
+        FROM {}
+        WHERE crc32 IS NOT NULL
+        ",
+            PERSIST_BLOCK_STAGE_TABLE
+        ))
+    } else {
+        CString::new(format!(
+            "
         INSERT INTO copy_block_crc (data_object_id, _order, crc32)
         SELECT data_object_id, _order, crc32
         FROM {}
@@ -3061,8 +3096,9 @@ unsafe fn merge_persist_block_stage_table(
         ON CONFLICT (data_object_id, _order)
         DO UPDATE SET crc32 = EXCLUDED.crc32, updated_at = NOW()
         ",
-        PERSIST_BLOCK_STAGE_TABLE
-    ))
+            PERSIST_BLOCK_STAGE_TABLE
+        ))
+    }
     .map_err(|_| "SQL contains NUL byte".to_string())?;
     let sql_delete_crc = CString::new(format!(
         "
@@ -3080,10 +3116,14 @@ unsafe fn merge_persist_block_stage_table(
     .map_err(|_| "SQL contains NUL byte".to_string())?;
 
     exec_command(conn, &sql_insert_data)?;
-    exec_command(conn, &sql_delete_data)?;
+    if !target_data_object_is_empty {
+        exec_command(conn, &sql_delete_data)?;
+    }
     if maintain_copy_crc_table {
         exec_command(conn, &sql_insert_crc)?;
-        exec_command(conn, &sql_delete_crc)?;
+        if !target_data_object_is_empty {
+            exec_command(conn, &sql_delete_crc)?;
+        }
     }
     Ok(())
 }
@@ -3377,6 +3417,7 @@ struct ReplacedDataObject {
 struct DataObjectWriteTarget {
     data_object_id: u64,
     replaced: Option<ReplacedDataObject>,
+    payload_rows_empty: bool,
 }
 
 fn persist_block_input_bytes(blocks: &[PersistBlockRow<'_>]) -> u64 {
@@ -5423,6 +5464,35 @@ impl DbRepo {
             .map_err(|_| "invalid id_data_object value".to_string())
     }
 
+    unsafe fn data_object_payload_rows_empty_on_conn(
+        &self,
+        conn: *mut PGconn,
+        data_object_id: u64,
+        maintain_copy_crc_table: bool,
+    ) -> Result<bool, String> {
+        let sql = if maintain_copy_crc_table {
+            CString::new(
+                "SELECT (
+                    NOT EXISTS (SELECT 1 FROM data_blocks WHERE data_object_id = $1 LIMIT 1)
+                    AND NOT EXISTS (SELECT 1 FROM copy_block_crc WHERE data_object_id = $1 LIMIT 1)
+                )::text",
+            )
+        } else {
+            CString::new(
+                "SELECT (NOT EXISTS (
+                    SELECT 1 FROM data_blocks WHERE data_object_id = $1 LIMIT 1
+                ))::text",
+            )
+        }
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let data_object_id = CString::new(data_object_id.to_string())
+            .map_err(|_| "data object id contains NUL byte".to_string())?;
+        let params = [&data_object_id];
+        let res = exec_params(conn, &sql, &params)?;
+        let value = fetch_single_text(res)?;
+        Ok(matches!(value.trim(), "t" | "true" | "1"))
+    }
+
     unsafe fn data_object_write_target_on_conn(
         &self,
         conn: *mut PGconn,
@@ -5444,15 +5514,19 @@ impl DbRepo {
                     old_data_object_id,
                     old_reference_count,
                 }),
+                payload_rows_empty: true,
             }));
         }
 
         self.detach_shared_data_object_on_conn(conn, file_id, file_size, maintain_copy_crc_table)
             .map(|value| {
-                value.map(|data_object_id| DataObjectWriteTarget {
-                    data_object_id,
-                    replaced: None,
-                })
+                value.map(
+                    |(data_object_id, payload_rows_empty)| DataObjectWriteTarget {
+                        data_object_id,
+                        replaced: None,
+                        payload_rows_empty,
+                    },
+                )
             })
     }
 
@@ -5515,7 +5589,7 @@ impl DbRepo {
         file_id: u64,
         file_size: u64,
         maintain_copy_crc_table: bool,
-    ) -> Result<Option<u64>, String> {
+    ) -> Result<Option<(u64, bool)>, String> {
         let sql_copy_data_object = CString::new(
             "INSERT INTO data_objects (file_size, content_hash, reference_count, creation_date, modification_date) \
              VALUES ($1, NULL, 1, NOW(), NOW()) RETURNING id_data_object",
@@ -5554,8 +5628,13 @@ impl DbRepo {
             else {
                 return Ok(None);
             };
+            let payload_rows_empty = self.data_object_payload_rows_empty_on_conn(
+                conn,
+                data_object_id,
+                maintain_copy_crc_table,
+            )?;
             if reference_count <= 1 {
-                return Ok(Some(data_object_id));
+                return Ok(Some((data_object_id, payload_rows_empty)));
             }
 
             let file_size = CString::new(file_size.to_string())
@@ -5586,7 +5665,7 @@ impl DbRepo {
             let params = [&old_data_object_id];
             exec_command_params(conn, &sql_touch_old_object, &params)?;
 
-            Ok(Some(new_data_object_id))
+            Ok(Some((new_data_object_id, payload_rows_empty)))
         }
     }
 
@@ -9923,9 +10002,10 @@ impl DbRepo {
             None => return Ok(()),
         };
         let data_object_id = target.data_object_id;
+        let target_data_object_is_empty = target.payload_rows_empty;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
-        if truncate_pending {
+        if truncate_pending && !target_data_object_is_empty {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
             if maintain_copy_crc_table {
@@ -9960,7 +10040,11 @@ impl DbRepo {
             copy.finish()?;
             self.record_persist_copy_stage_elapsed(copy_started.elapsed());
             let merge_started = Instant::now();
-            merge_persist_block_stage_table(conn, maintain_copy_crc_table)?;
+            merge_persist_block_stage_table(
+                conn,
+                maintain_copy_crc_table,
+                target_data_object_is_empty,
+            )?;
             self.record_persist_data_blocks_merge_elapsed(merge_started.elapsed());
         }
 
@@ -10038,9 +10122,10 @@ impl DbRepo {
             None => return Ok(()),
         };
         let data_object_id = target.data_object_id;
+        let target_data_object_is_empty = target.payload_rows_empty;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
-        if truncate_pending {
+        if truncate_pending && !target_data_object_is_empty {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
             if maintain_copy_crc_table {
@@ -10145,9 +10230,10 @@ impl DbRepo {
             None => return Ok(()),
         };
         let data_object_id = target.data_object_id;
+        let target_data_object_is_empty = target.payload_rows_empty;
         let data_object_id_text = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
-        if truncate_pending {
+        if truncate_pending && !target_data_object_is_empty {
             let params = [&data_object_id_text, &total_blocks_text];
             exec_command_params(conn, &sql_delete_tail, &params)?;
             if maintain_copy_crc_table {
@@ -10257,7 +10343,11 @@ impl DbRepo {
                 copy.finish()?;
                 self.record_persist_copy_stage_elapsed(copy_started.elapsed());
                 let merge_started = Instant::now();
-                merge_persist_block_stage_table(conn, maintain_copy_crc_table)?;
+                merge_persist_block_stage_table(
+                    conn,
+                    maintain_copy_crc_table,
+                    target_data_object_is_empty,
+                )?;
                 self.record_persist_data_blocks_merge_elapsed(merge_started.elapsed());
             }
             PersistBlockTransport::BinaryBytea | PersistBlockTransport::LegacyHex => {

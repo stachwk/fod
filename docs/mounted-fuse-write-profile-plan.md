@@ -175,10 +175,16 @@ adding them as if they were disjoint.
 Choose the next production change from the measured largest end-to-end
 component.
 
-Status: selected from the FOD 3.2.77 mounted profile. The next optimization is
-COPY BINARY staging plus the `data_blocks` set-based merge; do not optimize the
-debug request-start logging path first because its cost is tied to profiling
-verbosity.
+Status: first optimized in FOD 3.2.78. Full-size COPY BINARY row construction now
+borrows the input block slice instead of allocating a normalized block, and the
+stage merge uses append-only INSERT SQL when the target data object has no
+payload rows. Do not optimize the debug request-start logging path first because
+its cost is tied to profiling verbosity.
+
+The FOD 3.2.78 final mounted 128 MiB profile still leaves one `ON CONFLICT`
+merge for the second 64 MiB flush. The next measured persist-plan question is
+whether that staged range can be proven append-only/disjoint before changing the
+merge shape further.
 
 Possible outcomes include:
 

@@ -3550,6 +3550,202 @@ git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-16 commit e7797f0 working tree FOD 3.2.78 COPY staging and merge reduction
+
+Context lookup and code inspection:
+
+```bash
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search "FOD 3.2.77 next optimize COPY BINARY staging data_blocks merge persist plan mounted FUSE" --wing fod
+git diff -- rust_hotpath/src/pg.rs | sed -n '1,260p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '2940,3075p;9910,10025p;10060,10115p;10175,10315p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '3408,3430p;5450,5555p;10650,10705p'
+rg -n "file_data_object_info_on_conn|DataObjectWriteTarget|merge_persist_block_stage_table|persist_file_blocks_(copy_binary_staging|direct|streaming)_on_conn" rust_hotpath/src/pg.rs
+```
+
+Initial validation exposed root-owned build artifacts from earlier privileged
+runs:
+
+```bash
+cargo fmt --all && cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath encodes_copy_binary_stage_rows_with_padding_and_sparse_nulls -- --nocapture
+make --no-print-directory test-rust-pg-query
+ls -ld target target/debug target/debug/.fingerprint target/debug/.fingerprint/fod-rust-monitor-2a2eb258fd5d9f71 target/debug/.fingerprint/fod-rust-mkfs-81ac18896231b506 || true
+find target/debug/.fingerprint -maxdepth 1 \( ! -user "$(id -u)" -o ! -group "$(id -g)" \) -printf '%u:%g %p\n' | head -n 40
+sudo -n chown -R "$(id -u):$(id -g)" target
+docker run --rm --privileged --net=host --pid=host -v /:/host postgres:16-alpine chroot /host /bin/bash -lc 'cd /media/wojtek/virtdata/home/wojtek/git/fod && chown -R 1000:1000 target'
+```
+
+The native `sudo -n chown` failed with `sudo-rs: sudo must be owned by uid 0 and
+have the setuid bit set`; the Docker/chroot chown succeeded.
+
+Validation after the first implementation and after the empty-target SQL fix:
+
+```bash
+cargo fmt --all && cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath encodes_copy_binary_stage_rows_with_padding_and_sparse_nulls -- --nocapture
+make --no-print-directory test-rust-pg-query
+```
+
+Mounted FUSE profiling setup:
+
+```bash
+RUN_ID="copymerge-$(git rev-parse --short HEAD)-wt-3.2.78-$(date -u +%Y%m%dT%H%M%SZ)"
+ART_DIR="artifacts/perf/$(git rev-parse --short HEAD)/$(hostname -s)-${RUN_ID}"
+mkdir -p "$ART_DIR"
+printf '%s\n' "$RUN_ID" > /tmp/fod_copymerge_run_id
+printf '%s\n' "$ART_DIR" > /tmp/fod_copymerge_art_dir
+```
+
+Initial 128 MiB and 4 MiB profile through privileged Docker/chroot:
+
+```bash
+docker run --rm --privileged --net=host --pid=host -v /:/host postgres:16-alpine chroot /host /bin/bash -lc '
+set -euo pipefail
+cd /media/wojtek/virtdata/home/wojtek/git/fod
+RUN_ID=$(cat /tmp/fod_copymerge_run_id)
+ART_DIR=$(cat /tmp/fod_copymerge_art_dir)
+mkdir -p "$ART_DIR"
+{
+  echo "profile=copymerge-mounted-fuse"
+  echo "date=$(date -Is)"
+  echo "commit=$(git rev-parse HEAD)"
+  echo "fod_version=$(cat fod_version.txt)"
+  echo "run_id=$RUN_ID"
+  echo "artifact_dir=$ART_DIR"
+  echo "perf_event_paranoid=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true)"
+  echo "nmi_watchdog=$(cat /proc/sys/kernel/nmi_watchdog 2>/dev/null || true)"
+} > "$ART_DIR/run-meta.txt"
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" profile-env > "$ART_DIR/env.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" profile-pg-reset > "$ART_DIR/pg-reset-128m.log" 2>&1
+perf stat -d -d -d -o "$ART_DIR/perf-stat-fio-128m.txt" -- env FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FIO_FILE_SIZE=128M make --no-print-directory test-fio-sequential-io > "$ART_DIR/fuse-128m-fio-perf.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="128m" profile-pg-top-io-wal > "$ART_DIR/pg-top-128m.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="128m" profile-pg-metadata-top > "$ART_DIR/pg-metadata-128m.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="128m" profile-pg-wal > "$ART_DIR/pg-wal-128m.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" profile-pg-reset > "$ART_DIR/pg-reset-4m-strace.log" 2>&1
+perf stat -d -d -d -o "$ART_DIR/perf-stat-fio-strace-4m.txt" -- env FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FOD_STRACE=1 FIO_FILE_SIZE=4M bash tests/integration/test_fio_sequential_io.sh > "$ART_DIR/fuse-4m-strace-perf.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="4m-strace" profile-pg-top-io-wal > "$ART_DIR/pg-top-4m-strace.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="4m-strace" profile-pg-metadata-top > "$ART_DIR/pg-metadata-4m-strace.log" 2>&1
+chown -R 1000:1000 "$ART_DIR" target
+'
+```
+
+The first chroot profile printed a Git `safe.directory` warning in metadata
+capture, so later profile runs added:
+
+```bash
+git config --global --add safe.directory /media/wojtek/virtdata/home/wojtek/git/fod || true
+```
+
+Diagnostic rerun for the intermediate empty-target SQL bug:
+
+```bash
+docker run --rm --privileged --net=host --pid=host -v /:/host postgres:16-alpine chroot /host /bin/bash -lc '
+set -euo pipefail
+cd /media/wojtek/virtdata/home/wojtek/git/fod
+ART_DIR=$(cat /tmp/fod_copymerge_art_dir)
+make --no-print-directory PROFILE_RUN_ID="$(cat /tmp/fod_copymerge_run_id)" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" profile-pg-reset > "$ART_DIR/pg-reset-128m-debug.log" 2>&1
+set +e
+FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FIO_FILE_SIZE=128M FOD_TEST_LOG_ARCHIVE="$ART_DIR/fod-daemon-128m-debug.log" bash tests/integration/test_fio_sequential_io.sh > "$ART_DIR/fuse-128m-debug.log" 2>&1
+status=$?
+set -e
+make --no-print-directory PROFILE_RUN_ID="$(cat /tmp/fod_copymerge_run_id)" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="128m-debug" profile-pg-top-io-wal > "$ART_DIR/pg-top-128m-debug.log" 2>&1 || true
+chown -R 1000:1000 "$ART_DIR" target
+exit "$status"
+'
+ART_DIR=$(cat /tmp/fod_copymerge_art_dir)
+rg -n "ERROR|WARN|failed|FOD block persistence failed|unexpected PostgreSQL result status|SELECT NOT EXISTS" "$ART_DIR/fod-daemon-128m-debug.log" | tail -n 120
+```
+
+Final 128 MiB perf/fio and 4 MiB strace/perf run:
+
+```bash
+docker run --rm --privileged --net=host --pid=host -v /:/host postgres:16-alpine chroot /host /bin/bash -lc '
+set -euo pipefail
+cd /media/wojtek/virtdata/home/wojtek/git/fod
+git config --global --add safe.directory /media/wojtek/virtdata/home/wojtek/git/fod || true
+RUN_ID=$(cat /tmp/fod_copymerge_run_id)
+ART_DIR=$(cat /tmp/fod_copymerge_art_dir)
+{
+  echo "profile=copymerge-mounted-fuse-final"
+  echo "date=$(date -Is)"
+  echo "commit=$(git rev-parse HEAD)"
+  echo "fod_version=$(cat fod_version.txt)"
+  echo "run_id=$RUN_ID"
+  echo "artifact_dir=$ART_DIR"
+  echo "perf_event_paranoid=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true)"
+  echo "nmi_watchdog=$(cat /proc/sys/kernel/nmi_watchdog 2>/dev/null || true)"
+} > "$ART_DIR/run-meta-final.txt"
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" profile-pg-reset > "$ART_DIR/pg-reset-128m-final.log" 2>&1
+perf stat -d -d -d -o "$ART_DIR/perf-stat-fio-128m-final.txt" -- env FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FIO_FILE_SIZE=128M bash tests/integration/test_fio_sequential_io.sh > "$ART_DIR/fuse-128m-final-perf.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="128m-final" profile-pg-top-io-wal > "$ART_DIR/pg-top-128m-final.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="128m-final" profile-pg-metadata-top > "$ART_DIR/pg-metadata-128m-final.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" profile-pg-reset > "$ART_DIR/pg-reset-4m-strace-final.log" 2>&1
+perf stat -d -d -d -o "$ART_DIR/perf-stat-fio-strace-4m-final.txt" -- env FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FOD_STRACE=1 FIO_FILE_SIZE=4M bash tests/integration/test_fio_sequential_io.sh > "$ART_DIR/fuse-4m-strace-final-perf.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="4m-strace-final" profile-pg-top-io-wal > "$ART_DIR/pg-top-4m-strace-final.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="4m-strace-final" profile-pg-metadata-top > "$ART_DIR/pg-metadata-4m-strace-final.log" 2>&1
+chown -R 1000:1000 "$ART_DIR" target
+'
+```
+
+Final no-perf fio comparison run:
+
+```bash
+docker run --rm --privileged --net=host --pid=host -v /:/host postgres:16-alpine chroot /host /bin/bash -lc '
+set -euo pipefail
+cd /media/wojtek/virtdata/home/wojtek/git/fod
+git config --global --add safe.directory /media/wojtek/virtdata/home/wojtek/git/fod || true
+RUN_ID=$(cat /tmp/fod_copymerge_run_id)
+ART_DIR=$(cat /tmp/fod_copymerge_art_dir)
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" profile-pg-reset > "$ART_DIR/pg-reset-128m-final-noperf.log" 2>&1
+FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FIO_FILE_SIZE=128M bash tests/integration/test_fio_sequential_io.sh > "$ART_DIR/fuse-128m-final-noperf.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="128m-final-noperf" profile-pg-top-io-wal > "$ART_DIR/pg-top-128m-final-noperf.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" profile-pg-reset > "$ART_DIR/pg-reset-4m-final-noperf.log" 2>&1
+FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FIO_FILE_SIZE=4M bash tests/integration/test_fio_sequential_io.sh > "$ART_DIR/fuse-4m-final-noperf.log" 2>&1
+make --no-print-directory PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" ARTIFACTS_DIR="$ART_DIR" PROFILE_CAPTURE_LABEL="4m-final-noperf" profile-pg-top-io-wal > "$ART_DIR/pg-top-4m-final-noperf.log" 2>&1
+chown -R 1000:1000 "$ART_DIR" target
+'
+```
+
+Result extraction:
+
+```bash
+ART_DIR=$(cat /tmp/fod_copymerge_art_dir)
+rg -n "err=|WRITE:|READ:|OK fio|FOD callback counts|fuse_read_total_us|fuse_write_total_us|repo_persist_blocks_us|flush_execute_persist_plan_us|flush_write_state_us|prepare_persist_rows_from_block_plan_us|write_start_log_us|write_preflight_us|reply_write_us|logical task observability: stage=shutdown lane=write" "$ART_DIR/fuse-128m-final-noperf.log" "$ART_DIR/fuse-4m-final-noperf.log"
+sed -n '1,45p' "$ART_DIR/pg-top-128m-final-noperf.log"
+sed -n '1,35p' "$ART_DIR/pg-top-4m-final-noperf.log"
+sed -n '1,140p' "$ART_DIR/perf-stat-fio-128m-final.txt"
+sed -n '1,140p' "$ART_DIR/perf-stat-fio-strace-4m-final.txt"
+rg -n "FOD strace profile summary|% time|seconds|read|futex|wait4|writev|total" "$ART_DIR/fuse-4m-strace-final-perf.log"
+findmnt -rn -t fuse.fod,fuse3,fuse | rg 'fod|tmp/fod' || true
+pgrep -af 'fod-rust-fuse|fod-bootstrap' || true
+git status --short --branch
+```
+
+Final verification, commit, post-commit review and MemPalace refresh:
+
+```bash
+git status --short --branch
+git diff --stat
+git diff -- rust_hotpath/src/pg.rs
+git diff -- docs/mounted-fuse-write-profile-plan.md docs/block-only-performance-plan.md TODO.md conclusions.md commands.md
+rg -n "PersistBlockRow|BlockPersistPlan|block_index|BTree|HashMap|dedup|coalesce|sort" rust_hotpath/src/persist_plan.rs rust_hotpath/src/pg.rs
+nl -ba rust_hotpath/src/persist_plan.rs | sed -n '1,260p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '9860,10380p'
+git diff --check
+cargo check --workspace --locked
+git add Cargo.lock Cargo.toml TODO.md commands.md conclusions.md docs/block-only-performance-plan.md docs/mounted-fuse-write-profile-plan.md fod_version.txt rust_hotpath/src/pg.rs
+git diff --cached --check
+git commit -m "FOD 3.2.78: reduce block persist staging overhead"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git diff --stat HEAD~1..HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-16 commit d72a23d working tree FOD 3.2.77 mounted-FUSE write-stage instrumentation
 
 Context and plan lookup:

@@ -142,6 +142,23 @@ Therefore the next production optimization is COPY BINARY staging plus the
 defaults, hardlink counts, quota locking, or debug request-start logging before
 that measured persist-plan work.
 
+FOD 3.2.78 implements the first persist-plan reduction. For mounted 128 MiB
+direct-I/O fio without perf overhead, the working tree based on commit `e7797f0`
+measured:
+
+- fio write `16.3 MiB/s` over `7833 ms`, versus the FOD 3.2.77 baseline
+  `15.6 MiB/s` over `8225 ms`;
+- fio read `18.4 MiB/s` over `6958 ms`, versus `19.3 MiB/s` over `6625 ms`;
+- `repo_persist_blocks_us=1568453`, down from `1991349`;
+- `flush_execute_persist_plan_us=1588534`, down from `2009858`;
+- PostgreSQL COPY BINARY staging `1020.004 ms`, down from `1167.429 ms`;
+- `data_blocks` merge SQL `354.852 ms` plus `141.614 ms`, down from
+  `398.600 ms` plus `382.562 ms`.
+
+The remaining measured persist-plan work is not hardlink count, quota locking or
+worker defaults. It is the remaining `ON CONFLICT` merge for one 64 MiB flush
+and the still-dominant COPY receive/staging cost.
+
 The active detailed subplan is:
 
 - [`mounted-fuse-write-profile-plan.md`](mounted-fuse-write-profile-plan.md)

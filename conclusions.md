@@ -1618,3 +1618,66 @@ plus the set-based `data_blocks` merge in the persist plan, then repeat the same
 mounted 128 MiB and 4 MiB strace profile. Do not optimize hardlink count, quota
 locking, worker defaults, or debug request-start logging before that measured
 persist-plan work.
+
+## 2026-08-16 — FOD 3.2.78 COPY staging and empty-target merge reduction
+
+Measured working tree: FOD 3.2.78 based on commit `e7797f0`
+(`FOD 3.2.77: instrument mounted FUSE write stages`).
+
+Artifacts are under
+`artifacts/perf/e7797f0/lt7300-copymerge-e7797f0-wt-3.2.78-20260816T200601Z/`.
+
+The code change reduces persist-plan work in two places:
+
+- COPY BINARY row construction borrows full-size block slices instead of
+  allocating a normalized 4 KiB `Vec<u8>` for every full block.
+- The staging merge uses plain append-only INSERT statements when the target
+  data object has no payload rows. Empty-target detection covers both newly
+  replaced data objects and existing empty data objects, with a single indexed
+  `NOT EXISTS` check per persist operation.
+
+An intermediate version of the empty-target check produced `EIO` at the final
+128 MiB write because the no-CRC SQL cast was malformed. The captured daemon log
+showed repeated `unexpected PostgreSQL result status` immediately after
+`SELECT NOT EXISTS`. The SQL was fixed to `SELECT (NOT EXISTS (...))::text`, and
+the final mounted fio profiles passed with `err=0`.
+
+Final no-perf mounted fio results:
+
+| workload | fio write | fio read | callbacks |
+| --- | ---: | ---: | ---: |
+| 4 MiB | `13.2 MiB/s` / `304 ms` | `9752 KiB/s` / `420 ms` | read `1024`, write `1024` |
+| 128 MiB | `16.3 MiB/s` / `7833 ms` | `18.4 MiB/s` / `6958 ms` | read `32768`, write `32768` |
+
+Compared with the FOD 3.2.77 128 MiB baseline, write throughput improved from
+`15.6 MiB/s` to `16.3 MiB/s`, while read throughput was within run variance and
+slightly lower than the earlier `19.3 MiB/s` run.
+
+Final 128 MiB persist-plan counters:
+
+| counter | FOD 3.2.77 | FOD 3.2.78 |
+| --- | ---: | ---: |
+| `flush_execute_persist_plan_us` | `2009858` | `1588534` |
+| `repo_persist_blocks_us` | `1991349` | `1568453` |
+| PostgreSQL COPY BINARY | `1167.429 ms` | `1020.004 ms` |
+| PostgreSQL `data_blocks` merges | `398.600 + 382.562 ms` | `354.852 + 141.614 ms` |
+
+The 4 MiB strace/perf profile also passed: write `6793 KiB/s` / `603 ms`, read
+`4285 KiB/s` / `956 ms`, strace total `6.588429 s` / `19476` calls, dominated
+by `read` `3.432616 s`, `futex` `2.003754 s`, `wait4` `0.515535 s` and
+`writev` `0.014777 s`.
+
+`perf stat` was collected for the final 128 MiB mounted fio run:
+`12.613e9 task-clock`, `53.745e9 instructions`, `42.552e9 cycles`,
+`167357 context-switches`, `8599 cpu-migrations`, `74979 page-faults`, and
+`17.506445682 seconds time elapsed`. The 4 MiB strace/perf run measured
+`2.131e9 task-clock`, `4.519e9 instructions`, `3.995e9 cycles`, `82511
+context-switches`, `2607 cpu-migrations`, `29011 page-faults`, and
+`3.730127167 seconds time elapsed`.
+
+Conclusion: FOD 3.2.78 reduces the measured persist-plan cost, but the remaining
+128 MiB bottleneck is still inside COPY plus merge. The next step should inspect
+whether the second 64 MiB flush can be proven append-only/disjoint so it can
+avoid the remaining `ON CONFLICT` merge. If that cannot be proven correctly
+across sparse writes, truncate, COW, remount and two mounts, continue with COPY
+receive/staging cost instead.
