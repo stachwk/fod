@@ -6730,15 +6730,117 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe { Self::schema_is_initialized_on_conn(conn) })
     }
 
+    unsafe fn startup_probe_on_conn(conn: *mut PGconn) -> Result<(bool, bool), String> {
+        // Pierwszy round-trip jest bezpieczny takze przed inicjalizacja FOD:
+        // odwoluje sie tylko do pg_catalog/to_regclass i pg_is_in_recovery().
+        let sql = CString::new(format!(
+            "SELECT \
+                (\
+                    to_regclass('{schema}.directories') IS NOT NULL AND \
+                    to_regclass('{schema}.files') IS NOT NULL AND \
+                    to_regclass('{schema}.schema_version') IS NOT NULL\
+                )::text, \
+                pg_is_in_recovery()::text",
+            schema = FOD_SCHEMA_NAME
+        ))
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let rows = query_rows_text_on_conn(conn, &sql)?;
+        let row = rows
+            .first()
+            .ok_or_else(|| "startup probe returned no rows".to_string())?;
+        if row.len() < 2 {
+            return Err(format!(
+                "startup probe returned {} columns, expected at least 2",
+                row.len()
+            ));
+        }
+
+        let schema_is_initialized = matches!(
+            row[0].trim().to_ascii_lowercase().as_str(),
+            "t" | "true" | "1" | "on"
+        );
+        let is_in_recovery = matches!(
+            row[1].trim().to_ascii_lowercase().as_str(),
+            "t" | "true" | "1" | "on"
+        );
+        Ok((schema_is_initialized, is_in_recovery))
+    }
+
+    unsafe fn startup_initialized_values_on_conn(conn: *mut PGconn) -> Result<(u32, u32), String> {
+        // Drugie zapytanie jest wykonywane dopiero po potwierdzeniu schematu.
+        // EXISTS rozroznia brak rekordu config od obecnego, ale pustego rekordu,
+        // aby zachowac komunikaty i walidacje z poprzedniej implementacji.
+        let sql = CString::new(
+            "SELECT \
+                (EXISTS (SELECT 1 FROM config WHERE key = 'block_size'))::text, \
+                COALESCE((SELECT value::text FROM config WHERE key = 'block_size' LIMIT 1), ''), \
+                (EXISTS (SELECT 1 FROM config WHERE key = 'max_fs_size_bytes'))::text, \
+                COALESCE((SELECT value::text FROM config WHERE key = 'max_fs_size_bytes' LIMIT 1), ''), \
+                COALESCE((\
+                    SELECT version::text \
+                    FROM schema_version \
+                    ORDER BY applied_at DESC \
+                    LIMIT 1\
+                ), '')",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let rows = query_rows_text_on_conn(conn, &sql)?;
+        let row = rows
+            .first()
+            .ok_or_else(|| "initialized startup values query returned no rows".to_string())?;
+        if row.len() < 5 {
+            return Err(format!(
+                "initialized startup values query returned {} columns, expected at least 5",
+                row.len()
+            ));
+        }
+
+        let block_size_present = matches!(
+            row[0].trim().to_ascii_lowercase().as_str(),
+            "t" | "true" | "1" | "on"
+        );
+        if !block_size_present {
+            return Err("initialized FOD schema is missing config.block_size".to_string());
+        }
+        let block_size = row[1]
+            .trim()
+            .parse::<u32>()
+            .map_err(|err| format!("invalid config.block_size value: {err}"))?;
+        if block_size == 0 {
+            return Err("config.block_size must be greater than zero".to_string());
+        }
+
+        let max_fs_size_bytes_present = matches!(
+            row[2].trim().to_ascii_lowercase().as_str(),
+            "t" | "true" | "1" | "on"
+        );
+        if !max_fs_size_bytes_present {
+            return Err("initialized FOD schema is missing config.max_fs_size_bytes".to_string());
+        }
+        row[3]
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid config.max_fs_size_bytes value: {err}"))?;
+
+        let schema_version_value = row[4].trim();
+        if schema_version_value.is_empty() {
+            return Err("initialized FOD schema is missing schema version".to_string());
+        }
+        let schema_version = schema_version_value
+            .parse::<u32>()
+            .map_err(|err| format!("invalid schema version returned by PostgreSQL: {err}"))?;
+
+        Ok((block_size, schema_version))
+    }
+
     unsafe fn startup_snapshot_on_conn(
         &self,
         conn: *mut PGconn,
     ) -> Result<StartupSnapshot, String> {
-        // Wszystkie elementy snapshotu sa odczytywane z jednego PGconn.
-        // Dzieki temu routing/failover nie moze zmienic endpointu pomiedzy
-        // kolejnymi odczytami nalezacymi do jednego snapshotu startowego.
-        let schema_is_initialized = Self::schema_is_initialized_on_conn(conn)?;
-        let is_in_recovery = Self::is_in_recovery_on_conn(conn)?;
+        // Caly logiczny snapshot nadal pozostaje na jednym PGconn.
+        // Niezainicjalizowany schemat konczy sie po jednym zapytaniu.
+        // Zainicjalizowany schemat wymaga maksymalnie dwoch zapytan.
+        let (schema_is_initialized, is_in_recovery) = Self::startup_probe_on_conn(conn)?;
 
         if !schema_is_initialized {
             return Ok(StartupSnapshot {
@@ -6749,27 +6851,7 @@ impl DbRepo {
             });
         }
 
-        let block_size_value = Self::query_config_value_on_conn(conn, "block_size")?
-            .ok_or_else(|| "initialized FOD schema is missing config.block_size".to_string())?;
-        let block_size = block_size_value
-            .trim()
-            .parse::<u32>()
-            .map_err(|err| format!("invalid config.block_size value: {err}"))?;
-        if block_size == 0 {
-            return Err("config.block_size must be greater than zero".to_string());
-        }
-
-        let max_fs_size_bytes_value = Self::query_config_value_on_conn(conn, "max_fs_size_bytes")?
-            .ok_or_else(|| {
-                "initialized FOD schema is missing config.max_fs_size_bytes".to_string()
-            })?;
-        max_fs_size_bytes_value
-            .trim()
-            .parse::<u64>()
-            .map_err(|err| format!("invalid config.max_fs_size_bytes value: {err}"))?;
-
-        let schema_version = Self::schema_version_on_conn(conn)?
-            .ok_or_else(|| "initialized FOD schema is missing schema version".to_string())?;
+        let (block_size, schema_version) = Self::startup_initialized_values_on_conn(conn)?;
 
         Ok(StartupSnapshot {
             block_size: Some(block_size),

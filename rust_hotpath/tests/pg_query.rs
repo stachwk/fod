@@ -61,6 +61,63 @@ fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
 }
 
 #[test]
+fn startup_snapshot_matches_individual_live_queries() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+
+    let snapshot = repo.startup_snapshot()?;
+    let schema_is_initialized = repo.schema_is_initialized()?;
+    let is_in_recovery = repo.is_in_recovery()?;
+
+    if snapshot.schema_is_initialized != schema_is_initialized {
+        return Err(format!(
+            "startup snapshot schema state mismatch: snapshot={} helper={}",
+            snapshot.schema_is_initialized, schema_is_initialized
+        ));
+    }
+    if snapshot.is_in_recovery != is_in_recovery {
+        return Err(format!(
+            "startup snapshot recovery state mismatch: snapshot={} helper={}",
+            snapshot.is_in_recovery, is_in_recovery
+        ));
+    }
+
+    if !schema_is_initialized {
+        if snapshot.block_size.is_some() || snapshot.schema_version.is_some() {
+            return Err(
+                "uninitialized startup snapshot unexpectedly contains schema values".to_string(),
+            );
+        }
+        return Ok(());
+    }
+
+    let block_size = repo
+        .query_config_value("block_size")?
+        .ok_or_else(|| "missing config.block_size".to_string())?
+        .trim()
+        .parse::<u32>()
+        .map_err(|err| format!("invalid config.block_size value in comparison test: {err}"))?;
+    let schema_version = repo
+        .schema_version()?
+        .ok_or_else(|| "missing schema version in comparison test".to_string())?;
+
+    if snapshot.block_size != Some(block_size) {
+        return Err(format!(
+            "startup snapshot block_size mismatch: snapshot={:?} helper={block_size}",
+            snapshot.block_size
+        ));
+    }
+    if snapshot.schema_version != Some(schema_version) {
+        return Err(format!(
+            "startup snapshot schema_version mismatch: snapshot={:?} helper={schema_version}",
+            snapshot.schema_version
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn payload_capacity_reservations_serialize_across_repositories() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo_a = repo_with_runtime()?;

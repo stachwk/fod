@@ -6,6 +6,8 @@ Use this file to record concise conclusions that matter for future work.
 
 - FOD 3.2.79 keeps the complete `DbRepo::startup_snapshot()` read sequence on one acquired PostgreSQL connection. Schema initialization state, recovery role, `block_size`, `max_fs_size_bytes`, and schema version are still read with separate SQL statements, but they no longer reacquire from the pool between fields, so one logical startup snapshot cannot switch PostgreSQL endpoints between those reads.
 - `rust_hotpath/tests/pg_query.rs::startup_snapshot_uses_single_connection_acquisition` pins this contract through the existing pool `acquisition_count` observability: on the healthy PostgreSQL integration path one `startup_snapshot()` call must increase the acquisition count by exactly one. SQL round-trip consolidation remains a separate optimization and is intentionally not part of 3.2.79.
+- FOD 3.2.80 reduces startup SQL traffic without weakening the pre-init path: one probe now returns both schema readiness and `pg_is_in_recovery()`, and an initialized schema uses one additional query for `block_size`, `max_fs_size_bytes`, and the latest schema version. That changes the initialized startup path from five SQL queries to two while retaining one PostgreSQL connection acquisition.
+- A literal one-query implementation was intentionally not used for 3.2.80 because the pre-init path cannot safely reference `config` or `schema_version` before those relations exist. Dynamic SQL, temporary functions, or XML-based indirection would add more server work and complexity than the saved round-trip. The uninitialized path therefore uses one safe catalog/recovery probe; the normal initialized path uses two bounded queries.
 
 ## 2026-06-27
 
