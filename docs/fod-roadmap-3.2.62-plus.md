@@ -175,10 +175,18 @@ Status: implemented.
 
 ## FOD 3.2.71+ — External fencing and stronger cross-process consistency
 
-- integrate an authoritative external fencing/lease epoch before declaring an
-  old primary unusable and a promoted primary safe for writes;
-- cover in-flight write/control/lease operations during a real split-brain
-  transition;
+- FOD 3.2.82 adds a process-local in-flight primary generation fence: normal
+  operations using the guarded writable-primary target register against the
+  generation they actually execute on, and a primary generation transition
+  waits until operations from that generation have drained before publishing
+  the new generation. This conservatively includes primary reads as well as
+  write/control work. A connection acquired across a transition is rejected
+  before its operation closure starts.
+- The fence deliberately does not replace authoritative external fencing:
+  integrate an external fencing/lease epoch before declaring an old primary
+  unusable and a promoted primary safe for writes across processes/hosts;
+- extend the in-flight guarantee through a real cross-process split-brain
+  transition once the authoritative external epoch exists;
 - design cross-process/global consistency where multiple FOD writers require it;
 - add cross-process fairness where required;
 - validate promotion ancestry/timeline handling against a real standby cluster;

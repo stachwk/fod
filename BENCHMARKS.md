@@ -26,6 +26,36 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-07-05 from commit `a3076e1` and adds a fresh local/QNAP COPY-buffer matrix with DML, WAL, top statement IO/WAL, and bloat artifacts.
 - The current FUSE migration comparison was collected locally on 2026-07-12 from commit `522b1b5` with `fuser 0.17.0`, negotiated protocol 7.40, schema v17, and three samples per block/1 MiB extent mode; the frozen pre-migration reference remains commit `7d9ed83`.
 
+## 2026-08-17 FOD 3.2.82 pre-commit read regression check
+
+Measured working tree: `FOD 3.2.82` based on commit `877c165146db01a3aaaa5f7efef74e3d31171348`. Collected 5 mounted sequential fio repetitions before committing 3.2.82.
+
+Method: existing `tests/integration/test_fio_sequential_io.sh`, `FIO_FILE_SIZE=128M`, default fio block size, `FOD_PROFILE_IO=1`, `FOD_FOPEN_DIRECT_IO=1`. This matches the FOD 3.2.81 regression-check method.
+
+Collection time: `2026-08-17 18:42:37 UTC`. Raw logs: `artifacts/perf/wt-3.2.82/lt7300-read-regression-3.2.82-20260817T184107Z`.
+
+| reference | read throughput | note |
+| --- | ---: | --- |
+| FOD 3.2.81 `e0f08b7` median | `19.300 MiB/s` | 5-run committed baseline |
+| FOD 3.2.82 working tree median | `18.600 MiB/s` | 5-run pre-commit measurement |
+
+| current run | write MiB/s | read MiB/s | read runtime ms |
+| ---: | ---: | ---: | ---: |
+| 1 | `17.800` | `18.200` | `7047` |
+| 2 | `15.400` | `20.000` | `6415` |
+| 3 | `13.500` | `18.600` | `6884` |
+| 4 | `15.900` | `19.300` | `6627` |
+| 5 | `13.500` | `18.600` | `6893` |
+
+Current read statistics:
+
+- mean `18.940 MiB/s`, median `18.600 MiB/s`, min `18.200`, max `20.000`, population stdev `0.637 MiB/s`;
+- mean write throughput during setup: `15.220 MiB/s`;
+- median delta vs FOD 3.2.81: `-3.63%`;
+- this mounted benchmark validates the normal read path. The new 3.2.82 fence is only active for guarded multi-endpoint writable-primary routing. This fio result therefore does not quantify the synchronization overhead of primary reads in that opt-in mode; the dedicated failover/fence concurrency test is the correctness proof for the fenced path.
+
+Conclusion (`no_material_regression`): Nie wykryto materialnej regresji odczytu wzgledem mediany FOD 3.2.81.
+
 ## 2026-08-17 FOD 3.2.81 recent read-path regression check
 
 Measured commit: `e0f08b77f0e90e1224f8c05e5485dff9a1112da4` (`FOD 3.2.81`). Collected 5 mounted sequential fio repetitions on the current `main`.

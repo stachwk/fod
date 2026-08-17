@@ -634,6 +634,8 @@ struct DbRepoConnectionTargetState {
     primary_guard_split_brain_rejections: u64,
     primary_guard_no_primary_rejections: u64,
     primary_guard_last_error: Option<String>,
+    primary_operations_in_flight: u64,
+    primary_transition_pending: bool,
 }
 
 impl Default for DbRepoConnectionTargetState {
@@ -661,6 +663,8 @@ impl Default for DbRepoConnectionTargetState {
             primary_guard_split_brain_rejections: 0,
             primary_guard_no_primary_rejections: 0,
             primary_guard_last_error: None,
+            primary_operations_in_flight: 0,
+            primary_transition_pending: false,
         }
     }
 }
@@ -673,6 +677,17 @@ pub struct DbRepoConnectionTargets {
     runtime_failover_enabled: bool,
     state: Mutex<DbRepoConnectionTargetState>,
     transition: Mutex<()>,
+    primary_fence: Condvar,
+}
+
+struct PrimaryOperationGuard<'a> {
+    targets: &'a DbRepoConnectionTargets,
+}
+
+impl Drop for PrimaryOperationGuard<'_> {
+    fn drop(&mut self) {
+        self.targets.finish_primary_operation();
+    }
 }
 
 impl DbRepoConnectionTargets {
@@ -719,6 +734,7 @@ impl DbRepoConnectionTargets {
                 ..DbRepoConnectionTargetState::default()
             }),
             transition: Mutex::new(()),
+            primary_fence: Condvar::new(),
         })
     }
 
@@ -748,6 +764,82 @@ impl DbRepoConnectionTargets {
     fn primary_promotion_guard_enabled(&self) -> bool {
         self.requirement == DbRepoConnectionTargetRequirement::WritablePrimary
             && self.runtime_failover_enabled
+    }
+
+    fn begin_primary_operation(
+        &self,
+        generation: u64,
+    ) -> Result<Option<PrimaryOperationGuard<'_>>, String> {
+        if !self.primary_promotion_guard_enabled() {
+            return Ok(None);
+        }
+
+        let mut state = self.state()?;
+        while state.primary_transition_pending {
+            state = self
+                .primary_fence
+                .wait(state)
+                .map_err(|_| "PostgreSQL primary generation fence is poisoned".to_string())?;
+        }
+
+        if state.generation != generation {
+            return Ok(None);
+        }
+
+        state.primary_operations_in_flight = state
+            .primary_operations_in_flight
+            .checked_add(1)
+            .ok_or_else(|| "PostgreSQL primary in-flight operation counter overflow".to_string())?;
+
+        Ok(Some(PrimaryOperationGuard { targets: self }))
+    }
+
+    fn finish_primary_operation(&self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.primary_operations_in_flight == 0 {
+            debug_assert!(
+                false,
+                "PostgreSQL primary in-flight operation counter underflow"
+            );
+            return;
+        }
+        state.primary_operations_in_flight -= 1;
+        if state.primary_operations_in_flight == 0 {
+            self.primary_fence.notify_all();
+        }
+    }
+
+    fn wait_for_primary_operations<'a>(
+        &self,
+        mut state: std::sync::MutexGuard<'a, DbRepoConnectionTargetState>,
+        expected_generation: u64,
+    ) -> Result<(std::sync::MutexGuard<'a, DbRepoConnectionTargetState>, bool), String> {
+        if !self.primary_promotion_guard_enabled() || state.generation != expected_generation {
+            return Ok((state, false));
+        }
+
+        state.primary_transition_pending = true;
+        while state.primary_operations_in_flight > 0 {
+            state = self
+                .primary_fence
+                .wait(state)
+                .map_err(|_| "PostgreSQL primary generation fence is poisoned".to_string())?;
+        }
+
+        Ok((state, true))
+    }
+
+    fn finish_primary_transition_locked(
+        &self,
+        state: &mut DbRepoConnectionTargetState,
+        primary_transition: bool,
+    ) {
+        if primary_transition {
+            state.primary_transition_pending = false;
+            self.primary_fence.notify_all();
+        }
     }
 
     fn record_primary_guard_error_locked(
@@ -862,6 +954,18 @@ impl DbRepoConnectionTargets {
             .saturating_add(role_rejections);
         let was_revalidation = state.primary_revalidation_required;
         let previous_index = state.active_index;
+        let needs_generation_transition =
+            previous_index != selected_candidate.target_index && !was_revalidation;
+        let primary_transition = if needs_generation_transition {
+            let expected_generation = state.generation;
+            let (next_state, primary_transition) =
+                self.wait_for_primary_operations(state, expected_generation)?;
+            state = next_state;
+            primary_transition
+        } else {
+            false
+        };
+
         if previous_index != selected_candidate.target_index {
             state.active_index = selected_candidate.target_index;
             state.failover_count = state.failover_count.saturating_add(1);
@@ -874,7 +978,9 @@ impl DbRepoConnectionTargets {
         state.primary_revalidation_required = false;
         state.primary_last_failed_index = None;
         state.primary_guard_last_error = None;
-        Ok((selected_conn, state.generation))
+        let generation = state.generation;
+        self.finish_primary_transition_locked(&mut state, primary_transition);
+        Ok((selected_conn, generation))
     }
 
     fn best_replica_candidate_locked(
@@ -1128,6 +1234,16 @@ impl DbRepoConnectionTargets {
         if state.generation != expected_generation {
             return Ok(state.generation);
         }
+
+        let primary_transition = if self.primary_promotion_guard_enabled() {
+            let (next_state, primary_transition) =
+                self.wait_for_primary_operations(state, expected_generation)?;
+            state = next_state;
+            primary_transition
+        } else {
+            false
+        };
+
         state.last_failed_authority = Some(authority.to_string());
         let failed_index = state.active_index;
         if self.replica_scoring_enabled() {
@@ -1148,7 +1264,37 @@ impl DbRepoConnectionTargets {
                 state.failover_count = state.failover_count.saturating_add(1);
             }
         }
-        Ok(state.generation)
+
+        let generation = state.generation;
+        self.finish_primary_transition_locked(&mut state, primary_transition);
+        Ok(generation)
+    }
+
+    fn mark_primary_revalidation(
+        &self,
+        expected_generation: u64,
+        active_index: usize,
+        last_error: Option<String>,
+    ) -> Result<u64, String> {
+        let state = self.state()?;
+        if state.generation != expected_generation {
+            return Ok(state.generation);
+        }
+
+        let (mut state, primary_transition) =
+            self.wait_for_primary_operations(state, expected_generation)?;
+        if state.generation == expected_generation {
+            state.primary_revalidation_required = true;
+            state.primary_last_failed_index = Some(active_index);
+            if let Some(last_error) = last_error {
+                state.primary_guard_last_error = Some(last_error);
+            }
+            state.generation = state.generation.saturating_add(1);
+        }
+
+        let generation = state.generation;
+        self.finish_primary_transition_locked(&mut state, primary_transition);
+        Ok(generation)
     }
 
     fn mark_operation_connection_failure(&self, generation: u64) -> Result<u64, String> {
@@ -1222,29 +1368,22 @@ impl DbRepoConnectionTargets {
                         != Some(probe.system_identifier.as_str())
                     {
                         unsafe { PQfinish(conn) };
-                        let mut state = self.state()?;
-                        state.primary_guard_last_error = Some(format!(
-                            "PostgreSQL promotion guard observed changed cluster identity on {}: observed={} expected={}",
-                            target.authority,
-                            probe.system_identifier,
-                            expected_system_identifier.as_deref().unwrap_or("none")
-                        ));
-                        state.primary_revalidation_required = true;
-                        state.primary_last_failed_index = Some(active_index);
-                        state.generation = state.generation.saturating_add(1);
-                        drop(state);
+                        self.mark_primary_revalidation(
+                            generation,
+                            active_index,
+                            Some(format!(
+                                "PostgreSQL promotion guard observed changed cluster identity on {}: observed={} expected={}",
+                                target.authority,
+                                probe.system_identifier,
+                                expected_system_identifier.as_deref().unwrap_or("none")
+                            )),
+                        )?;
                         return self.connect_primary_guarded(tuning, Some(active_index));
                     }
 
                     if expected_fingerprint.as_deref() != Some(probe.server_fingerprint.as_str()) {
                         unsafe { PQfinish(conn) };
-                        let mut state = self.state()?;
-                        if state.generation == generation {
-                            state.primary_revalidation_required = true;
-                            state.primary_last_failed_index = Some(active_index);
-                            state.generation = state.generation.saturating_add(1);
-                        }
-                        drop(state);
+                        self.mark_primary_revalidation(generation, active_index, None)?;
                         return self.connect_primary_guarded(tuning, Some(active_index));
                     }
 
@@ -4753,6 +4892,40 @@ impl DbRepo {
                 }
             };
 
+            let primary_operation_guard =
+                if self.connection_targets.primary_promotion_guard_enabled() {
+                    match self
+                        .connection_targets
+                        .begin_primary_operation(generation)?
+                    {
+                        Some(guard) => Some(guard),
+                        None => {
+                            let current_generation = self.connection_targets.generation()?;
+                            match self.pool.return_cached(
+                                lane,
+                                conn,
+                                generation,
+                                current_generation,
+                                Duration::ZERO,
+                            ) {
+                                Ok(true) => {}
+                                Ok(false) => unsafe {
+                                    PQfinish(conn);
+                                },
+                                Err(err) => {
+                                    unsafe {
+                                        PQfinish(conn);
+                                    }
+                                    return Err(err);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+
             let operation_started = Instant::now();
             let _transaction_pool_scope =
                 CurrentTransactionPoolScope::enter(Arc::clone(&self.pool), lane);
@@ -4791,6 +4964,13 @@ impl DbRepo {
                     unsafe {
                         PQfinish(conn);
                     }
+
+                    // Operacja, ktora sama wykryla disconnect, musi zejsc z
+                    // in-flight fence przed mark_operation_connection_failure().
+                    // Transition czeka na zero aktywnych operacji tej generacji,
+                    // wiec trzymanie guarda tutaj spowodowaloby self-deadlock.
+                    drop(primary_operation_guard);
+
                     if let Err(pool_err) = pool_result {
                         return Err(format!("{err}; connection pool cleanup failed: {pool_err}"));
                     }
@@ -13436,5 +13616,130 @@ mod primary_promotion_guard_tests {
     fn no_writable_candidate_is_rejected() {
         let err = choose_safe_primary_candidate(&[], Some("cluster-1"), None).unwrap_err();
         assert_eq!(err.kind, PrimarySafetyErrorKind::NoWritablePrimary);
+    }
+
+    #[test]
+    fn primary_generation_transition_waits_for_in_flight_operation() {
+        let targets = Arc::new(
+            DbRepoConnectionTargets::new(
+                vec![
+                    DbRepoConnectionTarget {
+                        authority: "primary-a".to_string(),
+                        conninfo: "host=primary-a".to_string(),
+                    },
+                    DbRepoConnectionTarget {
+                        authority: "primary-b".to_string(),
+                        conninfo: "host=primary-b".to_string(),
+                    },
+                ],
+                DbRepoConnectionTargetRequirement::WritablePrimary,
+                true,
+                true,
+            )
+            .unwrap(),
+        );
+
+        let generation = targets.generation().unwrap();
+        let operation = targets
+            .begin_primary_operation(generation)
+            .unwrap()
+            .expect("primary operation should enter current generation");
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let transition_targets = Arc::clone(&targets);
+        let transition = std::thread::spawn(move || {
+            let result = transition_targets.mark_operation_connection_failure(generation);
+            done_tx.send(result).unwrap();
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let pending = {
+                let state = targets.state().unwrap();
+                state.primary_transition_pending
+            };
+            if pending {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "primary transition did not enter pending state"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        assert!(
+            done_rx.try_recv().is_err(),
+            "generation transition completed while old operation was still active"
+        );
+        assert_eq!(targets.generation().unwrap(), generation);
+        {
+            let state = targets.state().unwrap();
+            assert_eq!(state.primary_operations_in_flight, 1);
+            assert!(state.primary_transition_pending);
+        }
+
+        let (waiter_started_tx, waiter_started_rx) = std::sync::mpsc::channel();
+        let (waiter_done_tx, waiter_done_rx) = std::sync::mpsc::channel();
+        let waiter_targets = Arc::clone(&targets);
+        let waiter = std::thread::spawn(move || {
+            waiter_started_tx.send(()).unwrap();
+            let admitted = waiter_targets
+                .begin_primary_operation(generation)
+                .unwrap()
+                .is_some();
+            waiter_done_tx.send(admitted).unwrap();
+        });
+
+        waiter_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("new-operation waiter did not start");
+        assert!(
+            waiter_done_rx
+                .recv_timeout(Duration::from_millis(25))
+                .is_err(),
+            "new primary operation completed admission while transition was pending"
+        );
+
+        drop(operation);
+
+        let next_generation = done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("generation transition did not complete after operation drain")
+            .expect("generation transition failed");
+        transition
+            .join()
+            .expect("generation transition thread panicked");
+
+        let stale_admitted = waiter_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("new-operation waiter did not finish after transition");
+        waiter.join().expect("new-operation waiter panicked");
+        assert!(
+            !stale_admitted,
+            "operation waiting across transition entered the stale generation"
+        );
+
+        assert!(next_generation > generation);
+        assert_eq!(targets.generation().unwrap(), next_generation);
+        {
+            let state = targets.state().unwrap();
+            assert_eq!(state.primary_operations_in_flight, 0);
+            assert!(!state.primary_transition_pending);
+            assert!(state.primary_revalidation_required);
+        }
+
+        assert!(
+            targets
+                .begin_primary_operation(generation)
+                .unwrap()
+                .is_none(),
+            "stale generation unexpectedly admitted a new primary operation"
+        );
+        let current_operation = targets
+            .begin_primary_operation(next_generation)
+            .unwrap()
+            .expect("current generation should admit a primary operation");
+        drop(current_operation);
     }
 }

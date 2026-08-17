@@ -772,6 +772,7 @@ Notes:
 - [x] FOD 3.2.64 — add payload-byte budgets and byte-aware backpressure.
 - [ ] FOD 3.2.65+ — continue role-aware multi-endpoint routing, consistency,
   endpoint health/load scoring, failover and cross-process fairness work.
+- [x] FOD 3.2.82 — add a process-local in-flight primary generation fence: operations using the guarded writable-primary target register against the current generation, primary generation transitions wait for the old generation to drain, and stale post-acquisition connections are not allowed to start a new operation. External cross-process fencing remains separate.
 
 Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
 
