@@ -26,6 +26,40 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-07-05 from commit `a3076e1` and adds a fresh local/QNAP COPY-buffer matrix with DML, WAL, top statement IO/WAL, and bloat artifacts.
 - The current FUSE migration comparison was collected locally on 2026-07-12 from commit `522b1b5` with `fuser 0.17.0`, negotiated protocol 7.40, schema v17, and three samples per block/1 MiB extent mode; the frozen pre-migration reference remains commit `7d9ed83`.
 
+## 2026-08-17 FOD 3.2.81 recent read-path regression check
+
+Measured commit: `e0f08b77f0e90e1224f8c05e5485dff9a1112da4` (`FOD 3.2.81`). Collected 5 mounted sequential fio repetitions on the current `main`.
+
+Method: existing `tests/integration/test_fio_sequential_io.sh`, `FIO_FILE_SIZE=128M`, default fio block size, `FOD_PROFILE_IO=1`, `FOD_FOPEN_DIRECT_IO=1`. Each repetition creates/writes the file first and then performs the sequential read through the mounted FUSE filesystem.
+
+Collection time: `2026-08-17 18:00:39 UTC`. Raw logs and generated summary: `artifacts/perf/e0f08b7/lt7300-read-regression-3.2.81-20260817T175849Z`.
+
+| reference | read throughput | read runtime | note |
+| --- | ---: | ---: | --- |
+| FOD 3.2.77 `e7797f0` | `19.3 MiB/s` | `6625 ms` | mounted FUSE write-stage instrumentation baseline |
+| FOD 3.2.78 `e2fc0cb` | `18.4 MiB/s` | `6958 ms` | COPY staging and merge reduction baseline |
+| FOD 3.2.81 `e0f08b7` median | `19.300 MiB/s` | `6621 ms` | 5 current repetitions |
+
+| current run | write MiB/s | read MiB/s | read runtime ms |
+| ---: | ---: | ---: | ---: |
+| 1 | `15.300` | `19.200` | `6660` |
+| 2 | `14.400` | `19.300` | `6618` |
+| 3 | `16.300` | `19.300` | `6621` |
+| 4 | `15.900` | `19.600` | `6538` |
+| 5 | `15.300` | `18.500` | `6901` |
+
+Current read statistics:
+
+- mean `19.180 MiB/s`, median `19.300 MiB/s`, min `18.500`, max `19.600`, population stdev `0.366 MiB/s`;
+- mean write throughput during setup: `15.440 MiB/s`;
+- median delta vs FOD 3.2.77 `e7797f0`: `+0.00%`;
+- median delta vs FOD 3.2.78 `e2fc0cb`: `+4.89%`;
+- material-regression alert threshold: more than `10%` below the slower historical 3.2.77/3.2.78 reference.
+
+Conclusion (`no_material_regression`): Nie wykryto materialnej regresji odczytu. Aktualna mediana pozostaje w granicy 5% od wolniejszego zapisanego punktu 3.2.77/3.2.78, a commity 3.2.79-3.2.81 nie zmienialy steady-state read-path.
+
+Code-review context: FOD 3.2.79 only consolidated startup snapshot connection acquisition, FOD 3.2.80 only reduced startup snapshot SQL round trips, and FOD 3.2.81 only removed unreachable patterns from a persist-plan unit test. None of those commits intentionally changes the normal mounted data-read algorithm. FOD 3.2.74 remains the important recent read-path optimization: normal `read()` stopped paying the full `FileAttr.blocks` allocation query on every read.
+
 ## 2026-07-12 fuser 0.17 Migration Baseline
 
 Measured commit: `522b1b51e4ddd1d2deffe7e32084ce3ffb6f3547`
