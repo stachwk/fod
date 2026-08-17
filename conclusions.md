@@ -2,6 +2,11 @@
 
 Use this file to record concise conclusions that matter for future work.
 
+## 2026-08-17
+
+- FOD 3.2.79 keeps the complete `DbRepo::startup_snapshot()` read sequence on one acquired PostgreSQL connection. Schema initialization state, recovery role, `block_size`, `max_fs_size_bytes`, and schema version are still read with separate SQL statements, but they no longer reacquire from the pool between fields, so one logical startup snapshot cannot switch PostgreSQL endpoints between those reads.
+- `rust_hotpath/tests/pg_query.rs::startup_snapshot_uses_single_connection_acquisition` pins this contract through the existing pool `acquisition_count` observability: on the healthy PostgreSQL integration path one `startup_snapshot()` call must increase the acquisition count by exactly one. SQL round-trip consolidation remains a separate optimization and is intentionally not part of 3.2.79.
+
 ## 2026-06-27
 
 - `fod-indexer materialize` now streams file payload import from disk instead of building a whole-file `Vec<Vec<u8>>` first. The new `DbRepo::persist_file_blocks_from_path(...)` path keeps the transaction boundary intact, bounds memory to chunk-sized blocks, and the existing `make test-fod-indexer-smoke` still passes after the change.

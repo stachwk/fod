@@ -6648,43 +6648,54 @@ impl DbRepo {
         format!("'{}'", value.replace('\'', "''"))
     }
 
-    pub fn query_config_value(&self, key: &str) -> Result<Option<String>, String> {
+    unsafe fn query_config_value_on_conn(
+        conn: *mut PGconn,
+        key: &str,
+    ) -> Result<Option<String>, String> {
         let sql = CString::new("SELECT value FROM config WHERE key = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
         let key = CString::new(key).map_err(|_| "config key contains NUL byte".to_string())?;
-
-        self.with_cached_connection(|conn| unsafe {
-            let params = [&key];
-            let res = exec_params(conn, &sql, &params)?;
-            let rows = PQntuples(res);
-            let cols = PQnfields(res);
-            let value = if rows < 1 || cols < 1 {
+        let params = [&key];
+        let res = exec_params(conn, &sql, &params)?;
+        let rows = PQntuples(res);
+        let cols = PQnfields(res);
+        let value = if rows < 1 || cols < 1 {
+            None
+        } else {
+            let value_ptr = PQgetvalue(res, 0, 0);
+            if value_ptr.is_null() {
                 None
             } else {
-                let value_ptr = PQgetvalue(res, 0, 0);
-                if value_ptr.is_null() {
-                    None
-                } else {
-                    Some(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
-                }
-            };
-            PQclear(res);
-            Ok(value)
-        })
+                Some(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
+            }
+        };
+        PQclear(res);
+        Ok(value)
     }
 
-    pub fn is_in_recovery(&self) -> Result<bool, String> {
-        let value = self.query_scalar_text("SELECT pg_is_in_recovery()")?;
+    pub fn query_config_value(&self, key: &str) -> Result<Option<String>, String> {
+        self.with_cached_connection(|conn| unsafe { Self::query_config_value_on_conn(conn, key) })
+    }
+
+    unsafe fn is_in_recovery_on_conn(conn: *mut PGconn) -> Result<bool, String> {
+        let sql = CString::new("SELECT pg_is_in_recovery()")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let value = query_scalar_text_on_conn(conn, &sql)?;
         Ok(matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "t" | "true" | "1" | "on"
         ))
     }
 
-    pub fn schema_version(&self) -> Result<Option<u32>, String> {
-        let value = self.query_scalar_text(
-            "SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1",
-        )?;
+    pub fn is_in_recovery(&self) -> Result<bool, String> {
+        self.with_cached_connection(|conn| unsafe { Self::is_in_recovery_on_conn(conn) })
+    }
+
+    unsafe fn schema_version_on_conn(conn: *mut PGconn) -> Result<Option<u32>, String> {
+        let sql =
+            CString::new("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let value = query_scalar_text_on_conn(conn, &sql)?;
         if value.trim().is_empty() {
             return Ok(None);
         }
@@ -6695,23 +6706,39 @@ impl DbRepo {
             .map_err(|err| format!("invalid schema version returned by PostgreSQL: {err}"))
     }
 
-    pub fn schema_is_initialized(&self) -> Result<bool, String> {
-        let value = self.query_scalar_text(&format!(
+    pub fn schema_version(&self) -> Result<Option<u32>, String> {
+        self.with_cached_connection(|conn| unsafe { Self::schema_version_on_conn(conn) })
+    }
+
+    unsafe fn schema_is_initialized_on_conn(conn: *mut PGconn) -> Result<bool, String> {
+        let sql = CString::new(format!(
             "SELECT \
                 to_regclass('{schema}.directories') IS NOT NULL AND \
                 to_regclass('{schema}.files') IS NOT NULL AND \
                 to_regclass('{schema}.schema_version') IS NOT NULL",
             schema = FOD_SCHEMA_NAME
-        ))?;
+        ))
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let value = query_scalar_text_on_conn(conn, &sql)?;
         Ok(matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "t" | "true" | "1" | "on"
         ))
     }
 
-    pub fn startup_snapshot(&self) -> Result<StartupSnapshot, String> {
-        let schema_is_initialized = self.schema_is_initialized()?;
-        let is_in_recovery = self.is_in_recovery()?;
+    pub fn schema_is_initialized(&self) -> Result<bool, String> {
+        self.with_cached_connection(|conn| unsafe { Self::schema_is_initialized_on_conn(conn) })
+    }
+
+    unsafe fn startup_snapshot_on_conn(
+        &self,
+        conn: *mut PGconn,
+    ) -> Result<StartupSnapshot, String> {
+        // Wszystkie elementy snapshotu sa odczytywane z jednego PGconn.
+        // Dzieki temu routing/failover nie moze zmienic endpointu pomiedzy
+        // kolejnymi odczytami nalezacymi do jednego snapshotu startowego.
+        let schema_is_initialized = Self::schema_is_initialized_on_conn(conn)?;
+        let is_in_recovery = Self::is_in_recovery_on_conn(conn)?;
 
         if !schema_is_initialized {
             return Ok(StartupSnapshot {
@@ -6722,8 +6749,7 @@ impl DbRepo {
             });
         }
 
-        let block_size_value = self
-            .query_config_value("block_size")?
+        let block_size_value = Self::query_config_value_on_conn(conn, "block_size")?
             .ok_or_else(|| "initialized FOD schema is missing config.block_size".to_string())?;
         let block_size = block_size_value
             .trim()
@@ -6733,18 +6759,16 @@ impl DbRepo {
             return Err("config.block_size must be greater than zero".to_string());
         }
 
-        let max_fs_size_bytes_value =
-            self.query_config_value("max_fs_size_bytes")?
-                .ok_or_else(|| {
-                    "initialized FOD schema is missing config.max_fs_size_bytes".to_string()
-                })?;
+        let max_fs_size_bytes_value = Self::query_config_value_on_conn(conn, "max_fs_size_bytes")?
+            .ok_or_else(|| {
+                "initialized FOD schema is missing config.max_fs_size_bytes".to_string()
+            })?;
         max_fs_size_bytes_value
             .trim()
             .parse::<u64>()
             .map_err(|err| format!("invalid config.max_fs_size_bytes value: {err}"))?;
 
-        let schema_version = self
-            .schema_version()?
+        let schema_version = Self::schema_version_on_conn(conn)?
             .ok_or_else(|| "initialized FOD schema is missing schema version".to_string())?;
 
         Ok(StartupSnapshot {
@@ -6753,6 +6777,10 @@ impl DbRepo {
             schema_version: Some(schema_version),
             schema_is_initialized: true,
         })
+    }
+
+    pub fn startup_snapshot(&self) -> Result<StartupSnapshot, String> {
+        self.with_cached_connection(|conn| unsafe { self.startup_snapshot_on_conn(conn) })
     }
 
     fn query_schema_ready_bool(&self, sql: &str) -> Result<bool, String> {

@@ -37,6 +37,30 @@ fn repo_with_runtime_config(mut runtime: RuntimeConfig) -> Result<DbRepo, String
 }
 
 #[test]
+fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+
+    // observability_snapshot() czyta lokalny stan puli i nie pozyskuje PGconn.
+    // Dlatego delta acquisition_count izoluje wywolanie startup_snapshot().
+    let before = repo.observability_snapshot()?.pool.acquisition_count;
+    let snapshot = repo.startup_snapshot()?;
+    let after = repo.observability_snapshot()?.pool.acquisition_count;
+
+    let acquisitions = after.saturating_sub(before);
+    if acquisitions != 1 {
+        return Err(format!(
+            "startup_snapshot should use one PostgreSQL connection acquisition, got {acquisitions}"
+        ));
+    }
+
+    // Test nie wymusza konkretnego stanu schematu. Zarowno pusty, jak i
+    // zainicjalizowany FOD maja byc odczytane w ramach jednego PGconn.
+    let _ = snapshot;
+    Ok(())
+}
+
+#[test]
 fn payload_capacity_reservations_serialize_across_repositories() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo_a = repo_with_runtime()?;
