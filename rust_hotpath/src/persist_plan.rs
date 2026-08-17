@@ -295,18 +295,14 @@ mod tests {
             dirty_blocks: &[0, 1, 2, 3],
         };
 
-        match choose_persist_execution_plan(input) {
-            PersistExecutionPlan {
-                total_blocks,
-                write_class,
-                payload: PersistPayloadPlan::Blocks(blocks),
-            } => {
-                assert_eq!(total_blocks, 4);
-                assert_eq!(write_class, PersistWriteClass::ExistingObjectPatch);
-                assert_eq!(blocks, persist_block_plan(input).blocks);
-            }
-            _ => panic!("expected block execution plan"),
-        }
+        let PersistExecutionPlan {
+            total_blocks,
+            write_class,
+            payload: PersistPayloadPlan::Blocks(blocks),
+        } = choose_persist_execution_plan(input);
+        assert_eq!(total_blocks, 4);
+        assert_eq!(write_class, PersistWriteClass::ExistingObjectPatch);
+        assert_eq!(blocks, persist_block_plan(input).blocks);
 
         let truncate_only_input = PersistPlanInput {
             truncate_pending: true,
@@ -314,18 +310,14 @@ mod tests {
             ..input
         };
 
-        match choose_persist_execution_plan(truncate_only_input) {
-            PersistExecutionPlan {
-                total_blocks,
-                write_class,
-                payload: PersistPayloadPlan::Blocks(blocks),
-            } => {
-                assert_eq!(total_blocks, 4);
-                assert_eq!(write_class, PersistWriteClass::TruncateOnly);
-                assert!(blocks.is_empty());
-            }
-            _ => panic!("expected truncate-only execution plan"),
-        }
+        let PersistExecutionPlan {
+            total_blocks,
+            write_class,
+            payload: PersistPayloadPlan::Blocks(blocks),
+        } = choose_persist_execution_plan(truncate_only_input);
+        assert_eq!(total_blocks, 4);
+        assert_eq!(write_class, PersistWriteClass::TruncateOnly);
+        assert!(blocks.is_empty());
     }
 
     #[test]
