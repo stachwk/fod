@@ -51,9 +51,6 @@ WHERE schemaname = 'fod'
   AND tablename IN ('data_blocks', 'copy_block_crc')
 ORDER BY tablename, indexname;
 
-SELECT 'retired extent table' AS section;
-
-SELECT to_regclass('fod.data_extents') IS NULL AS data_extents_dropped;
 
 SELECT 'row counts' AS section;
 
@@ -118,7 +115,4 @@ SELECT
     'All orphan counters must be zero; PostgreSQL foreign keys should enforce this after schema version 17.' AS note
 UNION ALL
 SELECT
-    'reference_count_mismatches should be investigated before object GC or dedupe decisions.'
-UNION ALL
-SELECT
-    'data_extents_dropped must be true after schema version 21; payload rows must live in data_blocks.';
+    'reference_count_mismatches should be investigated before object GC or dedupe decisions.';

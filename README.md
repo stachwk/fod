@@ -482,7 +482,7 @@ The canonical runtime value-range rules live in [`rust_runtime/src/lib.rs`](/med
 
 `mkfs.fod` supports:
 
-`init` applies the fresh-install bootstrap from `migrations/base_schema.sql` into the dedicated `fod` schema and refuses to run if FOD objects already exist; `upgrade` first verifies the schema-admin password, then applies any missing migrations to the existing `fod` schema; `clean` drops the entire `fod` schema and leaves unrelated `public` objects intact. `clean` verifies the existing schema-admin secret and fails instead of recreating it if the secret table or row is missing. The schema tool uses a single explicit source for the schema-admin password: `--schema-admin-password`. If the password is missing, `init`, `upgrade`, and `clean` fail fast instead of prompting or generating a secret implicitly. `mkfs.fod status` reports `FOD version`, `FOD schema name`, `FOD schema version`, active schema, whether FOD objects exist, whether the schema is ready, and pending migrations without revealing the secret itself. The current schema version is exported by `mkfs.fod status`; schema version 17 made `data_objects` the exclusive payload owner, schema version 18 added transactional payload-capacity reservations, schema version 19 added immutable index catalogue snapshots, schema version 20 migrates legacy `data_extents` payload rows into canonical `data_blocks`, and schema version 21 drops the retired `data_extents` table after the migration gate. If the version row is missing from an otherwise complete latest schema, `upgrade` restores it only after a strict structural and data-migration gate.
+`init` applies the fresh-install bootstrap from `migrations/base_schema.sql` into the dedicated `fod` schema and refuses to run if FOD objects already exist; `upgrade` first verifies the schema-admin password, then applies any missing migrations to the existing `fod` schema; `clean` drops the entire `fod` schema and leaves unrelated `public` objects intact. `clean` verifies the existing schema-admin secret and fails instead of recreating it if the secret table or row is missing. The schema tool uses a single explicit source for the schema-admin password: `--schema-admin-password`. If the password is missing, `init`, `upgrade`, and `clean` fail fast instead of prompting or generating a secret implicitly. `mkfs.fod status` reports `FOD version`, `FOD schema name`, `FOD schema version`, active schema, whether FOD objects exist, whether the schema is ready, and pending migrations without revealing the secret itself. The current schema version is exported by `mkfs.fod status`; schema version 17 made `data_objects` the exclusive payload owner, schema version 18 added transactional payload-capacity reservations, schema version 19 added immutable index catalogue snapshots, and schema versions 20-21 reserve/finalize the canonical block-only storage layout. If the version row is missing from an otherwise complete latest schema, `upgrade` restores it only after a strict structural and data-migration gate.
 
 | Parameter | Type | Default | Effect |
 | --- | --- | --- | --- |
@@ -1015,12 +1015,6 @@ connections after a transition. This is not a replacement for external STONITH
 or consensus fencing: an already in-flight operation cannot be revoked by FOD
 after it has reached an old primary.
 
-## Storage path simplification in FOD 3.2.73
+## Canonical block storage
 
-The extent storage experiment is retired. Production FUSE persistence uses only
-the canonical `data_blocks` path; `enable_extents` and `extent_target_bytes` are
-no longer runtime settings. Schema migration 20 converts any remaining legacy
-`data_extents` rows to `data_blocks` during `mkfs.fod upgrade`, and schema
-migration 21 drops `data_extents` after confirming migration 20 left no rows.
-There is no extent read fallback and no extent-to-block conversion in the FUSE
-hot path.
+FOD persists file payloads only in the canonical `data_blocks` layout. The runtime, configuration surface, tests, and performance tooling expose only block storage. Upgrades from retired experimental payload layouts are not supported; recreate such schemas with the current `mkfs.fod init`.

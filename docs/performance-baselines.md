@@ -5,6 +5,11 @@
 - Raw profiling artifacts stay under `artifacts/perf/...` and are not committed.
 - Each committed baseline summary must include commit, host, workload, local/QNAP mode, PostgreSQL version, and exact commands.
 - No performance optimization should be merged without before/after numbers from the relevant workload.
+- Sequential FUSE read-regression measurements must explicitly use the production block path: `tests/integration/test_fio_sequential_io.sh`, which is permanently block-only.
+- Every standard sequential read-regression comparison must measure both `FOD_FOPEN_DIRECT_IO=0` and `FOD_FOPEN_DIRECT_IO=1` as separate cells. Never average or directly compare the two modes as one series.
+- The standard block-read matrix is `4M` and `128M` with `FIO_BLOCK_SIZE=4k` and at least five repetitions per cell. Keep host/backend, runtime profile, storage path, fio block size, file size, and direct-I/O mode constant across revisions.
+- Benchmark collectors must fail if a matrix cell contains more than one fio `READ` or `WRITE` summary. A valid block-only matrix cell emits exactly one pair.
+- Use `make profile-read-regression-matrix-record` for a recorded comparison. Raw logs stay under ignored `artifacts/perf/...`; the summary goes to `BENCHMARKS.md`.
 
 ## 2026-07-01 Local Baseline
 
@@ -608,3 +613,4 @@ Interpretation:
 - The correct live path is still dominated by server-side `COPY` plus two `data_blocks` merges.
 - The temp-table reproducer gives a safe way to compare candidate plans before touching production SQL.
 - Do not change runtime merge semantics until a candidate improves the real path and passes `test-copy-block-crc-table`, remount durability, chunking, and unlink-after-write.
+- Every recorded read-regression matrix must capture power source and CPU power policy: governor, scaling driver, min/max frequency and energy-performance preference when available. Cross-version comparisons must match these values; otherwise classify the result as environment-sensitive rather than a code-only regression.

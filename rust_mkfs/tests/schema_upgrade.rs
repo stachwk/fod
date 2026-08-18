@@ -18,8 +18,7 @@ const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     "/../migrations/0001_base.sql"
 ));
 const LEGACY_BLOCK_OBJECT_ID: u64 = 1_700_000_001;
-const LEGACY_EXTENT_OBJECT_ID: u64 = 1_700_000_002;
-const CASCADE_OBJECT_ID: u64 = 1_700_000_003;
+const CASCADE_OBJECT_ID: u64 = 1_700_000_002;
 
 fn conninfo_from_env() -> String {
     let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -159,7 +158,6 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                       AND table_name IN ('data_blocks', 'copy_block_crc')
                       AND column_name = 'id_file'
                 )
-                AND to_regclass('fod.data_extents') IS NULL
                 AND EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conname = 'files_data_object_id_fkey'
@@ -204,59 +202,31 @@ fn prepare_version_16_payload_fixture(conn: &DbConn) {
          INSERT INTO data_objects
              (id_data_object, file_size, content_hash, reference_count, creation_date, modification_date)
          VALUES
-             ({LEGACY_BLOCK_OBJECT_ID}, 12, NULL, 1, NOW(), NOW()),
-             ({LEGACY_EXTENT_OBJECT_ID}, 13, NULL, 1, NOW(), NOW());
+             ({LEGACY_BLOCK_OBJECT_ID}, 12, NULL, 1, NOW(), NOW());
          INSERT INTO files
              (id_file, data_object_id, id_directory, name, size, mode, uid, gid, inode_seed,
               modification_date, access_date, change_date, creation_date)
          VALUES
              ({LEGACY_BLOCK_OBJECT_ID}, {LEGACY_BLOCK_OBJECT_ID}, NULL,
               'migration-17-block', 12, '644', 0, 0, 'migration-17-block',
-              NOW(), NOW(), NOW(), NOW()),
-             ({LEGACY_EXTENT_OBJECT_ID}, {LEGACY_EXTENT_OBJECT_ID}, NULL,
-              'migration-17-extent', 13, '644', 0, 0, 'migration-17-extent',
               NOW(), NOW(), NOW(), NOW());
          INSERT INTO data_blocks (data_object_id, _order, data)
          VALUES ({LEGACY_BLOCK_OBJECT_ID}, 0, convert_to('legacy-block', 'UTF8'));
-         CREATE TABLE data_extents (
-             id_extent SERIAL PRIMARY KEY,
-             data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object) ON DELETE CASCADE,
-             start_block BIGINT NOT NULL,
-             block_count BIGINT NOT NULL,
-             used_bytes BIGINT NOT NULL,
-             payload BYTEA NOT NULL,
-             creation_date TIMESTAMP NOT NULL DEFAULT NOW(),
-             modification_date TIMESTAMP NOT NULL DEFAULT NOW()
-         );
-         CREATE UNIQUE INDEX idx_data_extents_object_start
-             ON data_extents (data_object_id, start_block);
-         CREATE INDEX idx_data_extents_data_object_id
-             ON data_extents (data_object_id);
-         INSERT INTO data_extents
-             (data_object_id, start_block, block_count, used_bytes, payload)
-         VALUES ({LEGACY_EXTENT_OBJECT_ID}, 0, 1, 13, convert_to('legacy-extent', 'UTF8'));
          INSERT INTO copy_block_crc (data_object_id, _order, crc32)
          VALUES ({LEGACY_BLOCK_OBJECT_ID}, 0, 12345);
 
          ALTER TABLE files DROP CONSTRAINT files_data_object_id_fkey;
          ALTER TABLE data_blocks DROP CONSTRAINT data_blocks_data_object_id_fkey;
-         ALTER TABLE data_extents DROP CONSTRAINT data_extents_data_object_id_fkey;
          ALTER TABLE copy_block_crc DROP CONSTRAINT copy_block_crc_data_object_id_fkey;
 
          ALTER TABLE data_blocks ADD COLUMN id_file INTEGER;
-         ALTER TABLE data_extents ADD COLUMN id_file INTEGER;
          ALTER TABLE copy_block_crc ADD COLUMN id_file INTEGER;
          UPDATE data_blocks SET id_file = {LEGACY_BLOCK_OBJECT_ID};
-         UPDATE data_extents SET id_file = {LEGACY_EXTENT_OBJECT_ID};
          UPDATE copy_block_crc SET id_file = {LEGACY_BLOCK_OBJECT_ID};
          ALTER TABLE data_blocks ALTER COLUMN id_file SET NOT NULL;
-         ALTER TABLE data_extents ALTER COLUMN id_file SET NOT NULL;
          ALTER TABLE copy_block_crc ALTER COLUMN id_file SET NOT NULL;
          ALTER TABLE data_blocks
              ADD CONSTRAINT data_blocks_id_file_fkey
-             FOREIGN KEY (id_file) REFERENCES files(id_file);
-         ALTER TABLE data_extents
-             ADD CONSTRAINT data_extents_id_file_fkey
              FOREIGN KEY (id_file) REFERENCES files(id_file);
          ALTER TABLE copy_block_crc
              ADD CONSTRAINT copy_block_crc_id_file_fkey
@@ -266,11 +236,11 @@ fn prepare_version_16_payload_fixture(conn: &DbConn) {
              ON copy_block_crc (data_object_id, _order);
          UPDATE schema_version SET version = 16, applied_at = NOW();"
     ))
-    .expect("prepare schema version 16 payload fixture");
+    .expect("prepare schema version 16 block payload fixture");
 }
 
-fn assert_legacy_extent_payload_migrated(conn: &DbConn) {
-    let migrated = conn
+fn assert_legacy_block_payload_upgraded(conn: &DbConn) {
+    let preserved = conn
         .query_exists(&format!(
             "SELECT
                 EXISTS (
@@ -280,28 +250,16 @@ fn assert_legacy_extent_payload_migrated(conn: &DbConn) {
                       AND data = convert_to('legacy-block', 'UTF8')
                 )
                 AND EXISTS (
-                    SELECT 1 FROM fod.data_blocks
-                    WHERE data_object_id = {LEGACY_EXTENT_OBJECT_ID}
-                      AND _order = 0
-                      AND octet_length(data) = 4096
-                      AND substring(data FROM 1 FOR 13) = convert_to('legacy-extent', 'UTF8')
-                )
-                AND to_regclass('fod.data_extents') IS NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM fod.copy_block_crc
-                    WHERE data_object_id = {LEGACY_EXTENT_OBJECT_ID}
-                )
-                AND EXISTS (
                     SELECT 1 FROM fod.copy_block_crc
                     WHERE data_object_id = {LEGACY_BLOCK_OBJECT_ID}
                       AND _order = 0
                       AND crc32 = 12345
                 )"
         ))
-        .expect("inspect migrated payload rows");
+        .expect("inspect upgraded block payload rows");
     assert!(
-        migrated,
-        "migration 20 must migrate legacy extent payload rows"
+        preserved,
+        "migration 17 must preserve canonical block payload rows"
     );
 }
 
@@ -586,7 +544,7 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_password_source(&String::from_utf8_lossy(&upgrade_result.stdout), "cli");
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
     assert_latest_payload_schema(&conn);
-    assert_legacy_extent_payload_migrated(&conn);
+    assert_legacy_block_payload_upgraded(&conn);
     assert_payload_delete_cascades(&conn);
 
     conn.exec("DROP SCHEMA IF EXISTS fod CASCADE")
@@ -708,7 +666,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0009: 0009_client_session_lock_cleanup.sql",
         "0010: 0010_fod_schema.sql",
         "0011: 0011_rename_fod_schema.sql",
-        "0012: 0012_data_extents.sql",
+        "0012: 0012_storage_slot.sql",
         "0013: 0013_indexer.sql",
         "0014: 0014_indexer_request_tokens.sql",
         "0015: 0015_data_object_request_tokens.sql",
@@ -716,8 +674,8 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0017: 0017_data_object_payload_ownership.sql",
         "0018: 0018_payload_capacity_reservations.sql",
         "0019: 0019_index_catalog_snapshots.sql",
-        "0020: 0020_migrate_extents_to_blocks.sql",
-        "0021: 0021_drop_data_extents.sql",
+        "0020: 0020_storage_slot.sql",
+        "0021: 0021_storage_layout_finalize.sql",
     ] {
         assert!(
             status_after_init.contains(needle),

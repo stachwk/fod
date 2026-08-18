@@ -5,6 +5,8 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 
 ## Current Status
 
+- Current sequential read regression is block-only. Historical experimental storage-mode measurements remain below only as archived measurements and are not valid current baselines.
+
 - The benchmark suite is now tied to documented runtime profiles and CI-visible regression targets.
 - Throughput, finalization, read-cache, and atime numbers are treated as baselines, not fixed promises.
 - `make test-throughput` and `make test-flush-release-profile` are the current write-path and finalization entry points.
@@ -25,8 +27,151 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-07-05 from commit `a3076e1` and adds a fresh local/QNAP COPY-buffer matrix with DML, WAL, top statement IO/WAL, and bloat artifacts.
 - The current FUSE migration comparison was collected locally on 2026-07-12 from commit `522b1b5` with `fuser 0.17.0`, negotiated protocol 7.40, schema v17, and three samples per block/1 MiB extent mode; the frozen pre-migration reference remains commit `7d9ed83`.
+- Sequential read regression tracking must use the production block path explicitly: the block-only `tests/integration/test_fio_sequential_io.sh` and separate measurements for `FOD_FOPEN_DIRECT_IO=0` and `1`. The standard matrix uses `4M` and `128M` files, `4k` fio blocks, and at least five repetitions per cell. Different storage paths or direct-I/O modes are separate baselines.
+
+## 2026-08-18 FOD 3.2.82 block read direct-I/O matrix
+
+Measured commit: `21d321a4202f5518bb805340ebd7c78b19f39a0e`. Host: `lt7300`. Collection time: `2026-08-18 17:11:59 UTC`.
+
+Method: production block-storage path only (`FIO_CASES=block`, `FOD_ENABLE_EXTENTS=0`), fio sync engine with `direct=0`, explicit `FIO_BLOCK_SIZE=4k`, sizes `4M`, `128M`, `5` repetitions per cell. `FOD_FOPEN_DIRECT_IO=0` and `1` are separate baselines.
+
+Raw logs: `artifacts/perf/21d321a/lt7300-block-read-matrix-3.2.82-20260818T165757Z`.
+
+| file size | FOD_FOPEN_DIRECT_IO | read mean MiB/s | read median MiB/s | min-max MiB/s | stdev | median read ms | median write MiB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `4M` | `0` | `121.000` | `121.000` | `108.000-143.000` | `12.946` | `33` | `1.034` |
+| `4M` | `1` | `3.427` | `3.278` | `3.177-3.948` | `0.293` | `1220` | `3.996` |
+| `128M` | `0` | `131.640` | `111.000` | `84.400-229.000` | `51.432` | `1157` | `1.273` |
+| `128M` | `1` | `4.453` | `4.468` | `4.163-4.751` | `0.188` | `28648` | `7.461` |
+
+Direct-I/O effect within the same size:
+
+- `4M`: `-97.29%` (`121.000` -> `3.278 MiB/s`).
+- `128M`: `-95.97%` (`111.000` -> `4.468 MiB/s`).
+
+Per-run values:
+
+| size | direct_io | run | read MiB/s | read ms | write MiB/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `4M` | `0` | `1` | `143.000` | `28` | `1.073` |
+| `4M` | `0` | `2` | `125.000` | `32` | `1.020` |
+| `4M` | `0` | `3` | `121.000` | `33` | `1.034` |
+| `4M` | `0` | `4` | `108.000` | `37` | `1.036` |
+| `4M` | `0` | `5` | `108.000` | `37` | `1.021` |
+| `128M` | `0` | `1` | `84.400` | `1516` | `1.315` |
+| `128M` | `0` | `2` | `229.000` | `559` | `1.325` |
+| `128M` | `0` | `3` | `98.800` | `1295` | `1.273` |
+| `128M` | `0` | `4` | `135.000` | `950` | `1.250` |
+| `128M` | `0` | `5` | `111.000` | `1157` | `1.241` |
+| `4M` | `1` | `1` | `3.185` | `1256` | `4.489` |
+| `4M` | `1` | `2` | `3.177` | `1259` | `3.996` |
+| `4M` | `1` | `3` | `3.948` | `1013` | `3.996` |
+| `4M` | `1` | `4` | `3.278` | `1220` | `4.908` |
+| `4M` | `1` | `5` | `3.546` | `1128` | `3.824` |
+| `128M` | `1` | `1` | `4.396` | `29113` | `7.886` |
+| `128M` | `1` | `2` | `4.487` | `28523` | `7.461` |
+| `128M` | `1` | `3` | `4.468` | `28648` | `7.174` |
+| `128M` | `1` | `4` | `4.163` | `30748` | `6.885` |
+| `128M` | `1` | `5` | `4.751` | `26943` | `7.723` |
+
+Comparison rule: compare only the same storage path, file size, fio block size, direct-I/O mode, host/backend class, and comparable runtime configuration. Extent results and legacy `FIO_CASES=both` collectors are not block-path baselines.
+
+## 2026-08-18 FOD 3.2.83 AC vs battery block-read baseline
+
+Purpose: isolate laptop power-policy effects from FOD code effects.
+Both series use the same FOD 3.2.83 working tree based on commit
+`21d321a4202f5518bb805340ebd7c78b19f39a0e`, host `lt7300`, production block storage,
+`FIO_BLOCK_SIZE=4k`, file sizes `4M` and `128M`, both `FOD_FOPEN_DIRECT_IO=0/1`,
+and five repetitions per cell.
+
+| environment | AC | battery | governor | scaling driver | CPU0 min-max | EPP |
+| --- | ---: | --- | --- | --- | --- | --- |
+| AC | `1` | charging, 66% before / 70% after | `powersave` | `intel_pstate` | `400000..4100000 kHz` | `balance_performance` |
+| battery | `0` | discharging, 71% before / 66% after | `powersave` | `intel_pstate` | `400000..4100000 kHz` | `balance_power` |
+
+Raw summaries:
+- AC: `artifacts/perf/21d321a/lt7300-block-read-matrix-3.2.83-20260818T182445Z/block-read-matrix-summary.md`
+- battery: `artifacts/perf/21d321a/lt7300-block-read-matrix-3.2.83-20260818T183020Z/block-read-matrix-summary.md`
+
+Median read throughput:
+
+| file size | direct_io | AC MiB/s | battery MiB/s | AC vs battery |
+| --- | ---: | ---: | ---: | ---: |
+| `4M` | `0` | `105.000` | `121.000` | `-13.22%` |
+| `4M` | `1` | `6.908` | `3.252` | `+112.42%` |
+| `128M` | `0` | `405.000` | `105.000` | `+285.71%` |
+| `128M` | `1` | `18.300` | `4.827` | `+279.12%` |
+
+Battery 3.2.83 compared with the earlier 3.2.82 block-read matrix:
+
+| file size | direct_io | 3.2.82 median MiB/s | 3.2.83 battery median MiB/s | delta |
+| --- | ---: | ---: | ---: | ---: |
+| `4M` | `0` | `121.000` | `121.000` | `+0.00%` |
+| `4M` | `1` | `3.278` | `3.252` | `-0.79%` |
+| `128M` | `0` | `111.000` | `105.000` | `-5.41%` |
+| `128M` | `1` | `4.468` | `4.827` | `+8.03%` |
+
+Interpretation:
+
+- Power source/EPP is a first-order benchmark variable on `lt7300`.
+- The battery series reproduces the previous 3.2.82 performance class closely.
+- There is no evidence of a material block-read regression caused by the 3.2.83 extent cleanup.
+- The `4M/direct_io=0` AC cell is noisy: individual runs included about `95-105 MiB/s` and `364 MiB/s`.
+- Cross-version comparisons must match power source and EPP. Unknown or different power metadata makes the comparison environment-sensitive.
+
+## 2026-08-18 FOD 3.2.83 block read direct-I/O matrix
+
+> **Environment note:** power-source/EPP metadata was not captured for this recorded series. Keep it as a measured data point, but use the AC vs battery baseline above for power-controlled comparisons.
+
+Measured commit: `21d321a4202f5518bb805340ebd7c78b19f39a0e`. Host: `lt7300`. Collection time: `2026-08-18 18:07:12 UTC`.
+
+Method: production block-storage path only; `test_fio_sequential_io.sh` is block-only, fio sync engine uses `direct=0`, explicit `FIO_BLOCK_SIZE=4k`, sizes `4M`, `128M`, `5` repetitions per cell. `FOD_FOPEN_DIRECT_IO=0` and `1` are separate baselines.
+
+Raw logs: `artifacts/perf/21d321a/lt7300-block-read-matrix-3.2.83-20260818T180139Z`.
+
+| file size | FOD_FOPEN_DIRECT_IO | read mean MiB/s | read median MiB/s | min-max MiB/s | stdev | median read ms | median write MiB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `4M` | `0` | `111.920` | `114.000` | `97.600-129.000` | `10.520` | `35` | `1.053` |
+| `4M` | `1` | `8.232` | `7.380` | `3.738-13.600` | `3.442` | `542` | `7.519` |
+| `128M` | `0` | `451.200` | `430.000` | `414.000-504.000` | `36.918` | `298` | `3.932` |
+| `128M` | `1` | `19.260` | `19.800` | `16.600-20.100` | `1.335` | `6450` | `13.400` |
+
+Direct-I/O effect within the same size:
+
+- `4M`: `-93.53%` (`114.000` -> `7.380 MiB/s`).
+- `128M`: `-95.40%` (`430.000` -> `19.800 MiB/s`).
+
+Per-run values:
+
+| size | direct_io | run | read MiB/s | read ms | write MiB/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `4M` | `0` | `1` | `105.000` | `38` | `1.194` |
+| `4M` | `0` | `2` | `114.000` | `35` | `1.003` |
+| `4M` | `0` | `3` | `97.600` | `41` | `1.053` |
+| `4M` | `0` | `4` | `114.000` | `35` | `1.147` |
+| `4M` | `0` | `5` | `129.000` | `31` | `0.998` |
+| `128M` | `0` | `1` | `487.000` | `263` | `2.758` |
+| `128M` | `0` | `2` | `430.000` | `298` | `3.945` |
+| `128M` | `0` | `3` | `414.000` | `309` | `3.969` |
+| `128M` | `0` | `4` | `421.000` | `304` | `3.856` |
+| `128M` | `0` | `5` | `504.000` | `254` | `3.932` |
+| `4M` | `1` | `1` | `3.738` | `1070` | `5.524` |
+| `4M` | `1` | `2` | `10.400` | `384` | `12.200` |
+| `4M` | `1` | `3` | `7.380` | `542` | `4.444` |
+| `4M` | `1` | `4` | `6.042` | `662` | `12.100` |
+| `4M` | `1` | `5` | `13.600` | `295` | `7.519` |
+| `128M` | `1` | `1` | `19.800` | `6472` | `13.300` |
+| `128M` | `1` | `2` | `20.100` | `6354` | `18.300` |
+| `128M` | `1` | `3` | `20.000` | `6393` | `14.700` |
+| `128M` | `1` | `4` | `16.600` | `7720` | `13.400` |
+| `128M` | `1` | `5` | `19.800` | `6450` | `13.400` |
+
+Comparison rule: compare only the same storage path, file size, fio block size, direct-I/O mode, host/backend class, and comparable runtime configuration. Legacy pre-retirement collectors that mixed storage modes are not block-path baselines.
 
 ## 2026-08-17 FOD 3.2.82 pre-commit read regression check
+
+> **Methodology clarification (2026-08-18):** `test_fio_sequential_io.sh` was already block-only. Earlier analysis that classified this result as an extent result was incorrect. Power-source/EPP metadata was not captured for this historical run.
+
 
 Measured working tree: `FOD 3.2.82` based on commit `877c165146db01a3aaaa5f7efef74e3d31171348`. Collected 5 mounted sequential fio repetitions before committing 3.2.82.
 
@@ -57,6 +202,7 @@ Current read statistics:
 Conclusion (`no_material_regression`): Nie wykryto materialnej regresji odczytu wzgledem mediany FOD 3.2.81.
 
 ## 2026-08-17 FOD 3.2.81 recent read-path regression check
+
 
 Measured commit: `e0f08b77f0e90e1224f8c05e5485dff9a1112da4` (`FOD 3.2.81`). Collected 5 mounted sequential fio repetitions on the current `main`.
 

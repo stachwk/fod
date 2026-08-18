@@ -33,7 +33,7 @@ cleanup() {
 }
 
 run_case() {
-  local label="$1"
+  local label="block"
   local block_size="${FIO_BLOCK_SIZE:-4k}"
   local file_size="${FIO_FILE_SIZE:-64k}"
   local file_size_slug="${file_size//[^[:alnum:]]/}"
@@ -80,38 +80,15 @@ run_case() {
     --direct=0 \
     --output-format=normal
 
+  local actual_size
   actual_size="$(fod_stat "${file}" '%s')"
   fod_assert_eq "${actual_size}" "${expected_size}" "fio ${label} file size"
-
-  for forbidden in \
-    "FOD extent PoC execution" \
-    "FOD sequential segment state entered" \
-    "write_state_mode=sequential_segment" \
-    "persist_write_class=new_object_sequential" \
-    "FOD direct segment persistence" \
-    "FOD append-only sequential object persisted"
-  do
-    if grep -Fq "${forbidden}" "${LOG_FILE}"; then
-      echo "unexpected retired extent-path marker: ${forbidden}"
-      return 1
-    fi
-  done
   fod_assert_contains "${LOG_FILE}" "FOD write_state_mode=block"
-  fod_assert_contains "${LOG_FILE}" "persist_write_class=existing_object_patch"
 
-  echo "OK fio/sequential ${label} size=${expected_size} block_size=${block_size}"
+  echo "OK fio/sequential block size=${expected_size} block_size=${block_size}"
   rm -f "${file}"
   fod_test_cleanup
 }
 
 trap cleanup EXIT
-
-case "${FIO_CASES:-block}" in
-  block)
-    run_case block
-    ;;
-  *)
-    echo "Unsupported FIO_CASES=${FIO_CASES}; use block" >&2
-    exit 2
-    ;;
-esac
+run_case

@@ -472,7 +472,7 @@ Kanoniczne reguły zakresów dla wartości runtime są w [`rust_runtime/src/lib.
 
 `mkfs.fod` obsługuje:
 
-`init` stosuje świeży bootstrap z `migrations/base_schema.sql` do dedykowanego schematu `fod` i odmawia działania, jeśli obiekty FOD już istnieją; `upgrade` najpierw weryfikuje hasło schema-admin, a potem stosuje brakujące migracje do istniejącego schematu `fod`; `clean` usuwa cały schemat `fod` i zostawia obce obiekty w `public` nietknięte. `clean` weryfikuje istniejący sekret schema-admin i zamiast go odtwarzać kończy się błędem, jeśli tabela lub wpis sekretu zniknęły. Narzędzie schematu używa jednego jawnego źródła hasła administracyjnego schematu: `--schema-admin-password`. Jeśli hasła brakuje, `init`, `upgrade` i `clean` kończą się natychmiast, bez promptu i bez ukrytej generacji sekretu. `mkfs.fod status` pokazuje `FOD version`, `FOD schema name`, `FOD schema version`, aktywny schemat, to czy obiekty FOD istnieją, to czy schemat jest gotowy, oraz zaległe migracje, bez ujawniania samego sekretu. Bieżąca wersja schematu jest eksportowana przez `mkfs.fod status`; wersja 17 przeniosła własność payloadu do `data_objects`, wersja 18 dodała transakcyjne rezerwacje pojemności payloadu, wersja 19 dodała niezmienne snapshoty katalogu indexera, wersja 20 migruje stare wiersze `data_extents` do kanonicznych `data_blocks`, a wersja 21 usuwa wycofaną tabelę `data_extents` po bramce migracyjnej.
+`init` stosuje świeży bootstrap z `migrations/base_schema.sql` do dedykowanego schematu `fod` i odmawia działania, jeśli obiekty FOD już istnieją; `upgrade` najpierw weryfikuje hasło schema-admin, a potem stosuje brakujące migracje do istniejącego schematu `fod`; `clean` usuwa cały schemat `fod` i zostawia obce obiekty w `public` nietknięte. `clean` weryfikuje istniejący sekret schema-admin i zamiast go odtwarzać kończy się błędem, jeśli tabela lub wpis sekretu zniknęły. Narzędzie schematu używa jednego jawnego źródła hasła administracyjnego schematu: `--schema-admin-password`. Jeśli hasła brakuje, `init`, `upgrade` i `clean` kończą się natychmiast, bez promptu i bez ukrytej generacji sekretu. `mkfs.fod status` pokazuje `FOD version`, `FOD schema name`, `FOD schema version`, aktywny schemat, to czy obiekty FOD istnieją, to czy schemat jest gotowy, oraz zaległe migracje, bez ujawniania samego sekretu. Bieżąca wersja schematu jest eksportowana przez `mkfs.fod status`; wersja 17 przeniosła własność payloadu do `data_objects`, wersja 18 dodała transakcyjne rezerwacje pojemności payloadu, wersja 19 dodała niezmienne snapshoty katalogu indexera, a wersje 20-21 rezerwują i finalizują kanoniczny układ block-only.
 
 | Parametr | Typ | Domyślnie | Efekt |
 | --- | --- | --- | --- |
@@ -1001,12 +1001,6 @@ po zmianie primary. Mechanizm nie zastępuje zewnętrznego STONITH ani fencing
 opartego o konsensus: operacji już wykonywanej na starym primary FOD nie może
 cofnąć po fakcie.
 
-## Uproszczenie ścieżki danych w FOD 3.2.73
+## Kanoniczna persystencja blokowa
 
-Eksperymentalna obsługa extentów jest wycofana. Produkcyjny FUSE używa wyłącznie
-kanonicznej persystencji w `data_blocks`; `enable_extents` i
-`extent_target_bytes` nie są już ustawieniami runtime. Migracja schematu 20
-przenosi pozostałe stare wiersze `data_extents` do `data_blocks`, a migracja
-schematu 21 usuwa tabelę `data_extents` po potwierdzeniu, że migracja 20 nie
-zostawiła w niej wierszy. Nie ma już fallbacku odczytu extentów ani konwersji
-extentów do bloków w hot path (ścieżce krytycznej) FUSE.
+FOD przechowuje payload plików wyłącznie w kanonicznym układzie `data_blocks`. Runtime, konfiguracja, testy i narzędzia wydajnościowe obsługują tylko storage blokowy. Aktualizacja z wycofanych eksperymentalnych układów payloadu nie jest wspierana; taki schemat należy odtworzyć przez aktualne `mkfs.fod init`.

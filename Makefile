@@ -2119,3 +2119,17 @@ test-postgresql-replica-scoring:
 test-postgresql-primary-promotion-safety:
 	@cargo test --locked -p fod-rust-hotpath primary_promotion_guard_tests -- --test-threads=1
 	@$(MAKE) --no-print-directory test-postgresql-runtime-failover
+
+# FOD block read regression matrix (production block path only).
+READ_REGRESSION_REPEAT ?= 5
+READ_REGRESSION_SIZES ?= 4M 128M
+READ_REGRESSION_BLOCK_SIZE ?= 4k
+READ_REGRESSION_VERBOSE ?= 1
+
+.PHONY: profile-read-regression-matrix profile-read-regression-matrix-record
+
+profile-read-regression-matrix:
+	$(PYTHON) scripts/perf/read_regression_matrix.py 		--repeat $(READ_REGRESSION_REPEAT) 		--sizes $(READ_REGRESSION_SIZES) 		--block-size $(READ_REGRESSION_BLOCK_SIZE) 		--verbose $(READ_REGRESSION_VERBOSE)
+
+profile-read-regression-matrix-record:
+	$(PYTHON) scripts/perf/read_regression_matrix.py 		--repeat $(READ_REGRESSION_REPEAT) 		--sizes $(READ_REGRESSION_SIZES) 		--block-size $(READ_REGRESSION_BLOCK_SIZE) 		--record BENCHMARKS.md 		--verbose $(READ_REGRESSION_VERBOSE)

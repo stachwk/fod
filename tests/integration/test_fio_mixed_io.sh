@@ -69,11 +69,6 @@ run_case() {
   actual_size="$(fod_stat "${file}" '%s')"
   fod_assert_eq "${actual_size}" "${expected_size}" "fio ${label} mixed file size"
 
-  if grep -Fq "FOD extent PoC execution" "${LOG_FILE}"; then
-    echo "unexpected extent PoC log in block-storage mode"
-    return 1
-  fi
-
   echo "OK fio/mixed ${label} rw=${rw_mode} size=${expected_size} block_size=${block_size}"
   rm -f "${file}"
   fod_test_cleanup
@@ -81,12 +76,4 @@ run_case() {
 
 trap cleanup EXIT
 
-case "${FIO_CASES:-block}" in
-  block)
-    run_case block
-    ;;
-  *)
-    echo "Unsupported FIO_CASES=${FIO_CASES}; use block" >&2
-    exit 2
-    ;;
-esac
+run_case block

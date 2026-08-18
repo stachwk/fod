@@ -37,7 +37,7 @@ const MIGRATION_FILES: [&str; 21] = [
     "0009_client_session_lock_cleanup.sql",
     "0010_fod_schema.sql",
     "0011_rename_fod_schema.sql",
-    "0012_data_extents.sql",
+    "0012_storage_slot.sql",
     "0013_indexer.sql",
     "0014_indexer_request_tokens.sql",
     "0015_data_object_request_tokens.sql",
@@ -45,8 +45,8 @@ const MIGRATION_FILES: [&str; 21] = [
     "0017_data_object_payload_ownership.sql",
     "0018_payload_capacity_reservations.sql",
     "0019_index_catalog_snapshots.sql",
-    "0020_migrate_extents_to_blocks.sql",
-    "0021_drop_data_extents.sql",
+    "0020_storage_slot.sql",
+    "0021_storage_layout_finalize.sql",
 ];
 
 const MIGRATION_DESCRIPTIONS: [&str; 21] = [
@@ -61,7 +61,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 21] = [
     "PostgreSQL-side lock cleanup trigger for expired client sessions",
     "Move FOD objects into the dedicated fod schema",
     "Rename legacy FOD schema to fod",
-    "Introduce native extent storage",
+    "Reserved storage migration slot",
     "Add fod-indexer metadata tables",
     "Make indexer run creation replay-safe",
     "Add request tokens for data object creation",
@@ -69,8 +69,8 @@ const MIGRATION_DESCRIPTIONS: [&str; 21] = [
     "Make data objects own payload rows",
     "Add transactional payload capacity reservations",
     "Add immutable index catalogue snapshots",
-    "Migrate legacy extent payload rows to canonical data blocks",
-    "Drop retired data_extents table",
+    "Reserved storage migration slot",
+    "Finalize canonical block storage layout",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -186,7 +186,7 @@ fn migration_sql(version: u64) -> &'static str {
         )),
         12 => include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../migrations/0012_data_extents.sql"
+            "/../migrations/0012_storage_slot.sql"
         )),
         13 => include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -218,11 +218,11 @@ fn migration_sql(version: u64) -> &'static str {
         )),
         20 => include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../migrations/0020_migrate_extents_to_blocks.sql"
+            "/../migrations/0020_storage_slot.sql"
         )),
         21 => include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../migrations/0021_drop_data_extents.sql"
+            "/../migrations/0021_storage_layout_finalize.sql"
         )),
         _ => "",
     }
@@ -447,10 +447,6 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                   AND confrelid = 'fod.data_objects'::regclass
                   AND contype = 'f'
                   AND confdeltype = 'c'
-            )
-            AND NOT EXISTS (
-                SELECT 1
-                WHERE to_regclass('fod.data_extents') IS NOT NULL
             )",
     )
 }
