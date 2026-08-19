@@ -206,6 +206,65 @@ class FODMountSuite(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_multi_handle_dirty_write_visibility(self):
+        suffix = uuid.uuid4().hex[:8]
+        file_path = self.mountpoint / f"multi-handle-visible-{suffix}.bin"
+        payload = b"dirty-state-visible-without-explicit-flush"
+
+        file_path.write_bytes(b"")
+        fd_writer = os.open(file_path, os.O_RDWR)
+        try:
+            written = os.pwrite(fd_writer, payload, 0)
+            self.assertEqual(written, len(payload))
+
+            # Bez fsync/flush drugi open ma widziec logiczny stan pliku.
+            fd_reader = os.open(file_path, os.O_RDONLY)
+            try:
+                reader_stat = os.fstat(fd_reader)
+                path_stat = file_path.stat()
+                self.assertEqual(reader_stat.st_size, len(payload))
+                self.assertEqual(path_stat.st_size, len(payload))
+                self.assertEqual(
+                    os.lseek(fd_reader, 0, os.SEEK_END),
+                    len(payload),
+                )
+
+                read_back = os.pread(fd_reader, len(payload), 0)
+                self.assertEqual(read_back, payload)
+            finally:
+                os.close(fd_reader)
+        finally:
+            os.close(fd_writer)
+
+    def test_multi_handle_dirty_partial_write_merge(self):
+        suffix = uuid.uuid4().hex[:8]
+        file_path = self.mountpoint / f"multi-handle-merge-{suffix}.bin"
+        prefix = b"AA"
+        suffix_payload = b"BB"
+        expected = prefix + suffix_payload
+
+        file_path.write_bytes(b"")
+        fd_first = os.open(file_path, os.O_RDWR)
+        try:
+            self.assertEqual(os.pwrite(fd_first, prefix, 0), len(prefix))
+
+            # Drugi fh jest otwierany, gdy pierwszy nadal ma dirty state.
+            # Jego zapis musi zachowac bajty pierwszego fh.
+            fd_second = os.open(file_path, os.O_RDWR)
+            try:
+                self.assertEqual(os.fstat(fd_second).st_size, len(prefix))
+                self.assertEqual(
+                    os.pwrite(fd_second, suffix_payload, len(prefix)),
+                    len(suffix_payload),
+                )
+            finally:
+                os.close(fd_second)
+        finally:
+            os.close(fd_first)
+
+        self.assertEqual(file_path.read_bytes(), expected)
+        self.assertEqual(file_path.stat().st_size, len(expected))
+
     def test_ioctl_fionread(self):
         suffix = uuid.uuid4().hex[:8]
         file_path = self.mountpoint / f"ioctl-{suffix}.txt"

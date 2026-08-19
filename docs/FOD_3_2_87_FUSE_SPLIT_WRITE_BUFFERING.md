@@ -60,3 +60,24 @@ replica -> replica-read, zgodnie z `zasady_sprawdzen.md`.
 Nie obnizamy `fuse_max_write_bytes=512KiB`, `block_size=4096`,
 `read_ahead_blocks=4` ani `sequential_read_ahead_blocks=8` na podstawie tej
 regresji.
+
+
+## Walidacja 64 MiB
+
+Po poprawce wykonano benchmark primary-write -> replica-read dla 64 MiB.
+
+| parametr | 256 KiB | 512 KiB |
+|---|---:|---:|
+| WRITE | 46.5 MiB/s | 61.4 MiB/s |
+| READ replica | 37.7 MiB/s | 36.8 MiB/s |
+| FOD write callbacks | 256 | 256 |
+| persist_operation_count | 1 | 1 |
+| persist_input_rows_total | 16384 | 16384 |
+| repo_persist_blocks_us | 869746 | 855128 |
+| update_write_buffer_us | 245074 | 53658 |
+
+Dla obu wariantow primary_flush_lsn i replica_replay_lsn wyniosly
+`0/3650B18`. Regresja persistence per techniczny callback 512 KiB
+nie wystapila. Limit 512 KiB pozostaje bez zmian.
+
+Przed push nalezy dodatkowo pokryc kontrakt wielu fh bez jawnego flush/fsync.

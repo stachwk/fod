@@ -4410,6 +4410,30 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
+        // Przy drugim lub kolejnym fh pending state starszego uchwytu musi
+        // byc widoczny juz dla fstat/stat/SEEK_END nowego uchwytu. Publikujemy
+        // go przed utworzeniem kolejnego handle. Pierwszy fh pozostaje w pelni
+        // buforowany, wiec split 512 KiB nadal nie powoduje flush per callback.
+        if !self.read_only && self.open_handle_count_for_file(file_id) > 0 {
+            if let Err(errno) = self.flush_pending_write_states_for_file_except(file_id, u64::MAX) {
+                self.log_request_error(
+                    req_id,
+                    "open",
+                    errno,
+                    format!(
+                        "path={} file_id={} publish pending write state",
+                        path, file_id
+                    ),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+            debug!(
+                "FOD req={} op=open pending_write_visibility file_id={} published_before_new_handle=true",
+                req_id, file_id
+            );
+        }
+
         let writable = (flags & libc::O_ACCMODE) != libc::O_RDONLY;
         let fh = self.create_handle_for_file(path, Some(file_id), flags);
         debug!("FOD open granted fh={} writable={}", fh, writable);
