@@ -81,3 +81,20 @@ Dla obu wariantow primary_flush_lsn i replica_replay_lsn wyniosly
 nie wystapila. Limit 512 KiB pozostaje bez zmian.
 
 Przed push nalezy dodatkowo pokryc kontrakt wielu fh bez jawnego flush/fsync.
+
+## Aktualizacja FOD 3.2.89 - domyslny write 256 KiB
+
+FOD 3.2.87 naprawil semantyke split write i nadal pozwala bezpiecznie ustawic
+`fuse_max_write_bytes=512KiB`. Po porownaniu wariantow 256 KiB i 512 KiB
+domyslna konfiguracja zostaje jednak ustawiona konserwatywnie na 256 KiB.
+
+Powody:
+
+- 256 KiB jest dostarczane jako jeden callback FUSE w obserwowanym srodowisku,
+- 512 KiB jest technicznie dzielone na dwa callbacki,
+- po 3.2.87 oba warianty maja poprawne pojedyncze persistence,
+- 512 KiB pozostaje dostepne jako jawny override do benchmarkow i workloadow,
+- domyslny `fuse_max_readahead_bytes` pozostaje 512 KiB.
+
+Ta zmiana nie cofa poprawki split-write z 3.2.87 i nie zmienia
+`block_size=4096`, `read_ahead_blocks=4` ani `sequential_read_ahead_blocks=8`.

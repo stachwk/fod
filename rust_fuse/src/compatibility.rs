@@ -8,7 +8,7 @@ use std::io;
 
 pub(crate) const FUSER_VERSION: &str = "0.18.0";
 pub(crate) const USERSPACE_PROTOCOL_MAX: Version = Version(7, 40);
-pub(crate) const DEFAULT_FUSE_MAX_WRITE_BYTES: u32 = 512 * 1024;
+pub(crate) const DEFAULT_FUSE_MAX_WRITE_BYTES: u32 = 256 * 1024;
 pub(crate) const DEFAULT_FUSE_MAX_READAHEAD_BYTES: u32 = 512 * 1024;
 
 const FUSE_MAX_WRITE_ENV: &str = "FOD_FUSE_MAX_WRITE_BYTES";
@@ -225,6 +225,12 @@ mod tests {
             format_init_flags(snapshot.available_capabilities),
             "[POSIX_LOCKS,MAX_PAGES]"
         );
+    }
+
+    #[test]
+    fn defaults_use_256k_write_and_keep_512k_readahead() {
+        assert_eq!(DEFAULT_FUSE_MAX_WRITE_BYTES, 256 * 1024);
+        assert_eq!(DEFAULT_FUSE_MAX_READAHEAD_BYTES, 512 * 1024);
     }
 
     #[test]
