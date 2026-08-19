@@ -61,23 +61,17 @@ impl FuseCompatibilitySnapshot {
         let available_capabilities = config.capabilities();
         let requested_max_write =
             requested_limit_from_env(FUSE_MAX_WRITE_ENV, DEFAULT_FUSE_MAX_WRITE_BYTES)?;
-        let requested_max_readahead = requested_limit_from_env(
-            FUSE_MAX_READAHEAD_ENV,
-            DEFAULT_FUSE_MAX_READAHEAD_BYTES,
-        )?;
+        let requested_max_readahead =
+            requested_limit_from_env(FUSE_MAX_READAHEAD_ENV, DEFAULT_FUSE_MAX_READAHEAD_BYTES)?;
 
-        let effective_max_write = apply_limit_with_fallback(
-            "max_write",
-            requested_max_write,
-            false,
-            |value| config.set_max_write(value),
-        )?;
-        let effective_max_readahead = apply_limit_with_fallback(
-            "max_readahead",
-            requested_max_readahead,
-            true,
-            |value| config.set_max_readahead(value),
-        )?;
+        let effective_max_write =
+            apply_limit_with_fallback("max_write", requested_max_write, false, |value| {
+                config.set_max_write(value)
+            })?;
+        let effective_max_readahead =
+            apply_limit_with_fallback("max_readahead", requested_max_readahead, true, |value| {
+                config.set_max_readahead(value)
+            })?;
 
         let snapshot = Self::from_parts(
             kernel_protocol,
@@ -265,19 +259,14 @@ mod tests {
     #[test]
     fn retries_with_nearest_supported_limit() {
         let mut applied = 0;
-        let effective = apply_limit_with_fallback(
-            "max_readahead",
-            512 * 1024,
-            true,
-            |value| {
-                if value > 256 * 1024 {
-                    Err(256 * 1024)
-                } else {
-                    applied = value;
-                    Ok(0)
-                }
-            },
-        )
+        let effective = apply_limit_with_fallback("max_readahead", 512 * 1024, true, |value| {
+            if value > 256 * 1024 {
+                Err(256 * 1024)
+            } else {
+                applied = value;
+                Ok(0)
+            }
+        })
         .unwrap();
 
         assert_eq!(effective, 256 * 1024);
@@ -286,8 +275,8 @@ mod tests {
 
     #[test]
     fn accepts_zero_kernel_readahead_limit_without_failing_mount() {
-        let effective = apply_limit_with_fallback("max_readahead", 512 * 1024, true, |_| Err(0))
-            .unwrap();
+        let effective =
+            apply_limit_with_fallback("max_readahead", 512 * 1024, true, |_| Err(0)).unwrap();
         assert_eq!(effective, 0);
     }
 

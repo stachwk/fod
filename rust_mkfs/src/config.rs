@@ -261,24 +261,15 @@ mod tests {
             min: 1,
             max: Some(u32::MAX as u64),
         };
-        assert!(validate_startup_passthrough_value(
-            "fuse_max_write_bytes",
-            "512KiB",
-            fuse_size
-        )
-        .is_ok());
-        assert!(validate_startup_passthrough_value(
-            "fuse_max_write_bytes",
-            "0",
-            fuse_size
-        )
-        .is_err());
-        assert!(validate_startup_passthrough_value(
-            "fuse_max_write_bytes",
-            "4GiB",
-            fuse_size
-        )
-        .is_err());
+        assert!(
+            validate_startup_passthrough_value("fuse_max_write_bytes", "512KiB", fuse_size).is_ok()
+        );
+        assert!(
+            validate_startup_passthrough_value("fuse_max_write_bytes", "0", fuse_size).is_err()
+        );
+        assert!(
+            validate_startup_passthrough_value("fuse_max_write_bytes", "4GiB", fuse_size).is_err()
+        );
     }
 
     #[test]

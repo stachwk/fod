@@ -62,6 +62,20 @@ Mount validation should confirm the negotiated line in the FOD startup log and
 verify that the filesystem still mounts when the kernel limits readahead below
 512 KiB.
 
+## Validation result and 3.2.86 cleanup
+
+The first 3.2.85 validation run confirmed that the workspace compiles and the
+new FUSE compatibility unit tests pass. `cargo test --workspace --locked`
+reached the PostgreSQL-backed integration benchmarks, which failed because no
+PostgreSQL server was listening on `127.0.0.1:5432`; this is an environment
+precondition failure, not a FUSE negotiation assertion failure.
+
+The same run also showed that the 3.2.85 commit was not `rustfmt` clean. FOD
+3.2.86 is therefore a behavior-neutral cleanup that applies the exact
+`cargo fmt` output and keeps the 512 KiB negotiation logic unchanged.
+PostgreSQL-backed integration tests must be repeated with the expected test
+database available.
+
 ## Performance validation after 3.2.85
 
 Repeat the same workload with application request sizes:
