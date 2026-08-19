@@ -166,6 +166,14 @@ Oczekiwany wynik: testy mounta przechodzą, a przypadki zależne od hosta mogą 
 
 Cel: sprawdzić ścieżki odczytu, zapisu i pomiary throughput.
 
+### Zasada pomiarów wydajnościowych primary/replica
+
+- Dla miarodajnego benchmarku I/O zapis wykonuj na osobnej instancji PostgreSQL primary/master.
+- Po zapisie odmontuj FOD zapisujący i poczekaj, aż replica/slave odtworzy WAL co najmniej do LSN zapisu.
+- Przed pomiarem odczytu zatrzymaj primary, uruchom świeży mount FOD w roli replica i czytaj z instancji replica/slave. Preferowanym scenariuszem jest `make test-fio-primary-write-replica-read-docker`, który dodatkowo restartuje replikę przed odczytem i wyłącza cache/read-ahead FOD.
+- Wyniku odczytu wykonanego bezpośrednio po zapisie tego samego pliku na tej samej instancji PostgreSQL nie traktuj jako benchmarku wydajnościowego. Taki przebieg może służyć diagnostycznie, ale cache systemu operacyjnego, PostgreSQL albo FOD może zafałszować wynik.
+- Porównując rozmiary I/O, używaj tego samego rozmiaru pliku i tej samej konfiguracji. Każdy wariant 4K/64K/512K wykonuj jako niezależny pełny przebieg primary-write -> WAL replay -> replica-read.
+
 1. Uruchom zwykły sequential smoke.
 
 ```bash
@@ -198,7 +206,7 @@ make test-throughput-sync
 FOD_PROFILE_IO=1 make test-fio-sequential-io
 ```
 
-Oczekiwany wynik: block path i extent path przechodzą, a strace pokazuje oczekiwany kształt syscalli, bez łapania `strace` i `perf` jako monitorowanych programów.
+Oczekiwany wynik: block path i extent path przechodzą, a strace pokazuje oczekiwany kształt syscalli, bez łapania `strace` i `perf` jako monitorowanych programów. Wyniki wydajnościowe odczytu uznawaj za porównywalne dopiero po przejściu scenariusza primary-write / replica-read zgodnie z powyższą zasadą.
 
 ## Profil `admpanch_trace`
 
