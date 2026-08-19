@@ -70,3 +70,12 @@ Walidacja FOD 3.2.90 musi potwierdzic:
 4. `256KiB` nadal moze byc uzyte jako jawny override,
 5. konfiguracja i mount suite przechodza,
 6. wersja workspace jest spojna z `fod_version.txt`.
+
+## Referencyjny baseline wydajnosci
+
+Pelny sweep sekwencyjnego I/O 4K -> 1M dla FOD 3.2.90 jest zapisany w:
+
+`docs/FOD_3_2_90_IO_BASELINE_4K_1M.md`
+
+Ten sweep jest punktem odniesienia dla przyszlych wersji i nie stanowi
+rekomendacji zmiany aktualnej konfiguracji.
