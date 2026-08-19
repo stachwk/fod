@@ -10,7 +10,8 @@ For normal mounts through `fod-bootstrap`:
 4. bootstrap CLI options override startup fields they own.
 
 FOD 3.2.61 makes FUSE startup/admission controls available through INI while
-preserving environment overrides.
+preserving environment overrides. FOD 3.2.85 adds explicit FUSE write and
+readahead negotiation limits, both defaulting to 512 KiB.
 
 ## FUSE concurrency and logical admission
 
@@ -58,6 +59,39 @@ FOD 3.2.60 confirmed `8/4` over ten runs:
 - write overlap: `100%`.
 
 ## Additional FUSE startup controls
+
+### `fuse_max_write_bytes`
+
+Environment override: `FOD_FUSE_MAX_WRITE_BYTES`.
+
+Startup-only maximum write request size requested from `fuser::KernelConfig`
+during the FUSE `init` handshake. The default is `512KiB` (`524288` bytes).
+The value must be positive and fit in `u32`. If `fuser` reports a smaller
+supported value, FOD retries with that value and continues mounting.
+
+This setting does not change the FOD storage block size. Storage blocks remain
+schema-defined (normally 4 KiB), so a 512 KiB FUSE request may span 128 normal
+FOD blocks.
+
+### `fuse_max_readahead_bytes`
+
+Environment override: `FOD_FUSE_MAX_READAHEAD_BYTES`.
+
+Startup-only maximum readahead size requested from the kernel during the FUSE
+`init` handshake. The default is `512KiB`. If the kernel exposes a smaller
+maximum, FOD accepts the kernel value instead of rejecting the mount. A kernel
+that exposes no readahead capacity is logged with effective value `0`.
+
+This is separate from `read_ahead_blocks` and
+`sequential_read_ahead_blocks`. Those settings control FOD's internal block
+prefetch policy and remain `4` and `8` by default; FOD 3.2.85 does not enlarge
+random-read prefetch to 512 KiB.
+
+The startup log reports both requested and effective limits:
+
+```text
+FOD FUSE negotiated: requested_max_write=524288 effective_max_write=524288 requested_max_readahead=524288 effective_max_readahead=524288 ...
+```
 
 ### `allow_other`
 

@@ -16,7 +16,7 @@ use fod_rust_runtime::{
 enum StartupPassthroughKind {
     Bool,
     U64 { min: u64, max: Option<u64> },
-    SizeBytes,
+    SizeBytes { min: u64, max: Option<u64> },
     NonNegativeFloat,
 }
 
@@ -34,6 +34,22 @@ const STARTUP_PASSTHROUGH_SPECS: &[(&str, &str, StartupPassthroughKind)] = &[
         "fuse_clone_fd",
         "FOD_FUSE_CLONE_FD",
         StartupPassthroughKind::Bool,
+    ),
+    (
+        "fuse_max_write_bytes",
+        "FOD_FUSE_MAX_WRITE_BYTES",
+        StartupPassthroughKind::SizeBytes {
+            min: 1,
+            max: Some(u32::MAX as u64),
+        },
+    ),
+    (
+        "fuse_max_readahead_bytes",
+        "FOD_FUSE_MAX_READAHEAD_BYTES",
+        StartupPassthroughKind::SizeBytes {
+            min: 1,
+            max: Some(u32::MAX as u64),
+        },
     ),
     (
         "task_read_active_limit",
@@ -58,7 +74,7 @@ const STARTUP_PASSTHROUGH_SPECS: &[(&str, &str, StartupPassthroughKind)] = &[
     (
         "pg_payload_in_flight_limit_bytes",
         "FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES",
-        StartupPassthroughKind::SizeBytes,
+        StartupPassthroughKind::SizeBytes { min: 0, max: None },
     ),
     (
         "pg_endpoint_routing_enabled",
@@ -136,9 +152,13 @@ fn validate_startup_passthrough_value(
             }
             Ok(())
         }
-        StartupPassthroughKind::SizeBytes => parse_size_bytes(value)
-            .map(|_| ())
-            .map_err(|err| format!("{key}: {err}")),
+        StartupPassthroughKind::SizeBytes { min, max } => {
+            let parsed = parse_size_bytes(value).map_err(|err| format!("{key}: {err}"))?;
+            if parsed < min || max.is_some_and(|upper| parsed > upper) {
+                return Err(format!("invalid {key}: {value}"));
+            }
+            Ok(())
+        }
         StartupPassthroughKind::NonNegativeFloat => {
             let parsed = value
                 .trim()
@@ -201,7 +221,10 @@ pub fn apply_runtime_env(runtime: &HashMap<String, String>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_runtime_env, runtime_env_var_name};
+    use super::{
+        apply_runtime_env, runtime_env_var_name, validate_startup_passthrough_value,
+        StartupPassthroughKind,
+    };
     use std::collections::HashMap;
     use std::env;
 
@@ -230,6 +253,32 @@ mod tests {
                 key
             );
         }
+    }
+
+    #[test]
+    fn validates_startup_fuse_io_sizes() {
+        let fuse_size = StartupPassthroughKind::SizeBytes {
+            min: 1,
+            max: Some(u32::MAX as u64),
+        };
+        assert!(validate_startup_passthrough_value(
+            "fuse_max_write_bytes",
+            "512KiB",
+            fuse_size
+        )
+        .is_ok());
+        assert!(validate_startup_passthrough_value(
+            "fuse_max_write_bytes",
+            "0",
+            fuse_size
+        )
+        .is_err());
+        assert!(validate_startup_passthrough_value(
+            "fuse_max_write_bytes",
+            "4GiB",
+            fuse_size
+        )
+        .is_err());
     }
 
     #[test]
