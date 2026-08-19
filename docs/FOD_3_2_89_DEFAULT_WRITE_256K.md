@@ -45,3 +45,28 @@ Walidacja musi potwierdzic:
 3. oba bazowe pliki INI maja write `256KiB` i readahead `512KiB`,
 4. konfiguracja i mount suite przechodza,
 5. wersja workspace jest spójna z `fod_version.txt`.
+
+## Aktualizacja FOD 3.2.90
+
+FOD 3.2.90 przywraca `512KiB` jako domyslny `fuse_max_write_bytes`.
+
+Decyzja jest swiadoma i nie wynika z regresji semantycznej 256 KiB. Benchmark
+izolujacy tylko `FOD_FUSE_MAX_WRITE_BYTES`, przy stalym `fio bs=512k` oraz
+pliku 256 MiB, dal identyczna mediane WRITE:
+
+- 256 KiB: 51.40 MiB/s,
+- 512 KiB: 51.40 MiB/s.
+
+Persistence pozostalo identyczne i poprawne dla obu wariantow:
+
+- `persist_operation_count=4`,
+- `persist_input_rows_total=65536`,
+- `persist_input_rows_max=16384`.
+
+W tym samym tescie mediana READ wyniosla 36.80 MiB/s dla wariantu 256 KiB
+oraz 39.40 MiB/s dla wariantu 512 KiB. Parametr `max_write` nie powinien byc
+traktowany jako bezposredni regulator read throughput, dlatego ten wynik jest
+zapisany jako obserwacja, a nie dowod zaleznosci przyczynowej.
+
+FOD 3.2.87 nadal gwarantuje, ze techniczny split callbackow 512 KiB nie wymusza
+persistence per callback. `256KiB` pozostaje obslugiwanym jawnym override.
