@@ -6168,14 +6168,23 @@ impl Filesystem for FodFuse {
         let write_len = data.len() as u64;
         let partial_block_visibility_write = write_len > 0
             && (offset % block_size != 0 || write_len < block_size || write_len % block_size != 0);
-        // Przy wielu aktywnych fh publikujemy zmiany od razu, zeby kolejny open
-        // nie czytal jeszcze starego stanu z repo albo cache kernela.
-        // Kazdy zapis czesciowego bloku tez publikujemy od razu. Inaczej drugi fh
-        // moze zbudowac blok na zerach i nadpisac poczatek pliku.
+        // Przy wielu aktywnych fh publikujemy zmiany od razu.
+        // Sam czesciowy callback nie jest jednak granica logicznego write(2):
+        // kernel moze technicznie podzielic jeden duzy zapis direct_io na kilka
+        // niewyrownanych callbackow. Sibling state jest scalany w write() i
+        // publikowany przed read() drugiego fh, wiec nie trzeba flushowac per fragment.
         let should_flush_now = self.should_flush_write_state(
             state.buffered_bytes,
             shared_open_handles,
             partial_block_visibility_write,
+        );
+        debug!(
+            "FOD req={} op=write flush_decision buffered_bytes={} shared_open_handles={} partial_block_visibility_write={} should_flush={}",
+            req_id,
+            state.buffered_bytes,
+            shared_open_handles,
+            partial_block_visibility_write,
+            should_flush_now
         );
         self.record_write_flush_decision_elapsed(flush_decision_started.elapsed());
         let mut flushed_now = false;

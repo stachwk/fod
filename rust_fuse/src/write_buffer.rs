@@ -424,6 +424,17 @@ impl FodFuse {
         self.write_flush_threshold_bytes > 0 && buffered_bytes >= self.write_flush_threshold_bytes
     }
 
+    pub(crate) fn write_visibility_requires_flush(
+        shared_open_handles: usize,
+        _partial_block_visibility_write: bool,
+    ) -> bool {
+        // Granica callbacku FUSE nie jest granica logicznego write(2).
+        // Przy jednym fh czesciowy callback moze byc tylko technicznym podzialem
+        // wiekszego zapisu, np. 512 KiB direct_io na granicy stron kernela.
+        // Widocznosc miedzy fh jest zachowana przez drain/flush sibling states.
+        shared_open_handles > 1
+    }
+
     pub(crate) fn should_flush_write_state(
         &self,
         buffered_bytes: u64,
@@ -431,8 +442,10 @@ impl FodFuse {
         partial_block_visibility_write: bool,
     ) -> bool {
         self.write_flush_threshold_reached(buffered_bytes)
-            || shared_open_handles > 1
-            || partial_block_visibility_write
+            || Self::write_visibility_requires_flush(
+                shared_open_handles,
+                partial_block_visibility_write,
+            )
     }
 
     pub(crate) fn update_write_state(&self, fh: u64, state: WriteState) {
@@ -570,5 +583,17 @@ mod tests {
         let err = FodFuse::load_write_block_from_repo(7, 2, 4, Err("boom".to_string()))
             .expect_err("database error should not be masked as zeroes");
         assert_eq!(err, EIO);
+    }
+
+    #[test]
+    fn single_handle_partial_callback_does_not_force_visibility_flush() {
+        assert!(!FodFuse::write_visibility_requires_flush(1, true));
+        assert!(!FodFuse::write_visibility_requires_flush(1, false));
+    }
+
+    #[test]
+    fn multiple_handles_still_require_visibility_flush() {
+        assert!(FodFuse::write_visibility_requires_flush(2, false));
+        assert!(FodFuse::write_visibility_requires_flush(2, true));
     }
 }

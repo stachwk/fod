@@ -96,3 +96,13 @@ Only after these measurements should the next optimization consider combining
 block fetches inside a large callback, including a possible
 `read_block_map -> repo_fetch_block_range` change. That optimization is outside
 3.2.85.
+
+## Aktualizacja FOD 3.2.87 - split write buffering
+
+Benchmark primary-write -> replica-read wykazal, ze w trybie `direct_io`
+logiczny write 512 KiB moze zostac technicznie podzielony na niewyrownane
+callbacki FUSE. FOD nie interpretuje juz samej granicy takiego callbacku jako
+powodu do natychmiastowego persistence przy pojedynczym `fh`.
+
+Szczegoly, dowod pomiarowy i kryteria regresji opisuje
+`docs/FOD_3_2_87_FUSE_SPLIT_WRITE_BUFFERING.md`.
