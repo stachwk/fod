@@ -1,0 +1,67 @@
+services:
+  primary:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-foddbname}
+      POSTGRES_USER: ${POSTGRES_USER:-foduser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cichosza}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - synchronous_commit=on
+    ports:
+      - "127.0.0.1:${REPLICA_READ_PRIMARY_PORT:-55441}:5432"
+    volumes:
+      - replica_read_primary_data:/var/lib/postgresql/data
+      - ./docker/replica-read/primary-init.sh:/docker-entrypoint-initdb.d/10-fod-replication.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 1s
+      timeout: 5s
+      retries: 60
+      start_period: 3s
+
+  replica:
+    image: postgres:16-alpine
+    depends_on:
+      primary:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-foddbname}
+      POSTGRES_USER: ${POSTGRES_USER:-foduser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cichosza}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      FOD_REPLICATION_USER: fod_repl
+      FOD_REPLICATION_PASSWORD: fod_repl_pass
+    entrypoint:
+      - /bin/sh
+      - /usr/local/bin/fod-replica-entrypoint.sh
+    ports:
+      - "127.0.0.1:${REPLICA_READ_REPLICA_PORT:-55442}:5432"
+    volumes:
+      - replica_read_replica_data:/var/lib/postgresql/data
+      - ./docker/replica-read/replica-entrypoint.sh:/usr/local/bin/fod-replica-entrypoint.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
+          test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
+          'SELECT pg_is_in_recovery()')" = "t"
+      interval: 1s
+      timeout: 5s
+      retries: 90
+      start_period: 3s
+
+volumes:
+  replica_read_primary_data:
+  replica_read_replica_data:

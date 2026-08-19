@@ -69,6 +69,22 @@ class MakefileDatabaseRestoreOrderTests(unittest.TestCase):
         self.assertIn('exit "$$suite_status"', block)
         self.assertIn('exit "$$restore_status"', block)
 
+    def test_destructive_schema_targets_restore_local_database(self) -> None:
+        for target, next_target in [
+            ("test-schema-upgrade", "test-schema-status"),
+            ("test-schema-status", "test-df"),
+        ]:
+            block = target_block(self.text, target, next_target)
+            self.assertIn("test_status=0", block)
+            self.assertIn("restore_status=0", block)
+            self.assertIn(
+                "$(MAKE) --no-print-directory test-db-restore-local "
+                "|| restore_status=$$?",
+                block,
+            )
+            self.assertIn('exit "$$test_status"', block)
+            self.assertIn('exit "$$restore_status"', block)
+
     def test_standalone_aliases_keep_their_original_scope(self) -> None:
         self.assertEqual(
             target_line(self.text, "test-runtime-validation"),

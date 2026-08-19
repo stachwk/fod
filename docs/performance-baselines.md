@@ -614,3 +614,65 @@ Interpretation:
 - The temp-table reproducer gives a safe way to compare candidate plans before touching production SQL.
 - Do not change runtime merge semantics until a candidate improves the real path and passes `test-copy-block-crc-table`, remount durability, chunking, and unlink-after-write.
 - Every recorded read-regression matrix must capture power source and CPU power policy: governor, scaling driver, min/max frequency and energy-performance preference when available. Cross-version comparisons must match these values; otherwise classify the result as environment-sensitive rather than a code-only regression.
+
+### Docker primary-write / replica-read cache-isolation diagnostic
+
+Run:
+
+```bash
+make test-fio-primary-write-replica-read-docker
+```
+
+The target creates a disposable PostgreSQL 16 primary and physical streaming
+replica in Docker. It writes through a FOD primary mount, fully unmounts that
+FOD process, waits until the replica replays the primary flushed WAL LSN, stops
+the primary container so fallback is impossible, restarts the replica to clear
+PostgreSQL `shared_buffers`, and then measures the same file through a fresh FOD
+replica mount.
+
+The read phase disables FOD read cache, FOD read-ahead, metadata/statfs TTL
+caches, FUSE writeback cache, and enables FOD `fopen_direct_io`. The test does
+not drop the Docker host kernel page cache because that would be a host-global
+privileged operation. It is therefore a strong FOD/PostgreSQL process-cache
+isolation test, not a guaranteed physical-disk cold-read benchmark.
+
+Defaults:
+
+- primary port: `55441`
+- replica port: `55442`
+- file size: `1G`
+- fio block size: `4k`
+- WAL replay timeout: `120s`
+
+#### Strict read-only replica regression guard
+
+A `read_only=true` FOD mount is observation-only and must not emit metadata or
+payload DML to PostgreSQL during read-only filesystem activity.
+
+The guard covers automatic atime writes, every mutating `setattr` field
+(mode/owner/size/timestamps/flags), and mutating ioctls such as SETFLAGS,
+FSSETXATTR, FICLONE and FICLONERANGE. Existing create/write/delete/rename/xattr
+and copy_file_range read-only fences remain in force. PostgreSQL session and
+lock-heartbeat writes are already disabled for read-only mounts.
+
+The Docker primary-write / replica-read diagnostic fails on SQLSTATE 25006,
+on PostgreSQL read-only transaction write errors, or when final FOD PostgreSQL
+lane observability reports non-zero `operation_failures`.
+
+This guard was introduced after a 256 MiB / 4 KiB replica read produced 65,536
+read callbacks, 65,536 rejected database operations and 65,537 PostgreSQL
+connection creations. The measured 209 KiB/s was dominated by rejected metadata
+updates and connection recreation rather than payload-read throughput.
+
+### 2026-08-19 post-fix physical-replica baseline
+
+The strict read-only replica fix was validated with a 256 MiB Docker physical-replica matrix. Primary fallback was impossible during each measured read, the replica was restarted before the read, and FOD caches/read-ahead were disabled.
+
+| fio block | write | replica read | FOD read callbacks | DB operations | failures | connections |
+|---|---:|---:|---:|---:|---:|---:|
+| 4 KiB | 36.7 MiB/s | ~8.4 MiB/s | 65,536 | 131,226 | 0 | 2 |
+| 64 KiB | 51.4 MiB/s | 29.1 MiB/s | 4,096 | 8,332 | 0 | 2 |
+| 512 KiB | 54.3 MiB/s | 38.5 MiB/s | 512 | 1,162 | 0 | 2 |
+| 1 MiB | 18.2 MiB/s | 41.9 MiB/s | 512 | 905 | 0 | 2 |
+
+The fio 1 MiB run still produced 512 FOD read callbacks for 256 MiB, proving that the current effective FUSE callback ceiling is approximately 512 KiB. The next optimization target is per-callback PostgreSQL work in `read_block_map -> repo_fetch_block_range`, not additional client cache tuning.

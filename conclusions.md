@@ -1692,3 +1692,65 @@ whether the second 64 MiB flush can be proven append-only/disjoint so it can
 avoid the remaining `ON CONFLICT` merge. If that cannot be proven correctly
 across sparse writes, truncate, COW, remount and two mounts, continue with COPY
 receive/staging cost instead.
+
+## FOD 3.2.84 - root-style uninstall
+
+- Added `make uninstall-on-root` as the reverse of `make install-on-root`.
+- The target detects active FOD FUSE mounts by filesystem source `fod`, unmounts them before deleting files, and aborts if umount fails or a FOD mount remains active.
+- After a clean unmount it removes root-style Rust binaries, `mount.fod`, and the configured system config; the config directory is removed only when empty.
+- Added no-root regression tests for ordering and failure safety.
+
+## FOD 3.2.84 - strict read-only replica fence
+
+- Docker replica-read diagnostics exposed a systemic read-only correctness issue,
+  not only an atime performance issue.
+- Physical replicas rejected automatic atime UPDATEs with SQLSTATE 25006 and the
+  failed operations caused connection recreation for nearly every 4 KiB read.
+- Read-only mounts now suppress automatic atime writes and reject every mutating
+  `setattr` variant.
+- Mutating ioctls (SETFLAGS, FSSETXATTR, FICLONE, FICLONERANGE) return `EROFS`
+  on read-only mounts.
+- Existing write/create/delete/rename/xattr/copy_file_range fences remain active;
+  PostgreSQL session/lock heartbeat writes are already disabled for read-only
+  mounts.
+- The Docker regression test requires zero DB operation failures and no
+  read-only-transaction write errors during the measured replica read.
+- The earlier 209 KiB/s result is invalid as a storage baseline because it
+  primarily measured rejected metadata writes and PostgreSQL connection churn.
+
+## 2026-08-19 - Replica-read correctness fix and next performance direction
+
+The Docker primary-write / physical-replica-read diagnostic established two separate conclusions.
+
+### Correctness conclusion
+
+The original 256 MiB / 4 KiB replica-read result near 209 KiB/s did not measure payload-read capability. Every read attempted to update atime on the PostgreSQL physical replica. PostgreSQL rejected the metadata DML with SQLSTATE 25006, FOD counted one failed operation, and the connection was recreated. The failing run therefore produced 65,536 read callbacks, 65,536 failed operations, and 65,537 connection creations.
+
+FOD 3.2.84 now treats a read-only/replica mount as observation-only. Automatic atime DML is disabled, mutating setattr and ioctl paths are fenced, and the Docker regression rejects read-only DML. The repeated 256 MiB / 4 KiB run completed with `operation_failures=0` and only two PostgreSQL connection creations.
+
+### Performance conclusion
+
+After removing the correctness defect, replica-read performance scales strongly with callback size:
+
+- 4 KiB: ~8.4 MiB/s;
+- 64 KiB: 29.1 MiB/s;
+- 512 KiB: 38.5 MiB/s;
+- fio 1 MiB: 41.9 MiB/s, but still split into 512 FOD callbacks.
+
+The FUSE-facing effective callback ceiling is therefore currently about 512 KiB. A fio 1 MiB request is split into two FOD callbacks and gives only a modest read gain while the same test size regresses write throughput from 54.3 MiB/s at 512 KiB to 18.2 MiB/s at 1 MiB.
+
+The remaining replica-read bottleneck is `read_block_map -> repo_fetch_block_range` and the associated PostgreSQL operation count. At 256 MiB, the final operation counts were 131,226 for 65,536 callbacks at 4 KiB, 8,332 for 4,096 callbacks at 64 KiB, 1,162 for 512 callbacks at 512 KiB, and 905 for 512 callbacks when fio requested 1 MiB.
+
+Decision: do not spend the next optimization cycle on client cache tuning. Profile the SQL/repository work behind a single 512 KiB callback, reduce avoidable round trips, explain the operation-count difference between the 512 KiB and fio-1 MiB layouts, and preserve separate read/write tuning.
+
+## FOD 3.2.84 - deterministic mkfs schema-suite configuration
+
+- `rust_mkfs/tests/schema_upgrade.rs` now passes the repository `fod_config.ini` explicitly through `FOD_CONFIG` when it launches `fod-rust-mkfs`.
+- This keeps the schema init/status/upgrade/clean regression independent of `/etc/fod/fod_config.ini` and of the test process working directory.
+- The production configuration contract is unchanged; this is a test-harness fix discovered by the local `make test-all` gate.
+
+## FOD 3.2.84 - destructive schema targets restore local database
+
+- `make test-all` exposed that the standalone `test-schema-upgrade` target intentionally mutates schema state and then left the shared local Docker database unsuitable for the following `test-block-read` target.
+- `test-schema-upgrade` and `test-schema-status` now always run `test-db-restore-local` after their schema test, on both success and failure, while preserving the original test failure status.
+- `tests/test_makefile_db_restore_order.py` now guards this cleanup contract so destructive schema tests cannot silently poison later integration targets.

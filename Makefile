@@ -231,6 +231,12 @@ SYSTEM_SITE_PACKAGES := $(shell $(PYTHON) -c 'import site; print(":".join(site.g
 COMPOSE ?= docker compose
 COMPOSE_FILE ?= docker-compose.yml
 SELINUX_ACL_COMPOSE_FILE ?= docker-compose.selinux-acl.yml
+REPLICA_READ_COMPOSE_FILE ?= docker-compose.replica-read.yml
+REPLICA_READ_PRIMARY_PORT ?= 55441
+REPLICA_READ_REPLICA_PORT ?= 55442
+REPLICA_READ_FIO_FILE_SIZE ?= 1G
+REPLICA_READ_FIO_BLOCK_SIZE ?= 4k
+REPLICA_READ_WAIT_SECONDS ?= 120
 FOD_CONFIG_SOURCE ?= fod_config.ini
 FOD_CONFIG_SOURCE_ABS := $(abspath $(FOD_CONFIG_SOURCE))
 FOD_CONFIG_DEST ?= /etc/fod/fod_config.ini
@@ -319,6 +325,7 @@ export CONTAINER_POSTGRES_NAME
 export CONTAINER_POSTGRES_SELINUX_ACL_NAME
 export CONTAINER_FOD_SELINUX_ACL_NAME
 MOUNT_HELPER_DEST ?= /usr/local/sbin/mount.fod
+SUDO ?= sudo
 STRIP ?= strip
 STRIP_FLAGS ?= --strip-unneeded
 UBUNTU_BUILD_DEPS := cargo rustc build-essential pkg-config libpq-dev libfuse3-dev python3 openssl
@@ -326,7 +333,7 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset test-db-restore-local smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke
+.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset test-db-restore-local smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-on-root uninstall-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke
 
 help:
 	@printf '%s\n' \
@@ -369,6 +376,7 @@ help:
 		'  make install-mount-helper - install mount.fod to $(MOUNT_HELPER_DEST)' \
 	'  make install-root-scripts - install fod-bootstrap, mkfs.fod, fod-change/fod.change, fod-indexer, fod-monitor, and fod-rust-fuse Rust binaries to /usr/local/bin (use FOD_CARGO_PROFILE=release-lto for final builds)' \
 		'  make install-on-root - install system config, Rust binaries, mount helper, and Rust hot-path artifacts' \
+		'  make uninstall-on-root - unmount active FOD resources, then remove root-style config, Rust binaries, and mount helper' \
 		'  make install-on-root-venv - create .venv for legacy tests, then run the full root-style install' \
 		'  make pip-build - removed; Rust binaries are built directly' \
 		'  make pip-install - removed; Rust binaries are built directly' \
@@ -537,6 +545,7 @@ help:
 		'  make test-metadata-cache - verify short-TTL metadata and statfs cache behavior' \
 		'  make test-mount-suite - shared Python mount smoke runner' \
 		'  make test-fio-sequential-io - fio sequential read/write smoke for the block path' \
+		'  make test-fio-primary-write-replica-read-docker - Docker primary write, stop primary, restart replica, then replica read' \
 		'  make test-fio-sequential-io-strace - fio sequential smoke with strace syscall tables for the block path' \
 		'  make test-admpanch-trace - run ADMP_TRACE_TARGET with ADMP_INI=$(ADMP_TRACE_INI_ABS) (override ADMP_TRACE_TARGET=...)' \
 		'  make test-fio-mixed-io - fio mixed sequential rw smoke for the block path' \
@@ -710,6 +719,11 @@ test-makefile-db-restore-order:
 
 .PHONY: test-makefile-db-restore-order
 
+test-makefile-uninstall-on-root:
+	$(PYTHON) tests/test_makefile_uninstall_on_root.py
+
+.PHONY: test-makefile-uninstall-on-root
+
 install-mount-helper:
 	@printf '%s\n' "Installing mount.fod -> $(MOUNT_HELPER_DEST)"
 	sudo install -D -m 0755 mount.fod $(MOUNT_HELPER_DEST)
@@ -735,6 +749,48 @@ install-root-scripts:
 
 install-on-root: install-config install-root-scripts install-mount-helper
 	@printf '%s\n' "FOD installed for root-style use: config, Rust binaries including fod-indexer and fod-monitor, and mount helper"
+
+uninstall-on-root:
+	@set -eu; \
+	if ! command -v findmnt >/dev/null 2>&1; then \
+		printf '%s\n' "Cannot safely uninstall FOD: findmnt is required to detect active FOD mounts." >&2; \
+		exit 1; \
+	fi; \
+	mount_list="$$(mktemp)"; \
+	trap 'rm -f "$$mount_list"' EXIT HUP INT TERM; \
+	LC_ALL=C findmnt -rn -S fod -o TARGET,FSTYPE 2>/dev/null | awk '$$2 ~ /^fuse([.]|$$)/ {print $$1}' > "$$mount_list"; \
+	if [ -s "$$mount_list" ]; then \
+		printf '%s\n' "Detected active FOD mounts:"; \
+		sed 's/^/  /' "$$mount_list"; \
+		while IFS= read -r mountpoint; do \
+			[ -n "$$mountpoint" ] || continue; \
+			printf '%s\n' "Unmounting FOD resource: $$mountpoint"; \
+			$(SUDO) umount -- "$$mountpoint"; \
+		done < "$$mount_list"; \
+	fi; \
+	: > "$$mount_list"; \
+	LC_ALL=C findmnt -rn -S fod -o TARGET,FSTYPE 2>/dev/null | awk '$$2 ~ /^fuse([.]|$$)/ {print $$1}' > "$$mount_list"; \
+	if [ -s "$$mount_list" ]; then \
+		printf '%s\n' "Cannot uninstall FOD: these FOD mounts are still active:" >&2; \
+		sed 's/^/  /' "$$mount_list" >&2; \
+		exit 1; \
+	fi; \
+	printf '%s\n' "Removing FOD root-style installation"; \
+	$(SUDO) rm -f \
+		/usr/local/bin/fod-bootstrap \
+		/usr/local/bin/mkfs.fod \
+		/usr/local/bin/fod-change \
+		/usr/local/bin/fod.change \
+		/usr/local/bin/fod-indexer \
+		/usr/local/bin/fod-monitor \
+		/usr/local/bin/fod-rust-fuse \
+		"$(MOUNT_HELPER_DEST)" \
+		"$(FOD_CONFIG_DEST)"; \
+	config_dir="$$(dirname -- "$(FOD_CONFIG_DEST)")"; \
+	$(SUDO) rmdir -- "$$config_dir" 2>/dev/null || true; \
+	rm -f "$$mount_list"; \
+	trap - EXIT HUP INT TERM; \
+	printf '%s\n' "FOD root-style installation removed"
 
 install-on-root-venv: venv install-on-root
 	@printf '%s\n' "FOD root-style install ready in $(VENV_DIR): config, legacy test venv, Rust binaries, and mount helper"
@@ -1041,10 +1097,32 @@ test-runtime-validation: test-rust-mkfs-suite
 test-rust-hotpath-runtime-size-limits: test-rust-mkfs-suite
 	@:
 test-schema-upgrade: up
-	$(CARGO_TEST_MKFS) --test schema_upgrade schema_upgrade_non_destructive_password_protected --offline
+	@set -u; \
+		test_status=0; \
+		restore_status=0; \
+		$(CARGO_TEST_MKFS) --test schema_upgrade schema_upgrade_non_destructive_password_protected --offline || test_status=$$?; \
+		$(MAKE) --no-print-directory test-db-restore-local || restore_status=$$?; \
+		if [ "$$test_status" -ne 0 ]; then \
+			if [ "$$restore_status" -ne 0 ]; then \
+				echo "test-schema-upgrade failed with status $$test_status and local database restore failed with status $$restore_status" >&2; \
+			fi; \
+			exit "$$test_status"; \
+		fi; \
+		exit "$$restore_status"
 
 test-schema-status: up
-	$(CARGO_TEST_MKFS) --test schema_upgrade schema_status_reports_version_secret_and_pending_migrations --offline
+	@set -u; \
+		test_status=0; \
+		restore_status=0; \
+		$(CARGO_TEST_MKFS) --test schema_upgrade schema_status_reports_version_secret_and_pending_migrations --offline || test_status=$$?; \
+		$(MAKE) --no-print-directory test-db-restore-local || restore_status=$$?; \
+		if [ "$$test_status" -ne 0 ]; then \
+			if [ "$$restore_status" -ne 0 ]; then \
+				echo "test-schema-status failed with status $$test_status and local database restore failed with status $$restore_status" >&2; \
+			fi; \
+			exit "$$test_status"; \
+		fi; \
+		exit "$$restore_status"
 
 test-df: build-debug venv up
 	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_DEBUG_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_df.sh
@@ -1106,6 +1184,22 @@ test-fio-sequential-io: init
 
 test-fio-sequential-io-strace: init
 	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FOD_STRACE=1 FIO_FILE_SIZE=$(FIO_FILE_SIZE) bash tests/integration/test_fio_sequential_io.sh
+
+
+.PHONY: test-fio-primary-write-replica-read-docker
+test-fio-primary-write-replica-read-docker: build-debug
+	@FOD_REPLICA_READ_COMPOSE="$(COMPOSE)" \
+	REPLICA_READ_COMPOSE_FILE="$(REPLICA_READ_COMPOSE_FILE)" \
+	REPLICA_READ_PRIMARY_PORT="$(REPLICA_READ_PRIMARY_PORT)" \
+	REPLICA_READ_REPLICA_PORT="$(REPLICA_READ_REPLICA_PORT)" \
+	FIO_FILE_SIZE="$(REPLICA_READ_FIO_FILE_SIZE)" \
+	FIO_BLOCK_SIZE="$(REPLICA_READ_FIO_BLOCK_SIZE)" \
+	REPLICA_WAIT_SECONDS="$(REPLICA_READ_WAIT_SECONDS)" \
+	POSTGRES_DB="$(POSTGRES_DB)" \
+	POSTGRES_USER="$(POSTGRES_USER)" \
+	POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" \
+	bash tests/integration/test_fio_primary_write_replica_read_docker.sh
 
 test-admpanch-trace:
 	@printf '%s\n' "Running $(ADMP_TRACE_TARGET) with ADMP_INI=$(ADMP_TRACE_INI_ABS)"

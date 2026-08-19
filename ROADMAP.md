@@ -5,7 +5,7 @@
 - The current FOD release is sourced from `fod_version.txt`; this roadmap
   intentionally avoids duplicating the latest patch number as an authoritative
   version source.
-- FOD has a working PostgreSQL-backed FUSE core, schema version `19`,
+- FOD has a working PostgreSQL-backed FUSE core, schema version `21`,
   documented runtime profiles, a shared Rust indexing core, and a broad local
   integration suite.
 - The repository currently has no active GitHub Actions workflow. `make test-all` is the main local regression gate, while `make test-all-full` adds wider mounted and indexer coverage.
@@ -27,12 +27,12 @@
 - xattr and ACL support
 - PostgreSQL-backed advisory locking and session leases
 - runtime tunables in `fod_config.ini`
-- safe schema init, repair, status, and migration handling through schema version `19`
+- safe schema init, repair, status, and migration handling through schema version `21`
 - Rust-backed repository and query layers
 - split attribute and directory-entry caches
 - shared Rust `fod-indexer` core with capability-driven source kinds
 - bounded transactional replay with durable outcome confirmation
-- transactional block/extent payload quota under a shared PostgreSQL advisory lock
+- transactional block payload quota under a shared PostgreSQL advisory lock
 - crash-recoverable copy-capacity reservations with renewal before persistence
 - canonical `statfs` accounting for payload, reservations, capacity, and inode headroom
 - mounted `df`/`du`/sparse/shared-object regression before and after remount
@@ -41,11 +41,16 @@
 
 ## Near Term
 
+- preserve the FOD 3.2.84 strict read-only replica correctness gate during further read-path tuning: read-only mounts must remain observation-only, Docker replica reads must report zero PostgreSQL operation failures, and PostgreSQL must observe no write attempt from the measured read path
+- optimize replica reads from measured `read_block_map -> repo_fetch_block_range` evidence: profile the SQL/repository operations behind one 512 KiB callback, remove avoidable per-callback round trips, and re-run the 4 KiB / 64 KiB / 512 KiB physical-replica matrix after each change
+- treat 512 KiB as the current effective FUSE callback ceiling until negotiation is changed and re-measured; a fio 1 MiB read is currently split into two ~512 KiB callbacks
+- tune read and write sizes independently: the 2026-08-19 Docker matrix shows read throughput increasing through large callbacks while 1 MiB writes regress sharply; 512 KiB is the best measured common point, not a universal final setting
+
 - keep `make test-all`, `make test-all-full`, `cargo fmt --all -- --check`, `cargo check --workspace --locked`, and `make test-version` as the documented local quality gates
 - keep planning documentation synchronized with `fod_version.txt`, the Cargo
   workspace version, and the Rust schema manifest before closing further TODO
   items
-- introduce an active automated workflow only as an explicit project decision, with Rust 1.85 minimum-version coverage and locked dependency checks
+- keep validation local and do not create or modify GitHub Actions workflows; use the documented local Rust 1.85 and locked-dependency quality gates instead
 - aggregate the existing FUSE callback, PostgreSQL, libpq, runtime, and
   storage-format diagnostics only after the individual boundaries expose
   trustworthy machine-readable data
@@ -54,7 +59,7 @@
 - instrument inode/path cache lifetime and implement `forget` plus `batch_forget` if large-tree measurements confirm retained entries
 - connect the existing resize and sparse-storage machinery to explicitly supported `fallocate` modes; reject unsupported mode combinations with `EOPNOTSUPP`
 - benchmark `readdirplus` against `readdir` for large directories and keep it only when it measurably reduces callbacks or PostgreSQL work
-- implement sparse-aware `lseek(SEEK_DATA/SEEK_HOLE)` over block and extent maps after edge-case tests define the contract
+- implement sparse-aware `lseek(SEEK_DATA/SEEK_HOLE)` over block maps after edge-case tests define the contract
 - keep post-ABI-7.31 features disabled until both the public `fuser` API and truthful FOD semantics exist; protocol negotiation alone is not an enablement decision
 - validate supported `libfuse3` versions, especially external unmount/session teardown and `copy_file_range`, without assuming a libfuse upgrade adds missing high-level `fuser` callbacks
 - keep benchmark baselines, decision notes, schema status, compatibility contracts, and runtime profiles synchronized with code changes

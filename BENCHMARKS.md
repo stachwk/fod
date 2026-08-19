@@ -2327,3 +2327,54 @@ overwrite, `31.57 MiB/s` for seed creation, and `28.17 MiB/s` for the changed
 overwrite. The mounted payload probe verified counter placement and cleanup;
 the small fio and one-run conflict values remain too noisy for tuning
 decisions.
+
+## 2026-08-19 - Docker physical-replica cold-process read matrix after strict read-only fix
+
+Purpose: validate that replica-read performance is no longer dominated by rejected metadata writes or PostgreSQL connection churn, then measure how FUSE request size affects the PostgreSQL-backed read path.
+
+Test topology and isolation:
+
+- PostgreSQL 16 primary plus physical streaming replica in Docker.
+- Data is written through a FOD primary mount.
+- The primary FOD process is fully unmounted.
+- The test waits until the replica reaches the captured primary flush WAL LSN.
+- The PostgreSQL primary container is stopped before the measured read, so fallback is impossible.
+- The replica PostgreSQL process is restarted before the measured read to clear its `shared_buffers`.
+- A fresh FOD `role=replica` mount performs the read.
+- FOD read cache, read-ahead, metadata/statfs cache TTLs, and FUSE writeback cache are disabled; `fopen_direct_io=true`.
+- The Docker host kernel page cache is intentionally not dropped.
+
+Strict read-only correctness result:
+
+- `replica_operation_failures=0` for every post-fix run.
+- `replica_connection_create_count=2`; connections are reused instead of recreated for every read.
+- no SQLSTATE `25006` or other read-only DML error is allowed by the regression guard.
+- primary is unreachable before the measured read.
+- the selected endpoint is the physical replica with `selected_read_only=true`.
+
+### 256 MiB matrix
+
+| fio block size | fio write | fio read | FOD read callbacks | final PostgreSQL operation_count | operation_failures | connections |
+|---|---:|---:|---:|---:|---:|---:|
+| 4 KiB | 36.7 MiB/s | 8611 KiB/s (~8.4 MiB/s) | 65,536 | 131,226 | 0 | 2 |
+| 64 KiB | 51.4 MiB/s | 29.1 MiB/s | 4,096 | 8,332 | 0 | 2 |
+| 512 KiB | 54.3 MiB/s | 38.5 MiB/s | 512 | 1,162 | 0 | 2 |
+| 1 MiB | 18.2 MiB/s | 41.9 MiB/s | 512 | 905 | 0 | 2 |
+
+Interpretation:
+
+1. The earlier 256 MiB / 4 KiB result around 209 KiB/s was invalid as a storage-performance baseline. It was dominated by rejected atime `UPDATE`s on the physical replica and by connection recreation.
+2. After the strict read-only fix, increasing request size strongly increases read throughput. The dominant remaining cost is therefore per-callback/per-query latency and PostgreSQL round-trip overhead, not connection creation.
+3. `read_block_map` and `repo_fetch_block_range` dominate the read profile. For the 512 KiB run, `fuse_read_total` was ~6.57 s, `read_block_map` ~6.30 s, and `repo_fetch_block_range` ~6.14 s over a 6.65 s fio runtime.
+4. 512 KiB is the current effective FUSE callback ceiling. fio 512 KiB produced 512 requests and 512 FOD callbacks; fio 1 MiB produced only 256 fio requests but still 512 FOD callbacks.
+5. 1 MiB is not a good common tuning size: read rises only from 38.5 to 41.9 MiB/s versus 512 KiB, while write falls from 54.3 to 18.2 MiB/s.
+6. The next optimization target is not cache. It is the number and shape of PostgreSQL operations executed by each large FUSE read callback, especially the `read_block_map -> repo_fetch_block_range` path.
+7. The 512 KiB and fio-1 MiB tests have the same FOD callback count but different final PostgreSQL `operation_count` values (1,162 vs 905). This must be explained before changing the read algorithm because layout/write behavior may affect the later read cost.
+
+Regression policy:
+
+- keep `make test-fio-primary-write-replica-read-docker`;
+- require zero replica operation failures and no read-only DML error;
+- preserve primary-offline and WAL-replay evidence;
+- after read-path changes, re-run 4 KiB, 64 KiB, and 512 KiB at 256 MiB;
+- record both throughput and callback/operation counts, not throughput alone.

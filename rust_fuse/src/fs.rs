@@ -62,6 +62,30 @@ pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     }
 }
 
+fn setattr_requests_mutation(
+    mode: bool,
+    uid: bool,
+    gid: bool,
+    size: bool,
+    atime: bool,
+    mtime: bool,
+    ctime: bool,
+    crtime: bool,
+    chgtime: bool,
+    bkuptime: bool,
+    flags: bool,
+) -> bool {
+    mode || uid || gid || size || atime || mtime || ctime || crtime || chgtime || bkuptime || flags
+}
+
+fn ioctl_is_mutating(cmd: u32) -> bool {
+    cmd == libc::FS_IOC_SETFLAGS as u32
+        || cmd == libc::FS_IOC32_SETFLAGS as u32
+        || cmd == IOCTL_FS_IOC_FSSETXATTR
+        || cmd == libc::FICLONE as u32
+        || cmd == libc::FICLONERANGE as u32
+}
+
 macro_rules! fuse_reply_error {
     ($reply:expr, $errno:expr) => {
         $reply.error(Errno::from_i32($errno))
@@ -3156,6 +3180,11 @@ impl FodFuse {
     }
 
     fn touch_access_time(&self, path: &str, file_attr: &FileAttr) {
+        // A read-only mount is observation-only. Never emit automatic
+        // metadata DML to a PostgreSQL physical replica.
+        if self.read_only {
+            return;
+        }
         if !should_update_atime(
             self.atime_policy,
             file_attr.kind == FileType::Directory,
@@ -3216,6 +3245,10 @@ impl FodFuse {
     }
 
     fn touch_file_access_time_from_read_metadata(&self, file_id: u64, metadata: &FileReadMetadata) {
+        // Reads on a replica must not turn into an UPDATE access_date.
+        if self.read_only {
+            return;
+        }
         let atime = Self::parse_time(&metadata.access_date);
         let mtime = Self::parse_time(&metadata.modification_date);
         if !self
@@ -3966,6 +3999,10 @@ impl Filesystem for FodFuse {
     ) {
         let ino = ino.0;
         let fh = fh.0;
+        if self.read_only && ioctl_is_mutating(cmd) {
+            fuse_reply_error!(reply, libc::EROFS);
+            return;
+        }
         let (path, attrs) = match self.entry_attrs_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
@@ -4949,7 +4986,21 @@ impl Filesystem for FodFuse {
         let fh = fh.map(|handle| handle.0);
         let subject = self.request_identity(req);
         let _write_profile = size.is_some().then(|| self.start_fuse_write_profile());
-        if self.read_only && size.is_some() {
+        if self.read_only
+            && setattr_requests_mutation(
+                mode.is_some(),
+                uid.is_some(),
+                gid.is_some(),
+                size.is_some(),
+                atime.is_some(),
+                mtime.is_some(),
+                _ctime.is_some(),
+                _crtime.is_some(),
+                _chgtime.is_some(),
+                _bkuptime.is_some(),
+                _flags.is_some(),
+            )
+        {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
@@ -6859,7 +6910,9 @@ impl Filesystem for FodFuse {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_update_atime, AtimePolicy, WriteState};
+    use super::{
+        ioctl_is_mutating, setattr_requests_mutation, should_update_atime, AtimePolicy, WriteState,
+    };
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
     use std::collections::BTreeMap;
@@ -6972,5 +7025,37 @@ mod tests {
         assert!(super::FodFuse::write_state_has_pending_changes(&buffered));
         assert!(super::FodFuse::write_state_has_pending_changes(&truncated));
         assert!(super::FodFuse::write_state_has_pending_changes(&blocked));
+    }
+    #[test]
+    fn read_only_setattr_detects_every_mutating_field() {
+        let none = [false; 11];
+        assert!(!setattr_requests_mutation(
+            none[0], none[1], none[2], none[3], none[4], none[5], none[6], none[7], none[8],
+            none[9], none[10],
+        ));
+
+        for index in 0..11 {
+            let mut fields = [false; 11];
+            fields[index] = true;
+            assert!(
+                setattr_requests_mutation(
+                    fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6],
+                    fields[7], fields[8], fields[9], fields[10],
+                ),
+                "setattr field index {index} must be treated as a mutation"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_ioctl_classifies_mutating_commands() {
+        assert!(ioctl_is_mutating(libc::FS_IOC_SETFLAGS as u32));
+        assert!(ioctl_is_mutating(libc::FS_IOC32_SETFLAGS as u32));
+        assert!(ioctl_is_mutating(super::IOCTL_FS_IOC_FSSETXATTR));
+        assert!(ioctl_is_mutating(libc::FICLONE as u32));
+        assert!(ioctl_is_mutating(libc::FICLONERANGE as u32));
+
+        assert!(!ioctl_is_mutating(super::IOCTL_FIGETBSZ));
+        assert!(!ioctl_is_mutating(libc::FIONREAD as u32));
     }
 }

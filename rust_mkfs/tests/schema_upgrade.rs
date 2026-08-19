@@ -6,6 +6,7 @@ mod pg;
 
 use pg::DbConn;
 use std::env;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -48,9 +49,23 @@ fn env_guard() -> std::sync::MutexGuard<'static, ()> {
     ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner())
 }
 
+fn test_config_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("rust_mkfs must live below the repository root")
+        .join("fod_config.ini")
+}
+
 fn run_mkfs(action: &str, extra_args: &[&str], envs: &[(&str, String)]) -> std::process::Output {
+    let config_path = test_config_path();
+    assert!(
+        config_path.is_file(),
+        "test FOD configuration file not found: {}",
+        config_path.display()
+    );
+
     let mut command = Command::new(env!("CARGO_BIN_EXE_fod-rust-mkfs"));
-    command.arg(action);
+    command.arg(action).env("FOD_CONFIG", &config_path);
     for arg in extra_args {
         command.arg(arg);
     }

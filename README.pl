@@ -352,6 +352,8 @@ Jeśli chcesz finalny, bardziej zoptymalizowany build z ThinLTO i stripem symbol
 
 `make install-on-root-venv` to odpowiednik `make venv` + `make install-on-root`.
 
+`make uninstall-on-root` wykonuje operację odwrotną do instalacji root-style. Najpierw wykrywa wszystkie aktywne mounty FOD typu FUSE ze źródłem filesystemu `fod`, odmontowuje je i sprawdza ponownie, czy żaden mount FOD nie pozostał. Jeżeli odmontowanie się nie powiedzie, uninstall zatrzymuje się przed usunięciem plików instalacji. Po poprawnym odmontowaniu usuwa zainstalowane binaria Rust, `mount.fod` oraz `FOD_CONFIG_DEST` (domyślnie `/etc/fod/fod_config.ini`). Katalog konfiguracji usuwa tylko wtedy, gdy jest pusty.
+
 Oba targety instalacyjne ostrzegają, jeśli config źródłowy nadal używa domyślnego hasła developerskiego `cichosza`.
 
 ## Szybki start

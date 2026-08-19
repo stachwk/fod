@@ -362,6 +362,8 @@ Use `make install-on-root FOD_CARGO_PROFILE=release-lto` when you want a final o
 
 `make install-on-root-venv` is the root-style equivalent of `make venv` followed by `make install-on-root`.
 
+`make uninstall-on-root` reverses the root-style installation. It first detects all active FOD FUSE mounts whose filesystem source is `fod`, unmounts them, and verifies that none remain. If unmounting fails, uninstall stops before removing installed files. After a clean unmount it removes the installed Rust binaries, `mount.fod`, and `FOD_CONFIG_DEST` (default `/etc/fod/fod_config.ini`). The config directory is removed only when empty.
+
 ## Quick Start
 
 1. Configure `/etc/fod/fod_config.ini` or local `fod_config.ini`.
