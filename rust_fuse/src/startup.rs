@@ -2,7 +2,7 @@
 // Licensed under BSL 1.1
 
 use fuser::{mount as fuser_mount, Config, MountOption, SessionACL};
-use log::info;
+use log::{info, warn};
 use rust_hotpath::pg::{DbRepo, StartupSnapshot};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -375,6 +375,9 @@ pub fn mount_fuse(
             .map_err(|err| format!("failed to register client session: {err}"))?;
         fs.start_lock_heartbeat()
             .map_err(|err| format!("failed to start lock heartbeat: {err}"))?;
+        if let Err(err) = fs.start_shared_monitor_publisher() {
+            warn!("FOD shared monitor publisher unavailable: {}", err);
+        }
     }
     fs.start_runtime_reload(runtime)
         .map_err(|err| format!("failed to start runtime reload: {err}"))?;

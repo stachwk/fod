@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
+mod cluster;
+
 use std::env;
 use std::fs;
 use std::thread;
@@ -64,8 +66,21 @@ fn run() -> Result<(), String> {
     match args.next().as_deref() {
         None | Some("status") => {
             ensure_no_extra_args(args)?;
+            let cluster_snapshot = cluster::load_cluster_snapshot();
             let snapshot = monitor_snapshot()?;
-            print_status(&snapshot);
+            print_status(&snapshot, cluster_snapshot.as_ref().ok());
+            if let Err(err) = cluster_snapshot {
+                eprintln!("FOD shared cluster telemetry unavailable: {err}");
+            }
+            Ok(())
+        }
+        Some("cluster") => {
+            ensure_no_extra_args(args)?;
+            let snapshot = cluster::load_cluster_snapshot()?;
+            println!("FOD monitor cluster");
+            println!("version={FOD_VERSION}");
+            println!("generated_unix_seconds={}", unix_seconds_now());
+            cluster::print_cluster_snapshot(&snapshot, None);
             Ok(())
         }
         Some("top") | Some("watch") => {
@@ -74,8 +89,12 @@ fn run() -> Result<(), String> {
         }
         Some("report") => {
             ensure_no_extra_args(args)?;
+            let cluster_snapshot = cluster::load_cluster_snapshot();
             let snapshot = monitor_snapshot()?;
-            print_report(&snapshot);
+            print_report(&snapshot, cluster_snapshot.as_ref().ok());
+            if let Err(err) = cluster_snapshot {
+                eprintln!("FOD shared cluster telemetry unavailable: {err}");
+            }
             Ok(())
         }
         Some("-h") | Some("--help") | Some("help") => {
@@ -154,16 +173,18 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  fod-monitor [status]");
+    println!("  fod-monitor cluster");
     println!("  fod-monitor top [--interval SECONDS] [--iterations N] [--no-clear]");
     println!("  fod-monitor report");
     println!("  fod-monitor --help");
     println!("  fod-monitor --version");
     println!();
     println!("Commands:");
-    println!("  status   Show system summary and local FOD process details");
-    println!("  top      Refresh status continuously, similarly to top");
+    println!("  status   Show shared cluster telemetry and local host diagnostics");
+    println!("  cluster  Show centrally stored telemetry for all active FOD sessions");
+    println!("  top      Refresh cluster and local status continuously, similarly to top");
     println!("  watch    Alias for top");
-    println!("  report   Generate a one-shot text report for diagnostics");
+    println!("  report   Generate shared and local one-shot diagnostics");
 }
 
 fn print_top_help() {
@@ -179,16 +200,30 @@ fn print_top_help() {
 
 fn run_top(options: TopOptions) -> Result<(), String> {
     let mut completed = 0_u64;
+    let mut previous_cluster = None;
     loop {
         if options.clear_screen {
             print!("\x1b[2J\x1b[H");
         }
 
+        let cluster_snapshot = cluster::load_cluster_snapshot();
         let snapshot = monitor_snapshot()?;
         println!(
             "FOD monitor top version={FOD_VERSION} generated_unix_seconds={}",
             unix_seconds_now()
         );
+        match cluster_snapshot {
+            Ok(current_cluster) => {
+                cluster::print_cluster_snapshot(&current_cluster, previous_cluster.as_ref());
+                println!();
+                previous_cluster = Some(current_cluster);
+            }
+            Err(err) => {
+                println!("Cluster:");
+                println!("  unavailable={err}");
+                println!();
+            }
+        }
         print_status_body(&snapshot);
 
         completed += 1;
@@ -203,18 +238,35 @@ fn run_top(options: TopOptions) -> Result<(), String> {
     }
 }
 
-fn print_status(snapshot: &MonitorSnapshot) {
+fn print_status(snapshot: &MonitorSnapshot, cluster_snapshot: Option<&cluster::ClusterSnapshot>) {
     println!("FOD monitor status");
     println!("version={FOD_VERSION}");
     println!("generated_unix_seconds={}", unix_seconds_now());
+    if let Some(cluster_snapshot) = cluster_snapshot {
+        cluster::print_cluster_snapshot(cluster_snapshot, None);
+        println!();
+    } else {
+        println!("Cluster:");
+        println!("  unavailable=true");
+        println!();
+    }
     print_status_body(snapshot);
 }
 
-fn print_report(snapshot: &MonitorSnapshot) {
+fn print_report(snapshot: &MonitorSnapshot, cluster_snapshot: Option<&cluster::ClusterSnapshot>) {
     println!("FOD monitor report");
     println!("version={FOD_VERSION}");
     println!("generated_unix_seconds={}", unix_seconds_now());
     println!();
+    if let Some(cluster_snapshot) = cluster_snapshot {
+        cluster::print_cluster_snapshot(cluster_snapshot, None);
+        println!();
+        cluster::print_cluster_details(cluster_snapshot);
+        println!();
+    } else {
+        println!("Cluster telemetry unavailable.");
+        println!();
+    }
     print_system_section(&snapshot.system);
     println!();
     print_process_summary(&snapshot.processes);
@@ -222,6 +274,7 @@ fn print_report(snapshot: &MonitorSnapshot) {
     print_process_table(&snapshot.processes);
     println!();
     println!("Hints:");
+    println!("  fod-monitor cluster");
     println!("  fod-monitor top --interval 2");
     println!("  fod-monitor top --iterations 5 --no-clear");
     println!("  fod-monitor report > fod-monitor-report.txt");

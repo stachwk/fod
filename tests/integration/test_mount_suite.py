@@ -58,6 +58,84 @@ class FODMountSuite(unittest.TestCase):
         self.launcher.stop()
         self.temp_dir.cleanup()
 
+    def test_shared_monitor_cluster(self):
+        suffix = uuid.uuid4().hex[:8]
+        file_path = self.mountpoint / f"monitor-{suffix}.bin"
+        payload = os.urandom(64 * 1024)
+        file_path.write_bytes(payload)
+
+        monitor_bin = ROOT / "target/debug/fod-monitor"
+        self.assertTrue(monitor_bin.is_file(), monitor_bin)
+
+        monitor_env = os.environ.copy()
+        monitor_host = os.environ.get("POSTGRES_HOST", "127.0.0.1")
+        monitor_port = os.environ.get("POSTGRES_PORT", "5432")
+        monitor_env["FOD_MONITOR_DSN"] = (
+            f"host={monitor_host} port={monitor_port} "
+            f"dbname={self.launcher.postgres_db} "
+            f"user={self.launcher.postgres_user} "
+            f"password={self.launcher.postgres_password} "
+            "options='-c timezone=Europe/Budapest'"
+        )
+
+        deadline = time.monotonic() + 15.0
+        last_result = None
+        last_metrics = {}
+
+        while time.monotonic() < deadline:
+            last_result = subprocess.run(
+                [str(monitor_bin), "cluster"],
+                cwd=ROOT,
+                env=monitor_env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            metrics = {}
+            if last_result.returncode == 0:
+                for line in last_result.stdout.splitlines():
+                    stripped = line.strip()
+                    if "=" not in stripped:
+                        continue
+                    key, metric_value = stripped.split("=", 1)
+                    if key in {
+                        "active_sessions",
+                        "telemetry_sessions",
+                        "write_completed_tasks",
+                        "write_completed_bytes",
+                    }:
+                        try:
+                            metrics[key] = int(metric_value)
+                        except ValueError:
+                            pass
+
+            last_metrics = metrics
+            if (
+                last_result.returncode == 0
+                and str(self.mountpoint) in last_result.stdout
+                and metrics.get("active_sessions", 0) >= 1
+                and metrics.get("telemetry_sessions", 0) >= 1
+                and metrics.get("write_completed_tasks", 0) >= 1
+                and metrics.get("write_completed_bytes", 0) >= len(payload)
+            ):
+                break
+            time.sleep(0.5)
+
+        self.assertIsNotNone(last_result)
+        self.assertEqual(last_result.returncode, 0, last_result.stderr)
+        self.assertIn(str(self.mountpoint), last_result.stdout)
+        self.assertIn("source_database=", last_result.stdout)
+        self.assertIn("source_role=", last_result.stdout)
+        # Aktywna sesja musi byc widoczna mimo nie-UTC TimeZone monitora.
+        self.assertGreaterEqual(last_metrics.get("active_sessions", 0), 1)
+        self.assertGreaterEqual(last_metrics.get("telemetry_sessions", 0), 1)
+        self.assertGreaterEqual(last_metrics.get("write_completed_tasks", 0), 1)
+        self.assertGreaterEqual(
+            last_metrics.get("write_completed_bytes", 0),
+            len(payload),
+        )
+
     def test_files(self):
         suffix = uuid.uuid4().hex[:8]
         file_path = self.mountpoint / f"files-{suffix}.bin"

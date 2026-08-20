@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -1264,6 +1265,327 @@ impl Drop for DbRepoPayloadBudgetPermit {
         for waiter in ready {
             waiter.signal();
         }
+    }
+}
+
+pub const SHARED_MONITOR_STATS_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SharedMonitorTaskStats {
+    pub admitted_tasks: u64,
+    pub completed_tasks: u64,
+    pub failed_tasks: u64,
+    pub queued_tasks: u64,
+    pub active_tasks: u64,
+    pub peak_queued_tasks: u64,
+    pub peak_active_tasks: u64,
+    pub active_transactions: u64,
+    pub active_transaction_limit: u64,
+    pub payload_in_flight_bytes: u64,
+    pub payload_in_flight_limit_bytes: u64,
+    pub per_task_buffer_limit_bytes: u64,
+    pub backpressure_events: u64,
+    pub fairness_yields: u64,
+    pub accounting_errors: u64,
+    pub completed_files: u64,
+    pub completed_bytes: u64,
+    pub database_batches: u64,
+    pub database_batch_rows: u64,
+    pub database_batch_bytes: u64,
+    pub elapsed_micros: u64,
+}
+
+impl SharedMonitorTaskStats {
+    pub fn from_snapshot(snapshot: &LogicalTaskObservabilitySnapshot) -> Self {
+        Self {
+            admitted_tasks: snapshot.queue.admitted_tasks,
+            completed_tasks: snapshot.queue.completed_tasks,
+            failed_tasks: snapshot.queue.failed_tasks,
+            queued_tasks: snapshot.queue.queued_tasks,
+            active_tasks: snapshot.queue.active_tasks,
+            peak_queued_tasks: snapshot.queue.peak_queued_tasks,
+            peak_active_tasks: snapshot.queue.peak_active_tasks,
+            active_transactions: snapshot.queue.active_transactions,
+            active_transaction_limit: snapshot.queue.active_transaction_limit,
+            payload_in_flight_bytes: snapshot.queue.payload_in_flight_bytes,
+            payload_in_flight_limit_bytes: snapshot.queue.payload_in_flight_limit_bytes,
+            per_task_buffer_limit_bytes: snapshot.queue.per_task_buffer_limit_bytes,
+            backpressure_events: snapshot.queue.backpressure_events,
+            fairness_yields: snapshot.queue.fairness_yields,
+            accounting_errors: snapshot.queue.accounting_errors,
+            completed_files: snapshot.throughput.completed_files,
+            completed_bytes: snapshot.throughput.completed_bytes,
+            database_batches: snapshot.throughput.database_batches,
+            database_batch_rows: snapshot.throughput.database_batch_rows,
+            database_batch_bytes: snapshot.throughput.database_batch_bytes,
+            elapsed_micros: snapshot.throughput.elapsed_micros,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SharedMonitorDatabaseStats {
+    pub pool_scope: String,
+    pub connection_limit: u64,
+    pub live_connections: u64,
+    pub idle_write_connections: u64,
+    pub idle_control_connections: u64,
+    pub active_connections: u64,
+    pub queued_acquisitions: u64,
+    pub peak_active_connections: u64,
+    pub peak_queued_acquisitions: u64,
+    pub acquisition_count: u64,
+    pub acquisition_wait_micros_total: u64,
+    pub acquisition_wait_micros_max: u64,
+    pub connection_create_count: u64,
+    pub connection_create_failures: u64,
+    pub operation_count: u64,
+    pub operation_failures: u64,
+    pub operation_micros_total: u64,
+    pub operation_micros_max: u64,
+    pub replay_count: u64,
+    pub stale_connection_discards: u64,
+    pub transaction_count: u64,
+    pub transaction_failures: u64,
+    pub transaction_micros_total: u64,
+    pub transaction_micros_max: u64,
+    pub heartbeat_count: u64,
+    pub heartbeat_failures: u64,
+    pub active_authority: String,
+    pub failover_count: u64,
+    pub connection_failures: u64,
+    pub role_rejections: u64,
+    pub replica_read_routing_enabled: bool,
+    pub replica_active_authority: Option<String>,
+    pub replica_reads: u64,
+    pub replica_lag_fallbacks: u64,
+    pub replica_read_failures: u64,
+    pub primary_read_fallbacks: u64,
+    pub replica_pool_pressure_fallbacks: u64,
+}
+
+impl SharedMonitorDatabaseStats {
+    pub fn from_snapshot(snapshot: &DbRepoObservabilitySnapshot) -> Self {
+        let pool = &snapshot.pool;
+        let routing = &snapshot.routing;
+        Self {
+            pool_scope: "fuse-repository".to_string(),
+            connection_limit: pool.connection_limit as u64,
+            live_connections: pool.live_connections as u64,
+            idle_write_connections: pool.idle_write_connections as u64,
+            idle_control_connections: pool.idle_control_connections as u64,
+            active_connections: pool.active_connections as u64,
+            queued_acquisitions: pool.queued_acquisitions as u64,
+            peak_active_connections: pool.peak_active_connections as u64,
+            peak_queued_acquisitions: pool.peak_queued_acquisitions as u64,
+            acquisition_count: pool.acquisition_count,
+            acquisition_wait_micros_total: pool.acquisition_wait_micros_total,
+            acquisition_wait_micros_max: pool.acquisition_wait_micros_max,
+            connection_create_count: pool.connection_create_count,
+            connection_create_failures: pool.connection_create_failures,
+            operation_count: pool.operation_count,
+            operation_failures: pool.operation_failures,
+            operation_micros_total: pool.operation_micros_total,
+            operation_micros_max: pool.operation_micros_max,
+            replay_count: pool.replay_count,
+            stale_connection_discards: pool.stale_connection_discards,
+            transaction_count: pool.transaction_count,
+            transaction_failures: pool.transaction_failures,
+            transaction_micros_total: pool.transaction_micros_total,
+            transaction_micros_max: pool.transaction_micros_max,
+            heartbeat_count: pool.heartbeat_count,
+            heartbeat_failures: pool.heartbeat_failures,
+            active_authority: routing.active_authority.clone(),
+            failover_count: routing.failover_count,
+            connection_failures: routing.connection_failures,
+            role_rejections: routing.role_rejections,
+            replica_read_routing_enabled: routing.replica_read_routing_enabled,
+            replica_active_authority: routing.replica_active_authority.clone(),
+            replica_reads: routing.replica_reads,
+            replica_lag_fallbacks: routing.replica_lag_fallbacks,
+            replica_read_failures: routing.replica_read_failures,
+            primary_read_fallbacks: routing.primary_read_fallbacks,
+            replica_pool_pressure_fallbacks: routing.replica_pool_pressure_fallbacks,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SharedMonitorPersistenceStats {
+    pub in_flight_bytes: u64,
+    pub peak_in_flight_bytes: u64,
+    pub in_flight_limit_bytes: u64,
+    pub reserved_bytes: u64,
+    pub queued_bytes: u64,
+    pub peak_reserved_bytes: u64,
+    pub peak_queued_bytes: u64,
+    pub queued_requests: u64,
+    pub peak_queued_requests: u64,
+    pub admission_count: u64,
+    pub backpressure_events: u64,
+    pub fairness_yields: u64,
+    pub oversized_admissions: u64,
+    pub accounting_errors: u64,
+    pub persist_operation_count: u64,
+    pub persist_operation_failures: u64,
+    pub persist_input_rows_total: u64,
+    pub persist_input_rows_max: u64,
+    pub persist_input_bytes_total: u64,
+    pub persist_input_bytes_max: u64,
+    pub persist_micros_total: u64,
+    pub persist_micros_max: u64,
+    pub persist_transaction_count: u64,
+    pub persist_transaction_failures: u64,
+    pub persist_transaction_micros_total: u64,
+    pub persist_transaction_micros_max: u64,
+    pub persist_copy_stage_count: u64,
+    pub persist_copy_stage_micros_total: u64,
+    pub persist_copy_stage_micros_max: u64,
+    pub persist_data_blocks_merge_count: u64,
+    pub persist_data_blocks_merge_micros_total: u64,
+    pub persist_data_blocks_merge_micros_max: u64,
+}
+
+impl SharedMonitorPersistenceStats {
+    pub fn from_snapshot(snapshot: &DbRepoObservabilitySnapshot) -> Self {
+        let payload = &snapshot.global_payload;
+        Self {
+            in_flight_bytes: payload.in_flight_bytes,
+            peak_in_flight_bytes: payload.peak_in_flight_bytes,
+            in_flight_limit_bytes: payload.in_flight_limit_bytes,
+            reserved_bytes: payload.reserved_bytes,
+            queued_bytes: payload.queued_bytes,
+            peak_reserved_bytes: payload.peak_reserved_bytes,
+            peak_queued_bytes: payload.peak_queued_bytes,
+            queued_requests: payload.queued_requests,
+            peak_queued_requests: payload.peak_queued_requests,
+            admission_count: payload.admission_count,
+            backpressure_events: payload.backpressure_events,
+            fairness_yields: payload.fairness_yields,
+            oversized_admissions: payload.oversized_admissions,
+            accounting_errors: payload
+                .accounting_errors
+                .saturating_add(payload.budget_accounting_errors),
+            persist_operation_count: payload.persist_operation_count,
+            persist_operation_failures: payload.persist_operation_failures,
+            persist_input_rows_total: payload.persist_input_rows_total,
+            persist_input_rows_max: payload.persist_input_rows_max,
+            persist_input_bytes_total: payload.persist_input_bytes_total,
+            persist_input_bytes_max: payload.persist_input_bytes_max,
+            persist_micros_total: payload.persist_micros_total,
+            persist_micros_max: payload.persist_micros_max,
+            persist_transaction_count: payload.persist_transaction_count,
+            persist_transaction_failures: payload.persist_transaction_failures,
+            persist_transaction_micros_total: payload.persist_transaction_micros_total,
+            persist_transaction_micros_max: payload.persist_transaction_micros_max,
+            persist_copy_stage_count: payload.persist_copy_stage_count,
+            persist_copy_stage_micros_total: payload.persist_copy_stage_micros_total,
+            persist_copy_stage_micros_max: payload.persist_copy_stage_micros_max,
+            persist_data_blocks_merge_count: payload.persist_data_blocks_merge_count,
+            persist_data_blocks_merge_micros_total: payload.persist_data_blocks_merge_micros_total,
+            persist_data_blocks_merge_micros_max: payload.persist_data_blocks_merge_micros_max,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SharedMonitorTimingStats {
+    pub fuse_read_total_us: u64,
+    pub fuse_write_total_us: u64,
+    pub read_block_map_us: u64,
+    pub assemble_read_slice_us: u64,
+    pub repo_fetch_block_range_us: u64,
+    pub repo_persist_blocks_us: u64,
+    pub update_write_buffer_us: u64,
+    pub flush_write_state_us: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SharedMonitorSessionStats {
+    pub schema_version: u32,
+    pub sample_seq: u64,
+    pub publish_interval_millis: u64,
+    pub read: SharedMonitorTaskStats,
+    pub write: SharedMonitorTaskStats,
+    pub copy: SharedMonitorTaskStats,
+    pub database: SharedMonitorDatabaseStats,
+    pub persistence: SharedMonitorPersistenceStats,
+    pub timings: SharedMonitorTimingStats,
+}
+
+impl SharedMonitorSessionStats {
+    pub fn from_snapshots(
+        sample_seq: u64,
+        publish_interval_millis: u64,
+        read: &LogicalTaskObservabilitySnapshot,
+        write: &LogicalTaskObservabilitySnapshot,
+        copy: &LogicalTaskObservabilitySnapshot,
+        database: &DbRepoObservabilitySnapshot,
+        timings: SharedMonitorTimingStats,
+    ) -> Self {
+        Self {
+            schema_version: SHARED_MONITOR_STATS_SCHEMA_VERSION,
+            sample_seq,
+            publish_interval_millis,
+            read: SharedMonitorTaskStats::from_snapshot(read),
+            write: SharedMonitorTaskStats::from_snapshot(write),
+            copy: SharedMonitorTaskStats::from_snapshot(copy),
+            database: SharedMonitorDatabaseStats::from_snapshot(database),
+            persistence: SharedMonitorPersistenceStats::from_snapshot(database),
+            timings,
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, String> {
+        serde_json::to_string(self)
+            .map_err(|err| format!("unable to serialize shared monitor stats: {err}"))
+    }
+
+    pub fn from_json(value: &str) -> Result<Self, String> {
+        serde_json::from_str(value)
+            .map_err(|err| format!("unable to parse shared monitor stats: {err}"))
+    }
+}
+
+#[cfg(test)]
+mod shared_monitor_tests {
+    use super::{SharedMonitorSessionStats, SHARED_MONITOR_STATS_SCHEMA_VERSION};
+
+    #[test]
+    fn shared_monitor_json_roundtrip_preserves_counters() {
+        let mut stats = SharedMonitorSessionStats {
+            schema_version: SHARED_MONITOR_STATS_SCHEMA_VERSION,
+            sample_seq: 17,
+            publish_interval_millis: 5_000,
+            ..SharedMonitorSessionStats::default()
+        };
+        stats.read.completed_tasks = 11;
+        stats.read.completed_bytes = 4096;
+        stats.write.completed_tasks = 7;
+        stats.write.completed_bytes = 8192;
+        stats.database.operation_count = 31;
+        stats.persistence.persist_operation_count = 3;
+        stats.timings.repo_persist_blocks_us = 1234;
+        let encoded = stats.to_json().unwrap();
+        let decoded = SharedMonitorSessionStats::from_json(&encoded).unwrap();
+        assert_eq!(decoded, stats);
+    }
+
+    #[test]
+    fn shared_monitor_json_defaults_missing_fields() {
+        let decoded = SharedMonitorSessionStats::from_json(
+            r#"{"schema_version":1,"sample_seq":4,"read":{"completed_bytes":55}}"#,
+        )
+        .unwrap();
+        assert_eq!(decoded.sample_seq, 4);
+        assert_eq!(decoded.publish_interval_millis, 0);
+        assert_eq!(decoded.read.completed_bytes, 55);
+        assert_eq!(decoded.write.completed_bytes, 0);
     }
 }
 

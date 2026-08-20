@@ -321,3 +321,30 @@ writable server. Multiple aliases to that same server are allowed.
 The policy is intentionally fail-closed. External HA software must perform the
 actual promotion and, where required, STONITH/fencing. FOD only validates that
 the observed writable state is unambiguous before routing new work to it.
+
+## Wspolna telemetria `fod-monitor` od 3.3.1
+
+Writable mount publikuje do `fod.monitor_session_stats` jedna wersjonowana
+migawke JSONB na `session_id`. Domyslny interwal to 5000 ms:
+
+```bash
+FOD_MONITOR_PUBLISH_INTERVAL_MS=5000
+```
+
+Zakres to 500-60000 ms. Nie ma zapisu statystyk per callback FUSE.
+Publikacja telemetrii odswieza liveness `client_sessions`; TTL wynosi co najmniej
+`max(lock_lease_ttl, 3 * publish_interval, 30 s)`. Payload zapisuje faktyczny
+interwal, a prog `stale_telemetry_sessions` wynosi
+`max(15 s, 3 * publish_interval)`.
+
+Telemetria nie zmienia semantyki lock managera: `lock_heartbeat_interval=0`
+nadal wylacza heartbeat lockow, a backend `memory` nie uruchamia heartbeat/prune
+lockow PostgreSQL.
+`fod-monitor` uzywa standardowej sekcji `[database]`; opcjonalny osobny DSN:
+
+```bash
+FOD_MONITOR_DSN="host=pg-primary dbname=fod user=fod_monitor ..." fod-monitor cluster
+```
+
+Monitor nie wypisuje DSN ani hasla. Pelny kontrakt jest w
+`docs/FOD_3_3_1_SHARED_MONITORING.md`.

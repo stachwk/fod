@@ -7129,6 +7129,7 @@ impl DbRepo {
             SELECT CASE WHEN
                 to_regclass('{schema}.client_sessions') IS NOT NULL
                 AND to_regclass('{schema}.client_session_owner_keys') IS NOT NULL
+                AND to_regclass('{schema}.monitor_session_stats') IS NOT NULL
                 AND EXISTS (
                     SELECT 1
                     FROM information_schema.columns
@@ -7167,6 +7168,12 @@ impl DbRepo {
                     FROM pg_indexes
                     WHERE schemaname = '{schema}'
                       AND indexname = 'idx_client_session_owner_keys_owner'
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_indexes
+                    WHERE schemaname = '{schema}'
+                      AND indexname = 'idx_monitor_session_stats_sampled'
                 )
                 AND EXISTS (
                     SELECT 1
@@ -7551,6 +7558,26 @@ impl DbRepo {
                             "
                             CREATE INDEX IF NOT EXISTS idx_client_session_owner_keys_last_seen
                             ON client_session_owner_keys (last_seen_at)
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
+                            CREATE TABLE IF NOT EXISTS monitor_session_stats (
+                                session_id BIGINT PRIMARY KEY REFERENCES client_sessions(session_id) ON DELETE CASCADE,
+                                fod_version VARCHAR(32) NOT NULL,
+                                sample_seq BIGINT NOT NULL DEFAULT 0,
+                                sampled_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                                payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                                updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                            )
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
+                            CREATE INDEX IF NOT EXISTS idx_monitor_session_stats_sampled
+                            ON monitor_session_stats (sampled_at)
                             ",
                         )
                         .map_err(|_| "SQL contains NUL byte".to_string())?,
@@ -8120,6 +8147,60 @@ impl DbRepo {
                     Ok(())
                 },
             )
+        })
+    }
+
+    pub fn publish_monitor_session_stats(
+        &self,
+        session_id: u64,
+        lease_ttl_seconds: u64,
+        fod_version: &str,
+        sample_seq: u64,
+        payload_json: &str,
+    ) -> Result<(), String> {
+        let sql = CString::new(
+            "
+            WITH refreshed_session AS (
+                UPDATE client_sessions
+                SET heartbeat_at = NOW(),
+                    lease_expires_at = NOW() + ($5::bigint * INTERVAL '1 second')
+                WHERE session_id = $1
+                RETURNING session_id
+            )
+            INSERT INTO monitor_session_stats (
+                session_id, fod_version, sample_seq, sampled_at, payload_json, updated_at
+            )
+            SELECT session_id, $2, $3, NOW(), $4::jsonb, NOW()
+            FROM refreshed_session
+            ON CONFLICT (session_id) DO UPDATE SET
+                fod_version = EXCLUDED.fod_version,
+                sample_seq = EXCLUDED.sample_seq,
+                sampled_at = EXCLUDED.sampled_at,
+                payload_json = EXCLUDED.payload_json,
+                updated_at = NOW()
+            WHERE monitor_session_stats.sample_seq <= EXCLUDED.sample_seq
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let session_id = CString::new(session_id.to_string())
+            .map_err(|_| "session id contains NUL byte".to_string())?;
+        let lease_ttl_seconds = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "lease ttl contains NUL byte".to_string())?;
+        let fod_version =
+            CString::new(fod_version).map_err(|_| "FOD version contains NUL byte".to_string())?;
+        let sample_seq = CString::new(sample_seq.to_string())
+            .map_err(|_| "sample sequence contains NUL byte".to_string())?;
+        let payload_json = CString::new(payload_json)
+            .map_err(|_| "monitor payload contains NUL byte".to_string())?;
+        self.with_control_connection(|conn| unsafe {
+            let params = [
+                &session_id,
+                &fod_version,
+                &sample_seq,
+                &payload_json,
+                &lease_ttl_seconds,
+            ];
+            exec_command_params(conn, &sql, &params).map(|_| ())
         })
     }
 

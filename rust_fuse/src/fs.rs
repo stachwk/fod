@@ -5,7 +5,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use fod_rust_monitor::{
     log_logical_task_observability as log_logical_task_snapshots, LogicalTaskAdmissionGate,
     LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
-    LogicalTaskQueueObservability,
+    LogicalTaskQueueObservability, SharedMonitorSessionStats, SharedMonitorTimingStats,
 };
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
@@ -205,6 +205,17 @@ struct LockHeartbeatHandle {
 
 const RUNTIME_RELOAD_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const LOGICAL_TASK_OBSERVABILITY_INTERVAL: Duration = Duration::from_secs(30);
+const SHARED_MONITOR_PUBLISH_INTERVAL_MS_DEFAULT: u64 = 5_000;
+const SHARED_MONITOR_PUBLISH_INTERVAL_MS_MIN: u64 = 500;
+const SHARED_MONITOR_PUBLISH_INTERVAL_MS_MAX: u64 = 60_000;
+const SHARED_MONITOR_PUBLISH_INTERVAL_MS_ENV: &str = "FOD_MONITOR_PUBLISH_INTERVAL_MS";
+const CLIENT_SESSION_LEASE_TTL_MIN_SECONDS: u64 = 30;
+const CLIENT_SESSION_LEASE_TTL_PUBLISH_INTERVAL_MULTIPLIER: u64 = 3;
+
+struct SharedMonitorPublisherHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
 
 struct RuntimeReloadHandle {
     stop: Arc<AtomicBool>,
@@ -270,6 +281,147 @@ impl Drop for LockHeartbeatHandle {
     }
 }
 
+fn shared_monitor_publish_interval() -> Duration {
+    let default = SHARED_MONITOR_PUBLISH_INTERVAL_MS_DEFAULT;
+    let value = match std::env::var(SHARED_MONITOR_PUBLISH_INTERVAL_MS_ENV) {
+        Ok(value) => match value.trim().parse::<u64>() {
+            Ok(value)
+                if (SHARED_MONITOR_PUBLISH_INTERVAL_MS_MIN
+                    ..=SHARED_MONITOR_PUBLISH_INTERVAL_MS_MAX)
+                    .contains(&value) =>
+            {
+                value
+            }
+            Ok(value) => {
+                warn!(
+                    "FOD shared monitor interval {}={} outside {}..={}; using {}",
+                    SHARED_MONITOR_PUBLISH_INTERVAL_MS_ENV,
+                    value,
+                    SHARED_MONITOR_PUBLISH_INTERVAL_MS_MIN,
+                    SHARED_MONITOR_PUBLISH_INTERVAL_MS_MAX,
+                    default
+                );
+                default
+            }
+            Err(err) => {
+                warn!(
+                    "FOD shared monitor interval {} invalid: {}; using {}",
+                    SHARED_MONITOR_PUBLISH_INTERVAL_MS_ENV, err, default
+                );
+                default
+            }
+        },
+        Err(_) => default,
+    };
+    Duration::from_millis(value)
+}
+
+fn publish_shared_monitor_sample(
+    repo: &DbRepo,
+    session_id: u64,
+    lease_ttl_seconds: u64,
+    publish_interval_millis: u64,
+    sample_seq: u64,
+    read: &LogicalTaskQueueObservability,
+    write: &LogicalTaskQueueObservability,
+    copy: &LogicalTaskQueueObservability,
+    profile: &FodFuseProfileCounters,
+) -> Result<(), String> {
+    let read_snapshot = read.snapshot()?;
+    let write_snapshot = write.snapshot()?;
+    let copy_snapshot = copy.snapshot()?;
+    let database_snapshot = repo.observability_snapshot()?;
+    let stats = SharedMonitorSessionStats::from_snapshots(
+        sample_seq,
+        publish_interval_millis,
+        &read_snapshot,
+        &write_snapshot,
+        &copy_snapshot,
+        &database_snapshot,
+        profile.shared_monitor_timing_stats(),
+    );
+    repo.publish_monitor_session_stats(
+        session_id,
+        lease_ttl_seconds,
+        env!("CARGO_PKG_VERSION"),
+        sample_seq,
+        &stats.to_json()?,
+    )
+}
+
+impl SharedMonitorPublisherHandle {
+    fn spawn(
+        repo: DbRepo,
+        session_id: u64,
+        session_lease_ttl: Duration,
+        read: Arc<LogicalTaskQueueObservability>,
+        write: Arc<LogicalTaskQueueObservability>,
+        copy: Arc<LogicalTaskQueueObservability>,
+        profile: Arc<FodFuseProfileCounters>,
+    ) -> Result<Self, String> {
+        let interval = shared_monitor_publish_interval();
+        let publish_interval_millis = interval.as_millis().min(u128::from(u64::MAX)) as u64;
+        let publish_interval_ttl_seconds = interval
+            .as_secs()
+            .saturating_add(u64::from(interval.subsec_nanos() > 0))
+            .saturating_mul(CLIENT_SESSION_LEASE_TTL_PUBLISH_INTERVAL_MULTIPLIER);
+        let lease_ttl_seconds = session_lease_ttl
+            .as_secs()
+            .saturating_add(u64::from(session_lease_ttl.subsec_nanos() > 0))
+            .max(CLIENT_SESSION_LEASE_TTL_MIN_SECONDS)
+            .max(publish_interval_ttl_seconds);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        info!("FOD shared monitor publisher: session_id={} interval_ms={} table={}.monitor_session_stats", session_id, interval.as_millis(), FOD_SCHEMA_NAME);
+        let thread = thread::Builder::new().name("fod-shared-monitor".to_string()).spawn(move || {
+            let mut sample_seq = 0_u64;
+            loop {
+                sample_seq = sample_seq.saturating_add(1);
+                if let Err(err) = publish_shared_monitor_sample(
+                        &repo,
+                        session_id,
+                        lease_ttl_seconds,
+                        publish_interval_millis,
+                        sample_seq, read.as_ref(), write.as_ref(), copy.as_ref(), profile.as_ref()) {
+                    warn!("FOD shared monitor publish failed session_id={} sample_seq={} err={}", session_id, sample_seq, err);
+                }
+                if stop_thread.load(Ordering::Relaxed) { break; }
+                thread::park_timeout(interval);
+                if stop_thread.load(Ordering::Relaxed) {
+                    sample_seq = sample_seq.saturating_add(1);
+                    if let Err(err) = publish_shared_monitor_sample(
+                        &repo,
+                        session_id,
+                        lease_ttl_seconds,
+                        publish_interval_millis,
+                        sample_seq, read.as_ref(), write.as_ref(), copy.as_ref(), profile.as_ref()) {
+                        warn!("FOD shared monitor final publish failed session_id={} sample_seq={} err={}", session_id, sample_seq, err);
+                    }
+                    break;
+                }
+            }
+        }).map_err(|err| format!("failed to spawn shared monitor thread: {err}"))?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for SharedMonitorPublisherHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 impl RuntimeReloadHandle {
     fn spawn(
         repo: DbRepo,
@@ -328,13 +480,6 @@ fn heartbeat_pg_mount_state(
     lease_ttl_seconds: u64,
 ) -> bool {
     let mut failed = false;
-    let local_owners = match local_lock_owners.lock() {
-        Ok(guard) => guard.iter().copied().collect::<HashSet<_>>(),
-        Err(err) => {
-            warn!("FOD lock heartbeat skipped: poisoned owner set: {}", err);
-            return true;
-        }
-    };
 
     if let Err(err) = repo.heartbeat_client_session(session_id, lease_ttl_seconds) {
         warn!(
@@ -343,6 +488,14 @@ fn heartbeat_pg_mount_state(
         );
         return true;
     }
+
+    let local_owners = match local_lock_owners.lock() {
+        Ok(guard) => guard.iter().copied().collect::<HashSet<_>>(),
+        Err(err) => {
+            warn!("FOD lock heartbeat skipped: poisoned owner set: {}", err);
+            return true;
+        }
+    };
 
     for owner in local_owners.iter().copied() {
         if let Err(err) = repo.touch_client_session_owner_key(session_id, owner) {
@@ -750,6 +903,19 @@ impl FodFuseProfileCounters {
         Self::add(&self.reply_write_us, elapsed);
     }
 
+    pub(crate) fn shared_monitor_timing_stats(&self) -> SharedMonitorTimingStats {
+        SharedMonitorTimingStats {
+            fuse_read_total_us: self.fuse_read_total_us.load(Ordering::Relaxed),
+            fuse_write_total_us: self.fuse_write_total_us.load(Ordering::Relaxed),
+            read_block_map_us: self.read_block_map_us.load(Ordering::Relaxed),
+            assemble_read_slice_us: self.assemble_read_slice_us.load(Ordering::Relaxed),
+            repo_fetch_block_range_us: self.repo_fetch_block_range_us.load(Ordering::Relaxed),
+            repo_persist_blocks_us: self.repo_persist_blocks_us.load(Ordering::Relaxed),
+            update_write_buffer_us: self.update_write_buffer_us.load(Ordering::Relaxed),
+            flush_write_state_us: self.flush_write_state_us.load(Ordering::Relaxed),
+        }
+    }
+
     pub(crate) fn has_activity(&self) -> bool {
         self.fuse_read_total_us.load(Ordering::Relaxed) > 0
             || self.fuse_write_total_us.load(Ordering::Relaxed) > 0
@@ -989,6 +1155,7 @@ pub struct FodFuse {
     logical_read_gate: Arc<LogicalTaskAdmissionGate>,
     logical_write_gate: Arc<LogicalTaskAdmissionGate>,
     logical_task_observability: Option<LogicalTaskObservabilitySampler>,
+    shared_monitor_publisher: Option<SharedMonitorPublisherHandle>,
     next_fh: Mutex<u64>,
     request_seq: AtomicU64,
     session_id: Option<u64>,
@@ -1085,6 +1252,7 @@ impl FodFuse {
             logical_read_gate,
             logical_write_gate,
             logical_task_observability: None,
+            shared_monitor_publisher: None,
             next_fh: Mutex::new(1),
             request_seq: AtomicU64::new(1),
             session_id: None,
@@ -2365,12 +2533,14 @@ impl FodFuse {
         if let Ok(mut guard) = self.local_lock_owners.lock() {
             guard.insert(owner);
         }
-        if let Some(session_id) = self.session_id {
-            if let Err(err) = self.repo.touch_client_session_owner_key(session_id, owner) {
-                warn!(
-                    "FOD session owner tracking failed session_id={} owner={} err={}",
-                    session_id, owner, err
-                );
+        if self.lock_backend_is_pg() {
+            if let Some(session_id) = self.session_id {
+                if let Err(err) = self.repo.touch_client_session_owner_key(session_id, owner) {
+                    warn!(
+                        "FOD session owner tracking failed session_id={} owner={} err={}",
+                        session_id, owner, err
+                    );
+                }
             }
         }
     }
@@ -3386,7 +3556,7 @@ impl FodFuse {
         mountpoint: &Path,
         mount_mode: &str,
     ) -> Result<(), String> {
-        if self.session_id.is_some() || !self.lock_backend_is_pg() {
+        if self.session_id.is_some() || self.read_only {
             return Ok(());
         }
         let host_name = std::env::var("HOSTNAME")
@@ -3395,7 +3565,11 @@ impl FodFuse {
             .unwrap_or_else(|| "unknown".to_string());
         let mountpoint = mountpoint.to_string_lossy().to_string();
         let pid = u64::from(std::process::id());
-        let lease_ttl_seconds = self.lock_lease_ttl.as_secs_f64().ceil().max(1.0) as u64;
+        let lease_ttl_seconds =
+            self.lock_lease_ttl
+                .as_secs_f64()
+                .ceil()
+                .max(CLIENT_SESSION_LEASE_TTL_MIN_SECONDS as f64) as u64;
         let session_id = self.repo.register_client_session(
             &host_name,
             &mountpoint,
@@ -3430,6 +3604,26 @@ impl FodFuse {
         Ok(())
     }
 
+    pub fn start_shared_monitor_publisher(&mut self) -> Result<(), String> {
+        if self.shared_monitor_publisher.is_some() || self.read_only {
+            return Ok(());
+        }
+        let Some(session_id) = self.session_id else {
+            return Ok(());
+        };
+        let publisher = SharedMonitorPublisherHandle::spawn(
+            self.repo.clone(),
+            session_id,
+            self.lock_lease_ttl,
+            Arc::clone(&self.logical_read_tasks),
+            Arc::clone(&self.logical_write_tasks),
+            Arc::clone(&self.logical_copy_tasks),
+            Arc::clone(&self.profile),
+        )?;
+        self.shared_monitor_publisher = Some(publisher);
+        Ok(())
+    }
+
     pub fn start_runtime_reload(&mut self, base_runtime: &RuntimeConfig) -> Result<(), String> {
         if self.runtime_reload.is_some() {
             return Ok(());
@@ -3458,6 +3652,9 @@ impl FodFuse {
 
 impl Drop for FodFuse {
     fn drop(&mut self) {
+        if let Some(mut publisher) = self.shared_monitor_publisher.take() {
+            publisher.stop();
+        }
         if let Some(mut sampler) = self.logical_task_observability.take() {
             sampler.stop();
         }
