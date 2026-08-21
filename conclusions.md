@@ -2228,3 +2228,67 @@ Known residual risk: these are Docker primary/replica measurements, not the
 physical slave run from the earlier `715cf22` note. The direction is strong,
 but the exact absolute throughput should still be confirmed on the physical
 replica when that environment is available.
+
+## 2026-08-21 - FOD 3.3.9 read SQL statement profiling
+
+Implementation base while testing: `45309a2` plus local statement-profile
+changes, later committed as `STMT_PROFILE_COMMIT`.
+
+The read-path profile now includes statement-level SQL aggregates in the FUSE
+boundary profile when `FOD_PROFILE_IO=1` is enabled:
+
+- `pg_prepared_statement` groups prepared statements by name.
+- `pg_sql_statement` groups raw SQL helpers by operation and compact SQL label.
+- Each aggregate reports call count, total/max/average microseconds, parameter
+  count, parameter bytes, returned rows, returned bytes, and failures.
+- Returned `PGresult` payload is scanned only when `FOD_PROFILE_IO` is enabled;
+  normal non-profiled runs do not pay that scan cost. The `FOD_PROFILE_IO`
+  flag is cached per process.
+
+Validation passed on 2026-08-21 with the code tree later committed as
+`STMT_PROFILE_COMMIT`:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | passed |
+| `cargo check --workspace --locked` | passed |
+| `make --no-print-directory test-rust-pg-query` | passed; 16 tests |
+| `make --no-print-directory test-block-read` | passed; 1 FUSE mount test |
+| `FOD_PROFILE_IO=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed; write 8063 KiB/s, read 5988 KiB/s, 1024 read callbacks, 1024 write callbacks |
+| `make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120` | passed; primary stopped before read, replica restarted, strict read-only DML guard passed |
+
+Final 128 MiB / 4 KiB replica-read profile from artifact
+`artifacts/perf/45309a2/lt7300-docker-primary-write-replica-read-20260821T142946Z`:
+
+| Metric | Value |
+| --- | ---: |
+| Read throughput | 64.4 MiB/s |
+| FOD read callbacks | 32768 |
+| `fuse_read_total_us` | 1057722 |
+| `read_block_map_us` | 421051 |
+| `repo_fetch_block_range_us` | 331078 |
+| `reply_data_us` | 220113 |
+| DB `operation_count` | 200 |
+| DB `operation_failures` | 0 |
+
+Statement breakdown from the same artifact:
+
+| Statement | Count | Total us | Rows | Bytes |
+| --- | ---: | ---: | ---: | ---: |
+| `fod_fetch_block_range` | 65 | 261186 | 32768 | 134479872 |
+| `fod_fetch_path_attrs_blob_file` | 15 | 110667 | 15 | 2280 |
+| `fod_get_dir_id` | 24 | 13875 | 1 | 1 |
+| `fod_resolve_path_root` | 23 | 13653 | 22 | 104 |
+| `SELECT COUNT(*) FROM directories WHERE id_parent IS NULL AND name != '/'` | 17 | 10782 | 17 | 17 |
+| `SELECT 1 + COUNT(*) FROM hardlinks WHERE id_file = $1` | 15 | 7263 | 15 | 15 |
+| `fod_file_read_metadata` | 1 | 444 | 1 | 87 |
+
+Conclusion: the remaining read-only direct-I/O 128 MiB / 4 KiB cost is not a
+per-callback metadata problem. `fod_file_read_metadata` runs once for the file
+handle. The largest measured target is still the payload/map path:
+`fod_fetch_block_range` performs 65 range calls, returns all 32768 blocks, and
+accounts for most prepared-statement SQL time. Raw hardlink and directory count
+queries are visible but small compared with payload transfer and path-attrs
+lookup. `reply_data_us` is also now material at 32768 callbacks, so the next
+optimization should keep both DB payload/map construction and FUSE reply cost
+in view.

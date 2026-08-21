@@ -18,8 +18,10 @@ use fuser::{
 use libc::{EIO, ENOENT, ENOSPC, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
+use rust_hotpath::pg::sql_statement_profile_snapshot_lines;
 use rust_hotpath::pg::{
-    DbRepo, DbRepoSourceSnapshot, FileReadMetadata, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
+    PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX,
 };
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
@@ -1130,7 +1132,7 @@ impl FodFuseProfileCounters {
     }
 
     pub(crate) fn snapshot_lines(&self) -> Vec<String> {
-        vec![
+        let mut lines = vec![
             format!(
                 "fuse_read_total_us={}",
                 self.fuse_read_total_us.load(Ordering::Relaxed)
@@ -1284,7 +1286,10 @@ impl FodFuseProfileCounters {
                 "reply_write_us={}",
                 self.reply_write_us.load(Ordering::Relaxed)
             ),
-        ]
+        ];
+        lines.extend(prepared_statement_profile_snapshot_lines());
+        lines.extend(sql_statement_profile_snapshot_lines());
+        lines
     }
 }
 

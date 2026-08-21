@@ -10,7 +10,7 @@ use fod_rust_monitor::{
     DbRepoTransactionAdmissionSnapshot, LaneObservabilitySource, PostgresPressureSnapshot,
 };
 use fod_rust_runtime::{
-    env_var_truthy_with_legacy_alias, postgres_session_setup_sql,
+    duration_to_micros, env_var_truthy_with_legacy_alias, postgres_session_setup_sql,
     request_token as generate_request_token, DataObjectSwapCleanup, PersistBlockTransport,
     PostgresRuntimeRequirements, PostgresVersionDiagnostics, RuntimeConfig, RuntimePayloadSettings,
     RuntimeStorageSettings, RuntimeTransactionSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
@@ -19,7 +19,7 @@ use fod_rust_runtime::{
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString};
 use std::fs::File;
@@ -27,7 +27,7 @@ use std::io::Read;
 use std::os::raw::{c_char, c_int, c_uint};
 use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 #[repr(C)]
@@ -68,8 +68,8 @@ const REPLICA_POOL_PRESSURE_MARGIN_MILLI: u64 = 250;
 static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 
 fn fod_profile_io_enabled() -> bool {
-    // Profilowanie jest wlaczone tylko dla FOD_PROFILE_IO=1/true/yes/on
-    env_var_truthy_with_legacy_alias("FOD_PROFILE_IO", false)
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_IO", false))
 }
 
 fn fod_sql_label(sql: &CString) -> String {
@@ -109,6 +109,231 @@ impl DbfsIoProfileAggregate {
         self.blocks_sum = self.blocks_sum.saturating_add(blocks);
         self.bytes_sum = self.bytes_sum.saturating_add(bytes);
     }
+}
+
+#[derive(Debug, Default)]
+struct StatementProfileAggregate {
+    count: u64,
+    failures: u64,
+    micros_sum: u64,
+    micros_max: u64,
+    params_sum: u64,
+    param_bytes_sum: u64,
+    result_rows_sum: u64,
+    result_bytes_sum: u64,
+}
+
+impl StatementProfileAggregate {
+    fn observe(
+        &mut self,
+        elapsed: Duration,
+        params: usize,
+        param_bytes: usize,
+        result_rows: u64,
+        result_bytes: u64,
+        failed: bool,
+    ) {
+        let elapsed_micros = duration_to_micros(elapsed);
+        self.count = self.count.saturating_add(1);
+        self.micros_sum = self.micros_sum.saturating_add(elapsed_micros);
+        self.micros_max = self.micros_max.max(elapsed_micros);
+        self.params_sum = self.params_sum.saturating_add(params as u64);
+        self.param_bytes_sum = self.param_bytes_sum.saturating_add(param_bytes as u64);
+        self.result_rows_sum = self.result_rows_sum.saturating_add(result_rows);
+        self.result_bytes_sum = self.result_bytes_sum.saturating_add(result_bytes);
+        if failed {
+            self.failures = self.failures.saturating_add(1);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StatementProfileSnapshot {
+    label: String,
+    op: &'static str,
+    count: u64,
+    failures: u64,
+    micros_sum: u64,
+    micros_max: u64,
+    params_sum: u64,
+    param_bytes_sum: u64,
+    result_rows_sum: u64,
+    result_bytes_sum: u64,
+}
+
+static FOD_PREPARED_STATEMENT_PROFILE_AGGREGATE: OnceLock<
+    Mutex<BTreeMap<&'static str, StatementProfileAggregate>>,
+> = OnceLock::new();
+
+static FOD_SQL_STATEMENT_PROFILE_AGGREGATE: OnceLock<
+    Mutex<BTreeMap<(String, &'static str), StatementProfileAggregate>>,
+> = OnceLock::new();
+
+fn fod_profile_prepared_statement_observe(
+    statement: PreparedStatement,
+    elapsed: Duration,
+    params: usize,
+    param_bytes: usize,
+    result_rows: u64,
+    result_bytes: u64,
+    failed: bool,
+) {
+    if !fod_profile_io_enabled() {
+        return;
+    }
+    let aggregate =
+        FOD_PREPARED_STATEMENT_PROFILE_AGGREGATE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Ok(mut guard) = aggregate.lock() {
+        guard.entry(statement.name()).or_default().observe(
+            elapsed,
+            params,
+            param_bytes,
+            result_rows,
+            result_bytes,
+            failed,
+        );
+    }
+}
+
+fn fod_profile_sql_statement_observe(
+    op: &'static str,
+    sql_label: String,
+    elapsed: Duration,
+    params: usize,
+    param_bytes: usize,
+    result_rows: u64,
+    result_bytes: u64,
+    failed: bool,
+) {
+    if !fod_profile_io_enabled() {
+        return;
+    }
+    let aggregate = FOD_SQL_STATEMENT_PROFILE_AGGREGATE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Ok(mut guard) = aggregate.lock() {
+        guard.entry((sql_label, op)).or_default().observe(
+            elapsed,
+            params,
+            param_bytes,
+            result_rows,
+            result_bytes,
+            failed,
+        );
+    }
+}
+
+pub fn prepared_statement_profile_snapshot_lines() -> Vec<String> {
+    if !fod_profile_io_enabled() {
+        return Vec::new();
+    }
+    let Some(aggregate) = FOD_PREPARED_STATEMENT_PROFILE_AGGREGATE.get() else {
+        return Vec::new();
+    };
+    let Ok(guard) = aggregate.lock() else {
+        return Vec::new();
+    };
+    let mut snapshots = guard
+        .iter()
+        .map(|(name, aggregate)| StatementProfileSnapshot {
+            label: (*name).to_string(),
+            op: "prepared",
+            count: aggregate.count,
+            failures: aggregate.failures,
+            micros_sum: aggregate.micros_sum,
+            micros_max: aggregate.micros_max,
+            params_sum: aggregate.params_sum,
+            param_bytes_sum: aggregate.param_bytes_sum,
+            result_rows_sum: aggregate.result_rows_sum,
+            result_bytes_sum: aggregate.result_bytes_sum,
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_unstable_by(|left, right| {
+        right
+            .micros_sum
+            .cmp(&left.micros_sum)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    snapshots
+        .into_iter()
+        .map(|snapshot| {
+            let avg_us = if snapshot.count == 0 {
+                0
+            } else {
+                snapshot.micros_sum / snapshot.count
+            };
+            format!(
+                "pg_prepared_statement name={} count={} total_us={} max_us={} avg_us={} params={} param_bytes={} result_rows={} result_bytes={} failures={}",
+                snapshot.label,
+                snapshot.count,
+                snapshot.micros_sum,
+                snapshot.micros_max,
+                avg_us,
+                snapshot.params_sum,
+                snapshot.param_bytes_sum,
+                snapshot.result_rows_sum,
+                snapshot.result_bytes_sum,
+                snapshot.failures
+            )
+        })
+        .collect()
+}
+
+pub fn sql_statement_profile_snapshot_lines() -> Vec<String> {
+    if !fod_profile_io_enabled() {
+        return Vec::new();
+    }
+    let Some(aggregate) = FOD_SQL_STATEMENT_PROFILE_AGGREGATE.get() else {
+        return Vec::new();
+    };
+    let Ok(guard) = aggregate.lock() else {
+        return Vec::new();
+    };
+    let mut snapshots = guard
+        .iter()
+        .map(|((label, op), aggregate)| StatementProfileSnapshot {
+            label: label.clone(),
+            op,
+            count: aggregate.count,
+            failures: aggregate.failures,
+            micros_sum: aggregate.micros_sum,
+            micros_max: aggregate.micros_max,
+            params_sum: aggregate.params_sum,
+            param_bytes_sum: aggregate.param_bytes_sum,
+            result_rows_sum: aggregate.result_rows_sum,
+            result_bytes_sum: aggregate.result_bytes_sum,
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_unstable_by(|left, right| {
+        right
+            .micros_sum
+            .cmp(&left.micros_sum)
+            .then_with(|| left.label.cmp(&right.label))
+            .then_with(|| left.op.cmp(right.op))
+    });
+    snapshots
+        .into_iter()
+        .map(|snapshot| {
+            let avg_us = if snapshot.count == 0 {
+                0
+            } else {
+                snapshot.micros_sum / snapshot.count
+            };
+            let sql = snapshot.label.replace('"', "'");
+            format!(
+                "pg_sql_statement op={} count={} total_us={} max_us={} avg_us={} params={} param_bytes={} result_rows={} result_bytes={} failures={} sql=\"{}\"",
+                snapshot.op,
+                snapshot.count,
+                snapshot.micros_sum,
+                snapshot.micros_max,
+                avg_us,
+                snapshot.params_sum,
+                snapshot.param_bytes_sum,
+                snapshot.result_rows_sum,
+                snapshot.result_bytes_sum,
+                snapshot.failures,
+                sql
+            )
+        })
+        .collect()
 }
 
 static FOD_COPY_PUT_DATA_PROFILE_AGGREGATE: std::sync::OnceLock<
@@ -2127,6 +2352,7 @@ unsafe fn exec_prepared_params_with_result_format(
     params: &[&CString],
     result_format: c_int,
 ) -> Result<*mut PGresult, String> {
+    let profile_enabled = fod_profile_io_enabled();
     if params.len() != statement.param_count() as usize {
         return Err(format!(
             "prepared statement {} expected {} parameters, got {}",
@@ -2145,6 +2371,14 @@ unsafe fn exec_prepared_params_with_result_format(
         .iter()
         .map(|value| value.as_bytes().len() as c_int)
         .collect::<Vec<_>>();
+    let param_bytes = if profile_enabled {
+        param_lengths
+            .iter()
+            .map(|value| if *value > 0 { *value as usize } else { 0 })
+            .sum::<usize>()
+    } else {
+        0
+    };
     let param_formats = vec![0 as c_int; params.len()];
     let (param_values_ptr, param_lengths_ptr, param_formats_ptr) = if params.is_empty() {
         (std::ptr::null(), std::ptr::null(), std::ptr::null())
@@ -2155,6 +2389,7 @@ unsafe fn exec_prepared_params_with_result_format(
             param_formats.as_ptr(),
         )
     };
+    let started = Instant::now();
     let res = PQexecPrepared(
         conn,
         name.as_ptr(),
@@ -2164,11 +2399,36 @@ unsafe fn exec_prepared_params_with_result_format(
         param_formats_ptr,
         result_format,
     );
+    let elapsed = started.elapsed();
     if res.is_null() {
+        if profile_enabled {
+            fod_profile_prepared_statement_observe(
+                statement,
+                elapsed,
+                params.len(),
+                param_bytes,
+                0,
+                0,
+                true,
+            );
+        }
         let err = conn_error(conn);
         Err(maybe_replayable_prepared_error(conn, statement, err))
     } else if statement.is_read_only() {
         let status = PQresultStatus(res);
+        let failed = status != PGRES_TUPLES_OK;
+        if profile_enabled {
+            let (result_rows, result_bytes) = pgresult_profile_payload(res, status);
+            fod_profile_prepared_statement_observe(
+                statement,
+                elapsed,
+                params.len(),
+                param_bytes,
+                result_rows,
+                result_bytes,
+                failed,
+            );
+        }
         if status != PGRES_TUPLES_OK {
             let error = result_error(res);
             if is_retryable_connection_error(conn, &error) {
@@ -2178,6 +2438,19 @@ unsafe fn exec_prepared_params_with_result_format(
         }
         Ok(res)
     } else {
+        if profile_enabled {
+            let status = PQresultStatus(res);
+            let failed = !matches!(status, PGRES_TUPLES_OK | PGRES_COMMAND_OK | PGRES_COPY_IN);
+            fod_profile_prepared_statement_observe(
+                statement,
+                elapsed,
+                params.len(),
+                param_bytes,
+                0,
+                0,
+                failed,
+            );
+        }
         Ok(res)
     }
 }
@@ -2284,12 +2557,41 @@ fn connect(conninfo: &str, tuning: &ConnectionTuning) -> Result<*mut PGconn, Str
 }
 
 unsafe fn query_scalar_text_on_conn(conn: *mut PGconn, sql: &CString) -> Result<String, String> {
+    let profile_enabled = fod_profile_io_enabled();
+    let started = Instant::now();
     let res = PQexec(conn, sql.as_ptr());
+    let elapsed = started.elapsed();
     if res.is_null() {
+        if profile_enabled {
+            fod_profile_sql_statement_observe(
+                "query_scalar",
+                fod_sql_label(sql),
+                elapsed,
+                0,
+                0,
+                0,
+                0,
+                true,
+            );
+        }
         let err = conn_error(conn);
         return Err(maybe_replayable_sql_error(conn, sql, err));
     }
     let status = PQresultStatus(res);
+    let failed = status != PGRES_TUPLES_OK;
+    if profile_enabled {
+        let (result_rows, result_bytes) = pgresult_profile_payload(res, status);
+        fod_profile_sql_statement_observe(
+            "query_scalar",
+            fod_sql_label(sql),
+            elapsed,
+            0,
+            0,
+            result_rows,
+            result_bytes,
+            failed,
+        );
+    }
     if status != PGRES_TUPLES_OK {
         let err = result_error(res);
         PQclear(res);
@@ -2305,12 +2607,41 @@ unsafe fn query_rows_text_on_conn(
     conn: *mut PGconn,
     sql: &CString,
 ) -> Result<Vec<Vec<String>>, String> {
+    let profile_enabled = fod_profile_io_enabled();
+    let started = Instant::now();
     let res = PQexec(conn, sql.as_ptr());
+    let elapsed = started.elapsed();
     if res.is_null() {
+        if profile_enabled {
+            fod_profile_sql_statement_observe(
+                "query_rows",
+                fod_sql_label(sql),
+                elapsed,
+                0,
+                0,
+                0,
+                0,
+                true,
+            );
+        }
         let err = conn_error(conn);
         return Err(maybe_replayable_sql_error(conn, sql, err));
     }
     let status = PQresultStatus(res);
+    let failed = status != PGRES_TUPLES_OK;
+    if profile_enabled {
+        let (result_rows, result_bytes) = pgresult_profile_payload(res, status);
+        fod_profile_sql_statement_observe(
+            "query_rows",
+            fod_sql_label(sql),
+            elapsed,
+            0,
+            0,
+            result_rows,
+            result_bytes,
+            failed,
+        );
+    }
     if status != PGRES_TUPLES_OK {
         let err = result_error(res);
         PQclear(res);
@@ -2758,6 +3089,27 @@ unsafe fn maybe_replayable_prepared_error(
     }
 }
 
+unsafe fn pgresult_profile_payload(res: *const PGresult, status: c_int) -> (u64, u64) {
+    if res.is_null() || status != PGRES_TUPLES_OK {
+        return (0, 0);
+    }
+    let rows = PQntuples(res).max(0);
+    let cols = PQnfields(res).max(0);
+    let mut bytes = 0u64;
+    for row in 0..rows {
+        for col in 0..cols {
+            if PQgetisnull(res, row, col) != 0 {
+                continue;
+            }
+            let len = PQgetlength(res, row, col);
+            if len > 0 {
+                bytes = bytes.saturating_add(len as u64);
+            }
+        }
+    }
+    (rows as u64, bytes)
+}
+
 unsafe fn exec_command(conn: *mut PGconn, sql: &CString) -> Result<(), String> {
     let started = Instant::now();
     let res = PQexec(conn, sql.as_ptr());
@@ -2765,6 +3117,16 @@ unsafe fn exec_command(conn: *mut PGconn, sql: &CString) -> Result<(), String> {
     let sql_label = fod_sql_label(sql);
 
     if res.is_null() {
+        fod_profile_sql_statement_observe(
+            "exec_command",
+            sql_label.clone(),
+            elapsed,
+            0,
+            0,
+            0,
+            0,
+            true,
+        );
         fod_log_io_profile(
             "pg.exec_command.error",
             elapsed,
@@ -2780,6 +3142,17 @@ unsafe fn exec_command(conn: *mut PGconn, sql: &CString) -> Result<(), String> {
     }
 
     let status = PQresultStatus(res);
+    let failed = status != PGRES_COMMAND_OK;
+    fod_profile_sql_statement_observe(
+        "exec_command",
+        sql_label.clone(),
+        elapsed,
+        0,
+        0,
+        0,
+        0,
+        failed,
+    );
     fod_log_io_profile(
         "pg.exec_command",
         elapsed,
@@ -2834,6 +3207,26 @@ unsafe fn exec_params(
     );
     let elapsed = started.elapsed();
     let sql_label = fod_sql_label(sql);
+    if fod_profile_io_enabled() {
+        let (failed, result_rows, result_bytes) = if res.is_null() {
+            (true, 0, 0)
+        } else {
+            let status = PQresultStatus(res);
+            let failed = !matches!(status, PGRES_TUPLES_OK | PGRES_COMMAND_OK | PGRES_COPY_IN);
+            let (result_rows, result_bytes) = pgresult_profile_payload(res, status);
+            (failed, result_rows, result_bytes)
+        };
+        fod_profile_sql_statement_observe(
+            "exec_params",
+            sql_label.clone(),
+            elapsed,
+            params.len(),
+            param_bytes,
+            result_rows,
+            result_bytes,
+            failed,
+        );
+    }
 
     fod_log_io_profile(
         "pg.exec_params",
@@ -2956,6 +3349,26 @@ unsafe fn exec_params_with_formats(
     );
     let elapsed = started.elapsed();
     let sql_label = fod_sql_label(sql);
+    if fod_profile_io_enabled() {
+        let (failed, result_rows, result_bytes) = if res.is_null() {
+            (true, 0, 0)
+        } else {
+            let status = PQresultStatus(res);
+            let failed = !matches!(status, PGRES_TUPLES_OK | PGRES_COMMAND_OK | PGRES_COPY_IN);
+            let (result_rows, result_bytes) = pgresult_profile_payload(res, status);
+            (failed, result_rows, result_bytes)
+        };
+        fod_profile_sql_statement_observe(
+            "exec_params_with_formats",
+            sql_label.clone(),
+            elapsed,
+            params.len(),
+            param_bytes,
+            result_rows,
+            result_bytes,
+            failed,
+        );
+    }
 
     fod_log_io_profile(
         "pg.exec_params_with_formats",

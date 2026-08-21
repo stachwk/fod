@@ -122,13 +122,46 @@ Problemem nie byl sam rozmiar callbacku, tylko to, ze kazdy wielo-blokowy
 callback dociagal mala koncowke zakresu z PostgreSQL mimo istniejacego
 prefetchu.
 
-Nastepny kandydat po tej zmianie:
+FOD 3.3.9 dopina statement-level SQL profiling dla tego miejsca bez zmiany
+storage ani read contractu. Przy `FOD_PROFILE_IO=1` boundary profile wypisuje
+teraz agregaty `pg_prepared_statement` i `pg_sql_statement`: liczbe wywolan,
+czas laczny/maksymalny/sredni, parametry, rozmiar zwroconego wyniku i bledy.
+Skanowanie `PGresult` do policzenia payloadu jest wykonywane tylko, gdy
+`FOD_PROFILE_IO` jest wlaczone, a sama flaga jest cache'owana per proces.
 
-- zmierzyc, czy pozostale ~199 operacji DB wynika glownie z metadata lookup,
-  mapowania blokow, czy payload transferu;
-- sprawdzic koszt `reply_data_us` i liczbe callbackow przy 4 KiB, bo DB path
-  nie jest juz jedynym dominujacym kosztem;
-- dopiero potem rozwazac wiekszy prefetch albo osobna sciezke bulk read.
+Walidacja 2026-08-21 na drzewie kodu zapisanym pozniej jako
+`STMT_PROFILE_COMMIT`:
+
+| Workload | Read result | FOD callbacks | `read_block_map_us` | `repo_fetch_block_range_us` | `reply_data_us` | DB `operation_count` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 MiB, fio bs 4 KiB | 64.4 MiB/s | 32768 | 421051 | 331078 | 220113 | 200 |
+
+Najwazniejszy rozklad SQL z tego profilu:
+
+| Statement | Count | Total us | Rows | Bytes |
+| --- | ---: | ---: | ---: | ---: |
+| `fod_fetch_block_range` | 65 | 261186 | 32768 | 134479872 |
+| `fod_fetch_path_attrs_blob_file` | 15 | 110667 | 15 | 2280 |
+| `SELECT COUNT(*) FROM directories WHERE id_parent IS NULL AND name != '/'` | 17 | 10782 | 17 | 17 |
+| `SELECT 1 + COUNT(*) FROM hardlinks WHERE id_file = $1` | 15 | 7263 | 15 | 15 |
+| `fod_file_read_metadata` | 1 | 444 | 1 | 87 |
+
+Wniosek: pozostale ~200 operacji DB nie wynika z per-callback
+`FileReadMetadata`; read-only direct-I/O ma tylko jedno `fod_file_read_metadata`
+dla uchwytu. Dominujacy koszt pozostaje w pobraniu payloadu i mapy blokow:
+65 wywolan `fod_fetch_block_range` przenosi cale 128 MiB, a metadata/path
+lookupi sa drugim, znacznie mniejszym kosztem. `reply_data_us` jest juz
+widoczne przy 32768 callbackach 4 KiB i trzeba je brac pod uwage, ale nie
+zastepuje jeszcze kosztu DB payload/map path.
+
+Nastepny kandydat po tym pomiarze:
+
+- zoptymalizowac `read_block_map` / `repo_fetch_block_range` jako payload/map
+  path, zanim wracamy do hardlink count albo ogolnego strojenia PostgreSQL;
+- rozdzielic w kolejnym pomiarze koszt samego transferu `BYTEA` od budowania
+  mapy `Vec<(index, payload)>` po stronie procesu;
+- dopiero po tym ocenic, czy potrzebna jest osobna sciezka bulk read albo
+  ograniczenie kosztu `reply_data_us` przy 4 KiB callbackach.
 
 ## 7. HA miedzy hostami
 

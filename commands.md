@@ -2852,6 +2852,73 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 - Read SQL statement profiling for replica read path
+
+Repository state while running the commands: `45309a2` plus local
+statement-profile changes, later committed as `STMT_PROFILE_COMMIT`.
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 10 "FOD 3.3.9 read path repo_fetch_block_range remaining 199 operations metadata payload reply_data_us"
+sed -n '80,145p' docs/FOD_CURRENT_ACTION_PLAN.md
+rg -n "fn fod_profile_io_enabled|fod_profile_io_enabled\\(" rust_hotpath/src/pg.rs
+sed -n '744,766p' rust_runtime/src/lib.rs
+sed -n '2340,2445p' rust_hotpath/src/pg.rs
+sed -n '2538,2620p' rust_hotpath/src/pg.rs
+sed -n '3150,3195p' rust_hotpath/src/pg.rs
+sed -n '3288,3335p' rust_hotpath/src/pg.rs
+git diff --stat
+git diff --check
+git diff -- rust_hotpath/src/pg.rs
+git diff -- rust_fuse/src/fs.rs
+```
+
+Validation commands:
+
+```bash
+cargo fmt --all
+cargo fmt --all -- --check
+cargo check --workspace --locked
+make --no-print-directory test-rust-pg-query
+make --no-print-directory test-block-read
+FOD_PROFILE_IO=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M
+```
+
+Replica-read profiling commands:
+
+```bash
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+grep 'pg_prepared_statement' artifacts/perf/45309a2/lt7300-docker-primary-write-replica-read-20260821T142946Z/replica-read-mount.log
+grep 'pg_sql_statement' artifacts/perf/45309a2/lt7300-docker-primary-write-replica-read-20260821T142946Z/replica-read-mount.log
+```
+
+Finalization commands:
+
+```bash
+git diff --check
+git diff --stat
+git add commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md rust_fuse/src/fs.rs rust_hotpath/src/pg.rs
+git diff --cached --stat
+git diff --cached --check
+git diff --cached --name-only
+git commit -m "FOD 3.3.9: profile read SQL statements"
+git rev-parse --short HEAD
+perl -0pi -e 's/STMT_PROFILE_COMMIT/<new-commit>/g' commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git add commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-21 - ACL mount option validation
 
 Base commit at execution time: `3c253e6`
