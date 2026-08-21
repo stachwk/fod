@@ -2084,3 +2084,44 @@ These atime benchmarks are smoke-scale wall-time baselines, not fio throughput
 tests. The important correctness result is that mount-style `noatime` and
 `nodiratime` are now accepted at the wrapper boundary and the mounted FOD
 behavior matches the selected policy.
+
+## 2026-08-21 - FOD 3.3.9 ACL mount option validation
+
+Implementation commit: `b6388ef` (`FOD 3.3.9: honor ACL mount option`).
+
+The first real `make --no-print-directory test-acl-mount-option` attempt found
+that `mount.fod -o acl=on` exported `FOD_ACL=on`, but `fod-bootstrap` still
+started the runtime with `acl_enabled=false`. The root cause was that
+`mount.fod` relied on environment variables for mount options while
+`fod-bootstrap` applies its own CLI defaults and then rewrites the runtime
+environment. `mount.fod` now passes the parsed role, SELinux, ACL, atime policy,
+default-permissions, log level, and debug values as explicit bootstrap
+arguments. It also accepts bare `acl` and `noacl` mount options.
+
+The second real ACL attempt found a separate semantics issue with
+`default_permissions`: after `system.posix_acl_access` was stored, `access(2)`
+could still succeed because the kernel saw stale normal mode bits. FOD now
+requests `FUSE_POSIX_ACL` only when ACL is enabled and synchronizes the basic
+mode bits from `ACL_USER_OBJ`, `ACL_MASK`/`ACL_GROUP_OBJ`, and `ACL_OTHER` when
+`system.posix_acl_access` is set. This preserves special bits and keeps
+`default_permissions` consistent with FOD's own ACL enforcement.
+
+Validation on `b6388ef` passed:
+
+| Test | Result |
+| --- | --- |
+| `cargo check --workspace --locked` | passed |
+| `python3 -m py_compile tests/integration/test_acl_mount_option.py` | passed |
+| `bash -n mount.fod` | passed |
+| `bash -n tests/integration/test_mount_wrapper_options.sh` | passed |
+| `cargo test --manifest-path Cargo.toml -p fod-rust-fuse --bin fod-rust-fuse acl_access_mode --offline` | passed; `1 passed` |
+| `cargo test --manifest-path Cargo.toml -p fod-rust-fuse --bin fod-rust-fuse compatibility --offline` | passed; `8 passed` |
+| `cargo test --manifest-path rust_runtime/Cargo.toml --lib builds_runtime_config_from_bootstrap_inputs --offline` | passed; `1 passed` |
+| `make --no-print-directory test-mount-wrapper-options` | passed; wrapper maps `acl=on`, bare `acl`, and `noacl` to the expected bootstrap args |
+| `make --no-print-directory test-acl-mount-option` | passed; real `mount.fod -o acl=on` starts with `acl_enabled=true`, negotiates `POSIX_ACL`, stores `system.posix_acl_access`, inherits `system.posix_acl_default`, updates mode to `0600`/`0000`, and denies reads after a deny ACL |
+
+Known residual risk: xattr storage and mode synchronization are still two
+separate repository writes. The code returns `EIO` if mode synchronization
+fails after storing the ACL, but the operation is not yet a single PostgreSQL
+transaction. If ACL churn becomes important, the storage layer should get an
+atomic `store ACL xattr + update mode` helper.

@@ -2852,6 +2852,143 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 - ACL mount option validation
+
+Base commit at execution time: `3c253e6`
+
+Discovery and implementation commands:
+
+```bash
+source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "ACL mount option FOD_ACL acl=on mount.fod test xattr access control lists"
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+sed -n '1,260p' tests/integration/test_acl_mount_option.py
+rg -n "test-xattr|test-mount-wrapper-options|test-integration|test-df|Specific smoke targets|Smoke targets|help:" Makefile README.md tests/integration/test_mount_wrapper_options.sh
+sed -n '1,220p' tests/integration/test_mount_wrapper_options.sh
+sed -n '420,470p' Makefile
+sed -n '920,985p' Makefile
+sed -n '540,650p' README.md
+rg -n "acl|FOD_ACL|system.posix_acl|setxattr" mount.fod rust_fuse/src tests/integration/test_xattr.py
+sed -n '1128,1168p' Makefile
+python3 -m py_compile tests/integration/test_acl_mount_option.py
+bash -n tests/integration/test_mount_wrapper_options.sh
+git diff -- Makefile README.md tests/integration/test_mount_wrapper_options.sh tests/integration/test_acl_mount_option.py
+git status --short
+git diff --check
+make --no-print-directory test-mount-wrapper-options
+make --no-print-directory help
+make --no-print-directory test-acl-mount-option
+sed -n '1,310p' mount.fod
+rg -n "FOD_ACL|acl_enabled|RuntimeSecuritySettings|struct RuntimeSecurity|security\\.acl|--acl|RuntimeMountSettings" rust_runtime rust_fuse rust_mkfs rust_hotpath
+sed -n '1,180p' rust_fuse/src/main.rs
+sed -n '1,140p' rust_fuse/src/startup.rs
+sed -n '1760,1815p' rust_runtime/src/lib.rs
+sed -n '560,650p' rust_runtime/src/lib.rs
+sed -n '1420,1490p' rust_runtime/src/lib.rs
+rg -n "acl\\s*=|acl_enabled|FOD_ACL|from_env|RuntimeConfig" rust_runtime/src/lib.rs fod_config.ini tests -g '!target'
+sed -n '1260,1335p' rust_runtime/src/lib.rs
+sed -n '1560,1625p' rust_runtime/src/lib.rs
+sed -n '2200,2310p' rust_runtime/src/lib.rs
+rg -n "BootstrapOverrides|from_bootstrap|apply_bootstrap_overrides|--acl|acl" rust_mkfs rust_runtime/src/lib.rs
+sed -n '1,285p' rust_mkfs/src/bin/fod-bootstrap.rs
+sed -n '2310,2460p' rust_runtime/src/lib.rs
+sed -n '1110,1160p' rust_runtime/src/lib.rs
+target/debug/fod-bootstrap --help
+rg -n "no-default-permissions|no_default_permissions|default-permissions=false|default_permissions" tests rust_* Makefile mount.fod README.md
+rg -n "ArgAction|default_value_t = true|default_permissions" rust_mkfs/src/bin/fod-bootstrap.rs Cargo.lock rust_mkfs/Cargo.toml
+sed -n '420,455p' rust_runtime/src/lib.rs
+cargo fmt --all
+bash -n mount.fod
+bash -n tests/integration/test_mount_wrapper_options.sh
+python3 -m py_compile tests/integration/test_acl_mount_option.py
+make --no-print-directory test-mount-wrapper-options
+cargo test --manifest-path rust_runtime/Cargo.toml --lib builds_runtime_config_from_bootstrap_inputs --offline
+cargo build --manifest-path Cargo.toml -p fod-rust-mkfs --bin fod-bootstrap
+make --no-print-directory test-acl-mount-option
+rg -n "POSIX_ACL|add_capabilities|set_capabilities|requested_capabilities|FUSE compatibility|capabilities" rust_fuse/src rust_fuse/tests
+sed -n '140,210p' rust_fuse/src/compatibility.rs
+sed -n '1,170p' rust_fuse/src/compatibility.rs
+rg -n "fn init|KernelConfig|Capability" rust_fuse/src/fs.rs rust_fuse/src/startup.rs
+sed -n '3935,3975p' rust_fuse/src/fs.rs
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse --bin fod-rust-fuse compatibility --offline
+id -u
+id -g
+id -G
+rg -n "request_identity|struct SubjectIdentity|can_access|acl_permission_from_entries|parse_posix_acl_xattr" rust_fuse/src/fs.rs
+sed -n '150,180p' rust_fuse/src/fs.rs
+sed -n '2270,2408p' rust_fuse/src/fs.rs
+sed -n '1,150p' tests/integration/fod_mount.py
+sed -n '150,210p' tests/integration/fod_mount.py
+rg -n "chmod|update.*mode|set_.*mode|store_.*mode|FileAttr|perm" rust_hotpath/src rust_fuse/src/fs.rs
+rg -n "fn chmod|chmod_path|set_permissions|update_entry|update_metadata|setattr" rust_fuse/src/fs.rs rust_hotpath/src
+sed -n '3650,3815p' rust_fuse/src/fs.rs
+sed -n '5475,5665p' rust_fuse/src/fs.rs
+sed -n '2465,2520p' rust_fuse/src/fs.rs
+rg -n "fn xattr_owner_for_path|enum.*Xattr|struct.*Xattr|store_xattr_value_for_owner|resolved_entry_for_path" rust_fuse/src/fs.rs rust_hotpath/src/pg.rs
+sed -n '2160,2215p' rust_fuse/src/fs.rs
+sed -n '2785,2825p' rust_fuse/src/fs.rs
+sed -n '12380,12425p' rust_hotpath/src/pg.rs
+rg -n "metadata_cache|invalidate|cache.*path|entry_attrs_for_ino|lookup_path" rust_fuse/src/fs.rs
+sed -n '3328,3590p' rust_fuse/src/fs.rs
+sed -n '7420,7625p' rust_fuse/src/fs.rs
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse --bin fod-rust-fuse acl_access_mode --offline
+make --no-print-directory test-acl-mount-option
+target/debug/fod-bootstrap --help
+cargo check --workspace --locked
+git diff --check
+git diff --stat
+git diff -- Makefile README.md mount.fod rust_fuse/src/compatibility.rs rust_fuse/src/fs.rs rust_mkfs/src/bin/fod-bootstrap.rs tests/integration/test_mount_wrapper_options.sh
+sed -n '1,220p' tests/integration/test_acl_mount_option.py
+git status --short --branch
+git add Makefile README.md mount.fod rust_fuse/src/compatibility.rs rust_fuse/src/fs.rs rust_mkfs/src/bin/fod-bootstrap.rs tests/integration/test_mount_wrapper_options.sh tests/integration/test_acl_mount_option.py
+git diff --cached --stat
+git diff --cached --check
+git commit -m "FOD 3.3.9: honor ACL mount option"
+```
+
+Implementation commit: `b6388ef`
+
+Post-commit review and validation commands:
+
+```bash
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch
+cat fod_version.txt
+cargo check --workspace --locked
+python3 -m py_compile tests/integration/test_acl_mount_option.py
+bash -n mount.fod
+bash -n tests/integration/test_mount_wrapper_options.sh
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse --bin fod-rust-fuse acl_access_mode --offline
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse --bin fod-rust-fuse compatibility --offline
+cargo test --manifest-path rust_runtime/Cargo.toml --lib builds_runtime_config_from_bootstrap_inputs --offline
+make --no-print-directory test-mount-wrapper-options
+make --no-print-directory test-acl-mount-option
+git diff -- commands.md conclusions.md
+git diff --check
+git status --short --branch
+git add commands.md conclusions.md
+git diff --cached --stat
+git diff --cached --check
+git commit -m "FOD 3.3.9: record ACL mount validation"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+git add commands.md
+git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-21 commit ccf522c direct-I/O read prefetch implementation
 
 Context lookup and source inspection:
