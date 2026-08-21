@@ -70,6 +70,8 @@ Priorytet: P2.
 
 ## 5. FOD 3.3.6 - centralna telemetria read-only replica
 
+Status: zakonczone w commicie FOD 3.3.6.
+
 Priorytet: P1 funkcjonalny.
 
 - rozdzielic read endpoint repliki od writable telemetry/control endpointu primary;

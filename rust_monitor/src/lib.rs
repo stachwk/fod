@@ -1506,10 +1506,19 @@ pub struct SharedMonitorTimingStats {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct SharedMonitorSourceStats {
+    pub data_source_role: String,
+    pub data_source_transaction_read_only: bool,
+    pub wal_replay_lag_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SharedMonitorSessionStats {
     pub schema_version: u32,
     pub sample_seq: u64,
     pub publish_interval_millis: u64,
+    pub source: SharedMonitorSourceStats,
     pub read: SharedMonitorTaskStats,
     pub write: SharedMonitorTaskStats,
     pub copy: SharedMonitorTaskStats,
@@ -1526,12 +1535,14 @@ impl SharedMonitorSessionStats {
         write: &LogicalTaskObservabilitySnapshot,
         copy: &LogicalTaskObservabilitySnapshot,
         database: &DbRepoObservabilitySnapshot,
+        source: SharedMonitorSourceStats,
         timings: SharedMonitorTimingStats,
     ) -> Self {
         Self {
             schema_version: SHARED_MONITOR_STATS_SCHEMA_VERSION,
             sample_seq,
             publish_interval_millis,
+            source,
             read: SharedMonitorTaskStats::from_snapshot(read),
             write: SharedMonitorTaskStats::from_snapshot(write),
             copy: SharedMonitorTaskStats::from_snapshot(copy),

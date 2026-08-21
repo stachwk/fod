@@ -106,7 +106,32 @@ fn main() {
     });
     log::debug!("FOD startup snapshot={:?}", snapshot);
     let settings = startup::FodFuseSettings::from_runtime(&runtime, &snapshot, args.readonly);
-    if let Err(err) = startup::mount_fuse(repo, &runtime, settings, &args.mountpoint, &snapshot) {
+    let telemetry_repo = if settings.read_only {
+        match startup::telemetry_repo_from_env(&runtime) {
+            Some(Ok(repo)) => {
+                log::info!("FOD read-only telemetry repo configured from explicit telemetry DSN");
+                Some(repo)
+            }
+            Some(Err(err)) => {
+                log::warn!(
+                    "FOD read-only telemetry repo unavailable; continuing without central telemetry: {}",
+                    err
+                );
+                None
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    if let Err(err) = startup::mount_fuse(
+        repo,
+        telemetry_repo,
+        &runtime,
+        settings,
+        &args.mountpoint,
+        &snapshot,
+    ) {
         log::error!("FOD mount failed: {}", err);
         eprintln!("fod-rust-fuse: {}", err);
         std::process::exit(1);

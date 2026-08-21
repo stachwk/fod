@@ -2852,6 +2852,70 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 commit 0cd8ea4 working tree FOD 3.3.6 read-only central telemetry
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD && cat fod_version.txt
+sed -n '1,180p' docs/FOD_CURRENT_ACTION_PLAN.md
+source ~/.venv/bin/activate && mempalace search "FOD 3.3.6 central telemetry read-only replica monitor_session_stats client_sessions telemetry primary FOD_MONITOR_DSN" --wing fod
+rg -n "monitor_session|SharedMonitor|publish_shared_monitor|register_client_session|heartbeat_client_session|SessionMaintenance|readonly|read_only|MountMode|FOD_MONITOR_DSN|monitor" rust_fuse/src rust_hotpath/src rust_monitor/src rust_runtime/src tests/integration -S
+sed -n '340,410p' rust_fuse/src/startup.rs
+sed -n '330,570p' rust_fuse/src/fs.rs
+sed -n '1280,1425p' rust_fuse/src/fs.rs
+sed -n '3680,3825p' rust_fuse/src/fs.rs
+sed -n '7920,8225p' rust_hotpath/src/pg.rs
+rg -n "pub fn new\\(|pub fn new_with_tuning|pub fn with_runtime|with_runtime_connection_targets" rust_hotpath/src/pg.rs
+sed -n '4385,4525p' rust_hotpath/src/pg.rs
+sed -n '1,760p' rust_fuse/src/pg_lanes.rs
+sed -n '1275,1558p' rust_monitor/src/lib.rs
+sed -n '1,240p' tests/integration/fod_mount.py
+```
+
+Edit/validation commands:
+
+```bash
+cargo fmt --all
+cargo check --workspace --locked
+cargo check --workspace
+cargo test --manifest-path Cargo.toml -p fod-rust-monitor -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse read_only -- --nocapture
+make --no-print-directory test-rust-pg-query
+# First ad-hoc read-only telemetry smoke failed to observe the replica session
+# because cargo check had not rebuilt target/debug/fod-rust-fuse.
+cargo build --manifest-path Cargo.toml -p fod-rust-fuse --bin fod-rust-fuse -p fod-rust-monitor --bin fod-monitor
+# Ad-hoc smoke: start a primary FOD mount, start a read-only FOD mount with
+# FOD_TELEMETRY_DSN, stat an existing file through the read-only mount, and poll
+# target/debug/fod-monitor cluster --json until a mount_mode=replica session
+# with stats.source appears. Result: passed.
+python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_shared_monitor_cluster
+FOD_TELEMETRY_DSN="host=${POSTGRES_HOST:-127.0.0.1} port=${POSTGRES_PORT:-5432} dbname=${POSTGRES_DB:-foddbname} user=${POSTGRES_USER:-foduser} password=${POSTGRES_PASSWORD:-cichosza}" python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_replica_read_only
+target/debug/fod-monitor cluster --json | python3 -m json.tool >/tmp/fod-monitor-cluster-json-336-check.out
+git diff --check
+git diff --stat
+```
+
+Commit and post-commit review commands:
+
+```bash
+git status --short --branch
+git diff -- Cargo.toml fod_version.txt Cargo.lock
+git diff -- rust_fuse/src/fs.rs rust_fuse/src/startup.rs rust_fuse/src/main.rs rust_fuse/src/pg_lanes.rs
+git diff -- rust_hotpath/src/pg.rs rust_monitor/src/lib.rs rust_monitor/src/cluster.rs
+git diff -- README.pl docs/FOD_3_3_1_SHARED_MONITORING.md docs/FOD_CURRENT_ACTION_PLAN.md docs/runtime-configuration.md conclusions.md commands.md
+git diff --check
+git add Cargo.lock Cargo.toml README.pl commands.md conclusions.md docs/FOD_3_3_1_SHARED_MONITORING.md docs/FOD_CURRENT_ACTION_PLAN.md docs/runtime-configuration.md fod_version.txt rust_fuse/src/fs.rs rust_fuse/src/main.rs rust_fuse/src/pg_lanes.rs rust_fuse/src/startup.rs rust_hotpath/src/pg.rs rust_monitor/src/cluster.rs rust_monitor/src/lib.rs
+git diff --cached --check
+git commit -m "FOD 3.3.6: publish read-only telemetry centrally"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 The target writes its JSON/Markdown artifacts outside the repository under
 `/tmp/fod-postgres-telemetry/` by default. It performs a `pg_stat_database`
 snapshot, runs one real sequential FUSE workload with the confirmed `8/4`

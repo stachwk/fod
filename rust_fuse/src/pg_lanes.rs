@@ -99,6 +99,7 @@ struct EndpointRoutingResolution {
     runtime_failover_target_count: usize,
     replica_read_targets: Option<Arc<DbRepoConnectionTargets>>,
     replica_read_target_count: usize,
+    read_only_telemetry_targets: Option<Arc<DbRepoConnectionTargets>>,
 }
 
 fn quote_conninfo_value(value: &str) -> String {
@@ -317,6 +318,7 @@ fn resolve_endpoint_routing(
             runtime_failover_target_count: 1,
             replica_read_targets: None,
             replica_read_target_count: 0,
+            read_only_telemetry_targets: None,
         });
     }
 
@@ -351,6 +353,38 @@ fn resolve_endpoint_routing(
         .map(|targets| targets.snapshot().map(|snapshot| snapshot.target_count))
         .transpose()?
         .unwrap_or(0);
+    let read_only_telemetry_targets = if selected.read_only {
+        let primary_roles = [PgEndpointRole::Primary, PgEndpointRole::Unknown];
+        match choose_endpoint(
+            &config,
+            &snapshots,
+            PgConnectionPurpose::Control,
+            &primary_roles,
+            false,
+        ) {
+            Some(telemetry_selection) => {
+                match build_connection_targets(base_conninfo, &config, &telemetry_selection, false)
+                {
+                    Ok(targets) => Some(targets),
+                    Err(err) => {
+                        log::warn!(
+                            "FOD read-only telemetry primary target unavailable; continuing without central telemetry: {}",
+                            err
+                        );
+                        None
+                    }
+                }
+            }
+            None => {
+                log::warn!(
+                    "FOD read-only telemetry primary target unavailable: no healthy writable primary endpoint"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
     Ok(EndpointRoutingResolution {
         connection_targets,
         health,
@@ -361,6 +395,7 @@ fn resolve_endpoint_routing(
         runtime_failover_target_count: target_snapshot.target_count,
         replica_read_targets,
         replica_read_target_count,
+        read_only_telemetry_targets,
     })
 }
 
@@ -399,6 +434,7 @@ pub struct DbRepoLanes {
     runtime_failover_target_count: usize,
     replica_read_routing_enabled: bool,
     replica_read_target_count: usize,
+    read_only_telemetry_repo: Option<DbRepo>,
 }
 
 impl DbRepoLanes {
@@ -424,6 +460,50 @@ impl DbRepoLanes {
             ));
 
         let replica_read_targets = routing.replica_read_targets.as_ref().map(Arc::clone);
+        let read_only_telemetry_repo = if routing
+            .selected
+            .as_ref()
+            .is_some_and(|selection| selection.read_only)
+        {
+            match crate::startup::telemetry_repo_from_env(runtime) {
+                Some(Ok(repo)) => {
+                    log::info!(
+                        "FOD read-only telemetry repo configured from explicit telemetry DSN"
+                    );
+                    Some(repo)
+                }
+                Some(Err(err)) => {
+                    log::warn!(
+                            "FOD read-only telemetry repo unavailable; continuing without central telemetry: {}",
+                            err
+                        );
+                    None
+                }
+                None => match routing.read_only_telemetry_targets.as_ref() {
+                    Some(targets) => {
+                        match DbRepo::with_runtime_connection_targets(Arc::clone(targets), runtime)
+                        {
+                            Ok(repo) => {
+                                log::info!(
+                                        "FOD read-only telemetry repo configured from writable primary endpoint"
+                                    );
+                                Some(repo)
+                            }
+                            Err(err) => {
+                                log::warn!(
+                                        "FOD read-only telemetry repo unavailable; continuing without central telemetry: {}",
+                                        err
+                                    );
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                },
+            }
+        } else {
+            None
+        };
         let storage = if dedicated {
             let mut write_runtime = runtime.clone();
             write_runtime.pool_max_connections = plan.write_limit as u64;
@@ -507,6 +587,7 @@ impl DbRepoLanes {
             runtime_failover_target_count: routing.runtime_failover_target_count,
             replica_read_routing_enabled: routing.replica_read_target_count > 0,
             replica_read_target_count: routing.replica_read_target_count,
+            read_only_telemetry_repo,
         })
     }
 
@@ -558,13 +639,14 @@ impl DbRepoLanes {
         }
     }
 
-    pub fn into_mount_repo(self) -> (DbRepo, DbRepoLaneKeepalive) {
+    pub fn into_mount_repo(self) -> (DbRepo, DbRepoLaneKeepalive, Option<DbRepo>) {
         match self.storage {
             DbRepoLaneStorage::Shared(repo) => (
                 repo,
                 DbRepoLaneKeepalive {
                     repositories: Vec::new(),
                 },
+                self.read_only_telemetry_repo,
             ),
             DbRepoLaneStorage::Dedicated {
                 read,
@@ -576,6 +658,7 @@ impl DbRepoLanes {
                 DbRepoLaneKeepalive {
                     repositories: vec![read, control, lease],
                 },
+                self.read_only_telemetry_repo,
             ),
         }
     }
@@ -769,12 +852,35 @@ pub fn mount_with_lanes(
     )?;
     let settings =
         crate::startup::FodFuseSettings::from_runtime(runtime, &snapshot, requested_readonly);
-    let (mount_repo, keepalive) = lanes.into_mount_repo();
+    let (mount_repo, keepalive, mut telemetry_repo) = lanes.into_mount_repo();
+    if telemetry_repo.is_none() && settings.read_only {
+        telemetry_repo = match crate::startup::telemetry_repo_from_env(runtime) {
+            Some(Ok(repo)) => {
+                log::info!("FOD read-only telemetry repo configured from explicit telemetry DSN");
+                Some(repo)
+            }
+            Some(Err(err)) => {
+                log::warn!(
+                    "FOD read-only telemetry repo unavailable; continuing without central telemetry: {}",
+                    err
+                );
+                None
+            }
+            None => None,
+        };
+    }
     log::debug!(
         "FOD PostgreSQL non-write lane keepalive count={}",
         keepalive.active_lane_count()
     );
-    let result = crate::startup::mount_fuse(mount_repo, runtime, settings, mountpoint, &snapshot);
+    let result = crate::startup::mount_fuse(
+        mount_repo,
+        telemetry_repo,
+        runtime,
+        settings,
+        mountpoint,
+        &snapshot,
+    );
     observability_sampler.stop();
     log_lane_observability("post-mount", &observability_repositories, &process_rss_peak);
     drop(keepalive);
@@ -955,8 +1061,9 @@ mod tests {
         assert!(!diagnostics.dedicated_lanes_active);
         assert!(diagnostics.legacy_dsn_only);
         assert!(!diagnostics.routing_enabled);
-        let (_, keepalive) = lanes.into_mount_repo();
+        let (_, keepalive, telemetry_repo) = lanes.into_mount_repo();
         assert_eq!(keepalive.active_lane_count(), 0);
+        assert!(telemetry_repo.is_none());
     }
 
     #[test]
@@ -971,8 +1078,9 @@ mod tests {
         assert_eq!(diagnostics.control_limit, 1);
         assert_eq!(diagnostics.lease_limit, 1);
         assert!(!diagnostics.routing_enabled);
-        let (_, keepalive) = lanes.into_mount_repo();
+        let (_, keepalive, telemetry_repo) = lanes.into_mount_repo();
         assert_eq!(keepalive.active_lane_count(), 3);
+        assert!(telemetry_repo.is_none());
     }
 
     #[test]
@@ -983,8 +1091,9 @@ mod tests {
         assert!(diagnostics.opt_in_enabled);
         assert!(!diagnostics.dedicated_lanes_active);
         assert_eq!(diagnostics.mode, PgPoolIsolationMode::SharedFallback);
-        let (_, keepalive) = lanes.into_mount_repo();
+        let (_, keepalive, telemetry_repo) = lanes.into_mount_repo();
         assert_eq!(keepalive.active_lane_count(), 0);
+        assert!(telemetry_repo.is_none());
     }
 
     #[test]

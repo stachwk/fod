@@ -16,8 +16,8 @@ kolumny identity/czasu (`session_id`, `fod_version`, `sample_seq`, `sampled_at`)
 oraz wersjonowany `payload_json` typu JSONB.
 
 Payload ma `schema_version` i sekcje `read`, `write`, `copy`, `database`,
-`persistence` oraz `timings`. Dzieki temu kolejne liczniki nie wymagaja
-rozbudowy tabeli o dziesiatki nowych kolumn.
+`persistence`, `source` oraz `timings`. Dzieki temu kolejne liczniki nie
+wymagaja rozbudowy tabeli o dziesiatki nowych kolumn.
 
 ## Dokladnosc i koszt
 
@@ -55,6 +55,24 @@ sprzata. Prune sesji usuwa tez historyczne wygasle lock rows z `session_id=0`.
 Sam UPSERT telemetrii jest widoczny w kolejnych licznikach operacji bazy jako
 koszt monitoringu.
 
+Od FOD 3.3.6 read-only mount moze publikowac centralna telemetrie przez osobne
+writable telemetry repo. Dane i metadata odczytu nadal ida przez endpoint
+repliki, natomiast `client_sessions`, heartbeat sesji i `monitor_session_stats`
+ida do primary. W trybie endpoint routing primary jest wybierany z
+`primary_hosts`/`FOD_PG_PRIMARY_HOSTS`. Bez endpoint routing mozna podac jawny
+sink przez:
+
+```bash
+FOD_TELEMETRY_DSN="host=pg-primary dbname=fod user=fod_monitor ..."
+```
+
+Jesli `FOD_TELEMETRY_DSN` nie jest ustawione, read-only mount probuje uzyc
+`FOD_MONITOR_DSN` jako kompatybilnego fallbacku. Brak lub awaria writable
+telemetry endpointu jest fail-soft: mount repliki dziala dalej bez centralnej
+telemetrii i zapisuje ostrzezenie w logu. Payload `source` zapisuje role
+rzeczywistego zrodla danych (`replica`, `primary-read-only` albo
+`primary-writable`) oraz opcjonalny `wal_replay_lag_bytes`.
+
 Tabela jest ograniczona do jednego rekordu na `session_id` i jest czyszczona
 kaskadowo razem z sesja. 3.3.1 celowo nie tworzy nieograniczonej historii.
 
@@ -72,7 +90,8 @@ Od FOD 3.3.3 identity hosta preferuje niepuste `HOSTNAME`, ale gdy zmienna nie j
 - `fod-monitor top` - klaster + lokalny host; `READ_BPS`, `WRITE_BPS` i
   `COPY_BPS` sa liczone z roznic kolejnych centralnych probek. Od FOD 3.3.5
   tabela pokazuje tez sredni rozmiar callbacku read/write/copy i przyblizone
-  `DB_OPS` na read/write task w formie wartosci milli.
+  `DB_OPS` na read/write task w formie wartosci milli. Od FOD 3.3.6 tabela
+  pokazuje tez per sesja role rzeczywistego zrodla danych i opcjonalny lag WAL.
 - `fod-monitor report` - dodatkowo szczegoly per sesja: DB, persistence,
   failovery i timingi FUSE.
 - `fod-monitor report --json` - stabilny maszynowy raport laczacy centralny

@@ -358,3 +358,18 @@ zrodlo PostgreSQL, agregat `summary` i liste aktywnych sesji. `report --json`
 zwraca ten sam centralny widok oraz lokalny snapshot `/proc`; gdy centralna
 telemetria jest niedostepna, pole `cluster_error` opisuje blad, a lokalne dane
 pozostaja dostepne.
+
+Od FOD 3.3.6 read-only mount moze publikowac centralna telemetrie bez zapisu do
+repliki. Przy wlaczonym endpoint routing FOD uzywa read endpointu repliki dla
+mounta i wybiera writable primary jako telemetry/control sink dla
+`client_sessions` oraz `monitor_session_stats`. Bez endpoint routing mozna
+ustawic:
+
+```bash
+FOD_TELEMETRY_DSN="host=pg-primary dbname=fod user=fod_monitor ..." fod-rust-fuse --readonly ...
+```
+
+`FOD_TELEMETRY_DSN` ma pierwszenstwo przed kompatybilnym fallbackiem
+`FOD_MONITOR_DSN`. Oba DSN-y musza wskazywac writable primary; FOD wymusza role
+`WritablePrimary` przy polaczeniu telemetrycznym. Awaria tego endpointu nie
+zatrzymuje read-only mounta, tylko wylacza centralna publikacje tej sesji.

@@ -3525,6 +3525,13 @@ pub struct StartupSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbRepoSourceSnapshot {
+    pub data_source_role: String,
+    pub transaction_read_only: bool,
+    pub wal_replay_lag_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPath {
     pub parent_id: Option<u64>,
     pub kind: Option<String>,
@@ -6798,6 +6805,68 @@ impl DbRepo {
     pub fn query_rows_text(&self, sql: &str) -> Result<Vec<Vec<String>>, String> {
         let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe { query_rows_text_on_conn(conn, &sql) })
+    }
+
+    pub fn source_snapshot(&self) -> Result<DbRepoSourceSnapshot, String> {
+        let value = self.query_scalar_text_stale_sensitive(
+            "
+            SELECT
+                CASE
+                    WHEN pg_is_in_recovery() THEN 'replica'
+                    WHEN current_setting('transaction_read_only')::boolean THEN 'primary-read-only'
+                    ELSE 'primary-writable'
+                END
+                || '|' || current_setting('transaction_read_only')
+                || '|' || COALESCE(
+                    CASE
+                        WHEN pg_is_in_recovery() THEN
+                            GREATEST(
+                                COALESCE(
+                                    pg_wal_lsn_diff(
+                                        COALESCE(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn()),
+                                        pg_last_wal_replay_lsn()
+                                    ),
+                                    0
+                                ),
+                                0
+                            )::bigint::text
+                        ELSE NULL
+                    END,
+                    ''
+                )
+            ",
+        )?;
+        let fields = value.trim().split('|').collect::<Vec<_>>();
+        if fields.len() != 3 {
+            return Err(format!(
+                "invalid PostgreSQL source snapshot `{}`: expected role|transaction_read_only|wal_lag",
+                value.trim()
+            ));
+        }
+        let transaction_read_only = match fields[1].trim().to_ascii_lowercase().as_str() {
+            "t" | "true" | "on" | "1" => true,
+            "f" | "false" | "off" | "0" => false,
+            other => {
+                return Err(format!(
+                    "invalid PostgreSQL source transaction_read_only value `{other}`"
+                ));
+            }
+        };
+        let wal_replay_lag_bytes = if fields[2].trim().is_empty() {
+            None
+        } else {
+            Some(fields[2].trim().parse::<u64>().map_err(|err| {
+                format!(
+                    "invalid PostgreSQL source WAL lag value `{}`: {err}",
+                    fields[2]
+                )
+            })?)
+        };
+        Ok(DbRepoSourceSnapshot {
+            data_source_role: fields[0].trim().to_string(),
+            transaction_read_only,
+            wal_replay_lag_bytes,
+        })
     }
 
     pub fn exec(&self, sql: &str) -> Result<(), String> {

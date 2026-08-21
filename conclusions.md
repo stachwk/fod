@@ -1824,3 +1824,46 @@ Validation on the working tree passed:
 - `make --no-print-directory test-rust-pg-query`;
 - `target/debug/fod-monitor report --json | python3 -m json.tool >/tmp/fod-monitor-report-json-check.out`;
 - `python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_shared_monitor_cluster`.
+
+## 2026-08-21 - FOD 3.3.6 read-only central telemetry
+
+Base commit: `0cd8ea4` (`FOD 3.3.5: add fod-monitor JSON output`).
+
+FOD 3.3.6 lets read-only mounts publish central shared-monitor telemetry
+without writing to the replica data source:
+
+- `FodFuse` now separates the data/observability repository from the
+  session/telemetry publication repository;
+- writable mounts keep the old behavior, using the mount repository for
+  `client_sessions`, session heartbeat, maintenance, and `monitor_session_stats`;
+- read-only mounts may use a separate writable telemetry repo for
+  `client_sessions`, heartbeat, prune, and shared monitor UPSERTs while reads
+  continue through the mount repo;
+- endpoint routing automatically selects a writable primary telemetry target for
+  a read-only replica mount when a healthy primary endpoint is configured;
+- without endpoint routing, `FOD_TELEMETRY_DSN` is the explicit telemetry sink
+  and `FOD_MONITOR_DSN` remains a compatible fallback;
+- telemetry endpoint failure is fail-soft for read-only mounts: the mount starts
+  and continues reading, while central session telemetry is disabled with a log
+  warning;
+- shared monitor payloads now include `source.data_source_role`,
+  `source.data_source_transaction_read_only`, and optional
+  `source.wal_replay_lag_bytes`.
+
+The local read-only telemetry smoke initially did not observe the replica
+session because `cargo check` had not rebuilt `target/debug/fod-rust-fuse`; the
+bootstrap-driven mount was still running the previous debug binary. After
+`cargo build --manifest-path Cargo.toml -p fod-rust-fuse --bin fod-rust-fuse -p
+fod-rust-monitor --bin fod-monitor`, the same smoke observed a central
+`mount_mode=replica` session with `stats.source`.
+
+Validation on the working tree passed:
+
+- `cargo check --workspace --locked`;
+- `cargo test --manifest-path Cargo.toml -p fod-rust-monitor -- --nocapture`;
+- `cargo test --manifest-path Cargo.toml -p fod-rust-fuse read_only -- --nocapture`;
+- `make --no-print-directory test-rust-pg-query`;
+- read-only telemetry smoke with primary mount, read-only mount,
+  `FOD_TELEMETRY_DSN`, and `fod-monitor cluster --json`;
+- `python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_shared_monitor_cluster`;
+- `FOD_TELEMETRY_DSN=... python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_replica_read_only`.

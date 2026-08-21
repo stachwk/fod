@@ -602,10 +602,15 @@ pub fn print_cluster_snapshot(snapshot: &ClusterSnapshot, previous: Option<&Clus
         println!("No active shared FOD sessions detected.");
         return;
     }
-    println!("HOST\tMOUNT\tMODE\tLOCK\tPID\tVER\tHB_S\tSAMPLE_S\tREAD_N\tREAD_B\tREAD_BPS\tREAD_AVG_B\tWRITE_N\tWRITE_B\tWRITE_BPS\tWRITE_AVG_B\tCOPY_N\tCOPY_B\tCOPY_BPS\tCOPY_AVG_B\tDB_OPS\tDB_ERR\tDB_READ_M\tDB_WRITE_M\tPERSIST_N");
+    println!("HOST\tMOUNT\tMODE\tSRC_ROLE\tWAL_LAG_B\tLOCK\tPID\tVER\tHB_S\tSAMPLE_S\tREAD_N\tREAD_B\tREAD_BPS\tREAD_AVG_B\tWRITE_N\tWRITE_B\tWRITE_BPS\tWRITE_AVG_B\tCOPY_N\tCOPY_B\tCOPY_BPS\tCOPY_AVG_B\tDB_OPS\tDB_ERR\tDB_READ_M\tDB_WRITE_M\tPERSIST_N");
     for session in &snapshot.sessions {
         let stats = session.stats.as_ref();
         let prev = previous_session(previous, session.session_id);
+        let source_role = stats
+            .map(|v| v.source.data_source_role.as_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("-");
+        let wal_lag = stats.and_then(|v| v.source.wal_replay_lag_bytes);
         let db_ops = stats.map(|v| v.database.operation_count).unwrap_or(0);
         let read_tasks = stats.map(|v| v.read.completed_tasks).unwrap_or(0);
         let write_tasks = stats.map(|v| v.write.completed_tasks).unwrap_or(0);
@@ -614,10 +619,12 @@ pub fn print_cluster_snapshot(snapshot: &ClusterSnapshot, previous: Option<&Clus
         let write_bytes = stats.map(|v| v.write.completed_bytes).unwrap_or(0);
         let copy_bytes = stats.map(|v| v.copy.completed_bytes).unwrap_or(0);
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             compact(&session.host_name, 24),
             compact(&session.mountpoint, 36),
             session.mount_mode,
+            source_role,
+            opt(wal_lag),
             session.lock_backend,
             session.pid,
             text(session.fod_version.as_deref()),
@@ -654,6 +661,15 @@ pub fn print_cluster_details(snapshot: &ClusterSnapshot) {
             opt(session.last_write_age_seconds), opt(session.sample_seq), opt(session.sample_age_seconds),
             session.stats.as_ref().map(|stats| stats.publish_interval_millis).unwrap_or(0));
         if let Some(stats) = &session.stats {
+            println!(
+                "    source role={} transaction_read_only={} wal_replay_lag_bytes={}",
+                text(
+                    (!stats.source.data_source_role.is_empty())
+                        .then_some(stats.source.data_source_role.as_str())
+                ),
+                stats.source.data_source_transaction_read_only,
+                opt(stats.source.wal_replay_lag_bytes)
+            );
             println!("    db authority={} live={} active={} queued={} failovers={} connection_failures={} replica_reads={} primary_fallbacks={}",
                 stats.database.active_authority, stats.database.live_connections, stats.database.active_connections,
                 stats.database.queued_acquisitions, stats.database.failover_count, stats.database.connection_failures,

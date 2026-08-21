@@ -3,8 +3,12 @@
 
 use fuser::{mount as fuser_mount, Config, MountOption, SessionACL};
 use log::{info, warn};
-use rust_hotpath::pg::{DbRepo, StartupSnapshot};
+use rust_hotpath::pg::{
+    DbRepo, DbRepoConnectionTarget, DbRepoConnectionTargetRequirement, DbRepoConnectionTargets,
+    StartupSnapshot,
+};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use fod_rust_runtime::{
@@ -135,6 +139,40 @@ impl FodFuseSettings {
 
 const DEFAULT_FUSE_EVENT_THREADS: usize = 1;
 const MAX_FUSE_EVENT_THREADS: usize = 256;
+pub const FOD_TELEMETRY_DSN_ENV: &str = "FOD_TELEMETRY_DSN";
+pub const FOD_MONITOR_DSN_ENV: &str = "FOD_MONITOR_DSN";
+
+pub fn writable_telemetry_repo(
+    conninfo: &str,
+    authority: &str,
+    runtime: &RuntimeConfig,
+) -> Result<DbRepo, String> {
+    let targets = Arc::new(DbRepoConnectionTargets::new(
+        vec![DbRepoConnectionTarget {
+            authority: authority.to_string(),
+            conninfo: conninfo.to_string(),
+        }],
+        DbRepoConnectionTargetRequirement::WritablePrimary,
+        true,
+        false,
+    )?);
+    DbRepo::with_runtime_connection_targets(targets, runtime)
+}
+
+pub fn telemetry_repo_from_env(runtime: &RuntimeConfig) -> Option<Result<DbRepo, String>> {
+    for env_name in [FOD_TELEMETRY_DSN_ENV, FOD_MONITOR_DSN_ENV] {
+        if let Some(conninfo) =
+            env_var_with_legacy_alias(env_name).filter(|value| !value.trim().is_empty())
+        {
+            return Some(
+                writable_telemetry_repo(&conninfo, env_name, runtime).map_err(|err| {
+                    format!("failed to create writable telemetry repo from {env_name}: {err}")
+                }),
+            );
+        }
+    }
+    None
+}
 
 fn fuse_event_loop_config() -> Result<(usize, bool), String> {
     let event_threads = match env_var_with_legacy_alias("FOD_FUSE_EVENT_THREADS") {
@@ -341,6 +379,7 @@ fn log_mount_status(
 
 pub fn mount_fuse(
     repo: DbRepo,
+    telemetry_repo: Option<DbRepo>,
     runtime: &RuntimeConfig,
     settings: FodFuseSettings,
     mountpoint: &Path,
@@ -355,7 +394,8 @@ pub fn mount_fuse(
 
     let task_settings = RuntimeTaskSettings::from_env()
         .map_err(|err| format!("invalid logical task admission config: {err}"))?;
-    let mut fs = FodFuse::new_with_task_settings(repo, settings, runtime, task_settings);
+    let mut fs =
+        FodFuse::new_with_task_settings(repo, telemetry_repo, settings, runtime, task_settings);
     let read_only = fs.read_only;
     let core = runtime.core_settings();
     let mount = runtime.mount_settings(read_only);
@@ -383,6 +423,36 @@ pub fn mount_fuse(
         if let Err(err) = fs.start_shared_monitor_publisher() {
             warn!("FOD shared monitor publisher unavailable: {}", err);
         }
+    } else if fs.has_client_session_repo() {
+        if let Err(err) = fs.register_client_session(mountpoint, "replica") {
+            warn!(
+                "FOD read-only shared monitor session unavailable; continuing without central telemetry: {}",
+                err
+            );
+        } else if fs.session_id().is_some() {
+            if let Err(err) = fs.start_client_session_heartbeat() {
+                warn!(
+                    "FOD read-only session heartbeat unavailable; continuing without central telemetry heartbeat: {}",
+                    err
+                );
+            }
+            if let Err(err) = fs.start_client_session_maintenance() {
+                warn!(
+                    "FOD read-only session maintenance unavailable; continuing without central telemetry maintenance: {}",
+                    err
+                );
+            }
+            if let Err(err) = fs.start_shared_monitor_publisher() {
+                warn!(
+                    "FOD read-only shared monitor publisher unavailable; continuing without central telemetry samples: {}",
+                    err
+                );
+            }
+        }
+    } else {
+        info!(
+            "FOD read-only shared monitor publisher disabled: no writable telemetry endpoint configured"
+        );
     }
     fs.start_runtime_reload(runtime)
         .map_err(|err| format!("failed to start runtime reload: {err}"))?;

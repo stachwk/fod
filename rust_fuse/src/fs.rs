@@ -5,7 +5,8 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use fod_rust_monitor::{
     log_logical_task_observability as log_logical_task_snapshots, LogicalTaskAdmissionGate,
     LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
-    LogicalTaskQueueObservability, SharedMonitorSessionStats, SharedMonitorTimingStats,
+    LogicalTaskQueueObservability, SharedMonitorSessionStats, SharedMonitorSourceStats,
+    SharedMonitorTimingStats,
 };
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
@@ -17,7 +18,9 @@ use fuser::{
 use libc::{EIO, ENOENT, ENOSPC, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
-use rust_hotpath::pg::{DbRepo, FileReadMetadata, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX};
+use rust_hotpath::pg::{
+    DbRepo, DbRepoSourceSnapshot, FileReadMetadata, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX,
+};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::ffi::OsStr;
@@ -482,7 +485,8 @@ fn shared_monitor_publish_interval() -> Duration {
 }
 
 fn publish_shared_monitor_sample(
-    repo: &DbRepo,
+    observability_repo: &DbRepo,
+    publish_repo: &DbRepo,
     session_id: u64,
     publish_interval_millis: u64,
     sample_seq: u64,
@@ -494,7 +498,8 @@ fn publish_shared_monitor_sample(
     let read_snapshot = read.snapshot()?;
     let write_snapshot = write.snapshot()?;
     let copy_snapshot = copy.snapshot()?;
-    let database_snapshot = repo.observability_snapshot()?;
+    let database_snapshot = observability_repo.observability_snapshot()?;
+    let source_snapshot = observability_repo.source_snapshot()?;
     let stats = SharedMonitorSessionStats::from_snapshots(
         sample_seq,
         publish_interval_millis,
@@ -502,9 +507,10 @@ fn publish_shared_monitor_sample(
         &write_snapshot,
         &copy_snapshot,
         &database_snapshot,
+        shared_monitor_source_stats(source_snapshot),
         profile.shared_monitor_timing_stats(),
     );
-    repo.publish_monitor_session_stats(
+    publish_repo.publish_monitor_session_stats(
         session_id,
         env!("CARGO_PKG_VERSION"),
         sample_seq,
@@ -512,9 +518,18 @@ fn publish_shared_monitor_sample(
     )
 }
 
+fn shared_monitor_source_stats(snapshot: DbRepoSourceSnapshot) -> SharedMonitorSourceStats {
+    SharedMonitorSourceStats {
+        data_source_role: snapshot.data_source_role,
+        data_source_transaction_read_only: snapshot.transaction_read_only,
+        wal_replay_lag_bytes: snapshot.wal_replay_lag_bytes,
+    }
+}
+
 impl SharedMonitorPublisherHandle {
     fn spawn(
-        repo: DbRepo,
+        observability_repo: DbRepo,
+        publish_repo: DbRepo,
         session_id: u64,
         interval: Duration,
         read: Arc<LogicalTaskQueueObservability>,
@@ -531,7 +546,8 @@ impl SharedMonitorPublisherHandle {
             loop {
                 sample_seq = sample_seq.saturating_add(1);
                 if let Err(err) = publish_shared_monitor_sample(
-                        &repo,
+                        &observability_repo,
+                        &publish_repo,
                         session_id,
                         publish_interval_millis,
                         sample_seq, read.as_ref(), write.as_ref(), copy.as_ref(), profile.as_ref()) {
@@ -542,7 +558,8 @@ impl SharedMonitorPublisherHandle {
                 if stop_thread.load(Ordering::Relaxed) {
                     sample_seq = sample_seq.saturating_add(1);
                     if let Err(err) = publish_shared_monitor_sample(
-                        &repo,
+                        &observability_repo,
+                        &publish_repo,
                         session_id,
                         publish_interval_millis,
                         sample_seq, read.as_ref(), write.as_ref(), copy.as_ref(), profile.as_ref()) {
@@ -1271,6 +1288,7 @@ impl FodFuseProfileCounters {
 
 pub struct FodFuse {
     pub repo: DbRepo,
+    telemetry_repo: Option<DbRepo>,
     pub block_size: u64,
     pub write_flush_threshold_bytes: u64,
     pub pg_visible_path: Option<PathBuf>,
@@ -1320,6 +1338,7 @@ pub struct FodFuse {
 impl FodFuse {
     pub fn new_with_task_settings(
         repo: DbRepo,
+        telemetry_repo: Option<DbRepo>,
         settings: FodFuseSettings,
         runtime: &RuntimeConfig,
         task_settings: RuntimeTaskSettings,
@@ -1373,6 +1392,7 @@ impl FodFuse {
 
         Self {
             repo,
+            telemetry_repo,
             block_size: storage.block_size.max(1),
             write_flush_threshold_bytes: storage.write_flush_threshold_bytes,
             pg_visible_path: storage.pg_visible_path,
@@ -1424,6 +1444,20 @@ impl FodFuse {
 
     fn next_request_id(&self) -> u64 {
         self.request_seq.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn client_session_repo(&self) -> Option<&DbRepo> {
+        self.telemetry_repo
+            .as_ref()
+            .or_else(|| (!self.read_only).then_some(&self.repo))
+    }
+
+    pub fn has_client_session_repo(&self) -> bool {
+        self.client_session_repo().is_some()
+    }
+
+    pub fn session_id(&self) -> Option<u64> {
+        self.session_id
     }
 
     fn request_prefix(&self, req_id: u64, op: &str) -> String {
@@ -1736,6 +1770,9 @@ impl FodFuse {
     }
 
     pub(crate) fn maybe_touch_client_session_write(&self) {
+        if self.read_only {
+            return;
+        }
         let Some(session_id) = self.session_id else {
             return;
         };
@@ -1760,7 +1797,10 @@ impl FodFuse {
             return;
         }
 
-        if let Err(err) = self.repo.touch_client_session_write(session_id) {
+        let Some(repo) = self.client_session_repo() else {
+            return;
+        };
+        if let Err(err) = repo.touch_client_session_write(session_id) {
             warn!(
                 "FOD client session write tracking failed session_id={} err={}",
                 session_id, err
@@ -3719,13 +3759,16 @@ impl FodFuse {
         mountpoint: &Path,
         mount_mode: &str,
     ) -> Result<(), String> {
-        if self.session_id.is_some() || self.read_only {
+        if self.session_id.is_some() {
             return Ok(());
         }
+        let Some(repo) = self.client_session_repo() else {
+            return Ok(());
+        };
         let host_name = client_session_hostname(std::env::var("HOSTNAME").ok(), current_hostname());
         let mountpoint = mountpoint.to_string_lossy().to_string();
         let pid = u64::from(std::process::id());
-        let session_id = self.repo.register_client_session(
+        let session_id = repo.register_client_session(
             &host_name,
             &mountpoint,
             mount_mode,
@@ -3738,14 +3781,17 @@ impl FodFuse {
     }
 
     pub fn start_client_session_heartbeat(&mut self) -> Result<(), String> {
-        if self.client_session_heartbeat.is_some() || self.read_only {
+        if self.client_session_heartbeat.is_some() {
             return Ok(());
         }
         let Some(session_id) = self.session_id else {
             return Ok(());
         };
+        let Some(repo) = self.client_session_repo() else {
+            return Ok(());
+        };
         let handle = ClientSessionHeartbeatHandle::spawn(
-            self.repo.clone(),
+            repo.clone(),
             session_id,
             self.client_session_heartbeat_interval,
             self.client_session_lease_ttl_seconds,
@@ -3755,13 +3801,16 @@ impl FodFuse {
     }
 
     pub fn start_client_session_maintenance(&mut self) -> Result<(), String> {
-        if self.client_session_maintenance.is_some() || self.read_only {
+        if self.client_session_maintenance.is_some() {
             return Ok(());
         }
         if self.session_id.is_none() {
             return Ok(());
         }
-        let handle = ClientSessionMaintenanceHandle::spawn(self.repo.clone())?;
+        let Some(repo) = self.client_session_repo() else {
+            return Ok(());
+        };
+        let handle = ClientSessionMaintenanceHandle::spawn(repo.clone())?;
         self.client_session_maintenance = Some(handle);
         Ok(())
     }
@@ -3789,14 +3838,18 @@ impl FodFuse {
     }
 
     pub fn start_shared_monitor_publisher(&mut self) -> Result<(), String> {
-        if self.shared_monitor_publisher.is_some() || self.read_only {
+        if self.shared_monitor_publisher.is_some() {
             return Ok(());
         }
         let Some(session_id) = self.session_id else {
             return Ok(());
         };
+        let Some(publish_repo) = self.client_session_repo() else {
+            return Ok(());
+        };
         let publisher = SharedMonitorPublisherHandle::spawn(
             self.repo.clone(),
+            publish_repo.clone(),
             session_id,
             self.client_session_heartbeat_interval,
             Arc::clone(&self.logical_read_tasks),
