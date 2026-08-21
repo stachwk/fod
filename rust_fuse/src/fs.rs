@@ -30,7 +30,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fod_rust_runtime::{
-    duration_to_micros, reloadable_snapshot_from_json, AtimeStat, RuntimeConfig,
+    current_hostname, duration_to_micros, reloadable_snapshot_from_json, AtimeStat, RuntimeConfig,
     RuntimeReloadableSettings, RuntimeTaskSettings, FOD_SCHEMA_NAME,
 };
 pub use fod_rust_runtime::{AtimePolicy, LockBackend};
@@ -203,6 +203,11 @@ struct LockHeartbeatHandle {
     thread: Option<JoinHandle<()>>,
 }
 
+struct ClientSessionMaintenanceHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
 const RUNTIME_RELOAD_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const LOGICAL_TASK_OBSERVABILITY_INTERVAL: Duration = Duration::from_secs(30);
 const SHARED_MONITOR_PUBLISH_INTERVAL_MS_DEFAULT: u64 = 5_000;
@@ -211,6 +216,10 @@ const SHARED_MONITOR_PUBLISH_INTERVAL_MS_MAX: u64 = 60_000;
 const SHARED_MONITOR_PUBLISH_INTERVAL_MS_ENV: &str = "FOD_MONITOR_PUBLISH_INTERVAL_MS";
 const CLIENT_SESSION_LEASE_TTL_MIN_SECONDS: u64 = 30;
 const CLIENT_SESSION_LEASE_TTL_PUBLISH_INTERVAL_MULTIPLIER: u64 = 3;
+const CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_DEFAULT: u64 = 5_000;
+const CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_MIN: u64 = 500;
+const CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_MAX: u64 = 60_000;
+const CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_ENV: &str = "FOD_SESSION_MAINTENANCE_INTERVAL_MS";
 
 struct SharedMonitorPublisherHandle {
     stop: Arc<AtomicBool>,
@@ -276,6 +285,91 @@ impl LockHeartbeatHandle {
 }
 
 impl Drop for LockHeartbeatHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn client_session_maintenance_interval() -> Duration {
+    let default = CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_DEFAULT;
+    let value = match std::env::var(CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_ENV) {
+        Ok(value) => match value.trim().parse::<u64>() {
+            Ok(value)
+                if (CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_MIN
+                    ..=CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_MAX)
+                    .contains(&value) =>
+            {
+                value
+            }
+            Ok(value) => {
+                warn!(
+                    "FOD session maintenance interval {}={} outside {}..={}; using {}",
+                    CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_ENV,
+                    value,
+                    CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_MIN,
+                    CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_MAX,
+                    default
+                );
+                default
+            }
+            Err(err) => {
+                warn!(
+                    "FOD session maintenance interval {} invalid: {}; using {}",
+                    CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_ENV, err, default
+                );
+                default
+            }
+        },
+        Err(_) => default,
+    };
+    Duration::from_millis(value)
+}
+
+impl ClientSessionMaintenanceHandle {
+    fn spawn(repo: DbRepo) -> Result<Self, String> {
+        let interval = client_session_maintenance_interval();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        info!(
+            "FOD client session maintenance: interval_ms={}",
+            interval.as_millis()
+        );
+        let thread = thread::Builder::new()
+            .name("fod-session-maintenance".to_string())
+            .spawn(move || {
+                while !stop_thread.load(Ordering::Relaxed) {
+                    thread::park_timeout(interval);
+                    if stop_thread.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    match repo.prune_expired_client_sessions() {
+                        Ok(true) => {
+                            debug!("FOD client session maintenance pruned expired sessions");
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            warn!("FOD client session maintenance prune failed: {}", err);
+                        }
+                    }
+                }
+            })
+            .map_err(|err| format!("failed to spawn client session maintenance thread: {err}"))?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for ClientSessionMaintenanceHandle {
     fn drop(&mut self) {
         self.stop();
     }
@@ -472,6 +566,24 @@ impl Drop for RuntimeReloadHandle {
     }
 }
 
+fn client_session_hostname(
+    env_hostname: Option<String>,
+    system_hostname: Result<String, String>,
+) -> String {
+    env_hostname
+        .and_then(|value| {
+            let value = value.trim().to_string();
+            (!value.is_empty()).then_some(value)
+        })
+        .or_else(|| {
+            system_hostname.ok().and_then(|value| {
+                let value = value.trim().to_string();
+                (!value.is_empty()).then_some(value)
+            })
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 fn heartbeat_pg_mount_state(
     repo: &DbRepo,
     session_id: u64,
@@ -551,17 +663,6 @@ fn heartbeat_pg_mount_state(
         }
     }
 
-    match repo.prune_expired_client_sessions() {
-        Ok(true) => {}
-        Ok(false) => {}
-        Err(err) => {
-            failed = true;
-            warn!(
-                "FOD session prune failed session_id={} err={}",
-                session_id, err
-            );
-        }
-    }
     failed
 }
 
@@ -1156,6 +1257,7 @@ pub struct FodFuse {
     logical_write_gate: Arc<LogicalTaskAdmissionGate>,
     logical_task_observability: Option<LogicalTaskObservabilitySampler>,
     shared_monitor_publisher: Option<SharedMonitorPublisherHandle>,
+    client_session_maintenance: Option<ClientSessionMaintenanceHandle>,
     next_fh: Mutex<u64>,
     request_seq: AtomicU64,
     session_id: Option<u64>,
@@ -1253,6 +1355,7 @@ impl FodFuse {
             logical_write_gate,
             logical_task_observability: None,
             shared_monitor_publisher: None,
+            client_session_maintenance: None,
             next_fh: Mutex::new(1),
             request_seq: AtomicU64::new(1),
             session_id: None,
@@ -3559,10 +3662,7 @@ impl FodFuse {
         if self.session_id.is_some() || self.read_only {
             return Ok(());
         }
-        let host_name = std::env::var("HOSTNAME")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "unknown".to_string());
+        let host_name = client_session_hostname(std::env::var("HOSTNAME").ok(), current_hostname());
         let mountpoint = mountpoint.to_string_lossy().to_string();
         let pid = u64::from(std::process::id());
         let lease_ttl_seconds =
@@ -3579,6 +3679,18 @@ impl FodFuse {
             lease_ttl_seconds,
         )?;
         self.session_id = Some(session_id);
+        Ok(())
+    }
+
+    pub fn start_client_session_maintenance(&mut self) -> Result<(), String> {
+        if self.client_session_maintenance.is_some() || self.read_only {
+            return Ok(());
+        }
+        if self.session_id.is_none() {
+            return Ok(());
+        }
+        let handle = ClientSessionMaintenanceHandle::spawn(self.repo.clone())?;
+        self.client_session_maintenance = Some(handle);
         Ok(())
     }
 
@@ -3654,6 +3766,9 @@ impl Drop for FodFuse {
     fn drop(&mut self) {
         if let Some(mut publisher) = self.shared_monitor_publisher.take() {
             publisher.stop();
+        }
+        if let Some(mut maintenance) = self.client_session_maintenance.take() {
+            maintenance.stop();
         }
         if let Some(mut sampler) = self.logical_task_observability.take() {
             sampler.stop();
@@ -7141,7 +7256,8 @@ impl Filesystem for FodFuse {
 #[cfg(test)]
 mod tests {
     use super::{
-        ioctl_is_mutating, setattr_requests_mutation, should_update_atime, AtimePolicy, WriteState,
+        client_session_hostname, ioctl_is_mutating, setattr_requests_mutation, should_update_atime,
+        AtimePolicy, WriteState,
     };
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
@@ -7167,6 +7283,29 @@ mod tests {
             flags: 0,
             blksize: 4096,
         }
+    }
+
+    #[test]
+    fn client_session_hostname_prefers_env_and_falls_back_to_system() {
+        assert_eq!(
+            client_session_hostname(
+                Some(" env-host ".to_string()),
+                Ok("system-host".to_string())
+            ),
+            "env-host"
+        );
+        assert_eq!(
+            client_session_hostname(Some("  ".to_string()), Ok(" system-host ".to_string())),
+            "system-host"
+        );
+        assert_eq!(
+            client_session_hostname(None, Ok("system-host".to_string())),
+            "system-host"
+        );
+        assert_eq!(
+            client_session_hostname(None, Err("hostname unavailable".to_string())),
+            "unknown"
+        );
     }
 
     #[test]

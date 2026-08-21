@@ -373,6 +373,9 @@ pub fn mount_fuse(
             .map_err(|err| format!("failed to ensure client session schema: {err}"))?;
         fs.register_client_session(mountpoint, "primary")
             .map_err(|err| format!("failed to register client session: {err}"))?;
+        if let Err(err) = fs.start_client_session_maintenance() {
+            warn!("FOD client session maintenance unavailable: {}", err);
+        }
         fs.start_lock_heartbeat()
             .map_err(|err| format!("failed to start lock heartbeat: {err}"))?;
         if let Err(err) = fs.start_shared_monitor_publisher() {

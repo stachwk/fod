@@ -49,6 +49,114 @@ fn require_root() -> Result<(), String> {
 }
 
 #[test]
+fn memory_backend_mount_prunes_expired_shared_sessions_without_lock_heartbeat() -> Result<(), String>
+{
+    require_root()?;
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let memory_mount = MountedFs::start_with_role(
+        "lock-backend-memory-session-maintenance",
+        "primary",
+        &[
+            ("FOD_LOCK_BACKEND", "memory".to_string()),
+            ("FOD_SESSION_MAINTENANCE_INTERVAL_MS", "500".to_string()),
+        ],
+    )?;
+    let startup_log = memory_mount.log_tail(200);
+    if !startup_log.contains("lock backend=Memory") {
+        return Err(format!(
+            "test mount did not use memory lock backend\n{}",
+            startup_log
+        ));
+    }
+
+    let repo = db_repo()?;
+    let token = format!("expired-memory-session-{}", unique_suffix());
+    let escaped_token = token.replace('\'', "''");
+    repo.exec(&format!(
+        "
+        WITH inserted AS (
+            INSERT INTO client_sessions (
+                host_name,
+                mountpoint,
+                mount_mode,
+                lock_backend,
+                pid,
+                request_token,
+                lease_expires_at,
+                heartbeat_at
+            )
+            VALUES (
+                'expired-memory-test',
+                '/tmp/fod-expired-memory-test',
+                'primary',
+                'memory',
+                0,
+                '{escaped_token}',
+                NOW() - INTERVAL '1 second',
+                NOW() - INTERVAL '1 second'
+            )
+            RETURNING session_id
+        )
+        INSERT INTO monitor_session_stats (
+            session_id,
+            fod_version,
+            sample_seq,
+            sampled_at,
+            payload_json,
+            updated_at
+        )
+        SELECT
+            session_id,
+            '3.3.3-test',
+            1,
+            NOW(),
+            jsonb_build_object('test_token', '{escaped_token}'),
+            NOW()
+        FROM inserted
+        "
+    ))?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let remaining = repo.query_scalar_text(&format!(
+            "SELECT COUNT(*)::text FROM client_sessions WHERE request_token = '{escaped_token}'"
+        ))?;
+        if remaining.trim() == "0" {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "expired memory-backend session was not pruned; remaining={}\n{}",
+                remaining.trim(),
+                memory_mount.log_tail(200)
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let monitor_remaining = repo.query_scalar_text(&format!(
+        "
+        SELECT COUNT(*)::text
+        FROM monitor_session_stats
+        WHERE payload_json ->> 'test_token' = '{escaped_token}'
+        "
+    ))?;
+    if monitor_remaining.trim() != "0" {
+        return Err(format!(
+            "monitor_session_stats row did not cascade with expired client session: {}",
+            monitor_remaining.trim()
+        ));
+    }
+
+    drop(memory_mount);
+    Ok(())
+}
+
+#[test]
 fn primary_lease_expiry_allows_second_mount_reacquire() -> Result<(), String> {
     require_root()?;
     if !Path::new("/dev/fuse").exists() {

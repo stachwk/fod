@@ -6,6 +6,8 @@ w `ROADMAP.md`.
 
 ## 1. FOD 3.3.2 - spojnosc schematu i migracji
 
+Status: zakonczone w `fd9d781`.
+
 Priorytet: P1.
 
 - podniesc kanoniczny numer schematu z 21 do 22;
@@ -22,6 +24,8 @@ Kryterium zakonczenia: test upgrade 21 -> 22, status kompletnego i uszkodzonego
 schematu, test manifestu, test wersji i mount smoke przechodza.
 
 ## 2. FOD 3.3.3 - lifecycle sesji i identity hosta
+
+Status: w realizacji.
 
 Priorytet: P1/P2.
 

@@ -44,12 +44,16 @@ Zakres: 500-60000 ms. Publikacja telemetrii odswieza rowniez liveness rekordu
 mount nie znika z centralnego widoku przy rzadszym probkowaniu.
 
 Telemetria nie zmienia semantyki lock managera: `lock_heartbeat_interval=0`
-nadal wylacza heartbeat lockow, a `lock_backend=memory` nie uruchamia heartbeat
-ani prune lockow PostgreSQL. Sam UPSERT telemetrii jest widoczny w kolejnych
+nadal wylacza heartbeat lockow, a `lock_backend=memory` nie uruchamia heartbeat lockow PostgreSQL. Od FOD 3.3.3 sprzatanie wygaslych `client_sessions` jest osobnym maintenance i dziala niezaleznie od backendu lockow. Prune sesji usuwa tez historyczne wygasle lock rows z `session_id=0`. Sam UPSERT telemetrii jest widoczny w kolejnych
 licznikach operacji bazy jako koszt monitoringu.
 
 Tabela jest ograniczona do jednego rekordu na `session_id` i jest czyszczona
 kaskadowo razem z sesja. 3.3.1 celowo nie tworzy nieograniczonej historii.
+
+
+Od FOD 3.3.3 identity hosta preferuje niepuste `HOSTNAME`, ale gdy zmienna nie jest eksportowana, FOD pobiera nazwe hosta z systemowego `gethostname()`. Wartosc `unknown` jest dopiero ostatnim fallbackiem.
+
+`FOD_SESSION_MAINTENANCE_INTERVAL_MS` steruje okresem sprzatania wygaslych `client_sessions`: domyslnie 5000 ms, zakres 500-60000 ms. Ten maintenance nie odnawia lock leases i nie zmienia semantyki `lock_heartbeat_interval`.
 
 ## Widoki
 
