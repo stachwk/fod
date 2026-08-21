@@ -66,11 +66,18 @@ Od FOD 3.3.3 identity hosta preferuje niepuste `HOSTNAME`, ale gdy zmienna nie j
 ## Widoki
 
 - `fod-monitor cluster` - tylko wspolny widok PostgreSQL.
+- `fod-monitor cluster --json` - stabilny maszynowy widok wspolnego klastra z
+  `schema_version`, zrodlem danych, agregatem `summary` i lista sesji.
 - `fod-monitor status` - wspolny klaster, potem lokalny host.
 - `fod-monitor top` - klaster + lokalny host; `READ_BPS`, `WRITE_BPS` i
-  `COPY_BPS` sa liczone z roznic kolejnych centralnych probek.
+  `COPY_BPS` sa liczone z roznic kolejnych centralnych probek. Od FOD 3.3.5
+  tabela pokazuje tez sredni rozmiar callbacku read/write/copy i przyblizone
+  `DB_OPS` na read/write task w formie wartosci milli.
 - `fod-monitor report` - dodatkowo szczegoly per sesja: DB, persistence,
   failovery i timingi FUSE.
+- `fod-monitor report --json` - stabilny maszynowy raport laczacy centralny
+  klaster z lokalnym snapshotem `/proc`; przy niedostepnosci klastra wypelnia
+  `cluster_error`, ale nadal zwraca lokalne dane.
 
 Monitor korzysta ze standardowej sekcji `[database]`. Opcjonalny osobny DSN:
 
@@ -82,6 +89,8 @@ DSN i haslo nie sa wypisywane. Jezeli monitor odczytuje fizyczna replike,
 `source_role=replica` jawnie sygnalizuje, ze widok moze byc opozniony o replay WAL.
 Obliczenia wieku sesji, lease i probek sa wykonywane jawnie w UTC niezaleznie
 od `TimeZone` sesji PostgreSQL uzywanej przez `fod-monitor`.
+Od FOD 3.3.5 `source_authority` pochodzi z `host(inet_server_addr())`, wiec
+nie zawiera maski CIDR z tekstowej reprezentacji adresu PostgreSQL.
 
 ## PostgreSQL
 

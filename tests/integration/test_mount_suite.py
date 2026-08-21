@@ -8,6 +8,7 @@ from __future__ import annotations
 import errno
 import array
 import fcntl
+import json
 import os
 import time
 import termios
@@ -134,6 +135,32 @@ class FODMountSuite(unittest.TestCase):
         self.assertGreaterEqual(
             last_metrics.get("write_completed_bytes", 0),
             len(payload),
+        )
+        json_result = subprocess.run(
+            [str(monitor_bin), "cluster", "--json"],
+            cwd=ROOT,
+            env=monitor_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(json_result.returncode, 0, json_result.stderr)
+        cluster_payload = json.loads(json_result.stdout)
+        self.assertEqual(cluster_payload["schema_version"], 1)
+        cluster = cluster_payload["cluster"]
+        self.assertNotIn("/", cluster["source"]["authority"])
+        self.assertEqual(cluster["source"]["database"], self.launcher.postgres_db)
+        self.assertGreaterEqual(cluster["summary"]["active_sessions"], 1)
+        self.assertGreaterEqual(cluster["summary"]["telemetry_sessions"], 1)
+        self.assertGreaterEqual(cluster["summary"]["write_completed_tasks"], 1)
+        self.assertGreaterEqual(
+            cluster["summary"]["write_completed_bytes"],
+            len(payload),
+        )
+        self.assertGreaterEqual(cluster["summary"]["write_average_callback_bytes"], 1)
+        self.assertTrue(
+            any(session["mountpoint"] == str(self.mountpoint) for session in cluster["sessions"]),
+            cluster["sessions"],
         )
 
     def test_files(self):

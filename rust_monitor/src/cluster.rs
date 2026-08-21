@@ -6,6 +6,7 @@ use fod_rust_runtime::ini_config::{
     load_config_parser, resolve_pg_endpoint_config, PgEndpointRole,
 };
 use fod_rust_runtime::FOD_SCHEMA_NAME;
+use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::ffi::{c_char, c_int, CStr, CString};
@@ -56,7 +57,7 @@ impl Drop for PgConnection {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ClusterSessionSnapshot {
     pub session_id: u64,
     pub host_name: String,
@@ -74,12 +75,51 @@ pub struct ClusterSessionSnapshot {
     pub stats: Option<SharedMonitorSessionStats>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ClusterSnapshot {
     pub source_authority: String,
     pub source_database: String,
     pub source_role: String,
     pub sessions: Vec<ClusterSessionSnapshot>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ClusterSummary {
+    pub active_sessions: u64,
+    pub active_hosts: u64,
+    pub telemetry_sessions: u64,
+    pub stale_telemetry_sessions: u64,
+    pub read_completed_tasks: u64,
+    pub read_completed_bytes: u64,
+    pub read_average_callback_bytes: u64,
+    pub write_completed_tasks: u64,
+    pub write_completed_bytes: u64,
+    pub write_average_callback_bytes: u64,
+    pub copy_completed_tasks: u64,
+    pub copy_completed_bytes: u64,
+    pub copy_average_callback_bytes: u64,
+    pub task_failures: u64,
+    pub database_operations: u64,
+    pub database_operation_failures: u64,
+    pub database_operations_per_completed_task_milli_proxy: u64,
+    pub database_operations_per_read_task_milli_proxy: u64,
+    pub database_operations_per_write_task_milli_proxy: u64,
+    pub persist_operations: u64,
+    pub persist_input_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClusterJsonSource<'a> {
+    pub authority: &'a str,
+    pub database: &'a str,
+    pub role: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClusterJsonSnapshot<'a> {
+    pub source: ClusterJsonSource<'a>,
+    pub summary: ClusterSummary,
+    pub sessions: &'a [ClusterSessionSnapshot],
 }
 
 fn c_text(ptr: *const c_char) -> String {
@@ -218,7 +258,7 @@ impl PgConnection {
     }
 
     fn actual_authority(&mut self) -> String {
-        self.query_scalar("SELECT COALESCE(inet_server_addr()::text, 'local') || ':' || COALESCE(inet_server_port()::text, '0')")
+        self.query_scalar("SELECT COALESCE(host(inet_server_addr()), 'local') || ':' || COALESCE(inet_server_port()::text, '0')")
             .unwrap_or_else(|_| self.configured_authority.clone())
     }
 
@@ -382,6 +422,115 @@ fn opt(value: Option<u64>) -> String {
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string())
 }
+
+fn avg_bytes(bytes: u64, tasks: u64) -> u64 {
+    if tasks == 0 {
+        0
+    } else {
+        bytes / tasks
+    }
+}
+
+fn per_task_milli(numerator: u64, denominator: u64) -> u64 {
+    if denominator == 0 {
+        0
+    } else {
+        numerator.saturating_mul(1_000) / denominator
+    }
+}
+
+pub fn cluster_summary(snapshot: &ClusterSnapshot) -> ClusterSummary {
+    let mut hosts = BTreeSet::new();
+    let mut summary = ClusterSummary {
+        active_sessions: snapshot.sessions.len() as u64,
+        ..ClusterSummary::default()
+    };
+    for session in &snapshot.sessions {
+        hosts.insert(session.host_name.as_str());
+        if session.stats.is_some() {
+            summary.telemetry_sessions = summary.telemetry_sessions.saturating_add(1);
+        }
+        let stale_threshold_seconds = stale_sample_threshold_seconds(
+            session
+                .stats
+                .as_ref()
+                .map(|stats| stats.publish_interval_millis),
+        );
+        if session
+            .sample_age_seconds
+            .is_some_and(|age| age > stale_threshold_seconds)
+        {
+            summary.stale_telemetry_sessions = summary.stale_telemetry_sessions.saturating_add(1);
+        }
+        if let Some(stats) = &session.stats {
+            summary.read_completed_tasks = summary
+                .read_completed_tasks
+                .saturating_add(stats.read.completed_tasks);
+            summary.read_completed_bytes = summary
+                .read_completed_bytes
+                .saturating_add(stats.read.completed_bytes);
+            summary.write_completed_tasks = summary
+                .write_completed_tasks
+                .saturating_add(stats.write.completed_tasks);
+            summary.write_completed_bytes = summary
+                .write_completed_bytes
+                .saturating_add(stats.write.completed_bytes);
+            summary.copy_completed_tasks = summary
+                .copy_completed_tasks
+                .saturating_add(stats.copy.completed_tasks);
+            summary.copy_completed_bytes = summary
+                .copy_completed_bytes
+                .saturating_add(stats.copy.completed_bytes);
+            summary.task_failures = summary
+                .task_failures
+                .saturating_add(stats.read.failed_tasks)
+                .saturating_add(stats.write.failed_tasks)
+                .saturating_add(stats.copy.failed_tasks);
+            summary.database_operations = summary
+                .database_operations
+                .saturating_add(stats.database.operation_count);
+            summary.database_operation_failures = summary
+                .database_operation_failures
+                .saturating_add(stats.database.operation_failures);
+            summary.persist_operations = summary
+                .persist_operations
+                .saturating_add(stats.persistence.persist_operation_count);
+            summary.persist_input_bytes = summary
+                .persist_input_bytes
+                .saturating_add(stats.persistence.persist_input_bytes_total);
+        }
+    }
+    summary.active_hosts = hosts.len() as u64;
+    summary.read_average_callback_bytes =
+        avg_bytes(summary.read_completed_bytes, summary.read_completed_tasks);
+    summary.write_average_callback_bytes =
+        avg_bytes(summary.write_completed_bytes, summary.write_completed_tasks);
+    summary.copy_average_callback_bytes =
+        avg_bytes(summary.copy_completed_bytes, summary.copy_completed_tasks);
+    let completed_tasks = summary
+        .read_completed_tasks
+        .saturating_add(summary.write_completed_tasks)
+        .saturating_add(summary.copy_completed_tasks);
+    summary.database_operations_per_completed_task_milli_proxy =
+        per_task_milli(summary.database_operations, completed_tasks);
+    summary.database_operations_per_read_task_milli_proxy =
+        per_task_milli(summary.database_operations, summary.read_completed_tasks);
+    summary.database_operations_per_write_task_milli_proxy =
+        per_task_milli(summary.database_operations, summary.write_completed_tasks);
+    summary
+}
+
+pub fn cluster_json_snapshot(snapshot: &ClusterSnapshot) -> ClusterJsonSnapshot<'_> {
+    ClusterJsonSnapshot {
+        source: ClusterJsonSource {
+            authority: &snapshot.source_authority,
+            database: &snapshot.source_database,
+            role: &snapshot.source_role,
+        },
+        summary: cluster_summary(snapshot),
+        sessions: &snapshot.sessions,
+    }
+}
 fn text(value: Option<&str>) -> &str {
     value.unwrap_or("-")
 }
@@ -399,84 +548,73 @@ fn compact(value: &str, max: usize) -> String {
 }
 
 pub fn print_cluster_snapshot(snapshot: &ClusterSnapshot, previous: Option<&ClusterSnapshot>) {
-    let mut hosts = BTreeSet::new();
-    let mut sampled = 0_u64;
-    let mut stale = 0_u64;
-    let mut read_ops = 0_u64;
-    let mut read_bytes = 0_u64;
-    let mut write_ops = 0_u64;
-    let mut write_bytes = 0_u64;
-    let mut copy_ops = 0_u64;
-    let mut copy_bytes = 0_u64;
-    let mut failures = 0_u64;
-    let mut db_ops = 0_u64;
-    let mut db_errors = 0_u64;
-    let mut persist_ops = 0_u64;
-    let mut persist_bytes = 0_u64;
-    for session in &snapshot.sessions {
-        hosts.insert(session.host_name.as_str());
-        if session.stats.is_some() {
-            sampled += 1;
-        }
-        let stale_threshold_seconds = stale_sample_threshold_seconds(
-            session
-                .stats
-                .as_ref()
-                .map(|stats| stats.publish_interval_millis),
-        );
-        if session
-            .sample_age_seconds
-            .is_some_and(|age| age > stale_threshold_seconds)
-        {
-            stale += 1;
-        }
-        if let Some(stats) = &session.stats {
-            read_ops = read_ops.saturating_add(stats.read.completed_tasks);
-            read_bytes = read_bytes.saturating_add(stats.read.completed_bytes);
-            write_ops = write_ops.saturating_add(stats.write.completed_tasks);
-            write_bytes = write_bytes.saturating_add(stats.write.completed_bytes);
-            copy_ops = copy_ops.saturating_add(stats.copy.completed_tasks);
-            copy_bytes = copy_bytes.saturating_add(stats.copy.completed_bytes);
-            failures = failures
-                .saturating_add(stats.read.failed_tasks)
-                .saturating_add(stats.write.failed_tasks)
-                .saturating_add(stats.copy.failed_tasks);
-            db_ops = db_ops.saturating_add(stats.database.operation_count);
-            db_errors = db_errors.saturating_add(stats.database.operation_failures);
-            persist_ops = persist_ops.saturating_add(stats.persistence.persist_operation_count);
-            persist_bytes =
-                persist_bytes.saturating_add(stats.persistence.persist_input_bytes_total);
-        }
-    }
+    let summary = cluster_summary(snapshot);
     println!("Cluster:");
     println!("  source_authority={}", snapshot.source_authority);
     println!("  source_database={}", snapshot.source_database);
     println!("  source_role={}", snapshot.source_role);
-    println!("  active_sessions={}", snapshot.sessions.len());
-    println!("  active_hosts={}", hosts.len());
-    println!("  telemetry_sessions={sampled}");
-    println!("  stale_telemetry_sessions={stale}");
-    println!("  read_completed_tasks={read_ops}");
-    println!("  read_completed_bytes={read_bytes}");
-    println!("  write_completed_tasks={write_ops}");
-    println!("  write_completed_bytes={write_bytes}");
-    println!("  copy_completed_tasks={copy_ops}");
-    println!("  copy_completed_bytes={copy_bytes}");
-    println!("  task_failures={failures}");
-    println!("  database_operations={db_ops}");
-    println!("  database_operation_failures={db_errors}");
-    println!("  persist_operations={persist_ops}");
-    println!("  persist_input_bytes={persist_bytes}");
+    println!("  active_sessions={}", summary.active_sessions);
+    println!("  active_hosts={}", summary.active_hosts);
+    println!("  telemetry_sessions={}", summary.telemetry_sessions);
+    println!(
+        "  stale_telemetry_sessions={}",
+        summary.stale_telemetry_sessions
+    );
+    println!("  read_completed_tasks={}", summary.read_completed_tasks);
+    println!("  read_completed_bytes={}", summary.read_completed_bytes);
+    println!(
+        "  read_average_callback_bytes={}",
+        summary.read_average_callback_bytes
+    );
+    println!("  write_completed_tasks={}", summary.write_completed_tasks);
+    println!("  write_completed_bytes={}", summary.write_completed_bytes);
+    println!(
+        "  write_average_callback_bytes={}",
+        summary.write_average_callback_bytes
+    );
+    println!("  copy_completed_tasks={}", summary.copy_completed_tasks);
+    println!("  copy_completed_bytes={}", summary.copy_completed_bytes);
+    println!(
+        "  copy_average_callback_bytes={}",
+        summary.copy_average_callback_bytes
+    );
+    println!("  task_failures={}", summary.task_failures);
+    println!("  database_operations={}", summary.database_operations);
+    println!(
+        "  database_operation_failures={}",
+        summary.database_operation_failures
+    );
+    println!(
+        "  database_operations_per_completed_task_milli_proxy={}",
+        summary.database_operations_per_completed_task_milli_proxy
+    );
+    println!(
+        "  database_operations_per_read_task_milli_proxy={}",
+        summary.database_operations_per_read_task_milli_proxy
+    );
+    println!(
+        "  database_operations_per_write_task_milli_proxy={}",
+        summary.database_operations_per_write_task_milli_proxy
+    );
+    println!("  persist_operations={}", summary.persist_operations);
+    println!("  persist_input_bytes={}", summary.persist_input_bytes);
     if snapshot.sessions.is_empty() {
         println!("No active shared FOD sessions detected.");
         return;
     }
-    println!("HOST\tMOUNT\tMODE\tLOCK\tPID\tVER\tHB_AGE_S\tSAMPLE_AGE_S\tREAD_OPS\tREAD_BYTES\tREAD_BPS\tWRITE_OPS\tWRITE_BYTES\tWRITE_BPS\tCOPY_OPS\tCOPY_BYTES\tCOPY_BPS\tDB_OPS\tDB_ERR\tPERSIST_OPS");
+    println!("HOST\tMOUNT\tMODE\tLOCK\tPID\tVER\tHB_S\tSAMPLE_S\tREAD_N\tREAD_B\tREAD_BPS\tREAD_AVG_B\tWRITE_N\tWRITE_B\tWRITE_BPS\tWRITE_AVG_B\tCOPY_N\tCOPY_B\tCOPY_BPS\tCOPY_AVG_B\tDB_OPS\tDB_ERR\tDB_READ_M\tDB_WRITE_M\tPERSIST_N");
     for session in &snapshot.sessions {
         let stats = session.stats.as_ref();
         let prev = previous_session(previous, session.session_id);
+        let db_ops = stats.map(|v| v.database.operation_count).unwrap_or(0);
+        let read_tasks = stats.map(|v| v.read.completed_tasks).unwrap_or(0);
+        let write_tasks = stats.map(|v| v.write.completed_tasks).unwrap_or(0);
+        let copy_tasks = stats.map(|v| v.copy.completed_tasks).unwrap_or(0);
+        let read_bytes = stats.map(|v| v.read.completed_bytes).unwrap_or(0);
+        let write_bytes = stats.map(|v| v.write.completed_bytes).unwrap_or(0);
+        let copy_bytes = stats.map(|v| v.copy.completed_bytes).unwrap_or(0);
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             compact(&session.host_name, 24),
             compact(&session.mountpoint, 36),
             session.mount_mode,
@@ -485,17 +623,22 @@ pub fn print_cluster_snapshot(snapshot: &ClusterSnapshot, previous: Option<&Clus
             text(session.fod_version.as_deref()),
             session.heartbeat_age_seconds,
             opt(session.sample_age_seconds),
-            stats.map(|v| v.read.completed_tasks).unwrap_or(0),
-            stats.map(|v| v.read.completed_bytes).unwrap_or(0),
+            read_tasks,
+            read_bytes,
             opt(rate(session, prev, |v| v.read.completed_bytes)),
-            stats.map(|v| v.write.completed_tasks).unwrap_or(0),
-            stats.map(|v| v.write.completed_bytes).unwrap_or(0),
+            avg_bytes(read_bytes, read_tasks),
+            write_tasks,
+            write_bytes,
             opt(rate(session, prev, |v| v.write.completed_bytes)),
-            stats.map(|v| v.copy.completed_tasks).unwrap_or(0),
-            stats.map(|v| v.copy.completed_bytes).unwrap_or(0),
+            avg_bytes(write_bytes, write_tasks),
+            copy_tasks,
+            copy_bytes,
             opt(rate(session, prev, |v| v.copy.completed_bytes)),
-            stats.map(|v| v.database.operation_count).unwrap_or(0),
+            avg_bytes(copy_bytes, copy_tasks),
+            db_ops,
             stats.map(|v| v.database.operation_failures).unwrap_or(0),
+            per_task_milli(db_ops, read_tasks),
+            per_task_milli(db_ops, write_tasks),
             stats
                 .map(|v| v.persistence.persist_operation_count)
                 .unwrap_or(0)
@@ -530,7 +673,9 @@ pub fn print_cluster_details(snapshot: &ClusterSnapshot) {
 
 #[cfg(test)]
 mod tests {
-    use super::stale_sample_threshold_seconds;
+    use super::{cluster_json_snapshot, cluster_summary, stale_sample_threshold_seconds};
+    use crate::cluster::{ClusterSessionSnapshot, ClusterSnapshot};
+    use fod_rust_monitor::SharedMonitorSessionStats;
 
     #[test]
     fn stale_threshold_defaults_to_fifteen_seconds() {
@@ -544,5 +689,54 @@ mod tests {
     fn stale_threshold_scales_with_slow_publish_interval() {
         assert_eq!(stale_sample_threshold_seconds(Some(20_000)), 60);
         assert_eq!(stale_sample_threshold_seconds(Some(60_000)), 180);
+    }
+
+    #[test]
+    fn cluster_summary_reports_efficiency_indicators() {
+        let mut stats = SharedMonitorSessionStats {
+            publish_interval_millis: 5_000,
+            ..SharedMonitorSessionStats::default()
+        };
+        stats.read.completed_tasks = 4;
+        stats.read.completed_bytes = 16_384;
+        stats.write.completed_tasks = 2;
+        stats.write.completed_bytes = 8_192;
+        stats.database.operation_count = 18;
+        stats.persistence.persist_operation_count = 2;
+        stats.persistence.persist_input_bytes_total = 8_192;
+        let snapshot = ClusterSnapshot {
+            source_authority: "127.0.0.1:5432".to_string(),
+            source_database: "foddbname".to_string(),
+            source_role: "primary-writable".to_string(),
+            sessions: vec![ClusterSessionSnapshot {
+                session_id: 1,
+                host_name: "host-a".to_string(),
+                mountpoint: "/mnt/fod".to_string(),
+                mount_mode: "primary".to_string(),
+                lock_backend: "postgres_lease".to_string(),
+                pid: 123,
+                heartbeat_age_seconds: 1,
+                started_age_seconds: 2,
+                last_write_age_seconds: Some(1),
+                fod_version: Some("3.3.5-test".to_string()),
+                sample_seq: Some(7),
+                sample_age_seconds: Some(1),
+                sample_epoch_micros: Some(10),
+                stats: Some(stats),
+            }],
+        };
+
+        let summary = cluster_summary(&snapshot);
+        assert_eq!(summary.active_sessions, 1);
+        assert_eq!(summary.active_hosts, 1);
+        assert_eq!(summary.read_average_callback_bytes, 4096);
+        assert_eq!(summary.write_average_callback_bytes, 4096);
+        assert_eq!(summary.database_operations_per_read_task_milli_proxy, 4500);
+        assert_eq!(summary.database_operations_per_write_task_milli_proxy, 9000);
+        assert_eq!(summary.persist_input_bytes, 8192);
+
+        let json = cluster_json_snapshot(&snapshot);
+        assert_eq!(json.source.authority, "127.0.0.1:5432");
+        assert_eq!(json.summary.read_completed_tasks, 4);
     }
 }

@@ -8,6 +8,8 @@ use std::fs;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
+
 const FOD_VERSION: &str = env!("CARGO_PKG_VERSION");
 const FOD_PROCESS_NAMES: &[&str] = &[
     "fod-rust-fuse",
@@ -18,8 +20,9 @@ const FOD_PROCESS_NAMES: &[&str] = &[
 ];
 const DEFAULT_TOP_INTERVAL_SECONDS: u64 = 2;
 const MAX_CMDLINE_CHARS: usize = 120;
+const MONITOR_JSON_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct SystemSnapshot {
     load_average: Option<String>,
     uptime_seconds: Option<u64>,
@@ -27,7 +30,7 @@ struct SystemSnapshot {
     mem_available_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct ProcessSnapshot {
     pid: u32,
     command: String,
@@ -41,10 +44,28 @@ struct ProcessSnapshot {
     cmdline: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct MonitorSnapshot {
     system: SystemSnapshot,
     processes: Vec<ProcessSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClusterCommandJson<'a> {
+    schema_version: u32,
+    fod_version: &'a str,
+    generated_unix_seconds: u64,
+    cluster: cluster::ClusterJsonSnapshot<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReportCommandJson<'a> {
+    schema_version: u32,
+    fod_version: &'a str,
+    generated_unix_seconds: u64,
+    cluster: Option<cluster::ClusterJsonSnapshot<'a>>,
+    cluster_error: Option<String>,
+    local: &'a MonitorSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,12 +96,22 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         Some("cluster") => {
-            ensure_no_extra_args(args)?;
+            let json = parse_json_flag(args)?;
             let snapshot = cluster::load_cluster_snapshot()?;
-            println!("FOD monitor cluster");
-            println!("version={FOD_VERSION}");
-            println!("generated_unix_seconds={}", unix_seconds_now());
-            cluster::print_cluster_snapshot(&snapshot, None);
+            let generated_unix_seconds = unix_seconds_now();
+            if json {
+                print_json(&ClusterCommandJson {
+                    schema_version: MONITOR_JSON_SCHEMA_VERSION,
+                    fod_version: FOD_VERSION,
+                    generated_unix_seconds,
+                    cluster: cluster::cluster_json_snapshot(&snapshot),
+                })?;
+            } else {
+                println!("FOD monitor cluster");
+                println!("version={FOD_VERSION}");
+                println!("generated_unix_seconds={generated_unix_seconds}");
+                cluster::print_cluster_snapshot(&snapshot, None);
+            }
             Ok(())
         }
         Some("top") | Some("watch") => {
@@ -88,12 +119,16 @@ fn run() -> Result<(), String> {
             run_top(options)
         }
         Some("report") => {
-            ensure_no_extra_args(args)?;
+            let json = parse_json_flag(args)?;
             let cluster_snapshot = cluster::load_cluster_snapshot();
             let snapshot = monitor_snapshot()?;
-            print_report(&snapshot, cluster_snapshot.as_ref().ok());
-            if let Err(err) = cluster_snapshot {
-                eprintln!("FOD shared cluster telemetry unavailable: {err}");
+            if json {
+                print_report_json(&snapshot, cluster_snapshot)?;
+            } else {
+                print_report(&snapshot, cluster_snapshot.as_ref().ok());
+                if let Err(err) = cluster_snapshot {
+                    eprintln!("FOD shared cluster telemetry unavailable: {err}");
+                }
             }
             Ok(())
         }
@@ -118,6 +153,21 @@ fn ensure_no_extra_args(mut args: impl Iterator<Item = String>) -> Result<(), St
         Some(arg) => Err(format!("unexpected argument `{arg}`")),
         None => Ok(()),
     }
+}
+
+fn parse_json_flag(args: impl Iterator<Item = String>) -> Result<bool, String> {
+    let mut json = false;
+    for arg in args {
+        match arg.as_str() {
+            "--json" => json = true,
+            "-h" | "--help" => {
+                print_help();
+                std::process::exit(0);
+            }
+            other => return Err(format!("unexpected argument `{other}`")),
+        }
+    }
+    Ok(json)
 }
 
 fn parse_top_options(args: impl Iterator<Item = String>) -> Result<TopOptions, String> {
@@ -173,9 +223,9 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  fod-monitor [status]");
-    println!("  fod-monitor cluster");
+    println!("  fod-monitor cluster [--json]");
     println!("  fod-monitor top [--interval SECONDS] [--iterations N] [--no-clear]");
-    println!("  fod-monitor report");
+    println!("  fod-monitor report [--json]");
     println!("  fod-monitor --help");
     println!("  fod-monitor --version");
     println!();
@@ -278,6 +328,38 @@ fn print_report(snapshot: &MonitorSnapshot, cluster_snapshot: Option<&cluster::C
     println!("  fod-monitor top --interval 2");
     println!("  fod-monitor top --iterations 5 --no-clear");
     println!("  fod-monitor report > fod-monitor-report.txt");
+}
+
+fn print_report_json(
+    snapshot: &MonitorSnapshot,
+    cluster_snapshot: Result<cluster::ClusterSnapshot, String>,
+) -> Result<(), String> {
+    let generated_unix_seconds = unix_seconds_now();
+    match cluster_snapshot {
+        Ok(cluster_snapshot) => print_json(&ReportCommandJson {
+            schema_version: MONITOR_JSON_SCHEMA_VERSION,
+            fod_version: FOD_VERSION,
+            generated_unix_seconds,
+            cluster: Some(cluster::cluster_json_snapshot(&cluster_snapshot)),
+            cluster_error: None,
+            local: snapshot,
+        }),
+        Err(err) => print_json(&ReportCommandJson {
+            schema_version: MONITOR_JSON_SCHEMA_VERSION,
+            fod_version: FOD_VERSION,
+            generated_unix_seconds,
+            cluster: None,
+            cluster_error: Some(err),
+            local: snapshot,
+        }),
+    }
+}
+
+fn print_json<T: Serialize>(value: &T) -> Result<(), String> {
+    let payload = serde_json::to_string_pretty(value)
+        .map_err(|err| format!("unable to serialize monitor JSON: {err}"))?;
+    println!("{payload}");
+    Ok(())
 }
 
 fn print_status_body(snapshot: &MonitorSnapshot) {

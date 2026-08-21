@@ -223,6 +223,62 @@ fn client_session_heartbeat_extends_expiry() {
 }
 
 #[test]
+fn monitor_publish_does_not_refresh_client_session_expiry() {
+    let _guard = test_guard();
+    let repo = repo();
+    ensure_lock_schema(&repo);
+    repo.ensure_client_session_schema()
+        .expect("create client session schema");
+
+    let session_id = repo
+        .register_client_session("host-a", "/mnt/fod", "primary", "postgres_lease", 1234, 180)
+        .expect("register session");
+    repo.exec(&format!(
+        "
+        UPDATE client_sessions
+        SET lease_expires_at = TIMESTAMP '2099-01-01 00:00:00',
+            heartbeat_at = TIMESTAMP '2000-01-01 00:00:00'
+        WHERE session_id = {session_id}
+        "
+    ))
+    .expect("pin session times");
+    let before = repo
+        .query_scalar_text(&format!(
+            "
+            SELECT lease_expires_at::text || '|' || heartbeat_at::text
+            FROM client_sessions
+            WHERE session_id = {session_id}
+            "
+        ))
+        .expect("read initial session times");
+
+    repo.publish_monitor_session_stats(
+        session_id,
+        "3.3.5-test",
+        1,
+        r#"{"schema_version":1,"sample_seq":1,"publish_interval_millis":60000}"#,
+    )
+    .expect("publish monitor stats");
+
+    let after = repo
+        .query_scalar_text(&format!(
+            "
+            SELECT lease_expires_at::text || '|' || heartbeat_at::text
+            FROM client_sessions
+            WHERE session_id = {session_id}
+            "
+        ))
+        .expect("read final session times");
+    assert_eq!(after, before);
+    let monitor_rows = repo
+        .query_scalar_text(&format!(
+            "SELECT COUNT(*)::text FROM monitor_session_stats WHERE session_id = {session_id}"
+        ))
+        .expect("count monitor rows");
+    assert_eq!(monitor_rows.trim(), "1");
+}
+
+#[test]
 fn expired_client_session_prunes_only_its_owners() {
     let _guard = test_guard();
     let repo = repo();

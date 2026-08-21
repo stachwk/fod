@@ -57,6 +57,8 @@ Priorytet: P1.
 
 ## 4. FOD 3.3.5 - czytelnosc i API fod-monitor
 
+Status: zakonczone w commicie FOD 3.3.5.
+
 Priorytet: P2.
 
 - poprawic format source authority bez maski CIDR;
@@ -75,7 +77,7 @@ Priorytet: P1 funkcjonalny.
 - awaria telemetry primary ma byc fail-soft i nie moze zatrzymywac odczytu repliki;
 - zachowac jawne informacje o roli zrodla i mozliwym opoznieniu WAL.
 
-## 5. Read-path performance
+## 6. Read-path performance
 
 Priorytet: po zamknieciu powyzszych bledow poprawnosci/obserwowalnosci.
 
@@ -86,7 +88,7 @@ Priorytet: po zamknieciu powyzszych bledow poprawnosci/obserwowalnosci.
 - po kazdej zmianie powtarzac macierz 4 KiB / 64 KiB / 512 KiB primary-write
   -> WAL replay -> replica-read.
 
-## 6. HA miedzy hostami
+## 7. HA miedzy hostami
 
 Priorytet: wymagany przed deklarowaniem pelnego automatycznego HA.
 

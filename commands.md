@@ -2794,6 +2794,64 @@ Fast telemetry check against the selected Makefile backend:
 make test-fuse-postgres-telemetry
 ```
 
+## 2026-08-21 commit a4a0a88 working tree FOD 3.3.5 fod-monitor JSON API
+
+Context and MemPalace commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD && cat fod_version.txt
+sed -n '1,260p' docs/FOD_CURRENT_ACTION_PLAN.md
+source ~/.venv/bin/activate && mempalace search "FOD 3.3.5 fod-monitor cluster json report json source authority top columns DB ops average callback" --wing fod
+rg -n "fod-monitor|3\\.3\\.5|3\\.3\\.4|shared monitor|cluster" README.pl docs/FOD_CURRENT_ACTION_PLAN.md docs/FOD_3_3_1_SHARED_MONITORING.md docs/runtime-configuration.md commands.md conclusions.md TODO.md
+```
+
+Inspection commands:
+
+```bash
+git diff --stat
+git diff -- rust_monitor/src/cluster.rs rust_monitor/src/main.rs rust_hotpath/tests/lock_manager.rs tests/integration/test_mount_suite.py
+sed -n '1,260p' docs/FOD_3_3_1_SHARED_MONITORING.md
+sed -n '1,260p' docs/runtime-configuration.md
+sed -n '112,128p' README.pl
+sed -n '300,370p' docs/runtime-configuration.md
+tail -n 80 conclusions.md
+tail -n 140 commands.md
+```
+
+Validation commands:
+
+```bash
+cargo fmt --all
+git diff --check
+cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-monitor -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --test lock_manager client_session -- --nocapture
+make --no-print-directory test-rust-pg-query
+target/debug/fod-monitor report --json | python3 -m json.tool >/tmp/fod-monitor-report-json-check.out
+python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_shared_monitor_cluster
+rg -n "FOD 3\\.3\\.5|Read-path performance|HA miedzy|cluster --json|report --json|2026-08-21 commit a4a0a88" docs/FOD_CURRENT_ACTION_PLAN.md docs/FOD_3_3_1_SHARED_MONITORING.md docs/runtime-configuration.md README.pl conclusions.md commands.md
+```
+
+Commit and post-commit review commands:
+
+```bash
+git diff --check
+git diff --stat
+git status --short --branch
+cat fod_version.txt
+git add Cargo.lock Cargo.toml README.pl commands.md conclusions.md docs/FOD_3_3_1_SHARED_MONITORING.md docs/FOD_CURRENT_ACTION_PLAN.md docs/runtime-configuration.md fod_version.txt rust_hotpath/tests/lock_manager.rs rust_monitor/src/cluster.rs rust_monitor/src/main.rs tests/integration/test_mount_suite.py
+git diff --cached --check
+git commit -m "FOD 3.3.5: add fod-monitor JSON output"
+git add commands.md && git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 The target writes its JSON/Markdown artifacts outside the repository under
 `/tmp/fod-postgres-telemetry/` by default. It performs a `pg_stat_database`
 snapshot, runs one real sequential FUSE workload with the confirmed `8/4`

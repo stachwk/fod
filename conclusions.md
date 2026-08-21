@@ -1791,3 +1791,36 @@ Validation on the working tree passed:
 
 No new or modified tests were added because the local project instruction says
 tests are created or changed only on explicit request.
+
+## 2026-08-21 - FOD 3.3.5 fod-monitor JSON API and TTL regression coverage
+
+Base commit: `a4a0a88` (`FOD 3.3.4: harden client session liveness`).
+
+FOD 3.3.5 makes `fod-monitor` easier to consume by scripts and by the future
+UI without changing the storage hot path:
+
+- `fod-monitor cluster --json` emits `schema_version=1`, source identity,
+  aggregate `summary`, and session rows from PostgreSQL shared telemetry;
+- `fod-monitor report --json` returns the same central cluster shape plus the
+  local `/proc` snapshot, and keeps local data available through `cluster_error`
+  when shared telemetry cannot be loaded;
+- `source_authority` now uses `host(inet_server_addr())` so PostgreSQL does not
+  leak a CIDR mask such as `/32` into the displayed authority;
+- cluster summaries expose average read/write/copy callback bytes and proxy
+  DB-operation density per completed task.
+
+The explicit test request allowed adding regression coverage. The hotpath
+regression now verifies that `publish_monitor_session_stats()` does not refresh
+or shorten `client_sessions.lease_expires_at` and `heartbeat_at`. The mounted
+shared-monitor test now validates `fod-monitor cluster --json`, including schema
+version, source database, non-CIDR authority, summary counters, and the active
+mount session entry.
+
+Validation on the working tree passed:
+
+- `cargo test --manifest-path Cargo.toml -p fod-rust-monitor -- --nocapture`;
+- `cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --test lock_manager client_session -- --nocapture`;
+- `cargo check --workspace --locked`;
+- `make --no-print-directory test-rust-pg-query`;
+- `target/debug/fod-monitor report --json | python3 -m json.tool >/tmp/fod-monitor-report-json-check.out`;
+- `python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_shared_monitor_cluster`.
