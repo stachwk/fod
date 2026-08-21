@@ -2232,7 +2232,7 @@ replica when that environment is available.
 ## 2026-08-21 - FOD 3.3.9 read SQL statement profiling
 
 Implementation base while testing: `45309a2` plus local statement-profile
-changes, later committed as `STMT_PROFILE_COMMIT`.
+changes, later committed as `cf96eb1`.
 
 The read-path profile now includes statement-level SQL aggregates in the FUSE
 boundary profile when `FOD_PROFILE_IO=1` is enabled:
@@ -2246,7 +2246,7 @@ boundary profile when `FOD_PROFILE_IO=1` is enabled:
   flag is cached per process.
 
 Validation passed on 2026-08-21 with the code tree later committed as
-`STMT_PROFILE_COMMIT`:
+`cf96eb1`:
 
 | Check | Result |
 | --- | --- |

@@ -2855,7 +2855,7 @@ source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fo
 ## 2026-08-21 - Read SQL statement profiling for replica read path
 
 Repository state while running the commands: `45309a2` plus local
-statement-profile changes, later committed as `STMT_PROFILE_COMMIT`.
+statement-profile changes, later committed as `cf96eb1`.
 
 Context and inspection commands:
 
@@ -2907,10 +2907,12 @@ git diff --cached --check
 git diff --cached --name-only
 git commit -m "FOD 3.3.9: profile read SQL statements"
 git rev-parse --short HEAD
-perl -0pi -e 's/STMT_PROFILE_COMMIT/<new-commit>/g' commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+# apply_patch: replaced the commit placeholder with cf96eb1
 git add commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
-git commit --amend --no-edit
+git commit -m "FOD 3.3.9: record read SQL profile commit"
+git show --stat --oneline --decorate --no-renames cf96eb1
 git show --stat --oneline --decorate --no-renames HEAD
+git diff --check cf96eb1~1..cf96eb1
 git diff --check HEAD~1..HEAD
 git show --name-only --format=fuller --no-renames HEAD
 git status --short --branch

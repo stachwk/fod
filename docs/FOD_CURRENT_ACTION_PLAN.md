@@ -129,8 +129,7 @@ czas laczny/maksymalny/sredni, parametry, rozmiar zwroconego wyniku i bledy.
 Skanowanie `PGresult` do policzenia payloadu jest wykonywane tylko, gdy
 `FOD_PROFILE_IO` jest wlaczone, a sama flaga jest cache'owana per proces.
 
-Walidacja 2026-08-21 na drzewie kodu zapisanym pozniej jako
-`STMT_PROFILE_COMMIT`:
+Walidacja 2026-08-21 na drzewie kodu zapisanym pozniej jako `cf96eb1`:
 
 | Workload | Read result | FOD callbacks | `read_block_map_us` | `repo_fetch_block_range_us` | `reply_data_us` | DB `operation_count` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
