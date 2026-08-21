@@ -116,7 +116,7 @@ FOD is source-available software licensed under Business Source License 1.1 (BSL
 - The current FOD version comes from `fod_version.txt`; the root Cargo workspace package version must stay aligned with it. The Rust `fod-config` helper, `fod-bootstrap --version`, and `mkfs.fod --version` all surface the same value.
 - The canonical FOD storage schema is `fod` on purpose: it keeps FOD tables out of `public` so other applications in the same database do not collide with FOD objects. In other words, `fod = canonical FOD storage schema`. A future `fod.schema_name` knob could support multiple FOD instances in one database, but the current runtime is intentionally fixed to `fod`.
 - Performance work is merged, and the current benchmark baselines are recorded in `BENCHMARKS.md`.
-- The Rust hot-path now lives in the Rust backend and shared hot-path library, covering the planner, changed-run packing, persist padding, read assembly, logical resize planning for `truncate()`/`fallocate()`, and the first repository lookups/mutations. Changed-copy dedupe stays opt-in because it can slow copy-heavy workloads down substantially.
+- The Rust hot-path now lives in the Rust backend crates, covering the planner, changed-run packing, persist padding, read assembly, logical resize planning for `truncate()`/`fallocate()`, and the first repository lookups/mutations. Changed-copy dedupe stays opt-in because it can slow copy-heavy workloads down substantially.
 - The local Docker Compose stack preloads `pg_stat_statements`, and `make enable-pg-stat-statements` can create the extension in the local database when the DB user has permission. That keeps query analysis and runtime profiling available in the local stack without making FOD init depend on extension privileges.
 - `TODO.md` serves as a decisions-and-notes log rather than an active implementation backlog.
 
@@ -357,19 +357,21 @@ make mount-user
 
 Both install targets warn if the source config still uses the default development password `cichosza`.
 
-`make install-on-root` combines `install-config`, `install-root-scripts`, `install-rust-hotpath`, and `install-mount-helper` for a root-style setup in one step. That installs the config, the Rust binaries including `fod-indexer`, the shared hot-path library, and the mount helper.
+`make install-on-root` combines `install-config`, `install-root-scripts`, and `install-mount-helper` for a root-style setup in one step. That installs the config, the Rust binaries including `fod-indexer` and `fod-monitor`, the `libfod.so` command-surface aggregate library with `libfod.h`, and the mount helper.
 
 Use `make install-on-root FOD_CARGO_PROFILE=release-lto` when you want a final optimized build with ThinLTO and symbol stripping.
 
+`make build-libfod` builds `target/<profile>/libfod.so`. `install-root-scripts` also installs `rust_libfod/include/fod/libfod.h` to `/usr/local/include/fod/libfod.h`. This library is for external embedding that needs one aggregate entrypoint surface for the installed FOD commands. It is not used by `fod-monitor`, `fod-indexer`, `fod-rust-fuse`, or the other FOD binaries; those tools keep their functionality built into their own binaries. `libfod.so` also does not define a supported hot-path C ABI, and `rust_hotpath/src/ffi.rs` remains internal.
+
 `make install-on-root-venv` is the root-style equivalent of `make venv` followed by `make install-on-root`.
 
-`make uninstall-on-root` reverses the root-style installation. It first detects all active FOD FUSE mounts whose filesystem source is `fod`, unmounts them, and verifies that none remain. If unmounting fails, uninstall stops before removing installed files. After a clean unmount it removes the installed Rust binaries, `mount.fod`, and `FOD_CONFIG_DEST` (default `/etc/fod/fod_config.ini`). The config directory is removed only when empty.
+`make uninstall-on-root` reverses the root-style installation. It first detects all active FOD FUSE mounts whose filesystem source is `fod`, unmounts them, and verifies that none remain. If unmounting fails, uninstall stops before removing installed files. After a clean unmount it removes the installed Rust binaries, `libfod.so`, `libfod.h`, `mount.fod`, and `FOD_CONFIG_DEST` (default `/etc/fod/fod_config.ini`). The config directory is removed only when empty.
 
 ## Quick Start
 
 1. Configure `/etc/fod/fod_config.ini` or local `fod_config.ini`.
 1. Optionally run `make install-config` to copy your chosen config file to `/etc/fod/fod_config.ini`.
-1. For a root-style setup, run `make install-on-root` to install the config, Rust binaries including `fod-indexer`, shared hot-path library, and mount helper together.
+1. For a root-style setup, run `make install-on-root` to install the config, Rust binaries including `fod-indexer` and `fod-monitor`, `libfod.so`, `libfod.h`, and mount helper together.
 1. For local development you can run `make install-config-user` to install your chosen config file to `~/.config/fod/fod_config.ini` without `sudo`.
 1. Use `make config-show` to see which config file is resolved and `make mount-user` to prefer `~/.config/fod/fod_config.ini`, falling back to local `fod_config.ini` if the user file does not exist.
 1. Initialize the schema:

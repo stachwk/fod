@@ -4998,3 +4998,95 @@ git rev-parse --short HEAD
 cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
+
+## 2026-08-21 - FOD 3.3.9 libfod command aggregate
+
+Base commit: `49e1836`.
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 10 "libfod shared library aggregate fod tools public ABI command surface"
+sed -n '1,240p' Cargo.toml
+sed -n '1,260p' Makefile
+sed -n '260,560p' Makefile
+rg -n "install-root-scripts|install-on-root|uninstall-on-root|cargo-profile-show|CARGO_BUILD_INSTALL_ROOT|FOD_RUST_INPUT_ROOTS|install-rust-hotpath|shared hot-path|libfod" Makefile README.md docs TODO.md conclusions.md commands.md
+sed -n '1,220p' docs/compatibility-contracts.md
+sed -n '330,410p' README.md
+sed -n '700,810p' Makefile
+sed -n '872,896p' Makefile
+rg -n "pub const FOD_VERSION_LABEL|build.rs|FOD_VERSION" rust_runtime/src rust_runtime/build.rs
+sed -n '1,220p' tests/test_makefile_uninstall_on_root.py
+find rust_mkfs/src rust_indexer/src rust_monitor/src rust_fuse/src -maxdepth 3 -type f -name '*.rs' | sort
+sed -n '1,220p' rust_monitor/src/main.rs
+sed -n '1,220p' rust_indexer/src/main.rs
+sed -n '1,200p' rust_fuse/src/main.rs
+find rust_mkfs/src/bin -maxdepth 1 -type f -name '*.rs' -print -exec sed -n '1,80p' {} \;
+```
+
+Validation commands:
+
+```bash
+cargo fmt --all
+cargo fmt --all -- --check
+cargo check --workspace --locked
+make --no-print-directory build-libfod
+printf '#include <fod/libfod.h>\nint main(void) { return (int)fod_program_count() < 0; }\n' | cc -I rust_libfod/include -Werror -x c -fsyntax-only -
+make -n --no-print-directory install-root-scripts | sed -n '1,90p'
+make -n --no-print-directory uninstall-on-root SUDO=sudo FOD_CONFIG_DEST=/tmp/fod_config.ini MOUNT_HELPER_DEST=/tmp/mount.fod FOD_LIBFOD_HEADER_DEST=/tmp/include/fod/libfod.h | sed -n '1,130p'
+nm -D --defined-only target/release/libfod.so | sort | rg " fod_|fod_"
+ldd target/release/libfod.so
+python3 - <<'PY'
+import ctypes
+import os
+lib = ctypes.CDLL('target/release/libfod.so')
+lib.fod_version_label.restype = ctypes.c_char_p
+lib.fod_program_count.restype = ctypes.c_size_t
+lib.fod_program_name.argtypes = [ctypes.c_size_t]
+lib.fod_program_name.restype = ctypes.c_char_p
+lib.fod_program_find.argtypes = [ctypes.c_char_p]
+lib.fod_program_find.restype = ctypes.c_ssize_t
+lib.fod_monitor.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_char_p)]
+lib.fod_monitor.restype = ctypes.c_int
+print(lib.fod_version_label().decode())
+count = lib.fod_program_count()
+print('count', count)
+print([lib.fod_program_name(i).decode() for i in range(count)])
+print('monitor_index', lib.fod_program_find(b'fod-monitor'))
+os.environ['FOD_LIBFOD_FOD_MONITOR_BIN'] = '/bin/true'
+print('monitor_exit', lib.fod_monitor(0, None))
+PY
+cargo tree --manifest-path Cargo.toml -p fod-lib --locked
+cargo tree --manifest-path Cargo.toml -p fod-rust-monitor --locked | rg "fod-lib|fod-rust-hotpath|fod-rust-monitor"
+cargo tree --manifest-path Cargo.toml -p fod-rust-indexer --locked | rg "fod-lib|fod-rust-hotpath|fod-rust-indexer"
+cargo tree --manifest-path Cargo.toml -p fod-rust-fuse --locked | rg "fod-lib|fod-rust-hotpath|fod-rust-fuse"
+make --no-print-directory test-version
+python3 -m unittest tests.test_makefile_uninstall_on_root
+git diff --check
+make --no-print-directory help | rg "build-libfod|install-root-scripts|install-on-root|uninstall-on-root"
+make --no-print-directory cargo-profile-show
+git diff --stat
+git status --short --branch
+```
+
+Finalization commands:
+
+```bash
+git add Cargo.lock Cargo.toml Makefile README.md TODO.md commands.md conclusions.md docs/compatibility-contracts.md rust_libfod/Cargo.toml rust_libfod/src/lib.rs rust_libfod/include/fod/libfod.h
+git diff --cached --check
+git diff --cached --stat
+git diff --cached -- Cargo.toml Cargo.lock rust_libfod/Cargo.toml rust_libfod/src/lib.rs rust_libfod/include/fod/libfod.h | sed -n '1,460p'
+git diff --cached -- Makefile README.md docs/compatibility-contracts.md TODO.md | sed -n '1,360p'
+git diff --cached -- commands.md conclusions.md | sed -n '1,260p'
+git commit -m "FOD 3.3.9: add libfod command aggregate"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+git diff HEAD~1..HEAD -- Cargo.toml Cargo.lock Makefile README.md docs/compatibility-contracts.md TODO.md rust_libfod/Cargo.toml rust_libfod/src/lib.rs rust_libfod/include/fod/libfod.h | sed -n '1,520p'
+```

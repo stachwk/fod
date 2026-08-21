@@ -1,0 +1,13 @@
+[package]
+name = "fod-lib"
+version.workspace = true
+rust-version.workspace = true
+edition = "2021"
+
+[lib]
+name = "fod"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+fod_rust_runtime = { package = "fod-rust-runtime", path = "../rust_runtime" }

@@ -12,6 +12,7 @@ FOD_FUSE_PACKAGE ?= $(or $(RUST_FUSE_PACKAGE),fod-rust-fuse)
 FOD_HOTPATH_PACKAGE ?= $(or $(RUST_HOTPATH_PACKAGE),fod-rust-hotpath)
 FOD_INDEXER_PACKAGE ?= $(or $(RUST_INDEXER_PACKAGE),fod-rust-indexer)
 FOD_MONITOR_PACKAGE ?= $(or $(RUST_MONITOR_PACKAGE),fod-rust-monitor)
+FOD_LIB_PACKAGE ?= $(or $(RUST_LIB_PACKAGE),fod-lib)
 FOD_BOOTSTRAP_BIN ?= fod-bootstrap
 FOD_MKFS_BIN ?= fod-rust-mkfs
 FOD_CONFIG_BIN ?= fod-config
@@ -19,6 +20,8 @@ FOD_CHANGE_BIN ?= fod-change
 FOD_FUSE_BIN ?= fod-rust-fuse
 FOD_INDEXER_BIN ?= fod-indexer
 FOD_MONITOR_BIN ?= fod-monitor
+FOD_LIBFOD_HEADER ?= rust_libfod/include/fod/libfod.h
+FOD_LIBFOD_HEADER_DEST ?= /usr/local/include/fod/libfod.h
 FOD_VERSION_FILE ?= fod_version.txt
 FOD_VERSION := $(shell cat $(FOD_VERSION_FILE))
 FOD_CARGO_PROFILE ?= release
@@ -29,6 +32,7 @@ CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path rust_mkfs/Cargo.toml
 CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path rust_fuse/Cargo.toml
 CARGO_BUILD_INDEXER := $(RUST_CARGO) build --manifest-path rust_indexer/Cargo.toml
 CARGO_BUILD_MONITOR := $(RUST_CARGO) build --manifest-path rust_monitor/Cargo.toml
+CARGO_BUILD_LIBFOD := $(RUST_CARGO) build --manifest-path rust_libfod/Cargo.toml
 
 CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path rust_mkfs/Cargo.toml
 CARGO_RUN_INDEXER := $(RUST_CARGO) run --manifest-path rust_indexer/Cargo.toml
@@ -41,11 +45,13 @@ RUST_MKFS_TARGET_DIR := rust_mkfs/target
 RUST_FUSE_TARGET_DIR := rust_fuse/target
 RUST_INDEXER_TARGET_DIR := rust_indexer/target
 RUST_MONITOR_TARGET_DIR := rust_monitor/target
+RUST_LIBFOD_TARGET_DIR := rust_libfod/target
 else
 CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
 CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_FUSE_PACKAGE)
 CARGO_BUILD_INDEXER := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_INDEXER_PACKAGE)
 CARGO_BUILD_MONITOR := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MONITOR_PACKAGE)
+CARGO_BUILD_LIBFOD := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_LIB_PACKAGE)
 CARGO_BUILD_INSTALL_ROOT := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_RELEASE_FLAG) -p $(FOD_MKFS_PACKAGE) --bins -p $(FOD_FUSE_PACKAGE) --bin $(FOD_FUSE_BIN) -p $(FOD_INDEXER_PACKAGE) --bin $(FOD_INDEXER_BIN) -p $(FOD_MONITOR_PACKAGE) --bin $(FOD_MONITOR_BIN)
 
 CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
@@ -59,6 +65,7 @@ RUST_MKFS_TARGET_DIR := target
 RUST_FUSE_TARGET_DIR := target
 RUST_INDEXER_TARGET_DIR := target
 RUST_MONITOR_TARGET_DIR := target
+RUST_LIBFOD_TARGET_DIR := target
 endif
 
 FOD_BOOTSTRAP_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-bootstrap
@@ -71,7 +78,7 @@ FOD_MONITOR_DEBUG_BIN := $(RUST_MONITOR_TARGET_DIR)/debug/fod-monitor
 FOD_DEBUG_BUILD_STAMP := target/.fod-debug-build.stamp
 FOD_LOCKING_TARGET_DIR ?= $(CURDIR)/target/test-locking
 FOD_LOCKING_BUILD_JSON ?= $(FOD_LOCKING_TARGET_DIR)/lock_backend_smoke-build.json
-FOD_RUST_INPUT_ROOTS := Cargo.toml Cargo.lock fod_version.txt rust_mkfs rust_fuse rust_hotpath rust_runtime rust_indexer rust_monitor migrations
+FOD_RUST_INPUT_ROOTS := Cargo.toml Cargo.lock fod_version.txt rust_mkfs rust_fuse rust_hotpath rust_runtime rust_indexer rust_monitor rust_libfod migrations
 FOD_RUST_INPUTS := $(shell find $(FOD_RUST_INPUT_ROOTS) -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' -o -name '*.sql' -o -name '*.txt' \) 2>/dev/null)
 
 FOD_BOOTSTRAP_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-bootstrap
@@ -80,6 +87,7 @@ FOD_FUSE_PROFILE_BIN := $(RUST_FUSE_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-rust-fu
 FOD_CHANGE_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-change
 FOD_INDEXER_PROFILE_BIN := $(RUST_INDEXER_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-indexer
 FOD_MONITOR_PROFILE_BIN := $(RUST_MONITOR_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-monitor
+FOD_LIBFOD_PROFILE_SO := $(RUST_LIBFOD_TARGET_DIR)/$(FOD_CARGO_PROFILE)/libfod.so
 
 ifeq ($(wildcard $(CARGO_ROOT_MANIFEST)),)
 CARGO_BUILD_INSTALL_ROOT := $(CARGO_BUILD_MKFS) $(FOD_RELEASE_FLAG) --bins && $(CARGO_BUILD_FUSE) $(FOD_RELEASE_FLAG) --bin $(FOD_FUSE_BIN) && $(CARGO_BUILD_MONITOR) $(FOD_RELEASE_FLAG) --bin $(FOD_MONITOR_BIN)
@@ -333,7 +341,7 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset test-db-restore-local smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper install-root-scripts install-on-root uninstall-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-acl-mount-option test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-nodiratime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke
+.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset test-db-restore-local smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper build-libfod install-root-scripts install-on-root uninstall-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-acl-mount-option test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-nodiratime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke
 
 help:
 	@printf '%s\n' \
@@ -374,9 +382,10 @@ help:
 		'  make install-config-user - install fod_config.ini to $$HOME/.config/fod/fod_config.ini without sudo (warns if password is still cichosza)' \
 		'  make test-config-warning - verify the install-config password warning behavior' \
 		'  make install-mount-helper - install mount.fod to $(MOUNT_HELPER_DEST)' \
-	'  make install-root-scripts - install fod-bootstrap, mkfs.fod, fod-change/fod.change, fod-indexer, fod-monitor, and fod-rust-fuse Rust binaries to /usr/local/bin (use FOD_CARGO_PROFILE=release-lto for final builds)' \
-		'  make install-on-root - install system config, Rust binaries, mount helper, and Rust hot-path artifacts' \
-		'  make uninstall-on-root - unmount active FOD resources, then remove root-style config, Rust binaries, and mount helper' \
+		'  make build-libfod - build libfod.so, the external command-surface aggregate library' \
+	'  make install-root-scripts - install FOD Rust binaries, libfod.so, and libfod.h (use FOD_CARGO_PROFILE=release-lto for final builds)' \
+		'  make install-on-root - install system config, Rust binaries, libfod.so/libfod.h, and mount helper' \
+		'  make uninstall-on-root - unmount active FOD resources, then remove root-style config, Rust binaries, libfod.so/libfod.h, and mount helper' \
 		'  make install-on-root-venv - create .venv for legacy tests, then run the full root-style install' \
 		'  make pip-build - removed; Rust binaries are built directly' \
 		'  make pip-install - removed; Rust binaries are built directly' \
@@ -731,9 +740,16 @@ install-mount-helper:
 	sudo install -D -m 0755 mount.fod $(MOUNT_HELPER_DEST)
 
 
+build-libfod:
+	$(CARGO_BUILD_LIBFOD) $(FOD_RELEASE_FLAG) --lib
+	@test -f "$(FOD_LIBFOD_PROFILE_SO)"
+	@printf '%s\n' "Built $(FOD_LIBFOD_PROFILE_SO)"
+
+
 install-root-scripts:
-	@printf '%s\n' "Installing FOD $(FOD_VERSION): fod-bootstrap, mkfs.fod, fod-change/fod.change, fod-indexer, fod-monitor, and fod-rust-fuse -> /usr/local/bin"
+	@printf '%s\n' "Installing FOD $(FOD_VERSION): Rust binaries -> /usr/local/bin, libfod.so -> /usr/local/lib, libfod.h -> $(FOD_LIBFOD_HEADER_DEST)"
 	$(CARGO_BUILD_INSTALL_ROOT)
+	$(CARGO_BUILD_LIBFOD) $(FOD_RELEASE_FLAG) --lib
 	sudo install -D -m 0755 "$(FOD_BOOTSTRAP_PROFILE_BIN)" /usr/local/bin/fod-bootstrap
 	sudo install -D -m 0755 "$(FOD_MKFS_PROFILE_BIN)" /usr/local/bin/mkfs.fod
 	sudo install -D -m 0755 "$(FOD_CHANGE_PROFILE_BIN)" /usr/local/bin/fod-change
@@ -741,16 +757,19 @@ install-root-scripts:
 	sudo install -D -m 0755 "$(FOD_INDEXER_PROFILE_BIN)" /usr/local/bin/fod-indexer
 	sudo install -D -m 0755 "$(FOD_MONITOR_PROFILE_BIN)" /usr/local/bin/fod-monitor
 	sudo install -D -m 0755 "$(FOD_FUSE_PROFILE_BIN)" /usr/local/bin/fod-rust-fuse
+	sudo install -D -m 0644 "$(FOD_LIBFOD_PROFILE_SO)" /usr/local/lib/libfod.so
+	sudo install -D -m 0644 "$(FOD_LIBFOD_HEADER)" "$(FOD_LIBFOD_HEADER_DEST)"
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-bootstrap
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/mkfs.fod
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-change
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-indexer
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-monitor
 	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-rust-fuse
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/lib/libfod.so
 
 
 install-on-root: install-config install-root-scripts install-mount-helper
-	@printf '%s\n' "FOD installed for root-style use: config, Rust binaries including fod-indexer and fod-monitor, and mount helper"
+	@printf '%s\n' "FOD installed for root-style use: config, Rust binaries including fod-indexer and fod-monitor, libfod.so/libfod.h, and mount helper"
 
 uninstall-on-root:
 	@set -eu; \
@@ -786,16 +805,19 @@ uninstall-on-root:
 		/usr/local/bin/fod-indexer \
 		/usr/local/bin/fod-monitor \
 		/usr/local/bin/fod-rust-fuse \
+		/usr/local/lib/libfod.so \
+		"$(FOD_LIBFOD_HEADER_DEST)" \
 		"$(MOUNT_HELPER_DEST)" \
 		"$(FOD_CONFIG_DEST)"; \
 	config_dir="$$(dirname -- "$(FOD_CONFIG_DEST)")"; \
+	$(SUDO) rmdir -- "$$(dirname -- "$(FOD_LIBFOD_HEADER_DEST)")" 2>/dev/null || true; \
 	$(SUDO) rmdir -- "$$config_dir" 2>/dev/null || true; \
 	rm -f "$$mount_list"; \
 	trap - EXIT HUP INT TERM; \
 	printf '%s\n' "FOD root-style installation removed"
 
 install-on-root-venv: venv install-on-root
-	@printf '%s\n' "FOD root-style install ready in $(VENV_DIR): config, legacy test venv, Rust binaries, and mount helper"
+	@printf '%s\n' "FOD root-style install ready in $(VENV_DIR): config, legacy test venv, Rust binaries, libfod.so/libfod.h, and mount helper"
 
 pip-build:
 	@printf '%s\n' "Python packaging has been removed; build the Rust binaries directly." >&2
@@ -886,7 +908,7 @@ cargo-profile-show:
 	@printf '%s\n' "FOD_VERSION=$(FOD_VERSION)"
 	@printf '%s\n' "FOD_CARGO_PROFILE=$(FOD_CARGO_PROFILE)"
 	@printf '%s\n' "FOD_RELEASE_FLAG=$(FOD_RELEASE_FLAG)"
-	@printf '%s\n' "install-root-scripts outputs: $(FOD_BOOTSTRAP_PROFILE_BIN), $(FOD_MKFS_PROFILE_BIN), $(FOD_CHANGE_PROFILE_BIN), $(FOD_INDEXER_PROFILE_BIN), $(FOD_MONITOR_PROFILE_BIN), $(FOD_FUSE_PROFILE_BIN)"
+	@printf '%s\n' "install-root-scripts outputs: $(FOD_BOOTSTRAP_PROFILE_BIN), $(FOD_MKFS_PROFILE_BIN), $(FOD_CHANGE_PROFILE_BIN), $(FOD_INDEXER_PROFILE_BIN), $(FOD_MONITOR_PROFILE_BIN), $(FOD_FUSE_PROFILE_BIN), $(FOD_LIBFOD_PROFILE_SO), $(FOD_LIBFOD_HEADER)"
 
 smoke: up
 	@set -eu; \

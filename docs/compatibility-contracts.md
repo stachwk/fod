@@ -70,6 +70,14 @@ implements the corresponding callback.
 ## Rust and C boundary
 
 - FOD binaries consume `fod-rust-hotpath` through its Rust library interface.
+- FOD binaries remain self-contained executables; `fod-monitor`,
+  `fod-indexer`, `fod-rust-fuse`, and the mkfs/config commands do not load or
+  depend on `libfod.so`.
+- `libfod.so` is an external command-surface aggregate over installed FOD
+  commands. It exposes command metadata and launcher entrypoints for the
+  `fod-*`/`mkfs.fod` tools through `rust_libfod/include/fod/libfod.h`, but it
+  is not the data hot path and is not a replacement dependency for the tools
+  themselves.
 - No supported external consumer of a hotpath shared library or C header is
   currently known.
 - `rust_hotpath/src/ffi.rs` is internal implementation and test code, not a
@@ -151,7 +159,7 @@ implements the corresponding callback.
 | FUSE | fuser 0.18.0, runtime-negotiated protocol, explicit libfuse3 |
 | Rust | minimum 1.85, Edition 2021 |
 | Automation | no active GitHub Actions workflow |
-| Hotpath ABI | internal Rust interface; no supported public C ABI |
+| Hotpath ABI | internal Rust interface; `libfod.so` is command-surface only; no supported hotpath C ABI |
 | Database schema | version 20 |
 | Capacity | canonical DB quota, advisory-lock admission, expiring reservations |
 | Layout | canonical block payload; legacy extents only before migration 20 |

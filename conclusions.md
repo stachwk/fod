@@ -2125,3 +2125,48 @@ separate repository writes. The code returns `EIO` if mode synchronization
 fails after storing the ACL, but the operation is not yet a single PostgreSQL
 transaction. If ACL churn becomes important, the storage layer should get an
 atomic `store ACL xattr + update mode` helper.
+
+## 2026-08-21 - FOD 3.3.9 libfod command aggregate
+
+Implementation base: `49e1836`.
+
+Added `fod-lib` as a separate workspace crate that builds `libfod.so` and
+exports a narrow C command surface for the installed FOD commands:
+`fod-bootstrap`, `mkfs.fod`, `fod-config`, `fod-change`, `fod-indexer`,
+`fod-monitor`, `fod-rust-fuse`, and `mount.fod`. The exported functions expose
+version/program metadata plus launcher entrypoints with per-command environment
+overrides such as `FOD_LIBFOD_FOD_MONITOR_BIN`.
+
+This intentionally does not make `fod-monitor`, `fod-indexer`,
+`fod-rust-fuse`, or mkfs/config tools depend on `libfod.so`. Existing tools
+remain self-contained binaries and keep using their existing Rust crate
+dependencies. `libfod.so` is also not a revival of the removed hotpath shared
+library: `rust_hotpath/src/ffi.rs` remains internal and no supported hotpath C
+ABI is introduced.
+
+`make build-libfod` now builds `target/<profile>/libfod.so`.
+`install-root-scripts` installs `libfod.so` to `/usr/local/lib/libfod.so` and
+`libfod.h` to `/usr/local/include/fod/libfod.h`; `uninstall-on-root` removes
+both after active FOD mounts are gone.
+
+Validation on `49e1836` plus local changes passed:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | passed |
+| `cargo check --workspace --locked` | passed |
+| `make --no-print-directory build-libfod` | passed; built `target/release/libfod.so` |
+| `cc -I rust_libfod/include -Werror -x c -fsyntax-only -` with `#include <fod/libfod.h>` | passed |
+| `nm -D --defined-only target/release/libfod.so` | exported the expected `fod_*` command-surface symbols |
+| `ctypes.CDLL('target/release/libfod.so')` smoke | version `FOD 3.3.9`, 8 programs, `fod_monitor()` override to `/bin/true` returned 0 |
+| `cargo tree -p fod-lib --locked` | only depends on `fod-rust-runtime` |
+| `cargo tree` for `fod-rust-monitor`, `fod-rust-indexer`, and `fod-rust-fuse` | no `fod-lib` dependency; indexer/fuse still use `fod-rust-hotpath` where expected |
+| `make --no-print-directory test-version` | passed; 9 tests |
+| `python3 -m unittest tests.test_makefile_uninstall_on_root` | passed; 4 tests |
+| `make -n --no-print-directory install-root-scripts` | includes `libfod.so` and `libfod.h` install steps |
+| `make -n --no-print-directory uninstall-on-root ...` | removes `libfod.so` and `libfod.h` |
+
+Known residual risk: `libfod.so` currently exposes command launcher entrypoints,
+not in-process rewrites of each CLI implementation. A full in-process aggregate
+would require a larger refactor of private `main.rs` command logic into library
+entrypoints per tool, while still keeping the binaries statically self-contained.
