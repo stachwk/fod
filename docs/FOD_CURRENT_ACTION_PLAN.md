@@ -83,12 +83,12 @@ Priorytet: P1 funkcjonalny.
 
 Priorytet: po zamknieciu powyzszych bledow poprawnosci/obserwowalnosci.
 
-Status: FOD 3.3.7 zakonczone: optymalizuje sekwencyjne `fopen_direct_io` przez
-`direct_io_read_prefetch_blocks`, bez zmiany formatu storage i bez zakladania,
-ze kernel przestanie wysylac 4 KiB callbacki. Pomiar po pierwszym patchu
-pokazal, ze trzeba tez usunac metadata lookup per callback, wiec read-only
-direct-I/O cache'uje `FileReadMetadata` per handle. Po tej zmianie nastepny
-kandydat to koszt samego `repo_fetch_block_range` dla wiekszych zakresow.
+Status: FOD 3.3.8 ustawia domyslny `direct_io_read_prefetch_blocks=512` po
+pomiarze wariantu 512 na slave/replica read. FOD 3.3.7 zakonczyl mechanizm
+prefetch i per-handle `FileReadMetadata` cache dla read-only direct-I/O, bez
+zmiany formatu storage i bez zakladania, ze kernel przestanie wysylac 4 KiB
+callbacki. Nastepny kandydat to koszt samego `repo_fetch_block_range` dla
+wiekszych zakresow.
 
 - profilowac jeden callback FUSE 512 KiB na fizycznej replice;
 - policzyc dokladne metadata/map/payload round-trip PostgreSQL;

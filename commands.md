@@ -2962,6 +2962,32 @@ git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 commit 89c3c81 default direct-I/O prefetch 512
+
+Context lookup and implementation commands:
+
+```bash
+git status --short --branch && git log --oneline --decorate -5 && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "FOD 3.3.7 direct_io_read_prefetch_blocks 512 replica read master write repo_fetch_block_range"
+rg -n "direct_io_read_prefetch_blocks|FOD_DIRECT_IO_READ_PREFETCH_BLOCKS|3\\.3\\.7|3\\.3\\.8" Cargo.toml Cargo.lock fod_version.txt fod_config.ini fod_config.example.ini README.md docs runtime_* rust_runtime/src/lib.rs commands.md conclusions.md -S
+cargo fmt --all
+cargo check --workspace --locked
+git diff --check
+git diff --stat
+rg -n "version = \"3\\.3\\.7\"|version = \"3\\.3\\.8\"|direct_io_read_prefetch_blocks = 128|direct_io_read_prefetch_blocks = 512|default is `128`|default is `512`" Cargo.toml Cargo.lock fod_version.txt fod_config.ini fod_config.example.ini README.md docs/runtime-configuration.md docs/FOD_CURRENT_ACTION_PLAN.md rust_runtime/src/lib.rs -S
+git diff -- Cargo.toml Cargo.lock fod_version.txt rust_runtime/src/lib.rs fod_config.ini fod_config.example.ini README.md docs/runtime-configuration.md docs/FOD_CURRENT_ACTION_PLAN.md | sed -n '1,260p'
+git status --short --branch
+cargo test -p fod-rust-runtime --lib --locked
+rg -n 'direct_io_read_prefetch_blocks = 128|default is `128`|Keep the default at `128`|direct_io_read_prefetch_blocks = 512|default is `512`|version = "3\.3\.8"' Cargo.toml Cargo.lock fod_config.ini fod_config.example.ini README.md docs/runtime-configuration.md docs/FOD_CURRENT_ACTION_PLAN.md rust_runtime/src/lib.rs -S
+git diff --check
+```
+
+The first `rg` included a non-existing `runtime_*` glob and returned status 2
+after printing the useful matches. The second `rg` used unescaped backticks in
+the shell string, so Bash attempted command substitution for `128` and `512`;
+the file matches were still printed and the version/default values were checked
+again in the subsequent diff.
+
 ## 2026-08-21 commit 7076787 fio without FUSE direct_io
 
 Context and preflight commands:

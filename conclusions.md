@@ -2016,5 +2016,21 @@ The 512-block tuning probe cut `operation_count` further (`395` -> `202`) and
 improved throughput modestly (`26.8 MiB/s` -> `29.1 MiB/s`), but
 `repo_fetch_block_range_us` stayed near `3.0 s`. That means the next bottleneck
 is likely the payload/range fetch path itself, not just the number of range
-queries. Keep the default at `128` blocks until a fuller 128/256/512 matrix
-proves that a larger window is consistently worth the extra read-ahead.
+queries. The FOD 3.3.7 validation kept the default at `128` conservatively; FOD
+3.3.8 raises it to `512` by explicit follow-up decision after the measured
+slave/replica read result.
+
+## 2026-08-21 - FOD 3.3.8 direct-I/O prefetch default 512
+
+Base commit before implementation: `89c3c81` (`FOD 3.3.7: record direct IO read validation`).
+
+The default `direct_io_read_prefetch_blocks` is raised from `128` to `512`.
+This makes the default internal prefetch window 2 MiB for the normal 4 KiB
+storage block size. The change follows the measured 512-block probe on commit
+`8596c01`, where 128 MiB slave/replica read improved from `26.8 MiB/s` to
+`29.1 MiB/s` and observed PostgreSQL lane `operation_count` dropped from `395`
+to `202` without introducing read failures.
+
+`FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=0` remains the diagnostic no-prefetch
+escape hatch, and explicit smaller INI/env values can still be used when a
+workload should avoid larger direct-I/O read-ahead.

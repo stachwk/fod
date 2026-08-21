@@ -90,8 +90,8 @@ prefetch policy and remain `4` and `8` by default; FOD 3.2.85 does not enlarge
 random-read prefetch to 512 KiB.
 
 `direct_io_read_prefetch_blocks` controls an additional internal prefetch
-window for sequential `fopen_direct_io` reads. The default is `128` blocks, so a
-4 KiB storage block maps to a 512 KiB range fetch after FOD has observed a
+window for sequential `fopen_direct_io` reads. The default is `512` blocks, so a
+4 KiB storage block maps to a 2 MiB range fetch after FOD has observed a
 sequential direct-I/O stream. This does not change the storage block format and
 does not change the kernel's callback size; it reduces repeated PostgreSQL range
 fetches behind 4 KiB direct-I/O callbacks. Set

@@ -1311,7 +1311,7 @@ impl RuntimeConfig {
         let read_ahead_blocks = lookup_u64(&lookup, "read_ahead_blocks", 4);
         let sequential_read_ahead_blocks = lookup_u64(&lookup, "sequential_read_ahead_blocks", 8);
         let direct_io_read_prefetch_blocks =
-            lookup_u64(&lookup, "direct_io_read_prefetch_blocks", 128);
+            lookup_u64(&lookup, "direct_io_read_prefetch_blocks", 512);
         let small_file_read_threshold_blocks =
             lookup_u64(&lookup, "small_file_read_threshold_blocks", 8);
         let workers_read = lookup_u64(&lookup, "workers_read", 4);
