@@ -2999,7 +2999,7 @@ unsafe fn fetch_block_range_rows_shared(
                     let index = u64::try_from(index)
                         .map_err(|_| "negative block index value".to_string())?;
                     let bytes = match read_result_binary_field(res, row, 1, |bytes| {
-                        Ok(normalize_block_bytes(bytes, block_size))
+                        Ok(normalize_block_arc(bytes, block_size))
                     })? {
                         Some(bytes) => bytes,
                         None => continue,
@@ -3008,7 +3008,7 @@ unsafe fn fetch_block_range_rows_shared(
                         decoded_rows = decoded_rows.saturating_add(1);
                         decoded_bytes = decoded_bytes.saturating_add(bytes.len() as u64);
                     }
-                    blocks.push((index, Arc::from(bytes)));
+                    blocks.push((index, bytes));
                 }
                 Ok(blocks)
             }
@@ -3647,6 +3647,23 @@ fn normalize_block_bytes(bytes: &[u8], target_len: usize) -> Vec<u8> {
         out.resize(target_len, 0);
     }
     out
+}
+
+fn normalize_block_arc(bytes: &[u8], target_len: usize) -> Arc<[u8]> {
+    let payload_len = bytes.len().min(target_len);
+    let mut out = Arc::<[u8]>::new_uninit_slice(target_len);
+    let out_mut = Arc::get_mut(&mut out).expect("newly allocated Arc slice is unique");
+    unsafe {
+        // Initialize every byte before converting the slice to Arc<[u8]>.
+        let dst = out_mut.as_mut_ptr().cast::<u8>();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, payload_len);
+        std::ptr::write_bytes(
+            dst.add(payload_len),
+            0,
+            target_len.saturating_sub(payload_len),
+        );
+        out.assume_init()
+    }
 }
 
 fn normalized_block_bytes_cow(bytes: &[u8], target_len: usize) -> Cow<'_, [u8]> {
