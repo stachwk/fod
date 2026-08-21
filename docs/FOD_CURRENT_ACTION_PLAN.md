@@ -83,10 +83,16 @@ Priorytet: P1 funkcjonalny.
 
 Priorytet: po zamknieciu powyzszych bledow poprawnosci/obserwowalnosci.
 
+Status: FOD 3.3.7 optymalizuje sekwencyjne `fopen_direct_io` przez
+`direct_io_read_prefetch_blocks`, bez zmiany formatu storage i bez zakladania,
+ze kernel przestanie wysylac 4 KiB callbacki.
+
 - profilowac jeden callback FUSE 512 KiB na fizycznej replice;
 - policzyc dokladne metadata/map/payload round-trip PostgreSQL;
 - redukowac `read_block_map -> repo_fetch_block_range` w kierunku jednej
   operacji range-oriented, jesli zachowuje to strict read-only i WAL gate;
+- mierzyc sukces przez spadek `repo_fetch_block_range_us` i `read_block_map_us`,
+  a nie przez sama liczbe callbackow FUSE;
 - po kazdej zmianie powtarzac macierz 4 KiB / 64 KiB / 512 KiB primary-write
   -> WAL replay -> replica-read.
 

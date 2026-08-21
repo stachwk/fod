@@ -1949,3 +1949,28 @@ into one callback per 4 KiB fio request. The 128 MiB read completed with 516 FUS
 read callbacks instead of the 32768 callbacks seen in the direct-I/O profile.
 Write callbacks remain 4 KiB-shaped because this fio workload submits 32768
 small synchronous writes.
+
+## 2026-08-21 - FOD 3.3.7 direct-I/O sequential read prefetch
+
+Base commit before implementation: `ccf522c` (`FOD 3.3.6: record fio non-direct validation`).
+
+The 4 KiB direct-I/O replica-read bottleneck should be optimized inside FOD's
+read path rather than by generic PostgreSQL tuning. The kernel may still deliver
+one 4 KiB FUSE read callback per fio request, so the first measurable objective
+is reducing repeated `repo_fetch_block_range` work behind those callbacks.
+
+FOD 3.3.7 adds a reloadable `direct_io_read_prefetch_blocks` knob with default
+`128` blocks. With the normal 4 KiB storage block size this gives a 512 KiB
+internal range fetch once a sequential `fopen_direct_io` stream has been
+observed. `FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=0` keeps the old diagnostic
+no-prefetch path available for apples-to-apples comparisons.
+
+The read sequence state now updates before the single-block cache-hit fast path.
+Without that ordering, prefetched cache hits would not advance sequential state
+and every prefetch window boundary would fall back to a one-block miss before
+the next larger range fetch.
+
+Pre-benchmark validation passed with `cargo check --workspace --locked` and
+`cargo test -p fod-rust-runtime --lib --locked`. `cargo test -p
+fod-rust-fuse --lib --locked` is not applicable because `fod-rust-fuse` has no
+library target.

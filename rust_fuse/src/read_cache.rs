@@ -152,10 +152,12 @@ impl FodFuse {
     }
 
     pub(crate) fn read_cache_limit_blocks(&self) -> usize {
-        self.reloadable_runtime()
-            .read_cache_blocks
-            .max(1)
-            .min(usize::MAX as u64) as usize
+        let live = self.reloadable_runtime();
+        let mut limit = live.read_cache_blocks;
+        if self.fopen_direct_io && live.direct_io_read_prefetch_blocks > 0 {
+            limit = limit.max(live.direct_io_read_prefetch_blocks);
+        }
+        limit.max(1).min(usize::MAX as u64) as usize
     }
 
     pub(crate) fn read_workers(&self) -> usize {

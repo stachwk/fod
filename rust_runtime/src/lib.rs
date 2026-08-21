@@ -464,6 +464,7 @@ pub struct RuntimeConfig {
     pub read_cache_eviction_policy: String,
     pub read_ahead_blocks: u64,
     pub sequential_read_ahead_blocks: u64,
+    pub direct_io_read_prefetch_blocks: u64,
     pub small_file_read_threshold_blocks: u64,
     pub workers_read: u64,
     pub workers_read_min_blocks: u64,
@@ -646,6 +647,7 @@ pub struct RuntimeCacheSettings {
     pub read_cache_eviction_policy: String,
     pub read_ahead_blocks: u64,
     pub sequential_read_ahead_blocks: u64,
+    pub direct_io_read_prefetch_blocks: u64,
     pub small_file_read_threshold_blocks: u64,
 }
 
@@ -680,6 +682,7 @@ pub struct RuntimeReloadableSettings {
     pub read_cache_blocks: u64,
     pub read_ahead_blocks: u64,
     pub sequential_read_ahead_blocks: u64,
+    pub direct_io_read_prefetch_blocks: u64,
     pub small_file_read_threshold_blocks: u64,
     pub workers_read: u64,
     pub workers_read_min_blocks: u64,
@@ -700,6 +703,7 @@ pub const RELOADABLE_RUNTIME_KEYS: &[&str] = &[
     "read_cache_blocks",
     "read_ahead_blocks",
     "sequential_read_ahead_blocks",
+    "direct_io_read_prefetch_blocks",
     "small_file_read_threshold_blocks",
     "workers_read",
     "workers_read_min_blocks",
@@ -1172,6 +1176,10 @@ const RUNTIME_VALUE_SPECS: &[RuntimeValueSpec] = &[
         RuntimeValueKind::U64 { allow_zero: true },
     ),
     RuntimeValueSpec::tuning_and_runtime_env(
+        "direct_io_read_prefetch_blocks",
+        RuntimeValueKind::U64 { allow_zero: true },
+    ),
+    RuntimeValueSpec::tuning_and_runtime_env(
         "small_file_read_threshold_blocks",
         RuntimeValueKind::U64 { allow_zero: true },
     ),
@@ -1302,6 +1310,8 @@ impl RuntimeConfig {
             lookup_string(&lookup, "read_cache_eviction_policy", "fifo");
         let read_ahead_blocks = lookup_u64(&lookup, "read_ahead_blocks", 4);
         let sequential_read_ahead_blocks = lookup_u64(&lookup, "sequential_read_ahead_blocks", 8);
+        let direct_io_read_prefetch_blocks =
+            lookup_u64(&lookup, "direct_io_read_prefetch_blocks", 128);
         let small_file_read_threshold_blocks =
             lookup_u64(&lookup, "small_file_read_threshold_blocks", 8);
         let workers_read = lookup_u64(&lookup, "workers_read", 4);
@@ -1380,6 +1390,7 @@ impl RuntimeConfig {
             read_cache_eviction_policy,
             read_ahead_blocks,
             sequential_read_ahead_blocks,
+            direct_io_read_prefetch_blocks,
             small_file_read_threshold_blocks,
             workers_read,
             workers_read_min_blocks,
@@ -1485,6 +1496,7 @@ impl RuntimeConfig {
             read_cache_eviction_policy: self.read_cache_eviction_policy.clone(),
             read_ahead_blocks: self.read_ahead_blocks,
             sequential_read_ahead_blocks: self.sequential_read_ahead_blocks,
+            direct_io_read_prefetch_blocks: self.direct_io_read_prefetch_blocks,
             small_file_read_threshold_blocks: self.small_file_read_threshold_blocks,
         }
     }
@@ -1518,6 +1530,7 @@ impl RuntimeConfig {
             read_cache_blocks: self.read_cache_blocks,
             read_ahead_blocks: self.read_ahead_blocks,
             sequential_read_ahead_blocks: self.sequential_read_ahead_blocks,
+            direct_io_read_prefetch_blocks: self.direct_io_read_prefetch_blocks,
             small_file_read_threshold_blocks: self.small_file_read_threshold_blocks,
             workers_read: self.workers_read,
             workers_read_min_blocks: self.workers_read_min_blocks,
@@ -1647,6 +1660,10 @@ impl RuntimeConfig {
         self.sequential_read_ahead_blocks = parse_u64(
             env_var_with_legacy_alias("FOD_SEQUENTIAL_READ_AHEAD_BLOCKS"),
             self.sequential_read_ahead_blocks,
+        );
+        self.direct_io_read_prefetch_blocks = parse_u64(
+            env_var_with_legacy_alias("FOD_DIRECT_IO_READ_PREFETCH_BLOCKS"),
+            self.direct_io_read_prefetch_blocks,
         );
         self.small_file_read_threshold_blocks = parse_u64(
             env_var_with_legacy_alias("FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS"),
@@ -1801,6 +1818,10 @@ impl RuntimeConfig {
             self.sequential_read_ahead_blocks,
         );
         set_u64(
+            "FOD_DIRECT_IO_READ_PREFETCH_BLOCKS",
+            self.direct_io_read_prefetch_blocks,
+        );
+        set_u64(
             "FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS",
             self.small_file_read_threshold_blocks,
         );
@@ -1897,6 +1918,11 @@ impl RuntimeConfig {
             &mut runtime,
             "sequential_read_ahead_blocks",
             self.sequential_read_ahead_blocks,
+        );
+        set_map_u64(
+            &mut runtime,
+            "direct_io_read_prefetch_blocks",
+            self.direct_io_read_prefetch_blocks,
         );
         set_map_u64(
             &mut runtime,

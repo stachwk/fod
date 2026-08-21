@@ -65,6 +65,7 @@ Generated from quoted `FOD_*` literals in production Rust sources. Rust identifi
 | `FOD_READ_AHEAD_BLOCKS` | `[fod] read_ahead_blocks` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_READ_CACHE_BLOCKS` | `[fod] read_cache_blocks` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
 | `FOD_READ_CACHE_EVICTION_POLICY` | `[fod] read_cache_eviction_policy` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |
+| `FOD_DIRECT_IO_READ_PREFETCH_BLOCKS` | `[fod] direct_io_read_prefetch_blocks` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | set to `0` for the old direct-I/O no-prefetch diagnostic path |
 | `FOD_ROLE` | `[fod] role` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_fuse/src/pg_lanes.rs, rust_runtime/src/lib.rs | - |
 | `FOD_RUST_FUSE_READONLY` | `[fod] force_read_only` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_mkfs/src/bin/fod-bootstrap.rs, rust_runtime/src/lib.rs | - |
 | `FOD_SELINUX` | `[fod] selinux` | active-in-both-ini | fod_config.ini, fod_config.example.ini | fod_config.ini, fod_config.example.ini | rust_runtime/src/lib.rs | - |

@@ -784,7 +784,7 @@ fn apply_reloadable_runtime(
                 .unwrap_or(log::LevelFilter::Info),
         );
         info!(
-            "FOD runtime reload applied profile={:?} log_level={} metadata_cache_ttl={}s statfs_cache_ttl={}s read_cache_blocks={} read_ahead_blocks={} sequential_read_ahead_blocks={} small_file_read_threshold_blocks={} workers_read={} workers_read_min_blocks={} workers_write={} workers_write_min_blocks={} persist_buffer_chunk_blocks={} copy_dedupe_enabled={} copy_dedupe_min_blocks={} copy_dedupe_max_blocks={} copy_dedupe_crc_table={}",
+            "FOD runtime reload applied profile={:?} log_level={} metadata_cache_ttl={}s statfs_cache_ttl={}s read_cache_blocks={} read_ahead_blocks={} sequential_read_ahead_blocks={} direct_io_read_prefetch_blocks={} small_file_read_threshold_blocks={} workers_read={} workers_read_min_blocks={} workers_write={} workers_write_min_blocks={} persist_buffer_chunk_blocks={} copy_dedupe_enabled={} copy_dedupe_min_blocks={} copy_dedupe_max_blocks={} copy_dedupe_crc_table={}",
             settings.profile,
             settings.log_level,
             settings.metadata_cache_ttl.as_secs(),
@@ -792,6 +792,7 @@ fn apply_reloadable_runtime(
             settings.read_cache_blocks,
             settings.read_ahead_blocks,
             settings.sequential_read_ahead_blocks,
+            settings.direct_io_read_prefetch_blocks,
             settings.small_file_read_threshold_blocks,
             settings.workers_read,
             settings.workers_read_min_blocks,
@@ -1887,7 +1888,7 @@ impl FodFuse {
             }
         }
         format!(
-            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, client_session_heartbeat_interval_secs={}, client_session_lease_ttl_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, samples=[{}]}}",
+            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, direct_io_read_prefetch_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, client_session_heartbeat_interval_secs={}, client_session_lease_ttl_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, samples=[{}]}}",
             self.read_only,
             self.use_fuse_context,
             self.fopen_direct_io,
@@ -1896,6 +1897,7 @@ impl FodFuse {
             live.read_cache_blocks,
             live.read_ahead_blocks,
             live.sequential_read_ahead_blocks,
+            live.direct_io_read_prefetch_blocks,
             live.small_file_read_threshold_blocks,
             live.workers_read,
             live.workers_read_min_blocks,
@@ -5300,6 +5302,8 @@ impl Filesystem for FodFuse {
         let live = self.reloadable_runtime();
         let first_block = offset / self.block_size;
         let last_block = (end_offset.saturating_sub(1)) / self.block_size;
+        let total_blocks = 1 + (file_size - 1) / self.block_size.max(1);
+        let (sequential, streak) = self.read_sequence_state_for_file(file_id, offset, end_offset);
         if first_block == last_block {
             if let Some(block) = self.cached_read_block(file_id, first_block) {
                 let block_offset = first_block.saturating_mul(self.block_size);
@@ -5316,23 +5320,30 @@ impl Filesystem for FodFuse {
                 }
             }
         }
-        let total_blocks = 1 + (file_size - 1) / self.block_size.max(1);
-        let (sequential, streak) = self.read_sequence_state_for_file(file_id, offset, end_offset);
         let (fetch_first, fetch_last) = if total_blocks <= live.small_file_read_threshold_blocks {
             (0, total_blocks.saturating_sub(1))
         } else {
+            let requested_blocks = last_block.saturating_sub(first_block).saturating_add(1);
             let mut read_ahead_blocks = live.read_ahead_blocks;
             if sequential {
                 let dynamic_ahead = live
                     .sequential_read_ahead_blocks
                     .saturating_mul(streak.max(1));
                 read_ahead_blocks = read_ahead_blocks.max(dynamic_ahead);
+                let direct_io_ahead = live
+                    .direct_io_read_prefetch_blocks
+                    .saturating_sub(requested_blocks);
+                if self.fopen_direct_io && direct_io_ahead > 0 {
+                    read_ahead_blocks = read_ahead_blocks.max(direct_io_ahead);
+                }
             }
             let cache_cap = self.read_cache_limit_blocks().saturating_sub(1) as u64;
             read_ahead_blocks = read_ahead_blocks.min(cache_cap);
             (
                 first_block,
-                (last_block + read_ahead_blocks).min(total_blocks.saturating_sub(1)),
+                last_block
+                    .saturating_add(read_ahead_blocks)
+                    .min(total_blocks.saturating_sub(1)),
             )
         };
         match self.read_block_map(file_id, fetch_first, fetch_last) {

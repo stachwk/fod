@@ -42,6 +42,7 @@ pub struct FuseCacheSettings {
     pub read_cache_eviction_policy: String,
     pub read_ahead_blocks: u64,
     pub sequential_read_ahead_blocks: u64,
+    pub direct_io_read_prefetch_blocks: u64,
     pub small_file_read_threshold_blocks: u64,
 }
 
@@ -111,6 +112,7 @@ impl FodFuseSettings {
                 read_cache_eviction_policy: cache.read_cache_eviction_policy.clone(),
                 read_ahead_blocks: cache.read_ahead_blocks,
                 sequential_read_ahead_blocks: cache.sequential_read_ahead_blocks,
+                direct_io_read_prefetch_blocks: cache.direct_io_read_prefetch_blocks,
                 small_file_read_threshold_blocks: cache.small_file_read_threshold_blocks,
             },
             workers: FuseWorkerSettings {
@@ -310,13 +312,14 @@ fn log_mount_status(
     );
     info!("FOD recovery_mode={}", snapshot.is_in_recovery);
     info!(
-        "FOD cache metadata_cache_ttl={}s statfs_cache_ttl={}s read_cache_blocks={} read_cache_eviction_policy={} read_ahead_blocks={} sequential_read_ahead_blocks={} small_file_read_threshold_blocks={}",
+        "FOD cache metadata_cache_ttl={}s statfs_cache_ttl={}s read_cache_blocks={} read_cache_eviction_policy={} read_ahead_blocks={} sequential_read_ahead_blocks={} direct_io_read_prefetch_blocks={} small_file_read_threshold_blocks={}",
         cache.metadata_cache_ttl.as_secs(),
         cache.statfs_cache_ttl.as_secs(),
         cache.read_cache_blocks,
         cache.read_cache_eviction_policy,
         cache.read_ahead_blocks,
         cache.sequential_read_ahead_blocks,
+        cache.direct_io_read_prefetch_blocks,
         cache.small_file_read_threshold_blocks
     );
     info!(

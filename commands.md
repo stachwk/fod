@@ -2852,6 +2852,48 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 commit ccf522c direct-I/O read prefetch implementation
+
+Context lookup and source inspection:
+
+```bash
+git status --short --branch
+rg -n "direct_io|read_ahead|read_cache_blocks|small_file_read_threshold|RuntimeCacheSettings|RuntimeReloadableSettings" rust_runtime/src/lib.rs rust_fuse/src/fs.rs rust_fuse/src/read_cache.rs rust_fuse/src/startup.rs fod_config.ini docs/FOD_CURRENT_ACTION_PLAN.md
+rg -n "3\\.3\\.6|^version =|fod_version" fod_version.txt Cargo.toml rust_*/Cargo.toml docs/FOD_CURRENT_ACTION_PLAN.md
+source ~/.venv/bin/activate && mempalace search "direct-I/O replica read 4 KiB callbacks range batching read_block_map repo_fetch_block_range FOD 3.3.6" --mode projects --wing fod --agent codex
+source ~/.venv/bin/activate && mempalace search --help
+source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "direct-I/O replica read 4 KiB callbacks range batching read_block_map repo_fetch_block_range FOD 3.3.6"
+sed -n '430,720p' rust_runtime/src/lib.rs
+sed -n '1280,1535p' rust_runtime/src/lib.rs
+sed -n '1600,1910p' rust_runtime/src/lib.rs
+sed -n '1125,1190p' rust_runtime/src/lib.rs
+sed -n '2260,2495p' rust_runtime/src/lib.rs
+sed -n '120,210p' rust_fuse/src/read_cache.rs
+sed -n '5250,5360p' rust_fuse/src/fs.rs
+sed -n '1,180p' rust_fuse/src/startup.rs
+sed -n '260,330p' rust_fuse/src/startup.rs
+sed -n '80,175p' fod_config.ini
+sed -n '60,110p' docs/FOD_CURRENT_ACTION_PLAN.md
+rg -n "FOD_READ_CACHE_BLOCKS|FOD_READ_AHEAD_BLOCKS|FOD_SEQUENTIAL_READ_AHEAD_BLOCKS|FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS|FOPEN_DIRECT_IO|read cache/read-ahead" tests/integration Makefile scripts rust_* -S
+rg -n "direct_io_read_prefetch_blocks|RuntimeConfig \\{|RuntimeCacheSettings \\{|RuntimeReloadableSettings \\{|FuseCacheSettings \\{" rust_runtime/src/lib.rs rust_fuse/src rust_mkfs/src/config.rs fod_config.ini docs -S
+rg -n "read_cache_blocks|read_ahead_blocks|sequential_read_ahead_blocks|small_file_read_threshold_blocks" docs README.md *.md -S
+rg -n "name = \"fod-rust|version = \"3\\.3\\.6\"|version = \"3\\.3\\.7\"" Cargo.lock Cargo.toml rust_*/Cargo.toml
+```
+
+Build and targeted checks:
+
+```bash
+cargo fmt --all
+git diff --check
+cargo check --workspace --locked
+cargo test -p fod-rust-runtime --lib --locked
+cargo test -p fod-rust-fuse --lib --locked
+git diff --stat
+git diff -- rust_fuse/src/fs.rs rust_fuse/src/read_cache.rs rust_runtime/src/lib.rs | sed -n '1,260p'
+git rev-parse --short HEAD
+git log -1 --oneline
+```
+
 ## 2026-08-21 commit 7076787 fio without FUSE direct_io
 
 Context and preflight commands:
