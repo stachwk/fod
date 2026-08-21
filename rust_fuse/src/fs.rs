@@ -30,13 +30,14 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fod_rust_runtime::{
-    current_hostname, duration_to_micros, reloadable_snapshot_from_json, AtimeStat, RuntimeConfig,
-    RuntimeReloadableSettings, RuntimeTaskSettings, FOD_SCHEMA_NAME,
+    current_hostname, duration_to_micros, env_var_truthy_with_legacy_alias,
+    reloadable_snapshot_from_json, AtimeStat, RuntimeConfig, RuntimeReloadableSettings,
+    RuntimeTaskSettings, FOD_SCHEMA_NAME,
 };
 pub use fod_rust_runtime::{AtimePolicy, LockBackend};
 
@@ -58,6 +59,11 @@ const IOCTL_FIGETBSZ: u32 = 2;
 const IOCTL_FS_IOC_FSGETXATTR: u32 = libc::_IOR::<[u8; IOCTL_FSXATTR_BYTES]>('X' as u32, 31) as u32;
 const IOCTL_FS_IOC_FSSETXATTR: u32 = libc::_IOW::<[u8; IOCTL_FSXATTR_BYTES]>('X' as u32, 32) as u32;
 const IOCTL_FSXATTR_BYTES: usize = 28;
+
+fn fod_fuse_profile_io_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_IO", false))
+}
 
 pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
@@ -3981,7 +3987,7 @@ impl Drop for FodFuse {
         if let Some(mut sampler) = self.logical_task_observability.take() {
             sampler.stop();
         }
-        if self.profile.has_activity() {
+        if fod_fuse_profile_io_enabled() && self.profile.has_activity() {
             info!("FOD boundary profile:");
             for line in self.profile.snapshot_lines() {
                 info!("  {}", line);

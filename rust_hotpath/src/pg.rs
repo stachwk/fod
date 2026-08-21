@@ -341,10 +341,14 @@ static FOD_COPY_PUT_DATA_PROFILE_AGGREGATE: std::sync::OnceLock<
 > = std::sync::OnceLock::new();
 
 fn fod_profile_io_verbose_enabled() -> bool {
-    env_var_truthy_with_legacy_alias("FOD_PROFILE_IO_VERBOSE", false)
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_IO_VERBOSE", false))
 }
 
 fn fod_profile_copy_put_data_observe(elapsed: std::time::Duration, blocks: usize, bytes: usize) {
+    if !fod_profile_io_enabled() {
+        return;
+    }
     let aggregate = FOD_COPY_PUT_DATA_PROFILE_AGGREGATE
         .get_or_init(|| std::sync::Mutex::new(DbfsIoProfileAggregate::default()));
     if let Ok(mut guard) = aggregate.lock() {
@@ -353,6 +357,9 @@ fn fod_profile_copy_put_data_observe(elapsed: std::time::Duration, blocks: usize
 }
 
 fn fod_profile_copy_put_data_flush() {
+    if !fod_profile_io_enabled() {
+        return;
+    }
     let Some(aggregate) = FOD_COPY_PUT_DATA_PROFILE_AGGREGATE.get() else {
         return;
     };
@@ -368,12 +375,14 @@ fn fod_profile_copy_put_data_flush() {
         std::time::Duration::from_secs_f64(guard.seconds_sum),
         guard.blocks_sum,
         guard.bytes_sum,
-        format!(
-            "count={} max={:.6} avg={:.6}",
-            guard.count,
-            guard.seconds_max,
-            guard.seconds_sum / guard.count as f64
-        ),
+        || {
+            format!(
+                "count={} max={:.6} avg={:.6}",
+                guard.count,
+                guard.seconds_max,
+                guard.seconds_sum / guard.count as f64
+            )
+        },
     );
 
     *guard = DbfsIoProfileAggregate::default();
@@ -384,7 +393,7 @@ fn fod_log_io_profile(
     elapsed: Duration,
     blocks: usize,
     bytes: usize,
-    detail: impl AsRef<str>,
+    detail: impl FnOnce() -> String,
 ) {
     // Format musi zaczynac sie od "FOD I/O profile:", bo testlib szuka tego grepem
     if fod_profile_io_enabled() {
@@ -394,7 +403,7 @@ fn fod_log_io_profile(
             elapsed.as_secs_f64(),
             blocks,
             bytes,
-            detail.as_ref()
+            detail()
         );
     }
 }
@@ -405,6 +414,9 @@ unsafe fn fod_profiled_pq_put_copy_data(
     len: c_int,
 ) -> c_int {
     // Profiluje wysylanie danych COPY do PostgreSQL
+    if !fod_profile_io_enabled() {
+        return PQputCopyData(conn, buffer, len);
+    }
     let started = Instant::now();
     let rc = PQputCopyData(conn, buffer, len);
     let bytes = if len > 0 { len as usize } else { 0 };
@@ -416,7 +428,7 @@ unsafe fn fod_profiled_pq_put_copy_data(
             fod_copy_put_data_elapsed,
             0,
             bytes,
-            format!("rc={}", rc),
+            || format!("rc={}", rc),
         );
     }
 
@@ -425,21 +437,23 @@ unsafe fn fod_profiled_pq_put_copy_data(
 
 unsafe fn fod_profiled_pq_put_copy_end(conn: *mut PGconn, errormsg: *const c_char) -> c_int {
     // Profiluje zakonczenie COPY
+    if !fod_profile_io_enabled() {
+        return PQputCopyEnd(conn, errormsg);
+    }
     let started = Instant::now();
     let rc = PQputCopyEnd(conn, errormsg);
     fod_profile_copy_put_data_flush();
-    fod_log_io_profile(
-        "pg.copy_put_end",
-        started.elapsed(),
-        0,
-        0,
-        format!("rc={}", rc),
-    );
+    fod_log_io_profile("pg.copy_put_end", started.elapsed(), 0, 0, || {
+        format!("rc={}", rc)
+    });
     rc
 }
 
 unsafe fn fod_profiled_pq_get_result(conn: *mut PGconn) -> *mut PGresult {
     // Profiluje odbior wyniku po COPY
+    if !fod_profile_io_enabled() {
+        return PQgetResult(conn);
+    }
     let started = Instant::now();
     let res = PQgetResult(conn);
     let status = if res.is_null() {
@@ -447,13 +461,9 @@ unsafe fn fod_profiled_pq_get_result(conn: *mut PGconn) -> *mut PGresult {
     } else {
         PQresultStatus(res)
     };
-    fod_log_io_profile(
-        "pg.copy_get_result",
-        started.elapsed(),
-        0,
-        0,
-        format!("status={}", status),
-    );
+    fod_log_io_profile("pg.copy_get_result", started.elapsed(), 0, 0, || {
+        format!("status={}", status)
+    });
     res
 }
 
@@ -2389,7 +2399,11 @@ unsafe fn exec_prepared_params_with_result_format(
             param_formats.as_ptr(),
         )
     };
-    let started = Instant::now();
+    let started = if profile_enabled {
+        Some(Instant::now())
+    } else {
+        None
+    };
     let res = PQexecPrepared(
         conn,
         name.as_ptr(),
@@ -2399,9 +2413,9 @@ unsafe fn exec_prepared_params_with_result_format(
         param_formats_ptr,
         result_format,
     );
-    let elapsed = started.elapsed();
+    let elapsed = started.map(|started| started.elapsed());
     if res.is_null() {
-        if profile_enabled {
+        if let Some(elapsed) = elapsed {
             fod_profile_prepared_statement_observe(
                 statement,
                 elapsed,
@@ -2417,7 +2431,7 @@ unsafe fn exec_prepared_params_with_result_format(
     } else if statement.is_read_only() {
         let status = PQresultStatus(res);
         let failed = status != PGRES_TUPLES_OK;
-        if profile_enabled {
+        if let Some(elapsed) = elapsed {
             let (result_rows, result_bytes) = pgresult_profile_payload(res, status);
             fod_profile_prepared_statement_observe(
                 statement,
@@ -2438,7 +2452,7 @@ unsafe fn exec_prepared_params_with_result_format(
         }
         Ok(res)
     } else {
-        if profile_enabled {
+        if let Some(elapsed) = elapsed {
             let status = PQresultStatus(res);
             let failed = !matches!(status, PGRES_TUPLES_OK | PGRES_COMMAND_OK | PGRES_COPY_IN);
             fod_profile_prepared_statement_observe(
@@ -2558,11 +2572,15 @@ fn connect(conninfo: &str, tuning: &ConnectionTuning) -> Result<*mut PGconn, Str
 
 unsafe fn query_scalar_text_on_conn(conn: *mut PGconn, sql: &CString) -> Result<String, String> {
     let profile_enabled = fod_profile_io_enabled();
-    let started = Instant::now();
+    let started = if profile_enabled {
+        Some(Instant::now())
+    } else {
+        None
+    };
     let res = PQexec(conn, sql.as_ptr());
-    let elapsed = started.elapsed();
+    let elapsed = started.map(|started| started.elapsed());
     if res.is_null() {
-        if profile_enabled {
+        if let Some(elapsed) = elapsed {
             fod_profile_sql_statement_observe(
                 "query_scalar",
                 fod_sql_label(sql),
@@ -2579,7 +2597,7 @@ unsafe fn query_scalar_text_on_conn(conn: *mut PGconn, sql: &CString) -> Result<
     }
     let status = PQresultStatus(res);
     let failed = status != PGRES_TUPLES_OK;
-    if profile_enabled {
+    if let Some(elapsed) = elapsed {
         let (result_rows, result_bytes) = pgresult_profile_payload(res, status);
         fod_profile_sql_statement_observe(
             "query_scalar",
@@ -2608,11 +2626,15 @@ unsafe fn query_rows_text_on_conn(
     sql: &CString,
 ) -> Result<Vec<Vec<String>>, String> {
     let profile_enabled = fod_profile_io_enabled();
-    let started = Instant::now();
+    let started = if profile_enabled {
+        Some(Instant::now())
+    } else {
+        None
+    };
     let res = PQexec(conn, sql.as_ptr());
-    let elapsed = started.elapsed();
+    let elapsed = started.map(|started| started.elapsed());
     if res.is_null() {
-        if profile_enabled {
+        if let Some(elapsed) = elapsed {
             fod_profile_sql_statement_observe(
                 "query_rows",
                 fod_sql_label(sql),
@@ -2629,7 +2651,7 @@ unsafe fn query_rows_text_on_conn(
     }
     let status = PQresultStatus(res);
     let failed = status != PGRES_TUPLES_OK;
-    if profile_enabled {
+    if let Some(elapsed) = elapsed {
         let (result_rows, result_bytes) = pgresult_profile_payload(res, status);
         fod_profile_sql_statement_observe(
             "query_rows",
@@ -3111,29 +3133,32 @@ unsafe fn pgresult_profile_payload(res: *const PGresult, status: c_int) -> (u64,
 }
 
 unsafe fn exec_command(conn: *mut PGconn, sql: &CString) -> Result<(), String> {
-    let started = Instant::now();
+    let profile_enabled = fod_profile_io_enabled();
+    let started = if profile_enabled {
+        Some(Instant::now())
+    } else {
+        None
+    };
     let res = PQexec(conn, sql.as_ptr());
-    let elapsed = started.elapsed();
-    let sql_label = fod_sql_label(sql);
+    let elapsed = started.map(|started| started.elapsed());
 
     if res.is_null() {
-        fod_profile_sql_statement_observe(
-            "exec_command",
-            sql_label.clone(),
-            elapsed,
-            0,
-            0,
-            0,
-            0,
-            true,
-        );
-        fod_log_io_profile(
-            "pg.exec_command.error",
-            elapsed,
-            0,
-            0,
-            format!("sql=\"{}\"", sql_label),
-        );
+        if let Some(elapsed) = elapsed {
+            let sql_label = fod_sql_label(sql);
+            fod_profile_sql_statement_observe(
+                "exec_command",
+                sql_label.clone(),
+                elapsed,
+                0,
+                0,
+                0,
+                0,
+                true,
+            );
+            fod_log_io_profile("pg.exec_command.error", elapsed, 0, 0, || {
+                format!("sql=\"{}\"", sql_label)
+            });
+        }
         let err = conn_error(conn);
         if sql_is_replayable_command(sql) && is_retryable_connection_error(conn, &err) {
             return Err(replayable_sql_error_once(err));
@@ -3143,23 +3168,22 @@ unsafe fn exec_command(conn: *mut PGconn, sql: &CString) -> Result<(), String> {
 
     let status = PQresultStatus(res);
     let failed = status != PGRES_COMMAND_OK;
-    fod_profile_sql_statement_observe(
-        "exec_command",
-        sql_label.clone(),
-        elapsed,
-        0,
-        0,
-        0,
-        0,
-        failed,
-    );
-    fod_log_io_profile(
-        "pg.exec_command",
-        elapsed,
-        0,
-        0,
-        format!("status={} sql=\"{}\"", status, sql_label),
-    );
+    if let Some(elapsed) = elapsed {
+        let sql_label = fod_sql_label(sql);
+        fod_profile_sql_statement_observe(
+            "exec_command",
+            sql_label.clone(),
+            elapsed,
+            0,
+            0,
+            0,
+            0,
+            failed,
+        );
+        fod_log_io_profile("pg.exec_command", elapsed, 0, 0, || {
+            format!("status={} sql=\"{}\"", status, sql_label)
+        });
+    }
 
     if status == PGRES_COMMAND_OK {
         PQclear(res);
@@ -3180,6 +3204,7 @@ unsafe fn exec_params(
     sql: &CString,
     params: &[&CString],
 ) -> Result<*mut PGresult, String> {
+    let profile_enabled = fod_profile_io_enabled();
     let param_values = params
         .iter()
         .map(|value| value.as_ptr())
@@ -3189,12 +3214,20 @@ unsafe fn exec_params(
         .map(|value| value.as_bytes().len() as c_int)
         .collect::<Vec<_>>();
     let param_formats = vec![0 as c_int; params.len()];
-    let param_bytes = param_lengths
-        .iter()
-        .map(|value| if *value > 0 { *value as usize } else { 0 })
-        .sum::<usize>();
+    let param_bytes = if profile_enabled {
+        param_lengths
+            .iter()
+            .map(|value| if *value > 0 { *value as usize } else { 0 })
+            .sum::<usize>()
+    } else {
+        0
+    };
 
-    let started = Instant::now();
+    let started = if profile_enabled {
+        Some(Instant::now())
+    } else {
+        None
+    };
     let res = PQexecParams(
         conn,
         sql.as_ptr(),
@@ -3205,9 +3238,9 @@ unsafe fn exec_params(
         param_formats.as_ptr(),
         0,
     );
-    let elapsed = started.elapsed();
-    let sql_label = fod_sql_label(sql);
-    if fod_profile_io_enabled() {
+    let elapsed = started.map(|started| started.elapsed());
+    if let Some(elapsed) = elapsed {
+        let sql_label = fod_sql_label(sql);
         let (failed, result_rows, result_bytes) = if res.is_null() {
             (true, 0, 0)
         } else {
@@ -3226,15 +3259,10 @@ unsafe fn exec_params(
             result_bytes,
             failed,
         );
+        fod_log_io_profile("pg.exec_params", elapsed, params.len(), param_bytes, || {
+            format!("null_result={} sql=\"{}\"", res.is_null(), sql_label)
+        });
     }
-
-    fod_log_io_profile(
-        "pg.exec_params",
-        elapsed,
-        params.len(),
-        param_bytes,
-        format!("null_result={} sql=\"{}\"", res.is_null(), sql_label),
-    );
 
     if res.is_null() {
         let err = conn_error(conn);
@@ -3259,7 +3287,12 @@ unsafe fn exec_command_params(
     sql: &CString,
     params: &[&CString],
 ) -> Result<(), String> {
-    let started = Instant::now();
+    let profile_enabled = fod_profile_io_enabled();
+    let started = if profile_enabled {
+        Some(Instant::now())
+    } else {
+        None
+    };
     let res = match exec_params(conn, sql, params) {
         Ok(res) => res,
         Err(err) => {
@@ -3269,17 +3302,15 @@ unsafe fn exec_command_params(
             return Err(err);
         }
     };
-    let elapsed = started.elapsed();
+    let elapsed = started.map(|started| started.elapsed());
     let status = PQresultStatus(res);
-    let sql_label = fod_sql_label(sql);
 
-    fod_log_io_profile(
-        "pg.exec_command_params",
-        elapsed,
-        params.len(),
-        0,
-        format!("status={} sql=\"{}\"", status, sql_label),
-    );
+    if let Some(elapsed) = elapsed {
+        let sql_label = fod_sql_label(sql);
+        fod_log_io_profile("pg.exec_command_params", elapsed, params.len(), 0, || {
+            format!("status={} sql=\"{}\"", status, sql_label)
+        });
+    }
 
     if status == PGRES_COMMAND_OK {
         PQclear(res);
@@ -3328,15 +3359,24 @@ unsafe fn exec_params_with_formats(
     sql: &CString,
     params: &[SqlParam<'_>],
 ) -> Result<*mut PGresult, String> {
+    let profile_enabled = fod_profile_io_enabled();
     let param_values = params.iter().map(SqlParam::ptr).collect::<Vec<_>>();
     let param_lengths = params.iter().map(SqlParam::len).collect::<Vec<_>>();
     let param_formats = params.iter().map(SqlParam::format).collect::<Vec<_>>();
-    let param_bytes = param_lengths
-        .iter()
-        .map(|value| if *value > 0 { *value as usize } else { 0 })
-        .sum::<usize>();
+    let param_bytes = if profile_enabled {
+        param_lengths
+            .iter()
+            .map(|value| if *value > 0 { *value as usize } else { 0 })
+            .sum::<usize>()
+    } else {
+        0
+    };
 
-    let started = Instant::now();
+    let started = if profile_enabled {
+        Some(Instant::now())
+    } else {
+        None
+    };
     let res = PQexecParams(
         conn,
         sql.as_ptr(),
@@ -3347,9 +3387,9 @@ unsafe fn exec_params_with_formats(
         param_formats.as_ptr(),
         0,
     );
-    let elapsed = started.elapsed();
-    let sql_label = fod_sql_label(sql);
-    if fod_profile_io_enabled() {
+    let elapsed = started.map(|started| started.elapsed());
+    if let Some(elapsed) = elapsed {
+        let sql_label = fod_sql_label(sql);
         let (failed, result_rows, result_bytes) = if res.is_null() {
             (true, 0, 0)
         } else {
@@ -3368,15 +3408,14 @@ unsafe fn exec_params_with_formats(
             result_bytes,
             failed,
         );
+        fod_log_io_profile(
+            "pg.exec_params_with_formats",
+            elapsed,
+            params.len(),
+            param_bytes,
+            || format!("null_result={} sql=\"{}\"", res.is_null(), sql_label),
+        );
     }
-
-    fod_log_io_profile(
-        "pg.exec_params_with_formats",
-        elapsed,
-        params.len(),
-        param_bytes,
-        format!("null_result={} sql=\"{}\"", res.is_null(), sql_label),
-    );
 
     if res.is_null() {
         let err = conn_error(conn);
@@ -3391,19 +3430,26 @@ unsafe fn exec_command_params_with_formats(
     sql: &CString,
     params: &[SqlParam<'_>],
 ) -> Result<(), String> {
-    let started = Instant::now();
+    let profile_enabled = fod_profile_io_enabled();
+    let started = if profile_enabled {
+        Some(Instant::now())
+    } else {
+        None
+    };
     let res = exec_params_with_formats(conn, sql, params)?;
-    let elapsed = started.elapsed();
+    let elapsed = started.map(|started| started.elapsed());
     let status = PQresultStatus(res);
-    let sql_label = fod_sql_label(sql);
 
-    fod_log_io_profile(
-        "pg.exec_command_params_with_formats",
-        elapsed,
-        params.len(),
-        0,
-        format!("status={} sql=\"{}\"", status, sql_label),
-    );
+    if let Some(elapsed) = elapsed {
+        let sql_label = fod_sql_label(sql);
+        fod_log_io_profile(
+            "pg.exec_command_params_with_formats",
+            elapsed,
+            params.len(),
+            0,
+            || format!("status={} sql=\"{}\"", status, sql_label),
+        );
+    }
 
     if status == PGRES_COMMAND_OK {
         PQclear(res);
