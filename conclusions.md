@@ -2484,3 +2484,49 @@ Rust-side `BYTEA` decode/copy is visible, 41.6-48.5 ms for 128 MiB, but it is
 not the dominant cost. The next target should remain payload transfer/query
 shape around `fod_fetch_block_range` and `read_block_map`, not generic
 PostgreSQL tuning or hardlink count.
+
+## 2026-08-21 - FOD 3.3.9 block-range Arc decode
+
+Implementation commit: `346aaf8`.
+
+`fetch_block_range_rows_shared()` now decodes each PostgreSQL binary `BYTEA`
+directly into an initialized `Arc<[u8]>`. The previous path built a padded
+`Vec<u8>` with `normalize_block_bytes()` and then converted it into `Arc<[u8]>`.
+The new path keeps the same padding/truncation behavior for sparse or partial
+blocks but removes the intermediate vector from the hot payload/map decode.
+
+Validation passed:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | passed |
+| `cargo check --workspace --locked` | passed |
+| `make --no-print-directory test-rust-pg-query` | passed; 16 tests |
+| `make --no-print-directory test-block-read` | passed |
+| `FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed; write 7367 KiB/s, read 4043 KiB/s, strace total 4.045294 s, `repo_fetch_block_range_us=0` because this smoke reads via recent-write cache |
+
+AC-controlled Docker primary-write/replica-read diagnostics on `346aaf8`:
+
+| Workload | Throughput | `repo_fetch_block_range_us` | `pg_prepared_statement fod_fetch_block_range` | `pg_result_decode fod_fetch_block_range` | Artifact |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 128 MiB, fio bs 4 KiB | 85.4 MiB/s | 267069 | 218222 | 42755 | `artifacts/perf/346aaf8/lt7300-docker-primary-write-replica-read-20260821T165506Z` |
+| 128 MiB, fio bs 64 KiB | 233 MiB/s | 298246 | 259645 | 32889 | `artifacts/perf/346aaf8/lt7300-docker-primary-write-replica-read-20260821T165534Z` |
+| 128 MiB, fio bs 64 KiB repeat | 246 MiB/s | 259271 | 221476 | 32478 | `artifacts/perf/346aaf8/lt7300-docker-primary-write-replica-read-20260821T165617Z` |
+
+All replica-read runs recorded `ac_online=1`, CPU governor `powersave`, EPP
+`balance_performance`, stopped the primary before read, restarted the replica,
+passed strict read-only DML guard and reported `replica_operation_failures=0`.
+
+Compared with the AC baseline `5a4e3db`, the targeted decode metric improved:
+
+| Workload | `5a4e3db pg_result_decode` | `346aaf8 pg_result_decode` |
+| --- | ---: | ---: |
+| 128 MiB, fio bs 4 KiB | 48535 us | 42755 us |
+| 128 MiB, fio bs 64 KiB | 41603 us | 32478 us on the stable repeat |
+
+Conclusion: direct Arc decode removes a measured slice of Rust-side decode/copy
+cost, but it does not change the dominant transfer/query cost. The main
+remaining read-path target is still the 65 `fod_fetch_block_range` payload
+transfers of 128 MiB through `PQexecPrepared`/libpq and PostgreSQL execution.
+Next work should consider a larger query/transport shape or bulk-read cache
+representation, not hardlink count or broad PostgreSQL tuning.

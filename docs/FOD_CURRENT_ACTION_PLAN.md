@@ -162,6 +162,26 @@ Nastepny kandydat po tym pomiarze:
 - dopiero po tym ocenic, czy potrzebna jest osobna sciezka bulk read albo
   ograniczenie kosztu `reply_data_us` przy 4 KiB callbackach.
 
+FOD 3.3.9 w commicie `346aaf8` ogranicza koszt budowania mapy payloadu po
+stronie procesu: `fod_fetch_block_range` dekoduje teraz binarne `BYTEA`
+bezposrednio do `Arc<[u8]>`, bez przejsciowego `Vec<u8>` i kolejnej konwersji
+`Vec -> Arc`. Semantyka sparse blocks i paddingu ostatniego bloku pozostaje
+bez zmian.
+
+Walidacja AC 2026-08-21:
+
+| Workload | Read result | `repo_fetch_block_range_us` | `pg_prepared_statement` | `pg_result_decode` | Artifact |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 128 MiB, fio bs 4 KiB | 85.4 MiB/s | 267069 | 218222 | 42755 | `artifacts/perf/346aaf8/lt7300-docker-primary-write-replica-read-20260821T165506Z` |
+| 128 MiB, fio bs 64 KiB | 246 MiB/s | 259271 | 221476 | 32478 | `artifacts/perf/346aaf8/lt7300-docker-primary-write-replica-read-20260821T165617Z` |
+
+Porownanie do AC baseline `5a4e3db`: `pg_result_decode` spadlo z 48.535 ms do
+42.755 ms dla 4 KiB i z 41.603 ms do 32.478 ms dla stabilniejszego 64 KiB
+rerunu. End-to-end throughput pozostaje w tym samym zakresie i jest nadal
+zalezny od `pg_prepared_statement`/transferu payloadu. Nastepny etap powinien
+wiec isc w transport/query shape dla 65 wywolan `fod_fetch_block_range`, a nie
+w dalsze mikrooptymalizacje dekodera.
+
 ## 7. HA miedzy hostami
 
 Priorytet: wymagany przed deklarowaniem pelnego automatycznego HA.

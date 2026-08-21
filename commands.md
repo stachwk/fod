@@ -2911,11 +2911,6 @@ git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
-One early attempt to run the 4 KiB and 64 KiB Docker replica-read benchmarks in
-parallel failed for the 4 KiB job because both jobs tried to bind the same
-local PostgreSQL ports. The result was discarded and both benchmarks were then
-run sequentially.
-
 ## 2026-08-21 - Split block-range fetch into PostgreSQL transfer and BYTEA decode
 
 Repository state while starting the work: `b063063`; code change committed as
@@ -5474,6 +5469,77 @@ git commit --amend --no-edit
 git show --stat --oneline --decorate --no-renames HEAD
 git diff --check HEAD~1..HEAD
 git diff HEAD~1..HEAD -- commands.md conclusions.md docs/performance.md
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
+## 2026-08-21 - Block-range Arc decode optimization
+
+Repository state while starting the work: `96e266b`. Code was committed as
+`346aaf8`. `fod_version.txt` remained `3.3.9`.
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 10 "payload query shape fod_fetch_block_range read_block_map next optimization AC fio rerun"
+sed -n '70,115p' docs/FOD_CURRENT_ACTION_PLAN.md
+rg -n "fetch_block_range_shared|fetch_block_range\\(|fod_fetch_block_range|pg_result_decode|read_block_map|fetch_block_range_profiled|assemble_read_slice|direct_io_read_prefetch|read_cache" rust_hotpath/src/pg.rs rust_fuse/src/fs.rs rust_fuse/src/read_cache.rs rust_runtime/src -S
+sed -n '520,660p' rust_fuse/src/read_cache.rs
+sed -n '2030,2255p' rust_hotpath/src/pg.rs
+sed -n '2920,3055p' rust_hotpath/src/pg.rs
+sed -n '3638,3665p' rust_hotpath/src/pg.rs
+sed -n '5350,5525p' rust_fuse/src/fs.rs
+```
+
+Implementation and validation commands:
+
+```bash
+cargo fmt --all
+cargo fmt --all -- --check
+cargo check --workspace --locked
+make --no-print-directory test-rust-pg-query
+make --no-print-directory test-block-read
+git diff --check
+git diff -- rust_hotpath/src/pg.rs
+git add rust_hotpath/src/pg.rs
+git commit -m "FOD 3.3.9: decode block ranges into Arc buffers"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git diff HEAD~1..HEAD -- rust_hotpath/src/pg.rs
+```
+
+AC-controlled profiling commands on `346aaf8`:
+
+```bash
+bash -lc 'source tests/integration/fod_testlib.sh; fod_test_power_metadata before-346aaf8-benchmark'
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+rg -n "READ:|read: IOPS|read_block_map_us=|repo_fetch_block_range_us=|pg_prepared_statement name=fod_fetch_block_range|pg_result_decode name=fod_fetch_block_range|reply_data_us=|ac_online|cpu_governors|cpu_energy_performance_preference|replica_operation_failures|primary_reachable_before_read" artifacts/perf/346aaf8/lt7300-docker-primary-write-replica-read-20260821T165506Z artifacts/perf/346aaf8/lt7300-docker-primary-write-replica-read-20260821T165534Z artifacts/perf/346aaf8/lt7300-docker-primary-write-replica-read-20260821T165617Z -S
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M
+```
+
+One early attempt to run the 4 KiB and 64 KiB Docker replica-read benchmarks in
+parallel failed for the 4 KiB job because both jobs tried to bind the same
+local PostgreSQL ports. The result was discarded and both benchmarks were then
+run sequentially.
+
+Finalization commands:
+
+```bash
+git diff --check
+git diff --stat
+cat fod_version.txt
+git add commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git commit -m "FOD 3.3.9: record Arc decode profile"
+git add commands.md
+git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git diff HEAD~1..HEAD -- commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
 git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
