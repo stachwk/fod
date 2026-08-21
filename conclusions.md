@@ -2053,3 +2053,34 @@ range fetch path itself: `repo_fetch_block_range_us` is about `3.0 s` and
 FUSE read callback per block. The next optimization should therefore focus on
 the range-oriented fetch implementation and payload assembly rather than only
 changing the prefetch window size again.
+
+## 2026-08-21 - FOD 3.3.9 atime mount options
+
+Implementation commit: `d20c98d` (`FOD 3.3.9: honor atime mount options`).
+
+`mount.fod -o noatime` and `mount.fod -o nodiratime` now select the matching
+internal FOD atime policy instead of being silently treated as irrelevant system
+passthrough options. The explicit `-o atime-policy=...` path remains supported.
+
+Validation on `d20c98d` passed:
+
+| Test | Result |
+| --- | --- |
+| `cargo check --workspace --locked` | passed |
+| `cargo test -p fod-rust-fuse --bin fod-rust-fuse atime --locked` | passed; `3 passed` |
+| `make --no-print-directory test-mount-wrapper-options` | passed; wrapper maps `-o noatime` and `-o nodiratime` to `FOD_ATIME_POLICY` |
+| `make --no-print-directory test-version` | passed; Rust config tests see version `3.3.9` |
+| `make --no-print-directory test-atime-noatime` | passed; file reads and directory listings do not advance atime |
+| `make --no-print-directory test-atime-nodiratime` | passed; file reads advance atime and directory listings do not |
+
+Short local benchmark baseline on `d20c98d`:
+
+| Policy | File read benchmark | Directory listing benchmark |
+| --- | ---: | ---: |
+| `noatime` | `891 ms` for 50 iterations | `5242 ms` for 50 iterations |
+| `nodiratime` | `1276 ms` for 50 iterations | `5354 ms` for 50 iterations |
+
+These atime benchmarks are smoke-scale wall-time baselines, not fio throughput
+tests. The important correctness result is that mount-style `noatime` and
+`nodiratime` are now accepted at the wrapper boundary and the mounted FOD
+behavior matches the selected policy.

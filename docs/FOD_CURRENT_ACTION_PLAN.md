@@ -97,7 +97,8 @@ FOD 3.3.9 uzupelnia montowanie opcji atime: `mount.fod -o noatime` i
 `mount.fod -o nodiratime` wybieraja teraz odpowiednia polityke FOD zamiast byc
 cicho ignorowanymi opcjami passthrough. Dodany smoke `test-atime-nodiratime`
 sprawdza, ze katalogi nie dostaja atime update, ale odczyt pliku nadal go
-dostaje.
+dostaje. Walidacja na `d20c98d` przeszla dla wrappera, `test-atime-noatime`,
+`test-atime-nodiratime` oraz krotkich benchmarkow atime dla obu polityk.
 
 - profilowac jeden callback FUSE 512 KiB na fizycznej replice;
 - policzyc dokladne metadata/map/payload round-trip PostgreSQL;

@@ -3048,6 +3048,76 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 commit d20c98d atime mount option tests
+
+Base commit before implementation: `e16aa43` (`FOD 3.3.8: record default prefetch validation`).
+Implementation commit: `d20c98d` (`FOD 3.3.9: honor atime mount options`).
+
+Context and implementation commands:
+
+```bash
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "FOD mount options noatime nodiratime fio primary write replica read test-fio-primary-write-replica-read-docker"
+rg -n "noatime|nodiratime|atime|mount option|mount_options|MOUNT_OPTS|FUSE.*OPT|FOD_.*MOUNT|extra.*mount|test-fio-primary-write-replica-read" Makefile tests/integration rust_fuse/src rust_runtime/src docs -S
+sed -n '1,120p' tests/integration/test_atime_policy.sh
+sed -n '200,250p' tests/integration/fod_testlib.sh
+sed -n '300,355p' rust_runtime/src/lib.rs
+sed -n '840,855p' rust_fuse/src/fs.rs
+sed -n '7478,7528p' rust_fuse/src/fs.rs
+sed -n '1180,1225p' Makefile
+rg -n "noatime|nodiratime|atime-policy|atime_policy|mount\\.fod|parse.*option|options" scripts rust_mkfs/src tests/integration/test_mount_wrapper_options.sh -S
+sed -n '1,140p' tests/integration/test_mount_wrapper_options.sh
+sed -n '1,260p' mount.fod
+sed -n '1,290p' rust_mkfs/src/bin/fod-bootstrap.rs
+sed -n '260,390p' rust_fuse/src/startup.rs
+rg -n "3\\.3\\.8|version = \\\"3\\.3\\.8\\\"|FOD 3\\.3\\.8|test-atime-noatime|test-atime-relatime|FOD_ATIME_POLICY|noatime|nodiratime" Cargo.toml Cargo.lock fod_version.txt README.md docs/FOD_CURRENT_ACTION_PLAN.md Makefile mount.fod tests/integration/test_atime_policy.sh tests/integration/test_mount_wrapper_options.sh -S
+bash -n mount.fod tests/integration/test_mount_wrapper_options.sh tests/integration/test_atime_policy.sh
+make --no-print-directory help | rg "test-atime-(noatime|nodiratime|relatime)"
+cargo check --workspace --locked
+cargo test -p fod-rust-fuse --bin fod-rust-fuse atime --locked
+make --no-print-directory test-mount-wrapper-options
+make --no-print-directory test-atime-noatime
+make --no-print-directory test-atime-nodiratime
+git diff --check
+git diff --stat
+git diff -- mount.fod tests/integration/test_mount_wrapper_options.sh tests/integration/test_atime_policy.sh Makefile README.md docs/FOD_CURRENT_ACTION_PLAN.md Cargo.toml Cargo.lock fod_version.txt
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+git add Cargo.lock Cargo.toml Makefile README.md docs/FOD_CURRENT_ACTION_PLAN.md fod_version.txt mount.fod tests/integration/test_atime_policy.sh tests/integration/test_mount_wrapper_options.sh
+git diff --cached --check
+git commit -m "FOD 3.3.9: honor atime mount options"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+```
+
+Post-commit validation commands on `d20c98d`:
+
+```bash
+cargo check --workspace --locked
+cargo test -p fod-rust-fuse --bin fod-rust-fuse atime --locked
+make --no-print-directory test-mount-wrapper-options
+make --no-print-directory test-version
+make --no-print-directory test-atime-noatime
+make --no-print-directory test-atime-nodiratime
+FOD_ATIME_POLICY=noatime make --no-print-directory test-atime-benchmark
+FOD_ATIME_POLICY=nodiratime make --no-print-directory test-atime-benchmark
+git status --short --branch
+git diff --check
+git diff --stat
+git diff -- commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git add commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git diff --cached --check
+git commit -m "FOD 3.3.9: record atime mount option validation"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-21 commit 7076787 fio without FUSE direct_io
 
 Context and preflight commands:
