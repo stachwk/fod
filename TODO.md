@@ -2,6 +2,8 @@
 
 This document records the small set of open follow-ups plus completed work, closed decisions, and regression notes for FOD. It is not an active implementation backlog.
 
+Active implementation sequence: [`docs/FOD_CURRENT_ACTION_PLAN.md`](docs/FOD_CURRENT_ACTION_PLAN.md).
+
 Reading guide:
 - `Historical note:` means closed-item context, benchmark results, or archived implementation detail.
 - `Decision:` means durable guidance that still applies.

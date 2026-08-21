@@ -5,11 +5,12 @@
 - The current FOD release is sourced from `fod_version.txt`; this roadmap
   intentionally avoids duplicating the latest patch number as an authoritative
   version source.
-- FOD has a working PostgreSQL-backed FUSE core, schema version `21`,
+- FOD has a working PostgreSQL-backed FUSE core, schema version `22`,
   documented runtime profiles, a shared Rust indexing core, and a broad local
   integration suite.
 - The repository currently has no active GitHub Actions workflow. `make test-all` is the main local regression gate, while `make test-all-full` adds wider mounted and indexer coverage.
 - Benchmark baselines are tracked in [`BENCHMARKS.md`](BENCHMARKS.md), while [`TODO.md`](TODO.md) records open follow-ups, accepted decisions, completed work, and regression notes.
+- The ordered implementation sequence is tracked in [`docs/FOD_CURRENT_ACTION_PLAN.md`](docs/FOD_CURRENT_ACTION_PLAN.md).
 - SELinux mount-label policy is a deliberate non-goal; xattr-backed metadata and runtime gating are the supported path.
 - Schema init, upgrade, and clean operations are non-destructive by default on existing databases and are protected by the schema-admin secret flow.
 - The runtime is Rust-backed end to end: mount entrypoints, namespace operations, metadata, permissions, locking, payload storage, schema tooling, and indexing no longer depend on the removed Python runtime.
@@ -27,7 +28,7 @@
 - xattr and ACL support
 - PostgreSQL-backed advisory locking and session leases
 - runtime tunables in `fod_config.ini`
-- safe schema init, repair, status, and migration handling through schema version `21`
+- safe schema init, repair, status, and migration handling through schema version `22`
 - Rust-backed repository and query layers
 - split attribute and directory-entry caches
 - shared Rust `fod-indexer` core with capability-driven source kinds

@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 21;
-const MIGRATION_FILES: [&str; 21] = [
+const SCHEMA_VERSION: u64 = 22;
+const MIGRATION_FILES: [&str; 22] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -47,9 +47,10 @@ const MIGRATION_FILES: [&str; 21] = [
     "0019_index_catalog_snapshots.sql",
     "0020_storage_slot.sql",
     "0021_storage_layout_finalize.sql",
+    "0022_monitor_session_stats.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 21] = [
+const MIGRATION_DESCRIPTIONS: [&str; 22] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -71,6 +72,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 21] = [
     "Add immutable index catalogue snapshots",
     "Reserved storage migration slot",
     "Finalize canonical block storage layout",
+    "Add shared monitor session statistics",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -224,6 +226,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0021_storage_layout_finalize.sql"
         )),
+        22 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0022_monitor_session_stats.sql"
+        )),
         _ => "",
     }
 }
@@ -251,6 +257,7 @@ fn migration_description(version: u64) -> &'static str {
         19 => MIGRATION_DESCRIPTIONS[18],
         20 => MIGRATION_DESCRIPTIONS[19],
         21 => MIGRATION_DESCRIPTIONS[20],
+        22 => MIGRATION_DESCRIPTIONS[21],
         _ => "Migration",
     }
 }
@@ -278,6 +285,7 @@ fn migration_filename(version: u64) -> &'static str {
         19 => MIGRATION_FILES[18],
         20 => MIGRATION_FILES[19],
         21 => MIGRATION_FILES[20],
+        22 => MIGRATION_FILES[21],
         _ => "unknown.sql",
     }
 }
@@ -394,7 +402,8 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                     ('index_catalog_snapshots'),
                     ('index_catalog_snapshot_files'),
                     ('client_sessions'),
-                    ('client_session_owner_keys')
+                    ('client_session_owner_keys'),
+                    ('monitor_session_stats')
                 ) AS required_relations(name)
                 WHERE to_regclass(format('fod.%I', name)) IS NULL
             )
@@ -413,6 +422,12 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                 WHERE table_schema = 'fod'
                   AND table_name IN ('data_blocks', 'copy_block_crc')
                   AND column_name = 'id_file'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'fod'
+                  AND indexname = 'idx_monitor_session_stats_sampled'
             )
             AND EXISTS (
                 SELECT 1
@@ -856,7 +871,21 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            let ready = fod_exists && current_version == Some(latest_version) && secret_present;
+            let latest_shape = if fod_exists && current_version == Some(latest_version) {
+                match latest_schema_shape_matches(&conn) {
+                    Ok(matches) => matches,
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                false
+            };
+            let ready = fod_exists
+                && current_version == Some(latest_version)
+                && secret_present
+                && latest_shape;
             println!("FOD version: {}", FOD_VERSION_LABEL);
             println!(
                 "PostgreSQL libpq runtime: {} ({})",
@@ -884,6 +913,10 @@ fn main() {
             println!("fod objects: {}", if fod_exists { "yes" } else { "no" });
             println!("Latest migration version: {}", latest_version);
             println!(
+                "Latest schema shape: {}",
+                if latest_shape { "yes" } else { "no" }
+            );
+            println!(
                 "Schema admin secret: {}",
                 if secret_present { "present" } else { "missing" }
             );
@@ -908,7 +941,12 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{base_schema_sql, quote_schema_regclass, quote_schema_regprocedure};
+    use super::{
+        base_schema_sql, migration_manifest, quote_schema_regclass, quote_schema_regprocedure,
+        SCHEMA_VERSION,
+    };
+    use std::fs;
+    use std::path::PathBuf;
 
     #[test]
     fn base_schema_sql_excludes_legacy_upgrade_migrations() {
@@ -934,5 +972,37 @@ mod tests {
             quote_schema_regprocedure("fo'd", r#"pr"oc"#, ""),
             "'\"fo''d\".\"pr\"\"oc\"()'"
         );
+    }
+
+    #[test]
+    fn migration_manifest_matches_numbered_migration_files() {
+        let migrations_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rust_mkfs must live below the repository root")
+            .join("migrations");
+        let mut disk_files = fs::read_dir(&migrations_dir)
+            .expect("read migrations directory")
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| {
+                name.len() > 5
+                    && name.as_bytes()[0..4]
+                        .iter()
+                        .all(|byte| byte.is_ascii_digit())
+                    && name.as_bytes()[4] == b'_'
+                    && name.ends_with(".sql")
+            })
+            .collect::<Vec<_>>();
+        disk_files.sort();
+
+        let manifest = migration_manifest();
+        let manifest_files = manifest
+            .iter()
+            .map(|(_, filename, _)| (*filename).to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(manifest.len() as u64, SCHEMA_VERSION);
+        assert_eq!(manifest.last().map(|entry| entry.0), Some(SCHEMA_VERSION));
+        assert_eq!(disk_files, manifest_files);
     }
 }
