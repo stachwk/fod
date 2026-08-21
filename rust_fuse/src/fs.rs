@@ -18,10 +18,12 @@ use fuser::{
 use libc::{EIO, ENOENT, ENOSPC, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
-use rust_hotpath::pg::sql_statement_profile_snapshot_lines;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
     PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX,
+};
+use rust_hotpath::pg::{
+    result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
 };
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
@@ -1294,6 +1296,7 @@ impl FodFuseProfileCounters {
             ),
         ];
         lines.extend(prepared_statement_profile_snapshot_lines());
+        lines.extend(result_decode_profile_snapshot_lines());
         lines.extend(sql_statement_profile_snapshot_lines());
         lines
     }

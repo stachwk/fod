@@ -169,6 +169,10 @@ static FOD_SQL_STATEMENT_PROFILE_AGGREGATE: OnceLock<
     Mutex<BTreeMap<(String, &'static str), StatementProfileAggregate>>,
 > = OnceLock::new();
 
+static FOD_RESULT_DECODE_PROFILE_AGGREGATE: OnceLock<
+    Mutex<BTreeMap<&'static str, StatementProfileAggregate>>,
+> = OnceLock::new();
+
 fn fod_profile_prepared_statement_observe(
     statement: PreparedStatement,
     elapsed: Duration,
@@ -221,6 +225,25 @@ fn fod_profile_sql_statement_observe(
     }
 }
 
+fn fod_profile_result_decode_observe(
+    label: &'static str,
+    elapsed: Duration,
+    result_rows: u64,
+    result_bytes: u64,
+    failed: bool,
+) {
+    if !fod_profile_io_enabled() {
+        return;
+    }
+    let aggregate = FOD_RESULT_DECODE_PROFILE_AGGREGATE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Ok(mut guard) = aggregate.lock() {
+        guard
+            .entry(label)
+            .or_default()
+            .observe(elapsed, 0, 0, result_rows, result_bytes, failed);
+    }
+}
+
 pub fn prepared_statement_profile_snapshot_lines() -> Vec<String> {
     if !fod_profile_io_enabled() {
         return Vec::new();
@@ -269,6 +292,60 @@ pub fn prepared_statement_profile_snapshot_lines() -> Vec<String> {
                 avg_us,
                 snapshot.params_sum,
                 snapshot.param_bytes_sum,
+                snapshot.result_rows_sum,
+                snapshot.result_bytes_sum,
+                snapshot.failures
+            )
+        })
+        .collect()
+}
+
+pub fn result_decode_profile_snapshot_lines() -> Vec<String> {
+    if !fod_profile_io_enabled() {
+        return Vec::new();
+    }
+    let Some(aggregate) = FOD_RESULT_DECODE_PROFILE_AGGREGATE.get() else {
+        return Vec::new();
+    };
+    let Ok(guard) = aggregate.lock() else {
+        return Vec::new();
+    };
+    let mut snapshots = guard
+        .iter()
+        .map(|(label, aggregate)| StatementProfileSnapshot {
+            label: (*label).to_string(),
+            op: "result_decode",
+            count: aggregate.count,
+            failures: aggregate.failures,
+            micros_sum: aggregate.micros_sum,
+            micros_max: aggregate.micros_max,
+            params_sum: aggregate.params_sum,
+            param_bytes_sum: aggregate.param_bytes_sum,
+            result_rows_sum: aggregate.result_rows_sum,
+            result_bytes_sum: aggregate.result_bytes_sum,
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_unstable_by(|left, right| {
+        right
+            .micros_sum
+            .cmp(&left.micros_sum)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    snapshots
+        .into_iter()
+        .map(|snapshot| {
+            let avg_us = if snapshot.count == 0 {
+                0
+            } else {
+                snapshot.micros_sum / snapshot.count
+            };
+            format!(
+                "pg_result_decode name={} count={} total_us={} max_us={} avg_us={} result_rows={} result_bytes={} failures={}",
+                snapshot.label,
+                snapshot.count,
+                snapshot.micros_sum,
+                snapshot.micros_max,
+                avg_us,
                 snapshot.result_rows_sum,
                 snapshot.result_bytes_sum,
                 snapshot.failures
@@ -2901,7 +2978,15 @@ unsafe fn fetch_block_range_rows_shared(
     res: *mut PGresult,
     block_size: usize,
 ) -> Result<Vec<(u64, Arc<[u8]>)>, String> {
-    let result = match PQresultStatus(res) {
+    let profile_enabled = fod_profile_io_enabled();
+    let started = if profile_enabled {
+        Some(Instant::now())
+    } else {
+        None
+    };
+    let mut decoded_rows = 0u64;
+    let mut decoded_bytes = 0u64;
+    let result = (|| match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
@@ -2919,13 +3004,26 @@ unsafe fn fetch_block_range_rows_shared(
                         Some(bytes) => bytes,
                         None => continue,
                     };
+                    if profile_enabled {
+                        decoded_rows = decoded_rows.saturating_add(1);
+                        decoded_bytes = decoded_bytes.saturating_add(bytes.len() as u64);
+                    }
                     blocks.push((index, Arc::from(bytes)));
                 }
                 Ok(blocks)
             }
         }
         _ => Err("unexpected PostgreSQL result status".to_string()),
-    };
+    })();
+    if let Some(started) = started {
+        fod_profile_result_decode_observe(
+            PreparedStatement::FetchBlockRange.name(),
+            started.elapsed(),
+            decoded_rows,
+            decoded_bytes,
+            result.is_err(),
+        );
+    }
     PQclear(res);
     result
 }
