@@ -587,6 +587,77 @@ impl FodFuse {
         Ok(blocks)
     }
 
+    fn fetch_missing_read_blocks(
+        &self,
+        file_id: u64,
+        missing: &[u64],
+    ) -> Result<Vec<(u64, Arc<[u8]>)>, libc::c_int> {
+        if missing.is_empty() {
+            return Ok(Vec::new());
+        }
+        let contiguous_ranges = Self::missing_block_ranges(missing);
+        let workers = read_missing_range_worker_count(
+            self.read_workers() as u64,
+            self.read_workers_min_blocks() as u64,
+            missing.len() as u64,
+            contiguous_ranges.len() as u64,
+        ) as usize;
+        if workers <= 1 {
+            let first = missing[0];
+            let last = *missing.last().unwrap_or(&first);
+            self.fetch_block_range_profiled(file_id, first, last, self.block_size)
+                .map_err(|_| EIO)
+        } else {
+            Self::fetch_block_range_parallel(
+                self.profile_counters(),
+                self.repo.clone(),
+                file_id,
+                contiguous_ranges,
+                self.block_size,
+                workers,
+            )
+        }
+    }
+
+    pub(crate) fn read_block_map_target_block(
+        &self,
+        file_id: u64,
+        fetch_first: u64,
+        fetch_last: u64,
+        target_block: u64,
+    ) -> Result<Option<Arc<[u8]>>, libc::c_int> {
+        let started = Instant::now();
+        if fetch_last < fetch_first || target_block < fetch_first || target_block > fetch_last {
+            self.record_read_block_map_elapsed(started.elapsed());
+            return Ok(None);
+        }
+        if let Some(block) = self.cached_read_block(file_id, target_block) {
+            self.record_read_block_map_elapsed(started.elapsed());
+            return Ok(Some(block));
+        }
+        let (cached, missing) =
+            self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
+        let mut target = cached
+            .into_iter()
+            .find(|(block_index, _)| *block_index == target_block)
+            .map(|(_, block)| block);
+        if missing.is_empty() {
+            self.record_read_block_map_elapsed(started.elapsed());
+            return Ok(target);
+        }
+
+        let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
+        if target.is_none() {
+            target = fetched
+                .iter()
+                .find(|(block_index, _)| *block_index == target_block)
+                .map(|(_, block)| Arc::clone(block));
+        }
+        self.store_read_blocks(file_id, &fetched);
+        self.record_read_block_map_elapsed(started.elapsed());
+        Ok(target)
+    }
+
     pub(crate) fn read_block_map(
         &self,
         file_id: u64,
@@ -604,28 +675,7 @@ impl FodFuse {
             self.record_read_block_map_elapsed(started.elapsed());
             return Ok(cached);
         }
-        let contiguous_ranges = Self::missing_block_ranges(&missing);
-        let workers = read_missing_range_worker_count(
-            self.read_workers() as u64,
-            self.read_workers_min_blocks() as u64,
-            missing.len() as u64,
-            contiguous_ranges.len() as u64,
-        ) as usize;
-        let fetched = if workers <= 1 {
-            let first = *missing.first().unwrap_or(&fetch_first);
-            let last = *missing.last().unwrap_or(&fetch_last);
-            self.fetch_block_range_profiled(file_id, first, last, self.block_size)
-                .map_err(|_| EIO)?
-        } else {
-            Self::fetch_block_range_parallel(
-                self.profile_counters(),
-                self.repo.clone(),
-                file_id,
-                contiguous_ranges,
-                self.block_size,
-                workers,
-            )?
-        };
+        let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
         self.store_read_blocks(file_id, &fetched);
         cached = Self::merge_sorted_blocks(cached, fetched);
         self.record_read_block_map_elapsed(started.elapsed());

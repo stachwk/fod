@@ -5476,6 +5476,55 @@ impl Filesystem for FodFuse {
                     .min(total_blocks.saturating_sub(1)),
             )
         };
+        if first_block == last_block {
+            match self.read_block_map_target_block(file_id, fetch_first, fetch_last, first_block) {
+                Ok(Some(block)) => {
+                    let block_offset = first_block.saturating_mul(self.block_size);
+                    let slice_start = (offset.saturating_sub(block_offset)) as usize;
+                    let slice_end = (end_offset.saturating_sub(block_offset)) as usize;
+                    let data = block.as_ref();
+                    if slice_end <= data.len() && slice_start <= slice_end {
+                        read_task.complete(0, slice_end.saturating_sub(slice_start) as u64);
+                        self.reply_data_profiled(reply, &data[slice_start..slice_end]);
+                        if let Some(metadata) = read_metadata.as_ref() {
+                            self.touch_file_access_time_from_read_metadata(file_id, metadata);
+                        }
+                        return;
+                    }
+                    self.log_request_error(
+                        req_id,
+                        "read",
+                        EIO,
+                        format!(
+                            "file_id={} block_index={} target block slice out of bounds",
+                            file_id, first_block
+                        ),
+                    );
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
+                Ok(None) => {
+                    let data_len = end_offset.saturating_sub(offset) as usize;
+                    let data = vec![0_u8; data_len];
+                    if let Some(metadata) = read_metadata.as_ref() {
+                        self.touch_file_access_time_from_read_metadata(file_id, metadata);
+                    }
+                    read_task.complete(0, data.len() as u64);
+                    self.reply_data_profiled(reply, &data);
+                    return;
+                }
+                Err(errno) => {
+                    self.log_request_error(
+                        req_id,
+                        "read",
+                        errno,
+                        format!("file_id={} read_block_map_target_block", file_id),
+                    );
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
+        }
         match self.read_block_map(file_id, fetch_first, fetch_last) {
             Ok(blocks) => {
                 if first_block == last_block {
