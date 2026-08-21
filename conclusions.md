@@ -1928,3 +1928,24 @@ replica-read profile spent `8.394474 s` in `repo_fetch_block_range_us` and
 large primary persist split into two 64 MiB persistence operations with
 `persist_copy_stage_micros_total=1032641` and
 `persist_data_blocks_merge_micros_total=899094`.
+
+## 2026-08-21 - FOD 3.3.6 fio without FUSE direct_io
+
+Base commit: `7076787` (`FOD 3.3.6: record performance and monitoring validation`).
+
+The requested fio run was executed through the normal non-direct FUSE path with
+`FOD_FOPEN_DIRECT_IO=0`, `PROFILE_FUSE_WORKLOAD=test-fio-sequential-io`, and the
+test script's existing `fio --direct=0`. This deliberately avoids the Makefile
+`test-fio-sequential-io-strace` target because that target forces
+`FOD_FOPEN_DIRECT_IO=1`.
+
+| Workload | Artifact | Result |
+| --- | --- | --- |
+| fio 4 MiB, no FUSE direct_io | `artifacts/perf/7076787/lt7300-20260821T113608Z-fio4m-no-directio` | write `3355 KiB/s`, read `364 MiB/s`, callbacks `read=20 write=1024`, `repo_persist_blocks_us=69752`, `flush_execute_persist_plan_us=70179`. |
+| fio 128 MiB, no FUSE direct_io | `artifacts/perf/7076787/lt7300-20260821T113617Z-fio128m-no-directio` | write `3595 KiB/s`, read `340 MiB/s`, callbacks `read=516 write=32768`, `repo_persist_blocks_us=1894866`, `flush_execute_persist_plan_us=1911680`. |
+
+The main confirmation is that without FUSE direct_io the read side is not forced
+into one callback per 4 KiB fio request. The 128 MiB read completed with 516 FUSE
+read callbacks instead of the 32768 callbacks seen in the direct-I/O profile.
+Write callbacks remain 4 KiB-shaped because this fio workload submits 32768
+small synchronous writes.

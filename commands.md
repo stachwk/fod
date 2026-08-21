@@ -2852,6 +2852,52 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 commit 7076787 fio without FUSE direct_io
+
+Context and preflight commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search "FOD 3.3.6 fio without direct_io FOD_FOPEN_DIRECT_IO profile-fuse-sequential-io 4M 128M" --wing fod
+rg -n "FOD_FOPEN_DIRECT_IO|--direct=|test-fio-sequential-io|profile-fuse-sequential-io" Makefile tests/integration/test_fio_sequential_io.sh docs/performance.md conclusions.md -S
+```
+
+Profile commands:
+
+```bash
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-fio4m-no-directio; FOD_FOPEN_DIRECT_IO=0 make --no-print-directory profile-fuse-sequential-io PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_FUSE_WORKLOAD=test-fio-sequential-io FIO_FILE_SIZE=4M FIO_BLOCK_SIZE=4k
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-fio128m-no-directio; FOD_FOPEN_DIRECT_IO=0 make --no-print-directory profile-fuse-sequential-io PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_FUSE_WORKLOAD=test-fio-sequential-io FIO_FILE_SIZE=128M FIO_BLOCK_SIZE=4k
+```
+
+Extraction commands:
+
+```bash
+rg -n "WRITE:|READ:|FOD callback counts|fuse_(read|write)_total_us|read_block_map_us|repo_fetch_block_range_us|repo_persist_blocks_us|flush_execute_persist_plan_us|cached_read_block_us|completed_bytes_per_second" artifacts/perf/7076787/lt7300-20260821T113608Z-fio4m-no-directio artifacts/perf/7076787/lt7300-20260821T113617Z-fio128m-no-directio -S
+git status --short --branch
+git ls-files --ignored --exclude-standard --others artifacts/perf/7076787 | head -n 20
+tail -n 80 commands.md
+tail -n 100 conclusions.md
+```
+
+Finalization commands:
+
+```bash
+git diff --check
+git diff --stat
+git diff -- commands.md conclusions.md | sed -n '1,260p'
+git status --short --branch
+git add commands.md conclusions.md
+git commit -m "FOD 3.3.6: record fio non-direct validation"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+git status --short --branch
+```
+
 ## 2026-08-21 commit 0cd8ea4 working tree FOD 3.3.6 read-only central telemetry
 
 Context and inspection commands:
