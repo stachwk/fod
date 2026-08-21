@@ -2852,6 +2852,70 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 - Payload/map read path follow-up
+
+Repository state while starting the work: `dd732b4`; code changes were then
+committed as `de91d7b` and `585a50d`.
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 10 "payload map path read_block_map repo_fetch_block_range FOD 3.3.9 next optimization hardlink count not target"
+rg -n "read_block_map|repo_fetch_block_range|fetch_block_range_shared|FetchBlockRange|LoadBlock|assemble_read_slice|cached_read_block_map|store_read_block|ReadBlockCache" rust_fuse rust_hotpath tests -S
+sed -n '1988,2148p' rust_hotpath/src/pg.rs
+sed -n '2880,3015p' rust_hotpath/src/pg.rs
+sed -n '4040,4105p' rust_hotpath/src/pg.rs
+sed -n '6380,6510p' rust_hotpath/src/pg.rs
+sed -n '5330,5505p' rust_fuse/src/fs.rs
+sed -n '450,560p' rust_fuse/src/read_cache.rs
+```
+
+Validation commands for `de91d7b` and the later `585a50d` follow-up:
+
+```bash
+cargo fmt --all -- --check
+git diff --check
+cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse read_cache
+make --no-print-directory test-block-read
+make --no-print-directory test-rust-pg-query
+FOD_PROFILE_IO=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+```
+
+Git finalization commands:
+
+```bash
+git diff --stat
+git diff -- rust_fuse/src/read_cache.rs
+git add rust_fuse/src/read_cache.rs
+git commit -m "FOD 3.3.9: batch read cache range mapping"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff HEAD~1..HEAD -- rust_fuse/src/read_cache.rs
+git diff -- rust_hotpath/src/pg.rs
+git add rust_hotpath/src/pg.rs
+git commit -m "FOD 3.3.9: avoid redundant block range sorting"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff HEAD~1..HEAD -- rust_hotpath/src/pg.rs
+git diff --check
+git diff --stat
+git add commands.md conclusions.md
+git commit -m "FOD 3.3.9: record payload map read profile"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff HEAD~1..HEAD -- commands.md conclusions.md
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
+One early attempt to run the 4 KiB and 64 KiB Docker replica-read benchmarks in
+parallel failed for the 4 KiB job because both jobs tried to bind the same
+local PostgreSQL ports. The result was discarded and both benchmarks were then
+run sequentially.
+
 ## 2026-08-21 - Profiling gate audit
 
 Repository state while running the commands: `d61b024` plus local profiling

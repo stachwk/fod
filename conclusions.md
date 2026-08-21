@@ -2328,3 +2328,62 @@ Conclusion: the obvious profile-only overhead in PostgreSQL/COPY was gated
 behind `FOD_PROFILE_IO`. FUSE timing counters are intentionally still runtime
 telemetry, but the FUSE boundary profile log no longer appears in normal
 non-profiled shutdowns.
+
+## 2026-08-21 - FOD 3.3.9 payload/map read-path follow-up
+
+Implementation commits:
+
+- `de91d7b` - batched read-cache range lookup/store in `read_block_map`.
+- `585a50d` - removed redundant Rust-side sort after `fod_fetch_block_range`;
+  the SQL query already returns rows with `ORDER BY db._order ASC`.
+
+Hardlink count was deliberately left out of scope. The measured target was the
+payload/map path in `read_block_map` and `repo_fetch_block_range`.
+
+Validation passed:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | passed |
+| `git diff --check` | passed |
+| `cargo check --workspace --locked` | passed |
+| `cargo test --manifest-path Cargo.toml -p fod-rust-fuse read_cache` | passed; 2 tests |
+| `make --no-print-directory test-block-read` | passed |
+| `make --no-print-directory test-rust-pg-query` | passed; 16 tests |
+| `FOD_PROFILE_IO=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed on `585a50d`; profile log emitted; this path reads from recent-write cache and does not exercise `repo_fetch_block_range` |
+
+Replica-read results on `585a50d`:
+
+| Workload | Throughput | Read callbacks | `read_block_map_us` | `repo_fetch_block_range_us` | `fod_fetch_block_range` SQL total | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 128 MiB, fio bs 4 KiB | 87.1 MiB/s | 32768 | 311488 | 251568 | 198080 | `artifacts/perf/585a50d/lt7300-docker-primary-write-replica-read-20260821T145636Z` |
+| 128 MiB, fio bs 64 KiB | 248 MiB/s | 2048 | 322555 | 266726 | 221185 | `artifacts/perf/585a50d/lt7300-docker-primary-write-replica-read-20260821T145707Z` |
+
+Both replica-read runs stopped the primary before the read phase, restarted the
+replica, passed the strict read-only DML guard, and reported
+`replica_operation_failures=0`.
+
+Immediate comparison against the intermediate cache-only commit `de91d7b`:
+
+| Workload | `de91d7b` throughput | `585a50d` throughput | `de91d7b` repo fetch us | `585a50d` repo fetch us |
+| --- | ---: | ---: | ---: | ---: |
+| 128 MiB, fio bs 4 KiB | 84.5 MiB/s | 87.1 MiB/s | 282021 | 251568 |
+| 128 MiB, fio bs 64 KiB | 227 MiB/s | 248 MiB/s | 277554 | 266726 |
+
+Conclusion: batching read-cache range operations removes a small per-block cache
+overhead, but cache locks were not the dominant cost. Removing the redundant
+Rust sort gives a measurable improvement, especially in the 4 KiB callback
+case. The remaining dominant cost is still PostgreSQL payload transfer and
+binary `BYTEA` result decoding in `fod_fetch_block_range`:
+
+- 65 range queries still return all 32768 payload blocks for a 128 MiB file.
+- `repo_fetch_block_range_us` remains around 252-267 ms.
+- `reply_data_us` remains material for 4 KiB direct-I/O reads because FUSE
+  still receives 32768 read callbacks.
+
+Do not replace `repo_fetch_block_range(file_id, ...)` with a blind
+`data_object_id` shortcut yet. `FileReadMetadata` can be cached on read-only
+direct-I/O handles, and a stale data object id could be incorrect across
+independent mounts or copy-on-write updates. A future direct data-object fetch
+needs either fresh per-read metadata, a validity check, or a transaction/snapshot
+contract that prevents reading an unreferenced old object.
