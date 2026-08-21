@@ -2387,3 +2387,57 @@ direct-I/O handles, and a stale data object id could be incorrect across
 independent mounts or copy-on-write updates. A future direct data-object fetch
 needs either fresh per-read metadata, a validity check, or a transaction/snapshot
 contract that prevents reading an unreferenced old object.
+
+## 2026-08-21 - FOD 3.3.9 block-range decode profiling split
+
+Implementation commit: `0fa91ac`.
+
+The FUSE boundary profile now includes a new `pg_result_decode` aggregate when
+`FOD_PROFILE_IO=1` is enabled. For `fod_fetch_block_range` this measures the
+Rust-side loop over `PGresult`, binary `_order` decoding, `BYTEA`
+normalization/copy into full blocks, and `Arc<[u8]>` construction. It is emitted
+next to the existing `pg_prepared_statement` aggregate, which still measures
+`PQexecPrepared` wall time: PostgreSQL execution plus libpq transfer/materialize
+time for the full `PGresult`.
+
+The new instrumentation is profile-gated. When `FOD_PROFILE_IO` is disabled,
+the decode path does not start an `Instant` and does not update aggregate
+counters. While adding the split, `fetch_block_range_rows_shared()` was also
+structured so `PQclear()` still runs after a decode error.
+
+Validation passed on `0fa91ac`:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | passed |
+| `git diff --check` | passed |
+| `cargo check --workspace --locked` | passed |
+| `make --no-print-directory test-block-read` | passed |
+| `make --no-print-directory test-rust-pg-query` | passed; 16 tests |
+| `FOD_PROFILE_IO=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed; this path does not exercise `repo_fetch_block_range` because it reads through recent-write cache |
+
+Docker primary-write/replica-read diagnostics on `0fa91ac`:
+
+| Workload | Throughput | `repo_fetch_block_range_us` | `pg_prepared_statement fod_fetch_block_range` | `pg_result_decode fod_fetch_block_range` | Decode share of repo fetch | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 128 MiB, fio bs 4 KiB | 19.1 MiB/s | 966614 | 818243 | 132640 | 13.7% | `artifacts/perf/0fa91ac/lt7300-docker-primary-write-replica-read-20260821T162733Z` |
+| 128 MiB, fio bs 64 KiB | 56.2 MiB/s | 1203636 | 1041655 | 141581 | 11.8% | `artifacts/perf/0fa91ac/lt7300-docker-primary-write-replica-read-20260821T162847Z` |
+
+Both replica-read runs stopped the primary before the read phase, restarted the
+replica, passed the strict read-only DML guard, and reported
+`replica_operation_failures=0`.
+
+These two runs were much slower than the immediately preceding `585a50d`
+profile, including higher PostgreSQL prepared-statement time and higher FUSE
+reply time. Treat their absolute throughput as noisy for performance comparison.
+The useful result is the within-run split: Rust-side `BYTEA` decode/copy is
+visible but not dominant, at roughly 12-14% of `repo_fetch_block_range_us`.
+The larger cost is before decode, inside `PQexecPrepared`: server execution plus
+libpq transfer/materialization of about 128 MiB of `BYTEA` payload over 65 range
+queries.
+
+Next optimization target should therefore stay on payload transfer/query shape:
+reduce bytes moved through `fod_fetch_block_range`, change the transport, or use
+server-side evidence from `pg_stat_statements` to split PostgreSQL execution time
+from libpq transfer time. Optimizing the Rust decode loop alone is unlikely to
+remove the main cost.

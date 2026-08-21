@@ -2916,6 +2916,61 @@ parallel failed for the 4 KiB job because both jobs tried to bind the same
 local PostgreSQL ports. The result was discarded and both benchmarks were then
 run sequentially.
 
+## 2026-08-21 - Split block-range fetch into PostgreSQL transfer and BYTEA decode
+
+Repository state while starting the work: `b063063`; code change committed as
+`0fa91ac`.
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 10 "repo_fetch_block_range BYTEA decode PostgreSQL transfer payload map path FOD 3.3.9"
+rg -n "profile|StatementProfile|prepared_statement_profile|sql_statement_profile|fod_profile_io_enabled|exec_prepared_params_with_result_format|fetch_block_range_rows_shared|DbfsIoProfileAggregate" rust_hotpath/src/pg.rs rust_fuse/src/fs.rs -S
+sed -n '1,340p' rust_hotpath/src/pg.rs
+sed -n '2340,2475p' rust_hotpath/src/pg.rs
+sed -n '2800,2940p' rust_hotpath/src/pg.rs
+sed -n '3100,3225p' rust_hotpath/src/pg.rs
+sed -n '1260,1310p' rust_fuse/src/fs.rs
+sed -n '6400,6485p' rust_hotpath/src/pg.rs
+rg -n "pg_stat_statements|statements" . -S
+```
+
+Validation and profiling commands:
+
+```bash
+cargo fmt --all
+cargo fmt --all -- --check
+git diff --check
+cargo check --workspace --locked
+make --no-print-directory test-block-read
+make --no-print-directory test-rust-pg-query
+FOD_PROFILE_IO=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M
+git diff --stat
+git diff -- rust_hotpath/src/pg.rs rust_fuse/src/fs.rs
+git add rust_hotpath/src/pg.rs rust_fuse/src/fs.rs
+git commit -m "FOD 3.3.9: split block range decode profiling"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff HEAD~1..HEAD -- rust_hotpath/src/pg.rs rust_fuse/src/fs.rs
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+rg -n "READ: bw=|read: IOPS|read_block_map_us=|repo_fetch_block_range_us=|pg_prepared_statement name=fod_fetch_block_range|pg_result_decode name=fod_fetch_block_range|reply_data_us=|replica_operation_failures|strict read-only" artifacts/perf/0fa91ac/lt7300-docker-primary-write-replica-read-20260821T162733Z artifacts/perf/0fa91ac/lt7300-docker-primary-write-replica-read-20260821T162847Z -S
+```
+
+Finalization commands:
+
+```bash
+git diff --check
+git diff --stat
+git add commands.md conclusions.md
+git commit -m "FOD 3.3.9: record block range decode profile"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff HEAD~1..HEAD -- commands.md conclusions.md
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-21 - Profiling gate audit
 
 Repository state while running the commands: `d61b024` plus local profiling
