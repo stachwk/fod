@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import types
 from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,8 +18,9 @@ import fod_identity
 
 
 def main():
-    with patch.dict(os.environ, {"FOD_USE_FUSE_CONTEXT": "1"}, clear=False), patch(
-        "fuse.fuse_get_context", return_value=(1234, 2345, 4321)
+    fake_fuse = types.SimpleNamespace(fuse_get_context=lambda: (1234, 2345, 4321))
+    with patch.dict(os.environ, {"FOD_USE_FUSE_CONTEXT": "1"}, clear=False), patch.dict(
+        sys.modules, {"fuse": fake_fuse}, clear=False
     ), patch("fod_identity.os.kill", return_value=None):
         assert fod_identity.current_uid_gid(prefer_fuse_context=True) == (1234, 2345)
         assert fod_identity.current_group_ids(prefer_fuse_context=True) == {2345}

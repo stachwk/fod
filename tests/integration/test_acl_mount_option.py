@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import stat
@@ -60,11 +61,25 @@ def unmount(mountpoint: Path) -> None:
 
 
 def assert_permission_denied(path: Path) -> None:
+    if os.geteuid() == 0:
+        print("SKIP acl-owner-read-denial (root can bypass DAC)")
+        return
+
     try:
         path.read_bytes()
     except PermissionError:
         return
     raise AssertionError("ACL deny entry did not block file read")
+
+
+def expected_optional_selinux_errno(err_no: int | None) -> bool:
+    expected_errno = {
+        errno.EPERM,
+        errno.EACCES,
+        errno.ENOTSUP,
+        getattr(errno, "EOPNOTSUPP", errno.ENOTSUP),
+    }
+    return err_no in expected_errno
 
 
 def assert_capability_enabled(log_text: str, capability: str) -> None:
@@ -97,7 +112,11 @@ def main() -> None:
         env["FOD_USE_RUST_FUSE"] = "1"
         env["FOD_USE_FUSE_CONTEXT"] = "1"
 
-        options = f"ini={launcher._config_path()},role=auto,acl=on,selinux=off,default_permissions"
+        selinux_mode = os.environ.get("FOD_TEST_ACL_MOUNT_SELINUX", "off")
+        options = (
+            f"ini={launcher._config_path()},role=auto,acl=on,"
+            f"selinux={selinux_mode},default_permissions"
+        )
         with log_path.open("w", encoding="utf-8") as log_handle:
             process = subprocess.Popen(
                 [str(ROOT / "mount.fod"), "none", str(mountpoint), "-o", options],
@@ -113,9 +132,26 @@ def main() -> None:
                 log_text = log_path.read_text(encoding="utf-8")
                 assert "acl_enabled=true" in log_text, log_text
                 assert_capability_enabled(log_text, "POSIX_ACL")
+                if selinux_mode == "on":
+                    assert "selinux_enabled=true" in log_text, log_text
 
                 file_path = mountpoint / f"acl-{suffix}.txt"
                 file_path.write_bytes(b"acl payload\n")
+                if selinux_mode == "on":
+                    selinux_value = b"system_u:object_r:tmp_t:s0"
+                    try:
+                        os.setxattr(file_path, "security.selinux", selinux_value)
+                    except OSError as exc:
+                        assert expected_optional_selinux_errno(exc.errno), (
+                            f"unexpected SELinux xattr errno: {exc.errno}"
+                        )
+                        print(
+                            "SKIP acl-mount-option-selinux-xattr "
+                            f"(security.selinux unavailable, errno={exc.errno})"
+                        )
+                    else:
+                        assert os.getxattr(file_path, "security.selinux") == selinux_value
+                        assert "security.selinux" in os.listxattr(file_path)
                 allow_acl = build_posix_acl(user_perm=0o6, group_perm=0o0, other_perm=0o0)
                 os.setxattr(file_path, "system.posix_acl_access", allow_acl)
                 assert os.getxattr(file_path, "system.posix_acl_access") == allow_acl
@@ -136,7 +172,8 @@ def main() -> None:
                 os.setxattr(file_path, "system.posix_acl_access", deny_acl)
                 assert os.getxattr(file_path, "system.posix_acl_access") == deny_acl
                 assert stat.S_IMODE(file_path.stat().st_mode) == 0o000
-                assert not os.access(file_path, os.R_OK)
+                if os.geteuid() != 0:
+                    assert not os.access(file_path, os.R_OK)
                 assert_permission_denied(file_path)
 
                 print("OK acl-mount-option")

@@ -63,7 +63,7 @@ services:
     volumes:
       - .:/workspace/fod:rw
       - ./docker/selinux-acl/fod_config.ini:/workspace/fod/fod_config.ini:ro
-      - fod_cargo_selinux_acl:/usr/local/cargo
+      - fod_cargo_selinux_acl:/usr/local/cargo/registry
       - fod_target_selinux_acl:/workspace/fod/target
     command: ["sleep", "infinity"]
 

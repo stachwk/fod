@@ -2574,3 +2574,34 @@ The next read-path target should remain larger than this local cleanup:
 `fod_fetch_block_range` transport/query shape, server-side versus libpq transfer
 split, or a cache representation that reduces payload movement without using
 stale `data_object_id` metadata.
+
+## 2026-08-21 - SELinux/ACL validation on working tree based on `ff8242d`
+
+SELinux is disabled on the local host (`getenforce` returned `Disabled` and
+`/sys/fs/selinux` is absent), so this machine cannot validate full SELinux MAC
+enforcement. With `selinux=on`, real `security.selinux` writes return `EPERM`
+locally; tests can only verify FOD option handling, xattr gating/fallback
+behavior, and that POSIX ACL still works when the SELinux feature flag is
+enabled on the same mount.
+
+Validation results before committing the test hardening:
+
+| Check | Result |
+| --- | --- |
+| `make test-acl-mount-option` | passed |
+| `FOD_TEST_ACL_MOUNT_SELINUX=on make test-acl-mount-option` | passed; `security.selinux` skipped with `EPERM`, POSIX ACL xattr/mode/inheritance/denial passed |
+| `make test-xattr` | passed; optional trusted/security/system xattrs used fallback on this host |
+| `make test-fuse-context-identity` | passed with an injected fake `fuse` module instead of requiring `fusepy` |
+| `cargo test --manifest-path Cargo.toml -p fod-rust-fuse --test root_permissions_smoke -- --nocapture` | passed |
+| `make docker-selinux-acl-smoke POSTGRES_PORT=15432` | passed; uses the FOD Docker port from `/home/wojtek/git/config/ports/fod.env` |
+| `FOD_SELINUX=off FOD_ACL=off make test-mount-suite` | passed with one expected SELinux-on skip |
+
+The Docker SELinux/ACL lab needed test-infrastructure fixes rather than FOD
+runtime fixes: the cargo volume must not hide `/usr/local/cargo/bin`, the smoke
+command must not use a login shell that resets `PATH`, the Python smoke should
+use the container's `python3` instead of the host `.venv` symlink, and
+`root_permissions_smoke` must pass the now-required `--config` argument to
+`fod-bootstrap`. The ACL mount test now supports an opt-in
+`FOD_TEST_ACL_MOUNT_SELINUX=on` variant. When the test runs as root, it records
+that owner read denial cannot be proven with `os.access()` because root can
+bypass DAC; the non-root local path still checks the denial directly.

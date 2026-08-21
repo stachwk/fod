@@ -2852,6 +2852,109 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 - SELinux/ACL validation and Docker smoke repair
+
+Repository state while starting the work: `ff8242d`. `fod_version.txt`
+remained `3.3.9`.
+
+Context and host capability checks:
+
+```bash
+mempalace search --wing fod --results 8 "ACL SELinux test xattr strict security.selinux acl mount option"
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+getenforce
+sestatus
+test -d /sys/fs/selinux
+findmnt /sys/kernel/security
+sed -n '1,220p' docker/selinux-acl/Dockerfile
+sed -n '1,220p' docker-compose.selinux-acl.yml
+sed -n '580,660p' Makefile
+sed -n '1,260p' tests/integration/test_xattr.py
+rg -n "docker-selinux-acl-smoke|test-xattr|acl-mount|selinux" Makefile tests/integration -g '*.py' -g 'Makefile'
+```
+
+Initial validation and expected host-limited failures:
+
+```bash
+make --no-print-directory test-acl-mount-option
+FOD_SELINUX=on FOD_ACL=on FOD_XATTR_STRICT_SECURITY=1 FOD_XATTR_STRICT_ACL=1 make --no-print-directory test-xattr
+FOD_SELINUX=on FOD_ACL=on FOD_XATTR_STRICT_ACL=1 make --no-print-directory test-xattr
+FOD_SELINUX=auto FOD_ACL=off make --no-print-directory test-xattr
+python3 - <<'PY'
+# ad hoc acl=on,selinux=on mount smoke; verified POSIX ACL behavior and
+# recorded security.selinux as host-unavailable with EPERM on this host.
+PY
+cargo test --manifest-path Cargo.toml -p fod-rust-runtime selinux -- --nocapture
+FOD_SELINUX=on FOD_ACL=on make --no-print-directory test-mount-suite
+FOD_SELINUX=off FOD_ACL=off make --no-print-directory test-mount-suite
+```
+
+Docker lab inspection and failing smoke attempts:
+
+```bash
+make --no-print-directory docker-selinux-acl-smoke
+POSTGRES_PORT=15432 make --no-print-directory docker-selinux-acl-smoke
+make --no-print-directory docker-selinux-acl-smoke POSTGRES_PORT=15432
+COMPOSE_PROJECT_NAME=fod-selinux-acl docker compose -f docker-compose.selinux-acl.yml build fod-selinux-acl
+make --no-print-directory docker-selinux-acl-down
+make --no-print-directory docker-selinux-acl-smoke POSTGRES_PORT=15432
+COMPOSE_PROJECT_NAME=fod-selinux-acl docker compose -f docker-compose.selinux-acl.yml ps -a
+docker images --format '{{.Repository}} {{.Tag}} {{.ID}} {{.CreatedSince}}' | rg 'fod|selinux|rust'
+COMPOSE_PROJECT_NAME=fod-selinux-acl docker compose -f docker-compose.selinux-acl.yml config
+COMPOSE_PROJECT_NAME=fod-selinux-acl docker compose -f docker-compose.selinux-acl.yml exec -T fod-selinux-acl bash -lc 'set -x; id; echo PATH=$PATH; echo CARGO_HOME=${CARGO_HOME:-}; ls -la /usr/local/cargo || true; ls -la /usr/local/cargo/bin || true; command -v cargo || true; cargo --version || true'
+docker inspect fod-selinux-acl --format '{{range .Config.Env}}{{println .}}{{end}}' | sort
+COMPOSE_PROJECT_NAME=fod-selinux-acl docker compose -f docker-compose.selinux-acl.yml exec -T fod-selinux-acl bash -c 'echo PATH=$PATH; cargo --version'
+COMPOSE_PROJECT_NAME=fod-selinux-acl docker compose -f docker-compose.selinux-acl.yml exec -T fod-selinux-acl bash -lc 'source /usr/local/cargo/env; echo PATH=$PATH; cargo --version'
+```
+
+Implementation inspection and final validation:
+
+```bash
+sed -n '320,520p' tests/integration/test_xattr.py
+sed -n '1,190p' tests/integration/test_acl_mount_option.py
+sed -n '1,260p' tests/integration/fod_mount.py
+rg -n "^import |^from " tests/integration/test_fuse_context_identity.py tests/integration/test_xattr.py tests/integration/test_acl_mount_option.py tests/integration/fod_mount.py
+COMPOSE_PROJECT_NAME=fod-selinux-acl docker compose -f docker-compose.selinux-acl.yml exec -T fod-selinux-acl bash -c 'python3 --version; test -x ./.venv/bin/python && ./.venv/bin/python --version || true; ls -ld .venv || true'
+sed -n '1,140p' tests/integration/test_fuse_context_identity.py
+COMPOSE_PROJECT_NAME=fod-selinux-acl docker compose -f docker-compose.selinux-acl.yml exec -T fod-selinux-acl bash -c 'ls -la .venv; ls -la .venv/bin || true; python3 - <<'"'"'PY'"'"'
+import fod_identity
+print("fod_identity ok")
+PY'
+sed -n '1,220p' fod_identity.py
+rg -n "python3-fuse|fusepy|pyfuse|python.*fuse|UBUNTU_LEGACY|LEGACY_PYTHON|fuse" Makefile pyproject.toml requirements* setup.py docker -g '*.*'
+COMPOSE_PROJECT_NAME=fod-selinux-acl docker compose -f docker-compose.selinux-acl.yml exec -T fod-selinux-acl bash -c 'apt-cache policy python3-fuse python3-fusepy python3-llfuse 2>/dev/null || true; python3 - <<'"'"'PY'"'"'
+try:
+    import fuse
+    print("fuse import ok")
+except Exception as exc:
+    print(type(exc).__name__, exc)
+PY'
+rg -n "import fuse|from fuse|fuse_get_context|fusepy" . -g '!target' -g '!rust_fuse/target'
+sed -n '1,280p' rust_fuse/tests/root_permissions_smoke.rs
+make --no-print-directory test-acl-mount-option
+FOD_TEST_ACL_MOUNT_SELINUX=on make --no-print-directory test-acl-mount-option
+make --no-print-directory docker-selinux-acl-smoke POSTGRES_PORT=15432
+make --no-print-directory test-xattr
+make --no-print-directory test-fuse-context-identity
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse --test root_permissions_smoke -- --nocapture
+cargo fmt --all -- --check
+git diff --check
+git status --short --branch
+git diff --stat
+make --no-print-directory docker-selinux-acl-down POSTGRES_PORT=15432
+git add Makefile commands.md conclusions.md docker-compose.selinux-acl.yml docker/selinux-acl/Dockerfile rust_fuse/tests/root_permissions_smoke.rs tests/integration/test_acl_mount_option.py tests/integration/test_fuse_context_identity.py
+git commit -m "FOD 3.3.9: harden selinux acl smoke tests"
+git add commands.md conclusions.md
+git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git diff HEAD~1..HEAD -- Makefile docker-compose.selinux-acl.yml docker/selinux-acl/Dockerfile rust_fuse/tests/root_permissions_smoke.rs tests/integration/test_acl_mount_option.py tests/integration/test_fuse_context_identity.py commands.md conclusions.md
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-21 - Payload/map read path follow-up
 
 Repository state while starting the work: `dd732b4`; code changes were then

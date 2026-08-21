@@ -627,7 +627,7 @@ docker-selinux-acl-shell:
 
 docker-selinux-acl-smoke: docker-selinux-acl-up
 	# This lab builds inside the container because it validates the container-local FUSE/SELinux toolchain.
-	COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T fod-selinux-acl bash -lc 'set -euo pipefail; $(CARGO_BUILD_MKFS) --bin fod-bootstrap --bin fod-rust-mkfs; $(CARGO_BUILD_FUSE) --bin fod-rust-fuse; ./.venv/bin/python tests/integration/test_fuse_context_identity.py; ./.venv/bin/python tests/integration/test_xattr.py; $(CARGO_TEST_FUSE) --test root_permissions_smoke -- --nocapture'
+	COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T fod-selinux-acl bash -c 'set -euo pipefail; source /usr/local/cargo/env; $(CARGO_BUILD_MKFS) --bin fod-bootstrap --bin fod-rust-mkfs; $(CARGO_BUILD_FUSE) --bin fod-rust-fuse; python3 tests/integration/test_fuse_context_identity.py; FOD_SELINUX=off FOD_ACL=off python3 tests/integration/test_xattr.py; FOD_TEST_ACL_MOUNT_SELINUX=on python3 tests/integration/test_acl_mount_option.py; $(CARGO_TEST_FUSE) --test root_permissions_smoke -- --nocapture'
 
 restart: down up
 

@@ -89,6 +89,8 @@ fn start_root_mount(name: &str) -> Result<MountedRootFs, String> {
         command
             .current_dir(repo_root())
             .arg("--debug")
+            .arg("--config")
+            .arg(&config)
             .arg("--role")
             .arg("auto")
             .arg("-f")
@@ -118,6 +120,8 @@ fn start_root_mount(name: &str) -> Result<MountedRootFs, String> {
             .arg("FOD_ACL=off")
             .arg(bootstrap)
             .arg("--debug")
+            .arg("--config")
+            .arg(config)
             .arg("--role")
             .arg("auto")
             .arg("-f")
