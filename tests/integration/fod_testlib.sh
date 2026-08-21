@@ -67,6 +67,133 @@ fod_test_make_mountpoint() {
   FOD_PID=""
 }
 
+fod_test_truthy() {
+  [[ "${1:-0}" =~ ^(1|true|True|yes|on)$ ]]
+}
+
+fod_test_read_sysfs() {
+  local path="$1"
+  if [[ -r "${path}" ]]; then
+    tr -d '\n' <"${path}" 2>/dev/null || true
+  fi
+}
+
+fod_test_join_unique_sysfs_values() {
+  local pattern="$1"
+  local path value
+  local -a values=()
+  for path in ${pattern}; do
+    [[ -r "${path}" ]] || continue
+    value="$(fod_test_read_sysfs "${path}")"
+    [[ -n "${value}" ]] || continue
+    values+=("${value}")
+  done
+  if ((${#values[@]} == 0)); then
+    echo "unknown"
+    return
+  fi
+  printf '%s\n' "${values[@]}" | sort -u | awk '
+    BEGIN { first = 1 }
+    {
+      if (!first) {
+        printf ", "
+      }
+      printf "%s", $0
+      first = 0
+    }
+    END { print "" }
+  '
+}
+
+fod_test_ac_online_status() {
+  local root="/sys/class/power_supply"
+  local supply type online seen=0
+  [[ -d "${root}" ]] || {
+    echo "unknown"
+    return
+  }
+  for supply in "${root}"/*; do
+    [[ -e "${supply}" ]] || continue
+    type="$(fod_test_read_sysfs "${supply}/type")"
+    online="$(fod_test_read_sysfs "${supply}/online")"
+    [[ -n "${online}" ]] || continue
+    case "${type}" in
+      Mains|USB|USB_C|USB_PD|USB_DCP|USB_CDP|USB_ACA)
+        seen=1
+        if [[ "${online}" == "1" ]]; then
+          echo "1"
+          return
+        fi
+        ;;
+    esac
+  done
+  if ((seen)); then
+    echo "0"
+  else
+    echo "unknown"
+  fi
+}
+
+fod_test_power_metadata() {
+  local label="${1:-unknown}"
+  local root="/sys/class/power_supply"
+  local cpu0="/sys/devices/system/cpu/cpu0/cpufreq"
+  local supply name type online status capacity
+  local scaling_driver scaling_min_freq scaling_max_freq
+
+  echo "captured_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "label=${label}"
+  echo "ac_online=$(fod_test_ac_online_status)"
+  if [[ -d "${root}" ]]; then
+    for supply in "${root}"/*; do
+      [[ -e "${supply}" ]] || continue
+      name="$(basename "${supply}")"
+      type="$(fod_test_read_sysfs "${supply}/type")"
+      online="$(fod_test_read_sysfs "${supply}/online")"
+      status="$(fod_test_read_sysfs "${supply}/status")"
+      capacity="$(fod_test_read_sysfs "${supply}/capacity")"
+      printf 'power_supply name=%s' "${name}"
+      [[ -n "${type}" ]] && printf ' type=%s' "${type}"
+      [[ -n "${online}" ]] && printf ' online=%s' "${online}"
+      [[ -n "${status}" ]] && printf ' status=%s' "${status}"
+      [[ -n "${capacity}" ]] && printf ' capacity=%s' "${capacity}"
+      printf '\n'
+    done
+  else
+    echo "power_supply=unknown"
+  fi
+  echo "cpu_governors=$(fod_test_join_unique_sysfs_values '/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor')"
+  scaling_driver="$(fod_test_read_sysfs "${cpu0}/scaling_driver")"
+  scaling_min_freq="$(fod_test_read_sysfs "${cpu0}/scaling_min_freq")"
+  scaling_max_freq="$(fod_test_read_sysfs "${cpu0}/scaling_max_freq")"
+  echo "cpu_scaling_driver=${scaling_driver:-unknown}"
+  echo "cpu_scaling_min_freq_khz=${scaling_min_freq:-unknown}"
+  echo "cpu_scaling_max_freq_khz=${scaling_max_freq:-unknown}"
+  echo "cpu_energy_performance_preference=$(fod_test_join_unique_sysfs_values '/sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference')"
+}
+
+fod_test_log_power_metadata() {
+  local label="${1:-unknown}"
+  local ac_online
+  echo "FOD power metadata (${label}):"
+  fod_test_power_metadata "${label}" | sed 's/^/  /'
+  ac_online="$(fod_test_ac_online_status)"
+  if [[ "${ac_online}" == "0" ]]; then
+    echo "WARN: running performance-sensitive FOD test without AC power" >&2
+    if fod_test_truthy "${FOD_REQUIRE_AC_POWER:-0}"; then
+      echo "FOD_REQUIRE_AC_POWER is set and AC power is not online" >&2
+      return 1
+    fi
+  fi
+}
+
+fod_test_write_power_metadata() {
+  local output="$1"
+  local label="${2:-unknown}"
+  mkdir -p "$(dirname "${output}")"
+  fod_test_power_metadata "${label}" >"${output}"
+}
+
 fod_strace_summary_to_markdown() {
   local summary_file="$1"
   local limit="${FOD_STRACE_SUMMARY_LIMIT:-12}"

@@ -114,6 +114,8 @@ echo "primary=127.0.0.1:${PRIMARY_PORT}"
 echo "replica=127.0.0.1:${REPLICA_PORT}"
 echo "size=${FILE_SIZE} block_size=${BLOCK_SIZE}"
 echo "artifact_dir=${ARTIFACT_DIR}"
+fod_test_write_power_metadata "${ARTIFACT_DIR}/power-before.txt" "before"
+fod_test_log_power_metadata "before"
 
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 compose up -d primary replica
@@ -312,6 +314,7 @@ echo "replica_operation_failures=${FINAL_OPERATION_FAILURES}" \
     | tee -a "${ARTIFACT_DIR}/replication.txt"
 echo "replica_connection_create_count=${FINAL_CONNECTION_CREATES:-unknown}" \
     | tee -a "${ARTIFACT_DIR}/replication.txt"
+fod_test_write_power_metadata "${ARTIFACT_DIR}/power-after.txt" "after"
 
 echo "=== RESULT ==="
 echo "primary stopped before read: yes"
@@ -325,6 +328,10 @@ echo "Docker host kernel page cache dropped: no"
 grep -E 'READ:|read:' "${ARTIFACT_DIR}/replica-read-fio.txt" | tail -n 4 || true
 echo "--- replication ---"
 cat "${ARTIFACT_DIR}/replication.txt"
+echo "--- power before ---"
+cat "${ARTIFACT_DIR}/power-before.txt"
+echo "--- power after ---"
+cat "${ARTIFACT_DIR}/power-after.txt"
 echo "--- replica mount evidence ---"
 grep -E \
     'selected_authority|selected_read_only|routing_enabled|read_only|endpoint' \

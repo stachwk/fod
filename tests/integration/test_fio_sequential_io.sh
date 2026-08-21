@@ -17,6 +17,7 @@ if [[ "${FOD_STRACE:-0}" =~ ^(1|true|True|yes|on)$ ]] && ! command -v strace >/d
 fi
 
 fod_test_setup "${ROOT}"
+fod_test_log_power_metadata "fio-sequential-before"
 
 size_to_bytes() {
   local value="$1"
@@ -88,6 +89,7 @@ run_case() {
   echo "OK fio/sequential block size=${expected_size} block_size=${block_size}"
   rm -f "${file}"
   fod_test_cleanup
+  fod_test_log_power_metadata "fio-sequential-after"
 }
 
 trap cleanup EXIT
