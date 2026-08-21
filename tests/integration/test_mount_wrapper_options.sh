@@ -14,6 +14,7 @@ cat >"${tmpdir}/bin/fod-bootstrap" <<'EOF'
 printf 'FOD_CONFIG=%s\n' "${FOD_CONFIG:-unset}"
 printf 'FOD_ALLOW_OTHER=%s\n' "${FOD_ALLOW_OTHER:-unset}"
 printf 'FOD_PROFILE=%s\n' "${FOD_PROFILE:-unset}"
+printf 'FOD_ATIME_POLICY=%s\n' "${FOD_ATIME_POLICY:-unset}"
 printf 'ARGS=%s\n' "$*"
 EOF
 chmod +x "${tmpdir}/bin/fod-bootstrap"
@@ -72,6 +73,23 @@ if grep -Fq "${db01_ini}" "${tmpdir}/db02.txt"; then
   echo "db02 mount leaked db01 configuration"
   exit 1
 fi
+
+# Standard atime mount options select the matching FOD atime policy.
+FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \
+  "${ROOT}/mount.fod" none "${tmpdir}/mnt-noatime" \
+  -o "ini=${db01_ini},noatime" \
+  >"${tmpdir}/noatime.txt"
+
+[[ -d "${tmpdir}/mnt-noatime" ]]
+grep -Fq "FOD_ATIME_POLICY=noatime" "${tmpdir}/noatime.txt"
+
+FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \
+  "${ROOT}/mount.fod" none "${tmpdir}/mnt-nodiratime" \
+  -o "ini=${db01_ini},nodiratime" \
+  >"${tmpdir}/nodiratime.txt"
+
+[[ -d "${tmpdir}/mnt-nodiratime" ]]
+grep -Fq "FOD_ATIME_POLICY=nodiratime" "${tmpdir}/nodiratime.txt"
 
 # Legacy explicit aliases remain temporarily supported, but warn.
 FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \

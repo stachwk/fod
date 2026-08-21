@@ -570,6 +570,7 @@ The project keeps the more specific smoke targets separate so you can rerun only
 - `make test-ownership-inheritance`
 - `make test-statfs-use-ino`
 - `make test-atime-noatime`
+- `make test-atime-nodiratime`
 - `make test-atime-relatime`
 - `make test-pool-connections`
 - `make test-mount-suite`
@@ -636,7 +637,8 @@ What the tests cover:
 - `make test-rename-root-conflict` checks file-over-file replacement, empty-dir replacement, cross-parent moves, and root-path edge cases for `rename`.
 - `make test-statfs-use-ino` checks, through a small shell smoke, that mount-visible inode values match the backend and that `statvfs()` reports the same filesystem figures as the backend `statfs()` helper.
 - `make test-mount-root-permissions` checks a fresh mount root plus directory chmod/chown/write behavior on a newly mounted filesystem.
-- `make test-atime-noatime` checks FOD atime behavior in `noatime` mode and confirms that reads do not advance atime.
+- `make test-atime-noatime` checks FOD atime behavior in `noatime` mode and confirms that file reads and directory listings do not advance atime.
+- `make test-atime-nodiratime` checks FOD atime behavior in `nodiratime` mode and confirms that directory listings do not advance atime while file reads still do.
 - `make test-atime-relatime` checks FOD atime behavior in `relatime` mode and confirms that a stale atime advances on read.
 - `make test-timestamp-touch-once` checks the relatime-style one-touch behavior for a file and a directory, confirming that the first stale read/listing updates atime and the second one does not.
 - `make test-atime-benchmark` prints a short wall-time baseline for FOD atime behavior on file reads and directory listings so you can compare `default`, `noatime`, and `nodiratime` runs without paying for a very long smoke loop.
@@ -656,7 +658,7 @@ What the tests cover:
 - `make test-tree-scale` benchmarks `getattr` and `readdir` on a larger seeded tree and reports `ls`/`find` timings.
 - `make test-flush-release-profile` checks that clean `flush()` / `release()` calls stay cheap and that a dirty flush persists exactly once.
 - `make test-write-flush-threshold` checks that a low write-flush threshold can push dirty data before close and that the buffer is no longer left dirty after the write.
-- `make test-all-full` extends `make test-all` with the standalone files/directories/metadata/symlink workflow checks, the shell `statfs/use_ino` smoke, the mount workflow smoke, both atime smoke profiles, and the fod-indexer smokes including the parallel plan/cleanup smoke.
+- `make test-all-full` extends `make test-all` with the standalone files/directories/metadata/symlink workflow checks, the shell `statfs/use_ino` smoke, the mount workflow smoke, the atime smoke profiles, and the fod-indexer smokes including the parallel plan/cleanup smoke.
 
 `make test-all` includes the xattr/SELinux/trusted/ACL check and the consolidated mount suite.
 Replica mounts can be forced with `--role replica`. Default `--role auto` detects replicas via `pg_is_in_recovery()` and mounts them read-only. Use `-o ro` if you want a read-only mount without switching the role to replica.
@@ -685,7 +687,7 @@ At mount start FOD logs the effective runtime profile, FOD version, FOD schema n
 `statfs_cache_ttl_seconds` controls the short TTL cache for `statfs()`. The default is `2` seconds.
 `FOD_METADATA_CACHE_TTL_SECONDS` and `FOD_STATFS_CACHE_TTL_SECONDS` override the matching `fod_config.ini` values if you want to tune those caches per environment.
 `FOD_PROFILE` selects a named runtime profile from `fod_config.ini`, such as `bulk_write`, `metadata_heavy`, or `pg_locking`.
-`FOD_ATIME_POLICY` is an internal FOD behavior selector, not a raw FUSE mount option. It controls when FOD updates `atime` in its own read path; `noatime`, `nodiratime`, `relatime`, and `strictatime` are handled inside FOD instead of being forwarded to the mount frontend.
+`FOD_ATIME_POLICY` is the internal FOD behavior selector that controls when FOD updates `atime` in its own read path. The `mount.fod` helper also maps standard mount-style options `noatime`, `nodiratime`, `relatime`, and `strictatime` onto the same selector instead of forwarding them to the mount frontend.
 To avoid continuously rewriting the same timestamp row during a single open/read or open/readdir sequence, FOD touches `access_date` only once per handle and then suppresses duplicate touches until the handle is released.
 The same principle applies to write-side timestamp persistence: repeated writes on the same open file update `mtime`/`ctime` only when the dirty buffer is persisted, not on every intermediate write call.
 Read path caching is configurable via `FOD_READ_CACHE_EVICTION_POLICY`; the current default is FIFO, and sequential reads increase read-ahead automatically so adjacent reads can reuse prefetched blocks instead of repeatedly hitting PostgreSQL.

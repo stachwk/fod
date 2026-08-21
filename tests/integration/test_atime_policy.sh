@@ -17,13 +17,45 @@ fod_test_start_mount "${MOUNTPOINT}"
 file="${MOUNTPOINT}/atime-${policy}.txt"
 printf '%s\n' "atime smoke" > "${file}"
 
-before="$(fod_stat "${file}" '%X')"
-
 case "${policy}" in
   noatime)
+    touch -a -d '2 days ago' "${file}"
+    before="$(fod_stat "${file}" '%X')"
     cat "${file}" >/dev/null
     after="$(fod_stat "${file}" '%X')"
     fod_assert_eq "${after}" "${before}" "atime changed under noatime"
+
+    dir="${MOUNTPOINT}/atime-${policy}-dir"
+    mkdir -p "${dir}"
+    printf '%s\n' "entry" > "${dir}/entry.txt"
+    touch -a -d '2 days ago' "${dir}"
+    before="$(fod_stat "${dir}" '%X')"
+    shopt -s nullglob
+    entries=( "${dir}"/* )
+    fod_assert_eq "${#entries[@]}" "1" "unexpected directory entry count under noatime"
+    after="$(fod_stat "${dir}" '%X')"
+    fod_assert_eq "${after}" "${before}" "directory atime changed under noatime"
+    ;;
+  nodiratime)
+    touch -a -d '2 days ago' "${file}"
+    before="$(fod_stat "${file}" '%X')"
+    cat "${file}" >/dev/null
+    after="$(fod_stat "${file}" '%X')"
+    if (( after <= before )); then
+      echo "expected file atime to advance under nodiratime: before=${before} after=${after}"
+      exit 1
+    fi
+
+    dir="${MOUNTPOINT}/atime-${policy}-dir"
+    mkdir -p "${dir}"
+    printf '%s\n' "entry" > "${dir}/entry.txt"
+    touch -a -d '2 days ago' "${dir}"
+    before="$(fod_stat "${dir}" '%X')"
+    shopt -s nullglob
+    entries=( "${dir}"/* )
+    fod_assert_eq "${#entries[@]}" "1" "unexpected directory entry count under nodiratime"
+    after="$(fod_stat "${dir}" '%X')"
+    fod_assert_eq "${after}" "${before}" "directory atime changed under nodiratime"
     ;;
   relatime)
     touch -a -d '2 days ago' "${file}"

@@ -93,6 +93,12 @@ wariant 512 w fizycznym master-write / slave-read: 4 MiB read `21.9 MiB/s`
 oraz 128 MiB read `29.0 MiB/s`, bez bledow operacji i z
 `primary_reachable_before_read=0`.
 
+FOD 3.3.9 uzupelnia montowanie opcji atime: `mount.fod -o noatime` i
+`mount.fod -o nodiratime` wybieraja teraz odpowiednia polityke FOD zamiast byc
+cicho ignorowanymi opcjami passthrough. Dodany smoke `test-atime-nodiratime`
+sprawdza, ze katalogi nie dostaja atime update, ale odczyt pliku nadal go
+dostaje.
+
 - profilowac jeden callback FUSE 512 KiB na fizycznej replice;
 - policzyc dokladne metadata/map/payload round-trip PostgreSQL;
 - redukowac `read_block_map -> repo_fetch_block_range` w kierunku jednej

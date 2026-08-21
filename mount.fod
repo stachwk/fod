@@ -136,6 +136,9 @@ translate_option() {
     atime-policy=*)
       ATIME_POLICY="${opt#atime-policy=}"
       ;;
+    noatime|nodiratime|relatime|strictatime)
+      ATIME_POLICY="${opt}"
+      ;;
     default_permissions|default-permissions)
       DEFAULT_PERMISSIONS=1
       ;;
@@ -183,7 +186,7 @@ translate_option() {
 warn_unknown_option() {
   local opt="$1"
   case "${opt}" in
-    _netdev|nofail|fail|defaults|ro|rw|user|users|owner|group|exec|noexec|suid|nosuid|dev|nodev|sync|async|relatime|noatime|nodiratime|strictatime|lazytime|dirsync|acl|noacl|user_xattr|nouser_xattr|x-systemd.*|x-mount.*|comment=*|context=*|fscontext=*|defcontext=*|rootcontext=*|uid=*|gid=*|umask=*|dmask=*|fmask=*|subtype=*|size=*|mode=*|shortname=*|iocharset=*|utf8|codepage=*|blocksize=*|loop|bind|rbind|move|remount)
+    _netdev|nofail|fail|defaults|ro|rw|user|users|owner|group|exec|noexec|suid|nosuid|dev|nodev|sync|async|lazytime|dirsync|acl|noacl|user_xattr|nouser_xattr|x-systemd.*|x-mount.*|comment=*|context=*|fscontext=*|defcontext=*|rootcontext=*|uid=*|gid=*|umask=*|dmask=*|fmask=*|subtype=*|size=*|mode=*|shortname=*|iocharset=*|utf8|codepage=*|blocksize=*|loop|bind|rbind|move|remount)
       return
       ;;
   esac
