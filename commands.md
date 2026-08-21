@@ -2925,6 +2925,43 @@ git diff -- rust_fuse/src/fs.rs | sed -n '1,220p'
 git status --short --branch
 ```
 
+Final validation on commit 8596c01:
+
+```bash
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=128 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=4M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=128 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=512 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M
+rg -n "READ:|read:|FOD callback counts|fuse_read_total_us|read_block_map_us|repo_fetch_block_range_us|cached_read_block_us|operation_count=|operation_failures=|connection_create_count=|artifact_dir=" artifacts/perf/8596c01/lt7300-docker-primary-write-replica-read-20260821T115924Z artifacts/perf/8596c01/lt7300-docker-primary-write-replica-read-20260821T115949Z artifacts/perf/8596c01/lt7300-docker-primary-write-replica-read-20260821T120035Z -S
+git status --short --branch
+find artifacts/perf/8596c01 -maxdepth 2 -type f | sort | tail -n 30
+rg -n "FOD strace profile summary|READ:|WRITE:|FOD callback counts|read_block_map_us|repo_fetch_block_range_us|total" /tmp tests artifacts/perf/8596c01 -S
+```
+
+The final extraction `rg` intentionally scanned `/tmp` and returned permission
+errors for system private directories; the useful benchmark evidence was already
+captured from the command output and artifact-specific `rg` above.
+
+Finalization commands for the validation commit:
+
+```bash
+git diff --check
+git diff --stat
+git status --short --branch
+git add commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git commit -m "FOD 3.3.7: record direct IO read validation"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-21 commit 7076787 fio without FUSE direct_io
 
 Context and preflight commands:

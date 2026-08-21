@@ -1993,3 +1993,28 @@ The follow-up FOD 3.3.7 patch therefore caches `FileReadMetadata` per open
 handle only when `read_only && fopen_direct_io`. Writable mounts keep the old
 per-read metadata lookup, so truncate/write/atime behavior on primary mounts is
 not changed by this optimization.
+
+Final validation on commit `8596c01` (`FOD 3.3.7: cache direct IO read
+metadata`) passed:
+
+| Workload | Artifact | Result |
+| --- | --- | --- |
+| Docker replica read 4 MiB, direct prefetch 128 | `artifacts/perf/8596c01/lt7300-docker-primary-write-replica-read-20260821T115924Z` | read `18.3 MiB/s`, callbacks `read=1024`, `fuse_read_total_us=156281`, `read_block_map_us=135731`, `repo_fetch_block_range_us=131601`, `operation_count=143`, `operation_failures=0`. |
+| Docker replica read 128 MiB, direct prefetch 128 | `artifacts/perf/8596c01/lt7300-docker-primary-write-replica-read-20260821T115949Z` | read `26.8 MiB/s`, callbacks `read=32768`, `fuse_read_total_us=3749382`, `read_block_map_us=3173589`, `repo_fetch_block_range_us=3080075`, `operation_count=395`, `operation_failures=0`. |
+| Docker replica read 128 MiB, tuning probe prefetch 512 | `artifacts/perf/8596c01/lt7300-docker-primary-write-replica-read-20260821T120035Z` | read `29.1 MiB/s`, callbacks `read=32768`, `fuse_read_total_us=3606432`, `read_block_map_us=3097009`, `repo_fetch_block_range_us=3000670`, `operation_count=202`, `operation_failures=0`. |
+| local direct-I/O strace smoke 4 MiB | stdout from `make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed; write `5476 KiB/s`, read `11.3 MiB/s`, callbacks `read=1024 write=1024`, strace total `3.329925 s`, top syscalls `futex` `43.52%` and `read` `42.34%`. |
+
+Against the previous 3.3.6 128 MiB direct-I/O replica profile, the default
+3.3.7 path improves replica read throughput from about `8305 KiB/s` to
+`26.8 MiB/s`, reduces `repo_fetch_block_range_us` from `8394474` to `3080075`,
+and reduces the observed PostgreSQL lane `operation_count` from effectively
+per-callback behavior to `395`. The FUSE callback count remains `32768`, so the
+optimization is correctly internal to FOD's PostgreSQL/read-cache work rather
+than a kernel callback-size change.
+
+The 512-block tuning probe cut `operation_count` further (`395` -> `202`) and
+improved throughput modestly (`26.8 MiB/s` -> `29.1 MiB/s`), but
+`repo_fetch_block_range_us` stayed near `3.0 s`. That means the next bottleneck
+is likely the payload/range fetch path itself, not just the number of range
+queries. Keep the default at `128` blocks until a fuller 128/256/512 matrix
+proves that a larger window is consistently worth the extra read-ahead.
