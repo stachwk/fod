@@ -2921,7 +2921,6 @@ unsafe fn fetch_block_range_rows_shared(
                     };
                     blocks.push((index, Arc::from(bytes)));
                 }
-                blocks.sort_unstable_by_key(|(index, _)| *index);
                 Ok(blocks)
             }
         }
