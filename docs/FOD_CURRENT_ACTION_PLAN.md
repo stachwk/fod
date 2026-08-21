@@ -88,7 +88,10 @@ pomiarze wariantu 512 na slave/replica read. FOD 3.3.7 zakonczyl mechanizm
 prefetch i per-handle `FileReadMetadata` cache dla read-only direct-I/O, bez
 zmiany formatu storage i bez zakladania, ze kernel przestanie wysylac 4 KiB
 callbacki. Nastepny kandydat to koszt samego `repo_fetch_block_range` dla
-wiekszych zakresow.
+wiekszych zakresow. Walidacja na commicie `715cf22` potwierdzila domyslny
+wariant 512 w fizycznym master-write / slave-read: 4 MiB read `21.9 MiB/s`
+oraz 128 MiB read `29.0 MiB/s`, bez bledow operacji i z
+`primary_reachable_before_read=0`.
 
 - profilowac jeden callback FUSE 512 KiB na fizycznej replice;
 - policzyc dokladne metadata/map/payload round-trip PostgreSQL;

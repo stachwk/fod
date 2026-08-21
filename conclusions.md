@@ -2034,3 +2034,22 @@ to `202` without introducing read failures.
 `FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=0` remains the diagnostic no-prefetch
 escape hatch, and explicit smaller INI/env values can still be used when a
 workload should avoid larger direct-I/O read-ahead.
+
+Validation on commit `715cf22` confirmed that the new default is active in the
+physical master-write / slave-read Docker path without setting
+`FOD_DIRECT_IO_READ_PREFETCH_BLOCKS`. Both primary and replica mount logs report
+`direct_io_read_prefetch_blocks=512`.
+
+| Workload | Artifact | Result |
+| --- | --- | --- |
+| master write / slave read 4 MiB, default 512 | `artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121035Z` | primary write `25.8 MiB/s`, slave read `21.9 MiB/s`, callbacks `read=1024`, `fuse_read_total_us=138410`, `read_block_map_us=122960`, `repo_fetch_block_range_us=118605`, `operation_count=137`, `operation_failures=0`, `primary_reachable_before_read=0`. |
+| master write / slave read 128 MiB, default 512 | `artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121100Z` | primary write `33.1 MiB/s`, slave read `29.0 MiB/s`, callbacks `read=32768`, `fuse_read_total_us=3609334`, `read_block_map_us=3103332`, `repo_fetch_block_range_us=3006729`, `operation_count=202`, `operation_failures=0`, `primary_reachable_before_read=0`. |
+
+The 128 MiB result matches the earlier explicit 512-block tuning probe
+(`29.1 MiB/s`) within run noise, so making 512 the default did not regress the
+measured slave/replica path. The remaining large-read cost is still the payload
+range fetch path itself: `repo_fetch_block_range_us` is about `3.0 s` and
+`read_block_map_us` is about `3.1 s` while the kernel still sends one 4 KiB
+FUSE read callback per block. The next optimization should therefore focus on
+the range-oriented fetch implementation and payload assembly rather than only
+changing the prefetch window size again.

@@ -2988,6 +2988,66 @@ the shell string, so Bash attempted command substitution for `128` and `512`;
 the file matches were still printed and the version/default values were checked
 again in the subsequent diff.
 
+## 2026-08-21 commit 715cf22 default 512 replica-read validation
+
+Base commit: `715cf22` (`FOD 3.3.8: default direct IO prefetch to 512 blocks`).
+
+Context and implementation-review commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "FOD 3.3.7 direct_io_read_prefetch_blocks 512 replica read master write repo_fetch_block_range"
+rg -n 'direct_io_read_prefetch_blocks|3\.3\.8|FOD 3\.3\.8|version = "3\.3\.8"' rust_runtime/src/lib.rs fod_config.ini fod_config.example.ini README.md docs/runtime-configuration.md docs/FOD_CURRENT_ACTION_PLAN.md Cargo.toml fod_version.txt
+cargo fmt --all
+cargo check --workspace --locked
+git diff --check
+cargo test -p fod-rust-runtime --lib --locked
+git diff --check
+git diff --stat
+git status --short --branch
+git add Cargo.lock Cargo.toml README.md commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md docs/runtime-configuration.md fod_config.example.ini fod_config.ini fod_version.txt rust_runtime/src/lib.rs
+git diff --cached --check
+git commit -m "FOD 3.3.8: default direct IO prefetch to 512 blocks"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
+Master-write / slave-read validation commands, with no
+`FOD_DIRECT_IO_READ_PREFETCH_BLOCKS` override:
+
+```bash
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=4M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+find artifacts/perf/715cf22 -maxdepth 1 -type d | sort
+find artifacts/perf/715cf22 -maxdepth 2 -type f | sort | tail -80
+rg -n "READ:|WRITE:|read: IOPS|write: IOPS" artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121035Z/primary-write-fio.txt artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121035Z/replica-read-fio.txt artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121100Z/primary-write-fio.txt artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121100Z/replica-read-fio.txt -S
+rg -n "direct_io_read_prefetch|fuse_read_total_us|read_block_map_us|repo_fetch_block_range_us|cached_read_block_us|operation_count=|operation_failures=|connection_create_count=|completed_tasks=|completed_bytes=" artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121035Z/primary-write-mount.log artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121035Z/replica-read-mount.log artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121100Z/primary-write-mount.log artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121100Z/replica-read-mount.log -S
+cat artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121035Z/replication.txt
+cat artifacts/perf/715cf22/lt7300-docker-primary-write-replica-read-20260821T121100Z/replication.txt
+rg -n "direct_io_read_prefetch_blocks" rust_runtime/src/lib.rs fod_config.ini fod_config.example.ini README.md docs/runtime-configuration.md -S
+git status --short --branch
+git diff --check
+git diff --stat
+git diff -- commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git add commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git diff --cached --check
+git commit -m "FOD 3.3.8: record default prefetch validation"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-21 commit 7076787 fio without FUSE direct_io
 
 Context and preflight commands:
