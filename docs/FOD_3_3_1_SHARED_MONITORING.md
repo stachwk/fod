@@ -39,13 +39,21 @@ FOD_MONITOR_PUBLISH_INTERVAL_MS=5000
 ```
 
 Zakres: 500-60000 ms. Publikacja telemetrii odswieza rowniez liveness rekordu
-`client_sessions`. TTL centralnej sesji wynosi co najmniej maksimum z
-`lock_lease_ttl`, trzykrotnosci interwalu publikacji i 30 s. Dzieki temu aktywny
-mount nie znika z centralnego widoku przy rzadszym probkowaniu.
+`client_sessions` do FOD 3.3.3. Od FOD 3.3.4 liveness sesji odnawia osobny
+heartbeat sesji, a publikacja telemetrii zapisuje tylko `monitor_session_stats`.
+Interwal heartbeat'u sesji jest taki sam jak interwal publikacji monitora, a TTL
+centralnej sesji wynosi `max(30 s, 3 * publish_interval)`. TTL sesji jest
+niezalezny od `lock_lease_ttl`, wiec heartbeat lockow PostgreSQL nie moze
+skrocic sesji przy rzadszym probkowaniu.
 
 Telemetria nie zmienia semantyki lock managera: `lock_heartbeat_interval=0`
-nadal wylacza heartbeat lockow, a `lock_backend=memory` nie uruchamia heartbeat lockow PostgreSQL. Od FOD 3.3.3 sprzatanie wygaslych `client_sessions` jest osobnym maintenance i dziala niezaleznie od backendu lockow. Prune sesji usuwa tez historyczne wygasle lock rows z `session_id=0`. Sam UPSERT telemetrii jest widoczny w kolejnych
-licznikach operacji bazy jako koszt monitoringu.
+nadal wylacza heartbeat lockow, a `lock_backend=memory` nie uruchamia heartbeat
+lockow PostgreSQL. Od FOD 3.3.3 sprzatanie wygaslych `client_sessions` jest
+osobnym maintenance i dziala niezaleznie od backendu lockow. Od FOD 3.3.4 lock
+heartbeat odnawia tylko lock leases/owner state, a session maintenance tylko
+sprzata. Prune sesji usuwa tez historyczne wygasle lock rows z `session_id=0`.
+Sam UPSERT telemetrii jest widoczny w kolejnych licznikach operacji bazy jako
+koszt monitoringu.
 
 Tabela jest ograniczona do jednego rekordu na `session_id` i jest czyszczona
 kaskadowo razem z sesja. 3.3.1 celowo nie tworzy nieograniczonej historii.

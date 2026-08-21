@@ -25,7 +25,7 @@ schematu, test manifestu, test wersji i mount smoke przechodza.
 
 ## 2. FOD 3.3.3 - lifecycle sesji i identity hosta
 
-Status: w realizacji.
+Status: zakonczone w `f8b4b2e`.
 
 Priorytet: P1/P2.
 
@@ -36,7 +36,26 @@ Priorytet: P1/P2.
   ustawione;
 - dodac regresje crash/expiry dla writable mounta z backendem memory.
 
-## 3. FOD 3.3.4 - czytelnosc i API fod-monitor
+## 3. FOD 3.3.4 - hardening lifecycle/TTL sesji
+
+Status: zakonczone w commicie FOD 3.3.4.
+
+Priorytet: P1.
+
+- dac `client_sessions` jeden autorytatywny heartbeat sesji, niezalezny od TTL
+  lockow PostgreSQL;
+- rejestrowac poczatkowy `lease_expires_at` sesji tym samym TTL, ktory potem
+  odnawia heartbeat sesji;
+- usunac odnawianie `client_sessions` z heartbeatow lock managera;
+- lock heartbeat ma odnawiac tylko owner state i lease lockow;
+- publisher `fod-monitor` ma publikowac tylko `monitor_session_stats`, bez
+  skracania lub odnawiania TTL sesji;
+- maintenance sesji ma pozostac tylko sprzataniem wygaslych rekordow i
+  historycznych lock rows z `session_id=0`;
+- przy `FOD_MONITOR_PUBLISH_INTERVAL_MS=60000` TTL sesji ma pozostac 180 s i
+  nie moze byc skrocony przez domyslny `lock_lease_ttl=30 s`.
+
+## 4. FOD 3.3.5 - czytelnosc i API fod-monitor
 
 Priorytet: P2.
 
@@ -47,7 +66,7 @@ Priorytet: P2.
 - dodac wskazniki efektywnosci, m.in. DB ops na read/write task i sredni
   rozmiar callbacku.
 
-## 4. FOD 3.3.5 - centralna telemetria read-only replica
+## 5. FOD 3.3.6 - centralna telemetria read-only replica
 
 Priorytet: P1 funkcjonalny.
 

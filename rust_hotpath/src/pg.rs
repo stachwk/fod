@@ -8153,25 +8153,18 @@ impl DbRepo {
     pub fn publish_monitor_session_stats(
         &self,
         session_id: u64,
-        lease_ttl_seconds: u64,
         fod_version: &str,
         sample_seq: u64,
         payload_json: &str,
     ) -> Result<(), String> {
         let sql = CString::new(
             "
-            WITH refreshed_session AS (
-                UPDATE client_sessions
-                SET heartbeat_at = NOW(),
-                    lease_expires_at = NOW() + ($5::bigint * INTERVAL '1 second')
-                WHERE session_id = $1
-                RETURNING session_id
-            )
             INSERT INTO monitor_session_stats (
                 session_id, fod_version, sample_seq, sampled_at, payload_json, updated_at
             )
             SELECT session_id, $2, $3, NOW(), $4::jsonb, NOW()
-            FROM refreshed_session
+            FROM client_sessions
+            WHERE session_id = $1
             ON CONFLICT (session_id) DO UPDATE SET
                 fod_version = EXCLUDED.fod_version,
                 sample_seq = EXCLUDED.sample_seq,
@@ -8184,8 +8177,6 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let session_id = CString::new(session_id.to_string())
             .map_err(|_| "session id contains NUL byte".to_string())?;
-        let lease_ttl_seconds = CString::new(lease_ttl_seconds.to_string())
-            .map_err(|_| "lease ttl contains NUL byte".to_string())?;
         let fod_version =
             CString::new(fod_version).map_err(|_| "FOD version contains NUL byte".to_string())?;
         let sample_seq = CString::new(sample_seq.to_string())
@@ -8193,13 +8184,7 @@ impl DbRepo {
         let payload_json = CString::new(payload_json)
             .map_err(|_| "monitor payload contains NUL byte".to_string())?;
         self.with_control_connection(|conn| unsafe {
-            let params = [
-                &session_id,
-                &fod_version,
-                &sample_seq,
-                &payload_json,
-                &lease_ttl_seconds,
-            ];
+            let params = [&session_id, &fod_version, &sample_seq, &payload_json];
             exec_command_params(conn, &sql, &params).map(|_| ())
         })
     }

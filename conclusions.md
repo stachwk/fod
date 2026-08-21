@@ -1754,3 +1754,40 @@ Decision: do not spend the next optimization cycle on client cache tuning. Profi
 - `make test-all` exposed that the standalone `test-schema-upgrade` target intentionally mutates schema state and then left the shared local Docker database unsuitable for the following `test-block-read` target.
 - `test-schema-upgrade` and `test-schema-status` now always run `test-db-restore-local` after their schema test, on both success and failure, while preserving the original test failure status.
 - `tests/test_makefile_db_restore_order.py` now guards this cleanup contract so destructive schema tests cannot silently poison later integration targets.
+
+## 2026-08-21 - FOD 3.3.4 session lifecycle/TTL hardening
+
+Base commit: `f8b4b2e` (`FOD 3.3.3: decouple session maintenance from lock heartbeat`).
+
+FOD 3.3.3 correctly moved `prune_expired_client_sessions()` out of lock
+heartbeat, but the PG lock heartbeat still called `heartbeat_client_session()`
+with the lock lease TTL. With the default `lock_lease_ttl=30 s` this could
+shorten the longer session TTL required when `FOD_MONITOR_PUBLISH_INTERVAL_MS`
+is raised to `60000` and the session needs a 180 s liveness window.
+
+FOD 3.3.4 separates the three lifecycle responsibilities:
+
+- `fod-session-heartbeat` is now the only runtime path that renews
+  `client_sessions.lease_expires_at` and `heartbeat_at`;
+- the session TTL is `max(30 s, 3 * FOD_MONITOR_PUBLISH_INTERVAL_MS)`, so
+  `FOD_MONITOR_PUBLISH_INTERVAL_MS=60000` produces a 180 s TTL independent of
+  `lock_lease_ttl`;
+- the PG lock heartbeat updates only owner tracking and lock range leases;
+- `publish_monitor_session_stats()` writes `monitor_session_stats` for an
+  existing session but no longer updates or shortens `client_sessions`;
+- session maintenance remains prune-only.
+
+This preserves memory-backend writable mounts because the session heartbeat runs
+independently of the lock backend. It also keeps monitor publishing separate
+from liveness: a temporary monitor UPSERT failure no longer makes telemetry the
+only path that can keep a writable session alive.
+
+Validation on the working tree passed:
+
+- `cargo check --workspace --locked`;
+- `cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --test lock_manager client_session -- --nocapture`;
+- `cargo test --manifest-path Cargo.toml -p fod-rust-fuse client_session -- --nocapture`;
+- `make --no-print-directory test-rust-pg-query`.
+
+No new or modified tests were added because the local project instruction says
+tests are created or changed only on explicit request.

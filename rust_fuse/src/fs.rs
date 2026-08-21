@@ -203,6 +203,11 @@ struct LockHeartbeatHandle {
     thread: Option<JoinHandle<()>>,
 }
 
+struct ClientSessionHeartbeatHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
 struct ClientSessionMaintenanceHandle {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -215,7 +220,7 @@ const SHARED_MONITOR_PUBLISH_INTERVAL_MS_MIN: u64 = 500;
 const SHARED_MONITOR_PUBLISH_INTERVAL_MS_MAX: u64 = 60_000;
 const SHARED_MONITOR_PUBLISH_INTERVAL_MS_ENV: &str = "FOD_MONITOR_PUBLISH_INTERVAL_MS";
 const CLIENT_SESSION_LEASE_TTL_MIN_SECONDS: u64 = 30;
-const CLIENT_SESSION_LEASE_TTL_PUBLISH_INTERVAL_MULTIPLIER: u64 = 3;
+const CLIENT_SESSION_LEASE_TTL_HEARTBEAT_INTERVAL_MULTIPLIER: u64 = 3;
 const CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_DEFAULT: u64 = 5_000;
 const CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_MIN: u64 = 500;
 const CLIENT_SESSION_MAINTENANCE_INTERVAL_MS_MAX: u64 = 60_000;
@@ -325,6 +330,72 @@ fn client_session_maintenance_interval() -> Duration {
     Duration::from_millis(value)
 }
 
+fn duration_ceil_seconds(duration: Duration) -> u64 {
+    duration
+        .as_secs()
+        .saturating_add(u64::from(duration.subsec_nanos() > 0))
+        .max(1)
+}
+
+fn client_session_lease_ttl_seconds(heartbeat_interval: Duration) -> u64 {
+    duration_ceil_seconds(heartbeat_interval)
+        .saturating_mul(CLIENT_SESSION_LEASE_TTL_HEARTBEAT_INTERVAL_MULTIPLIER)
+        .max(CLIENT_SESSION_LEASE_TTL_MIN_SECONDS)
+}
+
+impl ClientSessionHeartbeatHandle {
+    fn spawn(
+        repo: DbRepo,
+        session_id: u64,
+        interval: Duration,
+        lease_ttl_seconds: u64,
+    ) -> Result<Self, String> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = Arc::clone(&stop);
+        info!(
+            "FOD client session heartbeat: session_id={} interval_ms={} lease_ttl_seconds={}",
+            session_id,
+            interval.as_millis(),
+            lease_ttl_seconds
+        );
+        let thread = thread::Builder::new()
+            .name("fod-session-heartbeat".to_string())
+            .spawn(move || {
+                while !stop_thread.load(Ordering::Relaxed) {
+                    if let Err(err) = repo.heartbeat_client_session(session_id, lease_ttl_seconds) {
+                        warn!(
+                            "FOD session heartbeat failed session_id={} err={}",
+                            session_id, err
+                        );
+                    }
+                    if stop_thread.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    thread::park_timeout(interval);
+                }
+            })
+            .map_err(|err| format!("failed to spawn client session heartbeat thread: {err}"))?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for ClientSessionHeartbeatHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 impl ClientSessionMaintenanceHandle {
     fn spawn(repo: DbRepo) -> Result<Self, String> {
         let interval = client_session_maintenance_interval();
@@ -413,7 +484,6 @@ fn shared_monitor_publish_interval() -> Duration {
 fn publish_shared_monitor_sample(
     repo: &DbRepo,
     session_id: u64,
-    lease_ttl_seconds: u64,
     publish_interval_millis: u64,
     sample_seq: u64,
     read: &LogicalTaskQueueObservability,
@@ -436,7 +506,6 @@ fn publish_shared_monitor_sample(
     );
     repo.publish_monitor_session_stats(
         session_id,
-        lease_ttl_seconds,
         env!("CARGO_PKG_VERSION"),
         sample_seq,
         &stats.to_json()?,
@@ -447,23 +516,13 @@ impl SharedMonitorPublisherHandle {
     fn spawn(
         repo: DbRepo,
         session_id: u64,
-        session_lease_ttl: Duration,
+        interval: Duration,
         read: Arc<LogicalTaskQueueObservability>,
         write: Arc<LogicalTaskQueueObservability>,
         copy: Arc<LogicalTaskQueueObservability>,
         profile: Arc<FodFuseProfileCounters>,
     ) -> Result<Self, String> {
-        let interval = shared_monitor_publish_interval();
         let publish_interval_millis = interval.as_millis().min(u128::from(u64::MAX)) as u64;
-        let publish_interval_ttl_seconds = interval
-            .as_secs()
-            .saturating_add(u64::from(interval.subsec_nanos() > 0))
-            .saturating_mul(CLIENT_SESSION_LEASE_TTL_PUBLISH_INTERVAL_MULTIPLIER);
-        let lease_ttl_seconds = session_lease_ttl
-            .as_secs()
-            .saturating_add(u64::from(session_lease_ttl.subsec_nanos() > 0))
-            .max(CLIENT_SESSION_LEASE_TTL_MIN_SECONDS)
-            .max(publish_interval_ttl_seconds);
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
         info!("FOD shared monitor publisher: session_id={} interval_ms={} table={}.monitor_session_stats", session_id, interval.as_millis(), FOD_SCHEMA_NAME);
@@ -474,7 +533,6 @@ impl SharedMonitorPublisherHandle {
                 if let Err(err) = publish_shared_monitor_sample(
                         &repo,
                         session_id,
-                        lease_ttl_seconds,
                         publish_interval_millis,
                         sample_seq, read.as_ref(), write.as_ref(), copy.as_ref(), profile.as_ref()) {
                     warn!("FOD shared monitor publish failed session_id={} sample_seq={} err={}", session_id, sample_seq, err);
@@ -486,7 +544,6 @@ impl SharedMonitorPublisherHandle {
                     if let Err(err) = publish_shared_monitor_sample(
                         &repo,
                         session_id,
-                        lease_ttl_seconds,
                         publish_interval_millis,
                         sample_seq, read.as_ref(), write.as_ref(), copy.as_ref(), profile.as_ref()) {
                         warn!("FOD shared monitor final publish failed session_id={} sample_seq={} err={}", session_id, sample_seq, err);
@@ -589,17 +646,9 @@ fn heartbeat_pg_mount_state(
     session_id: u64,
     posix_locks: &Arc<Mutex<HashMap<String, Vec<PosixLockRecord>>>>,
     local_lock_owners: &Arc<Mutex<HashSet<u64>>>,
-    lease_ttl_seconds: u64,
+    lock_lease_ttl_seconds: u64,
 ) -> bool {
     let mut failed = false;
-
-    if let Err(err) = repo.heartbeat_client_session(session_id, lease_ttl_seconds) {
-        warn!(
-            "FOD session heartbeat failed session_id={} err={}",
-            session_id, err
-        );
-        return true;
-    }
 
     let local_owners = match local_lock_owners.lock() {
         Ok(guard) => guard.iter().copied().collect::<HashSet<_>>(),
@@ -652,7 +701,7 @@ fn heartbeat_pg_mount_state(
                 record.owner,
                 record.start,
                 record.end,
-                lease_ttl_seconds,
+                lock_lease_ttl_seconds,
             ) {
                 failed = true;
                 warn!(
@@ -1257,7 +1306,10 @@ pub struct FodFuse {
     logical_write_gate: Arc<LogicalTaskAdmissionGate>,
     logical_task_observability: Option<LogicalTaskObservabilitySampler>,
     shared_monitor_publisher: Option<SharedMonitorPublisherHandle>,
+    client_session_heartbeat: Option<ClientSessionHeartbeatHandle>,
     client_session_maintenance: Option<ClientSessionMaintenanceHandle>,
+    client_session_heartbeat_interval: Duration,
+    client_session_lease_ttl_seconds: u64,
     next_fh: Mutex<u64>,
     request_seq: AtomicU64,
     session_id: Option<u64>,
@@ -1315,6 +1367,9 @@ impl FodFuse {
         let logical_write_gate = Arc::new(LogicalTaskAdmissionGate::new(
             task_settings.write_active_limit,
         ));
+        let client_session_heartbeat_interval = shared_monitor_publish_interval();
+        let client_session_lease_ttl_seconds =
+            client_session_lease_ttl_seconds(client_session_heartbeat_interval);
 
         Self {
             repo,
@@ -1355,7 +1410,10 @@ impl FodFuse {
             logical_write_gate,
             logical_task_observability: None,
             shared_monitor_publisher: None,
+            client_session_heartbeat: None,
             client_session_maintenance: None,
+            client_session_heartbeat_interval,
+            client_session_lease_ttl_seconds,
             next_fh: Mutex::new(1),
             request_seq: AtomicU64::new(1),
             session_id: None,
@@ -1789,7 +1847,7 @@ impl FodFuse {
             }
         }
         format!(
-            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, samples=[{}]}}",
+            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, client_session_heartbeat_interval_secs={}, client_session_lease_ttl_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, samples=[{}]}}",
             self.read_only,
             self.use_fuse_context,
             self.fopen_direct_io,
@@ -1808,6 +1866,8 @@ impl FodFuse {
             self.lock_lease_ttl.as_secs_f64(),
             self.lock_heartbeat_interval.as_secs_f64(),
             self.lock_poll_interval.as_secs_f64(),
+            self.client_session_heartbeat_interval.as_secs_f64(),
+            self.client_session_lease_ttl_seconds,
             live.copy_dedupe_enabled,
             live.copy_dedupe_min_blocks,
             live.copy_dedupe_max_blocks,
@@ -3665,20 +3725,32 @@ impl FodFuse {
         let host_name = client_session_hostname(std::env::var("HOSTNAME").ok(), current_hostname());
         let mountpoint = mountpoint.to_string_lossy().to_string();
         let pid = u64::from(std::process::id());
-        let lease_ttl_seconds =
-            self.lock_lease_ttl
-                .as_secs_f64()
-                .ceil()
-                .max(CLIENT_SESSION_LEASE_TTL_MIN_SECONDS as f64) as u64;
         let session_id = self.repo.register_client_session(
             &host_name,
             &mountpoint,
             mount_mode,
             self.lock_backend.as_str(),
             pid,
-            lease_ttl_seconds,
+            self.client_session_lease_ttl_seconds,
         )?;
         self.session_id = Some(session_id);
+        Ok(())
+    }
+
+    pub fn start_client_session_heartbeat(&mut self) -> Result<(), String> {
+        if self.client_session_heartbeat.is_some() || self.read_only {
+            return Ok(());
+        }
+        let Some(session_id) = self.session_id else {
+            return Ok(());
+        };
+        let handle = ClientSessionHeartbeatHandle::spawn(
+            self.repo.clone(),
+            session_id,
+            self.client_session_heartbeat_interval,
+            self.client_session_lease_ttl_seconds,
+        )?;
+        self.client_session_heartbeat = Some(handle);
         Ok(())
     }
 
@@ -3726,7 +3798,7 @@ impl FodFuse {
         let publisher = SharedMonitorPublisherHandle::spawn(
             self.repo.clone(),
             session_id,
-            self.lock_lease_ttl,
+            self.client_session_heartbeat_interval,
             Arc::clone(&self.logical_read_tasks),
             Arc::clone(&self.logical_write_tasks),
             Arc::clone(&self.logical_copy_tasks),
@@ -3766,6 +3838,9 @@ impl Drop for FodFuse {
     fn drop(&mut self) {
         if let Some(mut publisher) = self.shared_monitor_publisher.take() {
             publisher.stop();
+        }
+        if let Some(mut heartbeat) = self.client_session_heartbeat.take() {
+            heartbeat.stop();
         }
         if let Some(mut maintenance) = self.client_session_maintenance.take() {
             maintenance.stop();

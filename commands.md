@@ -3550,6 +3550,83 @@ git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 commit f8b4b2e working tree FOD 3.3.4 session lifecycle TTL hardening
+
+Context lookup and plan inspection:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+sed -n '1,260p' docs/FOD_CURRENT_ACTION_PLAN.md
+source ~/.venv/bin/activate && mempalace search "FOD 3.3.4 session lifecycle TTL lock heartbeat client_sessions monitor publisher" --wing fod
+rg -n "heartbeat_pg_mount_state|heartbeat_client_session|ClientSessionMaintenanceHandle|register_client_session|lease_ttl|session.*ttl|monitor.*ttl|FOD_MONITOR_PUBLISH_INTERVAL|lock_lease_ttl|start_lock_heartbeat|start_session_maintenance|prune_expired_client_sessions|touch_client_session_owner_key" rust_fuse rust_hotpath rust_runtime tests docs Cargo.toml
+nl -ba rust_fuse/src/fs.rs | sed -n '1,260p;760,940p;3140,3305p;4380,4495p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '4600,4765p;4860,5005p'
+git show --stat --oneline --decorate --no-renames HEAD
+nl -ba rust_fuse/src/fs.rs | sed -n '230,520p;560,700p;2580,2665p;3640,3745p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '7920,8245p;8280,8650p;8700,8825p;8860,9005p'
+nl -ba rust_fuse/src/startup.rs | sed -n '340,395p'
+sed -n '1,140p' docs/FOD_3_3_1_SHARED_MONITORING.md
+sed -n '300,360p' docs/runtime-configuration.md
+nl -ba rust_fuse/tests/lock_backend_smoke.rs | sed -n '1,280p'
+nl -ba rust_fuse/src/fs.rs | sed -n '1180,1345p;1600,1715p;1750,1825p'
+rg -n "shared_monitor|client_sessions|monitor_session_stats|lease_expires_at|session heartbeat|maintenance|liveness|FOD_SESSION" docs README.pl TODO.md conclusions.md commands.md rust_fuse/src rust_hotpath/src rust_runtime/src
+nl -ba rust_runtime/src/lib.rs | sed -n '460,510p;620,655p;1325,1365p;1825,1850p;1950,1975p'
+rg -n "publish_monitor_session_stats\\(|heartbeat_client_session\\(|register_client_session\\(" rust_hotpath/src rust_fuse/src rust_hotpath/tests rust_fuse/tests
+nl -ba rust_hotpath/src/pg.rs | sed -n '2520,2660p'
+rg -n "publish_monitor_session_stats|heartbeat_client_session|register_client_session|client_session" rust_hotpath/src/ffi.rs rust_* -g '*.rs'
+sed -n '1,150p' TODO.md
+sed -n '100,125p;645,665p' README.pl
+tail -n 80 conclusions.md
+tail -n 120 commands.md
+rg -n "3\\.3\\.4|3\\.3\\.5|FOD_CURRENT_ACTION_PLAN|lock_heartbeat_interval_seconds|session heartbeat|lock lease|FOD_MONITOR_PUBLISH_INTERVAL_MS" docs README.pl TODO.md
+git fetch origin --tags
+git status --short --branch
+rg -n '^version = "3\\.3\\.3"|3\\.3\\.3' Cargo.toml Cargo.lock fod_version.txt
+rg -n "FOD 3\\.3\\.3|3\\.3\\.3|FOD 3\\.3\\.4|FOD 3\\.3\\.5" docs/FOD_CURRENT_ACTION_PLAN.md docs/FOD_3_3_1_SHARED_MONITORING.md docs/runtime-configuration.md README.pl conclusions.md TODO.md
+```
+
+Code, docs and validation:
+
+```bash
+cargo fmt --all
+git diff --check
+cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --test lock_manager client_session -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse client_session -- --nocapture
+make --no-print-directory test-rust-pg-query
+git diff --stat
+git diff -- rust_fuse/src/fs.rs rust_fuse/src/startup.rs rust_hotpath/src/pg.rs
+git status --short --branch
+rg -n "heartbeat_client_session|lease_expires_at = NOW\\(\\).*seconds|lease_expires_at = NOW\\(\\).*INTERVAL|publish_monitor_session_stats|heartbeat_pg_mount_state|touch_client_session_owner_key" rust_fuse/src/fs.rs rust_hotpath/src/pg.rs
+rg -n "lock_heartbeat_interval_seconds.*client_sessions|Publikacja telemetrii odswieza liveness|max\\(lock_lease_ttl|lock_lease_ttl, 3 \\* publish|heartbeat/prune" README.pl docs/FOD_3_3_1_SHARED_MONITORING.md docs/runtime-configuration.md docs/FOD_CURRENT_ACTION_PLAN.md
+sed -n '332,348p' docs/runtime-configuration.md
+sed -n '36,62p' docs/FOD_3_3_1_SHARED_MONITORING.md
+sed -n '26,75p' docs/FOD_CURRENT_ACTION_PLAN.md
+```
+
+Final verification, commit, post-commit review and MemPalace refresh:
+
+```bash
+cargo fmt --all
+cargo check --workspace --locked
+cargo test --manifest-path Cargo.toml -p fod-rust-hotpath --test lock_manager client_session -- --nocapture
+cargo test --manifest-path Cargo.toml -p fod-rust-fuse client_session -- --nocapture
+make --no-print-directory test-rust-pg-query
+git diff --check
+git diff --stat
+git add Cargo.lock Cargo.toml README.pl commands.md conclusions.md docs/FOD_3_3_1_SHARED_MONITORING.md docs/FOD_CURRENT_ACTION_PLAN.md docs/runtime-configuration.md fod_version.txt rust_fuse/src/fs.rs rust_fuse/src/startup.rs rust_hotpath/src/pg.rs
+git diff --cached --check
+git commit -m "FOD 3.3.4: harden client session liveness"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-16 commit e7797f0 working tree FOD 3.2.78 COPY staging and merge reduction
 
 Context lookup and code inspection:

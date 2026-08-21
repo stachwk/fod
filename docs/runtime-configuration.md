@@ -332,14 +332,17 @@ FOD_MONITOR_PUBLISH_INTERVAL_MS=5000
 ```
 
 Zakres to 500-60000 ms. Nie ma zapisu statystyk per callback FUSE.
-Publikacja telemetrii odswieza liveness `client_sessions`; TTL wynosi co najmniej
-`max(lock_lease_ttl, 3 * publish_interval, 30 s)`. Payload zapisuje faktyczny
-interwal, a prog `stale_telemetry_sessions` wynosi
-`max(15 s, 3 * publish_interval)`.
+Od FOD 3.3.4 liveness `client_sessions` odnawia osobny heartbeat sesji, ktory
+uzywa tego samego interwalu co publikacja monitora. TTL sesji wynosi
+`max(30 s, 3 * publish_interval)` i jest niezalezny od `lock_lease_ttl`.
+Publikacja telemetrii zapisuje `monitor_session_stats`, ale nie odnawia ani nie
+skraca TTL sesji. Payload zapisuje faktyczny interwal, a prog
+`stale_telemetry_sessions` wynosi `max(15 s, 3 * publish_interval)`.
 
 Telemetria nie zmienia semantyki lock managera: `lock_heartbeat_interval=0`
 nadal wylacza heartbeat lockow, a backend `memory` nie uruchamia heartbeat/prune
-lockow PostgreSQL.
+lockow PostgreSQL. Session maintenance sprzata wygasle sesje, ale ich nie
+odnawia.
 `fod-monitor` uzywa standardowej sekcji `[database]`; opcjonalny osobny DSN:
 
 ```bash

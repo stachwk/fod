@@ -373,6 +373,8 @@ pub fn mount_fuse(
             .map_err(|err| format!("failed to ensure client session schema: {err}"))?;
         fs.register_client_session(mountpoint, "primary")
             .map_err(|err| format!("failed to register client session: {err}"))?;
+        fs.start_client_session_heartbeat()
+            .map_err(|err| format!("failed to start client session heartbeat: {err}"))?;
         if let Err(err) = fs.start_client_session_maintenance() {
             warn!("FOD client session maintenance unavailable: {}", err);
         }
