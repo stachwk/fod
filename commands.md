@@ -5090,3 +5090,73 @@ git rev-parse --short HEAD
 cat fod_version.txt
 git diff HEAD~1..HEAD -- Cargo.toml Cargo.lock Makefile README.md docs/compatibility-contracts.md TODO.md rust_libfod/Cargo.toml rust_libfod/src/lib.rs rust_libfod/include/fod/libfod.h | sed -n '1,520p'
 ```
+
+## 2026-08-21 - Read-path `repo_fetch_block_range` optimization
+
+Repository state while running the commands: `adad2ca` plus local read-path
+changes for the FOD 3.3.9 read-path commit.
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 10 "read path repo_fetch_block_range read_block_map direct-I/O replica prefetch 512 bottleneck"
+rg -n "repo_fetch_block_range|read_block_map|fetch_block_range|LoadBlock|FetchBlockRange" rust_fuse rust_hotpath docs
+sed -n '80,120p' docs/FOD_CURRENT_ACTION_PLAN.md
+sed -n '1600,1680p' rust_fuse/src/fs.rs
+sed -n '5360,5525p' rust_fuse/src/fs.rs
+sed -n '440,540p' rust_fuse/src/read_cache.rs
+sed -n '2470,2555p' rust_hotpath/src/pg.rs
+sed -n '3075,3115p' rust_hotpath/src/pg.rs
+sed -n '1180,1248p' Makefile
+sed -n '1,220p' tests/integration/test_fio_primary_write_replica_read_docker.sh
+sed -n '220,420p' tests/integration/test_fio_primary_write_replica_read_docker.sh
+git diff -- rust_hotpath/src/pg.rs rust_fuse/src/fs.rs
+git diff --stat
+```
+
+Formatting and regression commands:
+
+```bash
+cargo fmt --all
+cargo fmt --all -- --check
+cargo check --workspace --locked
+make --no-print-directory test-rust-pg-query
+make --no-print-directory test-block-read
+make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M
+```
+
+Replica read profiling commands:
+
+```bash
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=4M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=4M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=4M REPLICA_READ_FIO_BLOCK_SIZE=512k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=512k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=512k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+```
+
+Finalization commands:
+
+```bash
+git diff --check
+git diff --stat
+git add commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md rust_fuse/src/fs.rs rust_fuse/src/read_cache.rs rust_hotpath/src/pg.rs
+git diff --cached --stat
+git diff --cached --check
+git diff --cached --name-only
+git commit -m "FOD 3.3.9: optimize block range reads"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```

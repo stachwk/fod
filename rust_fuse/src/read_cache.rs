@@ -252,6 +252,24 @@ impl FodFuse {
         }
     }
 
+    pub(crate) fn cached_read_block_map(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+    ) -> Option<Vec<(u64, Arc<[u8]>)>> {
+        if last_block < first_block {
+            return Some(Vec::new());
+        }
+        let total_blocks = last_block.saturating_sub(first_block).saturating_add(1);
+        let mut blocks = Vec::with_capacity(total_blocks.min(usize::MAX as u64) as usize);
+        for block_index in first_block..=last_block {
+            let block = self.cached_read_block(file_id, block_index)?;
+            blocks.push((block_index, block));
+        }
+        Some(blocks)
+    }
+
     pub(crate) fn store_recent_write_blocks(
         &self,
         file_id: u64,

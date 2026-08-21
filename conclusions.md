@@ -2170,3 +2170,61 @@ Known residual risk: `libfod.so` currently exposes command launcher entrypoints,
 not in-process rewrites of each CLI implementation. A full in-process aggregate
 would require a larger refactor of private `main.rs` command logic into library
 entrypoints per tool, while still keeping the binaries statically self-contained.
+
+## 2026-08-21 - FOD 3.3.9 read path `repo_fetch_block_range`
+
+Implementation base: `adad2ca` plus local read-path changes.
+
+The read path now removes two avoidable costs from
+`read_block_map -> repo_fetch_block_range`:
+
+- PostgreSQL `LoadBlock` and `FetchBlockRange` return binary `BYTEA` results
+  instead of base64 text. Block indexes are read as binary `BIGINT`, and block
+  payload is normalized directly from the `PGresult` field before `PQclear`.
+- The single-worker FUSE range fetch calls `fetch_block_range_shared`, avoiding
+  the old `Arc<[u8]> -> Vec<u8> -> Arc<[u8]>` copy.
+- Multi-block FUSE `read()` requests can now be served from the per-mount read
+  cache when the complete requested range is present. This preserves sparse-file
+  correctness because a missing cache entry still falls back to `read_block_map`;
+  it does not treat cache miss as a zero block.
+
+The multi-block cache path was necessary because the first binary-only profile
+showed that 128 MiB / 64 KiB still performed `operation_count=2152` and reached
+only `62.6 MiB/s`: each 64 KiB callback pulled a small trailing range from
+PostgreSQL even though most requested blocks had already been prefetched.
+
+Validation passed on 2026-08-21 with repository state `adad2ca` plus the
+read-path changes:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | passed |
+| `cargo check --workspace --locked` | passed |
+| `make --no-print-directory test-rust-pg-query` | passed; 16 tests |
+| `make --no-print-directory test-block-read` | passed; 1 FUSE mount test |
+| `make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed; strace/FOD_PROFILE_IO smoke, same-mount read stayed in local cache |
+
+Replica read performance after both read-path changes:
+
+| Workload | Read result | FOD callbacks | `read_block_map_us` | `repo_fetch_block_range_us` | DB `operation_count` | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 128 MiB, fio bs 4 KiB | 85.6 MiB/s | 32768 | 356122 | 282451 | 200 | `artifacts/perf/adad2ca/lt7300-docker-primary-write-replica-read-20260821T133638Z` |
+| 128 MiB, fio bs 64 KiB | 234 MiB/s | 2048 | 347436 | 270469 | 199 | `artifacts/perf/adad2ca/lt7300-docker-primary-write-replica-read-20260821T133537Z` |
+| 128 MiB, fio bs 512 KiB | 283 MiB/s | 512 | 326535 | 252586 | 199 | `artifacts/perf/adad2ca/lt7300-docker-primary-write-replica-read-20260821T133610Z` |
+
+All three final replica-read runs stopped primary before the read phase,
+restarted the replica, reported `replica_operation_failures=0`, and passed the
+strict read-only DML guard.
+
+Relative to the earlier physical replica baseline captured in the current plan
+(`715cf22`, 128 MiB at `29.0 MiB/s`,
+`repo_fetch_block_range_us=3006729`, `read_block_map_us=3103332`), the final
+128 MiB / 4 KiB Docker validation reduces the range-fetch timer from about
+3.01 s to about 0.28 s and raises read throughput to 85.6 MiB/s. The 64 KiB and
+512 KiB cases now avoid the previous repeated trailing-range DB fetch pattern
+and converge to about 199-200 PostgreSQL operations for the 128 MiB read.
+
+Known residual risk: these are Docker primary/replica measurements, not the
+physical slave run from the earlier `715cf22` note. The direction is strong,
+but the exact absolute throughput should still be confirmed on the physical
+replica when that environment is available.

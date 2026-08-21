@@ -1659,15 +1659,11 @@ impl FodFuse {
         block_size: u64,
     ) -> Result<Vec<(u64, Arc<[u8]>)>, String> {
         let started = Instant::now();
-        let result = self
-            .repo
-            .fetch_block_range(file_id, first_block, last_block, block_size);
+        let result =
+            self.repo
+                .fetch_block_range_shared(file_id, first_block, last_block, block_size);
         self.record_repo_fetch_block_range_elapsed(started.elapsed());
-        result.map(|rows| {
-            let mut blocks = rows
-                .into_iter()
-                .map(|(block_index, block)| (block_index, Arc::<[u8]>::from(block)))
-                .collect::<Vec<_>>();
+        result.map(|mut blocks| {
             blocks.sort_unstable_by_key(|(block_index, _)| *block_index);
             blocks
         })
@@ -5422,6 +5418,23 @@ impl Filesystem for FodFuse {
                     return;
                 }
             }
+        } else if let Some(blocks) = self.cached_read_block_map(file_id, first_block, last_block) {
+            let started = Instant::now();
+            let data = assemble_read_slice(
+                first_block,
+                last_block,
+                offset,
+                end_offset,
+                self.block_size,
+                &blocks,
+            );
+            self.record_assemble_read_slice_elapsed(started.elapsed());
+            if let Some(metadata) = read_metadata.as_ref() {
+                self.touch_file_access_time_from_read_metadata(file_id, metadata);
+            }
+            read_task.complete(0, data.len() as u64);
+            self.reply_data_profiled(reply, &data);
+            return;
         }
         let (fetch_first, fetch_last) = if total_blocks <= live.small_file_read_threshold_blocks {
             (0, total_blocks.saturating_sub(1))

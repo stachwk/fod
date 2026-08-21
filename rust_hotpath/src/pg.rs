@@ -274,6 +274,8 @@ unsafe extern "C" {
     fn PQresultErrorField(res: *const PGresult, fieldcode: c_int) -> *const c_char;
     fn PQntuples(res: *const PGresult) -> c_int;
     fn PQnfields(res: *const PGresult) -> c_int;
+    fn PQgetisnull(res: *const PGresult, row_number: c_int, field_number: c_int) -> c_int;
+    fn PQgetlength(res: *const PGresult, row_number: c_int, field_number: c_int) -> c_int;
     fn PQgetvalue(res: *const PGresult, row_number: c_int, field_number: c_int) -> *const c_char;
     fn PQclear(res: *mut PGresult);
     fn PQfinish(conn: *mut PGconn);
@@ -1885,7 +1887,7 @@ impl PreparedStatement {
             }
             PreparedStatement::LoadBlock => {
                 "
-                SELECT encode(db.data, 'base64')
+                SELECT db.data
                 FROM files f
                 JOIN data_blocks db ON db.data_object_id = f.data_object_id
                 WHERE f.id_file = $1 AND db._order = $2
@@ -1893,7 +1895,7 @@ impl PreparedStatement {
             }
             PreparedStatement::FetchBlockRange => {
                 "
-                SELECT db._order, encode(db.data, 'base64')
+                SELECT db._order::bigint, db.data
                 FROM files f
                 JOIN data_blocks db ON db.data_object_id = f.data_object_id
                 WHERE f.id_file = $1 AND db._order BETWEEN $2 AND $3
@@ -2479,6 +2481,69 @@ unsafe fn fetch_first_column_texts(res: *mut PGresult) -> Result<Vec<String>, St
     result
 }
 
+unsafe fn read_result_binary_field<T, F>(
+    res: *const PGresult,
+    row: c_int,
+    col: c_int,
+    decode: F,
+) -> Result<Option<T>, String>
+where
+    F: FnOnce(&[u8]) -> Result<T, String>,
+{
+    if PQgetisnull(res, row, col) != 0 {
+        return Ok(None);
+    }
+    let len = PQgetlength(res, row, col);
+    if len < 0 {
+        return Err("invalid binary field length".to_string());
+    }
+    let value_ptr = PQgetvalue(res, row, col);
+    if value_ptr.is_null() {
+        return Err("binary field pointer is null".to_string());
+    }
+    let bytes = std::slice::from_raw_parts(value_ptr.cast::<u8>(), len as usize);
+    decode(bytes).map(Some)
+}
+
+unsafe fn result_binary_i64(res: *const PGresult, row: c_int, col: c_int) -> Result<i64, String> {
+    read_result_binary_field(res, row, col, |bytes| match bytes.len() {
+        8 => Ok(i64::from_be_bytes(
+            bytes
+                .try_into()
+                .map_err(|_| "invalid BIGINT binary field".to_string())?,
+        )),
+        4 => Ok(i32::from_be_bytes(
+            bytes
+                .try_into()
+                .map_err(|_| "invalid INTEGER binary field".to_string())?,
+        ) as i64),
+        other => Err(format!("unexpected integer binary field length: {other}")),
+    })?
+    .ok_or_else(|| "integer field is null".to_string())
+}
+
+unsafe fn fetch_single_block_binary(
+    res: *mut PGresult,
+    block_size: usize,
+) -> Result<Option<Vec<u8>>, String> {
+    let result = match PQresultStatus(res) {
+        PGRES_TUPLES_OK => {
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            if rows < 1 || cols < 1 {
+                Ok(None)
+            } else {
+                read_result_binary_field(res, 0, 0, |bytes| {
+                    Ok(normalize_block_bytes(bytes, block_size))
+                })
+            }
+        }
+        _ => Err("unexpected PostgreSQL result status".to_string()),
+    };
+    PQclear(res);
+    result
+}
+
 unsafe fn fetch_block_range_rows_shared(
     res: *mut PGresult,
     block_size: usize,
@@ -2492,26 +2557,15 @@ unsafe fn fetch_block_range_rows_shared(
             } else {
                 let mut blocks = Vec::with_capacity(rows as usize);
                 for row in 0..rows {
-                    let index_ptr = PQgetvalue(res, row, 0);
-                    let data_ptr = PQgetvalue(res, row, 1);
-                    if index_ptr.is_null() || data_ptr.is_null() {
-                        continue;
-                    }
-                    let index = CStr::from_ptr(index_ptr)
-                        .to_string_lossy()
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|_| "invalid block index value".to_string())?;
-                    let text = CStr::from_ptr(data_ptr).to_string_lossy().to_string();
-                    let text = text.lines().collect::<String>();
-                    let mut bytes = BASE64_STANDARD
-                        .decode(text.trim())
-                        .map_err(|_| "invalid base64 block data".to_string())?;
-                    if bytes.len() < block_size {
-                        bytes.resize(block_size, 0);
-                    } else if bytes.len() > block_size {
-                        bytes.truncate(block_size);
-                    }
+                    let index = result_binary_i64(res, row, 0)?;
+                    let index = u64::try_from(index)
+                        .map_err(|_| "negative block index value".to_string())?;
+                    let bytes = match read_result_binary_field(res, row, 1, |bytes| {
+                        Ok(normalize_block_bytes(bytes, block_size))
+                    })? {
+                        Some(bytes) => bytes,
+                        None => continue,
+                    };
                     blocks.push((index, Arc::from(bytes)));
                 }
                 blocks.sort_unstable_by_key(|(index, _)| *index);
@@ -5923,21 +5977,13 @@ impl DbRepo {
 
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id_text, &block_index_text];
-            let res = exec_prepared_params(conn, PreparedStatement::LoadBlock, &params)?;
-            let text = fetch_single_text(res)?;
-            if text.is_empty() {
-                return Ok(None);
-            }
-            let text = text.lines().collect::<String>();
-            let mut bytes = BASE64_STANDARD
-                .decode(text.trim())
-                .map_err(|_| "invalid base64 block data".to_string())?;
-            if bytes.len() < block_size {
-                bytes.resize(block_size, 0);
-            } else if bytes.len() > block_size {
-                bytes.truncate(block_size);
-            }
-            Ok(Some(bytes))
+            let res = exec_prepared_params_with_result_format(
+                conn,
+                PreparedStatement::LoadBlock,
+                &params,
+                1,
+            )?;
+            fetch_single_block_binary(res, block_size)
         })
     }
 
@@ -5961,7 +6007,12 @@ impl DbRepo {
 
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id_text, &first_block_text, &last_block_text];
-            let res = exec_prepared_params(conn, PreparedStatement::FetchBlockRange, &params)?;
+            let res = exec_prepared_params_with_result_format(
+                conn,
+                PreparedStatement::FetchBlockRange,
+                &params,
+                1,
+            )?;
             fetch_block_range_rows_shared(res, block_size)
         })
     }

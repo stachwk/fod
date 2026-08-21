@@ -100,14 +100,35 @@ sprawdza, ze katalogi nie dostaja atime update, ale odczyt pliku nadal go
 dostaje. Walidacja na `d20c98d` przeszla dla wrappera, `test-atime-noatime`,
 `test-atime-nodiratime` oraz krotkich benchmarkow atime dla obu polityk.
 
-- profilowac jeden callback FUSE 512 KiB na fizycznej replice;
-- policzyc dokladne metadata/map/payload round-trip PostgreSQL;
-- redukowac `read_block_map -> repo_fetch_block_range` w kierunku jednej
-  operacji range-oriented, jesli zachowuje to strict read-only i WAL gate;
-- mierzyc sukces przez spadek `repo_fetch_block_range_us` i `read_block_map_us`,
-  a nie przez sama liczbe callbackow FUSE;
-- po kazdej zmianie powtarzac macierz 4 KiB / 64 KiB / 512 KiB primary-write
-  -> WAL replay -> replica-read.
+Kolejny krok read path zmniejszyl koszt `repo_fetch_block_range` bez zmiany
+formatu storage: `load_block` i `fetch_block_range` pobieraja teraz binarne
+`BYTEA` zamiast `encode(..., 'base64')`, jednowatkowa sciezka FUSE uzywa
+`fetch_block_range_shared` bez kopii `Arc -> Vec -> Arc`, a wielo-blokowy
+callback `read()` potrafi odpowiedziec z per-mount read cache, gdy caly zadany
+zakres jest juz po prefetchu w cache.
+
+Walidacja 128 MiB primary-write -> WAL replay -> primary stopped ->
+replica-read na tej zmianie:
+
+| fio bs | read throughput | `read_block_map_us` | `repo_fetch_block_range_us` | DB `operation_count` |
+| --- | ---: | ---: | ---: | ---: |
+| 4 KiB | 85.6 MiB/s | 356122 | 282451 | 200 |
+| 64 KiB | 234 MiB/s | 347436 | 270469 | 199 |
+| 512 KiB | 283 MiB/s | 326535 | 252586 | 199 |
+
+Wazny wniosek z pomiaru: przed dopieciem wielo-blokowego cache hit wariant
+128 MiB / 64 KiB wykonywal `operation_count=2152` i mial tylko 62.6 MiB/s.
+Problemem nie byl sam rozmiar callbacku, tylko to, ze kazdy wielo-blokowy
+callback dociagal mala koncowke zakresu z PostgreSQL mimo istniejacego
+prefetchu.
+
+Nastepny kandydat po tej zmianie:
+
+- zmierzyc, czy pozostale ~199 operacji DB wynika glownie z metadata lookup,
+  mapowania blokow, czy payload transferu;
+- sprawdzic koszt `reply_data_us` i liczbe callbackow przy 4 KiB, bo DB path
+  nie jest juz jedynym dominujacym kosztem;
+- dopiero potem rozwazac wiekszy prefetch albo osobna sciezke bulk read.
 
 ## 7. HA miedzy hostami
 
