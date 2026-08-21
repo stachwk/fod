@@ -93,6 +93,29 @@ impl ReadBlockCache {
         }
     }
 
+    fn get_range(
+        &mut self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+    ) -> (Vec<(u64, Arc<[u8]>)>, Vec<u64>) {
+        if last_block < first_block {
+            return (Vec::new(), Vec::new());
+        }
+        let total_blocks = last_block.saturating_sub(first_block).saturating_add(1);
+        let mut cached = Vec::with_capacity(total_blocks.min(usize::MAX as u64) as usize);
+        let mut missing = Vec::new();
+        for block_index in first_block..=last_block {
+            if let Some(block) = self.get(file_id, block_index) {
+                cached.push((block_index, block));
+            } else {
+                missing.push(block_index);
+            }
+        }
+        (cached, missing)
+    }
+
+    #[cfg(test)]
     fn insert(&mut self, file_id: u64, block_index: u64, data: Arc<[u8]>, limit_blocks: usize) {
         let key = (file_id, block_index);
         match &mut self.store {
@@ -114,6 +137,42 @@ impl ReadBlockCache {
                 entries.insert(key, data);
                 if existed {
                     let _ = entries.get_refresh(&key);
+                }
+                while entries.len() > limit_blocks {
+                    if entries.pop_front().is_none() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn insert_many(&mut self, file_id: u64, blocks: &[(u64, Arc<[u8]>)], limit_blocks: usize) {
+        match &mut self.store {
+            ReadCacheStore::Fifo { entries, order } => {
+                for (block_index, data) in blocks.iter() {
+                    let key = (file_id, *block_index);
+                    if !entries.contains_key(&key) {
+                        order.push_back(key);
+                    }
+                    entries.insert(key, Arc::clone(data));
+                }
+                while entries.len() > limit_blocks {
+                    if let Some(oldest) = order.pop_front() {
+                        entries.remove(&oldest);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            ReadCacheStore::Lru { entries } => {
+                for (block_index, data) in blocks.iter() {
+                    let key = (file_id, *block_index);
+                    let existed = entries.contains_key(&key);
+                    entries.insert(key, Arc::clone(data));
+                    if existed {
+                        let _ = entries.get_refresh(&key);
+                    }
                 }
                 while entries.len() > limit_blocks {
                     if entries.pop_front().is_none() {
@@ -243,12 +302,54 @@ impl FodFuse {
         block
     }
 
-    pub(crate) fn store_read_block(&self, file_id: u64, block_index: u64, data: Arc<[u8]>) {
+    fn cached_read_blocks_and_missing(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+    ) -> (Vec<(u64, Arc<[u8]>)>, Vec<u64>) {
+        if last_block < first_block {
+            return (Vec::new(), Vec::new());
+        }
+        let started = Instant::now();
+        if self.recent_write_blocks_len.load(Ordering::Relaxed) != 0 {
+            let total_blocks = last_block.saturating_sub(first_block).saturating_add(1);
+            let mut cached = Vec::with_capacity(total_blocks.min(usize::MAX as u64) as usize);
+            let mut missing = Vec::new();
+            for block_index in first_block..=last_block {
+                if let Some(block) = self.cached_read_block(file_id, block_index) {
+                    cached.push((block_index, block));
+                } else {
+                    missing.push(block_index);
+                }
+            }
+            return (cached, missing);
+        }
+
+        let lock_started = Instant::now();
+        let result = self.read_block_cache.lock();
+        self.record_read_block_cache_lock_elapsed(lock_started.elapsed());
+        let result = match result {
+            Ok(mut guard) => guard.get_range(file_id, first_block, last_block),
+            Err(_) => {
+                let missing = (first_block..=last_block).collect::<Vec<_>>();
+                (Vec::new(), missing)
+            }
+        };
+        self.record_cached_read_block_elapsed(started.elapsed());
+        result
+    }
+
+    pub(crate) fn store_read_blocks(&self, file_id: u64, blocks: &[(u64, Arc<[u8]>)]) {
+        if blocks.is_empty() {
+            return;
+        }
+        let limit_blocks = self.read_cache_limit_blocks();
         let started = Instant::now();
         let result = self.read_block_cache.lock();
         self.record_read_block_cache_lock_elapsed(started.elapsed());
         if let Ok(mut guard) = result {
-            guard.insert(file_id, block_index, data, self.read_cache_limit_blocks());
+            guard.insert_many(file_id, blocks, limit_blocks);
         }
     }
 
@@ -261,13 +362,13 @@ impl FodFuse {
         if last_block < first_block {
             return Some(Vec::new());
         }
-        let total_blocks = last_block.saturating_sub(first_block).saturating_add(1);
-        let mut blocks = Vec::with_capacity(total_blocks.min(usize::MAX as u64) as usize);
-        for block_index in first_block..=last_block {
-            let block = self.cached_read_block(file_id, block_index)?;
-            blocks.push((block_index, block));
+        let (blocks, missing) =
+            self.cached_read_blocks_and_missing(file_id, first_block, last_block);
+        if missing.is_empty() {
+            Some(blocks)
+        } else {
+            None
         }
-        Some(blocks)
     }
 
     pub(crate) fn store_recent_write_blocks(
@@ -497,16 +598,8 @@ impl FodFuse {
             self.record_read_block_map_elapsed(started.elapsed());
             return Ok(Vec::new());
         }
-        let total_blocks = fetch_last.saturating_sub(fetch_first).saturating_add(1);
-        let mut cached = Vec::with_capacity(total_blocks.min(usize::MAX as u64) as usize);
-        let mut missing = Vec::new();
-        for block_index in fetch_first..=fetch_last {
-            if let Some(block) = self.cached_read_block(file_id, block_index) {
-                cached.push((block_index, block));
-            } else {
-                missing.push(block_index);
-            }
-        }
+        let (mut cached, missing) =
+            self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
         if missing.is_empty() {
             self.record_read_block_map_elapsed(started.elapsed());
             return Ok(cached);
@@ -533,9 +626,7 @@ impl FodFuse {
                 workers,
             )?
         };
-        for (block_index, block) in fetched.iter() {
-            self.store_read_block(file_id, *block_index, Arc::clone(block));
-        }
+        self.store_read_blocks(file_id, &fetched);
         cached = Self::merge_sorted_blocks(cached, fetched);
         self.record_read_block_map_elapsed(started.elapsed());
         Ok(cached)
