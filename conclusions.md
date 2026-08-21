@@ -2292,3 +2292,39 @@ queries are visible but small compared with payload transfer and path-attrs
 lookup. `reply_data_us` is also now material at 32768 callbacks, so the next
 optimization should keep both DB payload/map construction and FUSE reply cost
 in view.
+
+## 2026-08-21 - FOD 3.3.9 profiling gate audit
+
+Implementation commit: `e6879b4`.
+
+The profile-only PostgreSQL path now avoids work when `FOD_PROFILE_IO` is not
+enabled:
+
+- `FOD_PROFILE_IO_VERBOSE` is cached per process, like `FOD_PROFILE_IO`.
+- COPY profiling wrappers call `PQputCopyData`, `PQputCopyEnd`, and
+  `PQgetResult` directly when `FOD_PROFILE_IO` is disabled, without
+  `Instant::now()`, aggregate locking, or log formatting.
+- Prepared statements, raw `PQexec`, and raw `PQexecParams` only start timers,
+  build compact SQL labels, sum profile-only parameter bytes, scan `PGresult`
+  payload, and format profile log details when `FOD_PROFILE_IO` is enabled.
+- `fod_log_io_profile` now accepts a lazy detail closure, so future call sites
+  do not allocate formatted profile strings before the flag check.
+- FUSE boundary profile output is now printed only when `FOD_PROFILE_IO` is
+  enabled. The underlying FUSE timing counters still run because they also feed
+  shared monitor telemetry for `fod-monitor`; disabling those counters would be
+  a separate monitoring contract change, not a pure I/O profile cleanup.
+
+Validation on `e6879b4`:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | passed |
+| `cargo check --workspace --locked` | passed |
+| `make --no-print-directory test-rust-pg-query` | passed; 16 tests |
+| `make --no-print-directory test-block-read` | passed; 1 FUSE mount test |
+| `FOD_PROFILE_IO=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed; write 9.85 MiB/s, read 6491 KiB/s, boundary profile and statement aggregates still emitted |
+
+Conclusion: the obvious profile-only overhead in PostgreSQL/COPY was gated
+behind `FOD_PROFILE_IO`. FUSE timing counters are intentionally still runtime
+telemetry, but the FUSE boundary profile log no longer appears in normal
+non-profiled shutdowns.

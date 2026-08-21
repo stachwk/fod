@@ -2852,6 +2852,73 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-21 - Profiling gate audit
+
+Repository state while running the commands: `d61b024` plus local profiling
+gate changes, later committed as `e6879b4`.
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 10 "FOD_PROFILE_IO profiling overhead hot path enabled only profile_io statement profiling pg copy fuse"
+rg -n "FOD_PROFILE_IO|fod_profile_io_enabled|fod_log_io_profile|profile_snapshot|profile.*enabled|boundary profile|Instant::now\\(\\)|elapsed\\(\\)" rust_hotpath rust_fuse rust_runtime rust_monitor rust_indexer rust_mkfs tests docs Makefile
+sed -n '330,465p' rust_hotpath/src/pg.rs
+sed -n '3088,3415p' rust_hotpath/src/pg.rs
+sed -n '880,1320p' rust_fuse/src/fs.rs
+sed -n '1500,1765p' rust_fuse/src/fs.rs
+rg -n "shared_monitor_timing_stats|profile_counters\\(|FodFuseProfileCounters|FodFuseProfileTimer|has_activity\\(|snapshot_lines\\(|FOD boundary profile" rust_fuse rust_monitor rust_hotpath
+sed -n '3940,4010p' rust_fuse/src/fs.rs
+sed -n '80,140p' rust_fuse/src/write_buffer.rs
+sed -n '180,250p' rust_fuse/src/write_buffer.rs
+sed -n '380,520p' rust_fuse/src/write_buffer.rs
+sed -n '160,260p' rust_fuse/src/read_cache.rs
+sed -n '400,545p' rust_fuse/src/read_cache.rs
+rg -n "fod_log_io_profile\\(" rust_hotpath/src/pg.rs
+rg -n "format!\\(.*sql|fod_sql_label\\(|pgresult_profile_payload\\(|param_bytes" rust_hotpath/src/pg.rs
+git diff --stat
+git diff --check
+git diff -- rust_hotpath/src/pg.rs
+git diff -- rust_fuse/src/fs.rs
+```
+
+Validation commands:
+
+```bash
+cargo fmt --all
+git diff --check
+cargo check --workspace --locked
+make --no-print-directory test-rust-pg-query
+make --no-print-directory test-block-read
+FOD_PROFILE_IO=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M
+cargo fmt --all -- --check
+```
+
+Finalization commands:
+
+```bash
+git add rust_hotpath/src/pg.rs rust_fuse/src/fs.rs
+git diff --cached --stat
+git diff --cached --check
+git diff --cached --name-only
+git commit -m "FOD 3.3.9: gate profile-only overhead"
+git add commands.md conclusions.md
+git diff --cached --stat
+git diff --cached --check
+git diff --cached --name-only
+git commit -m "FOD 3.3.9: record profiling gate audit"
+git show --stat --oneline --decorate --no-renames e6879b4
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check e6879b4~1..e6879b4
+git diff --check HEAD~1..HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-21 - Read SQL statement profiling for replica read path
 
 Repository state while running the commands: `45309a2` plus local
