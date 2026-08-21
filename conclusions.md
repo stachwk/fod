@@ -1867,3 +1867,64 @@ Validation on the working tree passed:
   `FOD_TELEMETRY_DSN`, and `fod-monitor cluster --json`;
 - `python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_shared_monitor_cluster`;
 - `FOD_TELEMETRY_DSN=... python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_replica_read_only`.
+
+## 2026-08-21 - FOD 3.3.6 performance and monitoring validation
+
+Base commit: `5082ff3` (`FOD 3.3.6: publish read-only telemetry centrally`).
+
+The 4 MiB and 128 MiB FUSE/PostgreSQL fio profiles passed on host `lt7300`
+with `FIO_BLOCK_SIZE=4k`. Raw artifacts are ignored by git under
+`artifacts/perf/5082ff3/` and the PostgreSQL telemetry smoke artifact is under
+`/tmp/fod-postgres-telemetry/3.3.6-20260821T110612Z`.
+
+| Workload | Artifact | Result |
+| --- | --- | --- |
+| FUSE fio 4 MiB | `lt7300-20260821T110315Z-fio4m` | write `3651 KiB/s`, read `90.9 MiB/s`, callbacks `read=20 write=1024`; `repo_persist_blocks_us=70966`, `flush_execute_persist_plan_us=71474`. |
+| FUSE fio 128 MiB | `lt7300-20260821T110325Z-fio128m` | write `3822 KiB/s`, read `500 MiB/s`, callbacks `read=516 write=32768`; `repo_persist_blocks_us=1654149`, `flush_execute_persist_plan_us=1672015`. |
+| FUSE strace 4 MiB | `lt7300-20260821T110413Z-fio4m-strace` | direct-I/O path passed; write `7714 KiB/s`, read `3080 KiB/s`, callbacks `read=1024 write=1024`; strace total `5.631032 s`, dominated by `futex` `43.30%` and `read` `42.59%`. |
+| FUSE strace 128 MiB | `lt7300-20260821T110424Z-fio128m-strace` | direct-I/O path passed; write `10.2 MiB/s`, read `12.1 MiB/s`, callbacks `read=32768 write=32768`; strace total `60.195174 s`, dominated by `futex` `48.56%` and `read` `42.98%`. |
+| system-wide perf 4 MiB | `lt7300-20260821T110458Z-fio4m-perf` | `workload_status=0`, `perf_status=0`, elapsed `4.664963999 s`, `13.44B` instructions, `16.69B` cycles, `95,581` context switches. |
+| system-wide perf 128 MiB | `lt7300-20260821T110509Z-fio128m-perf` | `workload_status=0`, `perf_status=0`, elapsed `40.048289122 s`, `155.84B` instructions, `206.30B` cycles, `1,939,519` context switches. |
+
+Monitoring validation also passed:
+
+- `python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_shared_monitor_cluster`
+  passed and confirmed that `fod-monitor cluster` sees the active mount and
+  write counters.
+- `make --no-print-directory test-fuse-postgres-telemetry` passed with status
+  `ok`, sequential workload elapsed `3.317 s`, transaction delta `3279`,
+  active-time/xact proxy `0.106879`, and cache-hit ratio `100.0`.
+- `python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_replica_read_only`
+  passed.
+
+Physical primary-write / replica-read Docker validation passed for both sizes:
+
+- 4 MiB artifact `lt7300-docker-primary-write-replica-read-20260821T110635Z`:
+  primary write `11.5 MiB/s`, replica read `7938 KiB/s`, primary stopped before
+  read, replica restarted before read, strict read-only DML guard passed,
+  `replica_operation_failures=0`, `replica_connection_create_count=1`.
+- 128 MiB artifact `lt7300-docker-primary-write-replica-read-20260821T110703Z`:
+  primary write `35.4 MiB/s`, replica read `8305 KiB/s`, primary stopped before
+  read, replica restarted before read, strict read-only DML guard passed,
+  `replica_operation_failures=0`, `replica_connection_create_count=2`.
+- In both Docker fail-soft cases the read-only mount logged
+  `FOD read-only telemetry primary target unavailable` and
+  `FOD read-only shared monitor publisher disabled`, then completed reads
+  without database operation failures.
+
+A positive read-only central telemetry smoke with primary still available also
+passed. Artifact `lt7300-readonly-telemetry-primary-20260821T110855Z` contains
+`cluster.json` from the primary. It observed the read-only mount with
+`mount_mode=replica`, `stats.source.data_source_role=replica`,
+`stats.source.data_source_transaction_read_only=true`, and
+`stats.source.wal_replay_lag_bytes=0`. The replica mount log also shows
+`FOD read-only telemetry repo configured from writable primary endpoint` and
+`FOD shared monitor publisher: session_id=2 interval_ms=500`.
+
+Main performance conclusion: for direct-I/O mounted replica reads, the measured
+large-read bottleneck remains one 4 KiB FUSE callback per block. The 128 MiB
+replica-read profile spent `8.394474 s` in `repo_fetch_block_range_us` and
+`8.734999 s` in `read_block_map_us` with 32768 read callbacks, while write-side
+large primary persist split into two 64 MiB persistence operations with
+`persist_copy_stage_micros_total=1032641` and
+`persist_data_blocks_merge_micros_total=899094`.

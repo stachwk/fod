@@ -4453,3 +4453,99 @@ git diff --check HEAD~1..HEAD
 git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
+## 2026-08-21 commit 5082ff3 performance and monitoring validation
+
+Context/preflight commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search "FOD 3.3.6 read-only central telemetry performance monitoring tests fio replica fod-monitor" --wing fod
+make help
+rg -n "(test|profile).*fio|fio.*(test|profile)|strace|perf|fod-monitor|telemetry|replica|read-only|cluster" Makefile tests/integration docs -S
+sed -n '1,260p' tests/integration/test_fio_sequential_io.sh
+sed -n '1,280p' tests/integration/test_fio_primary_write_replica_read_docker.sh
+sed -n '2130,2165p' Makefile
+rg -n "shared_monitor_cluster|replica_read_only|postgres_telemetry|fod-monitor cluster|FOD_TELEMETRY_DSN|monitor_session_stats|cluster --json" tests/integration rust_monitor/src rust_fuse/src docs -S
+sed -n '1431,1810p' Makefile
+command -v fio
+command -v strace
+command -v perf
+command -v docker
+sudo -n true
+cargo build --manifest-path Cargo.toml -p fod-rust-fuse --bin fod-rust-fuse -p fod-rust-monitor --bin fod-monitor
+```
+
+FUSE fio/profile commands:
+
+```bash
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-fio4m; make --no-print-directory profile-fuse-sequential-io PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_FUSE_WORKLOAD=test-fio-sequential-io FIO_FILE_SIZE=4M FIO_BLOCK_SIZE=4k
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-fio128m; make --no-print-directory profile-fuse-sequential-io PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_FUSE_WORKLOAD=test-fio-sequential-io FIO_FILE_SIZE=128M FIO_BLOCK_SIZE=4k
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-fio4m-strace; make --no-print-directory profile-fuse-sequential-io PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace FIO_FILE_SIZE=4M FIO_BLOCK_SIZE=4k
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-fio128m-strace; make --no-print-directory profile-fuse-sequential-io PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace FIO_FILE_SIZE=128M FIO_BLOCK_SIZE=4k
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-fio4m-perf; make --no-print-directory profile-fuse-sudo-perf-stat PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_FUSE_WORKLOAD=test-fio-sequential-io PROFILE_SUDO='sudo -n' FIO_FILE_SIZE=4M FIO_BLOCK_SIZE=4k
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-fio128m-perf; make --no-print-directory profile-fuse-sudo-perf-stat PROFILE_RUN_ID="$RUN_ID" PROFILE_HOST="$(hostname -s)" PROFILE_FUSE_WORKLOAD=test-fio-sequential-io PROFILE_SUDO='sudo -n' FIO_FILE_SIZE=128M FIO_BLOCK_SIZE=4k
+```
+
+Monitoring and replica commands:
+
+```bash
+python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_shared_monitor_cluster
+make --no-print-directory test-fuse-postgres-telemetry
+python3 -m unittest tests.integration.test_mount_suite.FODMountSuite.test_replica_read_only
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=4M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+```
+
+Positive read-only central telemetry smoke while primary remained available:
+
+```bash
+# One inline bash smoke created a fresh docker-compose.replica-read.yml project,
+# exported endpoint routing with FOD_PG_PRIMARY_HOSTS=127.0.0.1:55441 and
+# FOD_PG_REPLICA_HOSTS=127.0.0.1:55442, wrote one file through FOD_ROLE=primary,
+# waited for WAL replay, mounted FOD_ROLE=replica with FOD_MONITOR_PUBLISH_INTERVAL_MS=500,
+# read the file through the replica, and queried primary with:
+FOD_MONITOR_DSN="host=127.0.0.1 port=55441 dbname=${POSTGRES_DB:-foddbname} user=${POSTGRES_USER:-foduser} password=${POSTGRES_PASSWORD:-cichosza}" target/debug/fod-monitor cluster --json > artifacts/perf/5082ff3/lt7300-readonly-telemetry-primary-20260821T110855Z/cluster.json
+jq -e --arg mp "$REPLICA_MOUNTPOINT" '.cluster.sessions[] | select(.mountpoint == $mp and .mount_mode == "replica" and .stats.source.data_source_role == "replica")' artifacts/perf/5082ff3/lt7300-readonly-telemetry-primary-20260821T110855Z/cluster.json
+```
+
+Extraction commands:
+
+```bash
+find artifacts/perf/5082ff3 -maxdepth 2 -type f -mmin -30 | sort
+rg -n "WRITE:|READ:|FOD callback counts|fuse_(read|write)_total_us|repo_persist_blocks_us|flush_execute_persist_plan_us|read_block_map_us|repo_fetch_block_range_us|FOD strace profile summary|\| .* total \||\| .* futex \||\| .* read \|" artifacts/perf/5082ff3/lt7300-20260821T110315Z-fio4m artifacts/perf/5082ff3/lt7300-20260821T110325Z-fio128m artifacts/perf/5082ff3/lt7300-20260821T110413Z-fio4m-strace artifacts/perf/5082ff3/lt7300-20260821T110424Z-fio128m-strace -S
+rg -n "cpu-clock|context-switches|instructions|cycles|LLC-load-misses|seconds time elapsed|workload_status|perf_status" artifacts/perf/5082ff3/lt7300-20260821T110458Z-fio4m-perf artifacts/perf/5082ff3/lt7300-20260821T110509Z-fio128m-perf -S
+rg -n "READ:|read:" artifacts/perf/5082ff3/lt7300-docker-primary-write-replica-read-20260821T110635Z/replica-read-fio.txt artifacts/perf/5082ff3/lt7300-docker-primary-write-replica-read-20260821T110703Z/replica-read-fio.txt -S
+jq '.cluster.sessions[] | select(.mount_mode == "replica") | {mountpoint, mount_mode, source: .stats.source, read_completed_tasks: .stats.read.completed_tasks, read_completed_bytes: .stats.read.completed_bytes}' artifacts/perf/5082ff3/lt7300-readonly-telemetry-primary-20260821T110855Z/cluster.json
+rg -n "PostgreSQL telemetry smoke|Status|workload|transaction delta|active-time|cache-hit|transactions" /tmp/fod-postgres-telemetry/3.3.6-20260821T110612Z -S
+git status --short --branch
+git ls-files --ignored --exclude-standard --others artifacts/perf/5082ff3 | head -n 20
+git status --ignored --short artifacts/perf/5082ff3 | head -n 40
+```
+
+Finalization commands:
+
+```bash
+git diff --check
+git diff --stat
+git diff -- commands.md | sed -n '1,220p'
+git diff -- conclusions.md | sed -n '1,260p'
+git status --short --branch
+git add commands.md conclusions.md
+git commit -m "FOD 3.3.6: record performance and monitoring validation"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+git add commands.md
+git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
