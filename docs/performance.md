@@ -168,6 +168,14 @@ make profile-fuse-sequential-io
 
 The default workload is `test-fio-sequential-io-strace`. It captures the full workload output, including `FOD_PROFILE_IO` boundary summaries and strace syscall tables, under `artifacts/perf/<commit>/<host>-<run-id>/fuse-test-fio-sequential-io-strace.txt`.
 
+Performance-sensitive fio tests record power metadata before and after the
+workload: AC state, power supplies, CPU governor, scaling driver, frequency
+limits and energy-performance preference when the kernel exposes them. For
+comparison runs, use `FOD_REQUIRE_AC_POWER=1` so the test fails fast when AC
+power is not online. Compare throughput only between runs with matching power
+source and CPU power policy; otherwise classify the result as
+environment-sensitive.
+
 Debug logs identify the selected payload state as `write_state_mode=block` and
 the semantic operation as `persist_write_class=existing_object_patch` for normal
 block flushes. Use a buffered sequential case such as the following to validate

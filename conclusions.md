@@ -2441,3 +2441,46 @@ reduce bytes moved through `fod_fetch_block_range`, change the transport, or use
 server-side evidence from `pg_stat_statements` to split PostgreSQL execution time
 from libpq transfer time. Optimizing the Rust decode loop alone is unlikely to
 remove the main cost.
+
+## 2026-08-21 - FOD 3.3.9 AC-controlled fio/strace/perf rerun
+
+Implementation commit: `5a4e3db`.
+
+The fio test harness now records power metadata before and after
+performance-sensitive workloads. The recorded fields include AC state, power
+supplies, CPU governor, scaling driver, min/max frequency and
+energy-performance preference when available. `FOD_REQUIRE_AC_POWER=1` turns
+the AC check into a hard precondition, so future benchmark runs fail before
+measurement when the laptop is on battery.
+
+Validation for the harness change passed:
+
+| Check | Result |
+| --- | --- |
+| `bash -n tests/integration/fod_testlib.sh tests/integration/test_fio_primary_write_replica_read_docker.sh tests/integration/test_fio_sequential_io.sh` | passed |
+| `bash -lc 'source tests/integration/fod_testlib.sh; fod_test_power_metadata smoke'` | passed; `ac_online=1`, `cpu_governors=powersave`, `cpu_energy_performance_preference=balance_performance` |
+| `git diff --check` | passed |
+
+AC-controlled reruns on `5a4e3db` used `FOD_REQUIRE_AC_POWER=1`. All recorded
+power snapshots showed `ac_online=1`, `BAT0 status=Charging`, CPU governor
+`powersave`, scaling driver `intel_pstate`, min/max frequency
+`400000/4100000` kHz and EPP `balance_performance`.
+
+| Workload | Result | Key profile values | Artifact |
+| --- | ---: | --- | --- |
+| `test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed; write 9002 KiB/s, read 3025 KiB/s | 1024 read callbacks, 1024 write callbacks, `repo_fetch_block_range_us=0`, strace total 4.517805 s | console run on `5a4e3db` |
+| `profile-fuse-sudo-perf-stat PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed; write 6302 KiB/s, read 6311 KiB/s | 1024 read callbacks, 1024 write callbacks, `repo_fetch_block_range_us=0`, strace total 4.123243 s, system-wide `perf_status=0` | `artifacts/perf/5a4e3db/lt7300-ac-rerun-fio4m-strace-perf-20260821T1642Z/perf-stat-system-test-fio-sequential-io-strace-fuse.txt` |
+| Docker primary-write / replica-read, 128 MiB, fio bs 4 KiB | read 84.9 MiB/s | 32768 read callbacks, `read_block_map_us=331683`, `repo_fetch_block_range_us=269883`, `fod_fetch_block_range` 65 calls / 215363 us, `pg_result_decode` 48535 us, `reply_data_us=169223` | `artifacts/perf/5a4e3db/lt7300-docker-primary-write-replica-read-20260821T164019Z` |
+| Docker primary-write / replica-read, 128 MiB, fio bs 64 KiB | read 250 MiB/s | 2048 read callbacks, `read_block_map_us=326207`, `repo_fetch_block_range_us=264472`, `fod_fetch_block_range` 65 calls / 217110 us, `pg_result_decode` 41603 us, `reply_data_us=26599` | `artifacts/perf/5a4e3db/lt7300-docker-primary-write-replica-read-20260821T164051Z` |
+
+The earlier `0fa91ac` replica-read throughput numbers, 19.1 MiB/s for 4 KiB
+and 56.2 MiB/s for 64 KiB, should not be used as code-regression evidence.
+They were environment-sensitive. Under AC with recorded power metadata, the same
+read-path code returns to the expected range near the `585a50d` results:
+84.9-87.1 MiB/s for 4 KiB and 248-250 MiB/s for 64 KiB.
+
+The useful payload-path conclusion remains unchanged but better constrained:
+Rust-side `BYTEA` decode/copy is visible, 41.6-48.5 ms for 128 MiB, but it is
+not the dominant cost. The next target should remain payload transfer/query
+shape around `fod_fetch_block_range` and `read_block_map`, not generic
+PostgreSQL tuning or hardlink count.

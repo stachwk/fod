@@ -5415,3 +5415,65 @@ git rev-parse --short HEAD
 cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
+
+## 2026-08-21 - AC power-aware fio rerun and profile validation
+
+Repository state while running the commands: `850abe7` before the test-harness
+change, then `5a4e3db` for the AC-controlled reruns. `fod_version.txt` remained
+`3.3.9`.
+
+Context, power-state and harness inspection:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 10 "fio replica read benchmark power battery AC artifact performance tests"
+bash -lc 'source tests/integration/fod_testlib.sh; fod_test_power_metadata pre-rerun'
+sed -n '1,220p' tests/integration/test_fio_primary_write_replica_read_docker.sh
+sed -n '1,220p' tests/integration/test_fio_sequential_io.sh
+sed -n '1,240p' tests/integration/fod_testlib.sh
+rg -n "perf|test-fio|fio.*strace|FOD_REQUIRE_AC_POWER" Makefile tests scripts docs -g '!artifacts/**'
+```
+
+Validation and commit commands for the power-aware test harness:
+
+```bash
+bash -n tests/integration/fod_testlib.sh tests/integration/test_fio_primary_write_replica_read_docker.sh tests/integration/test_fio_sequential_io.sh
+bash -lc 'source tests/integration/fod_testlib.sh; fod_test_power_metadata smoke'
+git diff --check
+git diff -- Makefile tests/integration/fod_testlib.sh tests/integration/test_fio_primary_write_replica_read_docker.sh tests/integration/test_fio_sequential_io.sh
+git add Makefile tests/integration/fod_testlib.sh tests/integration/test_fio_primary_write_replica_read_docker.sh tests/integration/test_fio_sequential_io.sh
+git commit -m "FOD 3.3.9: capture fio power metadata"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff HEAD~1..HEAD -- Makefile tests/integration/fod_testlib.sh tests/integration/test_fio_primary_write_replica_read_docker.sh tests/integration/test_fio_sequential_io.sh
+```
+
+AC-controlled fio, strace, replica-read and perf reruns:
+
+```bash
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-sequential-io-strace FIO_FILE_SIZE=4M
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory profile-fuse-sudo-perf-stat PROFILE_FUSE_WORKLOAD=test-fio-sequential-io-strace FIO_FILE_SIZE=4M PROFILE_RUN_ID=ac-rerun-fio4m-strace-perf-20260821T1642Z PROFILE_HOST=lt7300 PROFILE_SUDO='sudo -n'
+rg -n "pg_result_decode|pg_prepared_statement name=fod_fetch_block_range|repo_fetch_block_range_us|read_block_map_us|reply_data_us|READ:|read: IOPS|power before|power after|ac_online|cpu_governors|energy_performance" artifacts/perf/5a4e3db/lt7300-docker-primary-write-replica-read-20260821T164019Z artifacts/perf/5a4e3db/lt7300-docker-primary-write-replica-read-20260821T164051Z artifacts/perf/5a4e3db/lt7300-ac-rerun-fio4m-strace-perf-20260821T1642Z
+find artifacts/perf/5a4e3db/lt7300-docker-primary-write-replica-read-20260821T164019Z artifacts/perf/5a4e3db/lt7300-docker-primary-write-replica-read-20260821T164051Z artifacts/perf/5a4e3db/lt7300-ac-rerun-fio4m-strace-perf-20260821T1642Z -maxdepth 1 -type f -printf '%p\n' | sort
+```
+
+Finalization commands:
+
+```bash
+git diff --check
+git diff --stat
+git status --short
+cat fod_version.txt
+git add commands.md conclusions.md docs/performance.md
+git commit -m "FOD 3.3.9: record AC fio rerun"
+git add commands.md
+git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git diff HEAD~1..HEAD -- commands.md conclusions.md docs/performance.md
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
