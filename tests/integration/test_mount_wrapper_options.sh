@@ -14,6 +14,7 @@ cat >"${tmpdir}/bin/fod-bootstrap" <<'EOF'
 printf 'FOD_CONFIG=%s\n' "${FOD_CONFIG:-unset}"
 printf 'FOD_ALLOW_OTHER=%s\n' "${FOD_ALLOW_OTHER:-unset}"
 printf 'FOD_PROFILE=%s\n' "${FOD_PROFILE:-unset}"
+printf 'FOD_ACL=%s\n' "${FOD_ACL:-unset}"
 printf 'FOD_ATIME_POLICY=%s\n' "${FOD_ATIME_POLICY:-unset}"
 printf 'ARGS=%s\n' "$*"
 EOF
@@ -57,7 +58,12 @@ FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \
 grep -Fq "FOD_CONFIG=${db01_ini}" "${tmpdir}/db01.txt"
 grep -Fq "FOD_ALLOW_OTHER=1" "${tmpdir}/db01.txt"
 grep -Fq "FOD_PROFILE=bulk_write" "${tmpdir}/db01.txt"
+grep -Fq "FOD_ACL=off" "${tmpdir}/db01.txt"
 grep -Fq "ARGS=-f ${tmpdir}/mnt-db01 --config ${db01_ini} --profile bulk_write" "${tmpdir}/db01.txt"
+grep -Fq -- "--role auto" "${tmpdir}/db01.txt"
+grep -Fq -- "--selinux off" "${tmpdir}/db01.txt"
+grep -Fq -- "--acl off" "${tmpdir}/db01.txt"
+grep -Fq -- "--default-permissions" "${tmpdir}/db01.txt"
 
 FOD_CONFIG="${db01_ini}" \
 FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \
@@ -90,6 +96,34 @@ FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \
 
 [[ -d "${tmpdir}/mnt-nodiratime" ]]
 grep -Fq "FOD_ATIME_POLICY=nodiratime" "${tmpdir}/nodiratime.txt"
+
+# The acl=on mount option must enable the FOD ACL runtime flag.
+FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \
+  "${ROOT}/mount.fod" none "${tmpdir}/mnt-acl-on" \
+  -o "ini=${db01_ini},acl=on" \
+  >"${tmpdir}/acl-on.txt"
+
+[[ -d "${tmpdir}/mnt-acl-on" ]]
+grep -Fq "FOD_ACL=on" "${tmpdir}/acl-on.txt"
+grep -Fq -- "--acl on" "${tmpdir}/acl-on.txt"
+
+FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \
+  "${ROOT}/mount.fod" none "${tmpdir}/mnt-bare-acl" \
+  -o "ini=${db01_ini},acl" \
+  >"${tmpdir}/bare-acl.txt"
+
+[[ -d "${tmpdir}/mnt-bare-acl" ]]
+grep -Fq "FOD_ACL=on" "${tmpdir}/bare-acl.txt"
+grep -Fq -- "--acl on" "${tmpdir}/bare-acl.txt"
+
+FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \
+  "${ROOT}/mount.fod" none "${tmpdir}/mnt-noacl" \
+  -o "ini=${db01_ini},acl=on,noacl" \
+  >"${tmpdir}/noacl.txt"
+
+[[ -d "${tmpdir}/mnt-noacl" ]]
+grep -Fq "FOD_ACL=off" "${tmpdir}/noacl.txt"
+grep -Fq -- "--acl off" "${tmpdir}/noacl.txt"
 
 # Legacy explicit aliases remain temporarily supported, but warn.
 FOD_BOOTSTRAP_BIN="${tmpdir}/bin/fod-bootstrap" \

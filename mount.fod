@@ -133,6 +133,12 @@ translate_option() {
     acl=*)
       ACL="${opt#acl=}"
       ;;
+    acl)
+      ACL="on"
+      ;;
+    noacl)
+      ACL="off"
+      ;;
     atime-policy=*)
       ATIME_POLICY="${opt#atime-policy=}"
       ;;
@@ -292,6 +298,24 @@ ensure_mountpoint_dir
 FOD_ARGS=("-f" "${MOUNTPOINT}" "--config" "${CONFIG_FILE}")
 if [[ -n "${PROFILE}" ]]; then
   FOD_ARGS+=("--profile" "${PROFILE}")
+fi
+FOD_ARGS+=("--role" "${ROLE}")
+FOD_ARGS+=("--selinux" "${SELINUX}")
+FOD_ARGS+=("--acl" "${ACL}")
+FOD_ARGS+=("--atime-policy" "${ATIME_POLICY}")
+case "${DEFAULT_PERMISSIONS,,}" in
+  0|false|no|off)
+    FOD_ARGS+=("--no-default-permissions")
+    ;;
+  *)
+    FOD_ARGS+=("--default-permissions")
+    ;;
+esac
+if [[ -n "${LOG_LEVEL}" ]]; then
+  FOD_ARGS+=("--log-level" "${LOG_LEVEL}")
+fi
+if [[ "${DEBUG}" != "0" ]]; then
+  FOD_ARGS+=("--debug")
 fi
 
 exec "${FOD_BOOTSTRAP_CMD[@]}" "${FOD_ARGS[@]}"

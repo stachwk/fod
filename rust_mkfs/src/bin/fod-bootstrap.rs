@@ -8,7 +8,7 @@ mod pg_config;
 #[path = "../version.rs"]
 mod version;
 
-use clap::Parser;
+use clap::{ArgAction, Parser};
 use config::{
     apply_startup_passthrough_env, load_config_parser, load_runtime_config, resolve_config_path,
 };
@@ -42,6 +42,8 @@ struct Cli {
     atime_policy: String,
     #[arg(long, default_value_t = true)]
     default_permissions: bool,
+    #[arg(long = "no-default-permissions", action = ArgAction::SetTrue)]
+    no_default_permissions: bool,
     #[arg(long, default_value_t = false)]
     lazytime: bool,
     #[arg(long, default_value_t = false)]
@@ -236,13 +238,14 @@ fn main() {
             env_log_level.clone()
         }
     });
+    let default_permissions = cli.default_permissions && !cli.no_default_permissions;
     let bootstrap_runtime = match runtime.with_bootstrap_overrides(&BootstrapOverrides {
         profile: cli.profile.clone(),
         role: cli.role.clone(),
         selinux: cli.selinux.clone(),
         acl: cli.acl.clone(),
         atime_policy: cli.atime_policy.clone(),
-        default_permissions: cli.default_permissions,
+        default_permissions,
         lazytime: cli.lazytime,
         sync: cli.sync,
         dirsync: cli.dirsync,

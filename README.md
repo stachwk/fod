@@ -572,6 +572,7 @@ The project keeps the more specific smoke targets separate so you can rerun only
 - `make test-atime-noatime`
 - `make test-atime-nodiratime`
 - `make test-atime-relatime`
+- `make test-acl-mount-option`
 - `make test-pool-connections`
 - `make test-mount-suite`
 - `make test-all-full`
@@ -640,6 +641,7 @@ What the tests cover:
 - `make test-atime-noatime` checks FOD atime behavior in `noatime` mode and confirms that file reads and directory listings do not advance atime.
 - `make test-atime-nodiratime` checks FOD atime behavior in `nodiratime` mode and confirms that directory listings do not advance atime while file reads still do.
 - `make test-atime-relatime` checks FOD atime behavior in `relatime` mode and confirms that a stale atime advances on read.
+- `make test-acl-mount-option` checks that `mount.fod -o acl=on` enables FOD POSIX ACL handling, stores `system.posix_acl_access`, inherits `system.posix_acl_default` to new children, and denies reads through ACL enforcement.
 - `make test-timestamp-touch-once` checks the relatime-style one-touch behavior for a file and a directory, confirming that the first stale read/listing updates atime and the second one does not.
 - `make test-atime-benchmark` prints a short wall-time baseline for FOD atime behavior on file reads and directory listings so you can compare `default`, `noatime`, and `nodiratime` runs without paying for a very long smoke loop.
 - `make test-pool-connections` checks that FOD starts its PostgreSQL pool with the configured connection limit.
@@ -715,7 +717,7 @@ Mount-time visibility options:
 - `--lazytime`, `--sync`, and `--dirsync` are also available as mount options.
 - SELinux mount labels can be passed through `FOD_SELINUX_CONTEXT`, `FOD_SELINUX_FSCONTEXT`, `FOD_SELINUX_DEFCONTEXT`, and `FOD_SELINUX_ROOTCONTEXT`.
 - Set `FOD_LOG_LEVEL=DEBUG` when you want full traceback-style diagnostics; the default is `INFO` so expected `ENODATA` cases stay quiet.
-- `--acl on` is required if you want ACLs enforced during runtime; otherwise ACL xattrs stay inactive.
+- `--acl on` or `mount.fod -o acl=on` is required if you want ACLs enforced during runtime; the mount helper also accepts bare `acl` and `noacl`.
 - `--selinux on` or `--selinux auto` is required if you want `security.selinux` active during runtime; otherwise SELinux xattrs stay inactive.
 - `make test-mount-suite` contains both SELinux-off and SELinux-on smoke coverage; the SELinux-on case is skipped automatically unless the mount starts with `FOD_SELINUX=on|auto`.
 - FOD stores SELinux labels as xattrs and gates them at runtime; it does not implement a full mount label policy on its own.

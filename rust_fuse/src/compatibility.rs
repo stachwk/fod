@@ -13,7 +13,7 @@ pub(crate) const DEFAULT_FUSE_MAX_READAHEAD_BYTES: u32 = 512 * 1024;
 
 const FUSE_MAX_WRITE_ENV: &str = "FOD_FUSE_MAX_WRITE_BYTES";
 const FUSE_MAX_READAHEAD_ENV: &str = "FOD_FUSE_MAX_READAHEAD_BYTES";
-const FOD_REQUESTED_CAPABILITIES: InitFlags =
+const FOD_BASE_REQUESTED_CAPABILITIES: InitFlags =
     InitFlags::FUSE_POSIX_LOCKS.union(InitFlags::FUSE_FLOCK_LOCKS);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,8 +38,9 @@ impl FuseCompatibilitySnapshot {
         effective_max_write: u32,
         requested_max_readahead: u32,
         effective_max_readahead: u32,
+        acl_enabled: bool,
     ) -> Self {
-        let requested_capabilities = FOD_REQUESTED_CAPABILITIES;
+        let requested_capabilities = requested_capabilities(acl_enabled);
         let enabled_capabilities = requested_capabilities & available_capabilities;
         let unsupported_capabilities = requested_capabilities & !available_capabilities;
         Self {
@@ -56,7 +57,7 @@ impl FuseCompatibilitySnapshot {
         }
     }
 
-    pub(crate) fn configure(config: &mut KernelConfig) -> io::Result<Self> {
+    pub(crate) fn configure(config: &mut KernelConfig, acl_enabled: bool) -> io::Result<Self> {
         let kernel_protocol = config.kernel_abi();
         let available_capabilities = config.capabilities();
         let requested_max_write =
@@ -80,6 +81,7 @@ impl FuseCompatibilitySnapshot {
             effective_max_write,
             requested_max_readahead,
             effective_max_readahead,
+            acl_enabled,
         );
         if !snapshot.enabled_capabilities.is_empty() {
             config
@@ -113,6 +115,14 @@ impl FuseCompatibilitySnapshot {
             self.requested_max_readahead,
             self.effective_max_readahead,
         );
+    }
+}
+
+fn requested_capabilities(acl_enabled: bool) -> InitFlags {
+    if acl_enabled {
+        FOD_BASE_REQUESTED_CAPABILITIES | InitFlags::FUSE_POSIX_ACL
+    } else {
+        FOD_BASE_REQUESTED_CAPABILITIES
     }
 }
 
@@ -208,6 +218,7 @@ mod tests {
             512 * 1024,
             512 * 1024,
             256 * 1024,
+            false,
         );
 
         assert_eq!(snapshot.kernel_protocol, Version(7, 38));
@@ -228,6 +239,40 @@ mod tests {
     }
 
     #[test]
+    fn requests_posix_acl_only_when_acl_is_enabled() {
+        let available =
+            InitFlags::FUSE_POSIX_LOCKS | InitFlags::FUSE_FLOCK_LOCKS | InitFlags::FUSE_POSIX_ACL;
+        let disabled = FuseCompatibilitySnapshot::from_parts(
+            Version(7, 38),
+            available,
+            DEFAULT_FUSE_MAX_WRITE_BYTES,
+            DEFAULT_FUSE_MAX_WRITE_BYTES,
+            DEFAULT_FUSE_MAX_READAHEAD_BYTES,
+            DEFAULT_FUSE_MAX_READAHEAD_BYTES,
+            false,
+        );
+        let enabled = FuseCompatibilitySnapshot::from_parts(
+            Version(7, 38),
+            available,
+            DEFAULT_FUSE_MAX_WRITE_BYTES,
+            DEFAULT_FUSE_MAX_WRITE_BYTES,
+            DEFAULT_FUSE_MAX_READAHEAD_BYTES,
+            DEFAULT_FUSE_MAX_READAHEAD_BYTES,
+            true,
+        );
+
+        assert!(!disabled
+            .requested_capabilities
+            .contains(InitFlags::FUSE_POSIX_ACL));
+        assert!(enabled
+            .requested_capabilities
+            .contains(InitFlags::FUSE_POSIX_ACL));
+        assert!(enabled
+            .enabled_capabilities
+            .contains(InitFlags::FUSE_POSIX_ACL));
+    }
+
+    #[test]
     fn defaults_use_512k_write_and_readahead() {
         assert_eq!(DEFAULT_FUSE_MAX_WRITE_BYTES, 512 * 1024);
         assert_eq!(DEFAULT_FUSE_MAX_READAHEAD_BYTES, 512 * 1024);
@@ -242,6 +287,7 @@ mod tests {
             DEFAULT_FUSE_MAX_WRITE_BYTES,
             DEFAULT_FUSE_MAX_READAHEAD_BYTES,
             DEFAULT_FUSE_MAX_READAHEAD_BYTES,
+            false,
         );
 
         assert_eq!(snapshot.negotiated_protocol, USERSPACE_PROTOCOL_MAX);

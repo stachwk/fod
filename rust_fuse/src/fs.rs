@@ -2405,6 +2405,50 @@ impl FodFuse {
         (other_perm.unwrap_or(0) & required) == required
     }
 
+    fn mode_from_acl_entries(
+        entries: &[PosixAclEntry],
+        current_perm: u16,
+    ) -> Result<u16, libc::c_int> {
+        let mut user_obj_perm = None;
+        let mut group_obj_perm = None;
+        let mut mask_perm = None;
+        let mut other_perm = None;
+        let mut has_named_entry = false;
+        for entry in entries {
+            let perm = entry.perm & 0o7;
+            match entry.tag {
+                0x0001 => user_obj_perm = Some(perm),
+                0x0002 | 0x0008 => has_named_entry = true,
+                0x0004 => group_obj_perm = Some(perm),
+                0x0010 => mask_perm = Some(perm),
+                0x0020 => other_perm = Some(perm),
+                _ => {}
+            }
+        }
+        if has_named_entry && mask_perm.is_none() {
+            return Err(libc::EINVAL);
+        }
+        let user_bits = user_obj_perm.ok_or(libc::EINVAL)?;
+        let group_bits = mask_perm.or(group_obj_perm).ok_or(libc::EINVAL)?;
+        let other_bits = other_perm.ok_or(libc::EINVAL)?;
+        Ok((current_perm & !0o777) | (user_bits << 6) | (group_bits << 3) | other_bits)
+    }
+
+    fn acl_access_mode_text(
+        &self,
+        path: &str,
+        value: &[u8],
+    ) -> Result<Option<String>, libc::c_int> {
+        let entries = Self::parse_posix_acl_xattr(value)?;
+        let attrs = self.lookup_path(path)?.ok_or(ENOENT)?.file_attr;
+        let new_perm = Self::mode_from_acl_entries(&entries, attrs.perm)?;
+        if new_perm == attrs.perm {
+            Ok(None)
+        } else {
+            Ok(Some(format!("{:o}", new_perm & 0o7777)))
+        }
+    }
+
     fn acl_allows(
         &self,
         path: &str,
@@ -3948,7 +3992,7 @@ impl Drop for FodFuse {
 
 impl Filesystem for FodFuse {
     fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> std::io::Result<()> {
-        FuseCompatibilitySnapshot::configure(config)?.log();
+        FuseCompatibilitySnapshot::configure(config, self.acl_enabled)?.log();
         Ok(())
     }
 
@@ -4293,11 +4337,37 @@ impl Filesystem for FodFuse {
                 return;
             }
         }
+        let acl_mode_text = if self.acl_enabled && name == "system.posix_acl_access" {
+            match self.acl_access_mode_text(&path, value) {
+                Ok(value) => value,
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let result = self
             .repo
             .store_xattr_value_for_owner(&owner.0, owner.1, &name, value);
         match result {
             Ok(_) => {
+                if let Some(mode_text) = acl_mode_text {
+                    let mode_result = match owner.0.as_str() {
+                        "file" => self.repo.update_file_mode(owner.1, &mode_text),
+                        "dir" => self.repo.update_directory_mode(owner.1, &mode_text),
+                        _ => Ok(()),
+                    };
+                    if mode_result.is_err() {
+                        warn!(
+                            "FOD setxattr stored ACL but failed to sync mode path={} name={}",
+                            path, name
+                        );
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                }
                 debug!("FOD setxattr stored path={} name={}", path, name);
                 reply.ok()
             }
@@ -7497,6 +7567,37 @@ mod tests {
             AtimePolicy::StrictAtime
         );
         assert!(AtimePolicy::parse("bad").is_err());
+    }
+
+    #[test]
+    fn acl_access_mode_uses_mask_for_group_class_and_preserves_special_bits() {
+        let entries = [
+            super::PosixAclEntry {
+                tag: 0x0001,
+                perm: 0o6,
+                id: -1,
+            },
+            super::PosixAclEntry {
+                tag: 0x0004,
+                perm: 0o7,
+                id: -1,
+            },
+            super::PosixAclEntry {
+                tag: 0x0010,
+                perm: 0o4,
+                id: -1,
+            },
+            super::PosixAclEntry {
+                tag: 0x0020,
+                perm: 0o1,
+                id: -1,
+            },
+        ];
+
+        assert_eq!(
+            super::FodFuse::mode_from_acl_entries(&entries, 0o4000 | 0o777).unwrap(),
+            0o4000 | 0o641
+        );
     }
 
     #[test]
