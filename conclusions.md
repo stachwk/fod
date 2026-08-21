@@ -1974,3 +1974,22 @@ Pre-benchmark validation passed with `cargo check --workspace --locked` and
 `cargo test -p fod-rust-runtime --lib --locked`. `cargo test -p
 fod-rust-fuse --lib --locked` is not applicable because `fod-rust-fuse` has no
 library target.
+
+Intermediate benchmark on commit `18f5ae6` confirmed that the range prefetch
+works but does not fully remove the direct-I/O read bottleneck:
+
+| Workload | Artifact | Result |
+| --- | --- | --- |
+| Docker replica read 4 MiB, direct prefetch 128 | `artifacts/perf/18f5ae6/lt7300-docker-primary-write-replica-read-20260821T115349Z` | read `8000 KiB/s`, callbacks `read=1024`, `read_block_map_us=170623`, `repo_fetch_block_range_us=165589`, `operation_count=1166`, `operation_failures=0`. |
+| Docker replica read 128 MiB, direct prefetch 128 | `artifacts/perf/18f5ae6/lt7300-docker-primary-write-replica-read-20260821T115416Z` | read `14.3 MiB/s`, callbacks `read=32768`, `read_block_map_us=3117296`, `repo_fetch_block_range_us=3026941`, `operation_count=33165`, `operation_failures=0`. |
+
+Compared with the previous 128 MiB direct-I/O replica profile, block range
+fetch cost dropped from `repo_fetch_block_range_us=8394474` to `3026941`, and
+`read_block_map_us` dropped from `8734999` to `3117296`. The remaining issue is
+not the range fetch itself but `file_read_metadata()` being executed once per
+4 KiB callback before the cache-hit fast path.
+
+The follow-up FOD 3.3.7 patch therefore caches `FileReadMetadata` per open
+handle only when `read_only && fopen_direct_io`. Writable mounts keep the old
+per-read metadata lookup, so truncate/write/atime behavior on primary mounts is
+not changed by this optimization.

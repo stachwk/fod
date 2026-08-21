@@ -85,7 +85,9 @@ Priorytet: po zamknieciu powyzszych bledow poprawnosci/obserwowalnosci.
 
 Status: FOD 3.3.7 optymalizuje sekwencyjne `fopen_direct_io` przez
 `direct_io_read_prefetch_blocks`, bez zmiany formatu storage i bez zakladania,
-ze kernel przestanie wysylac 4 KiB callbacki.
+ze kernel przestanie wysylac 4 KiB callbacki. Pomiar po pierwszym patchu
+pokazal, ze trzeba tez usunac metadata lookup per callback, wiec read-only
+direct-I/O cache'uje `FileReadMetadata` per handle.
 
 - profilowac jeden callback FUSE 512 KiB na fizycznej replice;
 - policzyc dokladne metadata/map/payload round-trip PostgreSQL;

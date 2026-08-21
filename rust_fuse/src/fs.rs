@@ -190,6 +190,7 @@ struct FileHandleState {
     file_id: Option<u64>,
     flags: i32,
     atime_touched: bool,
+    read_metadata: Option<FileReadMetadata>,
 }
 
 #[repr(C)]
@@ -2839,6 +2840,37 @@ impl FodFuse {
         self.file_id_for_handle(fh, ino)?.ok_or(ENOENT)
     }
 
+    fn file_read_metadata_for_handle(
+        &self,
+        fh: u64,
+        file_id: u64,
+    ) -> Result<Option<FileReadMetadata>, String> {
+        if self.read_only && self.fopen_direct_io {
+            if let Some(metadata) = self
+                .fh_table
+                .lock()
+                .ok()
+                .and_then(|guard| guard.get(&fh).and_then(|state| state.read_metadata.clone()))
+            {
+                return Ok(Some(metadata));
+            }
+        }
+
+        let metadata = self.repo.file_read_metadata(file_id)?;
+        if self.read_only && self.fopen_direct_io {
+            if let Some(metadata) = metadata.as_ref() {
+                if let Ok(mut guard) = self.fh_table.lock() {
+                    if let Some(state) = guard.get_mut(&fh) {
+                        if state.file_id == Some(file_id) {
+                            state.read_metadata = Some(metadata.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(metadata)
+    }
+
     fn file_size_for_file_id_or_errno(&self, file_id: u64) -> Result<u64, libc::c_int> {
         match self.repo.file_size(file_id) {
             Ok(Some(size)) => Ok(size),
@@ -3693,6 +3725,7 @@ impl FodFuse {
                     file_id,
                     flags,
                     atime_touched: false,
+                    read_metadata: None,
                 },
             );
         }
@@ -5244,7 +5277,7 @@ impl Filesystem for FodFuse {
             return;
         }
         let size = size as u64;
-        let read_metadata = match self.repo.file_read_metadata(file_id) {
+        let read_metadata = match self.file_read_metadata_for_handle(fh, file_id) {
             Ok(value) => value,
             Err(err) => {
                 self.log_request_error(

@@ -2894,6 +2894,37 @@ git rev-parse --short HEAD
 git log -1 --oneline
 ```
 
+Post-commit review, MemPalace refresh, intermediate benchmark and follow-up
+metadata-cache analysis:
+
+```bash
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git show --name-only --format=fuller --no-renames HEAD
+git status --short --branch && git rev-parse --short HEAD && cat fod_version.txt
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=128 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=4M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=128 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+rg -n "file_read_metadata|ReadMetadata|read_metadata|metadata_cache|touch_file_access_time_from_read_metadata|file_size_for_file_id" rust_fuse/src rust_hotpath/src -S
+sed -n '820,845p' rust_fuse/src/fs.rs
+sed -n '3535,3565p' rust_hotpath/src/pg.rs
+sed -n '5875,5915p' rust_hotpath/src/pg.rs
+sed -n '3605,3640p' rust_fuse/src/fs.rs
+rg -n "struct Handle|fh_table|file_id_for_handle|remove_handle_state|clear_read_cache_for_file|clear_file|open\\(" rust_fuse/src/fs.rs rust_fuse/src/read_cache.rs -S
+sed -n '1285,1325p' rust_fuse/src/fs.rs
+sed -n '2800,2855p' rust_fuse/src/fs.rs
+sed -n '3325,3725p' rust_fuse/src/fs.rs
+sed -n '4780,4925p' rust_fuse/src/fs.rs
+rg -n "struct FileHandleState" -C 5 rust_fuse/src/fs.rs
+cargo fmt --all
+cargo check --workspace --locked
+cargo test -p fod-rust-runtime --lib --locked
+git diff --check
+git diff --stat
+git diff -- rust_fuse/src/fs.rs | sed -n '1,220p'
+git status --short --branch
+```
+
 ## 2026-08-21 commit 7076787 fio without FUSE direct_io
 
 Context and preflight commands:
