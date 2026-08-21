@@ -5543,3 +5543,76 @@ git diff HEAD~1..HEAD -- commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN
 git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
+
+## 2026-08-21 - Single-block read map specialization
+
+Repository state while starting the work: `3fad19c`. Code was committed as
+`b7ffbd7`. `fod_version.txt` remained `3.3.9`.
+
+Context and inspection commands:
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+source ~/.venv/bin/activate && mempalace search "FOD read_block_map repo_fetch_block_range next optimization stale data_object_id" --mode projects --wing fod --agent codex
+mempalace search --help
+mempalace search --wing fod --results 8 "FOD read_block_map repo_fetch_block_range next optimization stale data_object_id"
+sed -n '1,260p' rust_fuse/src/read_cache.rs
+sed -n '260,620p' rust_fuse/src/read_cache.rs
+sed -n '580,700p' rust_fuse/src/read_cache.rs
+sed -n '1260,1485p' rust_fuse/src/fs.rs
+sed -n '1485,1615p' rust_fuse/src/fs.rs
+sed -n '5400,5535p' rust_fuse/src/fs.rs
+sed -n '150,190p' docs/FOD_CURRENT_ACTION_PLAN.md
+rg -n "read_block_map\\(|cached_read_block_map|assemble_read_slice|repo_fetch_block_range" rust_fuse/src rust_hotpath/src docs/FOD_CURRENT_ACTION_PLAN.md
+```
+
+The first `mempalace search` command used `mine`-style arguments and failed
+with an argument parsing error. The corrected search command with `--wing fod`
+was used immediately afterwards.
+
+Implementation and validation commands:
+
+```bash
+cargo fmt --all -- --check
+git diff -- rust_fuse/src/read_cache.rs rust_fuse/src/fs.rs
+cargo check --workspace --locked
+make test-rust-pg-query
+cargo test --workspace --locked read_cache
+make test-block-read
+FOD_REQUIRE_AC_POWER=1 make test-fio-sequential-io-strace FIO_FILE_SIZE=4M
+git status --short
+git diff --stat
+git diff --check
+git add rust_fuse/src/fs.rs rust_fuse/src/read_cache.rs
+git commit -m "FOD 3.3.9: avoid full map assembly for single-block reads"
+git show --stat --oneline HEAD
+git show --check --format=fuller HEAD
+git diff HEAD~1..HEAD -- rust_fuse/src/fs.rs rust_fuse/src/read_cache.rs
+```
+
+AC-controlled profiling commands on `b7ffbd7`:
+
+```bash
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=64k REPLICA_READ_WAIT_SECONDS=120
+FOD_REQUIRE_AC_POWER=1 make --no-print-directory test-fio-primary-write-replica-read-docker REPLICA_READ_FIO_FILE_SIZE=128M REPLICA_READ_FIO_BLOCK_SIZE=4k REPLICA_READ_WAIT_SECONDS=120
+```
+
+Finalization commands:
+
+```bash
+git diff --check
+git diff --stat
+git diff -- commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+cat fod_version.txt
+git add commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git commit -m "FOD 3.3.9: record single-block read map profile"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git diff HEAD~1..HEAD -- commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN.md
+git status --short --branch
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```

@@ -182,6 +182,28 @@ zalezny od `pg_prepared_statement`/transferu payloadu. Nastepny etap powinien
 wiec isc w transport/query shape dla 65 wywolan `fod_fetch_block_range`, a nie
 w dalsze mikrooptymalizacje dekodera.
 
+FOD 3.3.9 w commicie `b7ffbd7` dodal lokalna specjalizacje dla pojedynczego
+bloku: po wyliczeniu wiekszego prefetch window `read_block_map_target_block()`
+zapisuje brakujace bloki do cache, ale nie zwraca i nie scala pelnej mapy
+blokow, jezeli biezacy FUSE callback potrzebuje tylko jednego bloku. Semantyka
+sparse blocks pozostaje bez zmian: brak rekordu po udanym fetchu daje zera,
+a blad bazy nadal daje `EIO`.
+
+Walidacja AC 2026-08-21:
+
+| Workload | Read result | `read_block_map_us` | `repo_fetch_block_range_us` | `pg_prepared_statement` | Artifact |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 128 MiB, fio bs 4 KiB | 89.2 MiB/s | 326232 | 267392 | 219695 | `artifacts/perf/b7ffbd7/lt7300-docker-primary-write-replica-read-20260821T172119Z` |
+| 128 MiB, fio bs 4 KiB repeat | 84.7 MiB/s | 336052 | 273630 | 221956 | `artifacts/perf/b7ffbd7/lt7300-docker-primary-write-replica-read-20260821T172248Z` |
+| 128 MiB, fio bs 64 KiB repeat | 245 MiB/s | 330846 | 268293 | 225901 | `artifacts/perf/b7ffbd7/lt7300-docker-primary-write-replica-read-20260821T172220Z` |
+
+Wniosek: ta zmiana jest poprawnym cleanupem lokalnego kosztu mapowania, ale
+nie jest duza optymalizacja end-to-end. Dla 4 KiB throughput pozostaje w
+poprzednim zakresie, a dominujacy koszt nadal pochodzi z 65 transferow
+`fod_fetch_block_range` oraz z `reply_data_us` przy 32768 callbackach. Nastepny
+etap nadal musi dotyczyc transport/query shape albo bezpiecznej reprezentacji
+bulk-read/cache bez uzywania potencjalnie nieaktualnego `data_object_id`.
+
 ## 7. HA miedzy hostami
 
 Priorytet: wymagany przed deklarowaniem pelnego automatycznego HA.

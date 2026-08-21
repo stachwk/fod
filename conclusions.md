@@ -2530,3 +2530,47 @@ remaining read-path target is still the 65 `fod_fetch_block_range` payload
 transfers of 128 MiB through `PQexecPrepared`/libpq and PostgreSQL execution.
 Next work should consider a larger query/transport shape or bulk-read cache
 representation, not hardlink count or broad PostgreSQL tuning.
+
+## 2026-08-21 - FOD 3.3.9 single-block read map specialization
+
+Implementation commit: `b7ffbd7`.
+
+`read_block_map_target_block()` now handles a single requested block inside a
+larger prefetch range without returning and merging a full block map for the
+caller. It still fetches and stores the missing prefetch blocks, so cache warmup
+behavior is preserved. Sparse blocks keep the previous behavior: absence of a
+row is interpreted as zero-filled data only after the database fetch succeeds;
+database errors still return `EIO`.
+
+Validation passed:
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | passed |
+| `cargo check --workspace --locked` | passed |
+| `make test-rust-pg-query` | passed; 16 tests |
+| `cargo test --workspace --locked read_cache` | passed |
+| `make test-block-read` | passed |
+| `FOD_REQUIRE_AC_POWER=1 make test-fio-sequential-io-strace FIO_FILE_SIZE=4M` | passed; write 4842 KiB/s, read 5860 KiB/s, `repo_fetch_block_range_us=0`, AC power recorded |
+
+AC-controlled Docker primary-write/replica-read diagnostics on `b7ffbd7`:
+
+| Workload | Throughput | `read_block_map_us` | `repo_fetch_block_range_us` | `pg_prepared_statement fod_fetch_block_range` | `reply_data_us` | Artifact |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 128 MiB, fio bs 4 KiB | 89.2 MiB/s | 326232 | 267392 | 219695 | 165617 | `artifacts/perf/b7ffbd7/lt7300-docker-primary-write-replica-read-20260821T172119Z` |
+| 128 MiB, fio bs 4 KiB repeat | 84.7 MiB/s | 336052 | 273630 | 221956 | 168081 | `artifacts/perf/b7ffbd7/lt7300-docker-primary-write-replica-read-20260821T172248Z` |
+| 128 MiB, fio bs 64 KiB | 215 MiB/s | 370760 | 302997 | 259903 | 30897 | `artifacts/perf/b7ffbd7/lt7300-docker-primary-write-replica-read-20260821T172150Z` |
+| 128 MiB, fio bs 64 KiB repeat | 245 MiB/s | 330846 | 268293 | 225901 | 26701 | `artifacts/perf/b7ffbd7/lt7300-docker-primary-write-replica-read-20260821T172220Z` |
+
+The 64 KiB first run was noisy; the repeat returned to the previous stable
+range. The 4 KiB runs remain in the same end-to-end throughput range as
+`346aaf8` and the AC baseline. The code change removes unnecessary local map
+assembly for the single-block callback shape, but it does not materially reduce
+the dominant cost because only 65 cache-miss prefetches call
+`fod_fetch_block_range`, while the remaining 4 KiB callbacks are direct cache
+hits and are dominated by `reply_data_us` plus FUSE/syscall overhead.
+
+The next read-path target should remain larger than this local cleanup:
+`fod_fetch_block_range` transport/query shape, server-side versus libpq transfer
+split, or a cache representation that reduces payload movement without using
+stale `data_object_id` metadata.
