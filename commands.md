@@ -2852,6 +2852,83 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-22 - QNAP smoke and PostgreSQL checks
+
+Repository state while starting the work: `43724e8`. `fod_version.txt`
+remained `3.3.9`.
+
+Context and QNAP preset inspection:
+
+```bash
+source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "QNAP test qnap-smoke docker qnap config FOD"
+git status --short --branch --ahead-behind
+git rev-parse --short HEAD
+cat fod_version.txt
+rg -n "qnap|QNAP" Makefile docs tests scripts README* conclusions.md commands.md -S
+find /home/wojtek/git/config -maxdepth 4 -type f | sort | sed -n '1,160p'
+sed -n '650,730p' Makefile
+sed -n '900,970p' Makefile
+sed -n '1860,1945p' Makefile
+cat /home/wojtek/git/config/ports/fod.env
+sed -n '1,220p' /home/wojtek/git/config/README.md
+rg -n "^smoke:|test_db|PGPASSWORD|psql|FOD ready|qnap-smoke|qnap-init|init-qnap" Makefile tests -S
+sed -n '250,310p' Makefile
+rg -n "FOD_REMOTE_PG_ENV|FOD_DSN_CONNINFO|FOD_PG_HOST|POSTGRES_DB\\)" Makefile rust_mkfs/src rust_runtime/src -S
+make --no-print-directory qnap-config-show
+timeout 5 bash -lc 'ping -c 1 -W 2 192.168.1.11 >/dev/null && echo qnap_ping_ok || echo qnap_ping_failed'
+```
+
+QNAP smoke, schema status, and guarded upgrade attempt:
+
+```bash
+make --no-print-directory qnap-smoke
+make --no-print-directory qnap-init
+FOD_PG_HOST=192.168.1.11 FOD_PG_PORT=5432 FOD_PG_DBNAME=foddbname FOD_PG_USER=postgresql FOD_PG_PASSWORD=postgresqlfod target/debug/fod-rust-mkfs status
+target/debug/fod-rust-mkfs --help
+target/debug/fod-rust-mkfs upgrade --help
+PGPASSWORD=postgresqlfod psql -v ON_ERROR_STOP=1 -h 192.168.1.11 -p 5432 -U postgresql -d foddbname -At -c "SELECT current_database(), current_user, version();" -c "SELECT extname FROM pg_extension WHERE extname='pg_stat_statements';"
+ls -la .fod 2>/dev/null
+test -f .fod/schema_admin_password && wc -c .fod/schema_admin_password || true
+rg -n "schema-admin-password|upgrade|Schema admin secret|FOD_SCHEMA_ADMIN_PASSWORD" rust_mkfs/src Makefile tests -S
+sed -n '1,120p' migrations/0017_data_object_payload_ownership.sql
+sed -n '1,160p' migrations/0018_payload_capacity_reservations.sql
+sed -n '1,160p' migrations/0022_monitor_session_stats.sql
+FOD_PG_HOST=192.168.1.11 FOD_PG_PORT=5432 FOD_PG_DBNAME=foddbname FOD_PG_USER=postgresql FOD_PG_PASSWORD=postgresqlfod target/debug/fod-rust-mkfs upgrade --schema-admin-password "$(cat .fod/schema-admin-password)"
+```
+
+The QNAP upgrade attempt failed before migrations because the local
+`.fod/schema-admin-password` does not match the schema-admin secret stored in
+the QNAP database.
+
+QNAP PostgreSQL tests that do not require a ready FOD schema:
+
+```bash
+sed -n '1,240p' tests/integration/test_postgresql_requirements.py
+sed -n '1,220p' tests/integration/test_postgresql_connection_churn.py
+sed -n '1,220p' tests/integration/test_postgresql_wal_pressure.py
+rg -n "test-postgresql-requirements|test-postgresql-connection-churn|test-postgresql-wal-pressure|profile-pg-stat-statements-ready" Makefile
+make --no-print-directory QNAP=1 test-postgresql-requirements-autocommit-off
+make --no-print-directory QNAP=1 test-postgresql-requirements-autocommit-on
+POSTGRES_BENCHMARK_LABEL=qnap FOD_PG_HOST=192.168.1.11 FOD_PG_PORT=5432 FOD_PG_DBNAME=foddbname FOD_PG_USER=postgresql FOD_PG_PASSWORD=postgresqlfod PG_CONNECTION_CHURN_COUNT=30 .venv/bin/python tests/integration/test_postgresql_connection_churn.py
+FOD_PG_HOST=192.168.1.11 FOD_PG_PORT=5432 FOD_PG_DBNAME=foddbname FOD_PG_USER=postgresql FOD_PG_PASSWORD=postgresqlfod target/debug/fod-rust-mkfs status | sed -n '1,28p'
+tail -n 100 commands.md
+tail -n 100 conclusions.md
+sed -n '1,140p' TODO.md
+git status --short --branch --ahead-behind
+date '+%Y-%m-%d %H:%M:%S %Z'
+git rev-parse --short HEAD
+git diff --check
+git diff --stat
+git diff -- commands.md conclusions.md TODO.md
+git add commands.md conclusions.md TODO.md
+git commit -m "FOD 3.3.9: record QNAP smoke results"
+git show --stat --oneline --decorate --no-renames HEAD
+git diff --check HEAD~1..HEAD
+git diff HEAD~1..HEAD -- commands.md conclusions.md TODO.md
+git status --short --branch --ahead-behind
+source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
+```
+
 ## 2026-08-21 - SELinux/ACL validation and Docker smoke repair
 
 Repository state while starting the work: `ff8242d`. `fod_version.txt`

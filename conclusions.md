@@ -2605,3 +2605,29 @@ use the container's `python3` instead of the host `.venv` symlink, and
 `FOD_TEST_ACL_MOUNT_SELINUX=on` variant. When the test runs as root, it records
 that owner read denial cannot be proven with `os.access()` because root can
 bypass DAC; the non-root local path still checks the denial directly.
+
+## 2026-08-22 - QNAP smoke on `43724e8`
+
+The QNAP transport preset was reachable from `lt7300`:
+
+| Check | Result |
+| --- | --- |
+| `ping 192.168.1.11` | passed |
+| `make qnap-config-show` | resolved Docker TLS transport `tcp://192.168.1.11:2376` and PostgreSQL `192.168.1.11:5432` |
+| `make qnap-smoke` | passed; QNAP PostgreSQL container started and became ready |
+| direct PostgreSQL probe | passed; PostgreSQL `16.14`, user/database `postgresql` / `foddbname`, `pg_stat_statements` installed |
+| `make QNAP=1 test-postgresql-requirements-autocommit-off` | passed; server version `160014`, `max_connections=100`, `pool_max_connections=10` |
+| `make QNAP=1 test-postgresql-requirements-autocommit-on` | passed with the same server settings |
+| direct QNAP connection churn, 30 connects | passed; `elapsed_s=3.375`, `connect_avg_ms=98.862`, `connect_p95_ms=159.755`, `query_avg_ms=13.572`, `query_p95_ms=27.177` |
+
+The current QNAP FOD schema is not ready for mounted FUSE tests from this
+checkout: `fod-rust-mkfs status` reports schema version `16`, latest migration
+`22`, pending migrations `0017..0022`, `Schema admin secret: present`, and
+`FOD ready: no`. `qnap-init` correctly refused to reinitialize an existing FOD
+schema. `fod-rust-mkfs upgrade --schema-admin-password "$(cat .fod/schema-admin-password)"`
+was also correctly rejected because the local schema-admin password does not
+match the secret stored in the QNAP database. No migration was applied; a
+follow-up QNAP status still reported schema version `16` with the same pending
+migrations. Do not bypass this guard. To run mounted FUSE/ACL tests on QNAP,
+provide the matching QNAP schema-admin password or reset that dedicated QNAP
+test database deliberately.

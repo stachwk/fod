@@ -11,6 +11,9 @@ Reading guide:
 
 ## Current Follow-ups
 
+- [ ] Reconcile the QNAP FOD test database schema-admin secret or deliberately reset that dedicated QNAP database before running mounted FUSE/ACL tests there.
+  - 2026-08-22, commit `43724e8`: QNAP PostgreSQL smoke and PostgreSQL-only checks passed, but the FOD schema on QNAP is still version `16` with pending migrations `0017..0022`. `fod-rust-mkfs upgrade` correctly rejected the local `.fod/schema-admin-password` because it does not match the secret stored in the QNAP database. Do not bypass the guard; use the matching secret or a controlled reset.
+
 - [ ] Optimize the PostgreSQL-backed replica read path after closing the FOD 3.2.84 strict read-only correctness fix.
   - Baseline evidence (2026-08-19, Docker physical replica, 256 MiB, caches/read-ahead disabled, primary stopped before read): 4 KiB = ~8.4 MiB/s with 65,536 FOD read callbacks and 131,226 PostgreSQL operations; 64 KiB = 29.1 MiB/s with 4,096 callbacks and 8,332 operations; 512 KiB = 38.5 MiB/s with 512 callbacks and 1,162 operations; fio 1 MiB = 41.9 MiB/s but still 512 FOD callbacks and 905 PostgreSQL operations.
   - Decision: treat 512 KiB as the current effective FUSE read-callback ceiling. fio 1 MiB issues 256 userspace requests but FOD still receives 512 callbacks, so increasing the fio block above 512 KiB does not currently produce larger FUSE reads.
