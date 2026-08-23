@@ -2378,3 +2378,115 @@ Regression policy:
 - preserve primary-offline and WAL-replay evidence;
 - after read-path changes, re-run 4 KiB, 64 KiB, and 512 KiB at 256 MiB;
 - record both throughput and callback/operation counts, not throughput alone.
+
+## QNAP primary/replica FOD matrix (3.3.11)
+
+Dedicated command:
+
+```bash
+make test-fio-primary-write-replica-read-qnap
+```
+
+Default matrix:
+
+```text
+file size:   256M per data point
+block sizes: 4k 16k 64k 256k 512k 1m
+primary:     QNAP temporary PostgreSQL primary
+replica:     QNAP temporary physical PostgreSQL replica
+client:      FOD/FUSE on the host running make
+```
+
+The test uses a unique Docker Compose project and dedicated temporary volumes. It
+does not reset or reuse the normal QNAP `fod-postgres` volume.
+
+For every block size the sequence is:
+
+1. write through a writable FOD mount on primary;
+2. unmount and wait until the replica replays the primary WAL flush LSN;
+3. restart primary and measure a fresh FOD primary read;
+4. wait for replica replay again;
+5. stop primary and verify it is unreachable;
+6. restart replica and measure a fresh strict read-only FOD replica read;
+7. verify that a filesystem write through the replica mount is rejected.
+
+FOD read cache, read-ahead and direct-I/O prefetch are disabled for these
+measurements; FUSE direct I/O is enabled. PostgreSQL container restart clears
+shared buffers before each read phase. Host kernel page cache is intentionally
+not dropped because that is host-global.
+
+The matrix writes `summary.tsv` plus raw fio JSON, FOD mount logs, PostgreSQL
+logs, WAL replay evidence and power metadata below `artifacts/perf/<commit>/`.
+
+Larger run:
+
+```bash
+QNAP_REPLICA_READ_FIO_FILE_SIZE=1G \
+QNAP_REPLICA_READ_FIO_BLOCK_SIZES="4k 16k 64k 256k 512k 1m" \
+make test-fio-primary-write-replica-read-qnap
+```
+
+### First validated QNAP baseline - 2026-08-23
+
+Commit under test: `b39b708` (`FOD 3.3.11`).
+
+Client/test conditions:
+
+- client host: `lt7300`;
+- QNAP endpoint: `192.168.1.11`;
+- temporary PostgreSQL primary: port `55441`;
+- temporary physical replica: port `55442`;
+- file size: `256M` per point;
+- FOD read cache/read-ahead/direct-I/O prefetch: disabled;
+- FUSE direct I/O: enabled;
+- atime policy: `noatime`;
+- PostgreSQL restarted before each primary/replica read phase;
+- host kernel page cache: not dropped;
+- client AC power: online;
+- client CPU governor: `powersave`.
+
+Measured matrix:
+
+| block size | primary write MiB/s | primary write IOPS | primary read MiB/s | primary read IOPS | replica read MiB/s | replica read IOPS | replica vs primary read |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4k | 5.815 | 1488.609 | 0.537 | 137.553 | 0.949 | 242.940 | +76.7% |
+| 16k | 7.512 | 480.765 | 1.945 | 124.475 | 3.229 | 206.631 | +66.0% |
+| 64k | 5.862 | 93.788 | 7.942 | 127.071 | 12.252 | 196.028 | +54.3% |
+| 256k | 5.412 | 21.650 | 15.784 | 63.136 | 26.064 | 104.256 | +65.1% |
+| 512k | 6.295 | 12.590 | 10.637 | 21.273 | 8.900 | 17.801 | -16.3% |
+| 1m | 2.155 | 2.155 | 12.733 | 12.733 | 12.430 | 12.430 | -2.4% |
+
+Correctness/evidence for every point:
+
+- WAL replay reached the required primary flush LSN before replica read;
+- primary was unreachable before the replica read phase;
+- replica remained in recovery and transaction read-only;
+- replica filesystem write was rejected;
+- replica `operation_failures=0`;
+- no forbidden replica DML was observed.
+
+Interpretation:
+
+- `256k` is the strongest read candidate in this first QNAP run:
+  `15.784 MiB/s` on primary and `26.064 MiB/s` on replica.
+- Primary write peaks at `16k` (`7.512 MiB/s`) in this matrix; `1m` is the
+  weakest write point (`2.155 MiB/s`).
+- Replica read is materially faster than primary read for `4k` through `256k`
+  (about `+54%` to `+77%`), but the advantage disappears at `512k` and `1m`.
+- The primary read profile performs `fod_file_read_metadata` per read callback
+  in addition to `fod_fetch_block_range`; the replica profile is dominated by
+  `fod_fetch_block_range`. This is a concrete optimization lead for the primary
+  read path and should be investigated before attributing the gap only to
+  PostgreSQL storage behavior.
+- The non-monotonic `256k`/`512k`/`1m` results are a first baseline, not a final
+  tuning conclusion. Repeating larger-block points with a larger file and
+  multiple runs is recommended.
+- A physical replica is intentionally read-only, so there is no replica write
+  throughput value. Write performance on the former replica must be measured
+  only after a controlled promotion/failover test.
+
+Artifact root from this run:
+
+```text
+artifacts/perf/b39b708/lt7300-qnap-matrix-20260823T163853Z
+```

@@ -231,7 +231,40 @@ Priorytet: P1 test infrastructure.
 - pelny destrukcyjny test QNAP pozostaje operacja jawna:
   `QNAP_ALLOW_DESTRUCTIVE_RESET=1 QNAP=1 make test-all`.
 
-## 8. HA miedzy hostami
+## 8. FOD 3.3.11 - QNAP primary/replica performance matrix
+
+Status: implementacja i pierwszy pelny pomiar QNAP wykonane 2026-08-23; baseline zapisany.
+
+Priorytet: P1 performance validation.
+
+- uruchamiac primary i fizyczna replike w izolowanym projekcie Docker na QNAP,
+  bez dotykania glownego wolumenu `fod-postgres`;
+- publikowac tymczasowe porty primary/replica tylko na wskazanym adresie QNAP;
+- jawnie ustawic kompletny `FOD_PG_HOST/PORT/DBNAME/USER/PASSWORD` z danych
+  tymczasowego stosu, aby globalne legacy/local env nie zmienialy loginu;
+- mierzyc dla kazdego rozmiaru bloku:
+  - primary write,
+  - swiezy primary read po restarcie PostgreSQL,
+  - swiezy replica read po replay WAL i zatrzymaniu primary;
+- przed replica read wymagac replay co najmniej do LSN z primary;
+- wylaczyc FOD read cache/read-ahead/prefetch i wlaczyc FUSE direct I/O;
+- potwierdzic strict read-only: zapis przez replica mount musi zostac odrzucony,
+  `operation_failures=0`, brak SQLSTATE 25006;
+- domyslna macierz QNAP: `256M`, `4k 16k 64k 256k 512k 1m`;
+- zapisac `summary.tsv`, raw fio JSON, logi FOD/PostgreSQL i evidence WAL do
+  `artifacts/perf/<commit>/`;
+- [x] rzeczywisty pomiar QNAP wykonany dla `4k 16k 64k 256k 512k 1m`,
+  WAL replay i strict read-only potwierdzone, wyniki zapisane w `BENCHMARKS.md`;
+- [ ] powtorzyc `256k`, `512k` i `1m` na co najmniej `1G` oraz kilku przebiegach,
+  aby potwierdzic niemonotoniczny spadek przy `512k`;
+- [ ] przeanalizowac koszt `fod_file_read_metadata` na primary read; w pierwszym
+  baseline replica byla szybsza od primary o ok. 54-77% dla `4k..256k`;
+- [ ] dodac osobny benchmark kontrolowanej promocji replica -> primary i dopiero
+  po promocji mierzyc write throughput dawnego slave;
+- 3.3.11 jest funkcjonalnie gotowe do push po koncowym review commita; powyzsze
+  punkty sa follow-upami wydajnosciowymi, nie blokada poprawnosci benchmarku.
+
+## 9. HA miedzy hostami
 
 Priorytet: wymagany przed deklarowaniem pelnego automatycznego HA.
 
