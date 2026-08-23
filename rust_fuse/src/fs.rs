@@ -3734,6 +3734,67 @@ impl FodFuse {
         }
     }
 
+    fn noatime_direct_uncached_read_fast_path_enabled(&self) -> bool {
+        if self.atime_policy != AtimePolicy::NoAtime || !self.fopen_direct_io {
+            return false;
+        }
+        let live = self.reloadable_runtime();
+        live.read_cache_blocks == 0
+            && live.read_ahead_blocks == 0
+            && live.sequential_read_ahead_blocks == 0
+            && live.direct_io_read_prefetch_blocks == 0
+            && live.small_file_read_threshold_blocks == 0
+    }
+
+    fn read_noatime_direct_uncached(
+        &self,
+        file_id: u64,
+        offset: u64,
+        size: u64,
+    ) -> Result<Vec<u8>, libc::c_int> {
+        if size == 0 {
+            return Ok(Vec::new());
+        }
+        let requested_end = offset.saturating_add(size);
+        let first_block = offset / self.block_size;
+        let requested_last_block = requested_end.saturating_sub(1) / self.block_size;
+        let started = Instant::now();
+        let snapshot = self
+            .repo
+            .fetch_block_range_with_size_shared(
+                file_id,
+                first_block,
+                requested_last_block,
+                self.block_size,
+            )
+            .map_err(|_| EIO)?;
+        self.record_read_block_map_elapsed(started.elapsed());
+        let Some((file_size, mut blocks)) = snapshot else {
+            return Err(ENOENT);
+        };
+        if offset >= file_size {
+            return Ok(Vec::new());
+        }
+        let end_offset = requested_end.min(file_size);
+        let last_block = end_offset.saturating_sub(1) / self.block_size;
+        blocks.retain(|(idx, _)| *idx >= first_block && *idx <= last_block);
+        let started = Instant::now();
+        let data = assemble_read_slice(
+            first_block,
+            last_block,
+            offset,
+            end_offset,
+            self.block_size,
+            &blocks,
+        );
+        self.record_assemble_read_slice_elapsed(started.elapsed());
+        debug!(
+            "FOD read fast path fused_block_range_with_size file_id={} offset={} size={} file_size={} first_block={} last_block={}",
+            file_id, offset, size, file_size, first_block, last_block
+        );
+        Ok(data)
+    }
+
     fn fopen_flags(&self) -> FopenFlags {
         // Domyslnie nie wymuszamy direct_io.
         // direct_io jest trybem diagnostycznym/zgodnosciowym, bo potrafi mocno spowolnic
@@ -5357,6 +5418,44 @@ impl Filesystem for FodFuse {
             return;
         }
         let size = size as u64;
+        if self.atime_policy == AtimePolicy::NoAtime {
+            if let Some(mut state) = self.write_state_for_handle(fh) {
+                let data = match self.read_from_write_state(&mut state, offset, size) {
+                    Ok(data) => data,
+                    Err(errno) => {
+                        self.log_request_error(
+                            req_id,
+                            "read",
+                            errno,
+                            format!("fh={} read_from_write_state", fh),
+                        );
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                };
+                read_task.complete(0, data.len() as u64);
+                self.reply_data_profiled(reply, &data);
+                return;
+            }
+            if self.noatime_direct_uncached_read_fast_path_enabled() {
+                match self.read_noatime_direct_uncached(file_id, offset, size) {
+                    Ok(data) => {
+                        read_task.complete(0, data.len() as u64);
+                        self.reply_data_profiled(reply, &data);
+                    }
+                    Err(errno) => {
+                        self.log_request_error(
+                            req_id,
+                            "read",
+                            errno,
+                            format!("file_id={} fused_block_range_with_size", file_id),
+                        );
+                        fuse_reply_error!(reply, errno);
+                    }
+                }
+                return;
+            }
+        }
         let read_metadata = match self.file_read_metadata_for_handle(fh, file_id) {
             Ok(value) => value,
             Err(err) => {

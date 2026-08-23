@@ -257,12 +257,26 @@ Priorytet: P1 performance validation.
   WAL replay i strict read-only potwierdzone, wyniki zapisane w `BENCHMARKS.md`;
 - [ ] powtorzyc `256k`, `512k` i `1m` na co najmniej `1G` oraz kilku przebiegach,
   aby potwierdzic niemonotoniczny spadek przy `512k`;
-- [ ] przeanalizowac koszt `fod_file_read_metadata` na primary read; w pierwszym
-  baseline replica byla szybsza od primary o ok. 54-77% dla `4k..256k`;
+- [x] zidentyfikowac koszt `fod_file_read_metadata` na primary read: byl wykonywany per callback przed `fod_fetch_block_range`;
+- [x] pierwszy lokalny A/B 256k wykryl regresje pierwszego fused SQL:
+  legacy `215 MiB/s` vs `LEFT JOIN + ORDER BY` fused `78.6 MiB/s`; SQL fused
+  kosztowal srednio `2835 us`/callback zamiast ok. `669 us` dla dwoch starych query;
+- [x] drugi fused SQL odzyskal throughput: `218 MiB/s` vs legacy `215 MiB/s`,
+  ale zysk `+1.4%` jest zbyt maly, a SQL nadal kosztuje `874 us/callback`
+  vs ok. `669 us/callback` dla dwoch legacy statements;
+- [x] trzeci ksztalt bez `MATERIALIZED CTE`, z prostym `UNION ALL`, zostal
+  zwalidowany w 3 parach lokalnego A/B (`QNAP=0`, 256M, fio 256k):
+  legacy `164/172/160 MiB/s`, fused `238/264/225 MiB/s`;
+- [x] zaakceptowac direct-UNION jako optymalizacje 3.3.12: mediana
+  `164 -> 238 MiB/s` (`+45.1%`), mediana `fuse_read_total_us`
+  `1,463,130 -> 994,450` (`-32.0%`), mediana SQL `994,324 -> 798,491 us`
+  (`-19.7%`);
+- [ ] wykonac koncowy pelny gate `QNAP=0 make test-all` na finalnym 3.3.12;
 - [ ] dodac osobny benchmark kontrolowanej promocji replica -> primary i dopiero
   po promocji mierzyc write throughput dawnego slave;
-- 3.3.11 jest funkcjonalnie gotowe do push po koncowym review commita; powyzsze
-  punkty sa follow-upami wydajnosciowymi, nie blokada poprawnosci benchmarku.
+- 3.3.11 jest zamkniete i wypchniete; pozostaje baseline'em QNAP dla dalszych
+  porownan. Biezacym blokujacym krokiem przed push 3.3.12 jest koncowy lokalny
+  `QNAP=0 make test-all`.
 
 ## 9. HA miedzy hostami
 

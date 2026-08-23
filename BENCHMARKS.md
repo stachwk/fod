@@ -2490,3 +2490,71 @@ Artifact root from this run:
 ```text
 artifacts/perf/b39b708/lt7300-qnap-matrix-20260823T163853Z
 ```
+
+## Local primary-read fused-query validation (3.3.12)
+
+3.3.12 targets the extra PostgreSQL round-trip observed in the 3.3.11 primary-read profile. In the fully uncached `noatime + direct_io` path, one prepared `fod_fetch_block_range_with_size` returns both the current file size and requested block payload. Existing cache/read-ahead paths are unchanged.
+
+Correctness gate:
+
+```bash
+QNAP=0 make test-primary-read-fused
+QNAP=0 make test-all
+```
+
+Record local throughput and prepared-statement counts before accepting a performance conclusion.
+
+The first local 256k A/B exposed an unsuitable prototype query shape and is
+kept as diagnostic evidence rather than an accepted result:
+
+- legacy path: `215 MiB/s`, `1024` metadata statements plus `1020` block-range
+  statements; combined prepared-statement SQL time about `684 ms`;
+- first fused `LEFT JOIN ... ORDER BY NULLS LAST` prototype: `78.6 MiB/s`,
+  `1024` fused statements, about `2903 ms` prepared-statement SQL time.
+
+The second candidate (`MATERIALIZED target_file` + direct block range) recovered
+the lost throughput but did not yet prove a useful optimization:
+
+- second fused candidate: `218 MiB/s`, `1024` fused statements,
+  `895758 us` prepared-statement time (`874 us/callback`);
+- relative to the `215 MiB/s` legacy run this is only about `+1.4%`;
+- the fused SQL itself is still about `31%` more expensive than the combined
+  legacy `fod_file_read_metadata + fod_fetch_block_range` SQL time.
+
+The third candidate removes the materialized CTE entirely. One `UNION ALL`
+statement performs a direct `files` primary-key lookup for size and a direct
+`data_blocks` range using a scalar `data_object_id` lookup. Rust sorts only the
+returned block indexes.
+
+A repeated local A/B on 2026-08-24 validated this direct-UNION shape. The same
+3.3.12 commit and local PostgreSQL backend were used for both paths; the legacy
+path was selected with `FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS=1` and the fused
+path with `FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS=0`. The 256 MiB file and 256 KiB
+fio block size were unchanged. Runs were interleaved to reduce order bias.
+
+| Run | Legacy read MiB/s | Fused read MiB/s | Gain |
+| --- | ---: | ---: | ---: |
+| 1 | 164 | 238 | +45.1% |
+| 2 | 172 | 264 | +53.5% |
+| 3 | 160 | 225 | +40.6% |
+| **median** | **164** | **238** | **+45.1%** |
+
+Additional median diagnostics:
+
+- `fuse_read_total_us`: `1,463,130` legacy -> `994,450` fused (`-32.0%`);
+- combined legacy prepared-statement SQL time:
+  `994,324 us` median (`fod_file_read_metadata + fod_fetch_block_range`);
+- fused `fod_fetch_block_range_with_size` SQL time:
+  `798,491 us` median (`-19.7%`);
+- all three fused runs completed with `1024` read callbacks and zero fused
+  prepared-statement failures;
+- the slowest fused run (`225 MiB/s`) was still faster than the fastest legacy
+  run (`172 MiB/s`).
+
+Conclusion: direct-UNION is the accepted 3.3.12 local primary-read optimization
+for the fully uncached `noatime + direct_io` profile. It removes the per-read
+metadata round-trip without caching writable-primary EOF and shows a stable
+local 256k gain well beyond run-to-run variance.
+
+This result is local (`QNAP=0`) and must not be compared directly with the
+3.3.11 QNAP replica numbers as if the hosts and cache conditions were identical.

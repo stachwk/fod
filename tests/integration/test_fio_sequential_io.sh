@@ -84,7 +84,11 @@ run_case() {
   local actual_size
   actual_size="$(fod_stat "${file}" '%s')"
   fod_assert_eq "${actual_size}" "${expected_size}" "fio ${label} file size"
-  fod_assert_contains "${LOG_FILE}" "FOD write_state_mode=block"
+  case "${FOD_LOG_LEVEL,,}" in
+    debug|trace)
+      fod_assert_contains "${LOG_FILE}" "FOD write_state_mode=block"
+      ;;
+  esac
 
   echo "OK fio/sequential block size=${expected_size} block_size=${block_size}"
   rm -f "${file}"

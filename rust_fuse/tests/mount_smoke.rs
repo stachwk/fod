@@ -406,3 +406,59 @@ fn block_read_range() -> Result<(), String> {
 
     Ok(())
 }
+
+#[test]
+fn noatime_direct_uncached_read_uses_fused_postgres_query() -> Result<(), String> {
+    let mounted = MountedFs::start_with_env(
+        "noatime-fused-primary-read",
+        &[
+            ("FOD_ATIME_POLICY", "noatime".to_string()),
+            ("FOD_FOPEN_DIRECT_IO", "1".to_string()),
+            ("FOD_READ_CACHE_BLOCKS", "0".to_string()),
+            ("FOD_READ_AHEAD_BLOCKS", "0".to_string()),
+            ("FOD_SEQUENTIAL_READ_AHEAD_BLOCKS", "0".to_string()),
+            ("FOD_DIRECT_IO_READ_PREFETCH_BLOCKS", "0".to_string()),
+            ("FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS", "0".to_string()),
+        ],
+    )?;
+    let suffix = unique_suffix();
+    let file_path = mounted
+        .mountpoint
+        .join(format!("fused-primary-read-{suffix}.bin"));
+    let block_size = block_size_from_config()?.max(1);
+    let target_len = block_size * 3 + 137;
+    let mut payload = Vec::with_capacity(target_len);
+    while payload.len() < target_len {
+        payload.extend_from_slice(b"FOD-3.3.12-fused-primary-read-");
+    }
+    payload.truncate(target_len);
+    fs::write(&file_path, &payload).map_err(|err| err.to_string())?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(&file_path)
+        .map_err(|err| err.to_string())?;
+    let mut actual = Vec::new();
+    file.read_to_end(&mut actual)
+        .map_err(|err| err.to_string())?;
+    if actual != payload {
+        return Err(format!(
+            "fused read payload mismatch got={} expected={}",
+            actual.len(),
+            payload.len()
+        ));
+    }
+    let log = mounted.log_tail(1000);
+    if !log.contains("atime_policy=NoAtime") {
+        return Err(format!(
+            "noatime was not applied by test bootstrap
+{log}"
+        ));
+    }
+    if !log.contains("read fast path fused_block_range_with_size") {
+        return Err(format!(
+            "fused primary read fast path missing from log
+{log}"
+        ));
+    }
+    Ok(())
+}

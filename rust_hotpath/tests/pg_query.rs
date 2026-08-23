@@ -65,6 +65,79 @@ fn connection_value_prefers_fod_endpoint_over_legacy_postgres_env() {
 }
 
 #[test]
+fn fused_block_range_returns_file_size_and_payload() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let block_size = repo.startup_snapshot()?.block_size.unwrap_or(4096) as usize;
+    let bs = block_size as u64;
+    let dir_id = repo.create_directory(
+        None,
+        &unique_name("rust_pg_fused_read_dir"),
+        0o755,
+        1000,
+        1000,
+        &unique_name("rust_pg_fused_read_dir_seed"),
+    )?;
+    let file_id = repo.create_file(
+        Some(dir_id),
+        &unique_name("rust_pg_fused_read_file"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("rust_pg_fused_read_file_seed"),
+    )?;
+    let first = vec![0x41; block_size];
+    let second = vec![0x42; block_size];
+    let rows = [
+        PersistBlockRow {
+            block_index: 0,
+            data: &first,
+            used_len: bs,
+        },
+        PersistBlockRow {
+            block_index: 1,
+            data: &second,
+            used_len: bs,
+        },
+    ];
+    let result = (|| {
+        repo.persist_file_blocks_with_crc_flag(file_id, bs * 2, bs, 2, false, &rows, false)?;
+        let (size, blocks) = repo
+            .fetch_block_range_with_size_shared(file_id, 0, 1, bs)?
+            .ok_or_else(|| "fused read did not return file metadata".to_string())?;
+        if size != bs * 2 || blocks.len() != 2 {
+            return Err(format!(
+                "invalid fused read size={size} blocks={}",
+                blocks.len()
+            ));
+        }
+        if blocks[0].0 != 0 || blocks[0].1.as_ref() != first.as_slice() {
+            return Err("fused read first block mismatch".to_string());
+        }
+        if blocks[1].0 != 1 || blocks[1].1.as_ref() != second.as_slice() {
+            return Err("fused read second block mismatch".to_string());
+        }
+        let (size2, blocks2) = repo
+            .fetch_block_range_with_size_shared(file_id, 20, 21, bs)?
+            .ok_or_else(|| "fused read lost metadata beyond EOF".to_string())?;
+        if size2 != bs * 2 || !blocks2.is_empty() {
+            return Err("invalid fused read beyond EOF".to_string());
+        }
+        // files.id_file is PostgreSQL SERIAL/int4. Use a valid int4 value
+        // that is practically impossible in this isolated test database.
+        let missing = repo.fetch_block_range_with_size_shared(i32::MAX as u64, 0, 1, bs)?;
+        if missing.is_some() {
+            return Err("fused read returned metadata for a missing file".to_string());
+        }
+        Ok(())
+    })();
+    let cleanup = repo
+        .purge_primary_file(file_id)
+        .and_then(|_| repo.delete_directory_entry(dir_id));
+    result.and(cleanup)
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

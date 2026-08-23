@@ -436,6 +436,14 @@ impl MountedFs {
             .env("FOD_ACL", "off")
             .env("FOD_DEFAULT_PERMISSIONS", "1")
             .env("FOD_ATIME_POLICY", "default");
+        // fod-bootstrap traktuje atime_policy jako jawny parametr CLI.
+        // Test helper musi wiec przeniesc FOD_ATIME_POLICY rowniez do --atime-policy,
+        // inaczej domyslne "default" z bootstrapu nadpisze wartosc srodowiskowa.
+        if let Some((_, atime_policy)) =
+            extra_env.iter().find(|(key, _)| *key == "FOD_ATIME_POLICY")
+        {
+            command.arg("--atime-policy").arg(atime_policy);
+        }
         apply_admp_trace_env(&mut command)?;
         command
             .stdout(Stdio::from(

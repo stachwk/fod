@@ -2020,6 +2020,7 @@ enum PreparedStatement {
     ChoosePrimaryHardlink,
     LoadBlock,
     FetchBlockRange,
+    FetchBlockRangeWithSize,
     ResolvePathRoot,
     ResolvePathNested,
     FetchPathAttrsBlobFile,
@@ -2051,6 +2052,7 @@ impl PreparedStatement {
             PreparedStatement::ChoosePrimaryHardlink,
             PreparedStatement::LoadBlock,
             PreparedStatement::FetchBlockRange,
+            PreparedStatement::FetchBlockRangeWithSize,
             PreparedStatement::ResolvePathRoot,
             PreparedStatement::ResolvePathNested,
             PreparedStatement::FetchPathAttrsBlobFile,
@@ -2082,6 +2084,7 @@ impl PreparedStatement {
             PreparedStatement::ChoosePrimaryHardlink => "fod_choose_primary_hardlink",
             PreparedStatement::LoadBlock => "fod_load_block",
             PreparedStatement::FetchBlockRange => "fod_fetch_block_range",
+            PreparedStatement::FetchBlockRangeWithSize => "fod_fetch_block_range_with_size",
             PreparedStatement::ResolvePathRoot => "fod_resolve_path_root",
             PreparedStatement::ResolvePathNested => "fod_resolve_path_nested",
             PreparedStatement::FetchPathAttrsBlobFile => "fod_fetch_path_attrs_blob_file",
@@ -2212,6 +2215,26 @@ impl PreparedStatement {
                 JOIN data_blocks db ON db.data_object_id = f.data_object_id
                 WHERE f.id_file = $1 AND db._order BETWEEN $2 AND $3
                 ORDER BY db._order ASC
+                "
+            }
+            PreparedStatement::FetchBlockRangeWithSize => {
+                "
+                SELECT f.size::bigint AS file_size,
+                       NULL::bigint AS block_order,
+                       NULL::bytea AS data
+                FROM files f
+                WHERE f.id_file = $1
+                UNION ALL
+                SELECT NULL::bigint AS file_size,
+                       db._order::bigint AS block_order,
+                       db.data
+                FROM data_blocks db
+                WHERE db.data_object_id = (
+                    SELECT f.data_object_id
+                    FROM files f
+                    WHERE f.id_file = $1
+                )
+                  AND db._order BETWEEN $2 AND $3
                 "
             }
             PreparedStatement::ResolvePathRoot => {
@@ -2346,6 +2369,7 @@ impl PreparedStatement {
             | PreparedStatement::ChoosePrimaryHardlink
             | PreparedStatement::LoadBlock
             | PreparedStatement::FetchBlockRange
+            | PreparedStatement::FetchBlockRangeWithSize
             | PreparedStatement::ResolvePathRoot
             | PreparedStatement::ResolvePathNested
             | PreparedStatement::FetchPathAttrsBlobFile
@@ -2386,7 +2410,7 @@ impl PreparedStatement {
             | PreparedStatement::ResolvePathNested
             | PreparedStatement::GetSymlinkIdNested
             | PreparedStatement::LoadBlock => 2,
-            PreparedStatement::FetchBlockRange => 3,
+            PreparedStatement::FetchBlockRange | PreparedStatement::FetchBlockRangeWithSize => 3,
             PreparedStatement::StatfsSnapshot => 0,
         }
     }
@@ -3018,6 +3042,88 @@ unsafe fn fetch_block_range_rows_shared(
     if let Some(started) = started {
         fod_profile_result_decode_observe(
             PreparedStatement::FetchBlockRange.name(),
+            started.elapsed(),
+            decoded_rows,
+            decoded_bytes,
+            result.is_err(),
+        );
+    }
+    PQclear(res);
+    result
+}
+
+unsafe fn fetch_block_range_with_size_rows_shared(
+    res: *mut PGresult,
+    block_size: usize,
+) -> Result<Option<(u64, Vec<(u64, Arc<[u8]>)>)>, String> {
+    let profile_enabled = fod_profile_io_enabled();
+    let started = profile_enabled.then(Instant::now);
+    let mut decoded_rows = 0u64;
+    let mut decoded_bytes = 0u64;
+    let result = (|| match PQresultStatus(res) {
+        PGRES_TUPLES_OK => {
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            if rows < 1 {
+                return Ok(None);
+            }
+            if cols < 3 {
+                return Err("fused file read row is missing fields".to_string());
+            }
+            let mut file_size = None;
+            let mut blocks = Vec::with_capacity(rows.saturating_sub(1) as usize);
+            for row in 0..rows {
+                if PQgetisnull(res, row, 0) == 0 {
+                    let value = result_binary_i64(res, row, 0)?;
+                    let value =
+                        u64::try_from(value).map_err(|_| "negative file size value".to_string())?;
+                    if file_size.replace(value).is_some() {
+                        return Err("fused file read returned duplicate metadata rows".to_string());
+                    }
+                    continue;
+                }
+                if PQgetisnull(res, row, 1) != 0 {
+                    continue;
+                }
+                let index = u64::try_from(result_binary_i64(res, row, 1)?)
+                    .map_err(|_| "negative block index value".to_string())?;
+                let bytes = match read_result_binary_field(res, row, 2, |bytes| {
+                    Ok(normalize_block_arc(bytes, block_size))
+                })? {
+                    Some(bytes) => bytes,
+                    None => continue,
+                };
+                if profile_enabled {
+                    decoded_rows = decoded_rows.saturating_add(1);
+                    decoded_bytes = decoded_bytes.saturating_add(bytes.len() as u64);
+                }
+                blocks.push((index, bytes));
+            }
+            let Some(file_size) = file_size else {
+                return Ok(None);
+            };
+            blocks.sort_unstable_by_key(|(index, _)| *index);
+            Ok(Some((file_size, blocks)))
+        }
+        status => {
+            let message_ptr = PQresultErrorMessage(res);
+            let message = if message_ptr.is_null() {
+                "unknown PostgreSQL result error".to_string()
+            } else {
+                CStr::from_ptr(message_ptr)
+                    .to_string_lossy()
+                    .trim()
+                    .to_string()
+            };
+            Err(format!(
+                "fused file read PostgreSQL status={} error={}",
+                status, message
+            ))
+        }
+    })();
+    if let Some(started) = started {
+        fod_profile_result_decode_observe(
+            PreparedStatement::FetchBlockRangeWithSize.name(),
             started.elapsed(),
             decoded_rows,
             decoded_bytes,
@@ -6587,6 +6693,32 @@ impl DbRepo {
                 1,
             )?;
             fetch_block_range_rows_shared(res, block_size)
+        })
+    }
+
+    pub fn fetch_block_range_with_size_shared(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        block_size: u64,
+    ) -> Result<Option<(u64, Vec<(u64, Arc<[u8]>)>)>, String> {
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let first_block_text = CString::new(first_block.to_string())
+            .map_err(|_| "block index contains NUL byte".to_string())?;
+        let last_block_text = CString::new(last_block.to_string())
+            .map_err(|_| "block index contains NUL byte".to_string())?;
+        let block_size = block_size.max(1) as usize;
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file_id_text, &first_block_text, &last_block_text];
+            let res = exec_prepared_params_with_result_format(
+                conn,
+                PreparedStatement::FetchBlockRangeWithSize,
+                &params,
+                1,
+            )?;
+            fetch_block_range_with_size_rows_shared(res, block_size)
         })
     }
 
