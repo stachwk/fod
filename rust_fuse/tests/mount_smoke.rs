@@ -22,6 +22,21 @@ fn metadata_times(path: &Path) -> Result<(i64, i64, i64, i64), String> {
     ))
 }
 
+fn negotiated_u64(line: &str, key: &str) -> Result<Option<u64>, String> {
+    let prefix = format!("{key}=");
+    let value = line
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix(&prefix))
+        .ok_or_else(|| format!("missing FUSE negotiated field {key:?}\n{line}"))?;
+    if value == "unavailable" {
+        return Ok(None);
+    }
+    value
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|err| format!("invalid FUSE negotiated field {key:?}={value:?}: {err}\n{line}"))
+}
+
 #[test]
 fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
     let mounted = MountedFs::start("fuse-compatibility")?;
@@ -30,8 +45,15 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
         .lines()
         .find(|line| line.contains("FOD FUSE compatibility:"))
         .ok_or_else(|| format!("missing FUSE compatibility log line\n{log}"))?;
+    let negotiated_line = log
+        .lines()
+        .find(|line| line.contains("FOD FUSE negotiated:"))
+        .ok_or_else(|| format!("missing FUSE negotiated log line\n{log}"))?;
+
     println!("{compatibility_line}");
-    let required_fields = [
+    println!("{negotiated_line}");
+
+    for field in [
         "FOD FUSE compatibility:",
         "fuser=0.18.0",
         "userspace_protocol_max=7.40",
@@ -40,16 +62,53 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
         "available_capabilities=",
         "fod_requested_capabilities=[POSIX_LOCKS,FLOCK_LOCKS]",
         "fod_enabled_capabilities=",
-        "max_write=unavailable",
-        "max_readahead=unavailable",
-        "max_background=unavailable",
-        "congestion_threshold=unavailable",
-    ];
-    for field in required_fields {
-        if !log.contains(field) {
-            return Err(format!("missing FUSE compatibility field {field:?}\n{log}"));
+    ] {
+        if !compatibility_line.contains(field) {
+            return Err(format!(
+                "missing FUSE compatibility field {field:?}\n{compatibility_line}"
+            ));
         }
     }
+
+    for field in [
+        "FOD FUSE negotiated:",
+        "requested_max_write=",
+        "effective_max_write=",
+        "requested_max_readahead=",
+        "effective_max_readahead=",
+        "max_background=",
+        "congestion_threshold=",
+    ] {
+        if !negotiated_line.contains(field) {
+            return Err(format!(
+                "missing FUSE negotiated field {field:?}\n{negotiated_line}"
+            ));
+        }
+    }
+
+    let requested_write = negotiated_u64(negotiated_line, "requested_max_write")?
+        .ok_or_else(|| format!("requested_max_write unavailable\n{negotiated_line}"))?;
+    let effective_write = negotiated_u64(negotiated_line, "effective_max_write")?
+        .ok_or_else(|| format!("effective_max_write unavailable\n{negotiated_line}"))?;
+    let requested_readahead = negotiated_u64(negotiated_line, "requested_max_readahead")?
+        .ok_or_else(|| format!("requested_max_readahead unavailable\n{negotiated_line}"))?;
+    let effective_readahead = negotiated_u64(negotiated_line, "effective_max_readahead")?
+        .ok_or_else(|| format!("effective_max_readahead unavailable\n{negotiated_line}"))?;
+
+    if requested_write == 0 || effective_write == 0 || effective_write > requested_write {
+        return Err(format!(
+            "invalid FUSE max_write negotiation requested={requested_write} effective={effective_write}\n{negotiated_line}"
+        ));
+    }
+    if requested_readahead == 0
+        || effective_readahead == 0
+        || effective_readahead > requested_readahead
+    {
+        return Err(format!(
+            "invalid FUSE max_readahead negotiation requested={requested_readahead} effective={effective_readahead}\n{negotiated_line}"
+        ));
+    }
+
     Ok(())
 }
 

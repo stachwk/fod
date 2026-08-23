@@ -270,6 +270,8 @@ POSTGRES_AUTOVACUUM_WORK_MEM ?=
 POSTGRES_SERVER_TUNING_ENV := POSTGRES_SHARED_PRELOAD_LIBRARIES=$(POSTGRES_SHARED_PRELOAD_LIBRARIES) POSTGRES_SHARED_BUFFERS=$(POSTGRES_SHARED_BUFFERS) POSTGRES_MAX_CONNECTIONS=$(POSTGRES_MAX_CONNECTIONS) POSTGRES_MAX_WAL_SIZE=$(POSTGRES_MAX_WAL_SIZE) POSTGRES_CHECKPOINT_TIMEOUT=$(POSTGRES_CHECKPOINT_TIMEOUT) POSTGRES_CHECKPOINT_COMPLETION_TARGET=$(POSTGRES_CHECKPOINT_COMPLETION_TARGET) POSTGRES_WAL_COMPRESSION=$(POSTGRES_WAL_COMPRESSION) POSTGRES_RANDOM_PAGE_COST=$(POSTGRES_RANDOM_PAGE_COST) POSTGRES_EFFECTIVE_CACHE_SIZE=$(POSTGRES_EFFECTIVE_CACHE_SIZE) POSTGRES_MAINTENANCE_WORK_MEM=$(POSTGRES_MAINTENANCE_WORK_MEM) POSTGRES_AUTOVACUUM_MAX_WORKERS=$(POSTGRES_AUTOVACUUM_MAX_WORKERS) POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_AUTOVACUUM_WORK_MEM)
 QNAP ?= 0
 QNAP_ENABLED := $(filter 1 true yes on,$(QNAP))
+QNAP_ALLOW_DESTRUCTIVE_RESET ?= 0
+QNAP_ALLOW_DESTRUCTIVE_RESET_ENABLED := $(filter 1 true yes on,$(QNAP_ALLOW_DESTRUCTIVE_RESET))
 QNAP_DOCKER_HOST ?= tcp://192.168.1.11:2376
 QNAP_DOCKER_TLS_VERIFY ?= 1
 QNAP_DOCKER_CERT_PATH ?= $(HOME)/.docker
@@ -294,6 +296,18 @@ POSTGRES_DB := $(if $(QNAP_ENABLED),$(QNAP_PG_DBNAME),$(POSTGRES_DB_BASE))
 POSTGRES_USER := $(if $(QNAP_ENABLED),$(QNAP_PG_USER),$(POSTGRES_USER_BASE))
 POSTGRES_PASSWORD := $(if $(QNAP_ENABLED),$(QNAP_PG_PASSWORD),$(POSTGRES_PASSWORD_BASE))
 POSTGRES_PORT := $(if $(QNAP_ENABLED),$(QNAP_PG_PORT),$(POSTGRES_PORT_BASE))
+# Legacy integration tests still read POSTGRES_HOST. Keep that compatibility
+# variable aligned with the endpoint selected by FOD_PG_HOST so QNAP=1 cannot
+# silently fall back to a local 127.0.0.1 PostgreSQL instance.
+POSTGRES_HOST := $(FOD_PG_HOST)
+# Legacy tests still consume POSTGRES_* directly. Export the complete selected
+# endpoint so QNAP=1 cannot combine the remote host with local default
+# credentials such as foduser/cichosza.
+export POSTGRES_HOST
+export POSTGRES_PORT
+export POSTGRES_DB
+export POSTGRES_USER
+export POSTGRES_PASSWORD
 export FOD_PG_HOST
 export FOD_PG_PORT
 export FOD_PG_DBNAME
@@ -341,7 +355,7 @@ UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 
-.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait init init-qnap reset test-db-restore-local smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper build-libfod install-root-scripts install-on-root uninstall-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-acl-mount-option test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-nodiratime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-fod-indexer-parallel-smoke
+.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait wait-client init init-qnap reset test-db-destructive-guard test-db-restore-local test-db-restore-selected smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper build-libfod install-root-scripts install-on-root uninstall-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-acl-mount-option test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-nodiratime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-rust-mkfs-suite-restored test-fod-indexer-parallel-smoke
 
 help:
 	@printf '%s\n' \
@@ -368,15 +382,17 @@ help:
 		'  make qnap-restart - restart PostgreSQL using QNAP=1' \
 		'  make logs       - show local PostgreSQL logs' \
 		'  make qnap-logs  - show PostgreSQL logs using QNAP=1' \
-		'  make wait       - wait until PostgreSQL is ready' \
+		'  make wait       - wait until PostgreSQL is ready inside the selected Docker container' \
+		'  make wait-client - wait until the selected PostgreSQL endpoint accepts a host-side SQL connection' \
 		'  make qnap-wait  - wait until PostgreSQL is ready using QNAP=1' \
 		'  make init       - create the FOD schema in local PostgreSQL with --schema-admin-password' \
 		'  make qnap-init  - create the FOD schema using the QNAP transport preset' \
 		'  make init-qnap  - create the FOD schema using the remote QNAP PostgreSQL preset' \
 		'  make qnap-smoke - run the PostgreSQL smoke check using QNAP=1' \
-		'  make reset      - down -v / up / wait / init for a clean start' \
+		'  make reset      - destructive down -v / up / wait / init; QNAP requires QNAP_ALLOW_DESTRUCTIVE_RESET=1' \
 		'  make test-db-restore-local - reset only the local Docker test DB after mkfs schema tests' \
-		'  make qnap-reset - run reset using QNAP=1' \
+		'  make test-db-restore-selected - restore the selected local/QNAP test DB; QNAP requires explicit destructive opt-in' \
+		'  make qnap-reset - run reset using QNAP=1; requires QNAP_ALLOW_DESTRUCTIVE_RESET=1' \
 		'  make enable-pg-stat-statements - create pg_stat_statements in the local PostgreSQL database for diagnostics' \
 		'  make install-config - install fod_config.ini to /etc/fod/fod_config.ini (warns if password is still cichosza)' \
 		'  make install-config-user - install fod_config.ini to $$HOME/.config/fod/fod_config.ini without sudo (warns if password is still cichosza)' \
@@ -561,7 +577,7 @@ help:
 		'  make test-admpanch-trace - run ADMP_TRACE_TARGET with ADMP_INI=$(ADMP_TRACE_INI_ABS) (override ADMP_TRACE_TARGET=...)' \
 		'  make test-fio-mixed-io - fio mixed sequential rw smoke for the block path' \
 		'  make test-fio-random-mixed-io - fio random mixed rw negative control for the block path' \
-		'  make test-all   - smoke + current integration suite' \
+		'  make test-all   - smoke + current integration suite; QNAP=1 destructive runs require QNAP_ALLOW_DESTRUCTIVE_RESET=1' \
 		'  make db-shell   - open psql on local PostgreSQL' \
 		'  make clean      - remove .venv'
 
@@ -594,6 +610,7 @@ up:
 	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
 	$(COMPOSE_RUN) -f $(COMPOSE_FILE) up -d postgres
 	@$(MAKE) wait QNAP=$(QNAP)
+	@$(MAKE) wait-client QNAP=$(QNAP)
 
 docker-selinux-acl-up:
 	@COMPOSE_PROJECT_NAME=fod-selinux-acl POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) FOD_ROLE=auto FOD_PROFILE=bulk_write FOD_SELINUX=on FOD_ACL=on FOD_LOG_LEVEL=DEBUG FOD_ALLOW_OTHER=1 \
@@ -649,6 +666,20 @@ wait:
 	exit 1
 
 
+wait-client:
+	@set -eu; \
+	echo "Waiting for PostgreSQL client endpoint $(FOD_PG_HOST):$(FOD_PG_PORT)..."; \
+	for i in $$(seq 1 60); do \
+		if PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d "$(FOD_PG_DBNAME)" -tAc 'SELECT 1' 2>/dev/null | grep -qx 1; then \
+			echo "PostgreSQL client endpoint ready."; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "PostgreSQL client endpoint $(FOD_PG_HOST):$(FOD_PG_PORT) did not become reachable." >&2; \
+	exit 1
+
+
 init: build-debug up
 	@set -eu; \
 	status_output="$$($(FOD_MKFS_DEBUG_BIN) status 2>/dev/null || true)"; \
@@ -673,13 +704,25 @@ init-qnap: build-debug
 
 
 reset: build-debug
+	@set -eu; \
+	if [ -n "$(QNAP_ENABLED)" ] && [ -z "$(QNAP_ALLOW_DESTRUCTIVE_RESET_ENABLED)" ]; then \
+		echo "Refusing reset: QNAP=$(QNAP) would run docker compose down -v on the remote QNAP test database." >&2; \
+		echo "Re-run only for a dedicated disposable QNAP test database with QNAP_ALLOW_DESTRUCTIVE_RESET=1." >&2; \
+		exit 2; \
+	fi
 	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
 	$(COMPOSE_RUN) -f $(COMPOSE_FILE) down -v
 	$(MAKE) up QNAP=$(QNAP)
-	sleep 2
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_DEBUG_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"
 	mkdir -p .fod
 	@printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"
+
+test-db-destructive-guard:
+	@set -eu; \
+	if [ -n "$(QNAP_ENABLED)" ] && [ -z "$(QNAP_ALLOW_DESTRUCTIVE_RESET_ENABLED)" ]; then \
+		echo "Refusing destructive database test: QNAP=$(QNAP) requires QNAP_ALLOW_DESTRUCTIVE_RESET=1." >&2; \
+		exit 2; \
+	fi
 
 test-db-restore-local: build-debug
 	@set -eu; \
@@ -700,10 +743,17 @@ test-db-restore-local: build-debug
 	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB_BASE) POSTGRES_USER=$(POSTGRES_USER_BASE) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD_BASE) POSTGRES_PORT=$(POSTGRES_PORT_BASE) \
 	$(POSTGRES_SERVER_TUNING_ENV) $(COMPOSE) -f docker-compose.yml down -v
 	$(MAKE) up QNAP=0
-	sleep 2
 	@POSTGRES_DB=$(POSTGRES_DB_BASE) POSTGRES_USER=$(POSTGRES_USER_BASE) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD_BASE) $(FOD_MKFS_DEBUG_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"
 	mkdir -p .fod
 	@printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"
+
+test-db-restore-selected: test-db-destructive-guard
+	@set -eu; \
+	if [ -n "$(QNAP_ENABLED)" ]; then \
+		$(MAKE) --no-print-directory reset QNAP="$(QNAP)" QNAP_ALLOW_DESTRUCTIVE_RESET="$(QNAP_ALLOW_DESTRUCTIVE_RESET)"; \
+	else \
+		$(MAKE) --no-print-directory test-db-restore-local QNAP=0; \
+	fi
 
 warn-config-secret:
 	@set -eu; \
@@ -958,7 +1008,7 @@ unmount:
 		umount $(MOUNTPOINT); \
 	fi
 
-test-integration: test-makefile-db-restore-order venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-mkfs-suite-local-restored test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-schema-upgrade test-block-read test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-acl-mount-option test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary test-two-mount-quota
+test-integration: test-makefile-db-restore-order venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-mkfs-suite-restored test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-schema-upgrade test-block-read test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-acl-mount-option test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary test-two-mount-quota
 test-integration: test-rust-hotpath-persist-block-plan
 test-integration: test-rust-hotpath-persist-block-crc-plan
 test-integration: test-config-warning
@@ -1103,21 +1153,27 @@ test-rust-mkfs-suite:
 	$(CARGO_TEST_MKFS)
 
 # The complete mkfs suite intentionally exercises malformed and incomplete
-# schemas. Always restore the guarded local Docker database before later FUSE
-# integration tests consume it. Restore is attempted even when the suite fails.
-test-rust-mkfs-suite-local-restored:
+# schemas. Restore the selected test database before later FUSE integration
+# tests consume it. QNAP restore is allowed only with an explicit destructive
+# opt-in, and restore is attempted even when the suite fails.
+test-rust-mkfs-suite-restored: test-db-destructive-guard
 	@set -u; \
 		suite_status=0; \
 		restore_status=0; \
 		$(MAKE) --no-print-directory test-rust-mkfs-suite || suite_status=$$?; \
-		$(MAKE) --no-print-directory test-db-restore-local || restore_status=$$?; \
+		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
 		if [ "$$suite_status" -ne 0 ]; then \
 			if [ "$$restore_status" -ne 0 ]; then \
-				echo "mkfs suite failed with status $$suite_status and local database restore failed with status $$restore_status" >&2; \
+				echo "mkfs suite failed with status $$suite_status and selected database restore failed with status $$restore_status" >&2; \
 			fi; \
 			exit "$$suite_status"; \
 		fi; \
 		exit "$$restore_status"
+
+.PHONY: test-rust-mkfs-suite-restored
+
+test-rust-mkfs-suite-local-restored:
+	@$(MAKE) --no-print-directory QNAP=0 test-rust-mkfs-suite-restored
 
 .PHONY: test-rust-mkfs-suite-local-restored
 
@@ -1127,28 +1183,30 @@ test-runtime-validation: test-rust-mkfs-suite
 test-rust-hotpath-runtime-size-limits: test-rust-mkfs-suite
 	@:
 test-schema-upgrade: up
+	@$(MAKE) --no-print-directory test-db-destructive-guard
 	@set -u; \
 		test_status=0; \
 		restore_status=0; \
 		$(CARGO_TEST_MKFS) --test schema_upgrade schema_upgrade_non_destructive_password_protected --offline || test_status=$$?; \
-		$(MAKE) --no-print-directory test-db-restore-local || restore_status=$$?; \
+		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
 		if [ "$$test_status" -ne 0 ]; then \
 			if [ "$$restore_status" -ne 0 ]; then \
-				echo "test-schema-upgrade failed with status $$test_status and local database restore failed with status $$restore_status" >&2; \
+				echo "test-schema-upgrade failed with status $$test_status and selected database restore failed with status $$restore_status" >&2; \
 			fi; \
 			exit "$$test_status"; \
 		fi; \
 		exit "$$restore_status"
 
 test-schema-status: up
+	@$(MAKE) --no-print-directory test-db-destructive-guard
 	@set -u; \
 		test_status=0; \
 		restore_status=0; \
 		$(CARGO_TEST_MKFS) --test schema_upgrade schema_status_reports_version_secret_and_pending_migrations --offline || test_status=$$?; \
-		$(MAKE) --no-print-directory test-db-restore-local || restore_status=$$?; \
+		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
 		if [ "$$test_status" -ne 0 ]; then \
 			if [ "$$restore_status" -ne 0 ]; then \
-				echo "test-schema-status failed with status $$test_status and local database restore failed with status $$restore_status" >&2; \
+				echo "test-schema-status failed with status $$test_status and selected database restore failed with status $$restore_status" >&2; \
 			fi; \
 			exit "$$test_status"; \
 		fi; \

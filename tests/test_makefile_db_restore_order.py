@@ -45,14 +45,15 @@ class MakefileDatabaseRestoreOrderTests(unittest.TestCase):
     def test_integration_uses_one_restored_mkfs_suite(self) -> None:
         line = target_line(self.text, "test-integration")
         self.assertIn("test-makefile-db-restore-order", line)
-        self.assertIn("test-rust-mkfs-suite-local-restored", line)
+        self.assertIn("test-rust-mkfs-suite-restored", line)
+        self.assertNotIn("test-rust-mkfs-suite-local-restored", line)
         self.assertNotIn("test-rust-hotpath-runtime-size-limits", line)
         self.assertNotIn("test-runtime-validation", line)
 
-    def test_wrapper_runs_suite_before_restore(self) -> None:
+    def test_wrapper_runs_suite_before_selected_restore(self) -> None:
         block = target_block(
             self.text,
-            "test-rust-mkfs-suite-local-restored",
+            "test-rust-mkfs-suite-restored",
             ".PHONY",
         )
         suite_command = (
@@ -60,14 +61,29 @@ class MakefileDatabaseRestoreOrderTests(unittest.TestCase):
             "|| suite_status=$$?"
         )
         restore_command = (
-            "$(MAKE) --no-print-directory test-db-restore-local "
+            "$(MAKE) --no-print-directory test-db-restore-selected "
             "|| restore_status=$$?"
+        )
+        self.assertIn(
+            "test-db-destructive-guard",
+            target_line(self.text, "test-rust-mkfs-suite-restored"),
         )
         self.assertIn(suite_command, block)
         self.assertIn(restore_command, block)
         self.assertLess(block.index(suite_command), block.index(restore_command))
         self.assertIn('exit "$$suite_status"', block)
         self.assertIn('exit "$$restore_status"', block)
+
+    def test_local_wrapper_forces_local_backend(self) -> None:
+        block = target_block(
+            self.text,
+            "test-rust-mkfs-suite-local-restored",
+            ".PHONY",
+        )
+        self.assertIn(
+            "$(MAKE) --no-print-directory QNAP=0 test-rust-mkfs-suite-restored",
+            block,
+        )
 
     def test_destructive_schema_targets_restore_local_database(self) -> None:
         for target, next_target in [
@@ -78,12 +94,74 @@ class MakefileDatabaseRestoreOrderTests(unittest.TestCase):
             self.assertIn("test_status=0", block)
             self.assertIn("restore_status=0", block)
             self.assertIn(
-                "$(MAKE) --no-print-directory test-db-restore-local "
+                "$(MAKE) --no-print-directory test-db-restore-selected "
                 "|| restore_status=$$?",
+                block,
+            )
+            self.assertIn(
+                "$(MAKE) --no-print-directory test-db-destructive-guard",
                 block,
             )
             self.assertIn('exit "$$test_status"', block)
             self.assertIn('exit "$$restore_status"', block)
+
+    def test_qnap_reset_requires_explicit_destructive_opt_in(self) -> None:
+        block = target_block(self.text, "reset", "test-db-destructive-guard")
+        self.assertIn("QNAP_ALLOW_DESTRUCTIVE_RESET_ENABLED", block)
+        self.assertIn("Refusing reset:", block)
+        self.assertLess(
+            block.index("Refusing reset:"),
+            block.index("$(COMPOSE_RUN) -f $(COMPOSE_FILE) down -v"),
+        )
+        self.assertNotIn("\tsleep 2", block)
+
+    def test_local_restore_uses_host_side_readiness_without_fixed_sleep(self) -> None:
+        block = target_block(
+            self.text,
+            "test-db-restore-local",
+            "test-db-restore-selected",
+        )
+        self.assertIn("$(MAKE) up QNAP=0", block)
+        self.assertNotIn("\tsleep 2", block)
+
+    def test_selected_restore_dispatches_by_backend(self) -> None:
+        block = target_block(
+            self.text,
+            "test-db-restore-selected",
+            "warn-config-secret",
+        )
+        self.assertIn(
+            "test-db-destructive-guard",
+            target_line(self.text, "test-db-restore-selected"),
+        )
+        self.assertIn(
+            'reset QNAP="$(QNAP)" QNAP_ALLOW_DESTRUCTIVE_RESET="$(QNAP_ALLOW_DESTRUCTIVE_RESET)"',
+            block,
+        )
+        self.assertIn("test-db-restore-local QNAP=0", block)
+
+    def test_selected_backend_exports_complete_legacy_postgres_endpoint(self) -> None:
+        self.assertIn("POSTGRES_HOST := $(FOD_PG_HOST)", self.text)
+        for key in [
+            "POSTGRES_HOST",
+            "POSTGRES_PORT",
+            "POSTGRES_DB",
+            "POSTGRES_USER",
+            "POSTGRES_PASSWORD",
+        ]:
+            self.assertIn(f"export {key}", self.text)
+        self.assertLess(
+            self.text.index("POSTGRES_HOST := $(FOD_PG_HOST)"),
+            self.text.index("export POSTGRES_HOST"),
+        )
+
+    def test_up_waits_for_host_side_client_endpoint(self) -> None:
+        block = target_block(self.text, "up", "docker-selinux-acl-up")
+        self.assertIn("$(MAKE) wait QNAP=$(QNAP)", block)
+        self.assertIn("$(MAKE) wait-client QNAP=$(QNAP)", block)
+        client_wait = target_block(self.text, "wait-client", "init")
+        self.assertIn('psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)"', client_wait)
+        self.assertIn("'SELECT 1'", client_wait)
 
     def test_standalone_aliases_keep_their_original_scope(self) -> None:
         self.assertEqual(

@@ -1,6 +1,6 @@
 # FOD - aktualny plan dzialania
 
-Stan planu: 2026-08-21. Ten dokument jest aktywna kolejnoscia prac. Historyczne
+Stan planu: 2026-08-23. Ten dokument jest aktywna kolejnoscia prac. Historyczne
 decyzje i zakonczone zadania pozostaja w `TODO.md`, a kierunek dlugoterminowy
 w `ROADMAP.md`.
 
@@ -204,7 +204,34 @@ poprzednim zakresie, a dominujacy koszt nadal pochodzi z 65 transferow
 etap nadal musi dotyczyc transport/query shape albo bezpiecznej reprezentacji
 bulk-read/cache bez uzywania potencjalnie nieaktualnego `data_object_id`.
 
-## 7. HA miedzy hostami
+## 7. FOD 3.3.10 - hardening testow QNAP
+
+Status: zakonczone w commicie FOD 3.3.10.
+
+Priorytet: P1 test infrastructure.
+
+- blokowac `QNAP=1 reset` przed `docker compose down -v`, dopoki operator nie
+  poda jawnie `QNAP_ALLOW_DESTRUCTIVE_RESET=1`;
+- po gotowosci PostgreSQL wewnatrz kontenera czekac tez na realny SQL endpoint
+  widziany z hosta uruchamiajacego testy;
+- live `fod-config endpoint-probe`, destrukcyjne testy `schema_upgrade.rs`,
+  hotpath `pg_query.rs` oraz `lock_manager.rs` maja uzywac aktywnych
+  `FOD_PG_*`, z fallbackiem do starszych `POSTGRES_*`; Makefile dodatkowo
+  eksportuje kompletny legacy endpoint `POSTGRES_HOST/PORT/DB/USER/PASSWORD`
+  zgodny z `FOD_PG_*`, aby starsze testy i program pod testem zawsze trafialy
+  do tej samej bazy z tymi samymi danymi logowania;
+- destrukcyjne testy mkfs/schema maja przywracac wybrany backend zamiast
+  bezwarunkowo wolac lokalny restore;
+- lokalny alias restore ma nadal wymuszac `QNAP=0`;
+- test runtime-profile ma odzwierciedlac aktualny startup log cache, w tym
+  `direct_io_read_prefetch_blocks=512`, bez zmiany samego runtime;
+- test FUSE compatibility ma sprawdzac osobno `FOD FUSE compatibility:`
+  i `FOD FUSE negotiated:` oraz relacje requested/effective, bez zalozenia
+  ze uzgodnione limity sa `unavailable`;
+- pelny destrukcyjny test QNAP pozostaje operacja jawna:
+  `QNAP_ALLOW_DESTRUCTIVE_RESET=1 QNAP=1 make test-all`.
+
+## 8. HA miedzy hostami
 
 Priorytet: wymagany przed deklarowaniem pelnego automatycznego HA.
 

@@ -34,11 +34,21 @@ fn write_config(database_lines: &str) -> PathBuf {
 fn write_live_config() -> PathBuf {
     let dir = unique_temp_dir("pg-endpoint-probe");
     let config_path = dir.join("fod_config.ini");
-    let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
-    let dbname = env::var("POSTGRES_DB").unwrap_or_else(|_| "foddbname".to_string());
-    let user = env::var("POSTGRES_USER").unwrap_or_else(|_| "foduser".to_string());
-    let password = env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "cichosza".to_string());
+    let host = env::var("FOD_PG_HOST")
+        .or_else(|_| env::var("POSTGRES_HOST"))
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = env::var("FOD_PG_PORT")
+        .or_else(|_| env::var("POSTGRES_PORT"))
+        .unwrap_or_else(|_| "5432".to_string());
+    let dbname = env::var("FOD_PG_DBNAME")
+        .or_else(|_| env::var("POSTGRES_DB"))
+        .unwrap_or_else(|_| "foddbname".to_string());
+    let user = env::var("FOD_PG_USER")
+        .or_else(|_| env::var("POSTGRES_USER"))
+        .unwrap_or_else(|_| "foduser".to_string());
+    let password = env::var("FOD_PG_PASSWORD")
+        .or_else(|_| env::var("POSTGRES_PASSWORD"))
+        .unwrap_or_else(|_| "cichosza".to_string());
     fs::write(
         &config_path,
         format!(

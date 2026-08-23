@@ -211,7 +211,7 @@ def main() -> None:
             expected_cache_line = (
                 "FOD cache metadata_cache_ttl=7s statfs_cache_ttl=11s read_cache_blocks=2048 "
                 "read_cache_eviction_policy=fifo read_ahead_blocks=4 sequential_read_ahead_blocks=8 "
-                "small_file_read_threshold_blocks=16"
+                "direct_io_read_prefetch_blocks=512 small_file_read_threshold_blocks=16"
             )
             expected_storage_line = (
                 f'pg_visible_path=Some("{visible_dir.name}") workers_read=3 workers_read_min_blocks=16 '

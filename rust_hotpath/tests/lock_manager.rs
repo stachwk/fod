@@ -15,12 +15,27 @@ fn test_guard() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|err| err.into_inner())
 }
 
+fn prefer_connection_value(primary: Option<&str>, legacy: Option<&str>, default: &str) -> String {
+    primary
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| legacy.map(str::trim).filter(|value| !value.is_empty()))
+        .unwrap_or(default)
+        .to_string()
+}
+
+fn selected_env_value(primary: &str, legacy: &str, default: &str) -> String {
+    let primary_value = env::var(primary).ok();
+    let legacy_value = env::var(legacy).ok();
+    prefer_connection_value(primary_value.as_deref(), legacy_value.as_deref(), default)
+}
+
 fn conninfo() -> String {
-    let dbname = env::var("POSTGRES_DB").unwrap_or_else(|_| "foddbname".to_string());
-    let user = env::var("POSTGRES_USER").unwrap_or_else(|_| "foduser".to_string());
-    let password = env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "cichosza".to_string());
-    let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
+    let dbname = selected_env_value("FOD_PG_DBNAME", "POSTGRES_DB", "foddbname");
+    let user = selected_env_value("FOD_PG_USER", "POSTGRES_USER", "foduser");
+    let password = selected_env_value("FOD_PG_PASSWORD", "POSTGRES_PASSWORD", "cichosza");
+    let host = selected_env_value("FOD_PG_HOST", "POSTGRES_HOST", "127.0.0.1");
+    let port = selected_env_value("FOD_PG_PORT", "POSTGRES_PORT", "5432");
     format!(
         "host={host} port={port} dbname={dbname} user={user} password={password} connect_timeout=5"
     )
@@ -77,6 +92,19 @@ fn ensure_lock_schema(repo: &DbRepo) {
         "#,
     )
     .expect("create lock schema");
+}
+
+#[test]
+fn connection_value_prefers_fod_endpoint_over_legacy_postgres_env() {
+    assert_eq!(
+        prefer_connection_value(Some(" postgresql "), Some("foduser"), "fallback"),
+        "postgresql"
+    );
+    assert_eq!(
+        prefer_connection_value(Some("   "), Some(" cichosza "), "fallback"),
+        "cichosza"
+    );
+    assert_eq!(prefer_connection_value(None, None, "fallback"), "fallback");
 }
 
 #[test]
