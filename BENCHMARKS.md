@@ -2558,3 +2558,45 @@ local 256k gain well beyond run-to-run variance.
 
 This result is local (`QNAP=0`) and must not be compared directly with the
 3.3.11 QNAP replica numbers as if the hosts and cache conditions were identical.
+
+## FUSE large-I/O request ceiling validation (3.3.13)
+
+After the 3.3.12 fused-query optimization, a local 1 GiB diagnostic showed that
+large fio requests were still fragmented by the FUSE request ceiling. With a
+4096-byte page size and the host default `fs.fuse.max_pages_limit=256`, the
+kernel can carry at most about 1 MiB per FUSE request. FOD 3.3.12 additionally
+requested only 512 KiB through `FOD_FUSE_MAX_WRITE_BYTES`.
+
+A repeated three-run local A/B used the same 3.3.12 code (`eb408662e18c`), a
+1 GiB file, fio block size 1 MiB, `QNAP=0`, `noatime + direct_io`, and disabled
+FOD read cache/read-ahead/prefetch:
+
+| profile | kernel max pages | FOD max_write | read MiB/s median | write MiB/s median | read callbacks | write callbacks | fused SQL us median |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 256 | 512 KiB | 283 | 60.8 | 3072 | 3072 | 2,716,994 |
+| FOD 3.3.13 default candidate | 256 | 1 MiB | 322 | 61.3 | 2048 | 2048 | 2,362,538 |
+| optional host tuning | 512 | 2 MiB | 374 | 61.3 | 1024 | 1024 | 1,991,563 |
+
+Relative to the 512 KiB baseline:
+
+- the 1 MiB FOD-only change improves median read throughput by `+13.8%`,
+  reduces read callbacks by `33.3%`, reduces fused prepared-statement time by
+  about `13.0%`, and leaves median write throughput effectively unchanged;
+- the host-tuned 2 MiB profile improves median read throughput by `+32.2%`,
+  reduces read callbacks by `66.7%`, and reduces fused prepared-statement time
+  by about `26.7%`;
+- `fuse_read_total_us` medians are `3,390,769 -> 3,013,856 -> 2,613,306`;
+- no fused prepared-statement failures were observed.
+
+The 2 MiB result requires changing the host-global
+`fs.fuse.max_pages_limit` from 256 to 512. FOD must not modify this sysctl
+automatically. It is an administrator-controlled optional tuning for hosts
+dedicated to larger sequential I/O. FOD 3.3.13 therefore changes only its safe
+default request setting to 1 MiB and adds diagnostics that expose the kernel
+page size, `max_pages_limit`, the kernel request-byte limit, and the estimated
+effective request ceiling.
+
+Requesting `FOD_FUSE_MAX_WRITE_BYTES=2MiB` while leaving
+`fs.fuse.max_pages_limit=256` still produced requests of at most about 1 MiB,
+even though the fuser setter reported `effective_max_write=2097152`. The new
+diagnostic fields make this kernel cap visible.

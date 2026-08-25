@@ -76,6 +76,10 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
         "effective_max_write=",
         "requested_max_readahead=",
         "effective_max_readahead=",
+        "kernel_page_size_bytes=",
+        "kernel_max_pages_limit=",
+        "kernel_max_request_bytes=",
+        "estimated_request_ceiling_bytes=",
         "max_background=",
         "congestion_threshold=",
     ] {
@@ -107,6 +111,39 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
         return Err(format!(
             "invalid FUSE max_readahead negotiation requested={requested_readahead} effective={effective_readahead}\n{negotiated_line}"
         ));
+    }
+
+    let page_size = negotiated_u64(negotiated_line, "kernel_page_size_bytes")?;
+    let max_pages = negotiated_u64(negotiated_line, "kernel_max_pages_limit")?;
+    let kernel_max_request = negotiated_u64(negotiated_line, "kernel_max_request_bytes")?;
+    let estimated_request = negotiated_u64(negotiated_line, "estimated_request_ceiling_bytes")?
+        .ok_or_else(|| format!("estimated_request_ceiling_bytes unavailable\n{negotiated_line}"))?;
+
+    let configured_request = effective_write.max(effective_readahead);
+    if estimated_request == 0 || estimated_request > configured_request {
+        return Err(format!(
+            "invalid FUSE estimated request ceiling estimated={estimated_request} configured={configured_request}\n{negotiated_line}"
+        ));
+    }
+
+    if compatibility_line.contains("MAX_PAGES") {
+        if let (Some(page_size), Some(max_pages), Some(kernel_max_request)) =
+            (page_size, max_pages, kernel_max_request)
+        {
+            let expected = page_size
+                .checked_mul(max_pages)
+                .ok_or_else(|| "kernel FUSE request-byte calculation overflowed".to_string())?;
+            if kernel_max_request != expected {
+                return Err(format!(
+                    "invalid FUSE kernel request limit page_size={page_size} max_pages={max_pages} bytes={kernel_max_request} expected={expected}\n{negotiated_line}"
+                ));
+            }
+            if estimated_request > kernel_max_request {
+                return Err(format!(
+                    "estimated FUSE request ceiling exceeds kernel limit estimated={estimated_request} kernel={kernel_max_request}\n{negotiated_line}"
+                ));
+            }
+        }
     }
 
     Ok(())

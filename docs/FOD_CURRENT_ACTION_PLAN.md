@@ -255,8 +255,8 @@ Priorytet: P1 performance validation.
   `artifacts/perf/<commit>/`;
 - [x] rzeczywisty pomiar QNAP wykonany dla `4k 16k 64k 256k 512k 1m`,
   WAL replay i strict read-only potwierdzone, wyniki zapisane w `BENCHMARKS.md`;
-- [ ] powtorzyc `256k`, `512k` i `1m` na co najmniej `1G` oraz kilku przebiegach,
-  aby potwierdzic niemonotoniczny spadek przy `512k`;
+- [x] powtorzyc `256k`, `512k` i `1m` na `1G` oraz kilku przebiegach:
+  po 3.3.12 lokalny fused nie wykazuje istotnego zalamania przy `512k/1m`;
 - [x] zidentyfikowac koszt `fod_file_read_metadata` na primary read: byl wykonywany per callback przed `fod_fetch_block_range`;
 - [x] pierwszy lokalny A/B 256k wykryl regresje pierwszego fused SQL:
   legacy `215 MiB/s` vs `LEFT JOIN + ORDER BY` fused `78.6 MiB/s`; SQL fused
@@ -271,12 +271,20 @@ Priorytet: P1 performance validation.
   `164 -> 238 MiB/s` (`+45.1%`), mediana `fuse_read_total_us`
   `1,463,130 -> 994,450` (`-32.0%`), mediana SQL `994,324 -> 798,491 us`
   (`-19.7%`);
-- [ ] wykonac koncowy pelny gate `QNAP=0 make test-all` na finalnym 3.3.12;
+- [x] koncowy pelny gate `QNAP=0 make test-all` na finalnym 3.3.12 zakonczony bez bledow;
+- [x] zdiagnozowac fragmentacje duzych FUSE requestow: przy stronie 4096 i
+  `fs.fuse.max_pages_limit=256` domyslne 512KiB dawalo 3072 callbacki/1GiB,
+  1MiB dawalo 2048, a `max_pages_limit=512 + max_write=2MiB` dawalo 1024;
+- [x] powtarzany A/B 1GiB/fio 1MiB: read `283 -> 322 -> 374 MiB/s`,
+  write `60.8 -> 61.3 -> 61.3 MiB/s`; przyjac 1MiB jako bezpieczny domyslny
+  limit FOD 3.3.13, a 2MiB/512 stron pozostawic jako jawny tuning hosta;
+- [ ] po implementacji 3.3.13 wykonac testy targeted, koncowy
+  `QNAP=0 make test-all` i review `git diff HEAD~1..HEAD`;
 - [ ] dodac osobny benchmark kontrolowanej promocji replica -> primary i dopiero
   po promocji mierzyc write throughput dawnego slave;
-- 3.3.11 jest zamkniete i wypchniete; pozostaje baseline'em QNAP dla dalszych
-  porownan. Biezacym blokujacym krokiem przed push 3.3.12 jest koncowy lokalny
-  `QNAP=0 make test-all`.
+- 3.3.12 jest zamkniete i wypchniete; pozostaje baseline'em dla 3.3.13.
+  Biezacy krok to walidacja nowego domyslnego 1MiB FUSE request ceiling i
+  diagnostyki limitu kernela, bez automatycznej zmiany globalnego sysctl.
 
 ## 9. HA miedzy hostami
 

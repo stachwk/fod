@@ -4,14 +4,15 @@
 use fod_rust_runtime::{env_var_with_legacy_alias, parse_size_bytes};
 use fuser::{InitFlags, KernelConfig, Version};
 use log::{info, warn};
-use std::io;
+use std::{fs, io};
 
 pub(crate) const FUSER_VERSION: &str = "0.18.0";
 pub(crate) const USERSPACE_PROTOCOL_MAX: Version = Version(7, 40);
-pub(crate) const DEFAULT_FUSE_MAX_WRITE_BYTES: u32 = 512 * 1024;
+pub(crate) const DEFAULT_FUSE_MAX_WRITE_BYTES: u32 = 1024 * 1024;
 pub(crate) const DEFAULT_FUSE_MAX_READAHEAD_BYTES: u32 = 512 * 1024;
 
 const FUSE_MAX_WRITE_ENV: &str = "FOD_FUSE_MAX_WRITE_BYTES";
+const FUSE_MAX_PAGES_LIMIT_PATH: &str = "/proc/sys/fs/fuse/max_pages_limit";
 const FUSE_MAX_READAHEAD_ENV: &str = "FOD_FUSE_MAX_READAHEAD_BYTES";
 const FOD_BASE_REQUESTED_CAPABILITIES: InitFlags =
     InitFlags::FUSE_POSIX_LOCKS.union(InitFlags::FUSE_FLOCK_LOCKS);
@@ -108,14 +109,87 @@ impl FuseCompatibilitySnapshot {
             format_init_flags(self.enabled_capabilities),
             format_init_flags(self.unsupported_capabilities),
         );
+        let kernel_page_size_bytes = system_page_size_bytes();
+        let kernel_max_pages_limit = kernel_fuse_max_pages_limit();
+        let kernel_max_request_bytes = if self
+            .available_capabilities
+            .contains(InitFlags::FUSE_MAX_PAGES)
+        {
+            kernel_fuse_max_request_bytes(kernel_page_size_bytes, kernel_max_pages_limit)
+        } else {
+            None
+        };
+        let estimated_request_ceiling_bytes = estimated_request_ceiling_bytes(
+            self.effective_max_write,
+            self.effective_max_readahead,
+            kernel_max_request_bytes,
+        );
         info!(
-            "FOD FUSE negotiated: requested_max_write={} effective_max_write={} requested_max_readahead={} effective_max_readahead={} max_background=unavailable congestion_threshold=unavailable",
+            "FOD FUSE negotiated: requested_max_write={} effective_max_write={} requested_max_readahead={} effective_max_readahead={} kernel_page_size_bytes={} kernel_max_pages_limit={} kernel_max_request_bytes={} estimated_request_ceiling_bytes={} max_background=unavailable congestion_threshold=unavailable",
             self.requested_max_write,
             self.effective_max_write,
             self.requested_max_readahead,
             self.effective_max_readahead,
+            format_optional_u64(kernel_page_size_bytes),
+            format_optional_u64(kernel_max_pages_limit),
+            format_optional_u64(kernel_max_request_bytes),
+            estimated_request_ceiling_bytes,
         );
+        if let Some(kernel_max_request_bytes) = kernel_max_request_bytes {
+            let configured_request_bytes =
+                u64::from(self.effective_max_write.max(self.effective_max_readahead));
+            if configured_request_bytes > kernel_max_request_bytes {
+                warn!(
+                    "FOD FUSE request ceiling is kernel-capped: configured_bytes={} kernel_max_request_bytes={} path={}",
+                    configured_request_bytes,
+                    kernel_max_request_bytes,
+                    FUSE_MAX_PAGES_LIMIT_PATH
+                );
+            }
+        }
     }
+}
+
+fn system_page_size_bytes() -> Option<u64> {
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size > 0 {
+        Some(page_size as u64)
+    } else {
+        None
+    }
+}
+
+fn kernel_fuse_max_pages_limit() -> Option<u64> {
+    fs::read_to_string(FUSE_MAX_PAGES_LIMIT_PATH)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+}
+
+fn kernel_fuse_max_request_bytes(
+    page_size_bytes: Option<u64>,
+    max_pages_limit: Option<u64>,
+) -> Option<u64> {
+    page_size_bytes?.checked_mul(max_pages_limit?)
+}
+
+fn estimated_request_ceiling_bytes(
+    effective_max_write: u32,
+    effective_max_readahead: u32,
+    kernel_max_request_bytes: Option<u64>,
+) -> u64 {
+    let configured = u64::from(effective_max_write.max(effective_max_readahead));
+    kernel_max_request_bytes
+        .map(|kernel_limit| configured.min(kernel_limit))
+        .unwrap_or(configured)
+}
+
+fn format_optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unavailable".to_string())
 }
 
 fn requested_capabilities(acl_enabled: bool) -> InitFlags {
@@ -273,9 +347,40 @@ mod tests {
     }
 
     #[test]
-    fn defaults_use_512k_write_and_readahead() {
-        assert_eq!(DEFAULT_FUSE_MAX_WRITE_BYTES, 512 * 1024);
+    fn defaults_use_1m_write_and_512k_readahead() {
+        assert_eq!(DEFAULT_FUSE_MAX_WRITE_BYTES, 1024 * 1024);
         assert_eq!(DEFAULT_FUSE_MAX_READAHEAD_BYTES, 512 * 1024);
+    }
+
+    #[test]
+    fn estimates_request_ceiling_from_configured_and_kernel_limits() {
+        let kernel_1m = Some(1024 * 1024);
+        assert_eq!(
+            estimated_request_ceiling_bytes(512 * 1024, 128 * 1024, kernel_1m),
+            512 * 1024
+        );
+        assert_eq!(
+            estimated_request_ceiling_bytes(1024 * 1024, 128 * 1024, kernel_1m),
+            1024 * 1024
+        );
+        assert_eq!(
+            estimated_request_ceiling_bytes(2 * 1024 * 1024, 128 * 1024, kernel_1m),
+            1024 * 1024
+        );
+        assert_eq!(
+            estimated_request_ceiling_bytes(2 * 1024 * 1024, 128 * 1024, None),
+            2 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn computes_kernel_request_bytes_without_overflow() {
+        assert_eq!(
+            kernel_fuse_max_request_bytes(Some(4096), Some(256)),
+            Some(1024 * 1024)
+        );
+        assert_eq!(kernel_fuse_max_request_bytes(Some(u64::MAX), Some(2)), None);
+        assert_eq!(kernel_fuse_max_request_bytes(None, Some(256)), None);
     }
 
     #[test]
