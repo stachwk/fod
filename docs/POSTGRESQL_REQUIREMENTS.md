@@ -241,6 +241,13 @@ autovacuum_work_mem
 Nie nalezy wpisywac jednej stalej wartosci jako "wymaganej przez FOD".
 Powinny byc dobierane na podstawie pomiarow PostgreSQL i benchmarkow FOD.
 
+Dla random I/O obowiazuje dodatkowa metodyka z
+`docs/FOD_RANDOM_IO_POSTGRESQL_TUNING.md`. Przed zmiana kodu FOD nalezy
+sprawdzic, czy ograniczenie nie pochodzi z planera, `shared_buffers`,
+WAL/checkpointow, autovacuum albo page cache OS. Klase zmiany parametru
+(sesja/reload/restart) nalezy odczytywac z `pg_settings.context` na
+docelowej wersji PostgreSQL, zamiast utrzymywac stale zalozenie w FOD.
+
 ## 8. Autovacuum i ochrona przed wraparound
 
 FOD intensywnie aktualizuje tabele PostgreSQL, dlatego autovacuum musi
@@ -358,4 +365,6 @@ writable FOD:
 ```
 
 Parametry wydajnosciowe nalezy stroic osobno na podstawie realnego obciazenia,
-a nie traktowac ich jako stale wymagania protokolu FOD.
+a nie traktowac ich jako stale wymagania protokolu FOD. Metodyka random I/O,
+w tym `pg_stat_io`, `pg_stat_wal`, `pg_settings.context` i kontrolowane A/B,
+jest opisana w `docs/FOD_RANDOM_IO_POSTGRESQL_TUNING.md`.

@@ -281,12 +281,29 @@ Priorytet: P1 performance validation.
 - [x] po implementacji 3.3.13 wykonano testy targeted,
   `QNAP=0 make test-mount-suite`, koncowy `QNAP=0 make test-all` oraz
   review `git diff HEAD~1..HEAD`; wszystkie zakonczyly sie poprawnie;
+- [x] wykonac pierwszy powtarzany baseline random I/O na FOD 3.3.14:
+  `randread` i `randrw50` dla `4k 16k 256k 1m`, po 3 przebiegi;
+- [x] zapisac metodyke rozdzielania kosztu FOD/FUSE/PostgreSQL/kernel/storage
+  oraz klasyfikacje tuningu PostgreSQL przez `pg_settings.context` w
+  `docs/FOD_RANDOM_IO_POSTGRESQL_TUNING.md`;
+- [ ] zebrac kontrolowane cold/warm delty `pg_stat_io`, `pg_stat_wal`,
+  `pg_stat_database` i snapshot `pg_settings` dla `randread 4k`,
+  `randread 256k` i `randrw50`;
+- [ ] wykonac pojedyncze A/B parametrow sesyjnych/plannera, zaczynajac od
+  `plan_cache_mode`; `random_page_cost` i `effective_cache_size` testowac
+  tylko razem z porownaniem rzeczywistego planu `EXPLAIN`;
+- [ ] osobno wykonac restartowy A/B `shared_buffers`, jezeli statystyki I/O
+  potwierdza, ze cache PostgreSQL jest ograniczeniem;
+- [ ] nie wlaczac automatycznego tuningu runtime FOD przed powtarzalnym A/B
+  i nie obnizac durability dla zysku benchmarkowego;
 - [ ] dodac osobny benchmark kontrolowanej promocji replica -> primary i dopiero
   po promocji mierzyc write throughput dawnego slave;
 - 3.3.13 jest zamkniete i wypchniete w `63375d4`; nowy domyslny
   `FOD_FUSE_MAX_WRITE_BYTES=1MiB`, diagnostyka limitu kernela oraz
-  `docs/FUSE_REQUIREMENTS.md` sa zwalidowane. Nastepny otwarty krok read/HA to
-  osobny benchmark kontrolowanej promocji replica -> primary.
+  `docs/FUSE_REQUIREMENTS.md` sa zwalidowane. Po 3.3.15 priorytetem read path
+  jest diagnostyka random I/O razem z PostgreSQL, zanim zostanie zmieniony
+  runtime FOD. Benchmark kontrolowanej promocji replica -> primary pozostaje
+  osobnym otwartym krokiem HA/read-write.
 
 ## 9. HA miedzy hostami
 

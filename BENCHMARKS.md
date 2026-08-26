@@ -2600,3 +2600,49 @@ Requesting `FOD_FUSE_MAX_WRITE_BYTES=2MiB` while leaving
 `fs.fuse.max_pages_limit=256` still produced requests of at most about 1 MiB,
 even though the fuser setter reported `effective_max_write=2097152`. The new
 diagnostic fields make this kernel cap visible.
+
+## Random I/O PostgreSQL/FOD baseline (3.3.15)
+
+A diagnostic on FOD 3.3.14 (`98cea3f98b3d`) used a dense 1 GiB file and
+performed 64 MiB of random I/O per case. FOD ran with `noatime`, direct-I/O,
+and read cache/read-ahead/prefetch disabled. fio used one synchronous job at
+iodepth 1.
+
+The repeated 3-run medians were:
+
+| workload | block size | read MiB/s | write MiB/s | read IOPS |
+| --- | ---: | ---: | ---: | ---: |
+| `randread` | 4 KiB | 7.505 | - | 1921 |
+| `randread` | 16 KiB | 28.725 | - | 1838 |
+| `randread` | 256 KiB | 202.532 | - | 810 |
+| `randread` | 1 MiB | 206.452 | - | 206 |
+| `randrw50` | 4 KiB | 1.183 | 1.165 | 303 |
+| `randrw50` | 16 KiB | 4.100 | 4.141 | 262 |
+| `randrw50` | 256 KiB | 22.422 | 21.160 | 90 |
+| `randrw50` | 1 MiB | 23.579 | 18.409 | 24 |
+
+The first single-pass matrix was substantially colder/slower for pure reads:
+`0.866 MiB/s` at 4 KiB, `119.850 MiB/s` at 256 KiB, and `122.605 MiB/s`
+at 1 MiB. The repeated run reached medians of `7.505`, `202.532`, and
+`206.452 MiB/s` respectively. Therefore these measurements must not be
+attributed to FOD alone: PostgreSQL `shared_buffers`, kernel page cache,
+checkpoint state, and physical I/O need to be captured alongside FOD/FUSE
+profiles.
+
+`randrw50` reduced median read throughput relative to pure `randread` by about
+`84.2%` at 4 KiB, `85.7%` at 16 KiB, `88.9%` at 256 KiB, and `88.6%` at
+1 MiB. This is now a primary diagnostic target: split the cost between
+read-after-write flush/persist, WAL/commit/checkpoint work, PostgreSQL query
+execution, locks/serialization, and FUSE callbacks before changing FOD code.
+
+The first matrix also showed one-pass `randwrite` throughput between
+`15.725 MiB/s` (4 KiB) and `18.524 MiB/s` (1 MiB), but this requires a
+separate 3-run confirmation before becoming a stable baseline.
+
+One `randrw50` 256 KiB run reported `read_tasks=0 write_tasks=0` while fio
+completed normally. Those task counters are treated as missing shutdown
+telemetry, not as zero FOD/FUSE operations.
+
+The tuning methodology and candidate PostgreSQL parameters are documented in
+`docs/FOD_RANDOM_IO_POSTGRESQL_TUNING.md`. FOD 3.3.15 records the methodology
+only; it does not yet change runtime PostgreSQL settings.
