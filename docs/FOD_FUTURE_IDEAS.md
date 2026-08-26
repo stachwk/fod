@@ -98,29 +98,69 @@ Mozliwe korzysci:
 - mozliwosc uruchomienia odzyskanego systemu ze stanu sprzed incydentu, bez
   niszczenia materialu do analizy.
 
-Ten kierunek wymaga jednak osobnego modelu bezpieczenstwa. Sam rollback nie
-jest ochrona przed napastnikiem, jezeli ten sam zaatakowany system moze
-zmodyfikowac albo usunac historie FOD, dane recovery, PostgreSQL lub klucze
-administracyjne.
+### Model separacji recovery
 
-Dla zastosowania forensic/recovery nalezy rozwazyc:
+Zakladany model jest silniejszy niz zwykly filesystem z lokalnymi snapshotami:
 
-- oddzielenie backendu FOD od chronionego systemu/hosta;
-- append-only lub niemodyfikowalna historie recovery;
-- kryptograficzna integralnosc historii i punktow recovery;
-- osobne uprawnienia administracyjne do usuwania historii;
-- rejestrowanie session_id/host/user/process oraz czasu zmiany tam, gdzie jest
+- chroniony system operacyjny i PostgreSQL dzialaja na osobnych hostach;
+- skompromitowany host systemowy nie ma dostepu administracyjnego do hosta
+  PostgreSQL;
+- napastnik moze poznac dane uwierzytelniajace FOD do bazy i moze uzyskac
+  szerokie prawa logiczne do danych FOD, ale nie powinien otrzymywac dostepu do
+  systemu operacyjnego hosta PostgreSQL;
+- konto FOD nie powinno byc PostgreSQL `SUPERUSER`; powinno miec tylko prawa
+  wymagane do pracy FOD i zarzadzania jego schematem/danymi;
+- archiwum WAL i backupy PostgreSQL sa przechowywane poza zasiegiem
+  kompromitowanego hosta, najlepiej na kolejnym odseparowanym hoście lub w
+  repozytorium backupowym z osobnymi uprawnieniami;
+- skompromitowany system nie ma uprawnien do kasowania ani nadpisywania
+  historycznych backupow i WAL.
+
+W takim modelu napastnik moze zmienic lub nawet zniszczyc biezacy logiczny stan
+FOD widoczny przez swoje uprawnienia bazodanowe, ale nie moze zmienic
+historycznego stanu utrwalonego w niedostepnych dla niego backupach i archiwum
+WAL.
+
+Po incydencie mozna wiec odtworzyc osobna instancje PostgreSQL z backupu i WAL,
+wybierajac punkt czasu sprzed kompromitacji albo analizujac kolejne punkty czasu
+w okresie incydentu. Odtwarzanie powinno odbywac sie na nowym/czystym hoście,
+bez uzywania skompromitowanego systemu jako zaufanego elementu procesu recovery.
+
+To daje dwa niezalezne zrodla wartosci:
+
+1. operacyjne recovery - przywrocenie FOD i systemu do znanego dobrego stanu;
+2. forensic timeline - odtworzenie kopii PostgreSQL dla wybranych LSN/czasow i
+   porownanie zmian wykonanych podczas wlamania.
+
+### Konsekwencje dla projektu
+
+Dla tego zastosowania nalezy zaprojektowac i przetestowac:
+
+- Point-in-Time Recovery PostgreSQL jako podstawowy mechanizm odtworzenia;
+- retencje backupow i WAL wystarczajaca do cofniecia sie przed moment
+  wykrycia incydentu;
+- osobne credentiale i ACL dla runtime FOD, hosta PostgreSQL oraz systemu
+  backupowego;
+- zakaz uzywania przez FOD konta PostgreSQL `SUPERUSER`;
+- mozliwosc montowania/analizy odzyskanej kopii FOD bez zapisu do materialu
+  zrodlowego;
+- eksport historii zmian do analizy forensic;
+- rejestrowanie `session_id`, hosta, user/process i czasu zmiany tam, gdzie jest
   to wiarygodnie dostepne;
-- mozliwosc zamrozenia punktu recovery po wykryciu incydentu;
-- odczyt i eksport historii do narzedzi forensic bez zmiany badanego stanu;
-- testy odporne na kompromitacje klienta, utrate procesu, restart oraz
-  manipulacje zegarem;
-- jasne rozroznienie rollbacku operacyjnego od dowodu forensic.
+- test scenariusza: kompromitacja hosta systemowego -> zlosliwe zmiany FOD ->
+  utrata biezacej bazy -> odtworzenie z backupu + WAL na osobnym hoście;
+- test wyboru kilku punktow PITR przed, w trakcie i po incydencie oraz
+  porownania zmian filesystemu.
 
-Wariant docelowy moglby pozwalac na dwa niezalezne rezultaty po incydencie:
+Dodatkowa kryptograficzna integralnosc historii albo immutable/WORM backup moze
+jeszcze wzmocnic model, ale nie jest warunkiem podstawowym, jezeli backup/WAL
+sa juz fizycznie i uprawnieniowo odseparowane od kompromitowanego hosta i od
+konta runtime FOD.
+
+Wariant docelowy powinien pozwalac na dwa niezalezne rezultaty po incydencie:
 
 1. szybkie odtworzenie dzialajacego systemu do bezpiecznego punktu;
-2. zachowanie niezmienionej historii kompromitowanego okresu do pozniejszej
+2. zachowanie i odtwarzanie historycznego okresu kompromitacji do pozniejszej
    analizy.
 
 ## Kolejnosc dalszych prac
@@ -129,5 +169,5 @@ Proponowana kolejnosc:
 
 1. autotuning najpierw w trybie obserwacyjnym bez automatycznej zmiany limitow;
 2. A/B buildow `target` vs `/dev/shm` i projekt bezpiecznej polityki cleanup;
-3. osobny threat model oraz PoC recovery/forensic przed deklarowaniem FOD jako
-   filesystemu dla calego systemu operacyjnego.
+3. osobny threat model oraz PoC recovery/forensic z PostgreSQL PITR przed
+   deklarowaniem FOD jako filesystemu dla calego systemu operacyjnego.
