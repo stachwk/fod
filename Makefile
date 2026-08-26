@@ -27,6 +27,36 @@ FOD_VERSION := $(shell cat $(FOD_VERSION_FILE))
 FOD_CARGO_PROFILE ?= release
 FOD_RELEASE_FLAG := --profile $(FOD_CARGO_PROFILE)
 
+# Cargo build artifact placement. The default remains the repository ./target.
+# FOD_CARGO_TARGET_MODE=shm redirects Cargo artifacts to a per-user tmpfs
+# directory after an explicit safety preflight.
+FOD_CARGO_TARGET_MODE ?= disk
+FOD_SHM_TARGET_ROOT ?= /dev/shm
+FOD_SHM_TARGET_KEY ?= $(shell printf '%s\n' "$(CURDIR)" | cksum | awk '{print $$1}')
+FOD_SHM_TARGET_DIR ?= $(FOD_SHM_TARGET_ROOT)/fod-target-$(shell id -u)-$(FOD_SHM_TARGET_KEY)
+FOD_SHM_MIN_FREE_BYTES ?= 2147483648
+
+ifeq ($(filter $(FOD_CARGO_TARGET_MODE),disk shm),)
+$(error FOD_CARGO_TARGET_MODE must be 'disk' or 'shm', got '$(FOD_CARGO_TARGET_MODE)')
+endif
+
+ifeq ($(FOD_CARGO_TARGET_MODE),shm)
+override CARGO_TARGET_DIR := $(FOD_SHM_TARGET_DIR)
+endif
+
+ifneq ($(strip $(CARGO_TARGET_DIR)),)
+export CARGO_TARGET_DIR
+FOD_EFFECTIVE_CARGO_TARGET_DIR := $(CARGO_TARGET_DIR)
+else
+FOD_EFFECTIVE_CARGO_TARGET_DIR := target
+endif
+
+export FOD_CARGO_TARGET_MODE
+export FOD_SHM_TARGET_ROOT
+export FOD_SHM_TARGET_KEY
+export FOD_SHM_TARGET_DIR
+export FOD_SHM_MIN_FREE_BYTES
+
 ifeq ($(wildcard $(CARGO_ROOT_MANIFEST)),)
 CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path rust_mkfs/Cargo.toml
 CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path rust_fuse/Cargo.toml
@@ -41,11 +71,19 @@ CARGO_TEST_MKFS := $(RUST_CARGO) test --manifest-path rust_mkfs/Cargo.toml
 CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path rust_fuse/Cargo.toml
 CARGO_TEST_HOTPATH := $(RUST_CARGO) test --manifest-path rust_hotpath/Cargo.toml
 
+ifneq ($(strip $(CARGO_TARGET_DIR)),)
+RUST_MKFS_TARGET_DIR := $(CARGO_TARGET_DIR)
+RUST_FUSE_TARGET_DIR := $(CARGO_TARGET_DIR)
+RUST_INDEXER_TARGET_DIR := $(CARGO_TARGET_DIR)
+RUST_MONITOR_TARGET_DIR := $(CARGO_TARGET_DIR)
+RUST_LIBFOD_TARGET_DIR := $(CARGO_TARGET_DIR)
+else
 RUST_MKFS_TARGET_DIR := rust_mkfs/target
 RUST_FUSE_TARGET_DIR := rust_fuse/target
 RUST_INDEXER_TARGET_DIR := rust_indexer/target
 RUST_MONITOR_TARGET_DIR := rust_monitor/target
 RUST_LIBFOD_TARGET_DIR := rust_libfod/target
+endif
 else
 CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
 CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_FUSE_PACKAGE)
@@ -61,11 +99,11 @@ CARGO_TEST_MKFS := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) -p 
 CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_FUSE_PACKAGE)
 CARGO_TEST_HOTPATH := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_HOTPATH_PACKAGE)
 
-RUST_MKFS_TARGET_DIR := target
-RUST_FUSE_TARGET_DIR := target
-RUST_INDEXER_TARGET_DIR := target
-RUST_MONITOR_TARGET_DIR := target
-RUST_LIBFOD_TARGET_DIR := target
+RUST_MKFS_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
+RUST_FUSE_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
+RUST_INDEXER_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
+RUST_MONITOR_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
+RUST_LIBFOD_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
 endif
 
 FOD_BOOTSTRAP_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-bootstrap
@@ -75,8 +113,8 @@ FOD_CHANGE_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-change
 FOD_FUSE_DEBUG_BIN := $(RUST_FUSE_TARGET_DIR)/debug/fod-rust-fuse
 FOD_INDEXER_DEBUG_BIN := $(RUST_INDEXER_TARGET_DIR)/debug/fod-indexer
 FOD_MONITOR_DEBUG_BIN := $(RUST_MONITOR_TARGET_DIR)/debug/fod-monitor
-FOD_DEBUG_BUILD_STAMP := target/.fod-debug-build.stamp
-FOD_LOCKING_TARGET_DIR ?= $(CURDIR)/target/test-locking
+FOD_DEBUG_BUILD_STAMP := $(RUST_MKFS_TARGET_DIR)/.fod-debug-build.stamp
+FOD_LOCKING_TARGET_DIR ?= $(abspath $(FOD_EFFECTIVE_CARGO_TARGET_DIR))/test-locking
 FOD_LOCKING_BUILD_JSON ?= $(FOD_LOCKING_TARGET_DIR)/lock_backend_smoke-build.json
 FOD_RUST_INPUT_ROOTS := Cargo.toml Cargo.lock fod_version.txt rust_mkfs rust_fuse rust_hotpath rust_runtime rust_indexer rust_monitor rust_libfod migrations
 FOD_RUST_INPUTS := $(shell find $(FOD_RUST_INPUT_ROOTS) -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' -o -name '*.sql' -o -name '*.txt' \) 2>/dev/null)
@@ -104,6 +142,59 @@ $(FOD_DEBUG_BUILD_STAMP): Makefile $(FOD_RUST_INPUTS)
 	touch $@
 
 .PHONY: build-debug
+
+.PHONY: cargo-target-info cargo-target-preflight build-debug-shm test-all-shm test-all-full-shm shm-target-status shm-target-clean
+
+cargo-target-info:
+	@printf 'cargo_target_mode=%s\n' "$(FOD_CARGO_TARGET_MODE)"
+	@printf 'effective_cargo_target_dir=%s\n' "$(FOD_EFFECTIVE_CARGO_TARGET_DIR)"
+	@if [ "$(FOD_CARGO_TARGET_MODE)" = "shm" ]; then \
+		FOD_CARGO_TARGET_MODE=shm \
+		FOD_SHM_TARGET_ROOT="$(FOD_SHM_TARGET_ROOT)" \
+		FOD_SHM_TARGET_DIR="$(FOD_SHM_TARGET_DIR)" \
+		FOD_SHM_MIN_FREE_BYTES="$(FOD_SHM_MIN_FREE_BYTES)" \
+		CARGO_TARGET_DIR="$(FOD_EFFECTIVE_CARGO_TARGET_DIR)" \
+		bash scripts/fod-shm-target.sh status; \
+	elif [ -d "$(FOD_EFFECTIVE_CARGO_TARGET_DIR)" ]; then \
+		du -sh "$(FOD_EFFECTIVE_CARGO_TARGET_DIR)"; \
+	else \
+		printf 'target_exists=no\n'; \
+	fi
+
+cargo-target-preflight:
+	@if [ "$(FOD_CARGO_TARGET_MODE)" = "shm" ]; then \
+		FOD_CARGO_TARGET_MODE=shm \
+		FOD_SHM_TARGET_ROOT="$(FOD_SHM_TARGET_ROOT)" \
+		FOD_SHM_TARGET_DIR="$(FOD_SHM_TARGET_DIR)" \
+		FOD_SHM_MIN_FREE_BYTES="$(FOD_SHM_MIN_FREE_BYTES)" \
+		CARGO_TARGET_DIR="$(FOD_EFFECTIVE_CARGO_TARGET_DIR)" \
+		bash scripts/fod-shm-target.sh check; \
+	else \
+		printf 'Cargo target preflight: disk mode, target=%s\n' "$(FOD_EFFECTIVE_CARGO_TARGET_DIR)"; \
+	fi
+
+build-debug-shm:
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm cargo-target-preflight
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm build-debug
+
+test-all-shm:
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm cargo-target-preflight
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm test-all
+
+test-all-full-shm:
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm cargo-target-preflight
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm test-all-full
+
+shm-target-status:
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm cargo-target-info
+
+shm-target-clean:
+	@FOD_CARGO_TARGET_MODE=shm \
+		FOD_SHM_TARGET_ROOT="$(FOD_SHM_TARGET_ROOT)" \
+		FOD_SHM_TARGET_DIR="$(FOD_SHM_TARGET_DIR)" \
+		FOD_SHM_MIN_FREE_BYTES="$(FOD_SHM_MIN_FREE_BYTES)" \
+		CARGO_TARGET_DIR="$(FOD_SHM_TARGET_DIR)" \
+		bash scripts/fod-shm-target.sh clean
 
 # The local integration suites share one Docker/PostgreSQL database and FUSE
 # mount resources. Keep their prerequisites serial even when make receives -j.
@@ -1090,7 +1181,7 @@ test-copy-file-range: init
 test-copy-dedupe-benchmark: test-rust-hotpath-copy-dedupe-benchmark
 	@:
 test-copy-block-crc-table: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke copy_block_crc_table --offline
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke copy_block_crc_table --offline
 
 test-worker-thresholds-block-size: init
 	$(CARGO_TEST_HOTPATH) --test helper_parity write_worker_thresholds_block_size_plan_matches_expected_values
@@ -1403,21 +1494,21 @@ test-rust-pg-query: init
 	$(CARGO_TEST_HOTPATH) --test pg_query
 
 test-large-copy-benchmark: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
 
 test-large-copy-object-adoption: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) LARGE_COPY_REQUEST_SIZE=full LARGE_COPY_EXPECT_SHARED_OBJECT=1 $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) LARGE_COPY_REQUEST_SIZE=full LARGE_COPY_EXPECT_SHARED_OBJECT=1 $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
 
 .PHONY: test-large-copy-object-adoption
 
 test-data-blocks-conflict-seed: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_seed --offline -- --nocapture
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_seed --offline -- --nocapture
 
 test-data-blocks-conflict-overwrite-benchmark: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER="$(DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER)" $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_overwrite_benchmark --offline -- --nocapture
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER="$(DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER)" $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_overwrite_benchmark --offline -- --nocapture
 
 test-data-blocks-conflict-noop-overwrite-benchmark: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_noop_overwrite_benchmark --offline -- --nocapture
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_noop_overwrite_benchmark --offline -- --nocapture
 
 test-data-blocks-conflict-benchmark: test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark
 	@:
@@ -1426,34 +1517,34 @@ test-data-blocks-conflict-noop-benchmark: test-data-blocks-conflict-seed test-da
 	@:
 
 test-large-file-multiblock-benchmark: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test large_file_multiblock_benchmark --offline -- --nocapture
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test large_file_multiblock_benchmark --offline -- --nocapture
 
 test-remount-durability-benchmark: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test remount_durability_benchmark --offline -- --nocapture
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test remount_durability_benchmark --offline -- --nocapture
 
 test-tree-scale: venv up
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) TREE_SCALE_DIRS=$(TREE_SCALE_DIRS) TREE_SCALE_FILES=$(TREE_SCALE_FILES) bash tests/integration/test_tree_scale.sh
 
 test-flush-release-profile: reset
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke flush_release_profile --offline
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke flush_release_profile --offline
 
 test-truncate-release-profile: reset
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke truncate_release_profile --offline
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke truncate_release_profile --offline
 
 test-persist-buffer-chunking: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke persist_buffer_chunking --offline
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke persist_buffer_chunking --offline
 
 test-write-flush-threshold: init
 	$(CARGO_TEST_FUSE) --test profile_smoke write_flush_threshold --offline -- --nocapture
 
 test-utimens-noop: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test profile_smoke utimens_noop --offline
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke utimens_noop --offline
 
 test-write-noop: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test mount_smoke write_noop
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke write_noop
 
 test-unlink-after-write: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test mount_smoke unlink_after_write
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke unlink_after_write
 
 test-local-vs-fod-permissions: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_local_vs_fod_permissions.py
@@ -1467,7 +1558,7 @@ test-allow-other-visibility: init
 	bash tests/integration/test_allow_other_visibility.sh
 
 test-multi-open-unique-handles: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(CURDIR)/$(FOD_BOOTSTRAP_DEBUG_BIN) $(CARGO_TEST_FUSE) --test mount_smoke multi_open_unique_handles
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_DEBUG_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke multi_open_unique_handles
 
 
 test-version: test-mkfs-config-suite

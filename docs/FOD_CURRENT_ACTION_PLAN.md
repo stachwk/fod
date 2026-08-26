@@ -383,3 +383,28 @@ Priorytet: P1 domkniecie niespojnosci konfiguracji/runtime.
 
 Uzasadnienie i kryteria:
 `docs/FOD_3_3_19_FUSE_MAX_WRITE_CONFIG_DEFAULT.md`.
+
+
+## FOD 3.3.20 - opcjonalny Cargo target w /dev/shm
+
+Status: zakonczone w FOD 3.3.20.
+
+Priorytet: P2 developer/build performance.
+
+- pozostawic `./target` jako domyslny tryb;
+- dodac opt-in `FOD_CARGO_TARGET_MODE=shm`;
+- kierowac sciezki binariow Makefile do efektywnego `CARGO_TARGET_DIR`;
+- zapewnic zgodnosc helperow testow FUSE z `CARGO_TARGET_DIR`;
+- przed uzyciem tmpfs sprawdzac filesystem, wolne miejsce, ownership i `exec`;
+- nie przejmowac ani nie czyscic nieoznaczonego katalogu;
+- dodac `build-debug-shm`, `test-all-shm`, status i jawne czyszczenie;
+- po poprawnosci wykonac A/B cold/warm `./target` vs `/dev/shm`;
+- automatyczne czyszczenie starego dyskowego `./target` zostawic na osobny etap.
+
+A/B na `af26b0d`: cold disk/shm `12.17/15.29 s`, warm disk/shm
+`1.05/0.85 s`. Tmpfs nie zostaje domyslny: cold byl wolniejszy o ok. 25.6%,
+warm zyskal ok. 19%, a jeden target zajmuje ok. 1.29 GiB. Zachowac opt-in i
+2 GiB preflight.
+
+Szczegoly:
+`docs/FOD_3_3_20_SHM_CARGO_TARGET.md`.

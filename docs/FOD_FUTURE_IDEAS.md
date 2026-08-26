@@ -43,6 +43,11 @@ sterowanie.
 
 ## 2. Szybsze buildy przez /dev/shm i kontrolowane czyszczenie target
 
+Status: pierwsza czesc zakonczona w FOD 3.3.20. A/B wykazal, ze tmpfs
+nie powinien byc domyslny: cold build byl wolniejszy, a warm incremental
+zyskal ok. 19%. Tryb pozostaje opt-in. Automatyczna polityka wieku/rozmiaru
+dla dyskowego `./target` pozostaje osobnym krokiem.
+
 Obserwacja: wszystkie artefakty Cargo trafiaja obecnie do `./target`, ktory po
 wielu buildach i konfiguracjach zajmuje duzo miejsca. Dla lokalnych buildow i
 testow mozna rozwazyc opcjonalne kierowanie `CARGO_TARGET_DIR` do tmpfs, np.

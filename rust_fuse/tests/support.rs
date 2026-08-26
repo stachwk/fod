@@ -25,6 +25,20 @@ pub fn config_path() -> PathBuf {
     repo_root().join("fod_config.ini")
 }
 
+pub fn cargo_target_dir() -> PathBuf {
+    match env::var_os("CARGO_TARGET_DIR") {
+        Some(value) if !value.is_empty() => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root().join(path)
+            }
+        }
+        _ => repo_root().join("target"),
+    }
+}
+
 pub fn unique_suffix() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -251,9 +265,12 @@ pub fn resolve_file_id(repo: &DbRepo, mountpoint: &Path, path: &Path) -> Result<
 
 pub fn bootstrap_binary() -> PathBuf {
     let root = repo_root();
+    let target = cargo_target_dir();
     binary_from_env_or_candidates(
         "FOD_BOOTSTRAP_BIN",
         &[
+            target.join("debug/fod-bootstrap"),
+            target.join("release/fod-bootstrap"),
             root.join("target/debug/fod-bootstrap"),
             root.join("target/release/fod-bootstrap"),
             root.join("rust_mkfs/target/debug/fod-bootstrap"),
@@ -266,9 +283,12 @@ pub fn bootstrap_binary() -> PathBuf {
 
 pub fn mkfs_binary() -> PathBuf {
     let root = repo_root();
+    let target = cargo_target_dir();
     binary_from_env_or_candidates(
         "FOD_MKFS_BIN",
         &[
+            target.join("debug/fod-rust-mkfs"),
+            target.join("release/fod-rust-mkfs"),
             root.join("target/debug/fod-rust-mkfs"),
             root.join("target/release/fod-rust-mkfs"),
             root.join("rust_mkfs/target/debug/fod-rust-mkfs"),
