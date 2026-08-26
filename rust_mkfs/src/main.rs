@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 22;
-const MIGRATION_FILES: [&str; 22] = [
+const SCHEMA_VERSION: u64 = 23;
+const MIGRATION_FILES: [&str; 23] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -48,9 +48,10 @@ const MIGRATION_FILES: [&str; 22] = [
     "0020_storage_slot.sql",
     "0021_storage_layout_finalize.sql",
     "0022_monitor_session_stats.sql",
+    "0023_drop_redundant_data_blocks_index.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 22] = [
+const MIGRATION_DESCRIPTIONS: [&str; 23] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -73,6 +74,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 22] = [
     "Reserved storage migration slot",
     "Finalize canonical block storage layout",
     "Add shared monitor session statistics",
+    "Drop redundant data_blocks prefix index and refresh planner statistics",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -230,6 +232,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0022_monitor_session_stats.sql"
         )),
+        23 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0023_drop_redundant_data_blocks_index.sql"
+        )),
         _ => "",
     }
 }
@@ -258,6 +264,7 @@ fn migration_description(version: u64) -> &'static str {
         20 => MIGRATION_DESCRIPTIONS[19],
         21 => MIGRATION_DESCRIPTIONS[20],
         22 => MIGRATION_DESCRIPTIONS[21],
+        23 => MIGRATION_DESCRIPTIONS[22],
         _ => "Migration",
     }
 }
@@ -286,6 +293,7 @@ fn migration_filename(version: u64) -> &'static str {
         20 => MIGRATION_FILES[19],
         21 => MIGRATION_FILES[20],
         22 => MIGRATION_FILES[21],
+        23 => MIGRATION_FILES[22],
         _ => "unknown.sql",
     }
 }
@@ -428,6 +436,18 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                 FROM pg_indexes
                 WHERE schemaname = 'fod'
                   AND indexname = 'idx_monitor_session_stats_sampled'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'fod'
+                  AND indexname = 'idx_data_blocks_object_order'
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'fod'
+                  AND indexname = 'idx_data_blocks_data_object_id'
             )
             AND EXISTS (
                 SELECT 1
@@ -956,6 +976,10 @@ mod tests {
         assert!(!sql.contains("ALTER SCHEMA fod RENAME TO fod"));
         assert!(!sql.contains("ALTER TABLE IF EXISTS public."));
         assert!(!sql.contains("ALTER SEQUENCE IF EXISTS public."));
+        assert!(sql.contains(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_data_blocks_object_order ON data_blocks (data_object_id, _order);"
+        ));
+        assert!(!sql.contains("idx_data_blocks_data_object_id"));
     }
 
     #[test]

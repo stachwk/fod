@@ -342,3 +342,26 @@ Priorytet: wymagany przed deklarowaniem pelnego automatycznego HA.
 - uzywac lokalnych targetow `make` opisanych w `zasady_sprawdzen.md`;
 - po kazdym commicie wykonac `git diff HEAD~1..HEAD` lub `git show` i sprawdzic
   bledy, przypadkowe zmiany, brakujace pliki i regresje wzgledem celu.
+
+
+## FOD 3.3.18 - stabilnosc planera PostgreSQL dla zakresow blokow
+
+Status: zakonczone w FOD 3.3.18.
+
+Priorytet: P1 wydajnosci/poprawnosci planu SQL.
+
+- zachowac `idx_data_blocks_object_order(data_object_id, _order)`;
+- usunac redundantny `idx_data_blocks_data_object_id(data_object_id)` ze
+  swiezego schematu i migracja 0023 z istniejacych baz;
+- po migracji wykonac jednorazowe `ANALYZE fod.data_blocks`, bez dodawania
+  `ANALYZE` do hot-path;
+- latest-schema shape ma wymagac indeksu zlozonego i braku indeksu
+  redundantnego;
+- benchmarki duzych syntetycznych datasetow maja odswiezac statystyki po
+  przygotowaniu danych i przed pomiarem;
+- po zmianie zwalidowac 4 KiB / 256 KiB / 512 KiB / 1 MiB;
+- normalizacje standardowego `fuse_max_write_bytes` do 1 MiB wykonac osobno,
+  po zamknieciu tego A/B.
+
+Pelne uzasadnienie, pomiary i kryteria sa w
+`docs/FOD_3_3_18_POSTGRESQL_PLANNER_STABILITY.md`.

@@ -213,7 +213,6 @@ CREATE INDEX IF NOT EXISTS idx_payload_capacity_reservations_expires
     ON payload_capacity_reservations (expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_files_data_object_id ON files (data_object_id);
-CREATE INDEX IF NOT EXISTS idx_data_blocks_data_object_id ON data_blocks (data_object_id);
 
 CREATE TABLE IF NOT EXISTS index_sources (
     id_index_source SERIAL PRIMARY KEY,

@@ -898,3 +898,40 @@ Kryteria powtornego A/B przed push:
 
 Dopiero po zamknieciu tego per-block kosztu wracamy do A/B
 `plan_cache_mode`, `random_page_cost` i `effective_cache_size`.
+
+
+## FOD 3.3.18: stale planner statistics and redundant data_blocks prefix index
+
+The FOD 3.3.17 512 KiB read-after-write diagnostic exposed a PostgreSQL planner
+failure mode after preparing a dense 1 GiB block set without refreshing
+statistics. `fod_fetch_block_range` rose from about 1 ms to 32-40 ms and
+PostgreSQL fetched about 257k tuples per query to return 128 blocks.
+
+Refreshing statistics after dataset creation restored stable 512 KiB throughput
+near 40-41 MiB/s. A controlled INDEX+ANALYZE versus NO-INDEX+ANALYZE comparison
+showed no material throughput difference, so stale planner statistics are the
+primary cause. The single-column
+`idx_data_blocks_data_object_id(data_object_id)` remains redundant with the
+left prefix of `idx_data_blocks_object_order(data_object_id, _order)` and is
+removed in schema migration 0023 as a planner guard and maintenance
+simplification.
+
+Migration 0023 performs one `ANALYZE fod.data_blocks` after dropping the
+redundant index. Normal FOD read/write/flush paths must not issue `ANALYZE`.
+Synthetic large-data benchmarks should refresh statistics after preparing the
+dataset and before collecting performance measurements.
+
+
+### FOD 3.3.18 final validation
+
+Final 1 GiB / 512 MiB randrw50 validation after post-prepare `ANALYZE`:
+
+- 4 KiB median: read 13.642 MiB/s, write 13.637 MiB/s;
+- 256 KiB median: read 42.908 MiB/s, write 44.341 MiB/s;
+- 512 KiB median: read 41.390 MiB/s, write 43.431 MiB/s;
+- 1 MiB median: read 44.487 MiB/s, write 47.090 MiB/s.
+
+For 512 KiB, `fod_fetch_block_range` remained at 1.269-1.377 ms across all
+three runs. The former 32-40 ms warm-plan pathology did not recur.
+
+FOD 3.3.18 therefore closes the data_blocks planner/index issue.

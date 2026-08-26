@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 22;
+const SCHEMA_VERSION: u64 = 23;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -229,6 +229,16 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                     SELECT 1 FROM pg_indexes
                     WHERE schemaname = 'fod'
                       AND indexname = 'idx_monitor_session_stats_sampled'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname = 'fod'
+                      AND indexname = 'idx_data_blocks_object_order'
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname = 'fod'
+                      AND indexname = 'idx_data_blocks_data_object_id'
                 )",
         )
         .expect("inspect payload ownership schema");
@@ -467,7 +477,7 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade_result.stdout));
     assert!(
         String::from_utf8_lossy(&upgrade_result.stdout).contains(
-            "Schema version row was missing; recovered version 22 from the verified schema shape."
+            "Schema version row was missing; recovered version 23 from the verified schema shape."
         ),
         "{}",
         String::from_utf8_lossy(&upgrade_result.stdout)
@@ -700,10 +710,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 22",
+        "FOD schema version: 23",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 22",
+        "Latest migration version: 23",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -729,6 +739,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0020: 0020_storage_slot.sql",
         "0021: 0021_storage_layout_finalize.sql",
         "0022: 0022_monitor_session_stats.sql",
+        "0023: 0023_drop_redundant_data_blocks_index.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -748,10 +759,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 22",
+        "Latest migration version: 23",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -878,9 +889,11 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
 
     conn.exec(
         "DROP TABLE fod.monitor_session_stats;
+         CREATE INDEX idx_data_blocks_data_object_id
+             ON fod.data_blocks (data_object_id);
          UPDATE fod.schema_version SET version = 21, applied_at = NOW();",
     )
-    .expect("prepare schema version 21 without monitor stats");
+    .expect("prepare schema version 21 with legacy redundant data_blocks index");
     assert!(
         !table_exists(&conn, "fod", "monitor_session_stats").expect("monitor table absent"),
         "schema 21 fixture must not contain monitor_session_stats"
@@ -894,7 +907,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 22"),
+        status_before_text.contains("Latest migration version: 23"),
         "{status_before_text}"
     );
     assert!(
@@ -906,7 +919,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Pending migrations: 0022"),
+        status_before_text.contains("Pending migrations: 0022, 0023"),
         "{status_before_text}"
     );
 
@@ -952,7 +965,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 22"),
+        status_broken_text.contains("FOD schema version: 23"),
         "{status_broken_text}"
     );
     assert!(
