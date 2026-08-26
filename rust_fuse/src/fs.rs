@@ -7832,7 +7832,7 @@ mod tests {
                 blocks: {
                     let mut blocks = BTreeMap::new();
                     blocks.insert(0, vec![1, 2, 3, 4]);
-                    blocks
+                    blocks.into()
                 },
             }),
             ..clean

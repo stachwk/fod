@@ -286,24 +286,41 @@ Priorytet: P1 performance validation.
 - [x] zapisac metodyke rozdzielania kosztu FOD/FUSE/PostgreSQL/kernel/storage
   oraz klasyfikacje tuningu PostgreSQL przez `pg_settings.context` w
   `docs/FOD_RANDOM_IO_POSTGRESQL_TUNING.md`;
-- [ ] zebrac kontrolowane cold/warm delty `pg_stat_io`, `pg_stat_wal`,
+- [x] zebrac kontrolowane cold/warm delty `pg_stat_io`, `pg_stat_wal`,
   `pg_stat_database` i snapshot `pg_settings` dla `randread 4k`,
-  `randread 256k` i `randrw50`;
-- [ ] wykonac pojedyncze A/B parametrow sesyjnych/plannera, zaczynajac od
-  `plan_cache_mode`; `random_page_cost` i `effective_cache_size` testowac
-  tylko razem z porownaniem rzeczywistego planu `EXPLAIN`;
+  `randread 256k` i `randrw50`; poprawny `noatime` baseline nie pokazal
+  duzego sygnalu `shared_buffers` (cold -> warm read: `+2.3%`, `-2.4%`,
+  `+1.6%`, `-7.5%` dla badanych przypadkow);
+- [x] zlokalizowac dominujacy koszt `randrw50`: dla 4 KiB
+  `write_state_clone_us` zajmuje `75.0%/74.8%` calego `fuse_read_total_us`,
+  a dla 256 KiB `27.9%/31.9%`; `write_state_for_handle()` klonuje caly
+  narastajacy `BTreeMap<u64, Vec<u8>>`;
+- [x] FOD 3.3.16: zastapic glebokie klonowanie mapy dirty blocks snapshotem
+  copy-on-write i powtorzyc A/B `randrw50 4k/256k`; w stabilizacji 3x mediana
+  `randrw50 4k` wzrosla z baseline 3.3.15 `1.243/1.236 MiB/s` read/write do
+  `15.636/15.409 MiB/s`, a `write_state_clone_us` spadlo z ok. `21.8 s` do
+  `5-7 us` na caly przebieg bez przesuniecia kosztu na `write_state_lock_us`;
+- [ ] FOD 3.3.17: w read-after-write pobierac brakujace bloki hurtowo zamiast
+  wykonywac `fod_load_block` dla kazdego 4 KiB bloku; przy `randrw50 256k`
+  liczba wywolan nadal odpowiada dokladnie `read_callbacks * 64`
+  (`8448`, `7872`, `8960`);
+- [ ] wykonac pojedyncze A/B parametrow sesyjnych/plannera dopiero po
+  ograniczeniu kosztu per-block `fod_load_block`; zaczac od `plan_cache_mode`,
+  a `random_page_cost` i `effective_cache_size` testowac tylko razem z
+  porownaniem rzeczywistego planu `EXPLAIN`;
 - [ ] osobno wykonac restartowy A/B `shared_buffers`, jezeli statystyki I/O
   potwierdza, ze cache PostgreSQL jest ograniczeniem;
 - [ ] nie wlaczac automatycznego tuningu runtime FOD przed powtarzalnym A/B
   i nie obnizac durability dla zysku benchmarkowego;
 - [ ] dodac osobny benchmark kontrolowanej promocji replica -> primary i dopiero
   po promocji mierzyc write throughput dawnego slave;
-- 3.3.13 jest zamkniete i wypchniete w `63375d4`; nowy domyslny
-  `FOD_FUSE_MAX_WRITE_BYTES=1MiB`, diagnostyka limitu kernela oraz
-  `docs/FUSE_REQUIREMENTS.md` sa zwalidowane. Po 3.3.15 priorytetem read path
-  jest diagnostyka random I/O razem z PostgreSQL, zanim zostanie zmieniony
-  runtime FOD. Benchmark kontrolowanej promocji replica -> primary pozostaje
-  osobnym otwartym krokiem HA/read-write.
+- FOD 3.3.16 jest lokalnie zwalidowany jako skuteczna optymalizacja COW
+  dirty-block overlay: `randrw50 4k` poprawil sie ponad 12x, a koszt
+  `write_state_clone_us` praktycznie zniknal. Nastepnym read/write bottleneckiem
+  jest per-block `fod_load_block` w read-after-write dla wieloblokowych
+  callbackow; to jest cel 3.3.17 przed tuningiem planera PostgreSQL.
+  Benchmark kontrolowanej promocji replica -> primary pozostaje osobnym
+  otwartym krokiem HA/read-write.
 
 ## 9. HA miedzy hostami
 

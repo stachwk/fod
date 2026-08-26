@@ -2646,3 +2646,75 @@ telemetry, not as zero FOD/FUSE operations.
 The tuning methodology and candidate PostgreSQL parameters are documented in
 `docs/FOD_RANDOM_IO_POSTGRESQL_TUNING.md`. FOD 3.3.15 records the methodology
 only; it does not yet change runtime PostgreSQL settings.
+
+## FOD 3.3.16 write-state COW random-I/O validation
+
+FOD 3.3.16 candidate `5849d7caaf67` changes dirty-block overlay snapshots from
+a deep-cloned `BTreeMap<u64, Vec<u8>>` to copy-on-write
+`Arc<BTreeMap<u64, Vec<u8>>>`. The target was the measured read-after-write
+cost where `write_state_clone_us` consumed about 75% of `fuse_read_total_us`
+for `randrw50 4k`.
+
+Method:
+
+- dense 1 GiB file;
+- 64 MiB fio I/O per case;
+- `noatime`;
+- `fopen_direct_io=true`;
+- read cache/read-ahead/prefetch disabled;
+- fio `sync`, `iodepth=1`, one job;
+- AC power;
+- `FOD_PROFILE_IO=1`.
+
+Controlled 2-run series with PostgreSQL restart before each case:
+
+| workload | run | read MiB/s | write MiB/s | `write_state_clone_us` | `write_state_lock_us` |
+|---|---:|---:|---:|---:|---:|
+| `randrw50 4k` | 1 | 15.509 | 15.589 | 5 | 41 |
+| `randrw50 4k` | 2 | 15.123 | 14.867 | 5 | 35 |
+| `randrw50 256k` | 1 | 25.076 | 23.556 | 0 | 1 |
+| `randrw50 256k` | 2 | 27.045 | 29.244 | 0 | 13 |
+
+The 3.3.15 baseline for `randrw50 4k` was read `1.233/1.253 MiB/s`, write
+`1.239/1.232 MiB/s`, with `write_state_clone_us` about `21.9/21.7 s`.
+
+A second 3-run stabilization without PostgreSQL restarts produced:
+
+| workload | read MiB/s | write MiB/s | median read | median write |
+|---|---|---|---:|---:|
+| `randrw50 4k` | 15.330 / 15.636 / 15.983 | 15.409 / 15.371 / 16.275 | 15.636 | 15.409 |
+| `randrw50 256k` | 29.730 / 27.728 / 30.017 | 27.928 / 29.982 / 24.871 | 29.730 | 27.928 |
+
+Relative to the 3.3.15 median this is about `12.58x` read and `12.47x` write
+for 4 KiB mixed I/O. The 256 KiB mixed medians improve by about `30.5%` read
+and `21.6%` write.
+
+The 4 KiB stabilization profile reported `write_state_clone_us=7/5/6` and
+`write_state_lock_us=66/26/10`, confirming that the optimization removed the
+deep-copy cost without moving it to lock contention.
+
+One pure `randread 4k` first run was a clear environmental outlier at
+`0.255 MiB/s`; PostgreSQL statistics during that interval showed concurrent
+autovacuum/checkpointer activity and about `2.27e9` returned tuples. Later
+runs were `9.698/9.744 MiB/s`, while the earlier restart-controlled pair was
+`16.268/16.297 MiB/s`. Pure-read numbers from that disturbed interval are not
+used to judge the COW change.
+
+The next measured bottleneck is per-block read-after-write loading for
+multi-block callbacks:
+
+```text
+randrw50 256k run 1: 132 callbacks * 64 blocks = 8448 fod_load_block calls
+randrw50 256k run 2: 123 callbacks * 64 blocks = 7872 fod_load_block calls
+randrw50 256k run 3: 140 callbacks * 64 blocks = 8960 fod_load_block calls
+```
+
+Next performance work should batch the missing range and then overlay dirty
+blocks rather than issue one PostgreSQL load per 4 KiB block.
+
+Artifacts:
+
+```text
+/tmp/fod-3.3.16-cow-random-pg-stats-5849d7caaf67-20260826T133955Z
+/tmp/fod-3.3.16-cow-random-pg-stats-5849d7caaf67-20260826T134900Z
+```

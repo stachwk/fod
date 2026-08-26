@@ -666,3 +666,162 @@ docs/FOD_CURRENT_ACTION_PLAN.md
 `POSTGRESQL_REQUIREMENTS.md` pozostaje dokumentem kontraktu i wymagan.
 
 Ten dokument jest roboczym planem pomiarow i tuningu wydajnosci random I/O.
+
+## 20. Diagnostyka write-state przed tuningiem planera
+
+Powtorzony benchmark na poprawnym profilu `noatime + direct_io` zebral
+kontrolowane pary po restarcie PostgreSQL i kolejny warm run:
+
+| workload | cold read MiB/s | warm read MiB/s | zmiana |
+|---|---:|---:|---:|
+| `randread 4k` | 11.617 | 11.887 | +2.3% |
+| `randread 256k` | 258.065 | 251.969 | -2.4% |
+| `randrw50 4k` | 1.233 | 1.253 | +1.6% |
+| `randrw50 256k` | 23.673 | 21.902 | -7.5% |
+
+W tym pomiarze nie ma sygnalu >=15%, ktory uzasadnialby traktowanie
+`shared_buffers` jako pierwszego bottlenecku.
+
+Profil FOD pokazal natomiast dominujacy koszt read-after-write:
+
+```text
+randrw50 4k:
+  write_state_clone_us / fuse_read_total_us = 75.0% / 74.8%
+
+randrw50 256k:
+  write_state_clone_us / fuse_read_total_us = 27.9% / 31.9%
+```
+
+Dla 4 KiB dwa przebiegi zuzyly ok. `21.9 s` i `21.7 s` tylko na
+`write_state_clone`, przy ok. 8 tys. operacji read.
+
+Przyczyna w kodzie jest bezposrednia:
+
+```text
+WritePayloadState
+  -> BlockWriteState
+  -> BTreeMap<u64, Vec<u8>>
+
+write_state_for_handle()
+  -> state.clone()
+```
+
+`WriteState` jest klonowany do snapshotu przed odczytem. Poniewaz `Clone`
+dla `BTreeMap<u64, Vec<u8>>` jest gleboki, kazdy read kopiuje wszystkie
+aktualnie dirty bloki oraz ich payload. Przy narastajacym random-write overlay
+daje to koszt rosnacy z liczba dirty blocks.
+
+### Decyzja 3.3.16
+
+Pierwszym kandydatem nie jest tuning planera PostgreSQL, lecz zmiana
+reprezentacji dirty-block overlay na copy-on-write:
+
+```text
+Arc<BTreeMap<u64, Vec<u8>>>
+```
+
+Zasady:
+
+- snapshot read ma klonowac tylko `Arc`, nie caly payload;
+- lock `write_states` ma pozostac krotki;
+- odczyt nie moze trzymac globalnego mutexu podczas SQL;
+- writer uzywa `Arc::make_mut()`, aby zachowac izolacje snapshotu;
+- przy braku aktywnego snapshotu `Arc::make_mut()` nie kopiuje mapy;
+- przy rzeczywistej rownoleglosci read/write kopia jest wykonywana tylko przy
+  pierwszej modyfikacji wspoldzielonego snapshotu;
+- flush musi zachowac dotychczasowa semantyke i poprawnie obslugiwac aktywny
+  snapshot.
+
+Walidacja A/B zostala wykonana na kandydacie 3.3.16
+`5849d7caaf67` dla:
+
+```text
+randrw50 4k
+randrw50 256k
+randread 4k
+randread 256k
+```
+
+Pierwsza seria po kontrolowanym restarcie PostgreSQL (2 przebiegi) pokazala
+dla `randrw50 4k`:
+
+```text
+read  = 15.509 / 15.123 MiB/s
+write = 15.589 / 14.867 MiB/s
+write_state_clone_us = 5 / 5
+write_state_lock_us  = 41 / 35
+```
+
+Dla porownania baseline 3.3.15 mial:
+
+```text
+read  = 1.233 / 1.253 MiB/s
+write = 1.239 / 1.232 MiB/s
+write_state_clone_us ~= 21.9 s / 21.7 s
+```
+
+Druga seria stabilizujaca bez restartow PostgreSQL (3 przebiegi) potwierdzila
+wynik:
+
+| workload | read MiB/s | write MiB/s | mediana read | mediana write |
+|---|---|---|---:|---:|
+| `randrw50 4k` | 15.330 / 15.636 / 15.983 | 15.409 / 15.371 / 16.275 | 15.636 | 15.409 |
+| `randrw50 256k` | 29.730 / 27.728 / 30.017 | 27.928 / 29.982 / 24.871 | 29.730 | 27.928 |
+
+Wzgledem median baseline 3.3.15 oznacza to dla `randrw50 4k` ok. `12.58x`
+read i `12.47x` write. Dla 256 KiB wzrost mediany wynosi ok. `30.5%` read i
+`21.6%` write.
+
+`write_state_clone_us` w trzech stabilizujacych przebiegach 4 KiB wynioslo
+`7 / 5 / 6 us`, wiec kryterium usuniecia dominujacego deep-clone kosztu jest
+spelnione. `write_state_lock_us` pozostalo male (`66 / 26 / 10 us`), zatem
+koszt nie zostal przesuniety na globalny mutex.
+
+### Zaklocony czysty randread 4 KiB
+
+W serii bez restartow pierwszy `randread 4k` byl skrajnym outlierem:
+
+```text
+0.255 MiB/s
+```
+
+W tym samym oknie statystyki PostgreSQL pokazaly aktywny autovacuum/checkpointer
+oraz ok. `2.27e9` `tup_returned`. Kolejne dwa przebiegi wyniosly
+`9.698` i `9.744 MiB/s`, a w poprzedniej serii po restarcie PostgreSQL
+`16.268` i `16.297 MiB/s`.
+
+Ten punkt nie jest uzywany jako dowod regresji ani zysku COW. Pokazuje, ze
+czysty random read jest silnie wrazliwy na stan/background maintenance i musi
+byc porownywany przy kontrolowanym stanie PostgreSQL i systemu.
+
+### Nastepny bottleneck po COW
+
+Dla `randrw50 256k` liczba `fod_load_block` nadal wynosi:
+
+```text
+run 1: 132 read callbacks * 64 blocks = 8448 calls
+run 2: 123 read callbacks * 64 blocks = 7872 calls
+run 3: 140 read callbacks * 64 blocks = 8960 calls
+```
+
+Po usunieciu deep clone dominuje wiec per-block pobieranie brakujacego payloadu
+z PostgreSQL. Nastepny etap powinien pobrac brakujacy zakres hurtowo i dopiero
+nalozyc dirty-block overlay, zachowujac semantyke read-after-write.
+
+Dopiero po ograniczeniu tego kosztu nalezy wracac do `plan_cache_mode`,
+`random_page_cost`, `effective_cache_size` i innych ustawien planera.
+
+### Timing PostgreSQL
+
+W lokalnym PostgreSQL:
+
+```text
+track_io_timing = off       context=superuser
+track_wal_io_timing = off   context=superuser
+```
+
+Dlatego obecne delty licznikow sa uzyteczne, ale czasy I/O/WAL nie sa pelne.
+Do pozniejszego A/B PostgreSQL nalezy jawnie wlaczyc te statystyki w
+kontrolowanym srodowisku benchmarkowym. Nie jest to wymaganie produkcyjnego
+runtime FOD i FOD nie powinien wymagac uprawnien superuser tylko dla tych
+metryk.
