@@ -79,15 +79,24 @@ estimated_request_ceiling_bytes=...
 Dzieki temu wartosc ustawiona przez FOD nie jest mylona z rzeczywistym
 limitem wynikajacym z kernela.
 
-## 3. Domyslna wartosc FOD 3.3.13
+## 3. Domyslna wartosc FOD 3.3.19
 
-Od FOD 3.3.13 domyslna wartosc:
+Od FOD 3.3.13 kod Rust ma domyslna wartosc:
 
 ```text
 FOD_FUSE_MAX_WRITE_BYTES=1MiB
 ```
 
-zastepuje poprzednie `512KiB`.
+zamiast poprzedniego `512KiB`.
+
+Do FOD 3.3.18 standardowe `fod_config.ini` i `fod_config.example.ini` nadal
+jawnie ustawialy `fuse_max_write_bytes=512KiB`, przez co normalne uruchomienie
+z pliku konfiguracyjnego przeslanialo poprawny domyslny limit kodu. FOD 3.3.19
+usuwa ten historyczny drift i ustawia w obu standardowych konfiguracjach:
+
+```text
+fuse_max_write_bytes=1MiB
+```
 
 Domyslny `FOD_FUSE_MAX_READAHEAD_BYTES` pozostaje:
 
@@ -136,7 +145,9 @@ read callbacks: -33.3%
 WRITE: bez istotnej regresji
 ```
 
-Dlatego `1MiB` jest przyjete jako zalecany i domyslny limit FOD 3.3.13.
+Dlatego `1MiB` jest przyjete jako zalecany i domyslny limit FOD.
+Od FOD 3.3.19 rowniez standardowe pliki konfiguracyjne jawnie ustawiaja ten
+limit, wiec instalacja nie wraca juz do historycznego sufitu 512 KiB.
 
 ## 5. Zalecany tuning hosta dla duzego sequential I/O
 

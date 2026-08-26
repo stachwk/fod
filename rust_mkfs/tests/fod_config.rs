@@ -112,6 +112,8 @@ fn fod_config_command() -> Command {
         "FOD_PG_SSLKEY",
         "FOD_FUSE_EVENT_THREADS",
         "FOD_FUSE_CLONE_FD",
+        "FOD_FUSE_MAX_WRITE_BYTES",
+        "FOD_FUSE_MAX_READAHEAD_BYTES",
         "FOD_TASK_READ_ACTIVE_LIMIT",
         "FOD_TASK_WRITE_ACTIVE_LIMIT",
         "FOD_PG_WRITE_TRANSACTION_LIMIT",
@@ -159,6 +161,40 @@ fn version_matches_bootstrap_and_mkfs() {
     assert!(mkfs.status.success());
     let mkfs_version = String::from_utf8(mkfs.stdout).unwrap();
     assert!(mkfs_version.contains(version::FOD_VERSION_LABEL));
+}
+
+#[test]
+fn repository_configs_resolve_1m_fuse_write_and_512k_readahead() {
+    let _guard = env_guard();
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("rust_mkfs lives inside the repo root")
+        .to_path_buf();
+
+    for config_name in ["fod_config.ini", "fod_config.example.ini"] {
+        let config_path = repo_root.join(config_name);
+        let output = fod_config_command()
+            .env("FOD_CONFIG", &config_path)
+            .arg("runtime-config")
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "{config_name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let runtime: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            runtime["fuse_max_write_bytes"], "1MiB",
+            "{config_name}: standard max_write must match the validated Rust default"
+        );
+        assert_eq!(
+            runtime["fuse_max_readahead_bytes"], "512KiB",
+            "{config_name}: max_readahead must remain unchanged"
+        );
+    }
 }
 
 #[test]

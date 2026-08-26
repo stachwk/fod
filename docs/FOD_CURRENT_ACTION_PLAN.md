@@ -365,3 +365,21 @@ Priorytet: P1 wydajnosci/poprawnosci planu SQL.
 
 Pelne uzasadnienie, pomiary i kryteria sa w
 `docs/FOD_3_3_18_POSTGRESQL_PLANNER_STABILITY.md`.
+
+
+## FOD 3.3.19 - standardowy FUSE max_write 1 MiB
+
+Status: zakonczone w FOD 3.3.19.
+
+Priorytet: P1 domkniecie niespojnosci konfiguracji/runtime.
+
+- ustawic `fuse_max_write_bytes=1MiB` w `fod_config.ini`;
+- ustawic ten sam limit w `fod_config.example.ini`;
+- pozostawic `fuse_max_readahead_bytes=512KiB`;
+- nie zmieniac `block_size=4096`, bazowego chunka 512 KiB ani sysctl kernela;
+- dodac regresyjny test rzeczywistego `fod-config runtime-config` dla obu INI;
+- przejsc `cargo check`, testy FUSE/config oraz `QNAP=0 make test-all`;
+- po commicie wykonac pelny `git diff HEAD~1..HEAD`.
+
+Uzasadnienie i kryteria:
+`docs/FOD_3_3_19_FUSE_MAX_WRITE_CONFIG_DEFAULT.md`.
