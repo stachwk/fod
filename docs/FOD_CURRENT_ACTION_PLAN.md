@@ -1,6 +1,6 @@
 # FOD - aktualny plan dzialania
 
-Stan planu: 2026-08-23. Ten dokument jest aktywna kolejnoscia prac. Historyczne
+Stan planu: 2026-08-26. Ten dokument jest aktywna kolejnoscia prac. Historyczne
 decyzje i zakonczone zadania pozostaja w `TODO.md`, a kierunek dlugoterminowy
 w `ROADMAP.md`.
 
@@ -278,13 +278,15 @@ Priorytet: P1 performance validation.
 - [x] powtarzany A/B 1GiB/fio 1MiB: read `283 -> 322 -> 374 MiB/s`,
   write `60.8 -> 61.3 -> 61.3 MiB/s`; przyjac 1MiB jako bezpieczny domyslny
   limit FOD 3.3.13, a 2MiB/512 stron pozostawic jako jawny tuning hosta;
-- [ ] po implementacji 3.3.13 wykonac testy targeted, koncowy
-  `QNAP=0 make test-all` i review `git diff HEAD~1..HEAD`;
+- [x] po implementacji 3.3.13 wykonano testy targeted,
+  `QNAP=0 make test-mount-suite`, koncowy `QNAP=0 make test-all` oraz
+  review `git diff HEAD~1..HEAD`; wszystkie zakonczyly sie poprawnie;
 - [ ] dodac osobny benchmark kontrolowanej promocji replica -> primary i dopiero
   po promocji mierzyc write throughput dawnego slave;
-- 3.3.12 jest zamkniete i wypchniete; pozostaje baseline'em dla 3.3.13.
-  Biezacy krok to walidacja nowego domyslnego 1MiB FUSE request ceiling i
-  diagnostyki limitu kernela, bez automatycznej zmiany globalnego sysctl.
+- 3.3.13 jest zamkniete i wypchniete w `63375d4`; nowy domyslny
+  `FOD_FUSE_MAX_WRITE_BYTES=1MiB`, diagnostyka limitu kernela oraz
+  `docs/FUSE_REQUIREMENTS.md` sa zwalidowane. Nastepny otwarty krok read/HA to
+  osobny benchmark kontrolowanej promocji replica -> primary.
 
 ## 9. HA miedzy hostami
 
