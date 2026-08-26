@@ -825,3 +825,76 @@ Do pozniejszego A/B PostgreSQL nalezy jawnie wlaczyc te statystyki w
 kontrolowanym srodowisku benchmarkowym. Nie jest to wymaganie produkcyjnego
 runtime FOD i FOD nie powinien wymagac uprawnien superuser tylko dla tych
 metryk.
+
+## 21. FOD 3.3.17: bulk read-after-write range
+
+Po COW z 3.3.16 profil `randrw50 256k` pokazal kolejny bottleneck:
+
+```text
+132 read callbacks * 64 blocks = 8448 fod_load_block calls
+123 read callbacks * 64 blocks = 7872 fod_load_block calls
+140 read callbacks * 64 blocks = 8960 fod_load_block calls
+```
+
+Dotychczas `read_from_write_state()` iteruje po kazdym bloku i dla bloku,
+ktorego nie ma w dirty state ani recent-write cache, wywoluje
+`load_write_block()`. To prowadzi do osobnego prepared statement
+`fod_load_block` dla kazdego brakujacego 4 KiB bloku.
+
+FOD ma juz range API:
+
+```text
+fetch_block_range_profiled(file_id, first_block, last_block, block_size)
+  -> DbRepo::fetch_block_range_shared(...)
+  -> fod_fetch_block_range
+```
+
+3.3.17 nie dodaje nowego SQL. Zmienia tylko sposob uzycia istniejacego range
+query w read-after-write.
+
+Algorytm kandydata po pierwszym A/B:
+
+1. wyznaczyc bloki callbacku read;
+2. jezeli callback obejmuje tylko jeden blok, zachowac dokladnie fast path
+   3.3.16 przez `load_write_block()` / `fod_load_block`;
+3. dla callbacku wieloblokowego zachowac priorytet:
+   `dirty WriteState > recent_write_blocks > PostgreSQL > sparse zero`;
+4. dla blokow nieobecnych lokalnie wyznaczyc pierwszy i ostatni brakujacy blok;
+5. pobrac ten span jednym `fod_fetch_block_range`;
+6. zlozyc odpowiedz, nakladajac dirty/recent blocks nad wynikiem DB;
+7. jezeli wszystkie bloki sa lokalne, nie wykonywac zapytania PostgreSQL.
+
+Nie wolno trzymac `write_states` mutexu podczas query. Snapshot COW z 3.3.16
+pozostaje bez zmian.
+
+Pierwsze A/B kandydata bulk-only dalo mediany:
+
+```text
+3.3.16 baseline:
+  randrw50 4k   read=15.636 MiB/s write=15.409 MiB/s
+  randrw50 256k read=29.730 MiB/s write=27.928 MiB/s
+
+3.3.17 bulk-only:
+  randrw50 4k   read=13.358 MiB/s write=13.132 MiB/s
+  randrw50 256k read=125.000 MiB/s write=117.424 MiB/s
+```
+
+To oznacza ok. `-14.6%/-14.8%` dla 4 KiB oraz ok. `4.2x` wzrost read i write
+dla 256 KiB. Regresja 4 KiB wynika z uzycia ciezszego range statement nawet
+dla pojedynczego bloku, dlatego kandydat zostal zmieniony na hybrydowy.
+
+Kryteria powtornego A/B przed push:
+
+- `randrw50 256k`: `fod_load_block` ma zniknac z wieloblokowego read path, a
+  `fod_fetch_block_range` powinien byc bliski liczbie callbackow read;
+- mediana read 256 KiB ma poprawic sie wzgledem 3.3.16 (`29.730 MiB/s`) albo
+  przynajmniej wyraznie obnizyc `repo_fetch_block_range_us` bez regresji
+  poprawnosci;
+- `randrw50 4k` nie moze miec istotnej regresji, mimo ze pojedynczy blok nadal
+  wymaga jednego zapytania;
+- `write_state_clone_us` ma pozostac blisko zera;
+- testy read-after-write, partial write, truncate i flush musza pozostac
+  poprawne.
+
+Dopiero po zamknieciu tego per-block kosztu wracamy do A/B
+`plan_cache_mode`, `random_page_cost` i `effective_cache_size`.

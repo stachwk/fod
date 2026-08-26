@@ -10,6 +10,7 @@ use rust_hotpath::{
     choose_persist_execution_plan, PersistBlockPlanEntry, PersistExecutionPlan, PersistPayloadPlan,
     PersistPlanInput,
 };
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -336,6 +337,66 @@ impl FodFuse {
         let mut output = vec![0u8; (end_offset - offset) as usize];
         let first_block = offset / block_size;
         let last_block = (end_offset.saturating_sub(1)) / block_size;
+
+        // Preserve the 3.3.16 one-block fast path. A 4 KiB random read has
+        // exactly one block and `fod_load_block` is cheaper than the range
+        // statement. The bulk path below is only for multi-block callbacks.
+        if first_block == last_block {
+            let block = self.load_write_block(state, first_block)?;
+            let block_start = first_block * block_size;
+            let read_start = offset.max(block_start);
+            let read_end = end_offset.min(block_start.saturating_add(block_size));
+            if read_end > read_start {
+                let block_slice_start = (read_start - block_start) as usize;
+                let block_slice_end = (read_end - block_start) as usize;
+                let out_start = (read_start - offset) as usize;
+                let out_end = out_start + block_slice_end - block_slice_start;
+                output[out_start..out_end]
+                    .copy_from_slice(&block[block_slice_start..block_slice_end]);
+            }
+            return Ok(output);
+        }
+
+        // Preserve read-after-write priority while avoiding one PostgreSQL
+        // query per 4 KiB block. Dirty blocks win first, then recently flushed
+        // blocks. Only the remaining span is fetched from PostgreSQL, once.
+        let mut recent_blocks = BTreeMap::new();
+        let mut repo_first_block = None;
+        let mut repo_last_block = None;
+        for block_index in first_block..=last_block {
+            if state.blocks().contains_key(&block_index) {
+                continue;
+            }
+            if let Some(block) = self.recent_write_block(state.file_id, block_index) {
+                recent_blocks.insert(block_index, block);
+                continue;
+            }
+            if repo_first_block.is_none() {
+                repo_first_block = Some(block_index);
+            }
+            repo_last_block = Some(block_index);
+        }
+
+        let repo_blocks = match (repo_first_block, repo_last_block) {
+            (Some(repo_first_block), Some(repo_last_block)) => self
+                .fetch_block_range_profiled(
+                    state.file_id,
+                    repo_first_block,
+                    repo_last_block,
+                    block_size,
+                )
+                .map_err(|err| {
+                    warn!(
+                        "FOD read_from_write_state range load failed file_id={} first_block={} last_block={} err={}",
+                        state.file_id, repo_first_block, repo_last_block, err
+                    );
+                    EIO
+                })?
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+            _ => BTreeMap::new(),
+        };
+
         for block_index in first_block..=last_block {
             let block_start = block_index * block_size;
             let block_end = block_start.saturating_add(block_size);
@@ -344,12 +405,35 @@ impl FodFuse {
             if read_end <= read_start {
                 continue;
             }
-            let block = self.load_write_block(state, block_index)?;
+
+            let block: Option<&[u8]> = if let Some(block) = state.blocks().get(&block_index) {
+                Some(block.as_slice())
+            } else if let Some(block) = recent_blocks.get(&block_index) {
+                Some(block.as_ref())
+            } else if let Some(block) = repo_blocks.get(&block_index) {
+                Some(block.as_ref())
+            } else {
+                None
+            };
+
+            // Missing PostgreSQL blocks represent sparse/zero data. The output
+            // buffer is already zero-filled, so only present payload must be copied.
+            let Some(block) = block else {
+                continue;
+            };
+
             let block_slice_start = (read_start - block_start) as usize;
             let block_slice_end = (read_end - block_start) as usize;
+            if block_slice_start >= block.len() {
+                continue;
+            }
+            let source_end = block_slice_end.min(block.len());
+            if source_end <= block_slice_start {
+                continue;
+            }
             let out_start = (read_start - offset) as usize;
-            let out_end = out_start + block_slice_end - block_slice_start;
-            output[out_start..out_end].copy_from_slice(&block[block_slice_start..block_slice_end]);
+            let out_end = out_start + source_end - block_slice_start;
+            output[out_start..out_end].copy_from_slice(&block[block_slice_start..source_end]);
         }
         Ok(output)
     }

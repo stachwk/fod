@@ -300,10 +300,13 @@ Priorytet: P1 performance validation.
   `randrw50 4k` wzrosla z baseline 3.3.15 `1.243/1.236 MiB/s` read/write do
   `15.636/15.409 MiB/s`, a `write_state_clone_us` spadlo z ok. `21.8 s` do
   `5-7 us` na caly przebieg bez przesuniecia kosztu na `write_state_lock_us`;
-- [ ] FOD 3.3.17: w read-after-write pobierac brakujace bloki hurtowo zamiast
-  wykonywac `fod_load_block` dla kazdego 4 KiB bloku; przy `randrw50 256k`
-  liczba wywolan nadal odpowiada dokladnie `read_callbacks * 64`
-  (`8448`, `7872`, `8960`);
+- [ ] FOD 3.3.17: kandydat implementuje hurtowe pobranie brakujacego span
+  blokow jednym `fod_fetch_block_range` dla wieloblokowego callbacku
+  read-after-write, z priorytetem `dirty state > recent_write > PostgreSQL`;
+  pierwsze A/B pokazalo ok. `4.2x` wzrost mediany read/write dla 256 KiB, ale
+  ok. `14.6%/14.8%` regresji read/write dla 4 KiB, dlatego pojedynczy blok
+  zachowuje teraz fast path 3.3.16 przez `fod_load_block`; przed push wymagane
+  jest ponowne A/B `randrw50 4k/256k` i potwierdzenie liczby query;
 - [ ] wykonac pojedyncze A/B parametrow sesyjnych/plannera dopiero po
   ograniczeniu kosztu per-block `fod_load_block`; zaczac od `plan_cache_mode`,
   a `random_page_cost` i `effective_cache_size` testowac tylko razem z
