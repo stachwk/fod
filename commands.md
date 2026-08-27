@@ -3063,6 +3063,44 @@ after pushing `0a7500c` to `origin/main`. The Rocky checkout was clean
 afterwards, no FOD/httpd test mount or process remained, `httpd` was inactive,
 and `httpd_use_fusefs` was restored to `off`.
 
+## 2026-08-27 - Rocky SELinux support definition and profiling
+
+Repository state while recording the support definition and profiling SELinux:
+`987550a`. `fod_version.txt` was `3.3.22`.
+
+Inspection and package setup commands:
+
+```bash
+rg -n "PROFILE_IO|test-fio-sequential|throughput|FOD_PROFILE_IO|test-throughput|fio" Makefile tests rust_fuse/src | head -220
+git status --short --branch
+cat fod_version.txt
+tail -80 conclusions.md
+tail -80 commands.md
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && git status --short --branch && git rev-parse --short HEAD && getenforce && command -v fio || true && command -v perf || true && command -v strace || true'
+ssh 192.168.1.188 'sudo dnf install -y fio strace perf || sudo dnf install -y fio strace perf-tools'
+```
+
+Profiling commands:
+
+```bash
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && set -euo pipefail && git pull --ff-only && set -a; . /tmp/fod-rocky-selinux-pg.env; set +a; FOD_SELINUX=on FOD_ACL=on FOD_ALLOW_OTHER=1 FOD_REQUIRE_AC_POWER=0 FIO_FILE_SIZE=32M make --no-print-directory test-fio-sequential-io-strace'
+sed -n '1,130p' tests/integration/test_fio_sequential_io.sh
+sed -n '250,290p' tests/integration/fod_testlib.sh
+sed -n '300,390p' tests/integration/fod_testlib.sh
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && set -euo pipefail; set -a; . /tmp/fod-rocky-selinux-pg.env; set +a; ts=$(date +%Y%m%dT%H%M%S); out=/tmp/fod-selinux-profile-$ts; mkdir -p "$out"; FOD_SELINUX=on FOD_ACL=on FOD_ALLOW_OTHER=1 FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FOD_STRACE=1 FIO_FILE_SIZE=32M FOD_TEST_LOG_ARCHIVE="$out/fod-fio.log" bash tests/integration/test_fio_sequential_io.sh 2>&1 | tee "$out/fio.out"; echo ARTIFACT_DIR=$out; ls -l "$out"; grep -E "OK fio|FOD profile summary|FOD req=|op=(read|write)|FOD logical task" "$out/fio.out" "$out/fod-fio.log" 2>/dev/null | tail -120 || true'
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && set -euo pipefail; set -a; . /tmp/fod-rocky-selinux-pg.env; set +a; ts=$(date +%Y%m%dT%H%M%S); out=/tmp/fod-selinux-profile-$ts; mkdir -p "$out"; FOD_SELINUX=on FOD_ACL=on FOD_ALLOW_OTHER=1 FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FOD_STRACE=0 FIO_FILE_SIZE=32M FOD_TEST_LOG_ARCHIVE="$out/fod-fio.log" bash tests/integration/test_fio_sequential_io.sh 2>&1 | tee "$out/fio.out"; echo ARTIFACT_DIR=$out; ls -l "$out"; grep -E "^(  read:|  write:|WRITE:|READ:|OK fio|FOD callback counts|FOD boundary profile summary)|FOD I/O profile: op=fuse\.(read|write)|FOD logical task metrics" "$out/fio.out" "$out/fod-fio.log" 2>/dev/null | tail -180 || true'
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && set -euo pipefail; set -a; . /tmp/fod-rocky-selinux-pg.env; set +a; ts=$(date +%Y%m%dT%H%M%S); out=/tmp/fod-selinux-throughput-$ts; mkdir -p "$out"; FOD_SELINUX=on FOD_ACL=on FOD_ALLOW_OTHER=1 FOD_PROFILE_IO=1 THROUGHPUT_BLOCK_SIZE=1M THROUGHPUT_COUNT=64 THROUGHPUT_SYNC=1 FOD_TEST_LOG_ARCHIVE="$out/fod-throughput.log" bash tests/integration/test_throughput.sh 2>&1 | tee "$out/throughput.out"; echo ARTIFACT_DIR=$out; ls -l "$out"; grep -E "OK throughput|FOD callback counts|FOD boundary profile summary|fuse_(read|write)_total_us|repo_persist_blocks_us|flush_execute_persist_plan_us" "$out/throughput.out" "$out/fod-throughput.log" 2>/dev/null | tail -120 || true'
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && git status --short --branch && git rev-parse --short HEAD && mount | grep -E "fod-fio|fod-throughput|fod-httpd|fod-selinux" || true; ps -efZ | grep -E "fod-fio|fod-throughput|fod-bootstrap|fod-rust-fuse|httpd" | grep -v grep || true; getenforce; getsebool httpd_use_fusefs; systemctl is-active httpd || true; sudo ausearch -m AVC,USER_AVC -ts recent -i 2>/dev/null | tail -120 || true'
+ssh 192.168.1.188 'ls -ld /tmp/fod-selinux-profile-* /tmp/fod-selinux-throughput-* 2>/dev/null | tail -10'
+```
+
+The `make test-fio-sequential-io-strace` command was unsuitable on Rocky because
+that target depends on Docker through `init`, and Docker was not installed on
+the dedicated Rocky host. Running `test_fio_sequential_io.sh` directly with
+`FOD_STRACE=1` also did not produce a usable I/O profile because `fusermount3`
+failed under strace with `Operation not permitted`. The accepted fio profile was
+the direct script run with `FOD_STRACE=0` and `FOD_PROFILE_IO=1`.
+
 ## 2026-08-27 - Rocky 10.2 positive SELinux service access proof
 
 Repository state while running the proof: `c525531`. `fod_version.txt` was

@@ -2773,3 +2773,45 @@ mount options for FUSE, a filesystem type classified by policy as
 `fs_use_xattr`, or replacing the host policy/kernel behavior for FUSE. On Rocky
 10.2, `security_label`, `context=`, `fscontext=`, `defcontext=`, and
 `rootcontext=` were rejected by ordinary `fusermount3` for this FOD mount.
+
+## 2026-08-27 - Rocky SELinux support definition and profiling on `987550a`
+
+Canonical support definition for this stage:
+
+```text
+FOD 3.3.22 supports SELinux operational enforcement on Rocky Linux 10.2 through the host FUSE fusefs_t label and normal SELinux domain policy. Per-inode security.selinux labeling is not supported by the tested Rocky FUSE/SELinux mount model and is a separate host/mount-stack capability.
+```
+
+SELinux performance profiling on Rocky Linux 10.2, SELinux `Enforcing`, commit
+`987550a`, used the operational model with `FOD_SELINUX=on`, `FOD_ACL=on`, and
+`FOD_ALLOW_OTHER=1`. `fio`/`strace`/`perf` were installed on the host for this
+stage.
+
+The first fio profiling attempt with `FOD_STRACE=1` was discarded because the
+mount failed under `strace` with `fusermount3: mount failed: Operation not
+permitted`; it did not measure FOD I/O. The accepted fio run disabled strace but
+kept `FOD_PROFILE_IO=1` and archived the FOD log under
+`/tmp/fod-selinux-profile-20260827T220248`.
+
+Accepted fio sequential result, 32 MiB file, 4 KiB block size:
+
+| Metric | Result |
+| --- | --- |
+| sequential write | 14.9 MiB/s, 3819 IOPS |
+| sequential read | 16.5 MiB/s, 4216 IOPS |
+| FOD callbacks | 8192 reads, 8192 writes, 0 copy_file_range |
+| FOD profile | `fuse_read_total_us=1523143`, `fuse_write_total_us=1457988`, `repo_persist_blocks_us=354718`, `flush_execute_persist_plan_us=358838` |
+
+Accepted throughput smoke result, 64 MiB `dd` zero write with fsync, 1 MiB
+block size, archived under `/tmp/fod-selinux-throughput-20260827T220306`:
+
+| Metric | Result |
+| --- | --- |
+| write throughput | 119.52 MiB/s |
+| elapsed | 0.535 s |
+| FOD callbacks | 0 reads, 64 writes, 0 copy_file_range |
+| FOD profile | `fuse_read_total_us=42382`, `fuse_write_total_us=441636`, `repo_persist_blocks_us=314590`, `flush_execute_persist_plan_us=323069` |
+
+No AVC/USER_AVC records were observed after the accepted profiling runs. The
+Rocky host remained in SELinux `Enforcing`, `httpd_use_fusefs` was `off`,
+`httpd` was inactive, and no FOD/httpd test mount or process remained.
