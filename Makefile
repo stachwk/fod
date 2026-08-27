@@ -491,7 +491,7 @@ STRIP ?= strip
 STRIP_FLAGS ?= --strip-unneeded
 UBUNTU_BUILD_DEPS := cargo rustc build-essential pkg-config libpq-dev libfuse3-dev python3 openssl
 UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
-REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
+REDHAT_BUILD_DEPS := cargo rustc rustfmt gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
 REDHAT_SELINUX_ACL_DEPS := git fuse3 postgresql policycoreutils policycoreutils-python-utils setools-console audit attr acl findutils util-linux diffutils procps-ng
 REDHAT_POSTGRES_SERVER_DEPS := postgresql-server
@@ -775,6 +775,11 @@ rocky-selinux-install-deps:
 	@set -eu; \
 	if command -v systemctl >/dev/null 2>&1; then \
 		$(SUDO) systemctl enable --now auditd || true; \
+	fi; \
+	if [ -f /etc/fuse.conf ] && ! grep -Eq '^[[:space:]]*user_allow_other([[:space:]]*|$$)' /etc/fuse.conf; then \
+		$(SUDO) cp -a /etc/fuse.conf /etc/fuse.conf.fod-pre-selinux-test; \
+		$(SUDO) sed -i 's/^[[:space:]]*#[[:space:]]*user_allow_other[[:space:]]*$$/user_allow_other/' /etc/fuse.conf; \
+		grep -Eq '^[[:space:]]*user_allow_other([[:space:]]*|$$)' /etc/fuse.conf || printf '\nuser_allow_other\n' | $(SUDO) tee -a /etc/fuse.conf >/dev/null; \
 	fi
 
 rocky-selinux-postgres-prepare: rocky-selinux-install-deps
@@ -784,6 +789,22 @@ rocky-selinux-postgres-prepare: rocky-selinux-install-deps
 	fi; \
 	if command -v systemctl >/dev/null 2>&1; then \
 		$(SUDO) systemctl enable --now postgresql; \
+	fi; \
+	hba_file="$$($(SUDO) -u postgres psql -v ON_ERROR_STOP=1 -d postgres -tAc 'SHOW hba_file')"; \
+	marker="# FOD Rocky SELinux test auth"; \
+	if ! $(SUDO) grep -Fqx "$$marker" "$$hba_file"; then \
+		$(SUDO) cp -a "$$hba_file" "$$hba_file.fod-pre-selinux-test"; \
+		tmp_hba="$$(mktemp)"; \
+		$(SUDO) awk -v marker="$$marker" -v db="$(ROCKY_SELINUX_PG_DB)" -v user="$(ROCKY_SELINUX_PG_USER)" '\
+			{ print } \
+			/^#[[:space:]]*TYPE[[:space:]]+DATABASE[[:space:]]+USER[[:space:]]+ADDRESS[[:space:]]+METHOD/ { \
+				print marker; \
+				print "host    " db " " user " 127.0.0.1/32 scram-sha-256"; \
+				print "host    " db " " user " ::1/128 scram-sha-256"; \
+			}' "$$hba_file" >"$$tmp_hba"; \
+		$(SUDO) install -m 0600 -o postgres -g postgres "$$tmp_hba" "$$hba_file"; \
+		rm -f "$$tmp_hba"; \
+		$(SUDO) systemctl reload postgresql; \
 	fi; \
 	password="$$(if [ -f "$(ROCKY_SELINUX_PG_ENV_FILE)" ]; then sed -n 's/^FOD_PG_PASSWORD=//p' "$(ROCKY_SELINUX_PG_ENV_FILE)" | tail -n 1; fi)"; \
 	if [ -z "$$password" ]; then \

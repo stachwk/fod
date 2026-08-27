@@ -2851,6 +2851,90 @@ git diff --check
 git diff --stat
 ```
 
+## 2026-08-27 - Rocky 10.2 SELinux test run on `42307f9`
+
+```bash
+git status --short --branch
+git rev-parse HEAD
+cat fod_version.txt
+ssh 192.168.1.188 'sudo -n id && command -v dnf && getenforce && ls -l /dev/fuse'
+git bundle create /tmp/fod-rocky-head.bundle HEAD
+scp /tmp/fod-rocky-head.bundle 192.168.1.188:/tmp/fod-rocky-head.bundle
+make remote-rocky-selinux-install-deps
+ssh 192.168.1.188 'set -e; rm -rf /home/wojtek/git/fod; mkdir -p /home/wojtek/git; git clone /tmp/fod-rocky-head.bundle /home/wojtek/git/fod; cd /home/wojtek/git/fod; git checkout -B main 42307f9daa732059f267164d6960cb359db5afe2; git remote remove origin || true; git remote add origin https://github.com/stachwk/fod.git; git rev-parse HEAD; git status --short --branch'
+git push origin main
+ssh 192.168.1.188 'set -e; cd /home/wojtek/git/fod; git fetch origin; git branch --set-upstream-to=origin/main main; git pull --ff-only; git rev-parse HEAD; git status --short --branch; make --no-print-directory rocky-selinux-prepare'
+ssh 192.168.1.188 'set -e; cd /home/wojtek/git/fod; echo AUDIT_START=$(date -Is) | tee /tmp/fod-rocky-audit-start.txt; sudo ausearch -m AVC,USER_AVC -ts recent -i || true; make --no-print-directory rocky-selinux-test-strict'
+ssh 192.168.1.188 'sudo sed -n "1,220p" /var/lib/pgsql/data/pg_hba.conf'
+ssh 192.168.1.188 'set -e; sudo cp -a /var/lib/pgsql/data/pg_hba.conf /var/lib/pgsql/data/pg_hba.conf.fod-pre-selinux-test; sudo python3 - <<"PY"
+from pathlib import Path
+path = Path("/var/lib/pgsql/data/pg_hba.conf")
+text = path.read_text()
+marker = "# FOD Rocky SELinux test auth\n"
+block = marker + "host    fod_selinux_test fod_selinux_test 127.0.0.1/32 scram-sha-256\n" + "host    fod_selinux_test fod_selinux_test ::1/128 scram-sha-256\n"
+if marker not in text:
+    needle = "# TYPE  DATABASE        USER            ADDRESS                 METHOD\n"
+    text = text.replace(needle, needle + block, 1)
+    path.write_text(text)
+PY
+sudo systemctl reload postgresql
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d postgres -c "SELECT pg_reload_conf();"
+sudo sed -n "/FOD Rocky SELinux test auth/,+3p" /var/lib/pgsql/data/pg_hba.conf'
+ssh 192.168.1.188 'set -e; cd /home/wojtek/git/fod; set -a; . /tmp/fod-rocky-selinux-pg.env; set +a; PGPASSWORD="$FOD_PG_PASSWORD" psql -v ON_ERROR_STOP=1 -h "$FOD_PG_HOST" -p "$FOD_PG_PORT" -U "$FOD_PG_USER" -d "$FOD_PG_DBNAME" -c "SELECT current_user, current_database();"; echo AUDIT_START=$(date -Is) | tee /tmp/fod-rocky-audit-start.txt; sudo ausearch -m AVC,USER_AVC -ts recent -i || true; make --no-print-directory rocky-selinux-test-strict'
+ssh 192.168.1.188 'set -e; sudo cp -a /etc/fuse.conf /etc/fuse.conf.fod-pre-selinux-test; sudo python3 - <<"PY"
+from pathlib import Path
+path = Path("/etc/fuse.conf")
+text = path.read_text()
+if "\nuser_allow_other\n" not in text:
+    text = text.replace("# user_allow_other", "user_allow_other")
+    path.write_text(text)
+PY
+sudo sed -n "1,40p" /etc/fuse.conf'
+ssh 192.168.1.188 'set -e; cd /home/wojtek/git/fod; echo AUDIT_START=$(date -Is) | tee /tmp/fod-rocky-audit-start.txt; sudo ausearch -m AVC,USER_AVC -ts recent -i || true; make --no-print-directory rocky-selinux-test-strict'
+ssh 192.168.1.188 'sudo ausearch -m AVC,USER_AVC -ts 18:23:04 -i || true'
+ssh 192.168.1.188 'python3 - <<"PY"
+import os, tempfile, errno
+path=tempfile.mktemp(prefix="native-selinux-", dir="/tmp")
+open(path,"wb").write(b"x")
+value=b"system_u:object_r:tmp_t:s0"
+for op in ["set", "get", "list"]:
+    try:
+        if op == "set":
+            os.setxattr(path, "security.selinux", value)
+            print("native_set=OK")
+        elif op == "get":
+            print("native_get=", os.getxattr(path, "security.selinux"))
+        else:
+            print("native_list=", os.listxattr(path))
+    except OSError as e:
+        print(f"native_{op}=ERR errno={e.errno} name={errno.errorcode.get(e.errno)} msg={e.strerror}")
+os.unlink(path)
+PY'
+ssh 192.168.1.188 'cd /home/wojtek/git/fod; set -a; . /tmp/fod-rocky-selinux-pg.env; set +a; echo AUDIT_START=$(date -Is) | tee /tmp/fod-rocky-audit-start-acl.txt; FOD_TEST_ACL_MOUNT_SELINUX=on .venv/bin/python tests/integration/test_acl_mount_option.py; for selinux in off on; do for acl in off on; do echo "RUN test_xattr selinux=$selinux acl=$acl non-strict"; FOD_SELINUX=$selinux FOD_ACL=$acl .venv/bin/python tests/integration/test_xattr.py; done; done; sudo ausearch -m AVC,USER_AVC -ts recent -i || true'
+ssh 192.168.1.188 'cd /home/wojtek/git/fod; set -a; . /tmp/fod-rocky-selinux-pg.env; set +a; for combo in "on off" "on on" "off on"; do set -- $combo; selinux=$1; acl=$2; echo "RUN test_xattr selinux=$selinux acl=$acl non-strict"; if FOD_SELINUX=$selinux FOD_ACL=$acl .venv/bin/python tests/integration/test_xattr.py; then echo "RESULT selinux=$selinux acl=$acl PASS"; else rc=$?; echo "RESULT selinux=$selinux acl=$acl FAIL rc=$rc"; fi; done'
+cargo fmt --all -- --check
+cargo check --workspace --locked
+cargo test -p fod-rust-fuse compatibility -- --nocapture
+ssh 192.168.1.188 'sudo dnf install -y rustfmt || sudo dnf install -y rustfmt-preview || sudo dnf provides -y "*/cargo-fmt"'
+ssh 192.168.1.188 'set -e; cd /home/wojtek/git/fod; git diff --check; cargo fmt --all -- --check; cargo check --workspace --locked; make --no-print-directory build-debug'
+ssh 192.168.1.188 'cd /home/wojtek/git/fod; set -a; . /tmp/fod-rocky-selinux-pg.env; set +a; tmp=$(mktemp -d /tmp/fod-manual-selinux.XXXXXX); log=/tmp/fod-manual-selinux.log; rm -f "$log"; FOD_LOG_LEVEL=DEBUG FOD_SELINUX=on FOD_ACL=on FOD_USE_FUSE_CONTEXT=1 FOD_USE_RUST_FUSE=1 POSTGRES_DB="$POSTGRES_DB" POSTGRES_USER="$POSTGRES_USER" POSTGRES_PASSWORD="$POSTGRES_PASSWORD" target/debug/fod-bootstrap --config fod_config.ini --role auto --selinux on --acl on --default-permissions -f "$tmp" >"$log" 2>&1 & pid=$!; for i in $(seq 1 20); do mountpoint -q "$tmp" && break; sleep 0.5; done; echo tmp=$tmp pid=$pid mounted=$(mountpoint -q "$tmp" && echo yes || echo no); python3 - <<"PY"
+import os, errno
+path = "$tmp/manual.txt"
+open(path, "wb").write(b"x")
+try:
+    os.setxattr(path, "security.selinux", b"system_u:object_r:tmp_t:s0")
+    print("manual_set=OK")
+    print("manual_get=", os.getxattr(path, "security.selinux"))
+except OSError as e:
+    print(f"manual_set=ERR errno={e.errno} name={errno.errorcode.get(e.errno)} msg={e.strerror}")
+PY
+fusermount3 -u "$tmp" || sudo umount "$tmp" || true; wait "$pid" || true; grep -E "FOD FUSE compatibility|FOD security|FOD setxattr|security.selinux|unsupported|enabled_capabilities|requested_capabilities" "$log" || true; tail -40 "$log"; rmdir "$tmp" 2>/dev/null || true'
+ssh 192.168.1.188 'cd /home/wojtek/git/fod; git status --short --branch; getenforce; sudo ausearch -m AVC,USER_AVC -ts 18:20:55 -i || true; sudo ausearch -m AVC,USER_AVC -ts 18:20:55 -i 2>/dev/null | audit2why || true'
+ssh 192.168.1.188 'findmnt -t fuse.fod,fuse,fuse3 || true; ps -ef | grep fod-rust-fuse | grep -v grep || true; ls -l /tmp/fod-rocky-audit-start*.txt /tmp/fod-manual-selinux*.log 2>/dev/null || true'
+make -n rocky-selinux-install-deps rocky-selinux-postgres-prepare
+git diff --check
+```
+
 ## 2026-08-21 commit a4a0a88 working tree FOD 3.3.5 fod-monitor JSON API
 
 Context and MemPalace commands:

@@ -2670,3 +2670,37 @@ These targets prepare the host and strict xattr/ACL test entrypoints only. They
 do not replace the manual AVC correlation, native filesystem comparison, or the
 full four-variant SELinux/ACL matrix required before declaring Rocky SELinux
 validation complete.
+
+## 2026-08-27 - Rocky 10.2 SELinux test run on `42307f9`
+
+Rocky host `192.168.1.188` was prepared successfully after installing the
+required packages. `cargo check --workspace --locked` and `make build-debug`
+passed on Rocky Linux 10.2 with SELinux still `Enforcing`. The local PostgreSQL
+test instance needed a narrow `pg_hba.conf` `scram-sha-256` rule for
+`fod_selinux_test`, and `/etc/fuse.conf` needed `user_allow_other` for FOD's
+test helper mounts. The Makefile preparation target was updated to include
+those host setup steps plus `rustfmt`.
+
+Strict SELinux/xattr validation did not pass. With `FOD_SELINUX=on`,
+`FOD_ACL=on`, `FOD_XATTR_STRICT_SECURITY=1`, and
+`FOD_XATTR_STRICT_ACL=1`, `tests/integration/test_xattr.py` failed when setting
+`security.selinux` on a FOD file with `errno=95 ENOTSUP`. The same operation on
+a native `/tmp` file on the Rocky host succeeded and returned
+`system_u:object_r:tmp_t:s0\0`, so FOD currently diverges from native filesystem
+behavior for this strict SELinux xattr path.
+
+No AVC/USER_AVC denials were recorded from the test start through the final
+audit check. `audit2why` had nothing to explain. That makes this an FOD/FUSE
+capability or mount-stack behavior issue rather than an SELinux policy denial.
+
+`FOD_TEST_ACL_MOUNT_SELINUX=on tests/integration/test_acl_mount_option.py`
+passed, with `security.selinux` reported as skipped at `errno=95`. Non-strict
+`test_xattr.py` passed for `selinux=off acl=off` and `selinux=on acl=off` by
+using fallback xattr names, but `acl=on` runs are not a valid direct matrix for
+that test because its final negative assertion assumes an ACL-disabled mount.
+
+An experimental local patch that requested `FUSE_SECURITY_CTX` showed the Rocky
+kernel advertises and enables that capability, but manual `security.selinux`
+setxattr still returned `ENOTSUP` before reaching FOD's setxattr callback. Adding
+a `security_label` mount option was also tested and rejected by the Rocky
+fuse/fusermount stack as an unknown option. That experimental code was not kept.
