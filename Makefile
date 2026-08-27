@@ -493,8 +493,17 @@ UBUNTU_BUILD_DEPS := cargo rustc build-essential pkg-config libpq-dev libfuse3-d
 UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
 REDHAT_BUILD_DEPS := cargo rustc gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
 REDHAT_LEGACY_PYTHON_DEPS := python3-pip
+REDHAT_SELINUX_ACL_DEPS := git fuse3 postgresql policycoreutils policycoreutils-python-utils setools-console audit attr acl findutils util-linux diffutils procps-ng
+REDHAT_POSTGRES_SERVER_DEPS := postgresql-server
+ROCKY_SELINUX_HOST ?= 192.168.1.188
+ROCKY_SELINUX_SSH ?= ssh
+ROCKY_SELINUX_WORKDIR ?= $(HOME)/git/fod
+ROCKY_SELINUX_REPO_URL ?= $(shell git config --get remote.origin.url 2>/dev/null || printf '%s\n' https://github.com/stachwk/fod.git)
+ROCKY_SELINUX_PG_DB ?= fod_selinux_test
+ROCKY_SELINUX_PG_USER ?= fod_selinux_test
+ROCKY_SELINUX_PG_ENV_FILE ?= /tmp/fod-rocky-selinux-pg.env
 
-.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat up down restart logs wait wait-client init init-qnap reset test-db-destructive-guard test-db-restore-local test-db-restore-selected smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper build-libfod install-root-scripts install-on-root uninstall-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-acl-mount-option test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-fio-primary-write-replica-read-docker test-fio-primary-write-replica-read-matrix test-fio-primary-write-replica-read-qnap test-primary-replica-benchmark-wiring test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-nodiratime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-primary-read-fused test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-rust-mkfs-suite-restored test-fod-indexer-parallel-smoke
+.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat rocky-selinux-deps rocky-selinux-install-deps rocky-selinux-postgres-prepare rocky-selinux-preflight rocky-selinux-prepare rocky-selinux-test-strict remote-rocky-selinux-install-deps remote-rocky-selinux-sync remote-rocky-selinux-postgres-prepare remote-rocky-selinux-preflight remote-rocky-selinux-prepare remote-rocky-selinux-test-strict up down restart logs wait wait-client init init-qnap reset test-db-destructive-guard test-db-restore-local test-db-restore-selected smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper build-libfod install-root-scripts install-on-root uninstall-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-acl-mount-option test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-fio-primary-write-replica-read-docker test-fio-primary-write-replica-read-matrix test-fio-primary-write-replica-read-qnap test-primary-replica-benchmark-wiring test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-nodiratime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-primary-read-fused test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-rust-mkfs-suite-restored test-fod-indexer-parallel-smoke
 
 help:
 	@printf '%s\n' \
@@ -513,6 +522,9 @@ help:
 		'  make deps       - refresh the legacy Python test dependencies in .venv' \
 		'  make deps-ubuntu - print the Ubuntu/Debian packages needed to build FOD' \
 		'  make deps-redhat - print the Fedora/RHEL packages needed to build FOD' \
+		'  make rocky-selinux-deps - print Rocky/RHEL SELinux+ACL validation package prerequisites' \
+		'  make rocky-selinux-prepare - install packages, verify Enforcing preflight, pull main, and build locally' \
+		'  make remote-rocky-selinux-prepare ROCKY_SELINUX_HOST=192.168.1.188 - prepare a Rocky SELinux host over SSH' \
 		'  make up         - start local PostgreSQL in Docker' \
 		'  make qnap-up    - start PostgreSQL in Docker using QNAP=1' \
 		'  make docker-selinux-acl-up - start the SELinux/ACL test lab in Docker' \
@@ -611,6 +623,8 @@ help:
 		'  make test-postgresql-requirements-autocommit-on - verify PostgreSQL version, time zone, connection budget, and autocommit=on' \
 		'  make test-xattr - run xattr/SELinux backend tests' \
 		'  make test-acl-mount-option - verify mount.fod -o acl=on enables POSIX ACL storage and enforcement' \
+		'  make rocky-selinux-test-strict - run strict SELinux+ACL xattr tests without fallback acceptance' \
+		'  make remote-rocky-selinux-test-strict - run strict SELinux+ACL xattr tests on the configured Rocky host' \
 		'  make test-df   - verify df -Ph and df -Phi on a mounted FOD' \
 		'  make test-two-mount-quota - force concurrent quota decisions through two FUSE daemons' \
 		'  make test-locking - verify FOD lock backends and replica behavior' \
@@ -749,6 +763,102 @@ deps-redhat:
 		'Fedora/RHEL build prerequisites for FOD:' \
 		"  sudo dnf install -y $(REDHAT_BUILD_DEPS)" \
 		"  Optional legacy Python helpers/tests: sudo dnf install -y $(REDHAT_LEGACY_PYTHON_DEPS)"
+
+rocky-selinux-deps:
+	@printf '%s\n' \
+		'Rocky/RHEL SELinux+ACL host prerequisites for FOD validation:' \
+		"  sudo dnf install -y $(REDHAT_BUILD_DEPS) $(REDHAT_LEGACY_PYTHON_DEPS) $(REDHAT_SELINUX_ACL_DEPS) $(REDHAT_POSTGRES_SERVER_DEPS)" \
+		'If a package name changes on this Rocky release, resolve it with dnf repoquery or dnf provides before changing FOD.'
+
+rocky-selinux-install-deps:
+	$(SUDO) dnf install -y $(REDHAT_BUILD_DEPS) $(REDHAT_LEGACY_PYTHON_DEPS) $(REDHAT_SELINUX_ACL_DEPS) $(REDHAT_POSTGRES_SERVER_DEPS)
+	@set -eu; \
+	if command -v systemctl >/dev/null 2>&1; then \
+		$(SUDO) systemctl enable --now auditd || true; \
+	fi
+
+rocky-selinux-postgres-prepare: rocky-selinux-install-deps
+	@set -eu; \
+	if command -v postgresql-setup >/dev/null 2>&1 && [ ! -s /var/lib/pgsql/data/PG_VERSION ]; then \
+		$(SUDO) postgresql-setup --initdb; \
+	fi; \
+	if command -v systemctl >/dev/null 2>&1; then \
+		$(SUDO) systemctl enable --now postgresql; \
+	fi; \
+	password="$$(if [ -f "$(ROCKY_SELINUX_PG_ENV_FILE)" ]; then sed -n 's/^FOD_PG_PASSWORD=//p' "$(ROCKY_SELINUX_PG_ENV_FILE)" | tail -n 1; fi)"; \
+	if [ -z "$$password" ]; then \
+		password="$$(openssl rand -hex 24)"; \
+	fi; \
+	$(SUDO) -u postgres psql -v ON_ERROR_STOP=1 -d postgres -c "DO \$$$$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$(ROCKY_SELINUX_PG_USER)') THEN CREATE ROLE $(ROCKY_SELINUX_PG_USER) LOGIN PASSWORD '$$password'; ELSE ALTER ROLE $(ROCKY_SELINUX_PG_USER) WITH LOGIN PASSWORD '$$password'; END IF; END \$$$$;"; \
+	if ! $(SUDO) -u postgres psql -v ON_ERROR_STOP=1 -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$(ROCKY_SELINUX_PG_DB)'" | grep -qx 1; then \
+		$(SUDO) -u postgres createdb -O "$(ROCKY_SELINUX_PG_USER)" "$(ROCKY_SELINUX_PG_DB)"; \
+	fi; \
+	umask 077; \
+	{ \
+		printf 'FOD_PG_HOST=127.0.0.1\n'; \
+		printf 'FOD_PG_PORT=5432\n'; \
+		printf 'FOD_PG_DBNAME=%s\n' "$(ROCKY_SELINUX_PG_DB)"; \
+		printf 'FOD_PG_USER=%s\n' "$(ROCKY_SELINUX_PG_USER)"; \
+		printf 'FOD_PG_PASSWORD=%s\n' "$$password"; \
+		printf 'POSTGRES_HOST=127.0.0.1\n'; \
+		printf 'POSTGRES_PORT=5432\n'; \
+		printf 'POSTGRES_DB=%s\n' "$(ROCKY_SELINUX_PG_DB)"; \
+		printf 'POSTGRES_USER=%s\n' "$(ROCKY_SELINUX_PG_USER)"; \
+		printf 'POSTGRES_PASSWORD=%s\n' "$$password"; \
+	} >"$(ROCKY_SELINUX_PG_ENV_FILE)"; \
+	printf 'Wrote PostgreSQL test environment to %s\n' "$(ROCKY_SELINUX_PG_ENV_FILE)"
+
+rocky-selinux-preflight:
+	@set -eu; \
+	printf 'timestamp=%s\n' "$$(date -Is)"; \
+	cat /etc/os-release; \
+	uname -a; \
+	hostnamectl; \
+	getenforce; \
+	sestatus; \
+	id; \
+	ls -l /dev/fuse; \
+	fusermount3 --version || true; \
+	git rev-parse HEAD; \
+	cat fod_version.txt; \
+	git status --short; \
+	test "$$(getenforce)" = Enforcing; \
+	for tool in git cargo rustc make python3 psql getfattr setfattr getfacl setfacl ausearch audit2why fusermount3; do \
+		command -v "$$tool" >/dev/null || { printf 'missing_tool=%s\n' "$$tool" >&2; exit 1; }; \
+	done
+
+rocky-selinux-prepare:
+	$(MAKE) --no-print-directory rocky-selinux-postgres-prepare
+	$(MAKE) --no-print-directory rocky-selinux-preflight
+	git pull --ff-only
+	cargo check --workspace --locked
+	$(MAKE) --no-print-directory build-debug
+
+rocky-selinux-test-strict:
+	$(MAKE) --no-print-directory rocky-selinux-preflight
+	$(MAKE) --no-print-directory venv
+	@set -eu; \
+	if [ -f "$(ROCKY_SELINUX_PG_ENV_FILE)" ]; then set -a; . "$(ROCKY_SELINUX_PG_ENV_FILE)"; set +a; fi; \
+	FOD_SELINUX=on FOD_ACL=on FOD_XATTR_STRICT_SECURITY=1 FOD_XATTR_STRICT_ACL=1 $(VENV_PYTHON) tests/integration/test_xattr.py; \
+	FOD_TEST_ACL_MOUNT_SELINUX=on $(VENV_PYTHON) tests/integration/test_acl_mount_option.py
+
+remote-rocky-selinux-install-deps:
+	$(ROCKY_SELINUX_SSH) -tt $(ROCKY_SELINUX_HOST) 'set -eu; sudo dnf install -y $(REDHAT_BUILD_DEPS) $(REDHAT_LEGACY_PYTHON_DEPS) $(REDHAT_SELINUX_ACL_DEPS) $(REDHAT_POSTGRES_SERVER_DEPS); if command -v systemctl >/dev/null 2>&1; then sudo systemctl enable --now auditd || true; fi'
+
+remote-rocky-selinux-sync: remote-rocky-selinux-install-deps
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; mkdir -p "$$(dirname "$(ROCKY_SELINUX_WORKDIR)")"; if [ -d "$(ROCKY_SELINUX_WORKDIR)/.git" ]; then cd "$(ROCKY_SELINUX_WORKDIR)" && git checkout main && git pull --ff-only; else git clone --branch main "$(ROCKY_SELINUX_REPO_URL)" "$(ROCKY_SELINUX_WORKDIR)"; fi'
+
+remote-rocky-selinux-preflight: remote-rocky-selinux-sync
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; cd "$(ROCKY_SELINUX_WORKDIR)"; $(MAKE) --no-print-directory rocky-selinux-preflight'
+
+remote-rocky-selinux-postgres-prepare: remote-rocky-selinux-sync
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; cd "$(ROCKY_SELINUX_WORKDIR)"; $(MAKE) --no-print-directory rocky-selinux-postgres-prepare'
+
+remote-rocky-selinux-prepare: remote-rocky-selinux-sync
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; cd "$(ROCKY_SELINUX_WORKDIR)"; $(MAKE) --no-print-directory rocky-selinux-prepare'
+
+remote-rocky-selinux-test-strict: remote-rocky-selinux-prepare
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; cd "$(ROCKY_SELINUX_WORKDIR)"; $(MAKE) --no-print-directory rocky-selinux-test-strict'
 
 up:
 	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \

@@ -2650,3 +2650,23 @@ found under `/home/wojtek` or `/media` within the checked depth.
 fails, so Codex cannot install the missing packages without user action. No FOD
 code was changed and no SELinux/ACL PASS/FAIL/SKIP matrix result should be
 inferred from this preflight.
+
+## 2026-08-27 - Rocky SELinux Makefile preparation on `9e85557`
+
+The Makefile now has explicit Rocky/RHEL SELinux validation preparation targets:
+`rocky-selinux-deps`, `rocky-selinux-install-deps`,
+`rocky-selinux-postgres-prepare`, `rocky-selinux-preflight`,
+`rocky-selinux-prepare`, and `rocky-selinux-test-strict`, plus matching
+`remote-rocky-selinux-*` SSH wrappers for host `192.168.1.188` by default.
+
+The preparation flow installs the Red Hat build dependencies, SELinux/audit
+tools, FUSE/ACL/xattr utilities, and PostgreSQL server/client packages; verifies
+that SELinux is `Enforcing`; creates a local test PostgreSQL database and user;
+stores the generated test secret outside the repo in
+`/tmp/fod-rocky-selinux-pg.env`; synchronizes `main` with `git pull --ff-only`;
+and runs `cargo check --workspace --locked` plus `make build-debug`.
+
+These targets prepare the host and strict xattr/ACL test entrypoints only. They
+do not replace the manual AVC correlation, native filesystem comparison, or the
+full four-variant SELinux/ACL matrix required before declaring Rocky SELinux
+validation complete.

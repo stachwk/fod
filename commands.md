@@ -2818,6 +2818,39 @@ for root, dirs, files in os.walk("/home/wojtek"):
 PY'
 ```
 
+## 2026-08-27 - Rocky SELinux Makefile preparation on `9e85557`
+
+```bash
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+rg -n "selinux|acl|redhat|rocky|dnf|fuse3|libpq|install|test-xattr|test-acl" Makefile README.md docs tests -S
+sed -n '340,525p' Makefile
+sed -n '720,805p' Makefile
+sed -n '580,625p' Makefile
+sed -n '1180,1195p' Makefile
+make -n rocky-selinux-deps rocky-selinux-install-deps rocky-selinux-postgres-prepare rocky-selinux-preflight rocky-selinux-prepare rocky-selinux-test-strict
+make -n remote-rocky-selinux-sync remote-rocky-selinux-preflight remote-rocky-selinux-postgres-prepare remote-rocky-selinux-prepare remote-rocky-selinux-test-strict
+make -n rocky-selinux-deps rocky-selinux-install-deps rocky-selinux-postgres-prepare rocky-selinux-preflight rocky-selinux-prepare rocky-selinux-test-strict
+make help | rg -n "rocky-selinux|Rocky"
+git diff --check
+git diff --stat
+git diff -- Makefile
+make rocky-selinux-deps
+date -Is
+git rev-parse --short HEAD
+cat fod_version.txt
+make rocky-selinux-deps && make -n rocky-selinux-install-deps rocky-selinux-postgres-prepare rocky-selinux-preflight rocky-selinux-prepare rocky-selinux-test-strict
+make help | rg -n "rocky-selinux|Rocky"
+git diff --check
+git diff --stat
+make -n remote-rocky-selinux-install-deps
+make -n rocky-selinux-prepare rocky-selinux-test-strict
+make help | rg -n "rocky-selinux|Rocky"
+git diff --check
+git diff --stat
+```
+
 ## 2026-08-21 commit a4a0a88 working tree FOD 3.3.5 fod-monitor JSON API
 
 Context and MemPalace commands:
