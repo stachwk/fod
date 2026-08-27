@@ -2736,3 +2736,18 @@ SELinux/VFS rejects `security.selinux` relabel on ordinary FUSE before
 `FUSE_SETXATTR` reaches FOD. A FOD runtime change cannot make strict SELinux
 xattr relabel pass on this mount stack unless the filesystem is mounted through
 a SELinux/xattr-capable FUSE path supported by the host.
+
+## 2026-08-27 - Rocky 10.2 positive SELinux service access proof on `c525531`
+
+SELinux enforcement for FOD works on Rocky 10.2 when treated as ordinary FUSE
+content labeled `fusefs_t`. A systemd-started Apache process ran in
+`system_u:system_r:httpd_t:s0` and served a FOD file mounted with
+`FOD_ALLOW_OTHER=1`. With `httpd_use_fusefs` set to `off`, Apache returned
+`403` for the FOD file. With `httpd_use_fusefs` set to `on`, Apache returned
+`200` and served the expected `fod-httpd-ok` content.
+
+This confirms that the viable Rocky 10.2 SELinux model for FOD is policy-based
+access to `fusefs_t` content, using existing or custom SELinux policy rules for
+consumer domains. It does not provide per-file SELinux relabeling through
+`security.selinux`; that remains blocked by the ordinary FUSE/genfs mount stack
+before FOD receives a `FUSE_SETXATTR` request.

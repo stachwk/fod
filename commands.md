@@ -2993,6 +2993,79 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-27 - Rocky 10.2 positive SELinux service access proof
+
+Repository state while running the proof: `c525531`. `fod_version.txt` was
+`3.3.22`.
+
+```bash
+ssh 192.168.1.188 'set -u; getenforce; uname -a; rpm -q fuse3 fuse3-libs selinux-policy selinux-policy-targeted policycoreutils setools-console; fusermount3 --version || true; modinfo fuse 2>/dev/null | head -40 || true'
+ssh 192.168.1.188 'man 8 mount.fuse 2>/dev/null | col -b | grep -Ei "context|fscontext|defcontext|rootcontext|security_label|selinux|label" -C 3 || true; man 8 mount 2>/dev/null | col -b | grep -Ei "context=|fscontext=|defcontext=|rootcontext=" -C 2 | head -120 || true'
+ssh 192.168.1.188 'set -u; command -v runcon || true; id -Z; getsebool -a 2>/dev/null | grep -E "use_fusefs|fusefs|httpd_use_fusefs|virt_use_fusefs|samba_share_fusefs|use_fusefs_home_dirs" || true; seinfo -r 2>/dev/null | grep -E "system_r|object_r|unconfined_r" | head -20; seinfo -u 2>/dev/null | grep -E "system_u|unconfined_u|user_u" | head -20'
+ssh 192.168.1.188 'sesearch --allow -t fusefs_t -c file 2>/dev/null | head -120; printf "=== dirs ===\n"; sesearch --allow -t fusefs_t -c dir 2>/dev/null | head -120; printf "=== types ===\n"; seinfo -tfusefs_t -x 2>/dev/null || true'
+ssh 192.168.1.188 'command -v httpd || sudo dnf install -y httpd'
+```
+
+Intermediate attempts were discarded because they measured the test harness
+rather than FOD access: direct `runcon` could not execute `cat` in the selected
+domains; direct `/usr/sbin/httpd` stayed in `unconfined_t`; and a systemd run on
+port `18080` failed because that port was not labeled as an HTTP port. The
+accepted proof used systemd-started `httpd_t` on port `80`:
+
+```bash
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && set -euo pipefail
+set -a; . /tmp/fod-rocky-selinux-pg.env; set +a
+base=/srv/fod-httpd-fuse-proof; m=$base/mnt
+sudo mkdir -p "$m"
+sudo chown -R wojtek:wojtek "$base"
+sudo chmod 0755 /srv "$base" "$m"
+fusermount3 -u "$m" >/dev/null 2>&1 || true
+sudo systemctl stop httpd >/dev/null 2>&1 || true
+sudo rm -f /etc/httpd/conf.d/fod-fuse-proof.conf
+rm -f /tmp/fod-httpd-systemd-proof-*.body /tmp/fod-httpd-systemd-proof*.log
+( FOD_ALLOW_OTHER=1 FOD_LOG_LEVEL=INFO FOD_SELINUX=on FOD_ACL=on FOD_DEFAULT_PERMISSIONS=1 POSTGRES_DB="$FOD_PG_DBNAME" POSTGRES_USER="$FOD_PG_USER" POSTGRES_PASSWORD="$FOD_PG_PASSWORD" POSTGRES_HOST="$FOD_PG_HOST" POSTGRES_PORT="$FOD_PG_PORT" target/debug/fod-bootstrap --config /home/wojtek/git/fod/fod_config.ini --role auto --selinux on --acl on --default-permissions -f "$m" > /tmp/fod-httpd-systemd-proof-fod.log 2>&1 ) &
+fodpid=$!
+for i in $(seq 1 80); do mountpoint -q "$m" && break; sleep 0.25; done
+mountpoint -q "$m"
+printf "fod-httpd-ok\n" > "$m/index.txt"
+chmod 0755 "$m"; chmod 0644 "$m/index.txt"
+sudo tee /etc/httpd/conf.d/fod-fuse-proof.conf >/dev/null <<EOF
+<VirtualHost 127.0.0.1:80>
+    ServerName 127.0.0.1
+    DocumentRoot "$m"
+    ErrorLog /tmp/fod-httpd-systemd-proof-error.log
+    CustomLog /tmp/fod-httpd-systemd-proof-access.log combined
+    <Directory "$m">
+        Options None
+        AllowOverride None
+        Require all granted
+    </Directory>
+</VirtualHost>
+EOF
+echo labels; ls -Zd "$m"; ls -Z "$m/index.txt"; findmnt -T "$m" -no FSTYPE,OPTIONS
+sudo httpd -t
+sudo setsebool httpd_use_fusefs off
+echo off_bool: $(getsebool httpd_use_fusefs)
+sudo systemctl start httpd
+sleep 1
+ps -eZ | grep httpd | head -8 || true
+echo curl_off; curl -sS -o /tmp/fod-httpd-systemd-proof-off.body -w "code=%{http_code}\n" http://127.0.0.1/index.txt || true; cat /tmp/fod-httpd-systemd-proof-off.body 2>/dev/null || true
+sudo systemctl stop httpd
+sudo setsebool httpd_use_fusefs on
+echo on_bool: $(getsebool httpd_use_fusefs)
+sudo systemctl start httpd
+sleep 1
+ps -eZ | grep httpd | head -8 || true
+echo curl_on; curl -sS -o /tmp/fod-httpd-systemd-proof-on.body -w "code=%{http_code}\n" http://127.0.0.1/index.txt || true; cat /tmp/fod-httpd-systemd-proof-on.body 2>/dev/null || true
+sudo systemctl stop httpd
+sudo setsebool httpd_use_fusefs off
+sudo rm -f /etc/httpd/conf.d/fod-fuse-proof.conf
+fusermount3 -u "$m"
+wait "$fodpid" >/dev/null 2>&1 || true
+echo audit; sudo ausearch -m AVC,USER_AVC -ts recent -i 2>/dev/null | tail -160 || true
+echo errors; sudo tail -100 /tmp/fod-httpd-systemd-proof-error.log 2>/dev/null || true'
+```
+
 ## 2026-08-27 - Rocky 10.2 FUSE SELinux labeling proof
 
 Repository state while running the proof: `e80cc85`. `fod_version.txt` was
