@@ -2631,3 +2631,22 @@ follow-up QNAP status still reported schema version `16` with the same pending
 migrations. Do not bypass this guard. To run mounted FUSE/ACL tests on QNAP,
 provide the matching QNAP schema-admin password or reset that dedicated QNAP
 test database deliberately.
+
+## 2026-08-27 - Rocky 10.2 SELinux preflight on `8dcfcee`
+
+Host `192.168.1.188` is Rocky Linux 10.2 with kernel
+`6.12.0-211.16.1.el10_2.0.1.x86_64`, SELinux targeted policy in `Enforcing`
+mode, and `/dev/fuse` present as `crw-rw-rw-. root root 10,229`. The host is a
+valid SELinux enforcement target in principle.
+
+The requested FOD validation could not proceed because the host lacks the
+required user-space/toolchain packages in the current account context:
+`git`, `cargo`, `rustc`, `make`, `fusermount3`, `psql`, `getfacl`, `setfacl`,
+and `audit2why` were not available. `python3`, `getfattr`, `setfattr`, `curl`,
+`dnf`, `rpm`, `mount`, and `ausearch` were present. No existing FOD checkout was
+found under `/home/wojtek` or `/media` within the checked depth.
+
+`sudo` is configured to require an interactive password and `sudo -n true`
+fails, so Codex cannot install the missing packages without user action. No FOD
+code was changed and no SELinux/ACL PASS/FAIL/SKIP matrix result should be
+inferred from this preflight.

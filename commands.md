@@ -2794,6 +2794,30 @@ Fast telemetry check against the selected Makefile backend:
 make test-fuse-postgres-telemetry
 ```
 
+## 2026-08-27 - Rocky 10.2 SELinux preflight on `8dcfcee`
+
+```bash
+sed -n '1,240p' /home/wojtek/.codex/attachments/9a0337a2-e0d6-4700-b9ca-a669672c7b04/pasted-text.txt
+git status --short
+git rev-parse --short HEAD
+sed -n '1p' fod_version.txt
+source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "Rocky Linux SELinux ACL xattr FUSE validation FOD previous decisions"
+ssh 192.168.1.188 'set -u; cd /media/wojtek/virtdata/home/wojtek/git/fod 2>/dev/null || cd ~/git/fod; pwd; cat /etc/os-release; uname -a; hostnamectl; getenforce; sestatus; id; ls -l /dev/fuse; fusermount3 --version || true; git rev-parse HEAD; cat fod_version.txt; git status --short'
+ssh 192.168.1.188 'set -e; sudo dnf -y install git rust cargo gcc make pkgconf-pkg-config libpq-devel fuse3 fuse3-devel python3 python3-pip openssl-devel policycoreutils policycoreutils-python-utils setools-console audit attr acl findutils util-linux diffutils procps-ng'
+ssh -tt 192.168.1.188 'set -e; sudo dnf -y install git rust cargo gcc make pkgconf-pkg-config libpq-devel fuse3 fuse3-devel python3 python3-pip openssl-devel policycoreutils policycoreutils-python-utils setools-console audit attr acl findutils util-linux diffutils procps-ng'
+ssh 192.168.1.188 'set -u; command -v git || true; command -v cargo || true; command -v rustc || true; command -v make || true; command -v fusermount3 || true; command -v psql || true; command -v python3 || true; command -v getfacl || true; command -v setfacl || true; command -v getfattr || true; command -v setfattr || true; sudo -n true 2>/dev/null && echo SUDO_NOPASSWD=yes || echo SUDO_NOPASSWD=no'
+ssh 192.168.1.188 'find /home/wojtek /media -maxdepth 6 -type d -name .git -print 2>/dev/null | head -50'
+ssh 192.168.1.188 'set -u; for c in curl wget tar gzip unzip cc gcc clang dnf repoquery rpm fusermount fusermount3 mount getfacl setfacl audit2why ausearch; do printf "%s=" "$c"; command -v "$c" || true; done'
+ssh 192.168.1.188 'python3 - <<"PY"
+import os
+for root, dirs, files in os.walk("/home/wojtek"):
+    if "fod_version.txt" in files:
+        print(root)
+    if root.count(os.sep) > 5:
+        dirs[:] = []
+PY'
+```
+
 ## 2026-08-21 commit a4a0a88 working tree FOD 3.3.5 fod-monitor JSON API
 
 Context and MemPalace commands:
