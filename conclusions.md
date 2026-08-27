@@ -2751,3 +2751,25 @@ access to `fusefs_t` content, using existing or custom SELinux policy rules for
 consumer domains. It does not provide per-file SELinux relabeling through
 `security.selinux`; that remains blocked by the ordinary FUSE/genfs mount stack
 before FOD receives a `FUSE_SETXATTR` request.
+
+## 2026-08-27 - Rocky SELinux operational test target on `95d506d`
+
+The Makefile now has a dedicated Rocky SELinux operational target for the
+validated model: FOD mounted as ordinary FUSE content labeled `fusefs_t`, with
+real SELinux enforcement checked through a systemd-started `httpd_t` service.
+The test toggles `httpd_use_fusefs` off and on, expecting `403` while disabled
+and `200` with `fod-httpd-ok` content while enabled.
+
+This is the correct Rocky 10.2 test contract for SELinux support in FOD. The
+strict `security.selinux` xattr/relabel path should remain a negative or
+diagnostic test on ordinary FUSE, because Rocky's FUSE mount stack rejects
+`security.selinux` relabel before FOD receives `FUSE_SETXATTR`.
+
+There is no FOD-only FUSE callback change that can make the rejected relabel
+arrive after the kernel/SELinux layer has already returned `ENOTSUP`. The only
+plausible paths to per-file SELinux labels are host/mount-stack changes outside
+normal `fusermount3`, such as a kernel/libfuse path that accepts SELinux labeling
+mount options for FUSE, a filesystem type classified by policy as
+`fs_use_xattr`, or replacing the host policy/kernel behavior for FUSE. On Rocky
+10.2, `security_label`, `context=`, `fscontext=`, `defcontext=`, and
+`rootcontext=` were rejected by ordinary `fusermount3` for this FOD mount.

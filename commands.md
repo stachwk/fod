@@ -2993,6 +2993,61 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-27 - Rocky SELinux operational target implementation
+
+Repository state while implementing the target: `95d506d`. `fod_version.txt`
+was `3.3.22`.
+
+Inspection and implementation commands:
+
+```bash
+sed -n '760,890p' Makefile
+sed -n '210,255p' rust_fuse/src/startup.rs
+sed -n '4300,4465p' rust_fuse/src/fs.rs
+git status --short --branch
+cat fod_version.txt
+rg -n "rocky-selinux|httpd_use_fusefs|fusefs_t" Makefile tests docs conclusions.md commands.md | head -160
+sed -n '1,220p' tests/integration/test_mount_workflow.sh
+sed -n '1,120p' Makefile
+sed -n '490,510p' Makefile
+sed -n '600,635p' Makefile
+sed -n '1,120p' tests/integration/fod_testlib.sh
+```
+
+Validation commands:
+
+```bash
+bash -n tests/integration/test_rocky_selinux_operational.sh
+make -n rocky-selinux-test-operational remote-rocky-selinux-test-operational
+git diff --check
+git diff --stat
+git status --short --branch
+bash -n tests/integration/test_rocky_selinux_operational.sh
+make -n rocky-selinux-postgres-prepare rocky-selinux-test-operational
+git diff --check
+git diff --stat
+git diff -- Makefile | sed -n '1,220p'
+scp Makefile tests/integration/test_rocky_selinux_operational.sh 192.168.1.188:/tmp/
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && cp /tmp/Makefile Makefile && cp /tmp/test_rocky_selinux_operational.sh tests/integration/test_rocky_selinux_operational.sh && git status --short && make --no-print-directory rocky-selinux-test-operational'
+bash -n tests/integration/test_rocky_selinux_operational.sh
+git diff --check
+scp tests/integration/test_rocky_selinux_operational.sh 192.168.1.188:/tmp/test_rocky_selinux_operational.sh
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && cp /tmp/test_rocky_selinux_operational.sh tests/integration/test_rocky_selinux_operational.sh && make --no-print-directory rocky-selinux-test-operational'
+```
+
+`make -n remote-rocky-selinux-test-operational` was not a pure dry run because
+the remote wrapper invokes nested make on the Rocky host. That exposed an
+existing Rocky preparation bug: `postgresql-setup --initdb` could run when
+`PG_VERSION` was absent even if `/var/lib/pgsql/data` was non-empty. The
+preparation guard was tightened to initialize PostgreSQL only when the data
+directory is empty.
+
+The accepted Rocky test result was:
+
+```text
+OK Rocky SELinux operational FOD fusefs_t/httpd_t proof
+```
+
 ## 2026-08-27 - Rocky 10.2 positive SELinux service access proof
 
 Repository state while running the proof: `c525531`. `fod_version.txt` was
