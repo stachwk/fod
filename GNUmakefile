@@ -39,6 +39,58 @@ target-aux-clean:
 test-target-aux-clean-policy:
 	@bash tests/test_aux_target_clean_policy.sh
 
-# Keep the selective-cleanup policy regression in the normal gate without
-# modifying the existing Makefile target definition.
-test-all: test-target-aux-clean-policy
+# Rust toolchain comparison. rust-version remains the MSRV declaration; these
+# targets deliberately select concrete rustup toolchains without changing the
+# repository default toolchain or installing anything automatically.
+FOD_RUST_MSRV ?= 1.85
+FOD_RUST_BASELINE_TOOLCHAIN ?= 1.85.0
+FOD_RUST_CANDIDATE_TOOLCHAIN ?= 1.98.0
+FOD_RUST_TOOLCHAIN_BENCH_ROOT ?= $(CURDIR)/target/toolchain-benchmark
+FOD_RUST_TOOLCHAIN_BENCH_REPETITIONS ?= 3
+FOD_RUST_TOOLCHAIN_BENCH_BLOCK_SIZE ?= 512K
+FOD_RUST_TOOLCHAIN_BENCH_COUNT ?= 64
+FOD_RUST_TOOLCHAIN_BENCH_SOURCE ?= pattern
+
+.PHONY: rust-msrv-check rust-candidate-check rust-candidate-clippy rust-toolchain-benchmark-plan rust-toolchain-benchmark test-rust-toolchain-benchmark-policy
+
+rust-msrv-check:
+	@rustup run "$(FOD_RUST_BASELINE_TOOLCHAIN)" cargo check --workspace --locked
+
+rust-candidate-check:
+	@rustup run "$(FOD_RUST_CANDIDATE_TOOLCHAIN)" cargo check --workspace --locked
+
+rust-candidate-clippy:
+	@rustup run "$(FOD_RUST_CANDIDATE_TOOLCHAIN)" cargo clippy --workspace --all-targets --locked
+
+rust-toolchain-benchmark-plan:
+	@FOD_RUST_MSRV="$(FOD_RUST_MSRV)" \
+		FOD_RUST_BASELINE_TOOLCHAIN="$(FOD_RUST_BASELINE_TOOLCHAIN)" \
+		FOD_RUST_CANDIDATE_TOOLCHAIN="$(FOD_RUST_CANDIDATE_TOOLCHAIN)" \
+		FOD_RUST_TOOLCHAIN_BENCH_ROOT="$(FOD_RUST_TOOLCHAIN_BENCH_ROOT)" \
+		FOD_RUST_TOOLCHAIN_BENCH_REPETITIONS="$(FOD_RUST_TOOLCHAIN_BENCH_REPETITIONS)" \
+		FOD_RUST_TOOLCHAIN_BENCH_BLOCK_SIZE="$(FOD_RUST_TOOLCHAIN_BENCH_BLOCK_SIZE)" \
+		FOD_RUST_TOOLCHAIN_BENCH_COUNT="$(FOD_RUST_TOOLCHAIN_BENCH_COUNT)" \
+		FOD_RUST_TOOLCHAIN_BENCH_SOURCE="$(FOD_RUST_TOOLCHAIN_BENCH_SOURCE)" \
+		bash scripts/fod-rust-toolchain-benchmark.sh plan
+
+rust-toolchain-benchmark: venv up
+	@POSTGRES_DB="$(POSTGRES_DB)" \
+		POSTGRES_USER="$(POSTGRES_USER)" \
+		POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+		FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" \
+		FOD_RUST_MSRV="$(FOD_RUST_MSRV)" \
+		FOD_RUST_BASELINE_TOOLCHAIN="$(FOD_RUST_BASELINE_TOOLCHAIN)" \
+		FOD_RUST_CANDIDATE_TOOLCHAIN="$(FOD_RUST_CANDIDATE_TOOLCHAIN)" \
+		FOD_RUST_TOOLCHAIN_BENCH_ROOT="$(FOD_RUST_TOOLCHAIN_BENCH_ROOT)" \
+		FOD_RUST_TOOLCHAIN_BENCH_REPETITIONS="$(FOD_RUST_TOOLCHAIN_BENCH_REPETITIONS)" \
+		FOD_RUST_TOOLCHAIN_BENCH_BLOCK_SIZE="$(FOD_RUST_TOOLCHAIN_BENCH_BLOCK_SIZE)" \
+		FOD_RUST_TOOLCHAIN_BENCH_COUNT="$(FOD_RUST_TOOLCHAIN_BENCH_COUNT)" \
+		FOD_RUST_TOOLCHAIN_BENCH_SOURCE="$(FOD_RUST_TOOLCHAIN_BENCH_SOURCE)" \
+		bash scripts/fod-rust-toolchain-benchmark.sh run
+
+test-rust-toolchain-benchmark-policy:
+	@bash tests/test_rust_toolchain_benchmark_policy.sh
+
+# Keep lightweight policy regressions in the normal gate without modifying the
+# existing Makefile target definition.
+test-all: test-target-aux-clean-policy test-rust-toolchain-benchmark-policy

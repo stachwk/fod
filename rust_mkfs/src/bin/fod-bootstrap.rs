@@ -130,6 +130,23 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
     env::var_os("PATH").and_then(|path| find_in_paths(binary_name, env::split_paths(&path)))
 }
 
+fn configured_rust_fuse_binary(
+    configured: Option<std::ffi::OsString>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(configured) = configured else {
+        return Ok(None);
+    };
+    let candidate = PathBuf::from(configured);
+    if is_executable_file(&candidate) {
+        Ok(Some(candidate))
+    } else {
+        Err(format!(
+            "FOD_RUST_FUSE_BIN points to a missing or non-executable file: {}",
+            candidate.display()
+        ))
+    }
+}
+
 fn rust_fuse_binary() -> Option<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -187,12 +204,19 @@ fn apply_pg_endpoint_env(db_section: &std::collections::HashMap<String, String>)
 
 fn main() {
     let cli = Cli::parse();
-    let rust_fuse = match rust_fuse_binary() {
-        Some(path) => path,
-        None => {
-            eprintln!(
-                "Rust FUSE binary is unavailable; build target/debug/fod-rust-fuse first, install fod-rust-fuse on PATH, or place it in /usr/local/bin."
-            );
+    let rust_fuse = match configured_rust_fuse_binary(env::var_os("FOD_RUST_FUSE_BIN")) {
+        Ok(Some(path)) => path,
+        Ok(None) => match rust_fuse_binary() {
+            Some(path) => path,
+            None => {
+                eprintln!(
+                    "Rust FUSE binary is unavailable; build target/debug/fod-rust-fuse first, set FOD_RUST_FUSE_BIN, install fod-rust-fuse on PATH, or place it in /usr/local/bin."
+                );
+                std::process::exit(1);
+            }
+        },
+        Err(err) => {
+            eprintln!("{}", err);
             std::process::exit(1);
         }
     };
@@ -340,6 +364,39 @@ mod tests {
 
         let found = find_in_paths("fod-rust-fuse", [dir.clone()]).expect("find candidate");
         assert_eq!(found, candidate);
+
+        let _ = fs::remove_file(&candidate);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn validates_explicit_rust_fuse_binary_override() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base = env::temp_dir().join(format!("fod-bootstrap-explicit-{unique}"));
+        let candidate = base.join("fod-rust-fuse");
+        fs::create_dir_all(&base).expect("create temp dir");
+        fs::write(&candidate, b"#!/bin/sh\n").expect("write candidate");
+        #[cfg(unix)]
+        let mut perms = fs::metadata(&candidate)
+            .expect("stat candidate")
+            .permissions();
+        #[cfg(unix)]
+        perms.set_mode(0o755);
+        #[cfg(unix)]
+        fs::set_permissions(&candidate, perms).expect("chmod candidate");
+
+        let selected = configured_rust_fuse_binary(Some(candidate.clone().into_os_string()))
+            .expect("valid explicit binary")
+            .expect("explicit binary selected");
+        assert_eq!(selected, candidate);
+
+        let missing = base.join("missing-fod-rust-fuse");
+        let err = configured_rust_fuse_binary(Some(missing.into_os_string()))
+            .expect_err("missing explicit binary must fail");
+        assert!(err.contains("FOD_RUST_FUSE_BIN"));
 
         let _ = fs::remove_file(&candidate);
         let _ = fs::remove_dir_all(&base);
