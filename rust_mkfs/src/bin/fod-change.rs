@@ -136,10 +136,7 @@ fn effective_runtime(
 }
 
 fn validate_reloadable_key(key: &str) -> Result<(), String> {
-    if RuntimeConfig::reloadable_setting_keys()
-        .iter()
-        .any(|candidate| *candidate == key)
-    {
+    if RuntimeConfig::reloadable_setting_keys().contains(&key) {
         Ok(())
     } else {
         Err(format!(
@@ -192,7 +189,7 @@ fn main() {
         }
     };
     let params =
-        resolve_pg_connection_params(&db_section, &config_path.parent().unwrap_or(Path::new(".")));
+        resolve_pg_connection_params(&db_section, config_path.parent().unwrap_or(Path::new(".")));
     let conninfo = make_conninfo(&params);
     let conn = match DbConn::connect(&conninfo) {
         Ok(conn) => conn,

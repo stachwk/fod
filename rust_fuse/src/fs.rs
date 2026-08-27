@@ -5,8 +5,8 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use fod_rust_monitor::{
     log_logical_task_observability as log_logical_task_snapshots, LogicalTaskAdmissionGate,
     LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
-    LogicalTaskQueueObservability, SharedMonitorSessionStats, SharedMonitorSourceStats,
-    SharedMonitorTimingStats,
+    LogicalTaskQueueObservability, SharedMonitorSessionStats, SharedMonitorSessionStatsInput,
+    SharedMonitorSourceStats, SharedMonitorTimingStats,
 };
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
@@ -511,16 +511,16 @@ fn publish_shared_monitor_sample(
     let copy_snapshot = copy.snapshot()?;
     let database_snapshot = observability_repo.observability_snapshot()?;
     let source_snapshot = observability_repo.source_snapshot()?;
-    let stats = SharedMonitorSessionStats::from_snapshots(
+    let stats = SharedMonitorSessionStats::from_snapshots(SharedMonitorSessionStatsInput {
         sample_seq,
         publish_interval_millis,
-        &read_snapshot,
-        &write_snapshot,
-        &copy_snapshot,
-        &database_snapshot,
-        shared_monitor_source_stats(source_snapshot),
-        profile.shared_monitor_timing_stats(),
-    );
+        read: &read_snapshot,
+        write: &write_snapshot,
+        copy: &copy_snapshot,
+        database: &database_snapshot,
+        source: shared_monitor_source_stats(source_snapshot),
+        timings: profile.shared_monitor_timing_stats(),
+    });
     publish_repo.publish_monitor_session_stats(
         session_id,
         env!("CARGO_PKG_VERSION"),

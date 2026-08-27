@@ -38,16 +38,20 @@ fn run_case(label: &str, payload: &[u8], current: &[u8], block_size: usize) -> R
     let mut out_len: usize = 0;
 
     let start = Instant::now();
-    let status = fod_copy_dedupe(
-        0,
-        payload.as_ptr(),
-        payload.len(),
-        current.as_ptr(),
-        current.len(),
-        block_size,
-        &mut out_ptr,
-        &mut out_len,
-    );
+    let status = unsafe {
+        // SAFETY: pointers come from live slices and output pointers reference
+        // local variables that remain valid until the FFI call returns.
+        fod_copy_dedupe(
+            0,
+            payload.as_ptr(),
+            payload.len(),
+            current.as_ptr(),
+            current.len(),
+            block_size,
+            &mut out_ptr,
+            &mut out_len,
+        )
+    };
     if status != 0 {
         return Err(format!("fod_copy_dedupe returned status {status}"));
     }
@@ -68,7 +72,10 @@ fn run_case(label: &str, payload: &[u8], current: &[u8], block_size: usize) -> R
         ranges.len(),
         changed_bytes,
     );
-    fod_free_ranges(out_ptr, out_len);
+    unsafe {
+        // SAFETY: `out_ptr` and `out_len` are returned by `fod_copy_dedupe`.
+        fod_free_ranges(out_ptr, out_len);
+    }
     Ok(())
 }
 

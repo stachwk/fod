@@ -1,6 +1,15 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
+//! C ABI shims for FOD's internal Rust boundary.
+//!
+//! Pointer-taking exports are unsafe for Rust callers because callers must
+//! provide valid input buffers, writable output locations, and matching
+//! deallocation calls for buffers returned by this module. The Rust `unsafe`
+//! qualifier does not change the exported C ABI.
+
+#![allow(clippy::missing_safety_doc)]
+
 fn fod_ffi_copy_dedupe_crc_table_enabled() -> bool {
     // Domyslnie tabela CRC jest wlaczona.
     // Wylacza ja tylko jawne FOD_COPY_DEDUPE_CRC_TABLE=0/false/no/off.
@@ -223,7 +232,7 @@ fn fod_copy_dedupe_crc_table_enabled_from_env() -> bool {
     fod_rust_runtime::env_var_truthy_with_legacy_alias("FOD_COPY_DEDUPE_CRC_TABLE", true)
 }
 
-pub extern "C" fn fod_copy_plan(
+pub unsafe extern "C" fn fod_copy_plan(
     off_in: u64,
     off_out: u64,
     length: u64,
@@ -241,14 +250,11 @@ pub extern "C" fn fod_copy_plan(
         unsafe { write_boxed_output(segments, out_ptr, out_len) }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_copy_pack(
+pub unsafe extern "C" fn fod_copy_pack(
     off_out: u64,
     total_len: u64,
     block_size: u64,
@@ -275,14 +281,11 @@ pub extern "C" fn fod_copy_pack(
         write_boxed_output(ranges, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_copy_dedupe(
+pub unsafe extern "C" fn fod_copy_dedupe(
     dst_offset: u64,
     payload_ptr: *const u8,
     payload_len: usize,
@@ -329,14 +332,11 @@ pub extern "C" fn fod_copy_dedupe(
         write_boxed_output(ranges, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_persist_pad(
+pub unsafe extern "C" fn fod_persist_pad(
     input_ptr: *const u8,
     input_len: usize,
     used_len: usize,
@@ -353,14 +353,11 @@ pub extern "C" fn fod_persist_pad(
         write_boxed_output(output, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_read_assemble(
+pub unsafe extern "C" fn fod_read_assemble(
     blocks_ptr: *const DbfsReadBlock,
     blocks_len: usize,
     fetch_first: u64,
@@ -401,14 +398,11 @@ pub extern "C" fn fod_read_assemble(
         write_boxed_output(output, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_new(
+pub unsafe extern "C" fn fod_rust_pg_repo_new(
     conninfo_ptr: *const u8,
     conninfo_len: usize,
     out_repo: *mut *mut DbfsPgRepo,
@@ -434,14 +428,11 @@ pub extern "C" fn fod_rust_pg_repo_new(
         0
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_free(repo_ptr: *mut DbfsPgRepo) {
+pub unsafe extern "C" fn fod_rust_pg_repo_free(repo_ptr: *mut DbfsPgRepo) {
     if repo_ptr.is_null() {
         return;
     }
@@ -451,7 +442,7 @@ pub extern "C" fn fod_rust_pg_repo_free(repo_ptr: *mut DbfsPgRepo) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_query_scalar_text(
+pub unsafe extern "C" fn fod_rust_pg_repo_query_scalar_text(
     repo_ptr: *mut DbfsPgRepo,
     sql_ptr: *const u8,
     sql_len: usize,
@@ -477,14 +468,11 @@ pub extern "C" fn fod_rust_pg_repo_query_scalar_text(
         write_boxed_output(value, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_get_config_value(
+pub unsafe extern "C" fn fod_rust_pg_repo_get_config_value(
     repo_ptr: *mut DbfsPgRepo,
     key_ptr: *const u8,
     key_len: usize,
@@ -526,14 +514,11 @@ pub extern "C" fn fod_rust_pg_repo_get_config_value(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_is_in_recovery(
+pub unsafe extern "C" fn fod_rust_pg_repo_is_in_recovery(
     repo_ptr: *mut DbfsPgRepo,
     out_value: *mut u8,
 ) -> i32 {
@@ -550,14 +535,11 @@ pub extern "C" fn fod_rust_pg_repo_is_in_recovery(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_schema_version(
+pub unsafe extern "C" fn fod_rust_pg_repo_schema_version(
     repo_ptr: *mut DbfsPgRepo,
     out_value: *mut u32,
     out_found: *mut u8,
@@ -583,14 +565,11 @@ pub extern "C" fn fod_rust_pg_repo_schema_version(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_schema_is_initialized(
+pub unsafe extern "C" fn fod_rust_pg_repo_schema_is_initialized(
     repo_ptr: *mut DbfsPgRepo,
     out_value: *mut u8,
 ) -> i32 {
@@ -607,14 +586,11 @@ pub extern "C" fn fod_rust_pg_repo_schema_is_initialized(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_bootstrap_snapshot(
+pub unsafe extern "C" fn fod_rust_pg_repo_bootstrap_snapshot(
     repo_ptr: *mut DbfsPgRepo,
     out_block_size: *mut u32,
     out_block_size_found: *mut u8,
@@ -652,14 +628,11 @@ pub extern "C" fn fod_rust_pg_repo_bootstrap_snapshot(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_get_dir_id(
+pub unsafe extern "C" fn fod_rust_pg_repo_get_dir_id(
     repo_ptr: *mut DbfsPgRepo,
     path_ptr: *const u8,
     path_len: usize,
@@ -700,14 +673,11 @@ pub extern "C" fn fod_rust_pg_repo_get_dir_id(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_get_file_id(
+pub unsafe extern "C" fn fod_rust_pg_repo_get_file_id(
     repo_ptr: *mut DbfsPgRepo,
     path_ptr: *const u8,
     path_len: usize,
@@ -748,14 +718,11 @@ pub extern "C" fn fod_rust_pg_repo_get_file_id(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_count_file_links(
+pub unsafe extern "C" fn fod_rust_pg_repo_count_file_links(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     out_value: *mut u64,
@@ -778,14 +745,11 @@ pub extern "C" fn fod_rust_pg_repo_count_file_links(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_path_has_children(
+pub unsafe extern "C" fn fod_rust_pg_repo_path_has_children(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
     out_value: *mut u8,
@@ -803,14 +767,11 @@ pub extern "C" fn fod_rust_pg_repo_path_has_children(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_count_directory_children(
+pub unsafe extern "C" fn fod_rust_pg_repo_count_directory_children(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
     out_value: *mut u64,
@@ -828,14 +789,11 @@ pub extern "C" fn fod_rust_pg_repo_count_directory_children(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_count_directory_subdirs(
+pub unsafe extern "C" fn fod_rust_pg_repo_count_directory_subdirs(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
     out_value: *mut u64,
@@ -853,14 +811,11 @@ pub extern "C" fn fod_rust_pg_repo_count_directory_subdirs(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_count_root_directory_children(
+pub unsafe extern "C" fn fod_rust_pg_repo_count_root_directory_children(
     repo_ptr: *mut DbfsPgRepo,
     out_value: *mut u64,
 ) -> i32 {
@@ -877,14 +832,11 @@ pub extern "C" fn fod_rust_pg_repo_count_root_directory_children(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_count_symlinks(
+pub unsafe extern "C" fn fod_rust_pg_repo_count_symlinks(
     repo_ptr: *mut DbfsPgRepo,
     out_value: *mut u64,
 ) -> i32 {
@@ -901,14 +853,11 @@ pub extern "C" fn fod_rust_pg_repo_count_symlinks(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_load_symlink_target(
+pub unsafe extern "C" fn fod_rust_pg_repo_load_symlink_target(
     repo_ptr: *mut DbfsPgRepo,
     symlink_id: u64,
     out_ptr: *mut *mut u8,
@@ -941,14 +890,11 @@ pub extern "C" fn fod_rust_pg_repo_load_symlink_target(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_get_special_file_metadata(
+pub unsafe extern "C" fn fod_rust_pg_repo_get_special_file_metadata(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     out_ptr: *mut *mut u8,
@@ -989,14 +935,11 @@ pub extern "C" fn fod_rust_pg_repo_get_special_file_metadata(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_count_files(
+pub unsafe extern "C" fn fod_rust_pg_repo_count_files(
     repo_ptr: *mut DbfsPgRepo,
     out_value: *mut u64,
 ) -> i32 {
@@ -1013,14 +956,11 @@ pub extern "C" fn fod_rust_pg_repo_count_files(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_count_directories(
+pub unsafe extern "C" fn fod_rust_pg_repo_count_directories(
     repo_ptr: *mut DbfsPgRepo,
     out_value: *mut u64,
 ) -> i32 {
@@ -1037,14 +977,11 @@ pub extern "C" fn fod_rust_pg_repo_count_directories(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_total_data_size(
+pub unsafe extern "C" fn fod_rust_pg_repo_total_data_size(
     repo_ptr: *mut DbfsPgRepo,
     out_value: *mut u64,
 ) -> i32 {
@@ -1061,14 +998,11 @@ pub extern "C" fn fod_rust_pg_repo_total_data_size(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_get_file_mode_value(
+pub unsafe extern "C" fn fod_rust_pg_repo_get_file_mode_value(
     repo_ptr: *mut DbfsPgRepo,
     path_ptr: *const u8,
     path_len: usize,
@@ -1110,14 +1044,11 @@ pub extern "C" fn fod_rust_pg_repo_get_file_mode_value(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_get_hardlink_id(
+pub unsafe extern "C" fn fod_rust_pg_repo_get_hardlink_id(
     repo_ptr: *mut DbfsPgRepo,
     path_ptr: *const u8,
     path_len: usize,
@@ -1156,14 +1087,11 @@ pub extern "C" fn fod_rust_pg_repo_get_hardlink_id(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_get_symlink_id(
+pub unsafe extern "C" fn fod_rust_pg_repo_get_symlink_id(
     repo_ptr: *mut DbfsPgRepo,
     path_ptr: *const u8,
     path_len: usize,
@@ -1202,14 +1130,11 @@ pub extern "C" fn fod_rust_pg_repo_get_symlink_id(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_get_hardlink_file_id(
+pub unsafe extern "C" fn fod_rust_pg_repo_get_hardlink_file_id(
     repo_ptr: *mut DbfsPgRepo,
     hardlink_id: u64,
     out_value: *mut u64,
@@ -1239,14 +1164,11 @@ pub extern "C" fn fod_rust_pg_repo_get_hardlink_file_id(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_create_hardlink(
+pub unsafe extern "C" fn fod_rust_pg_repo_create_hardlink(
     repo_ptr: *mut DbfsPgRepo,
     source_file_id: u64,
     target_parent_id: u64,
@@ -1294,14 +1216,11 @@ pub extern "C" fn fod_rust_pg_repo_create_hardlink(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_create_directory(
+pub unsafe extern "C" fn fod_rust_pg_repo_create_directory(
     repo_ptr: *mut DbfsPgRepo,
     target_parent_id: u64,
     target_parent_found: u8,
@@ -1359,14 +1278,11 @@ pub extern "C" fn fod_rust_pg_repo_create_directory(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_create_file(
+pub unsafe extern "C" fn fod_rust_pg_repo_create_file(
     repo_ptr: *mut DbfsPgRepo,
     target_parent_id: u64,
     target_parent_found: u8,
@@ -1424,14 +1340,11 @@ pub extern "C" fn fod_rust_pg_repo_create_file(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_create_special_file(
+pub unsafe extern "C" fn fod_rust_pg_repo_create_special_file(
     repo_ptr: *mut DbfsPgRepo,
     target_parent_id: u64,
     target_parent_found: u8,
@@ -1508,14 +1421,11 @@ pub extern "C" fn fod_rust_pg_repo_create_special_file(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_create_symlink(
+pub unsafe extern "C" fn fod_rust_pg_repo_create_symlink(
     repo_ptr: *mut DbfsPgRepo,
     target_parent_id: u64,
     target_parent_found: u8,
@@ -1582,14 +1492,11 @@ pub extern "C" fn fod_rust_pg_repo_create_symlink(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_choose_primary_hardlink(
+pub unsafe extern "C" fn fod_rust_pg_repo_choose_primary_hardlink(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     out_hardlink_id: *mut u64,
@@ -1652,14 +1559,11 @@ pub extern "C" fn fod_rust_pg_repo_choose_primary_hardlink(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_promote_hardlink_to_primary(
+pub unsafe extern "C" fn fod_rust_pg_repo_promote_hardlink_to_primary(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     out_promoted: *mut u8,
@@ -1677,14 +1581,11 @@ pub extern "C" fn fod_rust_pg_repo_promote_hardlink_to_primary(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_count_file_blocks(
+pub unsafe extern "C" fn fod_rust_pg_repo_count_file_blocks(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     out_count: *mut u64,
@@ -1702,14 +1603,11 @@ pub extern "C" fn fod_rust_pg_repo_count_file_blocks(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_file_data_object_id(
+pub unsafe extern "C" fn fod_rust_pg_repo_file_data_object_id(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     out_data_object_id: *mut u64,
@@ -1733,14 +1631,11 @@ pub extern "C" fn fod_rust_pg_repo_file_data_object_id(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_file_size(
+pub unsafe extern "C" fn fod_rust_pg_repo_file_size(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     out_file_size: *mut u64,
@@ -1764,14 +1659,11 @@ pub extern "C" fn fod_rust_pg_repo_file_size(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_load_block(
+pub unsafe extern "C" fn fod_rust_pg_repo_load_block(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     block_index: u64,
@@ -1800,14 +1692,11 @@ pub extern "C" fn fod_rust_pg_repo_load_block(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_fetch_block_range(
+pub unsafe extern "C" fn fod_rust_pg_repo_fetch_block_range(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     first_block: u64,
@@ -1841,14 +1730,11 @@ pub extern "C" fn fod_rust_pg_repo_fetch_block_range(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_assemble_file_slice(
+pub unsafe extern "C" fn fod_rust_pg_repo_assemble_file_slice(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     first_block: u64,
@@ -1876,14 +1762,11 @@ pub extern "C" fn fod_rust_pg_repo_assemble_file_slice(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_create_data_object(
+pub unsafe extern "C" fn fod_rust_pg_repo_create_data_object(
     repo_ptr: *mut DbfsPgRepo,
     file_size: u64,
     content_hash_ptr: *const u8,
@@ -1915,14 +1798,11 @@ pub extern "C" fn fod_rust_pg_repo_create_data_object(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_touch_data_object(
+pub unsafe extern "C" fn fod_rust_pg_repo_touch_data_object(
     repo_ptr: *mut DbfsPgRepo,
     data_object_id: u64,
     file_size: u64,
@@ -1950,14 +1830,11 @@ pub extern "C" fn fod_rust_pg_repo_touch_data_object(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_adopt_source_data_object(
+pub unsafe extern "C" fn fod_rust_pg_repo_adopt_source_data_object(
     repo_ptr: *mut DbfsPgRepo,
     src_file_id: u64,
     dst_file_id: u64,
@@ -1979,14 +1856,11 @@ pub extern "C" fn fod_rust_pg_repo_adopt_source_data_object(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_persist_copy_block_crc_rows(
+pub unsafe extern "C" fn fod_rust_pg_repo_persist_copy_block_crc_rows(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     block_size: u64,
@@ -2025,14 +1899,11 @@ pub extern "C" fn fod_rust_pg_repo_persist_copy_block_crc_rows(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_persist_file_blocks(
+pub unsafe extern "C" fn fod_rust_pg_repo_persist_file_blocks(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     file_size: u64,
@@ -2091,14 +1962,11 @@ pub extern "C" fn fod_rust_pg_repo_persist_file_blocks(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_set_file_size(
+pub unsafe extern "C" fn fod_rust_pg_repo_set_file_size(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     file_size: u64,
@@ -2113,14 +1981,11 @@ pub extern "C" fn fod_rust_pg_repo_set_file_size(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_purge_primary_file(
+pub unsafe extern "C" fn fod_rust_pg_repo_purge_primary_file(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
 ) -> i32 {
@@ -2134,14 +1999,11 @@ pub extern "C" fn fod_rust_pg_repo_purge_primary_file(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_resolve_path(
+pub unsafe extern "C" fn fod_rust_pg_repo_resolve_path(
     repo_ptr: *mut DbfsPgRepo,
     path_ptr: *const u8,
     path_len: usize,
@@ -2204,14 +2066,11 @@ pub extern "C" fn fod_rust_pg_repo_resolve_path(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_fetch_xattr_value(
+pub unsafe extern "C" fn fod_rust_pg_repo_fetch_xattr_value(
     repo_ptr: *mut DbfsPgRepo,
     path_ptr: *const u8,
     path_len: usize,
@@ -2273,14 +2132,11 @@ pub extern "C" fn fod_rust_pg_repo_fetch_xattr_value(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_list_xattr_names_for_owner(
+pub unsafe extern "C" fn fod_rust_pg_repo_list_xattr_names_for_owner(
     repo_ptr: *mut DbfsPgRepo,
     owner_kind_ptr: *const u8,
     owner_kind_len: usize,
@@ -2317,14 +2173,11 @@ pub extern "C" fn fod_rust_pg_repo_list_xattr_names_for_owner(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_store_xattr_value_for_owner(
+pub unsafe extern "C" fn fod_rust_pg_repo_store_xattr_value_for_owner(
     repo_ptr: *mut DbfsPgRepo,
     owner_kind_ptr: *const u8,
     owner_kind_len: usize,
@@ -2367,14 +2220,11 @@ pub extern "C" fn fod_rust_pg_repo_store_xattr_value_for_owner(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_delete_owner_xattrs(
+pub unsafe extern "C" fn fod_rust_pg_repo_delete_owner_xattrs(
     repo_ptr: *mut DbfsPgRepo,
     owner_kind_ptr: *const u8,
     owner_kind_len: usize,
@@ -2398,14 +2248,11 @@ pub extern "C" fn fod_rust_pg_repo_delete_owner_xattrs(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_remove_xattr_for_owner(
+pub unsafe extern "C" fn fod_rust_pg_repo_remove_xattr_for_owner(
     repo_ptr: *mut DbfsPgRepo,
     owner_kind_ptr: *const u8,
     owner_kind_len: usize,
@@ -2448,14 +2295,11 @@ pub extern "C" fn fod_rust_pg_repo_remove_xattr_for_owner(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_update_file_mode(
+pub unsafe extern "C" fn fod_rust_pg_repo_update_file_mode(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     mode_ptr: *const u8,
@@ -2478,14 +2322,11 @@ pub extern "C" fn fod_rust_pg_repo_update_file_mode(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_update_directory_mode(
+pub unsafe extern "C" fn fod_rust_pg_repo_update_directory_mode(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
     mode_ptr: *const u8,
@@ -2508,14 +2349,11 @@ pub extern "C" fn fod_rust_pg_repo_update_directory_mode(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_update_file_owner(
+pub unsafe extern "C" fn fod_rust_pg_repo_update_file_owner(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     uid: u32,
@@ -2540,14 +2378,11 @@ pub extern "C" fn fod_rust_pg_repo_update_file_owner(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_update_directory_owner(
+pub unsafe extern "C" fn fod_rust_pg_repo_update_directory_owner(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
     uid: u32,
@@ -2575,14 +2410,11 @@ pub extern "C" fn fod_rust_pg_repo_update_directory_owner(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_update_symlink_owner(
+pub unsafe extern "C" fn fod_rust_pg_repo_update_symlink_owner(
     repo_ptr: *mut DbfsPgRepo,
     symlink_id: u64,
     uid: u32,
@@ -2597,14 +2429,11 @@ pub extern "C" fn fod_rust_pg_repo_update_symlink_owner(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_update_symlink_access_date(
+pub unsafe extern "C" fn fod_rust_pg_repo_update_symlink_access_date(
     repo_ptr: *mut DbfsPgRepo,
     symlink_id: u64,
     atime_ptr: *const u8,
@@ -2630,14 +2459,11 @@ pub extern "C" fn fod_rust_pg_repo_update_symlink_access_date(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_touch_file_times(
+pub unsafe extern "C" fn fod_rust_pg_repo_touch_file_times(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     atime_ptr: *const u8,
@@ -2670,14 +2496,11 @@ pub extern "C" fn fod_rust_pg_repo_touch_file_times(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_touch_directory_times(
+pub unsafe extern "C" fn fod_rust_pg_repo_touch_directory_times(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
     atime_ptr: *const u8,
@@ -2713,14 +2536,11 @@ pub extern "C" fn fod_rust_pg_repo_touch_directory_times(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_touch_directory_entry(
+pub unsafe extern "C" fn fod_rust_pg_repo_touch_directory_entry(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
 ) -> i32 {
@@ -2733,14 +2553,11 @@ pub extern "C" fn fod_rust_pg_repo_touch_directory_entry(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_update_file_access_date(
+pub unsafe extern "C" fn fod_rust_pg_repo_update_file_access_date(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     atime_ptr: *const u8,
@@ -2763,14 +2580,11 @@ pub extern "C" fn fod_rust_pg_repo_update_file_access_date(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_update_directory_access_date(
+pub unsafe extern "C" fn fod_rust_pg_repo_update_directory_access_date(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
     atime_ptr: *const u8,
@@ -2796,14 +2610,11 @@ pub extern "C" fn fod_rust_pg_repo_update_directory_access_date(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_append_journal_event(
+pub unsafe extern "C" fn fod_rust_pg_repo_append_journal_event(
     repo_ptr: *mut DbfsPgRepo,
     id_user: u32,
     directory_id: u64,
@@ -2839,14 +2650,11 @@ pub extern "C" fn fod_rust_pg_repo_append_journal_event(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_ensure_lock_schema(repo_ptr: *mut DbfsPgRepo) -> i32 {
+pub unsafe extern "C" fn fod_rust_pg_repo_ensure_lock_schema(repo_ptr: *mut DbfsPgRepo) -> i32 {
     let result = panic::catch_unwind(|| unsafe {
         if repo_ptr.is_null() {
             return 1;
@@ -2856,14 +2664,11 @@ pub extern "C" fn fod_rust_pg_repo_ensure_lock_schema(repo_ptr: *mut DbfsPgRepo)
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_prune_lock_leases(
+pub unsafe extern "C" fn fod_rust_pg_repo_prune_lock_leases(
     repo_ptr: *mut DbfsPgRepo,
     resource_kind_ptr: *const u8,
     resource_kind_len: usize,
@@ -2899,14 +2704,11 @@ pub extern "C" fn fod_rust_pg_repo_prune_lock_leases(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_delete_lock_lease(
+pub unsafe extern "C" fn fod_rust_pg_repo_delete_lock_lease(
     repo_ptr: *mut DbfsPgRepo,
     resource_kind_ptr: *const u8,
     resource_kind_len: usize,
@@ -2933,14 +2735,11 @@ pub extern "C" fn fod_rust_pg_repo_delete_lock_lease(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_prune_lock_range_leases(
+pub unsafe extern "C" fn fod_rust_pg_repo_prune_lock_range_leases(
     repo_ptr: *mut DbfsPgRepo,
     resource_kind_ptr: *const u8,
     resource_kind_len: usize,
@@ -2976,14 +2775,11 @@ pub extern "C" fn fod_rust_pg_repo_prune_lock_range_leases(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_delete_range_leases(
+pub unsafe extern "C" fn fod_rust_pg_repo_delete_range_leases(
     repo_ptr: *mut DbfsPgRepo,
     resource_kind_ptr: *const u8,
     resource_kind_len: usize,
@@ -3016,14 +2812,11 @@ pub extern "C" fn fod_rust_pg_repo_delete_range_leases(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_acquire_flock_lease(
+pub unsafe extern "C" fn fod_rust_pg_repo_acquire_flock_lease(
     repo_ptr: *mut DbfsPgRepo,
     resource_lock_id: i64,
     resource_kind_ptr: *const u8,
@@ -3058,14 +2851,11 @@ pub extern "C" fn fod_rust_pg_repo_acquire_flock_lease(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_release_flock_lease(
+pub unsafe extern "C" fn fod_rust_pg_repo_release_flock_lease(
     repo_ptr: *mut DbfsPgRepo,
     resource_kind_ptr: *const u8,
     resource_kind_len: usize,
@@ -3092,14 +2882,11 @@ pub extern "C" fn fod_rust_pg_repo_release_flock_lease(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_try_advisory_xact_lock(
+pub unsafe extern "C" fn fod_rust_pg_repo_try_advisory_xact_lock(
     repo_ptr: *mut DbfsPgRepo,
     resource_lock_id: i64,
 ) -> i32 {
@@ -3113,14 +2900,11 @@ pub extern "C" fn fod_rust_pg_repo_try_advisory_xact_lock(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_heartbeat_lock_lease(
+pub unsafe extern "C" fn fod_rust_pg_repo_heartbeat_lock_lease(
     repo_ptr: *mut DbfsPgRepo,
     resource_kind_ptr: *const u8,
     resource_kind_len: usize,
@@ -3150,14 +2934,11 @@ pub extern "C" fn fod_rust_pg_repo_heartbeat_lock_lease(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_heartbeat_lock_range_lease(
+pub unsafe extern "C" fn fod_rust_pg_repo_heartbeat_lock_range_lease(
     repo_ptr: *mut DbfsPgRepo,
     resource_kind_ptr: *const u8,
     resource_kind_len: usize,
@@ -3197,14 +2978,11 @@ pub extern "C" fn fod_rust_pg_repo_heartbeat_lock_range_lease(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_load_lock_range_state_blob(
+pub unsafe extern "C" fn fod_rust_pg_repo_load_lock_range_state_blob(
     repo_ptr: *mut DbfsPgRepo,
     resource_kind_ptr: *const u8,
     resource_kind_len: usize,
@@ -3237,14 +3015,11 @@ pub extern "C" fn fod_rust_pg_repo_load_lock_range_state_blob(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_persist_lock_range_state_blob(
+pub unsafe extern "C" fn fod_rust_pg_repo_persist_lock_range_state_blob(
     repo_ptr: *mut DbfsPgRepo,
     resource_kind_ptr: *const u8,
     resource_kind_len: usize,
@@ -3283,14 +3058,11 @@ pub extern "C" fn fod_rust_pg_repo_persist_lock_range_state_blob(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_list_directory_entries(
+pub unsafe extern "C" fn fod_rust_pg_repo_list_directory_entries(
     repo_ptr: *mut DbfsPgRepo,
     path_ptr: *const u8,
     path_len: usize,
@@ -3324,14 +3096,11 @@ pub extern "C" fn fod_rust_pg_repo_list_directory_entries(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_fetch_path_attrs(
+pub unsafe extern "C" fn fod_rust_pg_repo_fetch_path_attrs(
     repo_ptr: *mut DbfsPgRepo,
     path_ptr: *const u8,
     path_len: usize,
@@ -3365,14 +3134,11 @@ pub extern "C" fn fod_rust_pg_repo_fetch_path_attrs(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_rename_file_entry(
+pub unsafe extern "C" fn fod_rust_pg_repo_rename_file_entry(
     repo_ptr: *mut DbfsPgRepo,
     file_id: u64,
     new_parent_id: u64,
@@ -3405,14 +3171,11 @@ pub extern "C" fn fod_rust_pg_repo_rename_file_entry(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_rename_hardlink_entry(
+pub unsafe extern "C" fn fod_rust_pg_repo_rename_hardlink_entry(
     repo_ptr: *mut DbfsPgRepo,
     hardlink_id: u64,
     new_parent_id: u64,
@@ -3445,14 +3208,11 @@ pub extern "C" fn fod_rust_pg_repo_rename_hardlink_entry(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_rename_symlink_entry(
+pub unsafe extern "C" fn fod_rust_pg_repo_rename_symlink_entry(
     repo_ptr: *mut DbfsPgRepo,
     symlink_id: u64,
     new_parent_id: u64,
@@ -3485,14 +3245,11 @@ pub extern "C" fn fod_rust_pg_repo_rename_symlink_entry(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_rename_directory_entry(
+pub unsafe extern "C" fn fod_rust_pg_repo_rename_directory_entry(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
     new_parent_id: u64,
@@ -3525,14 +3282,11 @@ pub extern "C" fn fod_rust_pg_repo_rename_directory_entry(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_delete_hardlink_entry(
+pub unsafe extern "C" fn fod_rust_pg_repo_delete_hardlink_entry(
     repo_ptr: *mut DbfsPgRepo,
     hardlink_id: u64,
 ) -> i32 {
@@ -3545,14 +3299,11 @@ pub extern "C" fn fod_rust_pg_repo_delete_hardlink_entry(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_delete_symlink_entry(
+pub unsafe extern "C" fn fod_rust_pg_repo_delete_symlink_entry(
     repo_ptr: *mut DbfsPgRepo,
     symlink_id: u64,
 ) -> i32 {
@@ -3565,14 +3316,11 @@ pub extern "C" fn fod_rust_pg_repo_delete_symlink_entry(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_rust_pg_repo_delete_directory_entry(
+pub unsafe extern "C" fn fod_rust_pg_repo_delete_directory_entry(
     repo_ptr: *mut DbfsPgRepo,
     directory_id: u64,
 ) -> i32 {
@@ -3585,14 +3333,11 @@ pub extern "C" fn fod_rust_pg_repo_delete_directory_entry(
             Err(_) => 3,
         }
     });
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_pg_query_scalar_text(
+pub unsafe extern "C" fn fod_pg_query_scalar_text(
     conninfo_ptr: *const u8,
     conninfo_len: usize,
     sql_ptr: *const u8,
@@ -3628,14 +3373,11 @@ pub extern "C" fn fod_pg_query_scalar_text(
         write_boxed_output(value, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_pg_get_config_value(
+pub unsafe extern "C" fn fod_pg_get_config_value(
     conninfo_ptr: *const u8,
     conninfo_len: usize,
     key_ptr: *const u8,
@@ -3690,14 +3432,11 @@ pub extern "C" fn fod_pg_get_config_value(
         }
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_crc32(input_ptr: *const u8, input_len: usize) -> u32 {
+pub unsafe extern "C" fn fod_crc32(input_ptr: *const u8, input_len: usize) -> u32 {
     unsafe {
         match slice_from_raw(input_ptr, input_len) {
             Some(slice) => crc32_bytes(slice),
@@ -3744,7 +3483,7 @@ pub extern "C" fn fod_read_ahead_blocks(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_read_fetch_bounds(
+pub unsafe extern "C" fn fod_read_fetch_bounds(
     total_blocks: u64,
     requested_first: u64,
     requested_last: u64,
@@ -3784,14 +3523,11 @@ pub extern "C" fn fod_read_fetch_bounds(
         0
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_read_slice_plan(
+pub unsafe extern "C" fn fod_read_slice_plan(
     file_size: u64,
     offset: u64,
     size: u64,
@@ -3834,10 +3570,7 @@ pub extern "C" fn fod_read_slice_plan(
         0
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
@@ -3981,7 +3714,7 @@ pub extern "C" fn fod_write_copy_plan(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_sorted_contiguous_ranges(
+pub unsafe extern "C" fn fod_sorted_contiguous_ranges(
     values_ptr: *const u64,
     values_len: usize,
     out_ptr: *mut *mut DbfsRange,
@@ -4002,14 +3735,11 @@ pub extern "C" fn fod_sorted_contiguous_ranges(
         write_boxed_output(ranges, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_dirty_block_ranges_plan(
+pub unsafe extern "C" fn fod_dirty_block_ranges_plan(
     file_size: u64,
     block_size: u64,
     dirty_ptr: *const u64,
@@ -4039,14 +3769,11 @@ pub extern "C" fn fod_dirty_block_ranges_plan(
         write_boxed_output(ranges, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_persist_layout_plan(
+pub unsafe extern "C" fn fod_persist_layout_plan(
     file_size: u64,
     block_size: u64,
     truncate_pending: u8,
@@ -4080,14 +3807,11 @@ pub extern "C" fn fod_persist_layout_plan(
         write_boxed_output(ranges, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_persist_block_plan(
+pub unsafe extern "C" fn fod_persist_block_plan(
     file_size: u64,
     block_size: u64,
     truncate_pending: u8,
@@ -4129,14 +3853,11 @@ pub extern "C" fn fod_persist_block_plan(
         write_boxed_output(blocks, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_persist_block_crc_plan(
+pub unsafe extern "C" fn fod_persist_block_crc_plan(
     block_size: u64,
     blocks_ptr: *const DbfsPersistBlockInput,
     blocks_len: usize,
@@ -4176,14 +3897,11 @@ pub extern "C" fn fod_persist_block_crc_plan(
         write_boxed_output(rows, out_ptr, out_len)
     });
 
-    match result {
-        Ok(status) => status,
-        Err(_) => 2,
-    }
+    result.unwrap_or(2)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_free_copy_segments(ptr: *mut DbfsCopySegment, len: usize) {
+pub unsafe extern "C" fn fod_free_copy_segments(ptr: *mut DbfsCopySegment, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }
@@ -4194,7 +3912,7 @@ pub extern "C" fn fod_free_copy_segments(ptr: *mut DbfsCopySegment, len: usize) 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_free_ranges(ptr: *mut DbfsRange, len: usize) {
+pub unsafe extern "C" fn fod_free_ranges(ptr: *mut DbfsRange, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }
@@ -4205,7 +3923,7 @@ pub extern "C" fn fod_free_ranges(ptr: *mut DbfsRange, len: usize) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_free_persist_blocks(ptr: *mut DbfsPersistBlockPlanEntry, len: usize) {
+pub unsafe extern "C" fn fod_free_persist_blocks(ptr: *mut DbfsPersistBlockPlanEntry, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }
@@ -4216,7 +3934,7 @@ pub extern "C" fn fod_free_persist_blocks(ptr: *mut DbfsPersistBlockPlanEntry, l
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_free_persist_crc_rows(ptr: *mut DbfsPersistCrcPlanEntry, len: usize) {
+pub unsafe extern "C" fn fod_free_persist_crc_rows(ptr: *mut DbfsPersistCrcPlanEntry, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }
@@ -4227,7 +3945,7 @@ pub extern "C" fn fod_free_persist_crc_rows(ptr: *mut DbfsPersistCrcPlanEntry, l
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_free_bytes(ptr: *mut u8, len: usize) {
+pub unsafe extern "C" fn fod_free_bytes(ptr: *mut u8, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }
@@ -4238,7 +3956,7 @@ pub extern "C" fn fod_free_bytes(ptr: *mut u8, len: usize) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_free_read_blocks(ptr: *mut DbfsReadBlock, len: usize) {
+pub unsafe extern "C" fn fod_free_read_blocks(ptr: *mut DbfsReadBlock, len: usize) {
     if ptr.is_null() || len == 0 {
         return;
     }
@@ -4272,12 +3990,28 @@ mod tests {
         DbfsReadBlock, DbfsReadBounds, DbfsReadSlicePlan, DbfsWriteCopyPlan,
     };
 
+    macro_rules! unsafe_ffi {
+        ($expr:expr) => {{
+            // SAFETY: FFI tests pass pointers to live local buffers or explicit
+            // null pointers when validating defensive error paths.
+            unsafe { $expr }
+        }};
+    }
+
     #[test]
     fn exports_copy_plan_segments() {
         let mut out_ptr: *mut DbfsCopySegment = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_copy_plan(10, 20, 8193, 4096, 4, &mut out_ptr, &mut out_len);
+        let status = unsafe_ffi!(fod_copy_plan(
+            10,
+            20,
+            8193,
+            4096,
+            4,
+            &mut out_ptr,
+            &mut out_len
+        ));
         assert_eq!(status, 0);
         assert!(!out_ptr.is_null());
         assert_eq!(out_len, 3);
@@ -4288,7 +4022,7 @@ mod tests {
         assert_eq!(segments[0].len, 4096);
         assert_eq!(segments[2].len, 1);
 
-        fod_free_copy_segments(out_ptr, out_len);
+        unsafe_ffi!(fod_free_copy_segments(out_ptr, out_len));
     }
 
     #[test]
@@ -4297,7 +4031,7 @@ mod tests {
         let mut out_ptr: *mut DbfsRange = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_copy_pack(
+        let status = unsafe_ffi!(fod_copy_pack(
             100,
             4 * 4096,
             4096,
@@ -4305,7 +4039,7 @@ mod tests {
             mask.len(),
             &mut out_ptr,
             &mut out_len,
-        );
+        ));
         assert_eq!(status, 0);
         let ranges = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
         assert_eq!(
@@ -4321,7 +4055,7 @@ mod tests {
                 },
             ]
         );
-        fod_free_ranges(out_ptr, out_len);
+        unsafe_ffi!(fod_free_ranges(out_ptr, out_len));
     }
 
     #[test]
@@ -4330,18 +4064,18 @@ mod tests {
         let mut out_ptr: *mut u8 = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_persist_pad(
+        let status = unsafe_ffi!(fod_persist_pad(
             payload.as_ptr(),
             payload.len(),
             2,
             5,
             &mut out_ptr,
             &mut out_len,
-        );
+        ));
         assert_eq!(status, 0);
         let bytes = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
         assert_eq!(bytes, &[b'a', b'b', 0, 0, 0]);
-        fod_free_bytes(out_ptr, out_len);
+        unsafe_ffi!(fod_free_bytes(out_ptr, out_len));
     }
 
     #[test]
@@ -4363,7 +4097,7 @@ mod tests {
         let mut out_ptr: *mut u8 = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_read_assemble(
+        let status = unsafe_ffi!(fod_read_assemble(
             blocks.as_ptr(),
             blocks.len(),
             0,
@@ -4373,11 +4107,11 @@ mod tests {
             4,
             &mut out_ptr,
             &mut out_len,
-        );
+        ));
         assert_eq!(status, 0);
         let bytes = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
         assert_eq!(bytes, b"bcdefg");
-        fod_free_bytes(out_ptr, out_len);
+        unsafe_ffi!(fod_free_bytes(out_ptr, out_len));
     }
 
     #[test]
@@ -4387,7 +4121,7 @@ mod tests {
         let mut out_ptr: *mut DbfsRange = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_copy_dedupe(
+        let status = unsafe_ffi!(fod_copy_dedupe(
             0,
             payload.as_ptr(),
             payload.len(),
@@ -4396,43 +4130,46 @@ mod tests {
             4,
             &mut out_ptr,
             &mut out_len,
-        );
+        ));
         assert_eq!(status, 0);
         let ranges = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0].start, 0);
         assert_eq!(ranges[0].end, 4);
-        fod_free_ranges(out_ptr, out_len);
+        unsafe_ffi!(fod_free_ranges(out_ptr, out_len));
     }
 
     #[test]
     fn exports_promote_hardlink_to_primary() {
         let mut out_promoted = 0u8;
-        let status = fod_rust_pg_repo_promote_hardlink_to_primary(
+        let status = unsafe_ffi!(fod_rust_pg_repo_promote_hardlink_to_primary(
             std::ptr::null_mut(),
             1,
             &mut out_promoted,
-        );
+        ));
         assert_eq!(status, 1);
         assert_eq!(out_promoted, 0);
     }
 
     #[test]
     fn exports_set_file_size() {
-        let status = fod_rust_pg_repo_set_file_size(std::ptr::null_mut(), 1, 2);
+        let status = unsafe_ffi!(fod_rust_pg_repo_set_file_size(std::ptr::null_mut(), 1, 2));
         assert_eq!(status, 1);
     }
 
     #[test]
     fn exports_purge_primary_file() {
-        let status = fod_rust_pg_repo_purge_primary_file(std::ptr::null_mut(), 1);
+        let status = unsafe_ffi!(fod_rust_pg_repo_purge_primary_file(std::ptr::null_mut(), 1));
         assert_eq!(status, 1);
     }
 
     #[test]
     fn exports_crc32() {
-        assert_eq!(fod_crc32(b"123456789".as_ptr(), 9), 0xCBF4_3926);
-        assert_eq!(fod_crc32(std::ptr::null(), 0), 0);
+        assert_eq!(
+            unsafe_ffi!(fod_crc32(b"123456789".as_ptr(), 9)),
+            0xCBF4_3926
+        );
+        assert_eq!(unsafe_ffi!(fod_crc32(std::ptr::null(), 0)), 0);
     }
 
     #[test]
@@ -4464,12 +4201,12 @@ mod tests {
         let mut out_ptr: *mut DbfsRange = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_sorted_contiguous_ranges(
+        let status = unsafe_ffi!(fod_sorted_contiguous_ranges(
             missing.as_ptr(),
             missing.len(),
             &mut out_ptr,
             &mut out_len,
-        );
+        ));
         assert_eq!(status, 0);
         let ranges = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
         assert_eq!(
@@ -4480,7 +4217,7 @@ mod tests {
                 DbfsRange { start: 10, end: 11 },
             ]
         );
-        fod_free_ranges(out_ptr, out_len);
+        unsafe_ffi!(fod_free_ranges(out_ptr, out_len));
     }
 
     #[test]
@@ -4490,7 +4227,7 @@ mod tests {
         let mut out_ptr: *mut DbfsRange = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_dirty_block_ranges_plan(
+        let status = unsafe_ffi!(fod_dirty_block_ranges_plan(
             65536,
             4096,
             dirty.as_ptr(),
@@ -4498,7 +4235,7 @@ mod tests {
             &mut total_blocks,
             &mut out_ptr,
             &mut out_len,
-        );
+        ));
         assert_eq!(status, 0);
         assert_eq!(total_blocks, 16);
         let ranges = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
@@ -4510,7 +4247,7 @@ mod tests {
                 DbfsRange { start: 10, end: 11 },
             ]
         );
-        fod_free_ranges(out_ptr, out_len);
+        unsafe_ffi!(fod_free_ranges(out_ptr, out_len));
     }
 
     #[test]
@@ -4521,7 +4258,7 @@ mod tests {
         let mut out_ptr: *mut DbfsRange = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_persist_layout_plan(
+        let status = unsafe_ffi!(fod_persist_layout_plan(
             65536,
             4096,
             1,
@@ -4531,7 +4268,7 @@ mod tests {
             &mut truncate_only,
             &mut out_ptr,
             &mut out_len,
-        );
+        ));
         assert_eq!(status, 0);
         assert_eq!(total_blocks, 16);
         assert_eq!(truncate_only, 0);
@@ -4544,7 +4281,7 @@ mod tests {
                 DbfsRange { start: 10, end: 11 },
             ]
         );
-        fod_free_ranges(out_ptr, out_len);
+        unsafe_ffi!(fod_free_ranges(out_ptr, out_len));
     }
 
     #[test]
@@ -4555,7 +4292,7 @@ mod tests {
         let mut out_ptr: *mut DbfsPersistBlockPlanEntry = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_persist_block_plan(
+        let status = unsafe_ffi!(fod_persist_block_plan(
             65536,
             4096,
             1,
@@ -4565,7 +4302,7 @@ mod tests {
             &mut truncate_only,
             &mut out_ptr,
             &mut out_len,
-        );
+        ));
         assert_eq!(status, 0);
         assert_eq!(total_blocks, 16);
         assert_eq!(truncate_only, 0);
@@ -4599,7 +4336,7 @@ mod tests {
                 },
             ]
         );
-        fod_free_persist_blocks(out_ptr, out_len);
+        unsafe_ffi!(fod_free_persist_blocks(out_ptr, out_len));
     }
 
     #[test]
@@ -4629,13 +4366,13 @@ mod tests {
         let mut out_ptr: *mut DbfsPersistCrcPlanEntry = std::ptr::null_mut();
         let mut out_len: usize = 0;
 
-        let status = fod_persist_block_crc_plan(
+        let status = unsafe_ffi!(fod_persist_block_crc_plan(
             4096,
             inputs.as_ptr(),
             inputs.len(),
             &mut out_ptr,
             &mut out_len,
-        );
+        ));
         assert_eq!(status, 0);
         let rows = unsafe { std::slice::from_raw_parts(out_ptr, out_len) };
         assert_eq!(
@@ -4658,7 +4395,7 @@ mod tests {
                 },
             ]
         );
-        fod_free_persist_crc_rows(out_ptr, out_len);
+        unsafe_ffi!(fod_free_persist_crc_rows(out_ptr, out_len));
     }
 
     #[test]
@@ -4724,17 +4461,19 @@ mod tests {
         };
 
         assert_eq!(
-            fod_read_fetch_bounds(0, 0, 0, 2, 8, 0, 256, 0, 8, &mut out),
+            unsafe_ffi!(fod_read_fetch_bounds(0, 0, 0, 2, 8, 0, 256, 0, 8, &mut out)),
             1
         );
         assert_eq!(
-            fod_read_fetch_bounds(4, 0, 0, 2, 8, 0, 256, 0, 8, &mut out),
+            unsafe_ffi!(fod_read_fetch_bounds(4, 0, 0, 2, 8, 0, 256, 0, 8, &mut out)),
             0
         );
         assert_eq!(out.fetch_first, 0);
         assert_eq!(out.fetch_last, 3);
         assert_eq!(
-            fod_read_fetch_bounds(32, 2, 3, 2, 8, 1, 256, 1, 8, &mut out),
+            unsafe_ffi!(fod_read_fetch_bounds(
+                32, 2, 3, 2, 8, 1, 256, 1, 8, &mut out
+            )),
             0
         );
         assert_eq!(out.fetch_first, 2);
@@ -4750,7 +4489,9 @@ mod tests {
         };
 
         assert_eq!(
-            fod_read_slice_plan(16, 0, 4, 4, 2, 8, 0, 256, 0, 8, &mut out),
+            unsafe_ffi!(fod_read_slice_plan(
+                16, 0, 4, 4, 2, 8, 0, 256, 0, 8, &mut out
+            )),
             0
         );
         assert_eq!(

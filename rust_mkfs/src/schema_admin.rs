@@ -35,8 +35,7 @@ pub fn derive_schema_admin_secret(
         let copy_len = source.len().min(salt_bytes.len());
         salt_bytes[..copy_len].copy_from_slice(&source[..copy_len]);
     } else {
-        use rand::RngCore;
-        rand::thread_rng().fill_bytes(&mut salt_bytes);
+        rand::fill(&mut salt_bytes);
     }
     let mut output = [0u8; 32];
     pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt_bytes, iterations, &mut output);

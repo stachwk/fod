@@ -6,6 +6,7 @@ use std::env;
 
 const DEFAULT_PG_HOST: &str = "127.0.0.1";
 const DEFAULT_PG_PORT: u16 = 5432;
+type EndpointModeValues = (Option<String>, Option<String>, Option<String>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PgEndpointRole {
@@ -238,9 +239,7 @@ pub fn resolve_pg_endpoint_config(
     })
 }
 
-fn endpoint_mode_values(
-    db_config: &HashMap<String, String>,
-) -> Result<(Option<String>, Option<String>, Option<String>), String> {
+fn endpoint_mode_values(db_config: &HashMap<String, String>) -> Result<EndpointModeValues, String> {
     let env_primary = nonempty_env("FOD_PG_PRIMARY_HOSTS");
     let env_replica = nonempty_env("FOD_PG_REPLICA_HOSTS");
     let env_hosts = nonempty_env("FOD_PG_HOSTS");

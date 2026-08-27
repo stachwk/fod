@@ -3,7 +3,7 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -59,16 +59,16 @@ fn write_live_config() -> PathBuf {
     config_path
 }
 
-fn endpoint_config(config_path: &PathBuf) -> Output {
+fn endpoint_config(config_path: &Path) -> Output {
     endpoint_config_with_env(config_path, &[])
 }
 
-fn endpoint_config_with_env(config_path: &PathBuf, overrides: &[(&str, &str)]) -> Output {
+fn endpoint_config_with_env(config_path: &Path, overrides: &[(&str, &str)]) -> Output {
     config_command_with_env(config_path, "endpoint-config", overrides)
 }
 
 fn config_command_with_env(
-    config_path: &PathBuf,
+    config_path: &Path,
     subcommand: &str,
     overrides: &[(&str, &str)],
 ) -> Output {
@@ -254,6 +254,6 @@ fn endpoint_probe_reports_live_server_without_enabling_routing() {
         .as_array()
         .unwrap();
     for purpose in ["read", "write", "control", "lease"] {
-        assert!(eligible.iter().any(|value| value == purpose));
+        assert!(eligible.contains(&serde_json::Value::String(purpose.to_string())));
     }
 }

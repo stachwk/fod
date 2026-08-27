@@ -63,6 +63,11 @@ edition = "2021"
 [workspace]
 CARGOEOF
 printf '%s\n' 'pub fn fixture() {}' > "${fixture}/src/lib.rs"
+cat > "${fixture}/target/CACHEDIR.TAG" <<'CACHEEOF'
+Signature: 8a477f597d28d172789f06886806bc55
+# This file is a cache directory tag created by cargo.
+# For information about cache directory tags see https://bford.info/cachedir/
+CACHEEOF
 printf '%s\n' 'sentinel' > "${fixture}/target/debug/fod-clean-policy-sentinel"
 
 (

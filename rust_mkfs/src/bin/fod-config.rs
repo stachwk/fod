@@ -82,7 +82,7 @@ fn main() {
             };
             let params = pg_config::resolve_pg_connection_params(
                 &db_section,
-                &config_path.parent().unwrap_or(Path::new(".")),
+                config_path.parent().unwrap_or(Path::new(".")),
             );
             let mut map = serde_json::Map::new();
             for (key, value) in params {
@@ -141,7 +141,7 @@ fn main() {
             let health_registry = PgEndpointHealthRegistry::default();
             let base_params = pg_config::resolve_pg_connection_params(
                 &db_section,
-                &config_path.parent().unwrap_or(Path::new(".")),
+                config_path.parent().unwrap_or(Path::new(".")),
             );
             let mut reachable_count = 0usize;
             let mut failed_count = 0usize;

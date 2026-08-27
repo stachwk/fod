@@ -2844,3 +2844,51 @@ metadata for new objects, but it does not replace a later
 `FUSE_SETXATTR security.selinux` relabel of an existing inode. On the tested
 Rocky stack, the per-inode relabel request still stops in VFS/SELinux before it
 reaches FOD.
+
+## 2026-08-28 - Dependency refresh and Rust 1.98 follow-up on working state based on `fd168a8`
+
+The FOD 3.3.25 dependency refresh moved the remaining outdated compatible Rust
+crates to their current releases under the existing MSRV contract:
+`base64` 0.23.1, `sha2` 0.11.0, `hmac` 0.13.0, `pbkdf2` 0.13.0, and `rand`
+0.10.2. A follow-up `cargo update --dry-run --verbose` reported zero additional
+packages to lock to newer compatible versions.
+
+`rand` 0.10 removed the old `thread_rng().fill_bytes(...)` call pattern used by
+the schema admin salt generation path. The replacement is `rand::fill(...)`,
+which preserves the same behavior while matching the new API and still passes
+the Rust 1.85 MSRV gate.
+
+Rust 1.98's Clippy now rejects public FFI functions that may dereference raw
+pointers unless they are declared unsafe for Rust callers. The hotpath C ABI
+exports that accept raw pointers were updated to `pub unsafe extern "C" fn`.
+This does not change the exported C ABI, but it correctly models the Rust-side
+calling contract. Existing FFI tests now wrap those calls in a local helper with
+one safety comment describing the test-owned buffers and intentional null
+pointer negative cases.
+
+Cargo 1.98 tightened `cargo clean` behavior for custom or synthetic target
+directories. The target cleanup policy tests now create valid `CACHEDIR.TAG`
+markers in their fixtures before invoking cleanup paths, matching Cargo's cache
+directory validation while preserving the intended sentinel checks.
+
+Validation on the pre-commit FOD 3.3.25 working tree based on `fd168a8`:
+
+| Command/profile | Result |
+| --- | --- |
+| `make rust-production-toolchain-check` | passed |
+| `make rust-candidate-check` | passed |
+| `make rust-msrv-check` | passed on Rust 1.85 |
+| `make rust-candidate-clippy` | passed; pre-existing warnings remain non-blocking |
+| `cargo check --workspace --locked` | passed |
+| `cargo test --workspace --locked --lib --bins` | passed |
+| `cargo test --workspace --locked --tests` | stopped at `lock_backend_smoke` because it requires sudo |
+| sudo `lock_backend_smoke` binary | passed, 5 tests |
+| `QNAP=0 make test-all` | passed; SELinux xattr/mount-label paths skipped where unsupported by host |
+| `cargo fmt --all -- --check` | passed |
+| `git diff --check` | passed |
+| `cargo test --locked -p fod-rust-hotpath --test copy_dedupe_benchmark` | passed |
+
+The SELinux-related skips in `test-all` match the previously documented Rocky
+ordinary-FUSE model: operational SELinux enforcement through `fusefs_t` is
+supported, while per-inode `security.selinux` relabeling remains a host
+mount-stack capability outside FOD's direct control.

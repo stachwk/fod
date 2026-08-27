@@ -12,8 +12,8 @@ path = "src/main.rs"
 clap = { version = "=4.6.6", features = ["derive"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
-base64 = "0.22"
-sha2 = "0.10"
+base64 = "0.23"
+sha2 = "0.11"
 walkdir = "2"
 fod_rust_hotpath = { package = "fod-rust-hotpath", path = "../rust_hotpath" }
 fod_rust_runtime = { package = "fod-rust-runtime", path = "../rust_runtime" }

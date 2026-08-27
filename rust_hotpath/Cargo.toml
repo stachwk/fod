@@ -10,7 +10,7 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 fod_rust_runtime = { package = "fod-rust-runtime", path = "../rust_runtime" }
 fod_rust_monitor = { package = "fod-rust-monitor", path = "../rust_monitor" }
-sha2 = "0.10.9"
+sha2 = "0.11.0"

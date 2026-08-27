@@ -21,6 +21,11 @@ fail() {
 }
 
 mkdir -p "${repo_root}/target/test-locking"
+cat > "${repo_root}/target/test-locking/CACHEDIR.TAG" <<'CACHEEOF'
+Signature: 8a477f597d28d172789f06886806bc55
+# This file is a cache directory tag created by cargo.
+# For information about cache directory tags see https://bford.info/cachedir/
+CACHEEOF
 "${helper}" status > "${tmp}/status.txt"
 grep -q '^aux_name=test-locking$' "${tmp}/status.txt" || \
   fail "status did not select test-locking"
@@ -85,6 +90,11 @@ edition = "2021"
 [workspace]
 CARGOEOF
 printf '%s\n' 'pub fn fixture() {}' > "${fixture}/src/lib.rs"
+cat > "${fixture}/target/test-locking/CACHEDIR.TAG" <<'CACHEEOF'
+Signature: 8a477f597d28d172789f06886806bc55
+# This file is a cache directory tag created by cargo.
+# For information about cache directory tags see https://bford.info/cachedir/
+CACHEEOF
 printf '%s\n' 'aux' > "${fixture}/target/test-locking/debug/aux-sentinel"
 printf '%s\n' 'debug' > "${fixture}/target/debug/main-debug-sentinel"
 printf '%s\n' 'release' > "${fixture}/target/release/main-release-sentinel"

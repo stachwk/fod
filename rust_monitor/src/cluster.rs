@@ -385,10 +385,10 @@ fn stale_sample_threshold_seconds(publish_interval_millis: Option<u64>) -> u64 {
         .max(publish_interval_seconds.saturating_mul(STALE_SAMPLE_INTERVAL_MULTIPLIER))
 }
 
-fn previous_session<'a>(
-    previous: Option<&'a ClusterSnapshot>,
+fn previous_session(
+    previous: Option<&ClusterSnapshot>,
     session_id: u64,
-) -> Option<&'a ClusterSessionSnapshot> {
+) -> Option<&ClusterSessionSnapshot> {
     previous?
         .sessions
         .iter()
@@ -427,7 +427,7 @@ fn avg_bytes(bytes: u64, tasks: u64) -> u64 {
     if tasks == 0 {
         0
     } else {
-        bytes / tasks
+        bytes.checked_div(tasks).unwrap_or(0)
     }
 }
 
@@ -435,7 +435,10 @@ fn per_task_milli(numerator: u64, denominator: u64) -> u64 {
     if denominator == 0 {
         0
     } else {
-        numerator.saturating_mul(1_000) / denominator
+        numerator
+            .saturating_mul(1_000)
+            .checked_div(denominator)
+            .unwrap_or(0)
     }
 }
 

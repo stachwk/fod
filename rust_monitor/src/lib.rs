@@ -961,11 +961,9 @@ impl DbRepoPayloadObservability {
         state: &mut DbRepoPayloadBudgetState,
     ) -> Vec<Arc<DbRepoPayloadBudgetWaiter>> {
         let mut ready = Vec::new();
-        loop {
-            let Some(waiter) = state.waiters.front() else {
-                break;
-            };
-            if !self.request_fits_budget(state.reserved_bytes, waiter.requested_bytes) {
+        while let Some(waiter) = state.waiters.front() {
+            let requested_bytes = waiter.requested_bytes;
+            if !self.request_fits_budget(state.reserved_bytes, requested_bytes) {
                 break;
             }
             let waiter = state.waiters.pop_front().expect("front waiter disappeared");
@@ -977,14 +975,14 @@ impl DbRepoPayloadObservability {
                 Some(value) => state.queued_requests = value,
                 None => state.accounting_errors = state.accounting_errors.saturating_add(1),
             }
-            match state.queued_bytes.checked_sub(waiter.requested_bytes) {
+            match state.queued_bytes.checked_sub(requested_bytes) {
                 Some(value) => state.queued_bytes = value,
                 None => {
                     state.queued_bytes = 0;
                     state.accounting_errors = state.accounting_errors.saturating_add(1);
                 }
             }
-            match state.reserved_bytes.checked_add(waiter.requested_bytes) {
+            match state.reserved_bytes.checked_add(requested_bytes) {
                 Some(value) => state.reserved_bytes = value,
                 None => {
                     state.reserved_bytes = u64::MAX;
@@ -993,7 +991,7 @@ impl DbRepoPayloadObservability {
             }
             state.peak_reserved_bytes = state.peak_reserved_bytes.max(state.reserved_bytes);
             state.admission_count = state.admission_count.saturating_add(1);
-            if waiter.requested_bytes > self.in_flight_limit_bytes {
+            if requested_bytes > self.in_flight_limit_bytes {
                 state.oversized_admissions = state.oversized_admissions.saturating_add(1);
             }
             state.serving_ticket = state.serving_ticket.wrapping_add(1);
@@ -1527,28 +1525,30 @@ pub struct SharedMonitorSessionStats {
     pub timings: SharedMonitorTimingStats,
 }
 
+pub struct SharedMonitorSessionStatsInput<'a> {
+    pub sample_seq: u64,
+    pub publish_interval_millis: u64,
+    pub read: &'a LogicalTaskObservabilitySnapshot,
+    pub write: &'a LogicalTaskObservabilitySnapshot,
+    pub copy: &'a LogicalTaskObservabilitySnapshot,
+    pub database: &'a DbRepoObservabilitySnapshot,
+    pub source: SharedMonitorSourceStats,
+    pub timings: SharedMonitorTimingStats,
+}
+
 impl SharedMonitorSessionStats {
-    pub fn from_snapshots(
-        sample_seq: u64,
-        publish_interval_millis: u64,
-        read: &LogicalTaskObservabilitySnapshot,
-        write: &LogicalTaskObservabilitySnapshot,
-        copy: &LogicalTaskObservabilitySnapshot,
-        database: &DbRepoObservabilitySnapshot,
-        source: SharedMonitorSourceStats,
-        timings: SharedMonitorTimingStats,
-    ) -> Self {
+    pub fn from_snapshots(input: SharedMonitorSessionStatsInput<'_>) -> Self {
         Self {
             schema_version: SHARED_MONITOR_STATS_SCHEMA_VERSION,
-            sample_seq,
-            publish_interval_millis,
-            source,
-            read: SharedMonitorTaskStats::from_snapshot(read),
-            write: SharedMonitorTaskStats::from_snapshot(write),
-            copy: SharedMonitorTaskStats::from_snapshot(copy),
-            database: SharedMonitorDatabaseStats::from_snapshot(database),
-            persistence: SharedMonitorPersistenceStats::from_snapshot(database),
-            timings,
+            sample_seq: input.sample_seq,
+            publish_interval_millis: input.publish_interval_millis,
+            source: input.source,
+            read: SharedMonitorTaskStats::from_snapshot(input.read),
+            write: SharedMonitorTaskStats::from_snapshot(input.write),
+            copy: SharedMonitorTaskStats::from_snapshot(input.copy),
+            database: SharedMonitorDatabaseStats::from_snapshot(input.database),
+            persistence: SharedMonitorPersistenceStats::from_snapshot(input.database),
+            timings: input.timings,
         }
     }
 

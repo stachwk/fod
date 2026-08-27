@@ -6274,3 +6274,94 @@ git diff HEAD~1..HEAD -- commands.md conclusions.md docs/FOD_CURRENT_ACTION_PLAN
 git status --short --branch
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
+
+## 2026-08-28 - Rust dependency refresh for FOD 3.3.25
+
+Repository state while starting the work: `fd168a8`. Validation was performed
+on the pre-commit working tree based on `fd168a8`, with `fod_version.txt`
+advanced to `3.3.25`.
+
+Context and dependency review commands:
+
+```bash
+timeout 30 bash -lc 'source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "dependency update Cargo.lock libraries version policy"'
+git status --short --branch
+git rev-parse --short HEAD
+cat fod_version.txt
+cargo update --dry-run --verbose
+cargo info base64@0.23.1
+cargo info hmac@0.13.0
+cargo info pbkdf2@0.13.0
+cargo info rand@0.10.2
+cargo info sha2@0.11.0
+cargo update
+cargo update --dry-run --verbose
+rg -n 'name = "(base64|sha2|hmac|pbkdf2|rand|rand_chacha|rand_core|getrandom|generic-array|chacha20|digest)"|version = "(0\.23\.1|0\.11\.0|0\.13\.0|0\.10\.2|0\.10\.3|0\.4\.3|0\.14\.7|0\.14\.9|0\.4\.14|0\.12\.1|0\.9\.3|0\.6\.4)"' Cargo.lock
+```
+
+Implementation and diagnosis commands:
+
+```bash
+rg -n 'rand::|RngCore|thread_rng|pbkdf2|Sha256|base64|sha2' rust_hotpath rust_indexer rust_mkfs
+rg -n 'pub extern "C" fn|unsafe extern "C" fn|not_unsafe_ptr_arg_deref' rust_hotpath/src/ffi.rs rust_hotpath/tests
+perl -0pi -e 's/match result \{\n        Ok\(status\) => status,\n        Err\(_\) => 2,\n    \}/result.unwrap_or(2)/g' rust_hotpath/src/ffi.rs
+cargo test --locked -p fod-rust-hotpath --no-run
+make rust-candidate-clippy
+make test-target-disk-clean-policy
+make test-aux-target-clean-policy
+git diff -- Cargo.toml
+git diff -- rust_hotpath/src/ffi.rs
+git diff -- tests/test_target_disk_clean_policy.sh tests/test_aux_target_clean_policy.sh
+```
+
+Validation commands:
+
+```bash
+make cargo-profile-show
+make rust-production-toolchain-check
+make test-rust-release-defaults-policy
+make rust-candidate-check
+make rust-msrv-check
+make rust-candidate-clippy
+cargo check --workspace --locked
+cargo test --workspace --locked --lib --bins
+cargo test --workspace --locked --tests
+sudo -n true
+sudo -n env HOME="$HOME" PATH="$PATH" FOD_TEST_USE_EXISTING_TARGET=1 target/debug/deps/lock_backend_smoke-243a23989af9552e --nocapture
+findmnt -rn | rg 'fod-rust-fuse|/tmp/fod'
+ps -ef | rg 'fod-rust-fuse|target/debug/deps/lock_backend_smoke' | rg -v 'rg '
+make test-version
+QNAP=0 make test-all
+cargo fmt --all -- --check
+git diff --check
+cargo update --dry-run --verbose
+cargo test --locked -p fod-rust-hotpath --test copy_dedupe_benchmark
+```
+
+Review and finalization commands:
+
+```bash
+git status --short --branch
+git diff --stat
+git diff -- Cargo.toml fod_version.txt rust_hotpath/Cargo.toml rust_indexer/Cargo.toml rust_mkfs/Cargo.toml
+git diff -- rust_hotpath/src/ffi.rs
+git diff -- rust_fuse/src/fs.rs rust_monitor/src/lib.rs rust_monitor/src/cluster.rs rust_runtime/src/lib.rs rust_runtime/src/ini_config/pg_endpoints.rs rust_mkfs/src/schema_admin.rs rust_mkfs/src/bin/fod-change.rs rust_mkfs/src/bin/fod-config.rs rust_mkfs/tests/fod_pg_endpoints.rs tests/test_target_disk_clean_policy.sh tests/test_aux_target_clean_policy.sh
+git show HEAD:rust_hotpath/src/ffi.rs | sed -n '200,245p'
+rg -n '^\#\[unsafe\(no_mangle\)\]|^pub (unsafe )?extern "C" fn|^fn fod_copy_dedupe_crc_table_enabled_from_env' rust_hotpath/src/ffi.rs
+rg --files | rg '(^|/)(Cargo\.toml|Cargo\.lock|requirements.*\.txt|pyproject\.toml|poetry\.lock|package\.json|pnpm-lock\.yaml|yarn\.lock|package-lock\.json|go\.mod|go\.sum)$'
+git diff --check
+cat fod_version.txt
+git add Cargo.lock Cargo.toml commands.md conclusions.md fod_version.txt rust_fuse/src/fs.rs rust_hotpath/Cargo.toml rust_hotpath/src/ffi.rs rust_hotpath/tests/copy_dedupe_benchmark.rs rust_indexer/Cargo.toml rust_mkfs/Cargo.toml rust_mkfs/src/bin/fod-change.rs rust_mkfs/src/bin/fod-config.rs rust_mkfs/src/schema_admin.rs rust_mkfs/tests/fod_pg_endpoints.rs rust_monitor/src/cluster.rs rust_monitor/src/lib.rs rust_runtime/src/ini_config/pg_endpoints.rs rust_runtime/src/lib.rs tests/test_aux_target_clean_policy.sh tests/test_target_disk_clean_policy.sh
+git commit -m "FOD 3.3.25: update Rust dependencies for 1.98"
+git show --stat --oneline --decorate --no-renames HEAD
+git show --check --format=fuller HEAD
+git diff HEAD~1..HEAD -- Cargo.toml fod_version.txt rust_hotpath/Cargo.toml rust_indexer/Cargo.toml rust_mkfs/Cargo.toml tests/test_target_disk_clean_policy.sh tests/test_aux_target_clean_policy.sh
+git status --short --branch
+git add commands.md
+git commit --amend --no-edit
+git show --stat --oneline --decorate --no-renames HEAD
+git show --check --format=fuller HEAD
+git diff --check HEAD~1..HEAD
+git status --short --branch
+timeout 120 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex'
+```

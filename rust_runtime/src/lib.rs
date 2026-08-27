@@ -283,7 +283,7 @@ pub fn statvfs_total_bytes(path: &Path) -> Result<u64, String> {
         return Err(format!("statvfs failed for {}", path.display()));
     }
     let stats = unsafe { stats.assume_init() };
-    Ok((stats.f_frsize as u64).saturating_mul(stats.f_blocks as u64))
+    Ok(stats.f_frsize.saturating_mul(stats.f_blocks))
 }
 
 #[cfg(not(unix))]
@@ -1027,7 +1027,7 @@ where
 {
     if let Some(value) = lookup_value(lookup, key) {
         let normalized = value.trim().to_ascii_lowercase();
-        if !allowed.iter().any(|candidate| *candidate == normalized) {
+        if !allowed.contains(&normalized.as_str()) {
             return Err(format!("invalid {}: {}", key, value));
         }
     }
@@ -1550,11 +1550,7 @@ impl RuntimeConfig {
 
     pub fn reloadable_runtime_map(&self) -> HashMap<String, String> {
         let mut runtime = self.to_runtime_map();
-        runtime.retain(|key, _| {
-            Self::reloadable_setting_keys()
-                .iter()
-                .any(|candidate| *candidate == key.as_str())
-        });
+        runtime.retain(|key, _| Self::reloadable_setting_keys().contains(&key.as_str()));
         runtime
     }
 
@@ -1563,10 +1559,7 @@ impl RuntimeConfig {
         overrides: &HashMap<String, String>,
     ) -> Result<Self, String> {
         for key in overrides.keys() {
-            if !Self::reloadable_setting_keys()
-                .iter()
-                .any(|candidate| *candidate == key.as_str())
-            {
+            if !Self::reloadable_setting_keys().contains(&key.as_str()) {
                 return Err(format!(
                     "{} is not reloadable; restart FOD to change it.",
                     key
