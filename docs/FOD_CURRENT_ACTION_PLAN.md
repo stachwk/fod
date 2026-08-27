@@ -408,3 +408,27 @@ warm zyskal ok. 19%, a jeden target zajmuje ok. 1.29 GiB. Zachowac opt-in i
 
 Szczegoly:
 `docs/FOD_3_3_20_SHM_CARGO_TARGET.md`.
+
+
+## FOD 3.3.21 - kontrolowane czyszczenie dyskowego ./target
+
+Status: zakonczone w FOD 3.3.21.
+
+Priorytet: P2 developer/build hygiene.
+
+- zachowac `./target` jako domyslny trwaly cache Cargo;
+- nie czyscic automatycznie podczas build/test;
+- nie usuwac pojedynczych plikow Cargo po `mtime`;
+- domyslna kwalifikacja: >=10 GiB i >=14 dni bez zmian;
+- plan ma korzystac z `cargo clean --dry-run`;
+- wykonanie ma korzystac z `cargo clean --target-dir`, nie `rm -rf`;
+- zawsze wymagac tokenu `FOD_TARGET_CLEAN_CONFIRM=clean-disk-target`;
+- `FOD_TARGET_CLEAN_FORCE=1` moze ominac progi, ale nie zabezpieczenia sciezki ani potwierdzenie;
+- ograniczyc operacje dokladnie do repozytoryjnego `./target`;
+- pozostawic `make clean` bez zmian;
+- wlaczyc test polityki do `test-all`, w tym pozytywny clean tylko na
+  izolowanym zagniezdzonym repo testowym;
+- po commicie wykonac pelny `git diff HEAD~1..HEAD`.
+
+Szczegoly:
+`docs/FOD_3_3_21_CONTROLLED_TARGET_CLEANUP.md`.

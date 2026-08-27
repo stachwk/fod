@@ -36,6 +36,14 @@ FOD_SHM_TARGET_KEY ?= $(shell printf '%s\n' "$(CURDIR)" | cksum | awk '{print $$
 FOD_SHM_TARGET_DIR ?= $(FOD_SHM_TARGET_ROOT)/fod-target-$(shell id -u)-$(FOD_SHM_TARGET_KEY)
 FOD_SHM_MIN_FREE_BYTES ?= 2147483648
 
+# Controlled cleanup for the persistent repository ./target. This is never
+# invoked implicitly by normal builds or by the legacy `make clean`.
+FOD_TARGET_CLEAN_DIR ?= $(CURDIR)/target
+FOD_TARGET_CLEAN_MIN_SIZE_BYTES ?= 10737418240
+FOD_TARGET_CLEAN_MIN_AGE_DAYS ?= 14
+FOD_TARGET_CLEAN_CONFIRM ?=
+FOD_TARGET_CLEAN_FORCE ?= 0
+
 ifeq ($(filter $(FOD_CARGO_TARGET_MODE),disk shm),)
 $(error FOD_CARGO_TARGET_MODE must be 'disk' or 'shm', got '$(FOD_CARGO_TARGET_MODE)')
 endif
@@ -195,6 +203,36 @@ shm-target-clean:
 		FOD_SHM_MIN_FREE_BYTES="$(FOD_SHM_MIN_FREE_BYTES)" \
 		CARGO_TARGET_DIR="$(FOD_SHM_TARGET_DIR)" \
 		bash scripts/fod-shm-target.sh clean
+
+.PHONY: target-disk-status target-disk-clean-plan target-disk-clean test-target-disk-clean-policy
+
+target-disk-status:
+	@FOD_TARGET_CLEAN_DIR="$(FOD_TARGET_CLEAN_DIR)" \
+		FOD_TARGET_CLEAN_MIN_SIZE_BYTES="$(FOD_TARGET_CLEAN_MIN_SIZE_BYTES)" \
+		FOD_TARGET_CLEAN_MIN_AGE_DAYS="$(FOD_TARGET_CLEAN_MIN_AGE_DAYS)" \
+		FOD_TARGET_CLEAN_FORCE="$(FOD_TARGET_CLEAN_FORCE)" \
+		RUST_CARGO="$(RUST_CARGO)" \
+		bash scripts/fod-target-clean.sh status
+
+target-disk-clean-plan:
+	@FOD_TARGET_CLEAN_DIR="$(FOD_TARGET_CLEAN_DIR)" \
+		FOD_TARGET_CLEAN_MIN_SIZE_BYTES="$(FOD_TARGET_CLEAN_MIN_SIZE_BYTES)" \
+		FOD_TARGET_CLEAN_MIN_AGE_DAYS="$(FOD_TARGET_CLEAN_MIN_AGE_DAYS)" \
+		FOD_TARGET_CLEAN_FORCE="$(FOD_TARGET_CLEAN_FORCE)" \
+		RUST_CARGO="$(RUST_CARGO)" \
+		bash scripts/fod-target-clean.sh plan
+
+target-disk-clean:
+	@FOD_TARGET_CLEAN_DIR="$(FOD_TARGET_CLEAN_DIR)" \
+		FOD_TARGET_CLEAN_MIN_SIZE_BYTES="$(FOD_TARGET_CLEAN_MIN_SIZE_BYTES)" \
+		FOD_TARGET_CLEAN_MIN_AGE_DAYS="$(FOD_TARGET_CLEAN_MIN_AGE_DAYS)" \
+		FOD_TARGET_CLEAN_CONFIRM="$(FOD_TARGET_CLEAN_CONFIRM)" \
+		FOD_TARGET_CLEAN_FORCE="$(FOD_TARGET_CLEAN_FORCE)" \
+		RUST_CARGO="$(RUST_CARGO)" \
+		bash scripts/fod-target-clean.sh clean
+
+test-target-disk-clean-policy:
+	@bash tests/test_target_disk_clean_policy.sh
 
 # The local integration suites share one Docker/PostgreSQL database and FUSE
 # mount resources. Keep their prerequisites serial even when make receives -j.
@@ -462,6 +500,9 @@ help:
 	@printf '%s\n' \
 		'Targets:' \
 	'  make cargo-profile-show - print the active Cargo build profile used by Makefile install targets' \
+		'  make target-disk-status - report persistent ./target size, newest activity, thresholds, and largest entries' \
+		'  make target-disk-clean-plan - run the cleanup policy plus Cargo dry-run; never deletes files' \
+		'  make target-disk-clean FOD_TARGET_CLEAN_CONFIRM=clean-disk-target - clean eligible stale ./target through Cargo' \
 		'  make qnap-config-show - print the resolved QNAP Docker, PostgreSQL endpoint, and server tuning preset' \
 		'  make postgres-config-show - print the resolved PostgreSQL server tuning preset' \
 		'  make change-runtime-list - show the effective live reloadable snapshot via fod.change' \
@@ -1632,7 +1673,7 @@ test-mount-suite: venv
 	$(MAKE) reset
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mount_suite.py
 
-test-all: smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
+test-all: test-target-disk-clean-policy smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
 test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke
 test-integration: test-runtime-profile
 

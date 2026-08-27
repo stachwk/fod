@@ -45,8 +45,10 @@ sterowanie.
 
 Status: pierwsza czesc zakonczona w FOD 3.3.20. A/B wykazal, ze tmpfs
 nie powinien byc domyslny: cold build byl wolniejszy, a warm incremental
-zyskal ok. 19%. Tryb pozostaje opt-in. Automatyczna polityka wieku/rozmiaru
-dla dyskowego `./target` pozostaje osobnym krokiem.
+zyskal ok. 19%. Tryb pozostaje opt-in. Druga czesc zostala zakonczona w
+FOD 3.3.21 jako jawna, progowa polityka czyszczenia dyskowego `./target`
+oparta na Cargo dry-run i Cargo clean, bez automatycznego kasowania podczas
+buildow.
 
 Obserwacja: wszystkie artefakty Cargo trafiaja obecnie do `./target`, ktory po
 wielu buildach i konfiguracjach zajmuje duzo miejsca. Dla lokalnych buildow i
