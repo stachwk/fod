@@ -253,8 +253,14 @@ pub extern "C" fn fod_program_description(index: usize) -> *const c_char {
         .unwrap_or(std::ptr::null())
 }
 
+/// Find a FOD program by its C string name.
+///
+/// # Safety
+/// `name` must be a valid pointer to a NUL-terminated C string for the duration
+/// of this call. The exported C ABI is unchanged; this annotation makes the
+/// raw-pointer contract explicit for Rust callers.
 #[unsafe(no_mangle)]
-pub extern "C" fn fod_program_find(name: *const c_char) -> isize {
+pub unsafe extern "C" fn fod_program_find(name: *const c_char) -> isize {
     if name.is_null() {
         set_last_error("program name must not be null");
         return -1;

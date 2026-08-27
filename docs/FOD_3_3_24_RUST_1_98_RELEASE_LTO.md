@@ -1,0 +1,198 @@
+# FOD 3.3.24 - Rust 1.98.0 i domyslny profil release-lto
+
+## Decyzja
+
+Od FOD 3.3.24 kanoniczny toolchain uzywany do budowania artefaktow produkcyjnych jest przypiety do Rust `1.98.0`, a domyslny profil instalacyjny FOD to `release-lto`.
+
+Repozytorium zawiera teraz `rust-toolchain.toml`:
+
+```toml
+[toolchain]
+channel = "1.98.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
+```
+
+Profil `minimal` jest celowy. Do kompilacji i walidacji FOD potrzebne sa `rustc`, Cargo, `clippy` i `rustfmt`; dokumentacja Rust nie jest wymagana jako czesc lokalnego toolchainu projektu.
+
+## Dlaczego release-lto
+
+FOD 3.3.23 wprowadzil kontrolowany benchmark tego samego commita w trzech wariantach:
+
+| wariant | sredni zapis 512 KiB | min | max | rozmiar fod-rust-fuse |
+| --- | ---: | ---: | ---: | ---: |
+| Rust 1.85.0 / `release` | 74.41 MiB/s | 71.99 | 77.38 | 5,208,336 B |
+| Rust 1.98.0 / `release` | 71.80 MiB/s | 68.33 | 75.85 | 5,297,144 B |
+| Rust 1.98.0 / `release-lto` | 75.30 MiB/s | 73.82 | 76.20 | 3,506,560 B |
+
+Trzy probki nie sa wystarczajace, aby traktowac okolo 1.2% przewagi throughput jako statystycznie pewne przyspieszenie. Wynik pokazal jednak, ze zwykly Rust 1.98 `release` nie daje automatycznej przewagi, natomiast Rust 1.98 z istniejacym profilem ThinLTO zachowuje co najmniej porownywalna wydajnosc i jednoczesnie zmniejsza binarium FUSE o okolo jedna trzecia wzgledem bazowego Rust 1.85 `release`.
+
+Dlatego decyzja 3.3.24 nie opiera sie na deklaracji, ze sam nowszy kompilator musi przyspieszac FOD. Kanoniczna para jest traktowana lacznie:
+
+```text
+Rust 1.98.0 + release-lto
+```
+
+## Profil produkcyjny
+
+Profil zdefiniowany w `Cargo.toml` pozostaje:
+
+```toml
+[profile.release-lto]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+```
+
+Standardowe wywolanie `make`, ktore buduje lub instaluje artefakty produkcyjne, uzywa teraz domyslnie:
+
+```text
+FOD_CARGO_PROFILE=release-lto
+```
+
+Jawny override nadal jest mozliwy, np. dla diagnostyki lub porownania historycznego:
+
+```bash
+make FOD_CARGO_PROFILE=release cargo-profile-show
+```
+
+Zmiana domyslnego profilu nie zmienia debugowych targetow testowych. `build-debug`, testy jednostkowe i integracyjne nadal korzystaja z normalnych profili Cargo odpowiednich dla danego targetu.
+
+## MSRV a kanoniczny toolchain
+
+`rust-version` pozostaje:
+
+```toml
+rust-version = "1.85"
+```
+
+Jest to swiadome rozdzielenie dwoch kontraktow:
+
+- `rust-version = 1.85` oznacza minimalna wersje Rust, z ktora kod zrodlowy i zablokowane zaleznosci maja pozostawac kompatybilne;
+- `rust-toolchain.toml = 1.98.0` okresla kompilator uzywany do kanonicznych buildow projektu.
+
+Dzieki temu FOD nie podnosi sztucznie MSRV tylko dlatego, ze nowszy kompilator daje lepsze diagnostyki lub korzystniejszy wynik z ThinLTO.
+
+Kontrola MSRV pozostaje dostepna przez:
+
+```bash
+make rust-msrv-check
+```
+
+Natomiast zwykle `cargo`, `rustc`, `cargo fmt` i `cargo clippy` uruchomione wewnatrz checkoutu z rustup automatycznie wybieraja Rust 1.98.0 z `rust-toolchain.toml`.
+
+## Ochrona artefaktow produkcyjnych
+
+Targety instalacyjne `build-libfod` i `install-root-scripts` wymagaja aktywnego `rustc 1.98.0` poprzez `rust-production-toolchain-check`.
+
+Ma to zapobiegac sytuacji, w ktorej system posiada starszy distro `cargo/rustc`, a operator nieswiadomie tworzy oficjalny artefakt innym kompilatorem niz ustalony dla FOD 3.3.24.
+
+Polecenie kontrolne:
+
+```bash
+make rust-production-toolchain-check
+```
+
+`rust-toolchain.toml` jest takze zaleznoscia stempla debugowego builda. Zmiana przypietego kompilatora wymusza ponowne zbudowanie debugowych binariow zamiast pozostawienia starego stempla jako aktualnego.
+
+## Dobor binariow przy montowaniu
+
+Wczesniej lokalne wyszukiwanie rozpoznawalo przede wszystkim:
+
+```text
+target/debug
+target/release
+```
+
+Po przejsciu na `release-lto` mogloby to spowodowac uruchomienie starszego `target/release/fod-bootstrap` albo starszego `fod-rust-fuse`, mimo ze nowy build produkcyjny znajdowal sie w `target/release-lto`.
+
+FOD 3.3.24 dodaje `release-lto` do sciezek rozpoznawanych przez `mount.fod` i `fod-bootstrap`.
+
+Dla normalnego montowania checkout preferuje:
+
+```text
+target/release-lto
+target/release
+target/debug
+```
+
+W trybie debug `target/debug` pozostaje pierwszym wyborem.
+
+Dodatkowo wybrany `fod-bootstrap` preferuje `fod-rust-fuse` znajdujacy sie obok niego. Jezeli wrapper wybierze:
+
+```text
+target/release-lto/fod-bootstrap
+```
+
+to odpowiadajacy daemon ma byc:
+
+```text
+target/release-lto/fod-rust-fuse
+```
+
+Zapobiega to mieszaniu artefaktow z roznych profili kompilacji.
+
+## Rust 1.98 i granica FFI
+
+Walidacja 3.3.23 przez Clippy 1.98 wykryla, ze publiczna funkcja Rust:
+
+```text
+fod_program_find
+```
+
+przyjmuje surowy wskaznik C i bezposrednio go dereferencjonuje przez `CStr::from_ptr`, ale jej kontrakt Rust nie byl oznaczony jako `unsafe`.
+
+W 3.3.24 funkcja jest jawnie:
+
+```rust
+pub unsafe extern "C" fn fod_program_find(...)
+```
+
+i posiada sekcje `# Safety` opisujaca wymaganie poprawnego wskaznika do zakonczonego NUL-em lancucha C.
+
+Nie jest to zmiana ABI C. Naglowek `libfod.h` i symbol eksportowany przez `cdylib` zachowuja ten sam interfejs binarny. Zmiana doprecyzowuje kontrakt tylko dla wywolan z kodu Rust i usuwa deny-level diagnostyke Clippy 1.98.
+
+Pozostale ostrzezenia stylistyczne wykryte przez nowszy Clippy nie sa automatycznie poprawiane w tym commicie. Przejscie toolchainu nie jest laczone z przypadkowym refaktorem runtime.
+
+## Poza zakresem
+
+FOD 3.3.24 nie zmienia:
+
+- formatu danych ani bloku storage 4 KiB;
+- schematu PostgreSQL ani migracji;
+- zaleznosci w `Cargo.lock` poza numerem wersji crate'ow workspace;
+- Edition 2021;
+- ustawien FUSE I/O;
+- ustawien SELinux lub ACL;
+- GitHub Actions;
+- cache Cargo ani zasad selektywnego czyszczenia targetow.
+
+## Walidacja po aktualizacji
+
+Po `git pull` zalecany zestaw kontroli:
+
+```bash
+rustc --version
+cargo --version
+make cargo-profile-show
+make rust-production-toolchain-check
+make test-rust-release-defaults-policy
+make rust-msrv-check
+make rust-candidate-check
+make rust-candidate-clippy
+cargo fmt --all -- --check
+cargo check --workspace --locked
+QNAP=0 make test-all
+```
+
+Oczekiwane podstawowe wartosci:
+
+```text
+rustc 1.98.0
+FOD_CARGO_PROFILE=release-lto
+rust-version=1.85
+```
+
+Dopiero po przejsciu regresji produkcyjne artefakty powinny byc budowane lub instalowane przez standardowe targety FOD.

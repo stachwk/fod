@@ -147,15 +147,30 @@ fn configured_rust_fuse_binary(
     }
 }
 
+fn sibling_rust_fuse_binary(current_exe: &Path) -> Option<PathBuf> {
+    current_exe
+        .parent()
+        .map(|dir| dir.join("fod-rust-fuse"))
+        .filter(|candidate| is_executable_file(candidate))
+}
+
 fn rust_fuse_binary() -> Option<PathBuf> {
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(candidate) = sibling_rust_fuse_binary(&current_exe) {
+            return Some(candidate);
+        }
+    }
+
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or_else(|| Path::new("."));
     let candidates = [
-        root.join("target/debug/fod-rust-fuse"),
+        root.join("target/release-lto/fod-rust-fuse"),
         root.join("target/release/fod-rust-fuse"),
-        root.join("rust_fuse/target/debug/fod-rust-fuse"),
+        root.join("target/debug/fod-rust-fuse"),
+        root.join("rust_fuse/target/release-lto/fod-rust-fuse"),
         root.join("rust_fuse/target/release/fod-rust-fuse"),
+        root.join("rust_fuse/target/debug/fod-rust-fuse"),
     ];
     if let Some(candidate) = candidates
         .into_iter()
@@ -210,7 +225,7 @@ fn main() {
             Some(path) => path,
             None => {
                 eprintln!(
-                    "Rust FUSE binary is unavailable; build target/debug/fod-rust-fuse first, set FOD_RUST_FUSE_BIN, install fod-rust-fuse on PATH, or place it in /usr/local/bin."
+                    "Rust FUSE binary is unavailable; build target/release-lto/fod-rust-fuse or target/debug/fod-rust-fuse, set FOD_RUST_FUSE_BIN, install fod-rust-fuse on PATH, or place it in /usr/local/bin."
                 );
                 std::process::exit(1);
             }
@@ -366,6 +381,31 @@ mod tests {
         assert_eq!(found, candidate);
 
         let _ = fs::remove_file(&candidate);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn prefers_fuse_binary_sibling_of_selected_bootstrap() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base = env::temp_dir().join(format!("fod-bootstrap-sibling-{unique}"));
+        let profile_dir = base.join("release-lto");
+        let bootstrap = profile_dir.join("fod-bootstrap");
+        let fuse = profile_dir.join("fod-rust-fuse");
+        fs::create_dir_all(&profile_dir).expect("create profile dir");
+        fs::write(&bootstrap, b"#!/bin/sh\n").expect("write bootstrap");
+        fs::write(&fuse, b"#!/bin/sh\n").expect("write fuse");
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(&fuse).expect("stat fuse").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fuse, perms).expect("chmod fuse");
+        }
+
+        assert_eq!(sibling_rust_fuse_binary(&bootstrap), Some(fuse.clone()));
+
         let _ = fs::remove_dir_all(&base);
     }
 

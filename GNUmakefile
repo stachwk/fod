@@ -1,4 +1,31 @@
+# Canonical FOD builds use Rust 1.98.0 and the ThinLTO production profile.
+# Command-line/environment overrides still win over these defaults.
+FOD_CARGO_PROFILE ?= release-lto
+FOD_RUST_PRODUCTION_TOOLCHAIN ?= 1.98.0
+
 include Makefile
+
+.PHONY: rust-production-toolchain-check test-rust-release-defaults-policy
+
+rust-production-toolchain-check:
+	@set -eu; \
+	actual="$$(rustc --version)"; \
+	expected="rustc $(FOD_RUST_PRODUCTION_TOOLCHAIN) "; \
+	case "$$actual " in \
+		"$$expected"*) ;; \
+		*) \
+			printf 'FOD production build requires Rust %s; active compiler: %s\n' "$(FOD_RUST_PRODUCTION_TOOLCHAIN)" "$$actual" >&2; \
+			printf 'Install/select the repository toolchain from rust-toolchain.toml before building release artifacts.\n' >&2; \
+			exit 1 ;; \
+	esac
+
+# A toolchain change must invalidate an old debug build stamp, otherwise make
+# could reuse binaries produced by the previous compiler.
+$(FOD_DEBUG_BUILD_STAMP): rust-toolchain.toml
+
+# Release artifacts installed by FOD are required to use the pinned production
+# compiler. The C ABI is unchanged; only the compiler/profile defaults change.
+build-libfod install-root-scripts: rust-production-toolchain-check
 
 # Selective cleanup for known auxiliary Cargo targets. The allowlist is
 # enforced by scripts/fod-aux-target-clean.sh; these variables only tune the
@@ -39,9 +66,8 @@ target-aux-clean:
 test-target-aux-clean-policy:
 	@bash tests/test_aux_target_clean_policy.sh
 
-# Rust toolchain comparison. rust-version remains the MSRV declaration; these
-# targets deliberately select concrete rustup toolchains without changing the
-# repository default toolchain or installing anything automatically.
+# Rust toolchain comparison. rust-version remains the compatibility floor;
+# official production builds are pinned separately by rust-toolchain.toml.
 FOD_RUST_MSRV ?= 1.85
 FOD_RUST_BASELINE_TOOLCHAIN ?= 1.85.0
 FOD_RUST_CANDIDATE_TOOLCHAIN ?= 1.98.0
@@ -91,6 +117,9 @@ rust-toolchain-benchmark: venv up
 test-rust-toolchain-benchmark-policy:
 	@bash tests/test_rust_toolchain_benchmark_policy.sh
 
+test-rust-release-defaults-policy:
+	@bash tests/test_rust_release_defaults_policy.sh
+
 # Keep lightweight policy regressions in the normal gate without modifying the
 # existing Makefile target definition.
-test-all: test-target-aux-clean-policy test-rust-toolchain-benchmark-policy
+test-all: test-target-aux-clean-policy test-rust-toolchain-benchmark-policy test-rust-release-defaults-policy
