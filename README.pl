@@ -108,7 +108,7 @@ FOD to oprogramowanie source-available licencjonowane na warunkach Business Sour
 - Lookup, CRUD namespace, metadane, permissions, xattr, locking, storage i journal handling żyją już w Rust zamiast w Pythonowych helperach.
 - Wspólny core `fod-indexer` obsługuje rejestrację źródeł, `scan`, `hash`, raport duplikatów, `plan-import`, `materialize` i `cleanup-failed` przez jeden model możliwości. Obecne typy źródeł pozostają oparte o ścieżkę, mirror albo eksport (`local`, `smb`, `qnap`, `adb`, `github`), a `--name` nadal jest jawnym nadpisaniem.
 - Przy wyborze backendu FUSE `libfuse3` jest strategicznym baseline'em, jeśli najważniejsze są kompatybilność, standardowość i łatwiejsze debugowanie zgodne z upstream; inne stacki zostają do porównań, prototypów i diagnostyki.
-- SELinux działa jako xattr z runtime gating; pełna polityka mount-label jest celowo poza zakresem.
+- Na Rocky Linux 10.2 FOD wspiera operational enforcement (egzekwowanie operacyjne) SELinux przez hostowy label FUSE `fusefs_t` i zwykłą politykę domen SELinux. Per-inode `security.selinux` labeling (etykietowanie per plik) zależy od hosta i stosu mounta; w przetestowanym zwykłym modelu FUSE nie jest wspierane.
 - PostgreSQL TLS jest opcjonalny i konfigurowalny; FOD może też wygenerować lokalną parę certyfikat/klucz na żądanie.
 - Przejściowe zerwania połączenia PostgreSQL w gorącej ścieżce odczytu/zapisu są ponawiane raz, z zachowaniem stanu po stronie procesu klienta, więc aktywny dirty write state i cache odczytu mogą przetrwać próbę reconnect.
 - Migracja lock managera już się dokonała: PostgreSQL-backed leases są produkcyjną ścieżką dla zarówno `flock`, jak i range-locków `fcntl`, z TTL i heartbeat. `make test-locking` pozostaje zestawem semantyki locków, `make test-pg-lock-manager` pokrywa produkcyjny backend PostgreSQL, a `rust_fuse/tests/lock_backend_smoke.rs` sprawdza dwa niezależne primary mounty wobec tej samej bazy oraz repliki, która zostaje przy backendzie pamięciowym.
@@ -164,7 +164,7 @@ Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasa
 
 ## Znane Ograniczenia
 
-- Pełna polityka mount-label SELinux jest celowo poza zakresem; FOD trzyma SELinux jako metadane w xattr plus runtime gating.
+- Pełna polityka mount-label SELinux jest celowo poza zakresem. Na Rocky Linux 10.2 zwykła zawartość FUSE dostaje label `fusefs_t`; SELinux egzekwuje dostęp przez politykę hosta dla tego typu, ale per-inode relabeling (zmiana etykiet per plik) przez `security.selinux` nie działa w przetestowanym modelu FUSE/SELinux.
 - Obsługa `ioctl` obejmuje już `FIONREAD`, `FIGETBSZ`, `FS_IOC_GETFLAGS` i `FS_IOC_FSGETXATTR`; `FS_IOC_SETFLAGS` oraz `FS_IOC_FSSETXATTR` przyjmują tylko żądanie z `0` jako bezpieczny no-op do czasu ustalenia realnej polityki flag.
 - `FICLONE` nadal jest eksperymentalny i na niektórych stackach może zostać ucięty przed userspace, więc reflinki nie są jeszcze obietnicą produkcyjną.
 - Metadane specjalnych urządzeń są zapisywane, ale pełna semantyka uruchamiania takich node'ów nie jest głównym celem projektu.
@@ -413,7 +413,7 @@ FOD jest sterowany przez flagi CLI, zmienne środowiskowe oraz wartości z pliku
 | --- | --- | --- | --- |
 | `-f`, `--mountpoint` | CLI | wymagane | Punkt montowania filesystemu FUSE. |
 | `--role auto|primary|replica` | CLI / `FOD_ROLE` | `auto` | Steruje wykrywaniem repliki i wyborem backendu locków. `-o ro` daje mount tylko do odczytu bez zmiany roli. |
-| `--selinux auto|on|off` | CLI / `FOD_SELINUX` | `off` | Włącza lub wyłącza obsługę `security.selinux`. |
+| `--selinux auto|on|off` | CLI / `FOD_SELINUX` | `off` | Włącza lub wyłącza obsługę xattr SELinux w FOD, gdy hostowy stos FUSE/SELinux przekazuje żądania `security.selinux`. Nie wymusza na kernelu zgody na per-inode relabeling (etykietowanie per plik). |
 | `--acl on|off` | CLI / `FOD_ACL` | `off` | Włącza lub wyłącza egzekwowanie POSIX ACL. |
 | `--default-permissions` / `--no-default-permissions` | CLI / `FOD_DEFAULT_PERMISSIONS` | on | Steruje tym, czy kernelowe sprawdzanie uprawnień jest aktywne. |
 | `--atime-policy default|noatime|nodiratime|relatime|strictatime` | CLI / `FOD_ATIME_POLICY` | `default` | Wybiera wewnętrzne zachowanie `atime` FOD. |
@@ -674,7 +674,7 @@ Jeśli zmieniłeś tylko reloadowalne parametry w `fod_config.ini`, użyj `make 
 Na writable primary FOD używa backendu locków PostgreSQL lease, a każdy mount read-only, także `--role replica` albo `-o ro`, przełącza się na backend pamięciowy, bo mount i tak jest tylko do odczytu. Testy locków sprawdzają zarówno konflikt między dwoma primary mountami, jak i rozdzielenie primary/replica na tej samej bazie.
 
 Wsparcie xattr dla SELinux jest sterowane przez `--selinux auto|on|off` albo `FOD_SELINUX=auto|on|off`.
-Domyślnie jest `off`. `on` wymusza aktywację, a `auto` używa wykrywania po stronie hosta.
+Domyślnie jest `off`. `on` wymusza ścieżkę xattr SELinux po stronie FOD, a `auto` używa wykrywania po stronie hosta, ale kernel i polityka SELinux nadal decydują, czy żądania `security.selinux` zostaną przekazane do FOD.
 Wsparcie POSIX ACL jest sterowane przez `--acl on|off` albo `FOD_ACL=on|off`.
 Domyślnie jest `off`.
 Przy starcie FOD loguje efektywny profil runtime, wersję schematu, ustawienia TLS PostgreSQL, trwałość sesji PostgreSQL (`synchronous_commit`), tuning storage, opcje mounta i backend locków, więc można łatwo sprawdzić, jakie wartości faktycznie zostały zastosowane.
@@ -709,13 +709,14 @@ Opcje widoczne w mount:
 - Zachowanie `atime` FOD można wybrać przez `--atime-policy default|noatime|nodiratime|relatime|strictatime`.
 - `noatime` wyłącza aktualizację `atime` dla odczytów plików i listowania katalogów; `nodiratime` wyłącza aktualizację `atime` katalogów, ale zostawia aktualizację `atime` plików.
 - Dostępne są też `--lazytime`, `--sync` i `--dirsync`.
-- Label SELinux można podać przez `FOD_SELINUX_CONTEXT`, `FOD_SELINUX_FSCONTEXT`, `FOD_SELINUX_DEFCONTEXT` i `FOD_SELINUX_ROOTCONTEXT`.
+- Label SELinux można podać przez `FOD_SELINUX_CONTEXT`, `FOD_SELINUX_FSCONTEXT`, `FOD_SELINUX_DEFCONTEXT` i `FOD_SELINUX_ROOTCONTEXT`; host może jednak odrzucić te opcje dla zwykłego FUSE.
 - Ustaw `FOD_LOG_LEVEL=DEBUG`, jeśli chcesz pełne diagnostyczne tracebacki; domyślnie jest `INFO`, więc oczekiwane przypadki `ENODATA` nie będą zaśmiecały logów.
 - `--acl on` jest wymagane, jeśli chcesz egzekwować ACL podczas runtime; inaczej xattr ACL pozostają nieaktywne.
-- `--selinux on` lub `--selinux auto` jest wymagane, jeśli chcesz, żeby `security.selinux` było aktywne podczas runtime; inaczej xattr SELinux pozostają nieaktywne.
+- `--selinux on` lub `--selinux auto` jest wymagane, jeśli chcesz aktywować handler `security.selinux` po stronie FOD; inaczej xattr SELinux pozostają nieaktywne w FOD. To nie omija hostowych decyzji FUSE/SELinux.
 - `make test-mount-suite` zawiera zarówno smoke dla SELinux-off, jak i SELinux-on; przypadek SELinux-on jest pomijany automatycznie, jeśli mount nie startuje z `FOD_SELINUX=on|auto`.
-- FOD przechowuje etykiety SELinux jako xattr i steruje nimi w runtime; nie implementuje samodzielnie pełnej polityki label mount.
-- To zachowanie jest celowe: w tym repo pełna polityka mount-label jest poza zakresem, a zachowanie SELinux opiera się na host policy plus przechowywaniu xattr.
+- `make rocky-selinux-test-operational` sprawdza wspierany model Rocky Linux 10.2: zawartość FOD ma label `fusefs_t`, a egzekwowanie SELinux jest potwierdzane przez realną domenę konsumenta `httpd_t`. `make remote-rocky-selinux-test-operational` uruchamia ten sam dowód przez SSH.
+- `make rocky-selinux-test-strict` pozostaje ścisłą diagnostyką realnego per-inode `security.selinux` xattr. Na przetestowanym zwykłym FUSE Rocky Linux 10.2 kończy się hostowym `ENOTSUP`, zanim `FUSE_SETXATTR` dotrze do FOD.
+- Na Rocky Linux 10.2 polityka SELinux klasyfikuje zwykłe FUSE przez `genfscon fuse / ... fusefs_t`, a nie przez `fs_use_xattr`; FOD wspiera więc operational enforcement (egzekwowanie operacyjne) przez `fusefs_t` i politykę domen, nie per-file relabeling (etykietowanie per plik) na tym stosie mounta.
 - `mknod` tworzy FIFO i char device metadata; `st_rdev` i `st_dev` są raportowane, ale `open` dla special node'ów nadal jest unsupported.
 - `system.posix_acl_*` działa dla access ACL i default ACL inheritance; backend zapisuje, propaguje i egzekwuje ACL.
 - `poll` działa przez Rustowy frontend mounta dla zwykłych plików.
@@ -738,7 +739,7 @@ Opcje widoczne w mount:
 | --- | --- | --- |
 | `fod-relaxed` | Lokalny dev i smoke testy | `--no-default-permissions`, `FOD_ACL=off`, `FOD_SELINUX=off`, `--atime-policy default` |
 | `fod-linux-default` | Najbliżej typowego mounta Linuksa | `--default-permissions`, `FOD_ACL=off`, `FOD_SELINUX=off`, `--atime-policy relatime` |
-| `fod-selinux` | Środowiska z SELinux | `--default-permissions`, `FOD_ACL=on`, `FOD_SELINUX=auto` albo `on`, `FOD_SELINUX_CONTEXT` według potrzeb |
+| `fod-selinux` | Środowiska z SELinux | `--default-permissions`, `FOD_ACL=on`, `FOD_SELINUX=auto` albo `on`; na Rocky Linux 10.2 zwykłe FUSE używa hostowego labela `fusefs_t` i polityki domen |
 
 ## Rekomendowane workloady
 

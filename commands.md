@@ -2993,6 +2993,51 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-27 - Rocky SELinux documentation update
+
+Repository state while starting the documentation update: `e9123ea`.
+
+Context and documentation commands:
+
+```bash
+sed -n '90,175p' README.md
+sed -n '400,435p' README.md
+sed -n '675,760p' README.md
+sed -n '95,180p' README.pl
+sed -n '405,438p' README.pl
+sed -n '668,750p' README.pl
+rg -n "SELinux|selinux|fusefs_t|security\\.selinux|xattr|ACL" README* docs *.md
+rg --files docs
+git status --short --branch
+cat fod_version.txt
+sed -n '130,185p' docs/runtime-configuration.md
+sed -n '1,95p' ROADMAP.md
+sed -n '555,650p' TODO.md
+tail -n 80 conclusions.md
+tail -n 80 commands.md
+git rev-parse --short HEAD
+date -Iseconds
+rg -n "Decision: FOD keeps SELinux|SELinux mount-label policy|full SELinux mount-label|Storing \\`security\\.selinux\\`" ROADMAP.md TODO.md
+sed -n '575,595p' TODO.md
+sed -n '8,18p' ROADMAP.md
+sed -n '78,86p' ROADMAP.md
+rg -n "SELinux is xattr-backed|SELinux działa jako xattr|xattr-backed metadata plus runtime gating|FOD stores SELinux labels as xattrs|FOD przechowuje etykiety SELinux jako xattr|security\\.selinux active" README.md README.pl ROADMAP.md TODO.md docs conclusions.md
+git diff -- README.md README.pl ROADMAP.md TODO.md docs/FOD_3_3_22_ROCKY_SELINUX.md docs/runtime-configuration.md conclusions.md commands.md
+git status --short --branch
+git diff --check
+cat fod_version.txt
+git diff --stat
+git add README.md README.pl ROADMAP.md TODO.md commands.md conclusions.md docs/runtime-configuration.md docs/FOD_3_3_22_ROCKY_SELINUX.md
+git commit -m "FOD 3.3.22: document Rocky SELinux support"
+git diff --check HEAD~1..HEAD
+git diff HEAD~1..HEAD --stat
+git status --short --branch
+```
+
+One exploratory `rg` command quoted shell backticks incorrectly and caused the
+shell to try running `security.selinux`; it did not modify files and was
+immediately corrected.
+
 ## 2026-08-27 - Rocky SELinux operational target implementation
 
 Repository state while implementing the target: `95d506d`. `fod_version.txt`

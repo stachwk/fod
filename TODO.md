@@ -207,7 +207,7 @@ Reading guide:
   - [x] `FS_IOC_FSGETXATTR` zwraca teraz wyzerowany `fsxattr`, a `FS_IOC_FSSETXATTR` przyjmuje tylko zero/no-op do czasu decyzji o trwałej polityce xflags.
   - [x] `FICLONE` zostaje na razie eksperymentalny, bo na tym hoście obecny kernel/FUSE stack ucina ten request przed userspace; FOD nie ma jeszcze end-to-end potwierdzenia dla tego pathu.
     - Historical note: `tests/integration/test_ioctl.py` now covers `FICLONE` alongside `FIONREAD`, accepting the current unsupported path while still verifying that a successful clone would preserve payload contents. The host-side conclusion remains that the request is blocked before userspace on this stack.
-- [x] Zaprojektować pełną politykę mount-label SELinux. Celowo zamknięte jako non-goal: FOD trzyma SELinux jako xattr-backed metadata plus runtime gating, bez pełnej polityki mount-label.
+- [x] Zaprojektować pełną politykę mount-label SELinux. Celowo zamknięte jako non-goal: FOD używa hostowego modelu SELinux; na Rocky Linux 10.2 wspierany kontrakt to `fusefs_t` plus polityka domen, a nie per-inode `security.selinux` relabeling na zwykłym FUSE.
 
 ### PostgreSQL tuning and ingest hardening
 
@@ -582,13 +582,13 @@ These changes are already merged into the codebase and should be kept:
 
 Status: intentionally closed as a non-goal for this repo.
 
-- Decision: FOD keeps SELinux as xattr-backed metadata plus runtime gating only; it does not attempt to implement a full mount label policy.
+- Decision: FOD keeps SELinux xattr handling gated by runtime configuration where the host forwards those requests, but it does not attempt to implement a full mount label policy or force ordinary FUSE into `fs_use_xattr`.
 - Keep the existing coverage for:
   - mount with `FOD_SELINUX=on`
   - mount with `FOD_SELINUX=off`
   - mount with `FOD_SELINUX=auto`
   - reading and writing `security.selinux`
-- Document explicitly that full SELinux correctness depends on host policy and is not implied by xattr storage alone.
+- Document explicitly that full SELinux correctness depends on host policy and mount-stack behavior. Rocky Linux 10.2 ordinary FUSE uses `genfscon fuse / ... fusefs_t`, so the supported model is operational enforcement through `fusefs_t` and domain policy, not per-inode relabeling.
 
 ### Full FUSE / Linux Compatibility
 
@@ -641,7 +641,7 @@ Status: active design direction, but the main decisions below are already taken.
 
 ## Notes
 
-- Storing `security.selinux` in xattr alone is not enough to make the filesystem fully SELinux-aware. It is the foundation, not the whole model.
+- Storing `security.selinux` in xattr alone is not enough to make the filesystem fully SELinux-aware. On Rocky Linux 10.2 ordinary FUSE, SELinux/VFS rejects per-inode relabeling before FOD receives `FUSE_SETXATTR`; the supported model is `fusefs_t` plus domain policy.
 - `mknod` creates FIFO and char-device metadata, but `open` for special nodes still needs separate semantics.
 - `poll` is available through the Rust mount frontend for regular files.
 - `fallocate`, `flock`, `copy_file_range`, `ioctl`, `read_buf`, `write_buf`, `opendir`, `releasedir`, `fsyncdir`, `destroy`, `access`, `bmap`, `lseek`, `rename`, `mknod`, `st_blocks`, `st_nlink`, `ownership inheritance`, advisory `locks`, sticky-bit enforcement on `unlink`/`rmdir`, `chown` special-bit clearing, journal UID tracking, `ctime`/`change_date` metadata tracking, and the stable inode model are already in `Already in place`.

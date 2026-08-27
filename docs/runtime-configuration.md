@@ -159,7 +159,11 @@ runtime environment variables.
 
 Persistent/documented configuration in this stage includes the confirmed FUSE
 `8/4` controls, `allow_other`, optional FUSE cache timeouts, optional SELinux
-context overrides, and the PostgreSQL-visible-path override.
+context overrides, and the PostgreSQL-visible-path override. SELinux context
+overrides are pass-through mount options: they are recorded as configuration,
+but the host FUSE/SELinux stack still decides whether ordinary FUSE accepts
+them. Rocky Linux 10.2 ordinary FUSE was verified as `genfscon fuse / ...
+fusefs_t`, not `fs_use_xattr`.
 
 The following controls intentionally remain environment-only:
 

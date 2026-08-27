@@ -11,7 +11,7 @@
 - The repository currently has no active GitHub Actions workflow. `make test-all` is the main local regression gate, while `make test-all-full` adds wider mounted and indexer coverage.
 - Benchmark baselines are tracked in [`BENCHMARKS.md`](BENCHMARKS.md), while [`TODO.md`](TODO.md) records open follow-ups, accepted decisions, completed work, and regression notes.
 - The ordered implementation sequence is tracked in [`docs/FOD_CURRENT_ACTION_PLAN.md`](docs/FOD_CURRENT_ACTION_PLAN.md).
-- SELinux mount-label policy is a deliberate non-goal; xattr-backed metadata and runtime gating are the supported path.
+- SELinux mount-label policy is a deliberate non-goal. Rocky Linux 10.2 support is defined as operational SELinux enforcement through the host FUSE `fusefs_t` label and normal domain policy; per-inode `security.selinux` labeling depends on host/mount-stack support.
 - Schema init, upgrade, and clean operations are non-destructive by default on existing databases and are protected by the schema-admin secret flow.
 - The runtime is Rust-backed end to end: mount entrypoints, namespace operations, metadata, permissions, locking, payload storage, schema tooling, and indexing no longer depend on the removed Python runtime.
 - PostgreSQL-backed advisory locking is the production path for `flock`, `fcntl` range locks, payload-quota admission, and copy-capacity reservations across independent mounts.
@@ -78,7 +78,7 @@
 
 ## Non-Goals for Now
 
-- full SELinux mount-label policy
+- full SELinux mount-label policy or host-side FUSE promotion to `fs_use_xattr`
 - general-purpose execution semantics for special device nodes beyond stored metadata
 - replacing PostgreSQL backup and restore with a custom FOD backup subsystem
 - enabling FUSE passthrough without a real backing file descriptor and a coherent PostgreSQL/storage model

@@ -2815,3 +2815,18 @@ block size, archived under `/tmp/fod-selinux-throughput-20260827T220306`:
 No AVC/USER_AVC records were observed after the accepted profiling runs. The
 Rocky host remained in SELinux `Enforcing`, `httpd_use_fusefs` was `off`,
 `httpd` was inactive, and no FOD/httpd test mount or process remained.
+
+## 2026-08-27 - Rocky SELinux documentation update on `e9123ea`
+
+Documentation now uses the tested Rocky Linux 10.2 SELinux support definition:
+FOD supports operational enforcement through the ordinary FUSE `fusefs_t` label
+and normal SELinux domain policy, while per-inode `security.selinux` labeling is
+a separate host/mount-stack capability. README, README.pl, ROADMAP, TODO, and
+the dedicated `docs/FOD_3_3_22_ROCKY_SELINUX.md` note now avoid promising that
+FOD can force ordinary FUSE into `fs_use_xattr` or make SELinux/VFS forward a
+relabel request that the host already rejected before `FUSE_SETXATTR`.
+
+The documentation also records that `FOD_SELINUX_CONTEXT`,
+`FOD_SELINUX_FSCONTEXT`, `FOD_SELINUX_DEFCONTEXT`, and
+`FOD_SELINUX_ROOTCONTEXT` are pass-through mount options, not a guarantee that
+the host accepts SELinux mount labeling for ordinary FUSE.
