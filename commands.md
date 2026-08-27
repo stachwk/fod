@@ -3033,6 +3033,16 @@ bash -n tests/integration/test_rocky_selinux_operational.sh
 git diff --check
 scp tests/integration/test_rocky_selinux_operational.sh 192.168.1.188:/tmp/test_rocky_selinux_operational.sh
 ssh 192.168.1.188 'cd /home/wojtek/git/fod && cp /tmp/test_rocky_selinux_operational.sh tests/integration/test_rocky_selinux_operational.sh && make --no-print-directory rocky-selinux-test-operational'
+git add Makefile tests/integration/test_rocky_selinux_operational.sh commands.md conclusions.md
+git commit -m "FOD 3.3.22: add Rocky SELinux operational test"
+git diff --check HEAD~1..HEAD
+git diff HEAD~1..HEAD --stat
+git status --short --branch
+git diff HEAD~1..HEAD -- Makefile tests/integration/test_rocky_selinux_operational.sh | sed -n '1,280p'
+git push origin main
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && git stash push -u -m codex-rocky-selinux-operational-precommit-copy >/tmp/fod-rocky-stash.out && cat /tmp/fod-rocky-stash.out'
+make --no-print-directory remote-rocky-selinux-test-operational
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && git stash list && git stash drop stash@{0} || true && git status --short --branch && mount | grep -E "fod-httpd|fod-selinux" || true && ps -efZ | grep -E "fod-httpd|fod-bootstrap|fod-rust-fuse|httpd" | grep -v grep || true && getsebool httpd_use_fusefs && systemctl is-active httpd || true'
 ```
 
 `make -n remote-rocky-selinux-test-operational` was not a pure dry run because
@@ -3047,6 +3057,11 @@ The accepted Rocky test result was:
 ```text
 OK Rocky SELinux operational FOD fusefs_t/httpd_t proof
 ```
+
+The official `make remote-rocky-selinux-test-operational` target also passed
+after pushing `0a7500c` to `origin/main`. The Rocky checkout was clean
+afterwards, no FOD/httpd test mount or process remained, `httpd` was inactive,
+and `httpd_use_fusefs` was restored to `off`.
 
 ## 2026-08-27 - Rocky 10.2 positive SELinux service access proof
 
