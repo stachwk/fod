@@ -2993,6 +2993,76 @@ cat fod_version.txt
 source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex
 ```
 
+## 2026-08-27 - Rocky 10.2 FUSE SELinux labeling proof
+
+Repository state while running the proof: `e80cc85`. `fod_version.txt` was
+`3.3.22`.
+
+Policy and host inspection commands:
+
+```bash
+ssh 192.168.1.188 'set -u; getenforce; sestatus; seinfo --genfscon 2>/dev/null | grep -E "(^genfscon fuse|fusefs_t|fuse)" || true; sesearch --allow -s unconfined_t -t fusefs_t -c filesystem -p relabelto 2>/dev/null || true; sesearch --allow -s unconfined_t -t fusefs_t -c file -p relabelto 2>/dev/null || true'
+ssh 192.168.1.188 'grep -R "genfscon fuse\|fusefs_t" -n /etc/selinux /var/lib/selinux 2>/dev/null | head -50 || true'
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && git status --short && git rev-parse --short HEAD && command -v strace || true && command -v getfattr || true'
+ssh 192.168.1.188 'seinfo --help 2>&1 | grep -i "fs_use\|fsuse\|genfs" || true; seinfo --fs_use 2>&1 | head -80 || true; seinfo --fsuse 2>&1 | head -80 || true'
+```
+
+The first manual FOD proof command failed because it omitted the now-required
+`--config` argument. A second attempt exposed that the existing remote debug
+binary had been built from a reverted local experiment containing
+`security_label`, so that run was discarded. The binary was rebuilt from clean
+`HEAD` before the accepted proof:
+
+```bash
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && git status --short && git show HEAD:rust_fuse/src/fs.rs | grep -n "security_label" || true && rg -n "security_label|SECURITY_CTX" rust_fuse/src || true && cargo build --locked --bin fod-bootstrap --bin fod-rust-fuse'
+ssh 192.168.1.188 'cd /home/wojtek/git/fod && set -euo pipefail
+set -a; . /tmp/fod-rocky-selinux-pg.env; set +a
+mkdir -p /tmp/fod-selinux-proof/mnt
+fusermount3 -u /tmp/fod-selinux-proof/mnt >/dev/null 2>&1 || true
+rm -f /tmp/fod-selinux-proof/fod.log /tmp/fod-selinux-proof/proof.out
+( FOD_LOG_LEVEL=DEBUG FOD_SELINUX=on FOD_ACL=on FOD_DEFAULT_PERMISSIONS=1 POSTGRES_DB="$FOD_PG_DBNAME" POSTGRES_USER="$FOD_PG_USER" POSTGRES_PASSWORD="$FOD_PG_PASSWORD" POSTGRES_HOST="$FOD_PG_HOST" POSTGRES_PORT="$FOD_PG_PORT" target/debug/fod-bootstrap --config /home/wojtek/git/fod/fod_config.ini --role auto --selinux on --acl on --default-permissions -f /tmp/fod-selinux-proof/mnt > /tmp/fod-selinux-proof/fod.log 2>&1 ) &
+pid=$!
+for i in $(seq 1 80); do mountpoint -q /tmp/fod-selinux-proof/mnt && break; sleep 0.25; done
+if ! mountpoint -q /tmp/fod-selinux-proof/mnt; then cat /tmp/fod-selinux-proof/fod.log; exit 1; fi
+printf "mount_fstype_options " > /tmp/fod-selinux-proof/proof.out
+findmnt -T /tmp/fod-selinux-proof/mnt -no FSTYPE,OPTIONS >> /tmp/fod-selinux-proof/proof.out || true
+python3 - <<'"'"'PY'"'"' >> /tmp/fod-selinux-proof/proof.out 2>&1
+import errno, os, subprocess
+mnt = "/tmp/fod-selinux-proof/mnt"
+p = os.path.join(mnt, "selinux-proof-file")
+with open(p, "wb") as f:
+    f.write(b"fod proof\n")
+print("fod_mount_label", subprocess.check_output(["ls", "-Zd", mnt], text=True).strip())
+print("fod_file_label", subprocess.check_output(["ls", "-Z", p], text=True).strip())
+os.setxattr(p, "user.proof", b"ok")
+print("user_setxattr", os.getxattr(p, "user.proof"))
+try:
+    os.setxattr(p, "security.selinux", b"system_u:object_r:tmp_t:s0\0")
+    print("security_setxattr", "OK")
+except OSError as e:
+    print("security_setxattr", "ERR", e.errno, errno.errorcode.get(e.errno), e.strerror)
+try:
+    print("security_getxattr", os.getxattr(p, "security.selinux"))
+except OSError as e:
+    print("security_getxattr", "ERR", e.errno, errno.errorcode.get(e.errno), e.strerror)
+print("listxattr", sorted(os.listxattr(p)))
+native = "/tmp/fod-selinux-proof/native-proof-file"
+with open(native, "wb") as f:
+    f.write(b"native proof\n")
+print("native_file_label_before", subprocess.check_output(["ls", "-Z", native], text=True).strip())
+os.setxattr(native, "security.selinux", b"system_u:object_r:tmp_t:s0\0")
+print("native_security_setxattr", "OK")
+print("native_security_getxattr", os.getxattr(native, "security.selinux"))
+print("native_file_label_after", subprocess.check_output(["ls", "-Z", native], text=True).strip())
+PY
+sleep 0.5
+fusermount3 -u /tmp/fod-selinux-proof/mnt
+wait "$pid" || true
+printf "=== proof.out ===\n"; cat /tmp/fod-selinux-proof/proof.out
+printf "=== setxattr log ===\n"; grep -E "FOD (setxattr|getxattr|listxattr)|available_capabilities|fod_(requested|enabled)_capabilities|mount options" /tmp/fod-selinux-proof/fod.log || true
+printf "=== avc ===\n"; sudo ausearch -m AVC,USER_AVC -ts recent -i 2>/dev/null | tail -80 || true'
+```
+
 ## 2026-08-22 - QNAP smoke and PostgreSQL checks
 
 Repository state while starting the work: `43724e8`. `fod_version.txt`

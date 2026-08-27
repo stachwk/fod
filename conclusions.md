@@ -2704,3 +2704,35 @@ kernel advertises and enables that capability, but manual `security.selinux`
 setxattr still returned `ENOTSUP` before reaching FOD's setxattr callback. Adding
 a `security_label` mount option was also tested and rejected by the Rocky
 fuse/fusermount stack as an unknown option. That experimental code was not kept.
+
+## 2026-08-27 - Rocky 10.2 FUSE SELinux labeling proof on `e80cc85`
+
+Rocky 10.2 on `192.168.1.188` labels ordinary FUSE through genfs policy rather
+than xattr policy. `seinfo --fs_use` lists `fs_use_xattr` for native filesystems
+such as `xfs`, `ext4`, `overlay`, and `virtiofs`, but not for `fuse`.
+`seinfo --genfscon` reports:
+
+```text
+genfscon fuse / system_u:object_r:fusefs_t:s0
+genfscon fuseblk / system_u:object_r:fusefs_t:s0
+genfscon fusectl / system_u:object_r:fusefs_t:s0
+```
+
+A controlled FOD mount from clean `HEAD` on the Rocky host confirmed the runtime
+behavior. The mount and a newly created FOD file both had
+`system_u:object_r:fusefs_t:s0`. Setting `user.proof` succeeded and FOD logged
+the `FOD setxattr ... name=user.proof` callback. Setting `security.selinux` on
+the same FOD file returned `errno=95 ENOTSUP`; FOD did not log a
+`FOD setxattr ... name=security.selinux` callback, while it did log surrounding
+`getxattr` and `listxattr` callbacks. Reading `security.selinux` from the FOD
+file returned the synthetic genfs label `system_u:object_r:fusefs_t:s0\0`, and
+`listxattr` did not include `security.selinux`.
+
+The native `/tmp` control file on the same host accepted the same
+`security.selinux` relabel to `system_u:object_r:tmp_t:s0\0` and `ls -Z`
+reported the updated label. No AVC/USER_AVC records were produced for the FOD
+failure. This experimentally supports the hypothesis that Rocky 10.2
+SELinux/VFS rejects `security.selinux` relabel on ordinary FUSE before
+`FUSE_SETXATTR` reaches FOD. A FOD runtime change cannot make strict SELinux
+xattr relabel pass on this mount stack unless the filesystem is mounted through
+a SELinux/xattr-capable FUSE path supported by the host.
