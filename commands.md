@@ -3063,7 +3063,17 @@ git diff --stat
 git diff -- README.md README.pl docs/FOD_3_3_22_ROCKY_SELINUX.md conclusions.md commands.md
 git status --short --branch
 cat fod_version.txt
+git add README.md README.pl commands.md conclusions.md docs/FOD_3_3_22_ROCKY_SELINUX.md
+git commit -m "FOD 3.3.22: clarify Rocky SELinux scope"
+git diff --check HEAD~1..HEAD
+git diff HEAD~1..HEAD --stat
+git show --oneline --decorate --no-renames --stat HEAD
+git status --short --branch
+timeout 90 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex'
+git push origin main
 ```
+
+The MemPalace refresh command timed out with exit code `124` after 90 seconds.
 
 One exploratory `rg` command quoted shell backticks incorrectly and caused the
 shell to try running `security.selinux`; it did not modify files and was
