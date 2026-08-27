@@ -2830,3 +2830,17 @@ The documentation also records that `FOD_SELINUX_CONTEXT`,
 `FOD_SELINUX_FSCONTEXT`, `FOD_SELINUX_DEFCONTEXT`, and
 `FOD_SELINUX_ROOTCONTEXT` are pass-through mount options, not a guarantee that
 the host accepts SELinux mount labeling for ordinary FUSE.
+
+## 2026-08-27 - Rocky SELinux scope clarification on `e64c27a`
+
+The Rocky SELinux documentation now explicitly distinguishes FOD's verified
+operational SELinux enforcement from native XFS/ext4-style per-inode labeling.
+The supported Rocky Linux 10.2 model is real MAC enforcement over `fusefs_t`,
+not an application-level simulation, but it does not provide different SELinux
+types for different files inside the same ordinary FUSE mount.
+
+The `FUSE_SECURITY_CTX` note was also added: it can provide create-time context
+metadata for new objects, but it does not replace a later
+`FUSE_SETXATTR security.selinux` relabel of an existing inode. On the tested
+Rocky stack, the per-inode relabel request still stops in VFS/SELinux before it
+reaches FOD.

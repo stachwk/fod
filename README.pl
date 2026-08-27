@@ -717,6 +717,7 @@ Opcje widoczne w mount:
 - `make rocky-selinux-test-operational` sprawdza wspierany model Rocky Linux 10.2: zawartość FOD ma label `fusefs_t`, a egzekwowanie SELinux jest potwierdzane przez realną domenę konsumenta `httpd_t`. `make remote-rocky-selinux-test-operational` uruchamia ten sam dowód przez SSH.
 - `make rocky-selinux-test-strict` pozostaje ścisłą diagnostyką realnego per-inode `security.selinux` xattr. Na przetestowanym zwykłym FUSE Rocky Linux 10.2 kończy się hostowym `ENOTSUP`, zanim `FUSE_SETXATTR` dotrze do FOD.
 - Na Rocky Linux 10.2 polityka SELinux klasyfikuje zwykłe FUSE przez `genfscon fuse / ... fusefs_t`, a nie przez `fs_use_xattr`; FOD wspiera więc operational enforcement (egzekwowanie operacyjne) przez `fusefs_t` i politykę domen, nie per-file relabeling (etykietowanie per plik) na tym stosie mounta.
+- Szczegółowa definicja wsparcia Rocky, porównanie z XFS/ext4 oraz granica `FUSE_SETXATTR` są opisane w [`docs/FOD_3_3_22_ROCKY_SELINUX.md`](docs/FOD_3_3_22_ROCKY_SELINUX.md).
 - `mknod` tworzy FIFO i char device metadata; `st_rdev` i `st_dev` są raportowane, ale `open` dla special node'ów nadal jest unsupported.
 - `system.posix_acl_*` działa dla access ACL i default ACL inheritance; backend zapisuje, propaguje i egzekwuje ACL.
 - `poll` działa przez Rustowy frontend mounta dla zwykłych plików.

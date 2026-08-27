@@ -3044,6 +3044,27 @@ git push origin main
 
 The MemPalace refresh command timed out with exit code `124` after 90 seconds.
 
+## 2026-08-27 - Rocky SELinux scope documentation update
+
+Repository state while starting the documentation update: `e64c27a`.
+
+Context and documentation commands:
+
+```bash
+sed -n '1,240p' /home/wojtek/.codex/attachments/e0acd311-682a-4ae1-936f-afc48ca41b66/pasted-text.txt
+sed -n '1,220p' docs/FOD_3_3_22_ROCKY_SELINUX.md
+git status --short --branch
+cat fod_version.txt
+rg -n "Rocky Linux 10.2|fusefs_t|SELinux operational|security_label|SBLABEL|SECURITY_FS_USE_XATTR|SECURITY_FS_USE_GENFS|httpd_use_fusefs" README.md README.pl docs ROADMAP.md TODO.md conclusions.md commands.md
+sed -n '241,520p' /home/wojtek/.codex/attachments/e0acd311-682a-4ae1-936f-afc48ca41b66/pasted-text.txt
+nl -ba docs/FOD_3_3_22_ROCKY_SELINUX.md | sed -n '1,150p'
+git diff --check
+git diff --stat
+git diff -- README.md README.pl docs/FOD_3_3_22_ROCKY_SELINUX.md conclusions.md commands.md
+git status --short --branch
+cat fod_version.txt
+```
+
 One exploratory `rg` command quoted shell backticks incorrectly and caused the
 shell to try running `security.selinux`; it did not modify files and was
 immediately corrected.

@@ -725,6 +725,7 @@ Mount-time visibility options:
 - `make rocky-selinux-test-operational` verifies the supported Rocky Linux 10.2 model: FOD content is labeled `fusefs_t`, and SELinux enforcement is proven through a real `httpd_t` consumer domain. `make remote-rocky-selinux-test-operational` runs the same proof over SSH.
 - `make rocky-selinux-test-strict` remains a strict diagnostic for real per-inode `security.selinux` xattr support. On the tested Rocky Linux 10.2 ordinary FUSE stack, it fails with host-side `ENOTSUP` before `FUSE_SETXATTR` reaches FOD.
 - On Rocky Linux 10.2, SELinux policy classifies ordinary FUSE with `genfscon fuse / ... fusefs_t` rather than `fs_use_xattr`; FOD therefore supports SELinux operational enforcement through `fusefs_t` and domain policy, not per-file relabeling on that mount stack.
+- See [`docs/FOD_3_3_22_ROCKY_SELINUX.md`](docs/FOD_3_3_22_ROCKY_SELINUX.md) for the tested Rocky support definition, XFS/ext4 comparison, and the `FUSE_SETXATTR` boundary.
 - `mknod` creation and `stat` metadata for FIFO and char devices are supported; `st_rdev` and `st_dev` are reported, and special-node `open` is still unsupported.
 - `system.posix_acl_*` is supported for access ACLs and default ACL inheritance; the backend stores, propagates, and enforces ACLs.
 - `poll` is available through the Rust mount frontend for regular files.
