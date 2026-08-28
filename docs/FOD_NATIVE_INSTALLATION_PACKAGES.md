@@ -1,6 +1,6 @@
 # Native installation packages for Ubuntu and RHEL/RockyLinux
 
-Status: packaging infrastructure for FOD runtime 3.3.31. The first native package revision for this runtime is `3.3.31-1`.
+Status: packaging infrastructure for FOD runtime 3.4.1. The first native package revision for this runtime is `3.4.1-1`.
 
 ## Targets
 
@@ -97,14 +97,14 @@ The default package maintainer is the repository's GitHub noreply identity and c
 
 ## Package revision
 
-Runtime 3.3.31 starts a new native package revision series:
+Runtime 3.4.1 starts a new native package revision series:
 
 ```text
-FOD runtime:       3.3.31
-DEB/RPM revision:  3.3.31-1
+FOD runtime:       3.4.1
+DEB/RPM revision:  3.4.1-1
 ```
 
-Packaging-only corrections after that use `3.3.31-2`, `3.3.31-3`, and so on without changing the FOD runtime version.
+Packaging-only corrections after that use `3.4.1-2`, `3.4.1-3`, and so on without changing the FOD runtime version.
 
 ## Output
 
