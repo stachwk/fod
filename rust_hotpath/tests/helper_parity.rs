@@ -49,7 +49,7 @@ fn range_packing_helpers_match_expected_values() {
     ];
     assert_eq!(
         pack_changed_copy_pairs(100, 4 * 4096, 4096, &pairs),
-        vec![(100 + 1 * 4096, 100 + 3 * 4096)]
+        vec![(100 + 4096, 100 + 3 * 4096)]
     );
     assert_eq!(
         sorted_contiguous_ranges(&[7, 3, 4, 10, 11, 11, 8]),
@@ -305,7 +305,7 @@ fn write_workers_parallel_copy_plan_matches_expected_values() {
     assert_eq!(write_copy_worker_count(16, 4, 2), 4);
 
     assert_eq!(
-        write_copy_plan(1 * 4096, 4096, 4, 2, true, 1, 16),
+        write_copy_plan(4096, 4096, 4, 2, true, 1, 16),
         (1, true, false, 1)
     );
     assert_eq!(
@@ -321,7 +321,7 @@ fn write_workers_parallel_copy_plan_matches_expected_values() {
         (16, false, true, 4)
     );
     assert_eq!(
-        write_copy_dedupe_plan(1 * 4096, 4096, true, 1, 16),
+        write_copy_dedupe_plan(4096, 4096, true, 1, 16),
         (1, true)
     );
     assert_eq!(
@@ -337,7 +337,7 @@ fn write_workers_parallel_copy_plan_matches_expected_values() {
 #[test]
 fn write_worker_thresholds_block_size_plan_matches_expected_values() {
     assert_eq!(
-        write_copy_plan(1 * 4096, 4096, 2, 2, false, 0, 0),
+        write_copy_plan(4096, 4096, 2, 2, false, 0, 0),
         (1, false, false, 1)
     );
     assert_eq!(

@@ -268,6 +268,7 @@ fn mount_config(
     Ok(config)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_mount_status(
     mountpoint: &Path,
     core: &RuntimeCoreSettings,

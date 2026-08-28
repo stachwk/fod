@@ -388,7 +388,7 @@ fn truncate_rename() -> Result<(), String> {
     fh.set_len(4).map_err(|err| err.to_string())?;
     drop(fh);
 
-    if fs::read(&renamed_path).map_err(|err| err.to_string())? != &payload[..4] {
+    if fs::read(&renamed_path).map_err(|err| err.to_string())? != payload[..4] {
         return Err("truncate/read mismatch".to_string());
     }
 

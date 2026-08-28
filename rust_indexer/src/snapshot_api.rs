@@ -730,6 +730,7 @@ impl SnapshotFileShowOutput {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn load_snapshot_file_list(
     repo: &DbRepo,
     snapshot_id: u64,

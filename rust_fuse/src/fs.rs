@@ -62,6 +62,9 @@ const IOCTL_FS_IOC_FSGETXATTR: u32 = libc::_IOR::<[u8; IOCTL_FSXATTR_BYTES]>('X'
 const IOCTL_FS_IOC_FSSETXATTR: u32 = libc::_IOW::<[u8; IOCTL_FSXATTR_BYTES]>('X' as u32, 32) as u32;
 const IOCTL_FSXATTR_BYTES: usize = 28;
 
+type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
+type RecentWriteBlockKey = (u64, u64);
+
 fn fod_fuse_profile_io_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_IO", false))
@@ -75,6 +78,7 @@ pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setattr_requests_mutation(
     mode: bool,
     uid: bool,
@@ -495,6 +499,7 @@ fn shared_monitor_publish_interval() -> Duration {
     Duration::from_millis(value)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn publish_shared_monitor_sample(
     observability_repo: &DbRepo,
     publish_repo: &DbRepo,
@@ -538,6 +543,7 @@ fn shared_monitor_source_stats(snapshot: DbRepoSourceSnapshot) -> SharedMonitorS
 }
 
 impl SharedMonitorPublisherHandle {
+    #[allow(clippy::too_many_arguments)]
     fn spawn(
         observability_repo: DbRepo,
         publish_repo: DbRepo,
@@ -1324,7 +1330,7 @@ pub struct FodFuse {
     fh_table: Mutex<HashMap<u64, FileHandleState>>,
     pub(crate) write_states: Mutex<HashMap<u64, WriteState>>,
     pub(crate) read_block_cache: Mutex<ReadBlockCache>,
-    pub(crate) recent_write_blocks: Mutex<HashMap<(u64, u64), Arc<[u8]>>>,
+    pub(crate) recent_write_blocks: Mutex<HashMap<RecentWriteBlockKey, Arc<[u8]>>>,
     pub(crate) recent_write_blocks_len: AtomicU64,
     pub(crate) read_sequence_state: Mutex<HashMap<u64, ReadSequenceState>>,
     posix_locks: Arc<Mutex<HashMap<String, Vec<PosixLockRecord>>>>,
@@ -1671,7 +1677,7 @@ impl FodFuse {
         first_block: u64,
         last_block: u64,
         block_size: u64,
-    ) -> Result<Vec<(u64, Arc<[u8]>)>, String> {
+    ) -> Result<SharedBlockRows, String> {
         let started = Instant::now();
         let result =
             self.repo
@@ -1717,6 +1723,7 @@ impl FodFuse {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn persist_file_blocks_profiled<'a>(
         &self,
         file_id: u64,
@@ -1978,10 +1985,10 @@ impl FodFuse {
             return Err(format!("statvfs failed for {}", path.display()));
         }
         let stats = unsafe { stats.assume_init() };
-        let fragment_size = stats.f_frsize as u64;
+        let fragment_size = stats.f_frsize;
         Ok(StatfsCapacity {
-            total_bytes: fragment_size.saturating_mul(stats.f_blocks as u64),
-            available_bytes: fragment_size.saturating_mul(stats.f_bavail as u64),
+            total_bytes: fragment_size.saturating_mul(stats.f_blocks),
+            available_bytes: fragment_size.saturating_mul(stats.f_bavail),
         })
     }
 
@@ -2204,9 +2211,7 @@ impl FodFuse {
                 let mut groups = vec![0 as libc::gid_t; count as usize];
                 let rc = libc::getgroups(count, groups.as_mut_ptr());
                 if rc >= 0 {
-                    for group in groups {
-                        group_ids.insert(group as u32);
-                    }
+                    group_ids.extend(groups);
                 }
             }
         }
@@ -2990,6 +2995,7 @@ impl FodFuse {
         Ok(resolved.to_string_lossy().into_owned())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn copy_range_from_states(
         &self,
         req_id: u64,
@@ -3509,7 +3515,7 @@ impl FodFuse {
                 FileType::RegularFile
             };
             let mut perm =
-                u16::from_str_radix(mode.trim_start_matches("0o"), 8).unwrap_or(0o644) as u16;
+                u16::from_str_radix(mode.trim_start_matches("0o"), 8).unwrap_or(0o644);
             let mut rdev = 0;
             if obj_type == "hardlink" {
                 let file_id = self.repo.get_hardlink_file_id(raw_inode).map_err(|_| EIO)?;
@@ -4197,7 +4203,7 @@ impl Filesystem for FodFuse {
             let _ = reply.add(INodeNo(parent_ino), 2, FileType::Directory, "..");
             next_offset = 2;
         }
-        for (index, name) in entries.into_iter().enumerate().skip(offset.max(0) as usize) {
+        for (index, name) in entries.into_iter().enumerate().skip(offset as usize) {
             let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
             match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {
@@ -4384,29 +4390,27 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        if flags & libc::XATTR_CREATE != 0 {
-            if self
+        if flags & libc::XATTR_CREATE != 0
+            && self
                 .repo
                 .fetch_xattr_value(&path, &name)
                 .ok()
                 .flatten()
                 .is_some()
-            {
-                fuse_reply_error!(reply, libc::EEXIST);
-                return;
-            }
+        {
+            fuse_reply_error!(reply, libc::EEXIST);
+            return;
         }
-        if flags & libc::XATTR_REPLACE != 0 {
-            if self
+        if flags & libc::XATTR_REPLACE != 0
+            && self
                 .repo
                 .fetch_xattr_value(&path, &name)
                 .ok()
                 .flatten()
                 .is_none()
-            {
-                fuse_reply_error!(reply, libc::ENODATA);
-                return;
-            }
+        {
+            fuse_reply_error!(reply, libc::ENODATA);
+            return;
         }
         let acl_mode_text = if self.acl_enabled && name == "system.posix_acl_access" {
             match self.acl_access_mode_text(&path, value) {
@@ -5286,7 +5290,7 @@ impl Filesystem for FodFuse {
         let logical_blocks = if size == 0 {
             0
         } else {
-            (size + u64::from(blocksize) - 1) / u64::from(blocksize)
+            size.div_ceil(u64::from(blocksize))
         }
         .max(1);
         debug!(
@@ -6008,7 +6012,7 @@ impl Filesystem for FodFuse {
         };
         let mut mode = mode & !umask;
         if !subject.is_root() {
-            mode &= !(libc::S_ISUID | libc::S_ISGID) as u32;
+            mode &= !(libc::S_ISUID | libc::S_ISGID);
         }
         self.log_request_start(
             req_id,
@@ -6695,7 +6699,7 @@ impl Filesystem for FodFuse {
         };
         let mut mode = mode & !umask;
         if !subject.is_root() {
-            mode &= !(libc::S_ISUID | libc::S_ISGID) as u32;
+            mode &= !(libc::S_ISUID | libc::S_ISGID);
         }
         let file_id = match self.repo.create_file(
             parent_id,
@@ -7419,8 +7423,8 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
-        let file_type = mode & libc::S_IFMT as u32;
-        if file_type == libc::S_IFREG as u32 {
+        let file_type = mode & libc::S_IFMT;
+        if file_type == libc::S_IFREG {
             let parent_path = match self.entry_path_for_ino(parent) {
                 Ok(path) => path,
                 Err(errno) => {
@@ -7442,7 +7446,7 @@ impl Filesystem for FodFuse {
             };
             let mut mode = mode & !umask;
             if !subject.is_root() {
-                mode &= !(libc::S_ISUID | libc::S_ISGID) as u32;
+                mode &= !(libc::S_ISUID | libc::S_ISGID);
             }
             match self.repo.create_file(
                 parent_id,
@@ -7490,13 +7494,13 @@ impl Filesystem for FodFuse {
         };
         let mut mode = mode & !umask;
         if !subject.is_root() {
-            mode &= !(libc::S_ISUID | libc::S_ISGID) as u32;
+            mode &= !(libc::S_ISUID | libc::S_ISGID);
         }
-        let file_kind = if file_type == libc::S_IFIFO as u32 {
+        let file_kind = if file_type == libc::S_IFIFO {
             "fifo"
-        } else if file_type == libc::S_IFCHR as u32 {
+        } else if file_type == libc::S_IFCHR {
             "char"
-        } else if file_type == libc::S_IFBLK as u32 {
+        } else if file_type == libc::S_IFBLK {
             "block"
         } else {
             fuse_reply_error!(reply, libc::EINVAL);

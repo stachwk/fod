@@ -438,6 +438,7 @@ impl FodFuse {
         Ok(output)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn read_copy_destination_slice(
         &self,
         dst_file_id: u64,

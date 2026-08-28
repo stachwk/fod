@@ -74,7 +74,7 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
     let mut progress = ScanProgressReporter::new(&source.name, &source.root_path);
     let mut staged_rows: Vec<IndexFileStageRow> = Vec::new();
 
-    let scan_result = (|| -> Result<(), String> {
+    let scan_result: Result<(), String> = {
         let walker = WalkDir::new(&source.root_path)
             .follow_links(false)
             .into_iter()
@@ -193,7 +193,7 @@ pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
             progress.maybe_report(&summary, &entry_path, scan_status);
         }
         Ok(())
-    })();
+    };
 
     match scan_result {
         Ok(()) => {

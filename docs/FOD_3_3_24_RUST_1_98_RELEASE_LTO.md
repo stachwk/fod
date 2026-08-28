@@ -167,7 +167,13 @@ i posiada sekcje `# Safety` opisujaca wymaganie poprawnego wskaznika do zakonczo
 
 Nie jest to zmiana ABI C. Naglowek `libfod.h` i symbol eksportowany przez `cdylib` zachowuja ten sam interfejs binarny. Zmiana doprecyzowuje kontrakt tylko dla wywolan z kodu Rust i usuwa deny-level diagnostyke Clippy 1.98.
 
-Pozostale ostrzezenia stylistyczne wykryte przez nowszy Clippy nie sa automatycznie poprawiane w tym commicie. Przejscie toolchainu nie jest laczone z przypadkowym refaktorem runtime.
+## Rust 1.98 i Clippy po przejsciu na release-lto
+
+FOD 3.3.27 porzadkuje ostrzezenia Clippy pokazane przez walidacje Rust 1.98 w profilu `release-lto`. Proste, mechaniczne ostrzezenia zostaly poprawione w miejscu: `div_ceil`, `checked_div`, `contains`, `is_some_and`, `is_none_or`, `inspect_err`, `append` zamiast `extend(drain(..))`, zbedne casty na celu Linuxowym oraz drobne uproszczenia testow.
+
+Ostrzezenia typu `too_many_arguments` i `large_enum_variant` w goracej sciezce FUSE/PostgreSQL oraz w CLI indexera sa traktowane inaczej. Tam, gdzie funkcja jest swiadomym wewnetrznym kontraktem miedzy warstwami FOD, FOD 3.3.27 dodaje punktowe `#[allow(clippy::...)]` zamiast duzego refaktoru bez regresji runtime. Dotyczy to zwlaszcza sciezek persist/read/copy, startu FUSE, shared monitoringu i enumow utrzymywanych przez Clap.
+
+Ta decyzja nie zmienia zachowania FUSE, SELinux, ACL, storage ani schematu PostgreSQL. Celem jest obnizenie szumu walidacji Rust 1.98, zeby przyszle ostrzezenia latwiej odroznic od swiadomych ksztaltow API.
 
 ## Poza zakresem
 
@@ -197,6 +203,7 @@ make rust-candidate-check
 make rust-candidate-clippy
 cargo fmt --all -- --check
 cargo check --workspace --locked --profile release-lto
+cargo test --workspace --locked --profile release-lto --lib --bins
 QNAP=0 make test-all
 ```
 

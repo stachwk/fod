@@ -81,7 +81,7 @@ impl IndexerSettings {
                 .extension()
                 .and_then(|value| value.to_str())
                 .map(normalize_extension)
-                .map_or(false, |extension| allowlist.contains(&extension)),
+                .is_some_and(|extension| allowlist.contains(&extension)),
         }
     }
 }
@@ -140,7 +140,7 @@ fn parse_path_rules(value: &str) -> Vec<String> {
 
 fn parse_list(value: &str) -> Vec<String> {
     value
-        .split(|ch: char| ch == ',' || ch == '\n' || ch == ';')
+        .split([',', '\n', ';'])
         .map(|item| item.trim())
         .filter(|item| !item.is_empty())
         .map(|item| item.to_string())

@@ -60,7 +60,7 @@ pub fn copy_segments(
     let workers = workers.max(1);
     let total_blocks = 1 + (length - 1) / block_size;
     let worker_count = workers.min(total_blocks).max(1);
-    let blocks_per_worker = ((total_blocks + worker_count - 1) / worker_count).max(1);
+    let blocks_per_worker = total_blocks.div_ceil(worker_count).max(1);
     let bytes_per_worker = blocks_per_worker.saturating_mul(block_size);
 
     let mut segments = Vec::new();
@@ -143,6 +143,7 @@ pub fn read_ahead_blocks(
     effective.min(max_allowed)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn read_fetch_bounds(
     total_blocks: u64,
     requested_first: u64,
@@ -176,6 +177,7 @@ pub fn read_fetch_bounds(
     Some((fetch_first, fetch_last))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn read_slice_plan(
     file_size: u64,
     offset: u64,
@@ -363,7 +365,7 @@ mod tests {
         ];
         assert_eq!(
             pack_changed_copy_pairs(100, 4 * 4096, 4096, &pairs),
-            vec![(100 + 1 * 4096, 100 + 3 * 4096)]
+            vec![(100 + 4096, 100 + 3 * 4096)]
         );
     }
 

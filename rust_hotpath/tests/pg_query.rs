@@ -316,7 +316,7 @@ fn verify_expired_reservation_renewal(repo: &DbRepo, block_size: usize) -> Resul
     let original_limit = repo
         .query_config_value("max_fs_size_bytes")?
         .ok_or_else(|| "missing max_fs_size_bytes config".to_string())?;
-    let used_bytes = persisted_payload_bytes(&repo)?;
+    let used_bytes = persisted_payload_bytes(repo)?;
     let dir_id = repo.create_directory(
         None,
         &unique_name("rust_pg_reservation_renew_dir"),
@@ -359,7 +359,7 @@ fn verify_expired_reservation_renewal(repo: &DbRepo, block_size: usize) -> Resul
         if active_count.trim() != "1" {
             return Err("expired payload reservation was not renewed".to_string());
         }
-        assert_block_range_matches(&repo, file_id, block_size_u64, &[(0, payload.as_slice())])?;
+        assert_block_range_matches(repo, file_id, block_size_u64, &[(0, payload.as_slice())])?;
         repo.release_payload_capacity_reservation(&token)
     })();
 
@@ -389,7 +389,7 @@ fn verify_expired_reservation_rejection(repo: &DbRepo, block_size: usize) -> Res
     let original_limit = repo
         .query_config_value("max_fs_size_bytes")?
         .ok_or_else(|| "missing max_fs_size_bytes config".to_string())?;
-    let used_bytes = persisted_payload_bytes(&repo)?;
+    let used_bytes = persisted_payload_bytes(repo)?;
     let dir_id = repo.create_directory(
         None,
         &unique_name("rust_pg_reservation_reclaim_dir"),

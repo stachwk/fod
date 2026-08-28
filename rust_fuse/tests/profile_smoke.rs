@@ -192,13 +192,13 @@ fn persist_buffer_chunking() -> Result<(), String> {
     let first = data
         .get(..4)
         .ok_or_else(|| "missing first bytes".to_string())?;
-    if first != &[0, 0, 0, 0] {
+    if first != [0, 0, 0, 0] {
         return Err(format!("unexpected first bytes: {:?}", first));
     }
     let last = data
         .get(data.len().saturating_sub(4)..)
         .ok_or_else(|| "missing last bytes".to_string())?;
-    if last != &[0, 0, 0, 0] {
+    if last != [0, 0, 0, 0] {
         return Err(format!("unexpected last bytes: {:?}", last));
     }
 
@@ -220,6 +220,7 @@ fn write_flush_threshold() -> Result<(), String> {
     fs::create_dir(&dir_path).map_err(|err| err.to_string())?;
     let mut file = fs::OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .read(true)
         .open(&file_path)

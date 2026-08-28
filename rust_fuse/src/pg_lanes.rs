@@ -399,6 +399,7 @@ fn resolve_endpoint_routing(
     })
 }
 
+#[allow(clippy::large_enum_variant)]
 enum DbRepoLaneStorage {
     Shared(DbRepo),
     Dedicated {

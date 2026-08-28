@@ -67,6 +67,10 @@ const REPLICA_POOL_PRESSURE_MARGIN_MILLI: u64 = 250;
 
 static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 
+type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
+type SizedSharedBlockRows = Option<(u64, SharedBlockRows)>;
+type StatfsSnapshotRows = (u64, u64, u64, u64, u64, Option<u64>);
+
 fn fod_profile_io_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_IO", false))
@@ -199,6 +203,7 @@ fn fod_profile_prepared_statement_observe(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fod_profile_sql_statement_observe(
     op: &'static str,
     sql_label: String,
@@ -278,11 +283,7 @@ pub fn prepared_statement_profile_snapshot_lines() -> Vec<String> {
     snapshots
         .into_iter()
         .map(|snapshot| {
-            let avg_us = if snapshot.count == 0 {
-                0
-            } else {
-                snapshot.micros_sum / snapshot.count
-            };
+            let avg_us = snapshot.micros_sum.checked_div(snapshot.count).unwrap_or(0);
             format!(
                 "pg_prepared_statement name={} count={} total_us={} max_us={} avg_us={} params={} param_bytes={} result_rows={} result_bytes={} failures={}",
                 snapshot.label,
@@ -334,11 +335,7 @@ pub fn result_decode_profile_snapshot_lines() -> Vec<String> {
     snapshots
         .into_iter()
         .map(|snapshot| {
-            let avg_us = if snapshot.count == 0 {
-                0
-            } else {
-                snapshot.micros_sum / snapshot.count
-            };
+            let avg_us = snapshot.micros_sum.checked_div(snapshot.count).unwrap_or(0);
             format!(
                 "pg_result_decode name={} count={} total_us={} max_us={} avg_us={} result_rows={} result_bytes={} failures={}",
                 snapshot.label,
@@ -389,11 +386,7 @@ pub fn sql_statement_profile_snapshot_lines() -> Vec<String> {
     snapshots
         .into_iter()
         .map(|snapshot| {
-            let avg_us = if snapshot.count == 0 {
-                0
-            } else {
-                snapshot.micros_sum / snapshot.count
-            };
+            let avg_us = snapshot.micros_sum.checked_div(snapshot.count).unwrap_or(0);
             let sql = snapshot.label.replace('"', "'");
             format!(
                 "pg_sql_statement op={} count={} total_us={} max_us={} avg_us={} params={} param_bytes={} result_rows={} result_bytes={} failures={} sql=\"{}\"",
@@ -797,10 +790,7 @@ fn choose_safe_primary_candidate(
 
     let mut fingerprints: Vec<&str> = Vec::new();
     for candidate in candidates {
-        if !fingerprints
-            .iter()
-            .any(|fingerprint| *fingerprint == candidate.server_fingerprint.as_str())
-        {
+        if !fingerprints.contains(&candidate.server_fingerprint.as_str()) {
             fingerprints.push(candidate.server_fingerprint.as_str());
         }
     }
@@ -826,25 +816,13 @@ fn choose_safe_primary_candidate(
     Ok(0)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct DbRepoConnectionTargetMetric {
     connection_latency_micros_ewma: Option<u64>,
     operation_latency_micros_ewma: Option<u64>,
     replay_lag_bytes: Option<u64>,
     consecutive_failures: u64,
     circuit_open_until: Option<Instant>,
-}
-
-impl Default for DbRepoConnectionTargetMetric {
-    fn default() -> Self {
-        Self {
-            connection_latency_micros_ewma: None,
-            operation_latency_micros_ewma: None,
-            replay_lag_bytes: None,
-            consecutive_failures: 0,
-            circuit_open_until: None,
-        }
-    }
 }
 
 impl DbRepoConnectionTargetMetric {
@@ -1317,7 +1295,7 @@ impl DbRepoConnectionTargets {
                 Some(score) => {
                     if best
                         .as_ref()
-                        .map_or(true, |(_, best_score)| score < *best_score)
+                        .is_none_or(|(_, best_score)| score < *best_score)
                     {
                         best = Some((index, score));
                     }
@@ -2655,16 +2633,14 @@ fn connect(conninfo: &str, tuning: &ConnectionTuning) -> Result<*mut PGconn, Str
                 "failed to apply required PostgreSQL session settings: {err}"
             ));
         }
-        let schema_is_initialized = schema_is_initialized_on_conn(conn).map_err(|err| {
+        let schema_is_initialized = schema_is_initialized_on_conn(conn).inspect_err(|_| {
             PQfinish(conn);
-            err
         })?;
         if schema_is_initialized {
             // Empty databases must stay connectable so bootstrap and status paths can
             // report that initialization is still missing.
-            prepare_connection(conn).map_err(|err| {
+            prepare_connection(conn).inspect_err(|_| {
                 PQfinish(conn);
-                err
             })?;
         }
         Ok(conn)
@@ -3001,7 +2977,7 @@ unsafe fn fetch_single_block_binary(
 unsafe fn fetch_block_range_rows_shared(
     res: *mut PGresult,
     block_size: usize,
-) -> Result<Vec<(u64, Arc<[u8]>)>, String> {
+) -> Result<SharedBlockRows, String> {
     let profile_enabled = fod_profile_io_enabled();
     let started = if profile_enabled {
         Some(Instant::now())
@@ -3055,7 +3031,7 @@ unsafe fn fetch_block_range_rows_shared(
 unsafe fn fetch_block_range_with_size_rows_shared(
     res: *mut PGresult,
     block_size: usize,
-) -> Result<Option<(u64, Vec<(u64, Arc<[u8]>)>)>, String> {
+) -> Result<SizedSharedBlockRows, String> {
     let profile_enabled = fod_profile_io_enabled();
     let started = profile_enabled.then(Instant::now);
     let mut decoded_rows = 0u64;
@@ -5296,6 +5272,7 @@ impl DbRepo {
     }
 
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     fn new_with_tuning(
         conninfo: &str,
         connection_tuning: ConnectionTuning,
@@ -5322,6 +5299,7 @@ impl DbRepo {
     }
 
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     fn new_with_tuning_targets(
         connection_targets: Arc<DbRepoConnectionTargets>,
         connection_tuning: ConnectionTuning,
@@ -5348,6 +5326,7 @@ impl DbRepo {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_with_tuning_targets_and_replica(
         connection_targets: Arc<DbRepoConnectionTargets>,
         replica_read_targets: Option<Arc<DbRepoConnectionTargets>>,
@@ -6105,6 +6084,7 @@ impl DbRepo {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn confirm_created_special_file(
         &self,
         target_parent_id: Option<u64>,
@@ -6672,7 +6652,7 @@ impl DbRepo {
         first_block: u64,
         last_block: u64,
         block_size: u64,
-    ) -> Result<Vec<(u64, Arc<[u8]>)>, String> {
+    ) -> Result<SharedBlockRows, String> {
         if last_block < first_block {
             return Ok(Vec::new());
         }
@@ -6702,7 +6682,7 @@ impl DbRepo {
         first_block: u64,
         last_block: u64,
         block_size: u64,
-    ) -> Result<Option<(u64, Vec<(u64, Arc<[u8]>)>)>, String> {
+    ) -> Result<SizedSharedBlockRows, String> {
         let file_id_text = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
         let first_block_text = CString::new(first_block.to_string())
@@ -7480,7 +7460,7 @@ impl DbRepo {
                     return Ok(0);
                 }
 
-                let stage_sql = CString::new(format!(
+                let stage_sql = CString::new(
                     "
                     CREATE TEMP TABLE IF NOT EXISTS index_duplicate_sets_stage (
                         hash_algorithm TEXT NOT NULL,
@@ -7490,8 +7470,8 @@ impl DbRepo {
                         total_bytes BIGINT NOT NULL
                     ) ON COMMIT PRESERVE ROWS;
                     TRUNCATE index_duplicate_sets_stage
-                    "
-                ))
+                    ",
+                )
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 create_or_reset_temp_table(conn, &stage_sql)?;
 
@@ -8724,7 +8704,6 @@ impl DbRepo {
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let session_id = session_id;
         let owner_key = CString::new(owner_key.to_string())
             .map_err(|_| "owner key contains NUL byte".to_string())?;
 
@@ -8745,7 +8724,6 @@ impl DbRepo {
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let session_id = session_id;
         let owner_key = CString::new(owner_key.to_string())
             .map_err(|_| "owner key contains NUL byte".to_string())?;
 
@@ -10959,6 +10937,7 @@ impl DbRepo {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn create_special_file(
         &self,
         target_parent_id: Option<u64>,
@@ -11142,6 +11121,7 @@ impl DbRepo {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn persist_file_blocks_copy_binary_staging_on_conn<'a>(
         &self,
         conn: *mut PGconn,
@@ -11233,6 +11213,7 @@ impl DbRepo {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn persist_file_blocks_direct_on_conn<'a>(
         &self,
         conn: *mut PGconn,
@@ -11369,6 +11350,7 @@ impl DbRepo {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn persist_file_blocks_streaming_on_conn(
         &self,
         conn: *mut PGconn,
@@ -11727,6 +11709,7 @@ impl DbRepo {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn persist_file_blocks_from_path(
         &self,
         file_id: u64,
@@ -11788,6 +11771,7 @@ impl DbRepo {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn persist_file_blocks_with_crc_flag(
         &self,
         file_id: u64,
@@ -11810,6 +11794,7 @@ impl DbRepo {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn persist_file_blocks_with_crc_flag_and_reservation(
         &self,
         file_id: u64,
@@ -11875,6 +11860,7 @@ impl DbRepo {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn persist_file_blocks_rows_on_conn<'a>(
         &self,
         conn: *mut PGconn,
@@ -12326,7 +12312,7 @@ impl DbRepo {
                     }
                 },
                 |conn| {
-                    let data_object_id = match {
+                    let data_object_id = {
                         let params = [&file_id];
                         let res = exec_params(conn, &sql_lookup, &params)?;
                         let text = fetch_single_text(res)?;
@@ -12339,7 +12325,8 @@ impl DbRepo {
                                     .map_err(|_| "invalid data_object_id value".to_string())?,
                             )
                         }
-                    } {
+                    };
+                    let data_object_id = match data_object_id {
                         Some(value) => value,
                         None => {
                             let params = [&file_id];
@@ -12597,7 +12584,7 @@ impl DbRepo {
         })
     }
 
-    pub fn statfs_snapshot(&self) -> Result<(u64, u64, u64, u64, u64, Option<u64>), String> {
+    pub fn statfs_snapshot(&self) -> Result<StatfsSnapshotRows, String> {
         self.with_read_connection(|conn| unsafe {
             let res = exec_prepared_params(conn, PreparedStatement::StatfsSnapshot, &[])?;
             let values = fetch_first_row_texts(res)?;

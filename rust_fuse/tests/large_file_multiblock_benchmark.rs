@@ -55,6 +55,7 @@ fn large_file_multiblock_benchmark() -> Result<(), String> {
     fs::create_dir(&dir_path).map_err(|err| format!("create_dir failed: {err}"))?;
     let mut file = OpenOptions::new()
         .create(true)
+        .truncate(true)
         .read(true)
         .write(true)
         .open(&file_path)

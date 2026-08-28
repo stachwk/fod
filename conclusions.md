@@ -2916,3 +2916,27 @@ runtime profile before the helper resolves local binaries.
 Per user instruction, validation tests and benchmarks for this stage were not
 run by the assistant. The recommended validation command list was recorded in
 `commands.md` for user-side execution.
+
+## 2026-08-28 - Rust 1.98 release-lto Clippy cleanup prepared on `56c30fa`
+
+The user-provided `make rust-candidate-clippy` output for the Rust 1.98
+`release-lto` path completed successfully but still showed many warnings. FOD
+3.3.27 reduces that warning noise without changing the FUSE/SELinux/storage
+contract.
+
+Straight-line Clippy fixes were applied where they are behavior-preserving:
+checked or intrinsic arithmetic helpers, simpler option/result adapters,
+type aliases for repeated shared block row types, append-based vector
+collection, redundant-reference removal, redundant-local removal, collapsed
+conditions, explicit truncate intent in existing tests, and unnecessary Linux
+casts removed where the target types already match.
+
+Warnings that would require reshaping internal APIs were handled with targeted
+`#[allow(clippy::...)]` attributes instead of refactoring broad FUSE/PostgreSQL
+contracts without running the integration suite. This applies to selected
+persist/read/copy/startup/shared-monitor entry points and large CLI/lane enum
+variants. The intent is to make future Clippy output more actionable while
+preserving the existing runtime behavior until the user runs validation.
+
+Per user instruction, tests and benchmarks were not run by the assistant for
+this stage. User-side validation commands are recorded in `commands.md`.

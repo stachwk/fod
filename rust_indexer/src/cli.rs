@@ -27,6 +27,7 @@ impl Cli {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     #[command(
         about = "Describe the fod-indexer integration contract.",

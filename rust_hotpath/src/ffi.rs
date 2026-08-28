@@ -4342,7 +4342,7 @@ mod tests {
     #[test]
     fn exports_persist_block_crc_plan() {
         let full = vec![0xABu8; 4096];
-        let partial = vec![0xCDu8; 3];
+        let partial = [0xCDu8; 3];
         let inputs = [
             DbfsPersistBlockInput {
                 block_index: 3,

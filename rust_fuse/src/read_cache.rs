@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
+type MissingBlockIndices = Vec<u64>;
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ReadSequenceState {
     pub(crate) last_end: u64,
@@ -98,7 +101,7 @@ impl ReadBlockCache {
         file_id: u64,
         first_block: u64,
         last_block: u64,
-    ) -> (Vec<(u64, Arc<[u8]>)>, Vec<u64>) {
+    ) -> (SharedBlockRows, MissingBlockIndices) {
         if last_block < first_block {
             return (Vec::new(), Vec::new());
         }
@@ -307,7 +310,7 @@ impl FodFuse {
         file_id: u64,
         first_block: u64,
         last_block: u64,
-    ) -> (Vec<(u64, Arc<[u8]>)>, Vec<u64>) {
+    ) -> (SharedBlockRows, MissingBlockIndices) {
         if last_block < first_block {
             return (Vec::new(), Vec::new());
         }
@@ -358,7 +361,7 @@ impl FodFuse {
         file_id: u64,
         first_block: u64,
         last_block: u64,
-    ) -> Option<Vec<(u64, Arc<[u8]>)>> {
+    ) -> Option<SharedBlockRows> {
         if last_block < first_block {
             return Some(Vec::new());
         }
@@ -461,9 +464,9 @@ impl FodFuse {
     }
 
     fn merge_sorted_blocks(
-        mut left: Vec<(u64, Arc<[u8]>)>,
-        mut right: Vec<(u64, Arc<[u8]>)>,
-    ) -> Vec<(u64, Arc<[u8]>)> {
+        mut left: SharedBlockRows,
+        mut right: SharedBlockRows,
+    ) -> SharedBlockRows {
         if left.is_empty() {
             return right;
         }
@@ -507,7 +510,7 @@ impl FodFuse {
         first_block: u64,
         last_block: u64,
         block_size: u64,
-    ) -> Result<Vec<(u64, Arc<[u8]>)>, libc::c_int> {
+    ) -> Result<SharedBlockRows, libc::c_int> {
         let started = Instant::now();
         if last_block < first_block {
             profile.record_fetch_block_range_chunk_elapsed(started.elapsed());
@@ -539,7 +542,7 @@ impl FodFuse {
         ranges: Vec<(u64, u64)>,
         block_size: u64,
         workers: usize,
-    ) -> Result<Vec<(u64, Arc<[u8]>)>, libc::c_int> {
+    ) -> Result<SharedBlockRows, libc::c_int> {
         let started = Instant::now();
         if ranges.is_empty() {
             profile.record_fetch_block_range_parallel_elapsed(started.elapsed());
@@ -553,7 +556,7 @@ impl FodFuse {
             let profile = Arc::clone(&profile);
             let queue = Arc::clone(&queue);
             handles.push(thread::spawn(
-                move || -> Result<Vec<(u64, Arc<[u8]>)>, libc::c_int> {
+                move || -> Result<SharedBlockRows, libc::c_int> {
                     let mut collected = Vec::new();
                     loop {
                         let next = {
@@ -571,7 +574,7 @@ impl FodFuse {
                             last_block,
                             block_size,
                         )?;
-                        collected.extend(chunk.drain(..));
+                        collected.append(&mut chunk);
                     }
                     Ok(collected)
                 },
@@ -591,7 +594,7 @@ impl FodFuse {
         &self,
         file_id: u64,
         missing: &[u64],
-    ) -> Result<Vec<(u64, Arc<[u8]>)>, libc::c_int> {
+    ) -> Result<SharedBlockRows, libc::c_int> {
         if missing.is_empty() {
             return Ok(Vec::new());
         }
@@ -663,7 +666,7 @@ impl FodFuse {
         file_id: u64,
         fetch_first: u64,
         fetch_last: u64,
-    ) -> Result<Vec<(u64, Arc<[u8]>)>, libc::c_int> {
+    ) -> Result<SharedBlockRows, libc::c_int> {
         let started = Instant::now();
         if fetch_last < fetch_first {
             self.record_read_block_map_elapsed(started.elapsed());

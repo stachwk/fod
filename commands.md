@@ -6456,3 +6456,120 @@ git diff HEAD~1..HEAD -- Cargo.toml fod_version.txt Cargo.lock GNUmakefile Makef
 git status --short --branch
 timeout 120 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex'
 ```
+
+## 2026-08-28 - Rust 1.98 release-lto Clippy cleanup
+
+Base commit at execution time: `56c30fa`
+
+Executed diagnostic/edit-review commands, without running tests or benchmarks:
+
+```bash
+sed -n '1,260p' /home/wojtek/.codex/attachments/927a8c1f-a877-47f3-a19c-30e7cb613612/pasted-text.txt
+git status --short --branch --ignored AGENTS.md
+timeout 30 bash -lc 'source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "release-lto Rust 1.98 clippy too many arguments unsafe op warnings"'
+sed -n '261,620p' /home/wojtek/.codex/attachments/927a8c1f-a877-47f3-a19c-30e7cb613612/pasted-text.txt
+sed -n '620,1229p' /home/wojtek/.codex/attachments/927a8c1f-a877-47f3-a19c-30e7cb613612/pasted-text.txt
+wc -l /home/wojtek/.codex/attachments/927a8c1f-a877-47f3-a19c-30e7cb613612/pasted-text.txt
+nl -ba rust_hotpath/src/pg.rs | sed -n '180,360p'
+nl -ba rust_hotpath/src/lib.rs | sed -n '1,230p'
+nl -ba rust_fuse/src/read_cache.rs | sed -n '1,130p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '360,430p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '760,850p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '1290,1335p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '2635,2680p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '2980,3075p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '5280,5370p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '6645,6725p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '7460,7505p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '8700,8765p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '10930,11005p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '11120,11270p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '12305,12360p'
+nl -ba rust_hotpath/src/pg.rs | sed -n '12570,12625p'
+nl -ba rust_fuse/src/fs.rs | sed -n '1,110p'
+nl -ba rust_fuse/src/fs.rs | sed -n '470,560p'
+nl -ba rust_fuse/src/fs.rs | sed -n '1295,1350p'
+nl -ba rust_fuse/src/fs.rs | sed -n '1650,1740p'
+nl -ba rust_fuse/src/fs.rs | sed -n '1955,1995p'
+nl -ba rust_fuse/src/fs.rs | sed -n '2188,2220p'
+nl -ba rust_fuse/src/fs.rs | sed -n '2970,3035p'
+nl -ba rust_fuse/src/fs.rs | sed -n '4175,4215p'
+nl -ba rust_fuse/src/fs.rs | sed -n '4368,4410p'
+nl -ba rust_fuse/src/fs.rs | sed -n '5278,5298p'
+nl -ba rust_fuse/src/fs.rs | sed -n '5988,6030p'
+nl -ba rust_fuse/src/fs.rs | sed -n '6668,6710p'
+nl -ba rust_fuse/src/fs.rs | sed -n '7400,7460p'
+nl -ba rust_fuse/src/fs.rs | sed -n '7470,7510p'
+nl -ba rust_fuse/src/pg_lanes.rs | sed -n '1,140p'
+rg -n "enum DbRepoLaneStorage|pub enum Commands|fn log_mount_status|read_copy_destination_slice|load_snapshot_file_list|scan_result|allows_extension|parse_list" rust_fuse/src/pg_lanes.rs rust_indexer/src/cli.rs rust_indexer/src/config.rs rust_indexer/src/scan.rs rust_indexer/src/snapshot_api.rs rust_fuse/src/startup.rs rust_fuse/src/write_buffer.rs
+nl -ba rust_fuse/src/pg_lanes.rs | sed -n '520,610p'
+nl -ba rust_fuse/src/startup.rs | sed -n '250,300p'
+nl -ba rust_fuse/src/write_buffer.rs | sed -n '420,470p'
+nl -ba rust_indexer/src/config.rs | sed -n '60,155p'
+nl -ba rust_indexer/src/scan.rs | sed -n '60,210p'
+nl -ba rust_indexer/src/cli.rs | sed -n '1,90p'
+nl -ba rust_indexer/src/snapshot_api.rs | sed -n '720,770p'
+rg -n "1 \* 4096|\+ 1 \*|\* 4096" rust_hotpath/src/lib.rs rust_hotpath/tests/helper_parity.rs rust_hotpath/tests/transactional_replay_smoke.rs rust_hotpath/tests/pg_query.rs rust_hotpath/src/ffi.rs
+nl -ba rust_hotpath/tests/pg_query.rs | sed -n '300,405p'
+nl -ba rust_hotpath/tests/transactional_replay_smoke.rs | sed -n '210,235p'
+nl -ba rust_hotpath/src/ffi.rs | sed -n '4330,4360p'
+nl -ba rust_hotpath/src/lib.rs | sed -n '330,375p'
+nl -ba rust_fuse/src/read_cache.rs | sed -n '300,690p'
+nl -ba rust_hotpath/tests/helper_parity.rs | sed -n '40,60p'
+nl -ba rust_hotpath/tests/helper_parity.rs | sed -n '300,345p'
+rg -n "&repo|op_ref|create\(true\)|&payload\[\.\.|[0, 0, 0, 0]" rust_hotpath/tests/pg_query.rs rust_fuse/tests rust_indexer/tests tests
+nl -ba rust_hotpath/tests/pg_query.rs | sed -n '540,700p'
+nl -ba rust_fuse/tests/profile_smoke.rs | sed -n '185,230p'
+nl -ba rust_fuse/tests/mount_smoke.rs | sed -n '380,398p'
+nl -ba rust_fuse/tests/large_file_multiblock_benchmark.rs | sed -n '45,65p'
+nl -ba rust_fuse/tests/large_copy_benchmark.rs | sed -n '84,102p'
+cat fod_version.txt
+rg -n "version = \"3\.3\.26\"|name = \"fod|3\.3\.26" Cargo.toml Cargo.lock rust_*/Cargo.toml fod_version.txt
+git rev-parse --short HEAD
+date +%F
+git diff --check
+git diff --stat
+git diff -- rust_hotpath/src/pg.rs | sed -n '1,260p'
+git diff -- rust_fuse/src/fs.rs | sed -n '1,260p'
+git diff -- rust_fuse/src/read_cache.rs rust_indexer/src/scan.rs rust_indexer/src/config.rs rust_indexer/src/cli.rs rust_indexer/src/snapshot_api.rs | sed -n '1,260p'
+git diff -- rust_hotpath/src/lib.rs rust_hotpath/src/ffi.rs rust_hotpath/tests/helper_parity.rs rust_hotpath/tests/pg_query.rs rust_hotpath/tests/transactional_replay_smoke.rs rust_fuse/tests/mount_smoke.rs rust_fuse/tests/profile_smoke.rs rust_fuse/tests/large_file_multiblock_benchmark.rs | sed -n '1,260p'
+rg -n "^warning:|^\s+-->" /home/wojtek/.codex/attachments/927a8c1f-a877-47f3-a19c-30e7cb613612/pasted-text.txt
+git status --short --branch
+rg -n "3\.3\.26" Cargo.toml Cargo.lock fod_version.txt
+rg -n "let avg_us = if snapshot\.count|map_or\(true|map_or\(false|let session_id = session_id|extend\(chunk\.drain\(\.\.\)\)|1 \* 4096|\+ 1 \* 4096|vec!\[0xCDu8; 3\]|&payload\[\.\.4\]|&\[0, 0, 0, 0\]|offset\.max\(0\)|S_IFMT as u32|S_IFREG as u32|S_IFIFO as u32|S_IFCHR as u32|S_IFBLK as u32|u16::from_str_radix\([^\n]+ as u16" rust_hotpath rust_fuse rust_indexer
+git diff --check
+git diff --stat
+git diff -- rust_hotpath/tests/transactional_replay_smoke.rs rust_fuse/src/fs.rs | sed -n '1,260p'
+```
+
+Review and finalization commands:
+
+```bash
+git status --short --branch
+git diff --check
+git diff --stat
+git diff -- Cargo.toml Cargo.lock fod_version.txt docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md conclusions.md commands.md rust_hotpath/src/lib.rs rust_hotpath/src/pg.rs rust_hotpath/src/ffi.rs rust_hotpath/tests/helper_parity.rs rust_hotpath/tests/pg_query.rs rust_hotpath/tests/transactional_replay_smoke.rs rust_fuse/src/fs.rs rust_fuse/src/pg_lanes.rs rust_fuse/src/read_cache.rs rust_fuse/src/startup.rs rust_fuse/src/write_buffer.rs rust_fuse/tests/large_file_multiblock_benchmark.rs rust_fuse/tests/mount_smoke.rs rust_fuse/tests/profile_smoke.rs rust_indexer/src/cli.rs rust_indexer/src/config.rs rust_indexer/src/scan.rs rust_indexer/src/snapshot_api.rs
+git add Cargo.toml Cargo.lock fod_version.txt docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md conclusions.md commands.md rust_hotpath/src/lib.rs rust_hotpath/src/pg.rs rust_hotpath/src/ffi.rs rust_hotpath/tests/helper_parity.rs rust_hotpath/tests/pg_query.rs rust_hotpath/tests/transactional_replay_smoke.rs rust_fuse/src/fs.rs rust_fuse/src/pg_lanes.rs rust_fuse/src/read_cache.rs rust_fuse/src/startup.rs rust_fuse/src/write_buffer.rs rust_fuse/tests/large_file_multiblock_benchmark.rs rust_fuse/tests/mount_smoke.rs rust_fuse/tests/profile_smoke.rs rust_indexer/src/cli.rs rust_indexer/src/config.rs rust_indexer/src/scan.rs rust_indexer/src/snapshot_api.rs
+git commit -m "FOD 3.3.27: reduce Rust 1.98 clippy noise"
+git show --stat --oneline --decorate --no-renames HEAD
+git show --check --format=fuller HEAD
+git diff HEAD~1..HEAD -- Cargo.toml Cargo.lock fod_version.txt docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md conclusions.md commands.md rust_hotpath/src/lib.rs rust_hotpath/src/pg.rs rust_hotpath/src/ffi.rs rust_hotpath/tests/helper_parity.rs rust_hotpath/tests/pg_query.rs rust_hotpath/tests/transactional_replay_smoke.rs rust_fuse/src/fs.rs rust_fuse/src/pg_lanes.rs rust_fuse/src/read_cache.rs rust_fuse/src/startup.rs rust_fuse/src/write_buffer.rs rust_fuse/tests/large_file_multiblock_benchmark.rs rust_fuse/tests/mount_smoke.rs rust_fuse/tests/profile_smoke.rs rust_indexer/src/cli.rs rust_indexer/src/config.rs rust_indexer/src/scan.rs rust_indexer/src/snapshot_api.rs
+git status --short --branch
+timeout 120 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex'
+```
+
+Recommended validation commands for the user:
+
+```bash
+rustc --version
+cargo --version
+make cargo-profile-show
+make rust-production-toolchain-check
+make test-rust-release-defaults-policy
+cargo fmt --all -- --check
+cargo check --workspace --locked --profile release-lto
+cargo clippy --workspace --all-targets --locked --profile release-lto
+make rust-candidate-clippy
+cargo test --workspace --locked --profile release-lto --lib --bins
+QNAP=0 make test-all
+```
