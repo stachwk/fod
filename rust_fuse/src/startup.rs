@@ -268,19 +268,32 @@ fn mount_config(
     Ok(config)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn log_mount_status(
-    mountpoint: &Path,
-    core: &RuntimeCoreSettings,
-    mount: &RuntimeMountSettings,
-    security: &RuntimeSecuritySettings,
-    lock: &RuntimeLockSettings,
-    cache: &RuntimeCacheSettings,
-    storage: &RuntimeStorageSettings,
-    fs: &FodFuse,
-    snapshot: &StartupSnapshot,
-    config: &Config,
-) {
+struct MountStatusLogInput<'a> {
+    mountpoint: &'a Path,
+    core: &'a RuntimeCoreSettings,
+    mount: &'a RuntimeMountSettings,
+    security: &'a RuntimeSecuritySettings,
+    lock: &'a RuntimeLockSettings,
+    cache: &'a RuntimeCacheSettings,
+    storage: &'a RuntimeStorageSettings,
+    fs: &'a FodFuse,
+    snapshot: &'a StartupSnapshot,
+    config: &'a Config,
+}
+
+fn log_mount_status(input: MountStatusLogInput<'_>) {
+    let MountStatusLogInput {
+        mountpoint,
+        core,
+        mount,
+        security,
+        lock,
+        cache,
+        storage,
+        fs,
+        snapshot,
+        config,
+    } = input;
     info!("FOD mount startup status");
     info!(
         "FOD version={} FOD schema name={} FOD schema version={:?} initialized={}",
@@ -464,9 +477,18 @@ pub fn mount_fuse(
         .map_err(|err| format!("failed to start logical task observability: {err}"))?;
 
     let config = mount_config(&mount, &security)?;
-    log_mount_status(
-        mountpoint, &core, &mount, &security, &lock, &cache, &storage, &fs, snapshot, &config,
-    );
+    log_mount_status(MountStatusLogInput {
+        mountpoint,
+        core: &core,
+        mount: &mount,
+        security: &security,
+        lock: &lock,
+        cache: &cache,
+        storage: &storage,
+        fs: &fs,
+        snapshot,
+        config: &config,
+    });
     info!("FOD mounting filesystem at {}", mountpoint.display());
     println!(
         "fod-rust-fuse: mounting filesystem at {}",

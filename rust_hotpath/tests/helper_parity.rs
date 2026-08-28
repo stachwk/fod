@@ -8,7 +8,62 @@ use fod_rust_hotpath::{
     persist_layout_plan, read_ahead_blocks, read_fetch_bounds, read_missing_range_worker_count,
     read_slice_plan, sorted_contiguous_ranges, write_copy_dedupe_plan, write_copy_plan,
     write_copy_worker_count, LogicalResizePlan, PersistBlockPlanEntry, PersistPlanInput,
+    ReadFetchBoundsInput, ReadSlicePlanInput,
 };
+
+macro_rules! read_bounds {
+    (
+        $total_blocks:expr,
+        $requested_first:expr,
+        $requested_last:expr,
+        $read_ahead_blocks_value:expr,
+        $sequential_read_ahead_blocks_value:expr,
+        $streak:expr,
+        $read_cache_limit_blocks:expr,
+        $sequential:expr,
+        $small_file_threshold_blocks:expr
+    ) => {
+        read_fetch_bounds(ReadFetchBoundsInput {
+            total_blocks: $total_blocks,
+            requested_first: $requested_first,
+            requested_last: $requested_last,
+            read_ahead_blocks_value: $read_ahead_blocks_value,
+            sequential_read_ahead_blocks_value: $sequential_read_ahead_blocks_value,
+            streak: $streak,
+            read_cache_limit_blocks: $read_cache_limit_blocks,
+            sequential: $sequential,
+            small_file_threshold_blocks: $small_file_threshold_blocks,
+        })
+    };
+}
+
+macro_rules! read_slice {
+    (
+        $file_size:expr,
+        $offset:expr,
+        $size:expr,
+        $block_size:expr,
+        $read_ahead_blocks_value:expr,
+        $sequential_read_ahead_blocks_value:expr,
+        $streak:expr,
+        $read_cache_limit_blocks:expr,
+        $sequential:expr,
+        $small_file_threshold_blocks:expr
+    ) => {
+        read_slice_plan(ReadSlicePlanInput {
+            file_size: $file_size,
+            offset: $offset,
+            size: $size,
+            block_size: $block_size,
+            read_ahead_blocks_value: $read_ahead_blocks_value,
+            sequential_read_ahead_blocks_value: $sequential_read_ahead_blocks_value,
+            streak: $streak,
+            read_cache_limit_blocks: $read_cache_limit_blocks,
+            sequential: $sequential,
+            small_file_threshold_blocks: $small_file_threshold_blocks,
+        })
+    };
+}
 
 #[test]
 fn crc32_and_chunking_helpers_match_expected_values() {
@@ -60,26 +115,17 @@ fn range_packing_helpers_match_expected_values() {
 #[test]
 fn read_helpers_match_expected_values() {
     assert_eq!(read_ahead_blocks(2, 8, 3, 10, true), 9);
-    assert_eq!(read_fetch_bounds(0, 0, 0, 2, 8, 0, 256, false, 8), None);
+    assert_eq!(read_bounds!(0, 0, 0, 2, 8, 0, 256, false, 8), None);
+    assert_eq!(read_bounds!(4, 0, 0, 2, 8, 0, 256, false, 8), Some((0, 3)));
+    assert_eq!(read_bounds!(32, 2, 3, 2, 8, 1, 256, true, 8), Some((2, 11)));
+    assert_eq!(read_bounds!(32, 2, 3, 16, 8, 4, 4, true, 8), Some((2, 6)));
+    assert_eq!(read_slice!(0, 0, 1, 4, 2, 8, 0, 256, false, 8), None);
     assert_eq!(
-        read_fetch_bounds(4, 0, 0, 2, 8, 0, 256, false, 8),
-        Some((0, 3))
-    );
-    assert_eq!(
-        read_fetch_bounds(32, 2, 3, 2, 8, 1, 256, true, 8),
-        Some((2, 11))
-    );
-    assert_eq!(
-        read_fetch_bounds(32, 2, 3, 16, 8, 4, 4, true, 8),
-        Some((2, 6))
-    );
-    assert_eq!(read_slice_plan(0, 0, 1, 4, 2, 8, 0, 256, false, 8), None);
-    assert_eq!(
-        read_slice_plan(16, 0, 4, 4, 2, 8, 0, 256, false, 8),
+        read_slice!(16, 0, 4, 4, 2, 8, 0, 256, false, 8),
         Some((4, 0, 3))
     );
     assert_eq!(
-        read_slice_plan(64, 8, 8, 4, 2, 8, 1, 256, true, 8),
+        read_slice!(64, 8, 8, 4, 2, 8, 1, 256, true, 8),
         Some((16, 2, 11))
     );
     assert_eq!(read_missing_range_worker_count(1, 8, 10, 3), 1);
@@ -103,14 +149,8 @@ fn read_ahead_sequence_plan_matches_expected_values() {
     assert_eq!(read_ahead_blocks(0, 2, 2, 8, true), 4);
     assert_eq!(read_ahead_blocks(0, 2, 4, 8, true), 7);
     assert_eq!(read_ahead_blocks(2, 8, 3, 10, false), 2);
-    assert_eq!(
-        read_fetch_bounds(16, 0, 0, 0, 2, 1, 8, true, 0),
-        Some((0, 2))
-    );
-    assert_eq!(
-        read_fetch_bounds(16, 4, 7, 0, 2, 2, 8, true, 0),
-        Some((4, 11))
-    );
+    assert_eq!(read_bounds!(16, 0, 0, 0, 2, 1, 8, true, 0), Some((0, 2)));
+    assert_eq!(read_bounds!(16, 4, 7, 0, 2, 2, 8, true, 0), Some((4, 11)));
 }
 
 #[test]
@@ -130,11 +170,11 @@ fn read_cache_benchmark_plan_matches_expected_values() {
         2.min(blocks.saturating_sub(1))
     );
     assert_eq!(
-        read_fetch_bounds(blocks, 0, 0, 0, 2, 1, blocks, true, 0),
+        read_bounds!(blocks, 0, 0, 0, 2, 1, blocks, true, 0),
         Some((0, 2.min(blocks.saturating_sub(1))))
     );
     assert_eq!(
-        read_fetch_bounds(blocks, 1, 1, 0, 2, 2, blocks, true, 0),
+        read_bounds!(blocks, 1, 1, 0, 2, 2, blocks, true, 0),
         Some((1, (1 + 4).min(blocks.saturating_sub(1))))
     );
 }
@@ -320,10 +360,7 @@ fn write_workers_parallel_copy_plan_matches_expected_values() {
         write_copy_plan(16 * 4096, 4096, 4, 2, false, 1, 16),
         (16, false, true, 4)
     );
-    assert_eq!(
-        write_copy_dedupe_plan(4096, 4096, true, 1, 16),
-        (1, true)
-    );
+    assert_eq!(write_copy_dedupe_plan(4096, 4096, true, 1, 16), (1, true));
     assert_eq!(
         write_copy_dedupe_plan(16 * 4096, 4096, true, 1, 16),
         (16, true)

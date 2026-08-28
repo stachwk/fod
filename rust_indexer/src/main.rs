@@ -132,10 +132,13 @@ fn run() -> Result<(), String> {
                         snapshot_id,
                         limit,
                         cursor,
-                        source.as_deref(),
-                        file_kind.as_deref(),
-                        scan_status.as_deref(),
-                        hash_status.as_deref(),
+                        read_api::FileCatalogFilters {
+                            source,
+                            file_kind,
+                            scan_status,
+                            hash_status,
+                            ..read_api::FileCatalogFilters::default()
+                        },
                     )?
                 } else {
                     snapshot_api::SnapshotFileCatalogOutput::from_live(read_api::load_file_list(
@@ -178,18 +181,20 @@ fn run() -> Result<(), String> {
                         snapshot_id,
                         limit,
                         cursor,
-                        query.as_deref(),
-                        path.as_deref(),
-                        name.as_deref(),
-                        source.as_deref(),
-                        extension.as_deref(),
-                        file_kind.as_deref(),
-                        scan_status.as_deref(),
-                        hash_status.as_deref(),
-                        min_size,
-                        max_size,
-                        mtime_from,
-                        mtime_to,
+                        read_api::FileCatalogFilters {
+                            query,
+                            path,
+                            name,
+                            source,
+                            extension,
+                            file_kind,
+                            scan_status,
+                            hash_status,
+                            min_size,
+                            max_size,
+                            mtime_from,
+                            mtime_to,
+                        },
                     )?
                 } else {
                     snapshot_api::SnapshotFileCatalogOutput::from_live(read_api::search_files(

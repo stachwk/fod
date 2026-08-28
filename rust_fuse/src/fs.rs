@@ -47,7 +47,7 @@ use crate::compatibility::FuseCompatibilitySnapshot;
 use crate::copy_plan::{copy_range_bounds, pack_copy_skip_unchanged_runs, CopyRangeBounds};
 use crate::read_cache::{ReadBlockCache, ReadSequenceState};
 use crate::startup::FodFuseSettings;
-pub(crate) use crate::write_buffer::WriteState;
+pub(crate) use crate::write_buffer::{ReadCopyDestinationSlice, WriteState};
 
 const ROOT_INO: u64 = 1;
 const REQUEST_PID_GROUPS_CACHE_TTL: Duration = Duration::from_millis(500);
@@ -65,6 +65,31 @@ const IOCTL_FSXATTR_BYTES: usize = 28;
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type RecentWriteBlockKey = (u64, u64);
 
+pub(crate) struct PersistFileBlocksProfileInput<'rows, 'data> {
+    pub(crate) file_id: u64,
+    pub(crate) file_size: u64,
+    pub(crate) block_size: u64,
+    pub(crate) total_blocks: u64,
+    pub(crate) truncate_pending: bool,
+    pub(crate) blocks: &'rows [PersistBlockRow<'data>],
+    pub(crate) maintain_copy_crc_table: bool,
+    pub(crate) capacity_reservation_token: Option<&'rows str>,
+}
+
+struct CopyRangeFromStatesInput {
+    req_id: u64,
+    op: &'static str,
+    src_file_id: u64,
+    dst_file_id: u64,
+    fh_out: u64,
+    src_state: Option<WriteState>,
+    dst_state: Option<WriteState>,
+    src_offset: u64,
+    dst_offset: u64,
+    len: u64,
+    truncate_destination: bool,
+}
+
 fn fod_fuse_profile_io_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_IO", false))
@@ -78,8 +103,8 @@ pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn setattr_requests_mutation(
+#[derive(Debug, Clone, Copy, Default)]
+struct SetattrMutationFlags {
     mode: bool,
     uid: bool,
     gid: bool,
@@ -91,8 +116,22 @@ fn setattr_requests_mutation(
     chgtime: bool,
     bkuptime: bool,
     flags: bool,
-) -> bool {
-    mode || uid || gid || size || atime || mtime || ctime || crtime || chgtime || bkuptime || flags
+}
+
+impl SetattrMutationFlags {
+    fn any(self) -> bool {
+        self.mode
+            || self.uid
+            || self.gid
+            || self.size
+            || self.atime
+            || self.mtime
+            || self.ctime
+            || self.crtime
+            || self.chgtime
+            || self.bkuptime
+            || self.flags
+    }
 }
 
 fn ioctl_is_mutating(cmd: u32) -> bool {
@@ -499,37 +538,38 @@ fn shared_monitor_publish_interval() -> Duration {
     Duration::from_millis(value)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn publish_shared_monitor_sample(
-    observability_repo: &DbRepo,
-    publish_repo: &DbRepo,
+struct SharedMonitorPublishInput<'a> {
+    observability_repo: &'a DbRepo,
+    publish_repo: &'a DbRepo,
     session_id: u64,
     publish_interval_millis: u64,
     sample_seq: u64,
-    read: &LogicalTaskQueueObservability,
-    write: &LogicalTaskQueueObservability,
-    copy: &LogicalTaskQueueObservability,
-    profile: &FodFuseProfileCounters,
-) -> Result<(), String> {
-    let read_snapshot = read.snapshot()?;
-    let write_snapshot = write.snapshot()?;
-    let copy_snapshot = copy.snapshot()?;
-    let database_snapshot = observability_repo.observability_snapshot()?;
-    let source_snapshot = observability_repo.source_snapshot()?;
+    read: &'a LogicalTaskQueueObservability,
+    write: &'a LogicalTaskQueueObservability,
+    copy: &'a LogicalTaskQueueObservability,
+    profile: &'a FodFuseProfileCounters,
+}
+
+fn publish_shared_monitor_sample(input: SharedMonitorPublishInput<'_>) -> Result<(), String> {
+    let read_snapshot = input.read.snapshot()?;
+    let write_snapshot = input.write.snapshot()?;
+    let copy_snapshot = input.copy.snapshot()?;
+    let database_snapshot = input.observability_repo.observability_snapshot()?;
+    let source_snapshot = input.observability_repo.source_snapshot()?;
     let stats = SharedMonitorSessionStats::from_snapshots(SharedMonitorSessionStatsInput {
-        sample_seq,
-        publish_interval_millis,
+        sample_seq: input.sample_seq,
+        publish_interval_millis: input.publish_interval_millis,
         read: &read_snapshot,
         write: &write_snapshot,
         copy: &copy_snapshot,
         database: &database_snapshot,
         source: shared_monitor_source_stats(source_snapshot),
-        timings: profile.shared_monitor_timing_stats(),
+        timings: input.profile.shared_monitor_timing_stats(),
     });
-    publish_repo.publish_monitor_session_stats(
-        session_id,
+    input.publish_repo.publish_monitor_session_stats(
+        input.session_id,
         env!("CARGO_PKG_VERSION"),
-        sample_seq,
+        input.sample_seq,
         &stats.to_json()?,
     )
 }
@@ -543,17 +583,17 @@ fn shared_monitor_source_stats(snapshot: DbRepoSourceSnapshot) -> SharedMonitorS
 }
 
 impl SharedMonitorPublisherHandle {
-    #[allow(clippy::too_many_arguments)]
-    fn spawn(
-        observability_repo: DbRepo,
-        publish_repo: DbRepo,
-        session_id: u64,
-        interval: Duration,
-        read: Arc<LogicalTaskQueueObservability>,
-        write: Arc<LogicalTaskQueueObservability>,
-        copy: Arc<LogicalTaskQueueObservability>,
-        profile: Arc<FodFuseProfileCounters>,
-    ) -> Result<Self, String> {
+    fn spawn(input: SharedMonitorPublisherInput) -> Result<Self, String> {
+        let SharedMonitorPublisherInput {
+            observability_repo,
+            publish_repo,
+            session_id,
+            interval,
+            read,
+            write,
+            copy,
+            profile,
+        } = input;
         let publish_interval_millis = interval.as_millis().min(u128::from(u64::MAX)) as u64;
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop);
@@ -562,24 +602,34 @@ impl SharedMonitorPublisherHandle {
             let mut sample_seq = 0_u64;
             loop {
                 sample_seq = sample_seq.saturating_add(1);
-                if let Err(err) = publish_shared_monitor_sample(
-                        &observability_repo,
-                        &publish_repo,
+                if let Err(err) = publish_shared_monitor_sample(SharedMonitorPublishInput {
+                        observability_repo: &observability_repo,
+                        publish_repo: &publish_repo,
                         session_id,
                         publish_interval_millis,
-                        sample_seq, read.as_ref(), write.as_ref(), copy.as_ref(), profile.as_ref()) {
+                        sample_seq,
+                        read: read.as_ref(),
+                        write: write.as_ref(),
+                        copy: copy.as_ref(),
+                        profile: profile.as_ref(),
+                    }) {
                     warn!("FOD shared monitor publish failed session_id={} sample_seq={} err={}", session_id, sample_seq, err);
                 }
                 if stop_thread.load(Ordering::Relaxed) { break; }
                 thread::park_timeout(interval);
                 if stop_thread.load(Ordering::Relaxed) {
                     sample_seq = sample_seq.saturating_add(1);
-                    if let Err(err) = publish_shared_monitor_sample(
-                        &observability_repo,
-                        &publish_repo,
+                    if let Err(err) = publish_shared_monitor_sample(SharedMonitorPublishInput {
+                        observability_repo: &observability_repo,
+                        publish_repo: &publish_repo,
                         session_id,
                         publish_interval_millis,
-                        sample_seq, read.as_ref(), write.as_ref(), copy.as_ref(), profile.as_ref()) {
+                        sample_seq,
+                        read: read.as_ref(),
+                        write: write.as_ref(),
+                        copy: copy.as_ref(),
+                        profile: profile.as_ref(),
+                    }) {
                         warn!("FOD shared monitor final publish failed session_id={} sample_seq={} err={}", session_id, sample_seq, err);
                     }
                     break;
@@ -599,6 +649,17 @@ impl SharedMonitorPublisherHandle {
             let _ = thread.join();
         }
     }
+}
+
+struct SharedMonitorPublisherInput {
+    observability_repo: DbRepo,
+    publish_repo: DbRepo,
+    session_id: u64,
+    interval: Duration,
+    read: Arc<LogicalTaskQueueObservability>,
+    write: Arc<LogicalTaskQueueObservability>,
+    copy: Arc<LogicalTaskQueueObservability>,
+    profile: Arc<FodFuseProfileCounters>,
 }
 
 impl Drop for SharedMonitorPublisherHandle {
@@ -1723,18 +1784,20 @@ impl FodFuse {
         result
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn persist_file_blocks_profiled<'a>(
+    pub(crate) fn persist_file_blocks_profiled<'rows, 'data>(
         &self,
-        file_id: u64,
-        file_size: u64,
-        block_size: u64,
-        total_blocks: u64,
-        truncate_pending: bool,
-        blocks: &[PersistBlockRow<'a>],
-        maintain_copy_crc_table: bool,
-        capacity_reservation_token: Option<&str>,
+        input: PersistFileBlocksProfileInput<'rows, 'data>,
     ) -> Result<(), String> {
+        let PersistFileBlocksProfileInput {
+            file_id,
+            file_size,
+            block_size,
+            total_blocks,
+            truncate_pending,
+            blocks,
+            maintain_copy_crc_table,
+            capacity_reservation_token,
+        } = input;
         let started = Instant::now();
         let result = self.repo.persist_file_blocks_with_crc_flag_and_reservation(
             file_id,
@@ -2995,21 +3058,20 @@ impl FodFuse {
         Ok(resolved.to_string_lossy().into_owned())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn copy_range_from_states(
-        &self,
-        req_id: u64,
-        op: &'static str,
-        src_file_id: u64,
-        dst_file_id: u64,
-        fh_out: u64,
-        src_state: Option<WriteState>,
-        dst_state: Option<WriteState>,
-        src_offset: u64,
-        dst_offset: u64,
-        len: u64,
-        truncate_destination: bool,
-    ) -> Result<u32, libc::c_int> {
+    fn copy_range_from_states(&self, input: CopyRangeFromStatesInput) -> Result<u32, libc::c_int> {
+        let CopyRangeFromStatesInput {
+            req_id,
+            op,
+            src_file_id,
+            dst_file_id,
+            fh_out,
+            src_state,
+            dst_state,
+            src_offset,
+            dst_offset,
+            len,
+            truncate_destination,
+        } = input;
         let dst_size = if let Some(state) = dst_state.as_ref() {
             state.file_size
         } else {
@@ -3202,25 +3264,25 @@ impl FodFuse {
                 if target_end > compare_state.file_size {
                     compare_state.file_size = target_end;
                 }
-                self.read_copy_destination_slice(
+                self.read_copy_destination_slice(ReadCopyDestinationSlice {
                     dst_file_id,
-                    Some(&mut compare_state),
+                    state: Some(&mut compare_state),
                     dst_first_block,
                     dst_last_block,
                     dst_offset,
-                    copy_len,
+                    size: copy_len,
                     current_size,
-                )
+                })
             } else {
-                self.read_copy_destination_slice(
+                self.read_copy_destination_slice(ReadCopyDestinationSlice {
                     dst_file_id,
-                    None,
+                    state: None,
                     dst_first_block,
                     dst_last_block,
                     dst_offset,
-                    copy_len,
+                    size: copy_len,
                     current_size,
-                )
+                })
             };
             let current = match current {
                 Ok(data) => data,
@@ -3514,8 +3576,7 @@ impl FodFuse {
             } else {
                 FileType::RegularFile
             };
-            let mut perm =
-                u16::from_str_radix(mode.trim_start_matches("0o"), 8).unwrap_or(0o644);
+            let mut perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).unwrap_or(0o644);
             let mut rdev = 0;
             if obj_type == "hardlink" {
                 let file_id = self.repo.get_hardlink_file_id(raw_inode).map_err(|_| EIO)?;
@@ -4003,16 +4064,16 @@ impl FodFuse {
         let Some(publish_repo) = self.client_session_repo() else {
             return Ok(());
         };
-        let publisher = SharedMonitorPublisherHandle::spawn(
-            self.repo.clone(),
-            publish_repo.clone(),
+        let publisher = SharedMonitorPublisherHandle::spawn(SharedMonitorPublisherInput {
+            observability_repo: self.repo.clone(),
+            publish_repo: publish_repo.clone(),
             session_id,
-            self.client_session_heartbeat_interval,
-            Arc::clone(&self.logical_read_tasks),
-            Arc::clone(&self.logical_write_tasks),
-            Arc::clone(&self.logical_copy_tasks),
-            Arc::clone(&self.profile),
-        )?;
+            interval: self.client_session_heartbeat_interval,
+            read: Arc::clone(&self.logical_read_tasks),
+            write: Arc::clone(&self.logical_write_tasks),
+            copy: Arc::clone(&self.logical_copy_tasks),
+            profile: Arc::clone(&self.profile),
+        })?;
         self.shared_monitor_publisher = Some(publisher);
         Ok(())
     }
@@ -4802,19 +4863,19 @@ impl Filesystem for FodFuse {
                         src_path, src_file_id, path, dst_file_id, src_fd, src_size
                     ),
                 );
-                match self.copy_range_from_states(
+                match self.copy_range_from_states(CopyRangeFromStatesInput {
                     req_id,
-                    "ioctl_ficlone",
+                    op: "ioctl_ficlone",
                     src_file_id,
                     dst_file_id,
-                    fh,
-                    None,
+                    fh_out: fh,
+                    src_state: None,
                     dst_state,
-                    0,
-                    0,
-                    src_size,
-                    true,
-                ) {
+                    src_offset: 0,
+                    dst_offset: 0,
+                    len: src_size,
+                    truncate_destination: true,
+                }) {
                     Ok(_) => reply.ioctl(0, &[]),
                     Err(errno) => fuse_reply_error!(reply, errno),
                 }
@@ -4905,19 +4966,19 @@ impl Filesystem for FodFuse {
                         len
                     ),
                 );
-                match self.copy_range_from_states(
+                match self.copy_range_from_states(CopyRangeFromStatesInput {
                     req_id,
-                    "ioctl_ficlonerange",
+                    op: "ioctl_ficlonerange",
                     src_file_id,
                     dst_file_id,
-                    fh,
-                    None,
+                    fh_out: fh,
+                    src_state: None,
                     dst_state,
                     src_offset,
-                    args.dest_offset,
+                    dst_offset: args.dest_offset,
                     len,
-                    false,
-                ) {
+                    truncate_destination: false,
+                }) {
                     Ok(_) => reply.ioctl(0, &[]),
                     Err(errno) => fuse_reply_error!(reply, errno),
                 }
@@ -5744,19 +5805,20 @@ impl Filesystem for FodFuse {
         let subject = self.request_identity(req);
         let _write_profile = size.is_some().then(|| self.start_fuse_write_profile());
         if self.read_only
-            && setattr_requests_mutation(
-                mode.is_some(),
-                uid.is_some(),
-                gid.is_some(),
-                size.is_some(),
-                atime.is_some(),
-                mtime.is_some(),
-                _ctime.is_some(),
-                _crtime.is_some(),
-                _chgtime.is_some(),
-                _bkuptime.is_some(),
-                _flags.is_some(),
-            )
+            && (SetattrMutationFlags {
+                mode: mode.is_some(),
+                uid: uid.is_some(),
+                gid: gid.is_some(),
+                size: size.is_some(),
+                atime: atime.is_some(),
+                mtime: mtime.is_some(),
+                ctime: _ctime.is_some(),
+                crtime: _crtime.is_some(),
+                chgtime: _chgtime.is_some(),
+                bkuptime: _bkuptime.is_some(),
+                flags: _flags.is_some(),
+            })
+            .any()
         {
             fuse_reply_error!(reply, libc::EROFS);
             return;
@@ -7269,25 +7331,25 @@ impl Filesystem for FodFuse {
                 if target_end > compare_state.file_size {
                     compare_state.file_size = target_end;
                 }
-                self.read_copy_destination_slice(
+                self.read_copy_destination_slice(ReadCopyDestinationSlice {
                     dst_file_id,
-                    Some(&mut compare_state),
+                    state: Some(&mut compare_state),
                     dst_first_block,
                     dst_last_block,
                     dst_offset,
-                    copy_len,
+                    size: copy_len,
                     current_size,
-                )
+                })
             } else {
-                self.read_copy_destination_slice(
+                self.read_copy_destination_slice(ReadCopyDestinationSlice {
                     dst_file_id,
-                    None,
+                    state: None,
                     dst_first_block,
                     dst_last_block,
                     dst_offset,
-                    copy_len,
+                    size: copy_len,
                     current_size,
-                )
+                })
             };
             let current = match current {
                 Ok(data) => data,
@@ -7677,8 +7739,8 @@ impl Filesystem for FodFuse {
 #[cfg(test)]
 mod tests {
     use super::{
-        client_session_hostname, ioctl_is_mutating, setattr_requests_mutation, should_update_atime,
-        AtimePolicy, WriteState,
+        client_session_hostname, ioctl_is_mutating, should_update_atime, AtimePolicy,
+        SetattrMutationFlags, WriteState,
     };
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
@@ -7849,20 +7911,26 @@ mod tests {
     }
     #[test]
     fn read_only_setattr_detects_every_mutating_field() {
-        let none = [false; 11];
-        assert!(!setattr_requests_mutation(
-            none[0], none[1], none[2], none[3], none[4], none[5], none[6], none[7], none[8],
-            none[9], none[10],
-        ));
+        assert!(!SetattrMutationFlags::default().any());
 
         for index in 0..11 {
-            let mut fields = [false; 11];
-            fields[index] = true;
+            let mut fields = SetattrMutationFlags::default();
+            match index {
+                0 => fields.mode = true,
+                1 => fields.uid = true,
+                2 => fields.gid = true,
+                3 => fields.size = true,
+                4 => fields.atime = true,
+                5 => fields.mtime = true,
+                6 => fields.ctime = true,
+                7 => fields.crtime = true,
+                8 => fields.chgtime = true,
+                9 => fields.bkuptime = true,
+                10 => fields.flags = true,
+                _ => unreachable!(),
+            }
             assert!(
-                setattr_requests_mutation(
-                    fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6],
-                    fields[7], fields[8], fields[9], fields[10],
-                ),
+                fields.any(),
                 "setattr field index {index} must be treated as a mutation"
             );
         }

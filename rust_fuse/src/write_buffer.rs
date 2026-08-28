@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use crate::fs::{persist_error_errno, FodFuse};
+use crate::fs::{persist_error_errno, FodFuse, PersistFileBlocksProfileInput};
 use crate::write_payload::WritePayloadState;
 use libc::EIO;
 use log::{debug, warn};
@@ -21,6 +21,16 @@ pub(crate) struct WriteState {
     pub(crate) buffered_bytes: u64,
     pub(crate) load_error: bool,
     pub(crate) payload: WritePayloadState,
+}
+
+pub(crate) struct ReadCopyDestinationSlice<'a> {
+    pub(crate) dst_file_id: u64,
+    pub(crate) state: Option<&'a mut WriteState>,
+    pub(crate) dst_first_block: u64,
+    pub(crate) dst_last_block: u64,
+    pub(crate) dst_offset: u64,
+    pub(crate) size: u64,
+    pub(crate) current_size: u64,
 }
 
 impl WriteState {
@@ -297,16 +307,16 @@ impl FodFuse {
         );
         let PersistPayloadPlan::Blocks(blocks) = execution_plan.payload;
         let rows = self.prepare_persist_rows_from_block_plan(state, &blocks);
-        self.persist_file_blocks_profiled(
-            state.file_id,
-            state.file_size,
+        self.persist_file_blocks_profiled(PersistFileBlocksProfileInput {
+            file_id: state.file_id,
+            file_size: state.file_size,
             block_size,
-            execution_plan.total_blocks,
-            state.truncate_pending,
-            &rows,
-            live.copy_dedupe_crc_table,
+            total_blocks: execution_plan.total_blocks,
+            truncate_pending: state.truncate_pending,
+            blocks: &rows,
+            maintain_copy_crc_table: live.copy_dedupe_crc_table,
             capacity_reservation_token,
-        )
+        })
         .map_err(|err| {
             let errno = persist_error_errno(&err);
             warn!(
@@ -438,17 +448,19 @@ impl FodFuse {
         Ok(output)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn read_copy_destination_slice(
         &self,
-        dst_file_id: u64,
-        state: Option<&mut WriteState>,
-        dst_first_block: u64,
-        dst_last_block: u64,
-        dst_offset: u64,
-        size: u64,
-        current_size: u64,
+        input: ReadCopyDestinationSlice<'_>,
     ) -> Result<Vec<u8>, libc::c_int> {
+        let ReadCopyDestinationSlice {
+            dst_file_id,
+            state,
+            dst_first_block,
+            dst_last_block,
+            dst_offset,
+            size,
+            current_size,
+        } = input;
         if size == 0 {
             return Ok(Vec::new());
         }

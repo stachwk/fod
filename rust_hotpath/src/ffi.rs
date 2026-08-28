@@ -25,7 +25,7 @@ use crate::{
     parallel_worker_count, parallel_worker_plan, persist_block_plan, persist_layout_plan,
     pg::DbRepo, pg::PersistBlockRow, read_ahead_blocks, read_fetch_bounds,
     read_missing_range_worker_count, read_slice_plan, sorted_contiguous_ranges, write_copy_plan,
-    write_copy_worker_count,
+    write_copy_worker_count, ReadFetchBoundsInput, ReadSlicePlanInput,
 };
 
 #[repr(C)]
@@ -3496,7 +3496,7 @@ pub unsafe extern "C" fn fod_read_fetch_bounds(
     out_ptr: *mut DbfsReadBounds,
 ) -> i32 {
     let result = panic::catch_unwind(|| {
-        let bounds = match read_fetch_bounds(
+        let bounds = match read_fetch_bounds(ReadFetchBoundsInput {
             total_blocks,
             requested_first,
             requested_last,
@@ -3504,9 +3504,9 @@ pub unsafe extern "C" fn fod_read_fetch_bounds(
             sequential_read_ahead_blocks_value,
             streak,
             read_cache_limit_blocks,
-            sequential != 0,
+            sequential: sequential != 0,
             small_file_threshold_blocks,
-        ) {
+        }) {
             Some((fetch_first, fetch_last)) => DbfsReadBounds {
                 fetch_first,
                 fetch_last,
@@ -3541,7 +3541,7 @@ pub unsafe extern "C" fn fod_read_slice_plan(
     out_ptr: *mut DbfsReadSlicePlan,
 ) -> i32 {
     let result = panic::catch_unwind(|| {
-        let plan = match read_slice_plan(
+        let plan = match read_slice_plan(ReadSlicePlanInput {
             file_size,
             offset,
             size,
@@ -3550,9 +3550,9 @@ pub unsafe extern "C" fn fod_read_slice_plan(
             sequential_read_ahead_blocks_value,
             streak,
             read_cache_limit_blocks,
-            sequential != 0,
+            sequential: sequential != 0,
             small_file_threshold_blocks,
-        ) {
+        }) {
             Some((total_blocks, fetch_first, fetch_last)) => DbfsReadSlicePlan {
                 total_blocks,
                 fetch_first,

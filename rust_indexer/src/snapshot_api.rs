@@ -730,60 +730,25 @@ impl SnapshotFileShowOutput {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn load_snapshot_file_list(
     repo: &DbRepo,
     snapshot_id: u64,
     limit: usize,
     cursor: Option<u64>,
-    source: Option<&str>,
-    file_kind: Option<&str>,
-    scan_status: Option<&str>,
-    hash_status: Option<&str>,
+    filters: crate::read_api::FileCatalogFilters,
 ) -> Result<SnapshotFileCatalogOutput, String> {
-    let filters = normalize_snapshot_filters(crate::read_api::FileCatalogFilters {
-        source: owned_filter(source),
-        file_kind: owned_filter(file_kind),
-        scan_status: owned_filter(scan_status),
-        hash_status: owned_filter(hash_status),
-        ..crate::read_api::FileCatalogFilters::default()
-    })?;
+    let filters = normalize_snapshot_filters(filters)?;
     load_snapshot_file_catalog(repo, snapshot_id, limit, cursor, filters, false)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn search_snapshot_files(
     repo: &DbRepo,
     snapshot_id: u64,
     limit: usize,
     cursor: Option<u64>,
-    query: Option<&str>,
-    path: Option<&str>,
-    name: Option<&str>,
-    source: Option<&str>,
-    extension: Option<&str>,
-    file_kind: Option<&str>,
-    scan_status: Option<&str>,
-    hash_status: Option<&str>,
-    min_size: Option<u64>,
-    max_size: Option<u64>,
-    mtime_from: Option<i64>,
-    mtime_to: Option<i64>,
+    filters: crate::read_api::FileCatalogFilters,
 ) -> Result<SnapshotFileCatalogOutput, String> {
-    let filters = normalize_snapshot_filters(crate::read_api::FileCatalogFilters {
-        query: owned_filter(query),
-        path: owned_filter(path),
-        name: owned_filter(name),
-        source: owned_filter(source),
-        extension: owned_filter(extension),
-        file_kind: owned_filter(file_kind),
-        scan_status: owned_filter(scan_status),
-        hash_status: owned_filter(hash_status),
-        min_size,
-        max_size,
-        mtime_from,
-        mtime_to,
-    })?;
+    let filters = normalize_snapshot_filters(filters)?;
     if snapshot_filters_empty(&filters) {
         return Err("file search requires at least one search filter".to_string());
     }
@@ -1064,10 +1029,6 @@ fn parse_optional_i64_snapshot(value: &str, label: &str) -> Result<Option<i64>, 
             .map(Some)
             .map_err(|e| format!("invalid {label}: {e}"))
     }
-}
-
-fn owned_filter(value: Option<&str>) -> Option<String> {
-    value.map(str::to_string)
 }
 
 #[cfg(test)]

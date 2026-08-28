@@ -143,18 +143,31 @@ pub fn read_ahead_blocks(
     effective.min(max_allowed)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn read_fetch_bounds(
-    total_blocks: u64,
-    requested_first: u64,
-    requested_last: u64,
-    read_ahead_blocks_value: u64,
-    sequential_read_ahead_blocks_value: u64,
-    streak: u64,
-    read_cache_limit_blocks: u64,
-    sequential: bool,
-    small_file_threshold_blocks: u64,
-) -> Option<(u64, u64)> {
+#[derive(Debug, Clone, Copy)]
+pub struct ReadFetchBoundsInput {
+    pub total_blocks: u64,
+    pub requested_first: u64,
+    pub requested_last: u64,
+    pub read_ahead_blocks_value: u64,
+    pub sequential_read_ahead_blocks_value: u64,
+    pub streak: u64,
+    pub read_cache_limit_blocks: u64,
+    pub sequential: bool,
+    pub small_file_threshold_blocks: u64,
+}
+
+pub fn read_fetch_bounds(input: ReadFetchBoundsInput) -> Option<(u64, u64)> {
+    let ReadFetchBoundsInput {
+        total_blocks,
+        requested_first,
+        requested_last,
+        read_ahead_blocks_value,
+        sequential_read_ahead_blocks_value,
+        streak,
+        read_cache_limit_blocks,
+        sequential,
+        small_file_threshold_blocks,
+    } = input;
     if total_blocks == 0 {
         return None;
     }
@@ -177,19 +190,33 @@ pub fn read_fetch_bounds(
     Some((fetch_first, fetch_last))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn read_slice_plan(
-    file_size: u64,
-    offset: u64,
-    size: u64,
-    block_size: u64,
-    read_ahead_blocks_value: u64,
-    sequential_read_ahead_blocks_value: u64,
-    streak: u64,
-    read_cache_limit_blocks: u64,
-    sequential: bool,
-    small_file_threshold_blocks: u64,
-) -> Option<(u64, u64, u64)> {
+#[derive(Debug, Clone, Copy)]
+pub struct ReadSlicePlanInput {
+    pub file_size: u64,
+    pub offset: u64,
+    pub size: u64,
+    pub block_size: u64,
+    pub read_ahead_blocks_value: u64,
+    pub sequential_read_ahead_blocks_value: u64,
+    pub streak: u64,
+    pub read_cache_limit_blocks: u64,
+    pub sequential: bool,
+    pub small_file_threshold_blocks: u64,
+}
+
+pub fn read_slice_plan(input: ReadSlicePlanInput) -> Option<(u64, u64, u64)> {
+    let ReadSlicePlanInput {
+        file_size,
+        offset,
+        size,
+        block_size,
+        read_ahead_blocks_value,
+        sequential_read_ahead_blocks_value,
+        streak,
+        read_cache_limit_blocks,
+        sequential,
+        small_file_threshold_blocks,
+    } = input;
     if size == 0 || offset >= file_size {
         return None;
     }
@@ -208,7 +235,7 @@ pub fn read_slice_plan(
         .unwrap_or(0)
         .max(requested_first);
 
-    let (fetch_first, fetch_last) = read_fetch_bounds(
+    let (fetch_first, fetch_last) = read_fetch_bounds(ReadFetchBoundsInput {
         total_blocks,
         requested_first,
         requested_last,
@@ -218,7 +245,7 @@ pub fn read_slice_plan(
         read_cache_limit_blocks,
         sequential,
         small_file_threshold_blocks,
-    )?;
+    })?;
 
     Some((total_blocks, fetch_first, fetch_last))
 }
@@ -308,7 +335,7 @@ mod tests {
         pad_block_bytes, parallel_worker_count, parallel_worker_plan, persist_block_plan,
         persist_layout_plan, read_ahead_blocks, read_fetch_bounds, read_missing_range_worker_count,
         read_slice_plan, sorted_contiguous_ranges, write_copy_dedupe_plan, write_copy_plan,
-        write_copy_worker_count,
+        write_copy_worker_count, ReadFetchBoundsInput, ReadSlicePlanInput,
     };
     use crate::{LogicalResizePlan, PersistBlockPlanEntry};
 
@@ -394,17 +421,60 @@ mod tests {
 
     #[test]
     fn plans_read_fetch_bounds() {
-        assert_eq!(read_fetch_bounds(0, 0, 0, 2, 8, 0, 256, false, 8), None);
         assert_eq!(
-            read_fetch_bounds(4, 0, 0, 2, 8, 0, 256, false, 8),
+            read_fetch_bounds(ReadFetchBoundsInput {
+                total_blocks: 0,
+                requested_first: 0,
+                requested_last: 0,
+                read_ahead_blocks_value: 2,
+                sequential_read_ahead_blocks_value: 8,
+                streak: 0,
+                read_cache_limit_blocks: 256,
+                sequential: false,
+                small_file_threshold_blocks: 8,
+            }),
+            None
+        );
+        assert_eq!(
+            read_fetch_bounds(ReadFetchBoundsInput {
+                total_blocks: 4,
+                requested_first: 0,
+                requested_last: 0,
+                read_ahead_blocks_value: 2,
+                sequential_read_ahead_blocks_value: 8,
+                streak: 0,
+                read_cache_limit_blocks: 256,
+                sequential: false,
+                small_file_threshold_blocks: 8,
+            }),
             Some((0, 3))
         );
         assert_eq!(
-            read_fetch_bounds(32, 2, 3, 2, 8, 1, 256, true, 8),
+            read_fetch_bounds(ReadFetchBoundsInput {
+                total_blocks: 32,
+                requested_first: 2,
+                requested_last: 3,
+                read_ahead_blocks_value: 2,
+                sequential_read_ahead_blocks_value: 8,
+                streak: 1,
+                read_cache_limit_blocks: 256,
+                sequential: true,
+                small_file_threshold_blocks: 8,
+            }),
             Some((2, 11))
         );
         assert_eq!(
-            read_fetch_bounds(32, 2, 3, 16, 8, 4, 4, true, 8),
+            read_fetch_bounds(ReadFetchBoundsInput {
+                total_blocks: 32,
+                requested_first: 2,
+                requested_last: 3,
+                read_ahead_blocks_value: 16,
+                sequential_read_ahead_blocks_value: 8,
+                streak: 4,
+                read_cache_limit_blocks: 4,
+                sequential: true,
+                small_file_threshold_blocks: 8,
+            }),
             Some((2, 6))
         );
         assert_eq!(read_ahead_blocks(2, 8, 3, 10, true), 9);
@@ -412,13 +482,49 @@ mod tests {
 
     #[test]
     fn plans_read_slice_plan() {
-        assert_eq!(read_slice_plan(0, 0, 1, 4, 2, 8, 0, 256, false, 8), None);
         assert_eq!(
-            read_slice_plan(16, 0, 4, 4, 2, 8, 0, 256, false, 8),
+            read_slice_plan(ReadSlicePlanInput {
+                file_size: 0,
+                offset: 0,
+                size: 1,
+                block_size: 4,
+                read_ahead_blocks_value: 2,
+                sequential_read_ahead_blocks_value: 8,
+                streak: 0,
+                read_cache_limit_blocks: 256,
+                sequential: false,
+                small_file_threshold_blocks: 8,
+            }),
+            None
+        );
+        assert_eq!(
+            read_slice_plan(ReadSlicePlanInput {
+                file_size: 16,
+                offset: 0,
+                size: 4,
+                block_size: 4,
+                read_ahead_blocks_value: 2,
+                sequential_read_ahead_blocks_value: 8,
+                streak: 0,
+                read_cache_limit_blocks: 256,
+                sequential: false,
+                small_file_threshold_blocks: 8,
+            }),
             Some((4, 0, 3))
         );
         assert_eq!(
-            read_slice_plan(64, 8, 8, 4, 2, 8, 1, 256, true, 8),
+            read_slice_plan(ReadSlicePlanInput {
+                file_size: 64,
+                offset: 8,
+                size: 8,
+                block_size: 4,
+                read_ahead_blocks_value: 2,
+                sequential_read_ahead_blocks_value: 8,
+                streak: 1,
+                read_cache_limit_blocks: 256,
+                sequential: true,
+                small_file_threshold_blocks: 8,
+            }),
             Some((16, 2, 11))
         );
     }

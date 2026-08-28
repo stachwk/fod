@@ -6366,6 +6366,9 @@ git status --short --branch
 timeout 120 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex'
 ```
 
+Post-commit MemPalace refresh result: the command reached the 120 second timeout
+and exited with code 124.
+
 ## 2026-08-28 - Rust 1.98 release-lto runtime/test policy for FOD 3.3.26
 
 Repository state while starting this follow-up: `65ff178`. Per user instruction,
@@ -6572,4 +6575,86 @@ cargo clippy --workspace --all-targets --locked --profile release-lto
 make rust-candidate-clippy
 cargo test --workspace --locked --profile release-lto --lib --bins
 QNAP=0 make test-all
+```
+
+## 2026-08-28 - Targeted Clippy allow contract review
+
+Base commit at execution time: `516b320`
+
+Executed diagnostic, edit-review, and targeted validation commands:
+
+```bash
+timeout 30 bash -lc 'source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "Clippy allow too_many_arguments large_enum_variant Rust 1.98 FUSE PostgreSQL contract"'
+rg -n "allow\(clippy::too_many_arguments\)|allow\(clippy::large_enum_variant\)" rust_hotpath/src rust_fuse/src rust_indexer/src
+git status --short --branch --ignored AGENTS.md
+rg -n "allow\(clippy::too_many_arguments\)|allow\(clippy::large_enum_variant\)" rust_hotpath/src rust_fuse/src rust_indexer/src
+rg -n "persist_file_blocks_profiled\(|copy_range_from_states\(|read_copy_destination_slice\(|read_fetch_bounds\(|read_slice_plan\(" rust_hotpath/src rust_hotpath/tests rust_fuse/src rust_indexer/src
+git diff --check
+nl -ba rust_fuse/src/fs.rs | sed -n '1,120p'
+nl -ba rust_fuse/src/fs.rs | sed -n '3020,3095p'
+nl -ba rust_fuse/src/fs.rs | sed -n '4840,4995p'
+nl -ba rust_fuse/src/write_buffer.rs | sed -n '1,80p;280,330p;430,475p'
+nl -ba rust_fuse/src/pg_lanes.rs | sed -n '360,445p'
+nl -ba rust_fuse/src/pg_lanes.rs | sed -n '445,560p;620,720p'
+rg -n "DbRepoLaneStorage::Dedicated|storage" rust_fuse/src/pg_lanes.rs
+nl -ba rust_fuse/src/pg_lanes.rs | sed -n '588,625p'
+rg -n "persist_file_blocks_profiled\(|copy_range_from_states\(|DbRepoLaneStorage::Dedicated|allow\(clippy::too_many_arguments\)|allow\(clippy::large_enum_variant\)" rust_fuse/src rust_hotpath/src rust_hotpath/tests rust_indexer/src
+rg -n "owned_filter" rust_indexer/src/snapshot_api.rs
+git diff -- rust_fuse/src/pg_lanes.rs rust_fuse/src/fs.rs rust_fuse/src/write_buffer.rs | sed -n '1,260p'
+nl -ba rust_indexer/src/snapshot_api.rs | sed -n '1018,1042p'
+cargo fmt --all
+cargo fmt --all
+cargo check --locked -p fod-rust-hotpath --profile release-lto
+cargo check --locked -p fod-rust-fuse --profile release-lto
+cargo check --locked -p fod-rust-indexer --profile release-lto
+cargo clippy --locked -p fod-rust-hotpath --all-targets --profile release-lto
+cargo clippy --locked -p fod-rust-fuse --all-targets --profile release-lto
+cargo clippy --locked -p fod-rust-indexer --all-targets --profile release-lto
+nl -ba rust_hotpath/src/lib.rs | sed -n '328,345p'
+nl -ba rust_fuse/src/fs.rs | sed -n '7738,7752p;7908,7935p'
+cargo fmt --all
+cargo clippy --locked -p fod-rust-hotpath --all-targets --profile release-lto
+cargo clippy --locked -p fod-rust-fuse --all-targets --profile release-lto
+cargo clippy --locked -p fod-rust-indexer --all-targets --profile release-lto
+rg -n "allow\(clippy::too_many_arguments\)|allow\(clippy::large_enum_variant\)" rust_hotpath/src rust_fuse/src rust_indexer/src
+git diff --check
+git diff --stat
+cargo test --locked -p fod-rust-hotpath --lib plans_read_fetch_bounds --profile release-lto -- --exact
+cargo test --locked -p fod-rust-hotpath --lib plans_read_slice_plan --profile release-lto -- --exact
+cargo test --locked -p fod-rust-hotpath --test helper_parity read_helpers_match_expected_values --profile release-lto -- --exact
+cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse read_only_setattr_detects_every_mutating_field --profile release-lto -- --exact
+cargo test --locked -p fod-rust-hotpath --lib plans_read_fetch_bounds --profile release-lto
+cargo test --locked -p fod-rust-hotpath --lib plans_read_slice_plan --profile release-lto
+cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse read_only_setattr_detects_every_mutating_field --profile release-lto
+cat fod_version.txt
+rg -n "version = \"3\.3\.27\"|3\.3\.27|3\.3\.26|release-lto|Clippy|allow" Cargo.toml Cargo.lock docs conclusions.md commands.md
+ls docs | sed -n '1,120p'
+git rev-parse --short HEAD
+perl -0pi -e 's/3\.3\.27/3.3.28/g' fod_version.txt Cargo.toml Cargo.lock
+tail -80 conclusions.md
+tail -140 commands.md
+nl -ba docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md | sed -n '160,230p'
+```
+
+The first `cargo fmt --all` found a local Rust syntax issue in the new
+`SetattrMutationFlags` expression; it was fixed and `cargo fmt --all` passed on
+the second attempt. The first exact-name test filters for two hotpath lib tests
+and one FUSE bin test built successfully but ran zero tests; the same filters
+were repeated without `--exact` and each ran one target test successfully.
+
+Review and finalization commands:
+
+```bash
+cargo fmt --all -- --check
+git diff --check
+git diff --stat
+git status --short --branch --ignored AGENTS.md
+git diff -- Cargo.toml Cargo.lock fod_version.txt docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md conclusions.md commands.md rust_hotpath/src/lib.rs rust_hotpath/src/ffi.rs rust_hotpath/tests/helper_parity.rs rust_hotpath/tests/transactional_replay_smoke.rs rust_fuse/src/fs.rs rust_fuse/src/pg_lanes.rs rust_fuse/src/startup.rs rust_fuse/src/write_buffer.rs rust_indexer/src/main.rs rust_indexer/src/snapshot_api.rs
+git add Cargo.toml Cargo.lock fod_version.txt docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md conclusions.md commands.md rust_hotpath/src/lib.rs rust_hotpath/src/ffi.rs rust_hotpath/tests/helper_parity.rs rust_hotpath/tests/transactional_replay_smoke.rs rust_fuse/src/fs.rs rust_fuse/src/pg_lanes.rs rust_fuse/src/startup.rs rust_fuse/src/write_buffer.rs rust_indexer/src/main.rs rust_indexer/src/snapshot_api.rs
+git commit -m "FOD 3.3.28: replace local clippy allowances"
+git show --stat --oneline --decorate --no-renames HEAD
+git show --check --format=fuller HEAD
+git diff HEAD~1..HEAD -- Cargo.toml Cargo.lock fod_version.txt docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md conclusions.md commands.md rust_hotpath/src/lib.rs rust_hotpath/src/ffi.rs rust_hotpath/tests/helper_parity.rs rust_hotpath/tests/transactional_replay_smoke.rs rust_fuse/src/fs.rs rust_fuse/src/pg_lanes.rs rust_fuse/src/startup.rs rust_fuse/src/write_buffer.rs rust_indexer/src/main.rs rust_indexer/src/snapshot_api.rs
+git status --short --branch --ignored AGENTS.md
+timeout 120 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex'
 ```

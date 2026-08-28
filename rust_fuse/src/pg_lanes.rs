@@ -399,15 +399,16 @@ fn resolve_endpoint_routing(
     })
 }
 
-#[allow(clippy::large_enum_variant)]
 enum DbRepoLaneStorage {
     Shared(DbRepo),
-    Dedicated {
-        read: DbRepo,
-        write: DbRepo,
-        control: DbRepo,
-        lease: DbRepo,
-    },
+    Dedicated(Box<DedicatedDbRepoLanes>),
+}
+
+struct DedicatedDbRepoLanes {
+    read: DbRepo,
+    write: DbRepo,
+    control: DbRepo,
+    lease: DbRepo,
 }
 
 pub struct DbRepoLaneKeepalive {
@@ -508,7 +509,7 @@ impl DbRepoLanes {
         let storage = if dedicated {
             let mut write_runtime = runtime.clone();
             write_runtime.pool_max_connections = plan.write_limit as u64;
-            DbRepoLaneStorage::Dedicated {
+            DbRepoLaneStorage::Dedicated(Box::new(DedicatedDbRepoLanes {
                 read: build_lane_repo(
                     Arc::clone(&connection_targets),
                     runtime,
@@ -537,7 +538,7 @@ impl DbRepoLanes {
                     PgConnectionPurpose::Lease,
                     global_payload_observability,
                 )?,
-            }
+            }))
         } else {
             let mut primary_runtime = runtime.clone();
             if replica_read_targets.is_some() {
@@ -595,16 +596,11 @@ impl DbRepoLanes {
     pub fn repo_for(&self, purpose: PgConnectionPurpose) -> &DbRepo {
         match &self.storage {
             DbRepoLaneStorage::Shared(repo) => repo,
-            DbRepoLaneStorage::Dedicated {
-                read,
-                write,
-                control,
-                lease,
-            } => match purpose {
-                PgConnectionPurpose::Read => read,
-                PgConnectionPurpose::Write => write,
-                PgConnectionPurpose::Control => control,
-                PgConnectionPurpose::Lease => lease,
+            DbRepoLaneStorage::Dedicated(lanes) => match purpose {
+                PgConnectionPurpose::Read => &lanes.read,
+                PgConnectionPurpose::Write => &lanes.write,
+                PgConnectionPurpose::Control => &lanes.control,
+                PgConnectionPurpose::Lease => &lanes.lease,
             },
         }
     }
@@ -614,27 +610,22 @@ impl DbRepoLanes {
     ) -> Vec<(&'static str, Arc<dyn LaneObservabilitySource + Send + Sync>)> {
         match &self.storage {
             DbRepoLaneStorage::Shared(repo) => vec![("shared", observability_source(repo))],
-            DbRepoLaneStorage::Dedicated {
-                read,
-                write,
-                control,
-                lease,
-            } => vec![
+            DbRepoLaneStorage::Dedicated(lanes) => vec![
                 (
                     PgConnectionPurpose::Read.as_str(),
-                    observability_source(read),
+                    observability_source(&lanes.read),
                 ),
                 (
                     PgConnectionPurpose::Write.as_str(),
-                    observability_source(write),
+                    observability_source(&lanes.write),
                 ),
                 (
                     PgConnectionPurpose::Control.as_str(),
-                    observability_source(control),
+                    observability_source(&lanes.control),
                 ),
                 (
                     PgConnectionPurpose::Lease.as_str(),
-                    observability_source(lease),
+                    observability_source(&lanes.lease),
                 ),
             ],
         }
@@ -649,15 +640,10 @@ impl DbRepoLanes {
                 },
                 self.read_only_telemetry_repo,
             ),
-            DbRepoLaneStorage::Dedicated {
-                read,
-                write,
-                control,
-                lease,
-            } => (
-                write,
+            DbRepoLaneStorage::Dedicated(lanes) => (
+                lanes.write,
                 DbRepoLaneKeepalive {
-                    repositories: vec![read, control, lease],
+                    repositories: vec![lanes.read, lanes.control, lanes.lease],
                 },
                 self.read_only_telemetry_repo,
             ),

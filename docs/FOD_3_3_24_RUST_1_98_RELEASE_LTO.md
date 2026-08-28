@@ -173,6 +173,10 @@ FOD 3.3.27 porzadkuje ostrzezenia Clippy pokazane przez walidacje Rust 1.98 w pr
 
 Ostrzezenia typu `too_many_arguments` i `large_enum_variant` w goracej sciezce FUSE/PostgreSQL oraz w CLI indexera sa traktowane inaczej. Tam, gdzie funkcja jest swiadomym wewnetrznym kontraktem miedzy warstwami FOD, FOD 3.3.27 dodaje punktowe `#[allow(clippy::...)]` zamiast duzego refaktoru bez regresji runtime. Dotyczy to zwlaszcza sciezek persist/read/copy, startu FUSE, shared monitoringu i enumow utrzymywanych przez Clap.
 
+FOD 3.3.28 ponownie przeglada te punktowe wyjatki przy konkretnych kontraktach. Tam, gdzie poprawa jest lokalna i lepiej opisuje granice API, `allow` zostal zastapiony jawna struktura wejscia: planowanie zakresow read-ahead, planowanie slice read, read-only `setattr`, publish shared monitoringu, start shared monitor publisher, log statusu mounta, persist blokow FUSE, copy range ze stanow write buffer oraz snapshotowe filtrowanie katalogu indexera. Duzy wariant storage lane PostgreSQL w FUSE zostal opakowany w `Box`, wiec rozmiar enumu nie wymaga juz wyjatku.
+
+Po przegladzie FOD 3.3.28 nadal zostawia wyjatki tam, gdzie refaktor oznaczalby szersza zmiane stabilnego kontraktu albo mniej czytelny model domenowy: publiczny enum komend Clap w indexerze, istniejacy kontrakt `read_api::search_files` oraz kilka szerokich operacji PostgreSQL w `DbRepo` zwiazanych z tuningiem, specjalnymi plikami i persist/storage. Te miejsca wymagaja osobnej zmiany API i osobnych testow integracyjnych, a nie kosmetycznego opakowania argumentow.
+
 Ta decyzja nie zmienia zachowania FUSE, SELinux, ACL, storage ani schematu PostgreSQL. Celem jest obnizenie szumu walidacji Rust 1.98, zeby przyszle ostrzezenia latwiej odroznic od swiadomych ksztaltow API.
 
 ## Poza zakresem

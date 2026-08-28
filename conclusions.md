@@ -2940,3 +2940,40 @@ preserving the existing runtime behavior until the user runs validation.
 
 Per user instruction, tests and benchmarks were not run by the assistant for
 this stage. User-side validation commands are recorded in `commands.md`.
+
+## 2026-08-28 - Targeted Clippy allow review completed for FOD 3.3.28 on `516b320`
+
+The second review of local `#[allow(clippy::...)]` attributes found several
+places where the allow was weaker than an explicit contract. These were replaced
+with small input structs or local data wrappers instead of suppressing Clippy:
+read fetch bounds, read slice planning, read-only `setattr` mutation flags,
+shared monitor sample publishing, shared monitor publisher startup, mount status
+logging, FUSE block persist profiling, FUSE copy range state transfer, FUSE
+destination slice reads, snapshot catalog filtering, and dedicated PostgreSQL
+lane storage.
+
+The remaining allows are intentionally left for broader contracts: the Clap
+command enum, the pre-existing indexer read API search contract, and wide
+PostgreSQL `DbRepo` operations around tuning, special file creation/confirmation
+and block/storage persistence. Those should be revisited only as separate API
+changes with targeted integration coverage, not as a cosmetic argument wrapper.
+
+Targeted validation for this stage passed under Rust 1.98 `release-lto`:
+
+| Command/profile | Result |
+| --- | --- |
+| `cargo check --locked -p fod-rust-hotpath --profile release-lto` | passed |
+| `cargo check --locked -p fod-rust-fuse --profile release-lto` | passed |
+| `cargo check --locked -p fod-rust-indexer --profile release-lto` | passed |
+| `cargo clippy --locked -p fod-rust-hotpath --all-targets --profile release-lto` | passed |
+| `cargo clippy --locked -p fod-rust-fuse --all-targets --profile release-lto` | passed |
+| `cargo clippy --locked -p fod-rust-indexer --all-targets --profile release-lto` | passed |
+| `cargo test --locked -p fod-rust-hotpath --test helper_parity read_helpers_match_expected_values --profile release-lto -- --exact` | passed |
+| `cargo test --locked -p fod-rust-hotpath --lib plans_read_fetch_bounds --profile release-lto` | passed |
+| `cargo test --locked -p fod-rust-hotpath --lib plans_read_slice_plan --profile release-lto` | passed |
+| `cargo test --locked -p fod-rust-fuse --bin fod-rust-fuse read_only_setattr_detects_every_mutating_field --profile release-lto` | passed |
+
+The first attempts for two hotpath lib tests and one FUSE bin test used
+`-- --exact` with a short test name, so Cargo built successfully but ran zero
+tests. The commands were repeated without `--exact` and each targeted test then
+executed exactly one matching test.

@@ -219,10 +219,7 @@ fn handle_proxy_connection(
             }
         }
 
-        if type_buf[0] == b'E'
-            && drop_on_next_execute
-            && !triggered.swap(true, Ordering::SeqCst)
-        {
+        if type_buf[0] == b'E' && drop_on_next_execute && !triggered.swap(true, Ordering::SeqCst) {
             drop_hits.fetch_add(1, Ordering::SeqCst);
             stop_forwarding.store(true, Ordering::SeqCst);
             if !drop_delay.is_zero() {
