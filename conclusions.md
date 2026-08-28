@@ -2977,3 +2977,44 @@ The first attempts for two hotpath lib tests and one FUSE bin test used
 `-- --exact` with a short test name, so Cargo built successfully but ran zero
 tests. The commands were repeated without `--exact` and each targeted test then
 executed exactly one matching test.
+
+## 2026-08-28 - Rust 1.98 release-lto transition closed for FOD 3.3.29 on `f345e02`
+
+FOD 3.3.29 fixes the last profile mismatch in the 3.3.25-3.3.29 Rust 1.98 /
+`release-lto` transition. `build-runtime` now uses `FOD_RUNTIME_PROFILE` through
+`FOD_RUNTIME_FLAG`, and its stamp name is keyed by the runtime profile. Install
+paths still use `FOD_CARGO_PROFILE`, so build/install and runtime selection are
+separate explicit contracts.
+
+The release defaults regression now covers a divergent profile case:
+`FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto` must produce a
+`build-runtime` plan with `--profile release-lto` and the
+`.fod-runtime-release-lto-build.stamp` marker. The same fixture no longer embeds
+a stale `3.3.26` version and copies the repository `fod_version.txt` instead.
+
+Full validation exposed two test-environment issues and both were fixed before
+accepting the transition:
+
+- `cargo test --workspace --locked` previously failed because
+  `lock_backend_smoke` requires sudo/root. The smoke tests now skip cleanly when
+  not run as root, while root/FUSE coverage remains available through the
+  Makefile sudo path.
+- `profile_smoke::persist_buffer_chunking` passed alone but failed in the full
+  workspace run with a truncated observed file size. The profile smoke tests now
+  serialize their real FUSE mounts locally, and `MountedFs` drops the daemon
+  before unmounting to reduce stale busy mountpoints.
+
+Validation on the FOD 3.3.29 working tree based on `f345e02`:
+
+| Command/profile | Result |
+| --- | --- |
+| `make test-rust-release-defaults-policy` | passed |
+| `cargo fmt --all -- --check` | passed |
+| `cargo check --workspace --locked --profile release-lto` | passed |
+| `cargo clippy --workspace --all-targets --locked --profile release-lto` | passed |
+| `cargo test --workspace --locked` | passed |
+| `QNAP=0 make test-all` | passed |
+
+This closes the Rust 1.98 / `release-lto` transition for FOD 3.3.25 through
+3.3.29. The SELinux per-inode xattr limitations documented for Rocky ordinary
+FUSE remain unchanged by this runtime-profile work.

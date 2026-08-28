@@ -518,9 +518,9 @@ impl MountedFs {
 
 impl Drop for MountedFs {
     fn drop(&mut self) {
-        try_unmount(&self.mountpoint);
         let _ = self.child.kill();
         let _ = self.child.wait();
+        try_unmount(&self.mountpoint);
         print_profile_io_summaries_if_enabled(&self.log_path);
         let _ = fs::remove_dir_all(&self.workspace);
     }

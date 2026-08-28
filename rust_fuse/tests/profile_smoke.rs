@@ -9,10 +9,18 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use rust_hotpath::crc32_bytes;
 use rust_hotpath::pg::DbRepo;
 use support::{db_repo, resolve_file_id, unique_suffix, MountedFs};
+
+fn profile_smoke_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("profile smoke test lock poisoned")
+}
 
 fn query_u64(repo: &DbRepo, sql: &str) -> Result<u64, String> {
     let value = repo.query_scalar_text(sql)?;
@@ -94,6 +102,7 @@ fn utimens(
 
 #[test]
 fn flush_release_profile() -> Result<(), String> {
+    let _guard = profile_smoke_lock();
     let mounted = MountedFs::start("flush-release-profile")?;
     let repo = db_repo()?;
     let suffix = unique_suffix();
@@ -129,6 +138,7 @@ fn flush_release_profile() -> Result<(), String> {
 
 #[test]
 fn truncate_release_profile() -> Result<(), String> {
+    let _guard = profile_smoke_lock();
     let mounted = MountedFs::start("truncate-release-profile")?;
     let repo = db_repo()?;
     let suffix = unique_suffix();
@@ -159,6 +169,7 @@ fn truncate_release_profile() -> Result<(), String> {
 
 #[test]
 fn persist_buffer_chunking() -> Result<(), String> {
+    let _guard = profile_smoke_lock();
     let mounted = MountedFs::start("persist-buffer-chunking")?;
     let suffix = unique_suffix();
     let dir_path = mounted.mountpoint.join(format!("persist-chunk-{suffix}"));
@@ -207,6 +218,7 @@ fn persist_buffer_chunking() -> Result<(), String> {
 
 #[test]
 fn write_flush_threshold() -> Result<(), String> {
+    let _guard = profile_smoke_lock();
     let mounted = MountedFs::start_with_env(
         "write-flush-threshold",
         &[("FOD_WRITE_FLUSH_THRESHOLD_BYTES", "1".to_string())],
@@ -247,6 +259,7 @@ fn write_flush_threshold() -> Result<(), String> {
 
 #[test]
 fn copy_block_crc_table() -> Result<(), String> {
+    let _guard = profile_smoke_lock();
     let mounted = MountedFs::start_with_env(
         "copy-block-crc-table",
         &[("FOD_COPY_DEDUPE_CRC_TABLE", "1".to_string())],
@@ -427,6 +440,7 @@ fn copy_block_crc_table() -> Result<(), String> {
 
 #[test]
 fn utimens_noop() -> Result<(), String> {
+    let _guard = profile_smoke_lock();
     let mounted = MountedFs::start("utimens-noop")?;
     let suffix = unique_suffix();
     let file_path = mounted.mountpoint.join(format!("utimens-{suffix}.txt"));

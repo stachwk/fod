@@ -71,6 +71,8 @@ Od FOD 3.3.26 ten sam domyslny profil obejmuje takze:
 --profile release-lto
 ```
 
+FOD 3.3.29 rozdziela jawnie profil build/install od profilu runtime. `FOD_CARGO_PROFILE` nadal steruje artefaktami instalacyjnymi, a `FOD_RUNTIME_PROFILE` steruje `build-runtime`, sciezkami runtime binarek i stampem runtime. Dzieki temu konfiguracja typu `FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto` buduje i uruchamia runtime z `release-lto`, zamiast przypadkowo budowac `release` i szukac `release-lto`.
+
 `build-debug` i `build-debug-shm` pozostaja dostepne jako jawne targety diagnostyczne. Nie sa jednak zwykla sciezka runtime ani domyslny fallback dla testow.
 
 ## MSRV a kanoniczny toolchain
@@ -177,6 +179,8 @@ FOD 3.3.28 ponownie przeglada te punktowe wyjatki przy konkretnych kontraktach. 
 
 Po przegladzie FOD 3.3.28 nadal zostawia wyjatki tam, gdzie refaktor oznaczalby szersza zmiane stabilnego kontraktu albo mniej czytelny model domenowy: publiczny enum komend Clap w indexerze, istniejacy kontrakt `read_api::search_files` oraz kilka szerokich operacji PostgreSQL w `DbRepo` zwiazanych z tuningiem, specjalnymi plikami i persist/storage. Te miejsca wymagaja osobnej zmiany API i osobnych testow integracyjnych, a nie kosmetycznego opakowania argumentow.
 
+FOD 3.3.29 domyka przejscie 3.3.25-3.3.29 na Rust 1.98 i `release-lto`: poprawia rozbieznosc `FOD_RUNTIME_PROFILE` kontra `FOD_CARGO_PROFILE`, dodaje regresje dla rozbieznych profili, usuwa hardcoded numer wersji z fixture testu polityki release defaults oraz stabilizuje realne testy FUSE przez lokalna serializacje `profile_smoke` i poprawiona kolejnosc cleanupu testowych mountow.
+
 Ta decyzja nie zmienia zachowania FUSE, SELinux, ACL, storage ani schematu PostgreSQL. Celem jest obnizenie szumu walidacji Rust 1.98, zeby przyszle ostrzezenia latwiej odroznic od swiadomych ksztaltow API.
 
 ## Poza zakresem
@@ -207,7 +211,8 @@ make rust-candidate-check
 make rust-candidate-clippy
 cargo fmt --all -- --check
 cargo check --workspace --locked --profile release-lto
-cargo test --workspace --locked --profile release-lto --lib --bins
+cargo clippy --workspace --all-targets --locked --profile release-lto
+cargo test --workspace --locked
 QNAP=0 make test-all
 ```
 

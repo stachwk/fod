@@ -15,8 +15,11 @@ grep -Eq '^rust-version[[:space:]]*=[[:space:]]*"1\.85"' "${repo_root}/Cargo.tom
 grep -Eq '^FOD_CARGO_PROFILE[[:space:]]*\?=[[:space:]]*release-lto$' "${repo_root}/Makefile"
 grep -Fq 'FOD_CARGO_TEST_PROFILE ?= $(FOD_CARGO_PROFILE)' "${repo_root}/Makefile"
 grep -Fq 'FOD_TEST_FLAG := --profile $(FOD_CARGO_TEST_PROFILE)' "${repo_root}/Makefile"
+grep -Fq 'FOD_RUNTIME_FLAG := --profile $(FOD_RUNTIME_PROFILE)' "${repo_root}/Makefile"
 grep -Eq '^FOD_RUST_PRODUCTION_TOOLCHAIN[[:space:]]*\?=[[:space:]]*1\.98\.0$' "${repo_root}/Makefile"
 grep -Fq 'build-runtime: rust-production-toolchain-check $(FOD_RUNTIME_BUILD_STAMP)' "${repo_root}/Makefile"
+grep -Fq 'FOD_RUNTIME_BUILD_STAMP := $(RUST_MKFS_TARGET_DIR)/.fod-runtime-$(FOD_RUNTIME_PROFILE)-build.stamp' "${repo_root}/Makefile"
+grep -Fq '$(CARGO_BUILD_MKFS) $(FOD_RUNTIME_FLAG) --bins' "${repo_root}/Makefile"
 grep -Fq '$(CARGO_BUILD_LIBFOD) $(FOD_RELEASE_FLAG) --lib' "${repo_root}/Makefile"
 grep -Fq 'build-libfod install-root-scripts: rust-production-toolchain-check' "${repo_root}/Makefile"
 grep -Fq '$(FOD_DEBUG_BUILD_STAMP): Makefile GNUmakefile rust-toolchain.toml' "${repo_root}/Makefile"
@@ -39,7 +42,7 @@ mkdir -p "${checkout}/target/release-lto" "${checkout}/target/release" "${checko
 cp "${repo_root}/mount.fod" "${checkout}/mount.fod"
 chmod +x "${checkout}/mount.fod"
 printf '[workspace]\n' >"${checkout}/Cargo.toml"
-printf '3.3.26\n' >"${checkout}/fod_version.txt"
+cp "${repo_root}/fod_version.txt" "${checkout}/fod_version.txt"
 printf '[database]\nhost = 127.0.0.1\n' >"${checkout}/test.ini"
 
 cat >"${checkout}/target/release-lto/fod-bootstrap" <<'EOF'
@@ -75,6 +78,20 @@ grep -Fq "BOOTSTRAP=${checkout}/target/release-lto/fod-bootstrap" <<<"${output}"
 grep -Fq "FOD_RUST_FUSE_BIN=${checkout}/target/release-lto/fod-rust-fuse" <<<"${output}"
 if grep -Fq 'STALE_BOOTSTRAP_SELECTED' <<<"${output}"; then
   echo "mount wrapper selected a stale non-LTO bootstrap" >&2
+  exit 1
+fi
+
+build_plan="$(
+  cd "${repo_root}"
+  make --no-print-directory -nB build-runtime FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto
+)"
+
+grep -Eq 'cargo build .*--profile release-lto .*--bins' <<<"${build_plan}"
+grep -Eq 'cargo build .*--profile release-lto .*--bin fod-rust-fuse' <<<"${build_plan}"
+grep -Eq 'cargo build .*--profile release-lto .*--lib' <<<"${build_plan}"
+grep -Fq '.fod-runtime-release-lto-build.stamp' <<<"${build_plan}"
+if grep -Eq 'cargo build .*--profile release .*--bins' <<<"${build_plan}"; then
+  echo "build-runtime must not use FOD_CARGO_PROFILE when FOD_RUNTIME_PROFILE differs" >&2
   exit 1
 fi
 
