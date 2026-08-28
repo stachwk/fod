@@ -2,8 +2,8 @@
 # distribution family so linked glibc/libpq/libfuse dependencies match the host.
 FOD_PACKAGE_ROOT ?= $(CURDIR)/target/packages
 FOD_PACKAGE_NAME ?= fod
-FOD_PACKAGE_RELEASE ?= 1
-FOD_PACKAGE_MAINTAINER ?= FOD Project <maintainer@fod.invalid>
+FOD_PACKAGE_RELEASE ?= 2
+FOD_PACKAGE_MAINTAINER ?= FOD Project <33524981+stachwk@users.noreply.github.com>
 FOD_PACKAGE_URL ?= https://github.com/stachwk/fod
 FOD_PACKAGE_CONFIG_SOURCE ?= $(CURDIR)/fod_config.example.ini
 UBUNTU_PACKAGE_BUILD_DEPS ?= dpkg-dev

@@ -9,7 +9,8 @@ done
 fod_package_check_links
 
 work="$FOD_PACKAGE_ROOT/work/deb"
-stage="$work/root"
+stage_rel="debian/$FOD_PACKAGE_NAME"
+stage="$work/$stage_rel"
 outdir="$FOD_PACKAGE_ROOT/deb"
 arch="$(dpkg --print-architecture)"
 multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
@@ -30,18 +31,22 @@ Description: PostgreSQL-backed FUSE filesystem
  FOD provides a Rust FUSE filesystem backed by PostgreSQL storage.
 EOF_CONTROL
 
+# Keep the payload in the conventional debian/<package>/ tree and pass paths
+# relative to the Debian build root. dpkg-shlibdeps can then associate every
+# ELF object with the package instead of warning that it is outside its package
+# directory.
 shlib_line="$(cd "$work" && dpkg-shlibdeps -O \
-  -e"$stage/usr/bin/fod-bootstrap" \
-  -e"$stage/usr/sbin/mkfs.fod" \
-  -e"$stage/usr/bin/fod-change" \
-  -e"$stage/usr/bin/fod-indexer" \
-  -e"$stage/usr/bin/fod-monitor" \
-  -e"$stage/usr/bin/fod-rust-fuse" \
-  -e"$stage$libdir/libfod.so")"
+  -e"$stage_rel/usr/bin/fod-bootstrap" \
+  -e"$stage_rel/usr/sbin/mkfs.fod" \
+  -e"$stage_rel/usr/bin/fod-change" \
+  -e"$stage_rel/usr/bin/fod-indexer" \
+  -e"$stage_rel/usr/bin/fod-monitor" \
+  -e"$stage_rel/usr/bin/fod-rust-fuse" \
+  -e"$stage_rel$libdir/libfod.so")"
 deps="${shlib_line#shlibs:Depends=}"
 [[ "$deps" != "$shlib_line" && -n "$deps" ]] || { echo 'dpkg-shlibdeps did not produce shlibs:Depends' >&2; exit 1; }
 
-mkdir -p "$stage/DEBIAN"
+install -d -m0755 "$stage/DEBIAN"
 cat > "$stage/DEBIAN/control" <<EOF_CONTROL
 Package: $FOD_PACKAGE_NAME
 Version: $FOD_PACKAGE_VERSION-$FOD_PACKAGE_RELEASE
