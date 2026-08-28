@@ -43,19 +43,22 @@ def require_root(script_name: str) -> None:
         raise SystemExit(f"{script_name} must be run via sudo")
 
 
+def runtime_profile() -> str:
+    return os.environ.get("FOD_RUNTIME_PROFILE") or os.environ.get("FOD_CARGO_PROFILE") or "release-lto"
+
+
 def resolve_fod_change_binary(root: Path) -> Path:
+    profile = runtime_profile()
     candidates = [
-        root / "target/debug/fod-change",
-        root / "target/release/fod-change",
-        root / "rust_mkfs/target/debug/fod-change",
-        root / "rust_mkfs/target/release/fod-change",
+        root / "target" / profile / "fod-change",
+        root / "rust_mkfs" / "target" / profile / "fod-change",
         Path("/usr/local/bin/fod-change"),
         Path("/usr/local/bin/fod.change"),
     ]
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    raise FileNotFoundError("fod-change binary not found; build rust_mkfs first")
+    raise FileNotFoundError(f"fod-change binary not found; build the {profile} runtime profile first")
 
 
 def run_fod_change(root: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:

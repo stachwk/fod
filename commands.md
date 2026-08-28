@@ -6365,3 +6365,94 @@ git diff --check HEAD~1..HEAD
 git status --short --branch
 timeout 120 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex'
 ```
+
+## 2026-08-28 - Rust 1.98 release-lto runtime/test policy for FOD 3.3.26
+
+Repository state while starting this follow-up: `65ff178`. Per user instruction,
+tests and benchmarks were not run by the assistant in this stage; validation is
+left for user-side execution.
+
+Context and review commands executed:
+
+```bash
+timeout 30 bash -lc 'source ~/.venv/bin/activate && mempalace search --wing fod --results 8 "Rust 1.98 release-lto cargo profile Makefile policy"'
+git status --short --branch
+nl -ba Makefile | sed -n '1,260p'
+nl -ba GNUmakefile | sed -n '1,220p'
+rg -n "cargo test|build-debug|target/debug|target/release|FOD_CARGO_PROFILE|FOD_CARGO_TEST_PROFILE|FOD_TEST_FLAG|release-lto|rust-production-toolchain-check|FOD_.*DEBUG_BIN|FOD_.*RUNTIME_BIN" Makefile GNUmakefile tests rust_fuse rust_mkfs mount.fod docs commands.md conclusions.md fod_version.txt Cargo.toml
+git diff -- Makefile GNUmakefile
+nl -ba Makefile | sed -n '520,620p'
+nl -ba Makefile | sed -n '860,1010p'
+nl -ba Makefile | sed -n '1260,1445p'
+nl -ba Makefile | sed -n '1740,1905p'
+nl -ba tests/integration/fod_testlib.sh | sed -n '1,100p'
+nl -ba tests/integration/fod_mount.py | sed -n '1,140p'
+nl -ba tests/integration/fod_runtime_testlib.py | sed -n '1,90p'
+nl -ba rust_fuse/tests/support.rs | sed -n '245,315p'
+nl -ba tests/integration/test_mount_suite.py | sed -n '55,85p'
+nl -ba tests/integration/test_mount_wrapper_path_and_ro.sh | sed -n '1,60p'
+nl -ba mount.fod | sed -n '1,130p'
+nl -ba rust_mkfs/src/bin/fod-bootstrap.rs | sed -n '150,240p'
+nl -ba tests/test_rust_release_defaults_policy.sh | sed -n '1,220p'
+nl -ba docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md | sed -n '1,230p'
+cat fod_version.txt
+rg -n '^version =|workspace.package' Cargo.toml
+rg -n "(^|[[:space:]])cargo test|rustup run|cargo check --workspace --locked|CARGO_BUILD_MKFS\)|CARGO_BUILD_FUSE\)|build-debug-shm|cargo-profile-show|target/debug|target/release" Makefile GNUmakefile tests/integration tests/test_rust_release_defaults_policy.sh mount.fod rust_mkfs/src/bin/fod-bootstrap.rs rust_fuse/tests/support.rs
+git diff -- Cargo.lock | sed -n '1,140p'
+rg -n "3\.3\.25|3\.3\.26|3\.3\.24" Cargo.lock Cargo.toml fod_version.txt docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md tests/test_rust_release_defaults_policy.sh
+sed -n '1,170p' mount.fod
+rg -n "target/release/fod-bootstrap|target/debug/fod-bootstrap|rust_mkfs/target/release/fod-bootstrap|rust_mkfs/target/debug/fod-bootstrap|target/release/fod-rust-fuse|target/debug/fod-rust-fuse|rust_fuse/target/release/fod-rust-fuse|rust_fuse/target/debug/fod-rust-fuse|target/debug/fod-(bootstrap|rust-mkfs|change|monitor)|cargo test --locked -p|cargo test --manifest-path|cargo check --workspace --locked$" Makefile GNUmakefile mount.fod rust_mkfs/src/bin/fod-bootstrap.rs rust_fuse/tests/support.rs tests/integration tests/test_rust_release_defaults_policy.sh docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md
+tail -n 60 AGENTS.md
+git rev-parse --short HEAD
+rg -n "(source .*/?fod_testlib\\.sh|FODMount|fod_mount|FOD_BOOTSTRAP_BIN|FOD_MKFS_BIN|fod-bootstrap|fod-rust-mkfs)" tests/integration
+rg -n "^test-[A-Za-z0-9_-]+:.*\\b(up|venv)\\b" Makefile
+nl -ba Makefile | sed -n '1386,1610p'
+rg -n "target/release/fod-bootstrap|target/release/fod-rust-fuse|target/debug/fod-rust-fuse|cargo check --workspace --locked$|cargo test --locked -p|cargo test --manifest-path rust_runtime/Cargo.toml --lib" Makefile GNUmakefile mount.fod rust_mkfs/src/bin/fod-bootstrap.rs rust_fuse/tests/support.rs tests/integration tests/test_rust_release_defaults_policy.sh docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md
+rg -n "^test-(permissions|journal|statfs-use-ino|atime-noatime|atime-nodiratime|atime-relatime|atime-benchmark|mount-workflow|fuse-context-identity|files|directories|metadata|metadata-cache|truncate-shrink-block-boundary|symlink|throughput|throughput-sync|tree-scale):" Makefile
+git diff --stat
+git diff --check
+```
+
+Recommended validation commands for the user:
+
+```bash
+rustc --version
+cargo --version
+make cargo-profile-show
+make -f Makefile cargo-profile-show
+make rust-production-toolchain-check
+make test-rust-release-defaults-policy
+make test-mount-wrapper-path-and-ro
+cargo fmt --all -- --check
+cargo check --workspace --locked --profile release-lto
+cargo test --workspace --locked --profile release-lto --lib --bins
+make build-runtime
+make test-role-autodetect
+make rust-candidate-check
+make rust-msrv-check
+make rust-candidate-clippy
+QNAP=0 make test-all
+```
+
+Optional SELinux/Rocky validation commands for the dedicated host:
+
+```bash
+make remote-rocky-selinux-prepare ROCKY_SELINUX_HOST=192.168.1.188
+make remote-rocky-selinux-test-operational ROCKY_SELINUX_HOST=192.168.1.188
+make remote-rocky-selinux-test-strict ROCKY_SELINUX_HOST=192.168.1.188
+```
+
+Review and finalization commands:
+
+```bash
+git status --short --branch
+git diff --stat
+git diff -- Cargo.toml fod_version.txt Cargo.lock GNUmakefile Makefile mount.fod rust_mkfs/src/bin/fod-bootstrap.rs rust_fuse/tests/support.rs tests/test_rust_release_defaults_policy.sh tests/integration/fod_mount.py tests/integration/fod_runtime_testlib.py tests/integration/fod_testlib.sh tests/integration/test_mount_suite.py tests/integration/test_mount_wrapper_path_and_ro.sh docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md conclusions.md commands.md
+git add Cargo.lock Cargo.toml GNUmakefile Makefile commands.md conclusions.md docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md fod_version.txt mount.fod rust_fuse/tests/support.rs rust_mkfs/src/bin/fod-bootstrap.rs tests/integration/fod_mount.py tests/integration/fod_runtime_testlib.py tests/integration/fod_testlib.sh tests/integration/test_mount_suite.py tests/integration/test_mount_wrapper_path_and_ro.sh tests/test_rust_release_defaults_policy.sh
+git commit -m "FOD 3.3.26: enforce release-lto runtime profile"
+git show --stat --oneline --decorate --no-renames HEAD
+git show --check --format=fuller HEAD
+git diff HEAD~1..HEAD -- Cargo.toml fod_version.txt Cargo.lock GNUmakefile Makefile mount.fod rust_mkfs/src/bin/fod-bootstrap.rs rust_fuse/tests/support.rs tests/test_rust_release_defaults_policy.sh tests/integration/fod_mount.py tests/integration/fod_runtime_testlib.py tests/integration/fod_testlib.sh tests/integration/test_mount_suite.py tests/integration/test_mount_wrapper_path_and_ro.sh docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md conclusions.md commands.md
+git status --short --branch
+timeout 120 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex'
+```

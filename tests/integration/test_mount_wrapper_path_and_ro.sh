@@ -8,14 +8,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmpdir="$(mktemp -d /tmp/fod-mount-wrapper-path.XXXXXX)"
 trap 'rm -rf "${tmpdir}"' EXIT
 
-mkdir -p "${tmpdir}/target/debug"
+mkdir -p "${tmpdir}/target/release-lto"
 mkdir -p "${tmpdir}/bin"
 cp "${ROOT}/mount.fod" "${tmpdir}/mount.fod"
 chmod +x "${tmpdir}/mount.fod"
 printf '[package]\n' >"${tmpdir}/Cargo.toml"
 printf '3.0.4\n' >"${tmpdir}/fod_version.txt"
 
-cat >"${tmpdir}/target/debug/fod-bootstrap" <<'EOF'
+cat >"${tmpdir}/target/release-lto/fod-bootstrap" <<'EOF'
 #!/usr/bin/env bash
 printf 'BOOTSTRAP_SOURCE=%s\n' "target"
 printf 'FOD_ROLE=%s\n' "${FOD_ROLE:-unset}"
@@ -23,7 +23,7 @@ printf 'FOD_RUST_FUSE_READONLY=%s\n' "${FOD_RUST_FUSE_READONLY:-unset}"
 printf 'FOD_CONFIG=%s\n' "${FOD_CONFIG:-unset}"
 printf 'ARGS=%s\n' "$*"
 EOF
-chmod +x "${tmpdir}/target/debug/fod-bootstrap"
+chmod +x "${tmpdir}/target/release-lto/fod-bootstrap"
 
 cat >"${tmpdir}/bin/fod-bootstrap" <<'EOF'
 #!/usr/bin/env bash

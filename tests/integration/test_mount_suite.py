@@ -65,7 +65,8 @@ class FODMountSuite(unittest.TestCase):
         payload = os.urandom(64 * 1024)
         file_path.write_bytes(payload)
 
-        monitor_bin = ROOT / "target/debug/fod-monitor"
+        runtime_profile = os.environ.get("FOD_RUNTIME_PROFILE") or os.environ.get("FOD_CARGO_PROFILE") or "release-lto"
+        monitor_bin = ROOT / "target" / runtime_profile / "fod-monitor"
         self.assertTrue(monitor_bin.is_file(), monitor_bin)
 
         monitor_env = os.environ.copy()

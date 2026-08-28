@@ -2,7 +2,7 @@
 
 ## Decyzja
 
-Od FOD 3.3.24 kanoniczny toolchain uzywany do budowania artefaktow produkcyjnych jest przypiety do Rust `1.98.0`, a domyslny profil instalacyjny FOD to `release-lto`.
+Od FOD 3.3.24 kanoniczny toolchain uzywany do budowania artefaktow produkcyjnych jest przypiety do Rust `1.98.0`, a domyslny profil instalacyjny FOD to `release-lto`. Od FOD 3.3.26 ta sama para jest takze domyslna dla runtime i testow uruchamianych przez `Makefile`.
 
 Repozytorium zawiera teraz `rust-toolchain.toml`:
 
@@ -46,7 +46,7 @@ panic = "abort"
 strip = "symbols"
 ```
 
-Standardowe wywolanie `make`, ktore buduje lub instaluje artefakty produkcyjne, uzywa teraz domyslnie:
+Standardowe wywolanie `make`, ktore buduje lub uruchamia artefakty FOD z `Makefile`, uzywa teraz domyslnie:
 
 ```text
 FOD_CARGO_PROFILE=release-lto
@@ -58,7 +58,20 @@ Jawny override nadal jest mozliwy, np. dla diagnostyki lub porownania historyczn
 make FOD_CARGO_PROFILE=release cargo-profile-show
 ```
 
-Zmiana domyslnego profilu nie zmienia debugowych targetow testowych. `build-debug`, testy jednostkowe i integracyjne nadal korzystaja z normalnych profili Cargo odpowiednich dla danego targetu.
+Od FOD 3.3.26 ten sam domyslny profil obejmuje takze:
+
+- `build-runtime`, czyli standardowy build binariow runtime z `Makefile`;
+- `init`, `reset`, `mount`, `indexer`, `fod-change` i pokrewne targety runtime;
+- testy Cargo uruchamiane przez zmienne `CARGO_TEST_*` w `Makefile`;
+- pomocnicze testy integracyjne, ktore same wyszukuja lokalne binaria.
+
+`FOD_CARGO_TEST_PROFILE` domyslnie dziedziczy `FOD_CARGO_PROFILE`, wiec standardowe targety testowe Makefile uruchamiaja Cargo z:
+
+```text
+--profile release-lto
+```
+
+`build-debug` i `build-debug-shm` pozostaja dostepne jako jawne targety diagnostyczne. Nie sa jednak zwykla sciezka runtime ani domyslny fallback dla testow.
 
 ## MSRV a kanoniczny toolchain
 
@@ -83,11 +96,11 @@ make rust-msrv-check
 
 Natomiast zwykle `cargo`, `rustc`, `cargo fmt` i `cargo clippy` uruchomione wewnatrz checkoutu z rustup automatycznie wybieraja Rust 1.98.0 z `rust-toolchain.toml`.
 
-## Ochrona artefaktow produkcyjnych
+## Ochrona artefaktow runtime
 
-Targety instalacyjne `build-libfod` i `install-root-scripts` wymagaja aktywnego `rustc 1.98.0` poprzez `rust-production-toolchain-check`.
+Targety `build-runtime`, `build-libfod` i `install-root-scripts` wymagaja aktywnego `rustc 1.98.0` poprzez `rust-production-toolchain-check`.
 
-Ma to zapobiegac sytuacji, w ktorej system posiada starszy distro `cargo/rustc`, a operator nieswiadomie tworzy oficjalny artefakt innym kompilatorem niz ustalony dla FOD 3.3.24.
+Ma to zapobiegac sytuacji, w ktorej system posiada starszy distro `cargo/rustc`, a operator nieswiadomie tworzy oficjalny artefakt innym kompilatorem niz ustalony dla FOD.
 
 Polecenie kontrolne:
 
@@ -95,7 +108,7 @@ Polecenie kontrolne:
 make rust-production-toolchain-check
 ```
 
-`rust-toolchain.toml` jest takze zaleznoscia stempla debugowego builda. Zmiana przypietego kompilatora wymusza ponowne zbudowanie debugowych binariow zamiast pozostawienia starego stempla jako aktualnego.
+`rust-toolchain.toml` jest zaleznoscia stempli `build-runtime` i `build-debug`. Zmiana przypietego kompilatora wymusza ponowne zbudowanie binariow zamiast pozostawienia starego stempla jako aktualnego.
 
 ## Dobor binariow przy montowaniu
 
@@ -108,17 +121,15 @@ target/release
 
 Po przejsciu na `release-lto` mogloby to spowodowac uruchomienie starszego `target/release/fod-bootstrap` albo starszego `fod-rust-fuse`, mimo ze nowy build produkcyjny znajdowal sie w `target/release-lto`.
 
-FOD 3.3.24 dodaje `release-lto` do sciezek rozpoznawanych przez `mount.fod` i `fod-bootstrap`.
+FOD 3.3.24 dodal `release-lto` do sciezek rozpoznawanych przez `mount.fod` i `fod-bootstrap`. FOD 3.3.26 zaostrza te zasade: normalna sciezka checkoutu nie spada juz automatycznie do lokalnego `target/release` ani `target/debug`.
 
 Dla normalnego montowania checkout preferuje:
 
 ```text
 target/release-lto
-target/release
-target/debug
 ```
 
-W trybie debug `target/debug` pozostaje pierwszym wyborem.
+W trybie debug `target/debug` pozostaje pierwszym wyborem, ale jest to jawny tryb diagnostyczny.
 
 Dodatkowo wybrany `fod-bootstrap` preferuje `fod-rust-fuse` znajdujacy sie obok niego. Jezeli wrapper wybierze:
 
@@ -133,6 +144,8 @@ target/release-lto/fod-rust-fuse
 ```
 
 Zapobiega to mieszaniu artefaktow z roznych profili kompilacji.
+
+Jezeli operator chce uruchomic inny artefakt, powinien ustawic jawnie odpowiednia zmienna, np. `FOD_BOOTSTRAP_BIN`, `FOD_MKFS_BIN`, `FOD_RUST_FUSE_BIN` albo `FOD_RUNTIME_PROFILE=debug`.
 
 ## Rust 1.98 i granica FFI
 
@@ -183,7 +196,7 @@ make rust-msrv-check
 make rust-candidate-check
 make rust-candidate-clippy
 cargo fmt --all -- --check
-cargo check --workspace --locked
+cargo check --workspace --locked --profile release-lto
 QNAP=0 make test-all
 ```
 
@@ -192,6 +205,8 @@ Oczekiwane podstawowe wartosci:
 ```text
 rustc 1.98.0
 FOD_CARGO_PROFILE=release-lto
+FOD_CARGO_TEST_PROFILE=release-lto
+FOD_RUNTIME_PROFILE=release-lto
 rust-version=1.85
 ```
 

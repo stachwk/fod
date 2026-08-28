@@ -20,6 +20,10 @@ def _bool_env(value: str) -> bool:
     return value not in {"0", "false", "False", "no", "off", ""}
 
 
+def _runtime_profile() -> str:
+    return os.environ.get("FOD_RUNTIME_PROFILE") or os.environ.get("FOD_CARGO_PROFILE") or "release-lto"
+
+
 @dataclass
 class MountConfig:
     root: Path
@@ -84,29 +88,27 @@ class FODMount:
         raise FileNotFoundError(missing_error)
 
     def _mkfs_binary(self) -> Path:
+        profile = _runtime_profile()
         return self._resolve_binary(
             "FOD_MKFS_BIN",
             [
-                self.root / "target/debug/fod-rust-mkfs",
-                self.root / "target/release/fod-rust-mkfs",
-                self.root / "rust_mkfs/target/debug/fod-rust-mkfs",
-                self.root / "rust_mkfs/target/release/fod-rust-mkfs",
+                self.root / "target" / profile / "fod-rust-mkfs",
+                self.root / "rust_mkfs" / "target" / profile / "fod-rust-mkfs",
                 Path("/usr/local/bin/fod-rust-mkfs"),
             ],
-            "fod-rust-mkfs binary not found; build rust_mkfs first",
+            f"fod-rust-mkfs binary not found; build the {profile} runtime profile first",
         )
 
     def _bootstrap_binary(self) -> Path:
+        profile = _runtime_profile()
         return self._resolve_binary(
             "FOD_BOOTSTRAP_BIN",
             [
-                self.root / "target/debug/fod-bootstrap",
-                self.root / "target/release/fod-bootstrap",
-                self.root / "rust_mkfs/target/debug/fod-bootstrap",
-                self.root / "rust_mkfs/target/release/fod-bootstrap",
+                self.root / "target" / profile / "fod-bootstrap",
+                self.root / "rust_mkfs" / "target" / profile / "fod-bootstrap",
                 Path("/usr/local/bin/fod-bootstrap"),
             ],
-            "fod-bootstrap binary not found; build rust_mkfs first",
+            f"fod-bootstrap binary not found; build the {profile} runtime profile first",
         )
 
     def _config_path(self) -> Path:

@@ -39,6 +39,14 @@ pub fn cargo_target_dir() -> PathBuf {
     }
 }
 
+pub fn runtime_profile() -> String {
+    env::var("FOD_RUNTIME_PROFILE")
+        .or_else(|_| env::var("FOD_CARGO_PROFILE"))
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "release-lto".to_string())
+}
+
 pub fn unique_suffix() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -266,36 +274,38 @@ pub fn resolve_file_id(repo: &DbRepo, mountpoint: &Path, path: &Path) -> Result<
 pub fn bootstrap_binary() -> PathBuf {
     let root = repo_root();
     let target = cargo_target_dir();
+    let profile = runtime_profile();
     binary_from_env_or_candidates(
         "FOD_BOOTSTRAP_BIN",
         &[
-            target.join("debug/fod-bootstrap"),
-            target.join("release/fod-bootstrap"),
-            root.join("target/debug/fod-bootstrap"),
-            root.join("target/release/fod-bootstrap"),
-            root.join("rust_mkfs/target/debug/fod-bootstrap"),
-            root.join("rust_mkfs/target/release/fod-bootstrap"),
+            target.join(&profile).join("fod-bootstrap"),
+            root.join("target").join(&profile).join("fod-bootstrap"),
+            root.join("rust_mkfs")
+                .join("target")
+                .join(&profile)
+                .join("fod-bootstrap"),
             PathBuf::from("/usr/local/bin/fod-bootstrap"),
         ],
-        "fod-bootstrap binary not found; build the workspace first",
+        &format!("fod-bootstrap binary not found; build the {profile} runtime profile first"),
     )
 }
 
 pub fn mkfs_binary() -> PathBuf {
     let root = repo_root();
     let target = cargo_target_dir();
+    let profile = runtime_profile();
     binary_from_env_or_candidates(
         "FOD_MKFS_BIN",
         &[
-            target.join("debug/fod-rust-mkfs"),
-            target.join("release/fod-rust-mkfs"),
-            root.join("target/debug/fod-rust-mkfs"),
-            root.join("target/release/fod-rust-mkfs"),
-            root.join("rust_mkfs/target/debug/fod-rust-mkfs"),
-            root.join("rust_mkfs/target/release/fod-rust-mkfs"),
+            target.join(&profile).join("fod-rust-mkfs"),
+            root.join("target").join(&profile).join("fod-rust-mkfs"),
+            root.join("rust_mkfs")
+                .join("target")
+                .join(&profile)
+                .join("fod-rust-mkfs"),
             PathBuf::from("/usr/local/bin/fod-rust-mkfs"),
         ],
-        "fod-rust-mkfs binary not found; build the workspace first",
+        &format!("fod-rust-mkfs binary not found; build the {profile} runtime profile first"),
     )
 }
 

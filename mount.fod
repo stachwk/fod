@@ -85,19 +85,13 @@ resolve_bootstrap_bin() {
       candidates=(
         "${project_root}/target/debug/fod-bootstrap"
         "${project_root}/target/release-lto/fod-bootstrap"
-        "${project_root}/target/release/fod-bootstrap"
         "${project_root}/rust_mkfs/target/debug/fod-bootstrap"
         "${project_root}/rust_mkfs/target/release-lto/fod-bootstrap"
-        "${project_root}/rust_mkfs/target/release/fod-bootstrap"
       )
     else
       candidates=(
         "${project_root}/target/release-lto/fod-bootstrap"
-        "${project_root}/target/release/fod-bootstrap"
-        "${project_root}/target/debug/fod-bootstrap"
         "${project_root}/rust_mkfs/target/release-lto/fod-bootstrap"
-        "${project_root}/rust_mkfs/target/release/fod-bootstrap"
-        "${project_root}/rust_mkfs/target/debug/fod-bootstrap"
       )
     fi
   fi

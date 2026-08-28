@@ -166,11 +166,7 @@ fn rust_fuse_binary() -> Option<PathBuf> {
         .unwrap_or_else(|| Path::new("."));
     let candidates = [
         root.join("target/release-lto/fod-rust-fuse"),
-        root.join("target/release/fod-rust-fuse"),
-        root.join("target/debug/fod-rust-fuse"),
         root.join("rust_fuse/target/release-lto/fod-rust-fuse"),
-        root.join("rust_fuse/target/release/fod-rust-fuse"),
-        root.join("rust_fuse/target/debug/fod-rust-fuse"),
     ];
     if let Some(candidate) = candidates
         .into_iter()
@@ -225,7 +221,7 @@ fn main() {
             Some(path) => path,
             None => {
                 eprintln!(
-                    "Rust FUSE binary is unavailable; build target/release-lto/fod-rust-fuse or target/debug/fod-rust-fuse, set FOD_RUST_FUSE_BIN, install fod-rust-fuse on PATH, or place it in /usr/local/bin."
+                    "Rust FUSE binary is unavailable; build target/release-lto/fod-rust-fuse, set FOD_RUST_FUSE_BIN, install fod-rust-fuse on PATH, or place it in /usr/local/bin."
                 );
                 std::process::exit(1);
             }

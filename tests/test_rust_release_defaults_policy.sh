@@ -12,15 +12,23 @@ grep -Fq '"clippy"' "${repo_root}/rust-toolchain.toml"
 grep -Fq '"rustfmt"' "${repo_root}/rust-toolchain.toml"
 
 grep -Eq '^rust-version[[:space:]]*=[[:space:]]*"1\.85"' "${repo_root}/Cargo.toml"
-grep -Eq '^FOD_CARGO_PROFILE[[:space:]]*\?=[[:space:]]*release-lto$' "${repo_root}/GNUmakefile"
-grep -Eq '^FOD_RUST_PRODUCTION_TOOLCHAIN[[:space:]]*\?=[[:space:]]*1\.98\.0$' "${repo_root}/GNUmakefile"
-grep -Fq 'rust-production-toolchain-check' "${repo_root}/GNUmakefile"
-grep -Fq 'build-libfod install-root-scripts: rust-production-toolchain-check' "${repo_root}/GNUmakefile"
-grep -Fq '$(FOD_DEBUG_BUILD_STAMP): rust-toolchain.toml' "${repo_root}/GNUmakefile"
+grep -Eq '^FOD_CARGO_PROFILE[[:space:]]*\?=[[:space:]]*release-lto$' "${repo_root}/Makefile"
+grep -Fq 'FOD_CARGO_TEST_PROFILE ?= $(FOD_CARGO_PROFILE)' "${repo_root}/Makefile"
+grep -Fq 'FOD_TEST_FLAG := --profile $(FOD_CARGO_TEST_PROFILE)' "${repo_root}/Makefile"
+grep -Eq '^FOD_RUST_PRODUCTION_TOOLCHAIN[[:space:]]*\?=[[:space:]]*1\.98\.0$' "${repo_root}/Makefile"
+grep -Fq 'build-runtime: rust-production-toolchain-check $(FOD_RUNTIME_BUILD_STAMP)' "${repo_root}/Makefile"
+grep -Fq '$(CARGO_BUILD_LIBFOD) $(FOD_RELEASE_FLAG) --lib' "${repo_root}/Makefile"
+grep -Fq 'build-libfod install-root-scripts: rust-production-toolchain-check' "${repo_root}/Makefile"
+grep -Fq '$(FOD_DEBUG_BUILD_STAMP): Makefile GNUmakefile rust-toolchain.toml' "${repo_root}/Makefile"
+grep -Fq 'CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_TEST_FLAG) -p $(FOD_FUSE_PACKAGE)' "${repo_root}/Makefile"
 
 grep -Fq 'target/release-lto/fod-rust-fuse' "${repo_root}/rust_mkfs/src/bin/fod-bootstrap.rs"
 grep -Fq 'sibling_rust_fuse_binary' "${repo_root}/rust_mkfs/src/bin/fod-bootstrap.rs"
 grep -Fq 'pub unsafe extern "C" fn fod_program_find' "${repo_root}/rust_libfod/src/lib.rs"
+if grep -Fq '${project_root}/target/release/fod-bootstrap' "${repo_root}/mount.fod"; then
+  echo "normal mount.fod checkout path must not fall back to target/release/fod-bootstrap" >&2
+  exit 1
+fi
 
 bash -n "${repo_root}/mount.fod"
 
@@ -31,7 +39,7 @@ mkdir -p "${checkout}/target/release-lto" "${checkout}/target/release" "${checko
 cp "${repo_root}/mount.fod" "${checkout}/mount.fod"
 chmod +x "${checkout}/mount.fod"
 printf '[workspace]\n' >"${checkout}/Cargo.toml"
-printf '3.3.24\n' >"${checkout}/fod_version.txt"
+printf '3.3.26\n' >"${checkout}/fod_version.txt"
 printf '[database]\nhost = 127.0.0.1\n' >"${checkout}/test.ini"
 
 cat >"${checkout}/target/release-lto/fod-bootstrap" <<'EOF'

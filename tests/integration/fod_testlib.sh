@@ -32,29 +32,22 @@ fod_test_setup() {
   FOD_SELINUX_FSCONTEXT="${FOD_SELINUX_FSCONTEXT:-}"
   FOD_SELINUX_DEFCONTEXT="${FOD_SELINUX_DEFCONTEXT:-}"
   FOD_SELINUX_ROOTCONTEXT="${FOD_SELINUX_ROOTCONTEXT:-}"
+  FOD_RUNTIME_PROFILE="${FOD_RUNTIME_PROFILE:-${FOD_CARGO_PROFILE:-release-lto}}"
   if [[ -n "${FOD_BOOTSTRAP_BIN:-}" ]]; then
     :
-  elif [[ -x "${ROOT}/target/debug/fod-bootstrap" ]]; then
-    FOD_BOOTSTRAP_BIN="${ROOT}/target/debug/fod-bootstrap"
-  elif [[ -x "${ROOT}/target/release/fod-bootstrap" ]]; then
-    FOD_BOOTSTRAP_BIN="${ROOT}/target/release/fod-bootstrap"
-  elif [[ -x "${ROOT}/rust_mkfs/target/debug/fod-bootstrap" ]]; then
-    FOD_BOOTSTRAP_BIN="${ROOT}/rust_mkfs/target/debug/fod-bootstrap"
-  elif [[ -x "${ROOT}/rust_mkfs/target/release/fod-bootstrap" ]]; then
-    FOD_BOOTSTRAP_BIN="${ROOT}/rust_mkfs/target/release/fod-bootstrap"
+  elif [[ -x "${ROOT}/target/${FOD_RUNTIME_PROFILE}/fod-bootstrap" ]]; then
+    FOD_BOOTSTRAP_BIN="${ROOT}/target/${FOD_RUNTIME_PROFILE}/fod-bootstrap"
+  elif [[ -x "${ROOT}/rust_mkfs/target/${FOD_RUNTIME_PROFILE}/fod-bootstrap" ]]; then
+    FOD_BOOTSTRAP_BIN="${ROOT}/rust_mkfs/target/${FOD_RUNTIME_PROFILE}/fod-bootstrap"
   else
     FOD_BOOTSTRAP_BIN="/usr/local/bin/fod-bootstrap"
   fi
   if [[ -n "${FOD_MKFS_BIN:-}" ]]; then
     :
-  elif [[ -x "${ROOT}/target/debug/fod-rust-mkfs" ]]; then
-    FOD_MKFS_BIN="${ROOT}/target/debug/fod-rust-mkfs"
-  elif [[ -x "${ROOT}/target/release/fod-rust-mkfs" ]]; then
-    FOD_MKFS_BIN="${ROOT}/target/release/fod-rust-mkfs"
-  elif [[ -x "${ROOT}/rust_mkfs/target/debug/fod-rust-mkfs" ]]; then
-    FOD_MKFS_BIN="${ROOT}/rust_mkfs/target/debug/fod-rust-mkfs"
-  elif [[ -x "${ROOT}/rust_mkfs/target/release/fod-rust-mkfs" ]]; then
-    FOD_MKFS_BIN="${ROOT}/rust_mkfs/target/release/fod-rust-mkfs"
+  elif [[ -x "${ROOT}/target/${FOD_RUNTIME_PROFILE}/fod-rust-mkfs" ]]; then
+    FOD_MKFS_BIN="${ROOT}/target/${FOD_RUNTIME_PROFILE}/fod-rust-mkfs"
+  elif [[ -x "${ROOT}/rust_mkfs/target/${FOD_RUNTIME_PROFILE}/fod-rust-mkfs" ]]; then
+    FOD_MKFS_BIN="${ROOT}/rust_mkfs/target/${FOD_RUNTIME_PROFILE}/fod-rust-mkfs"
   else
     FOD_MKFS_BIN="/usr/local/bin/fod-rust-mkfs"
   fi

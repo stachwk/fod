@@ -1,31 +1,6 @@
-# Canonical FOD builds use Rust 1.98.0 and the ThinLTO production profile.
-# Command-line/environment overrides still win over these defaults.
-FOD_CARGO_PROFILE ?= release-lto
-FOD_RUST_PRODUCTION_TOOLCHAIN ?= 1.98.0
-
 include Makefile
 
-.PHONY: rust-production-toolchain-check test-rust-release-defaults-policy
-
-rust-production-toolchain-check:
-	@set -eu; \
-	actual="$$(rustc --version)"; \
-	expected="rustc $(FOD_RUST_PRODUCTION_TOOLCHAIN) "; \
-	case "$$actual " in \
-		"$$expected"*) ;; \
-		*) \
-			printf 'FOD production build requires Rust %s; active compiler: %s\n' "$(FOD_RUST_PRODUCTION_TOOLCHAIN)" "$$actual" >&2; \
-			printf 'Install/select the repository toolchain from rust-toolchain.toml before building release artifacts.\n' >&2; \
-			exit 1 ;; \
-	esac
-
-# A toolchain change must invalidate an old debug build stamp, otherwise make
-# could reuse binaries produced by the previous compiler.
-$(FOD_DEBUG_BUILD_STAMP): rust-toolchain.toml
-
-# Release artifacts installed by FOD are required to use the pinned production
-# compiler. The C ABI is unchanged; only the compiler/profile defaults change.
-build-libfod install-root-scripts: rust-production-toolchain-check
+.PHONY: test-rust-release-defaults-policy
 
 # Selective cleanup for known auxiliary Cargo targets. The allowlist is
 # enforced by scripts/fod-aux-target-clean.sh; these variables only tune the
@@ -80,13 +55,13 @@ FOD_RUST_TOOLCHAIN_BENCH_SOURCE ?= pattern
 .PHONY: rust-msrv-check rust-candidate-check rust-candidate-clippy rust-toolchain-benchmark-plan rust-toolchain-benchmark test-rust-toolchain-benchmark-policy
 
 rust-msrv-check:
-	@rustup run "$(FOD_RUST_BASELINE_TOOLCHAIN)" cargo check --workspace --locked
+	@rustup run "$(FOD_RUST_BASELINE_TOOLCHAIN)" cargo check --workspace --locked --profile "$(FOD_CARGO_PROFILE)"
 
 rust-candidate-check:
-	@rustup run "$(FOD_RUST_CANDIDATE_TOOLCHAIN)" cargo check --workspace --locked
+	@rustup run "$(FOD_RUST_CANDIDATE_TOOLCHAIN)" cargo check --workspace --locked --profile "$(FOD_CARGO_PROFILE)"
 
 rust-candidate-clippy:
-	@rustup run "$(FOD_RUST_CANDIDATE_TOOLCHAIN)" cargo clippy --workspace --all-targets --locked
+	@rustup run "$(FOD_RUST_CANDIDATE_TOOLCHAIN)" cargo clippy --workspace --all-targets --locked --profile "$(FOD_CARGO_PROFILE)"
 
 rust-toolchain-benchmark-plan:
 	@FOD_RUST_MSRV="$(FOD_RUST_MSRV)" \

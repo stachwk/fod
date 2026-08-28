@@ -2892,3 +2892,27 @@ The SELinux-related skips in `test-all` match the previously documented Rocky
 ordinary-FUSE model: operational SELinux enforcement through `fusefs_t` is
 supported, while per-inode `security.selinux` relabeling remains a host
 mount-stack capability outside FOD's direct control.
+
+## 2026-08-28 - Runtime/test Makefile policy tightened for FOD 3.3.26 on `65ff178`
+
+FOD 3.3.26 tightens the Rust 1.98 / `release-lto` decision from install-only
+policy into the default Makefile runtime and test policy. `Makefile` now owns
+the canonical defaults directly, so both `make` and `make -f Makefile` use
+`FOD_CARGO_PROFILE=release-lto`, `FOD_CARGO_TEST_PROFILE=release-lto`, and
+`FOD_RUNTIME_PROFILE=release-lto` unless explicitly overridden.
+
+The standard runtime targets now build and run profile artifacts through
+`build-runtime`. Local helper discovery in shell, Python, and Rust integration
+support also prefers the configured runtime profile instead of silently choosing
+stale `target/debug` or `target/release` binaries. `mount.fod` and
+`fod-bootstrap` no longer use local non-LTO checkout binaries as normal
+fallbacks; debug artifacts remain available only through explicit debug paths
+or explicit binary/profile overrides.
+
+Integration targets that launch FOD through the shared mount helpers now depend
+on `build-runtime`, so invoking those Makefile targets builds the canonical
+runtime profile before the helper resolves local binaries.
+
+Per user instruction, validation tests and benchmarks for this stage were not
+run by the assistant. The recommended validation command list was recorded in
+`commands.md` for user-side execution.
