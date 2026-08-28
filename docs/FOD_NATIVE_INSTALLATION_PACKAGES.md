@@ -65,6 +65,18 @@ The packaged configuration comes from `fod_config.example.ini`, never from the l
 
 FOD 3.3.31 adds INI-controlled per-instance file logging. The package creates `/var/log/fod` with mode `0755`; individual log files are opened by `fod-rust-fuse` in append mode and are created with mode `0640` subject to the system umask. The default packaged INI enables file logging and derives the file name from the selected INI basename. For example, `/etc/fod/db-primary.ini` writes to `/var/log/fod/db-primary.log`.
 
+## Runtime privilege model
+
+The supported deployment model runs `mount.fod`, `fod-bootstrap` and `fod-rust-fuse` as `root`. The package therefore deliberately keeps `/var/log/fod` as `root:root 0755`; it is not made generally writable for non-root daemons.
+
+Operational configuration under `/etc/fod` is root-controlled. The packaged INI is a non-secret template/default configuration; once an operational INI contains database passwords, private key locations, tokens or other secrets, it should be restricted to `root` according to deployment policy, normally with mode `0600` or `0640`.
+
+The privileged runtime identity is independent of access to mounted FOD data. Ordinary users may use the mounted filesystem according to effective UID/GID ownership, mode bits, `default_permissions`, ACL and `allow_other` settings.
+
+A dedicated `fod` service account is intentionally deferred. Introducing one requires a separate design for `/dev/fuse`, configuration secrets, log ownership, mountpoints, UID/GID/ACL behavior and service-manager/package lifecycle.
+
+See [FOD_RUNTIME_PRIVILEGE_POLICY.md](FOD_RUNTIME_PRIVILEGE_POLICY.md) for the authoritative policy.
+
 For Debian packages `/etc/fod/fod_config.ini` is declared in `DEBIAN/conffiles`. For RPM it is `%config(noreplace)`, so a locally edited configuration is preserved across upgrades. Debian package dependencies for ELF libraries are generated with `dpkg-shlibdeps`; this also avoids hard-coding a specific Ubuntu FUSE library package name when the distribution changes SONAME packages. Because the package installs `libfod.so` into the dynamic-linker library path, the Debian package also declares the `activate-noawait ldconfig` trigger. On RHEL/Rocky 8 and newer, glibc transaction file triggers update the `ldconfig` cache, so no package-specific RPM scriptlet is added. RPM keeps automatic ELF dependency generation and adds explicit `bash` and `fuse3` runtime requirements.
 
 ## Debian staging and permissions
