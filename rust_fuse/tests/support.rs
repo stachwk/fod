@@ -47,6 +47,15 @@ pub fn runtime_profile() -> String {
         .unwrap_or_else(|| "release-lto".to_string())
 }
 
+pub fn runtime_artifact_profile() -> String {
+    let profile = runtime_profile();
+    if profile == "dev" {
+        "debug".to_string()
+    } else {
+        profile
+    }
+}
+
 pub fn unique_suffix() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -275,14 +284,17 @@ pub fn bootstrap_binary() -> PathBuf {
     let root = repo_root();
     let target = cargo_target_dir();
     let profile = runtime_profile();
+    let artifact_profile = runtime_artifact_profile();
     binary_from_env_or_candidates(
         "FOD_BOOTSTRAP_BIN",
         &[
-            target.join(&profile).join("fod-bootstrap"),
-            root.join("target").join(&profile).join("fod-bootstrap"),
+            target.join(&artifact_profile).join("fod-bootstrap"),
+            root.join("target")
+                .join(&artifact_profile)
+                .join("fod-bootstrap"),
             root.join("rust_mkfs")
                 .join("target")
-                .join(&profile)
+                .join(&artifact_profile)
                 .join("fod-bootstrap"),
             PathBuf::from("/usr/local/bin/fod-bootstrap"),
         ],
@@ -294,14 +306,17 @@ pub fn mkfs_binary() -> PathBuf {
     let root = repo_root();
     let target = cargo_target_dir();
     let profile = runtime_profile();
+    let artifact_profile = runtime_artifact_profile();
     binary_from_env_or_candidates(
         "FOD_MKFS_BIN",
         &[
-            target.join(&profile).join("fod-rust-mkfs"),
-            root.join("target").join(&profile).join("fod-rust-mkfs"),
+            target.join(&artifact_profile).join("fod-rust-mkfs"),
+            root.join("target")
+                .join(&artifact_profile)
+                .join("fod-rust-mkfs"),
             root.join("rust_mkfs")
                 .join("target")
-                .join(&profile)
+                .join(&artifact_profile)
                 .join("fod-rust-mkfs"),
             PathBuf::from("/usr/local/bin/fod-rust-mkfs"),
         ],

@@ -73,6 +73,15 @@ Od FOD 3.3.26 ten sam domyslny profil obejmuje takze:
 
 FOD 3.3.29 rozdziela jawnie profil build/install od profilu runtime. `FOD_CARGO_PROFILE` nadal steruje artefaktami instalacyjnymi, a `FOD_RUNTIME_PROFILE` steruje `build-runtime`, sciezkami runtime binarek i stampem runtime. Dzieki temu konfiguracja typu `FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto` buduje i uruchamia runtime z `release-lto`, zamiast przypadkowo budowac `release` i szukac `release-lto`.
 
+FOD 3.3.30 doprecyzowuje tryb developerski: `FOD_RUNTIME_PROFILE=dev` jest przekazywany do Cargo jako `--profile dev`, ale artefakty sa pobierane z katalogu `target/debug`. Pozostale profile runtime zachowuja mapowanie 1:1.
+
+| `FOD_RUNTIME_PROFILE` | Cargo profile | Katalog artefaktow |
+| --- | --- | --- |
+| `dev` | `dev` | `target/debug` |
+| `release` | `release` | `target/release` |
+| `release-lto` | `release-lto` | `target/release-lto` |
+| `profiling` | `profiling` | `target/profiling` |
+
 `build-debug` i `build-debug-shm` pozostaja dostepne jako jawne targety diagnostyczne. Nie sa jednak zwykla sciezka runtime ani domyslny fallback dla testow.
 
 ## MSRV a kanoniczny toolchain
@@ -147,7 +156,7 @@ target/release-lto/fod-rust-fuse
 
 Zapobiega to mieszaniu artefaktow z roznych profili kompilacji.
 
-Jezeli operator chce uruchomic inny artefakt, powinien ustawic jawnie odpowiednia zmienna, np. `FOD_BOOTSTRAP_BIN`, `FOD_MKFS_BIN`, `FOD_RUST_FUSE_BIN` albo `FOD_RUNTIME_PROFILE=debug`.
+Jezeli operator chce uruchomic inny artefakt, powinien ustawic jawnie odpowiednia zmienna, np. `FOD_BOOTSTRAP_BIN`, `FOD_MKFS_BIN`, `FOD_RUST_FUSE_BIN` albo `FOD_RUNTIME_PROFILE=dev`.
 
 ## Rust 1.98 i granica FFI
 

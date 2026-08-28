@@ -66,7 +66,8 @@ class FODMountSuite(unittest.TestCase):
         file_path.write_bytes(payload)
 
         runtime_profile = os.environ.get("FOD_RUNTIME_PROFILE") or os.environ.get("FOD_CARGO_PROFILE") or "release-lto"
-        monitor_bin = ROOT / "target" / runtime_profile / "fod-monitor"
+        artifact_profile = "debug" if runtime_profile == "dev" else runtime_profile
+        monitor_bin = ROOT / "target" / artifact_profile / "fod-monitor"
         self.assertTrue(monitor_bin.is_file(), monitor_bin)
 
         monitor_env = os.environ.copy()

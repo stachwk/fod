@@ -6369,6 +6369,78 @@ timeout 120 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --m
 Post-commit MemPalace refresh result: the command reached the 120 second timeout
 and exited with code 124.
 
+## 2026-08-28 - FOD 3.3.30 dev runtime profile mapping
+
+Base commit at execution time: `efc4b29`
+
+Executed diagnostic and edit commands:
+
+```bash
+git status --short --branch --ignored AGENTS.md
+git fetch origin --tags
+cat fod_version.txt
+nl -ba Cargo.toml | sed -n '1,80p'
+nl -ba Makefile | sed -n '24,40p;136,158p;168,182p;1288,1302p'
+rg -n "FOD_RUNTIME_PROFILE=debug|FOD_RUNTIME_PROFILE|target/\$\(FOD_RUNTIME_PROFILE\)|target/debug|profile dev|\[profile\.dev\]" Makefile tests docs README.md rust_* mount.fod
+nl -ba tests/test_rust_release_defaults_policy.sh | sed -n '1,130p'
+perl -0pi -e 's/3\.3\.29/3.3.30/g' fod_version.txt Cargo.toml Cargo.lock
+rg -n "FOD_RUNTIME_PROFILE=debug|debug|FOD_RUNTIME_ARTIFACT_PROFILE|FOD_RUNTIME_PROFILE=dev" docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md conclusions.md commands.md README.md Makefile tests/test_rust_release_defaults_policy.sh
+nl -ba docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md | sed -n '68,82p;128,154p;178,188p'
+```
+
+Required validation commands for this stage:
+
+```bash
+make test-rust-release-defaults-policy
+cargo fmt --all -- --check
+cargo check --workspace --locked --profile release-lto
+cargo clippy --workspace --all-targets --locked --profile release-lto
+cargo test --workspace --locked
+make FOD_RUNTIME_PROFILE=dev build-runtime
+QNAP=0 make test-all
+```
+
+Validation results on the working tree based on `efc4b29`:
+
+```text
+make test-rust-release-defaults-policy: passed
+cargo fmt --all -- --check: failed once after a local rustfmt diff, then passed after cargo fmt --all
+cargo check --workspace --locked --profile release-lto: failed once because root profile dev cannot specify inherits, then passed after removing the invalid [profile.dev] block
+cargo clippy --workspace --all-targets --locked --profile release-lto: passed
+cargo test --workspace --locked: passed
+make FOD_RUNTIME_PROFILE=dev build-runtime: passed; Cargo used --profile dev and wrote target/.fod-runtime-dev-build.stamp
+QNAP=0 make test-all: first run stopped at test-db-restore-local because an orphaned temporary FOD FUSE mount was still active; after fusermount3 -u on that temporary /tmp/fod-rust-fuse-* mount, the second run passed
+```
+
+Additional commands executed during validation and cleanup:
+
+```bash
+cargo fmt --all
+fusermount3 -u /tmp/fod-rust-fuse-2420653-1787916202667250058-truncate-rename/mount || fusermount -u /tmp/fod-rust-fuse-2420653-1787916202667250058-truncate-rename/mount
+findmnt -rn -t fuse.fod,fuseblk,fuse,fuse3
+pgrep -af 'fod-rust-fuse|fod-bootstrap|target/.*/fod|mount.fod'
+```
+
+Post-commit review commands:
+
+```bash
+git diff --check
+rg -n "FOD_RUNTIME_PROFILE=debug|--profile debug|target/dev/fod-(bootstrap|rust-fuse)" Makefile tests docs README.md conclusions.md commands.md rust_*
+git diff --stat
+git status --short --branch --untracked-files=all
+git add Cargo.toml Cargo.lock Makefile commands.md conclusions.md docs/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md fod_version.txt rust_fuse/tests/support.rs tests/integration/fod_mount.py tests/integration/fod_runtime_testlib.py tests/integration/fod_testlib.sh tests/integration/test_mount_suite.py tests/test_rust_release_defaults_policy.sh
+git commit -m "FOD 3.3.30: fix dev runtime profile mapping"
+git show --check HEAD
+git diff HEAD~1..HEAD
+timeout 120 bash -lc 'source ~/.venv/bin/activate && mempalace mine "$(pwd)" --mode projects --wing fod --agent codex'
+```
+
+Post-commit review result: `git show --check HEAD` passed, and
+`git diff HEAD~1..HEAD` matched the intended version, Makefile, documentation,
+test helper, and release-defaults policy changes. MemPalace refresh reached the
+120 second timeout and exited with code 124 after printing only the existing
+embedder identity warning.
+
 ## 2026-08-28 - Close Rust 1.98 release-lto profile transition
 
 Base commit at execution time: `f345e02`

@@ -16,10 +16,12 @@ grep -Eq '^FOD_CARGO_PROFILE[[:space:]]*\?=[[:space:]]*release-lto$' "${repo_roo
 grep -Fq 'FOD_CARGO_TEST_PROFILE ?= $(FOD_CARGO_PROFILE)' "${repo_root}/Makefile"
 grep -Fq 'FOD_TEST_FLAG := --profile $(FOD_CARGO_TEST_PROFILE)' "${repo_root}/Makefile"
 grep -Fq 'FOD_RUNTIME_FLAG := --profile $(FOD_RUNTIME_PROFILE)' "${repo_root}/Makefile"
+grep -Fq 'FOD_RUNTIME_ARTIFACT_PROFILE := $(if $(filter dev,$(FOD_RUNTIME_PROFILE)),debug,$(FOD_RUNTIME_PROFILE))' "${repo_root}/Makefile"
 grep -Eq '^FOD_RUST_PRODUCTION_TOOLCHAIN[[:space:]]*\?=[[:space:]]*1\.98\.0$' "${repo_root}/Makefile"
 grep -Fq 'build-runtime: rust-production-toolchain-check $(FOD_RUNTIME_BUILD_STAMP)' "${repo_root}/Makefile"
 grep -Fq 'FOD_RUNTIME_BUILD_STAMP := $(RUST_MKFS_TARGET_DIR)/.fod-runtime-$(FOD_RUNTIME_PROFILE)-build.stamp' "${repo_root}/Makefile"
 grep -Fq '$(CARGO_BUILD_MKFS) $(FOD_RUNTIME_FLAG) --bins' "${repo_root}/Makefile"
+grep -Fq 'FOD_BOOTSTRAP_RUNTIME_BIN ?= $(RUST_MKFS_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-bootstrap' "${repo_root}/Makefile"
 grep -Fq '$(CARGO_BUILD_LIBFOD) $(FOD_RELEASE_FLAG) --lib' "${repo_root}/Makefile"
 grep -Fq 'build-libfod install-root-scripts: rust-production-toolchain-check' "${repo_root}/Makefile"
 grep -Fq '$(FOD_DEBUG_BUILD_STAMP): Makefile GNUmakefile rust-toolchain.toml' "${repo_root}/Makefile"
@@ -92,6 +94,40 @@ grep -Eq 'cargo build .*--profile release-lto .*--lib' <<<"${build_plan}"
 grep -Fq '.fod-runtime-release-lto-build.stamp' <<<"${build_plan}"
 if grep -Eq 'cargo build .*--profile release .*--bins' <<<"${build_plan}"; then
   echo "build-runtime must not use FOD_CARGO_PROFILE when FOD_RUNTIME_PROFILE differs" >&2
+  exit 1
+fi
+
+dev_profile="$(
+  cd "${repo_root}"
+  make --no-print-directory cargo-profile-show FOD_RUNTIME_PROFILE=dev
+)"
+
+grep -Fq 'FOD_RUNTIME_PROFILE=dev' <<<"${dev_profile}"
+grep -Fq 'FOD_RUNTIME_FLAG=--profile dev' <<<"${dev_profile}"
+grep -Fq 'FOD_RUNTIME_ARTIFACT_PROFILE=debug' <<<"${dev_profile}"
+grep -Fq 'FOD_RUNTIME_BUILD_STAMP=target/.fod-runtime-dev-build.stamp' <<<"${dev_profile}"
+
+dev_build_plan="$(
+  cd "${repo_root}"
+  make --no-print-directory -nB build-runtime FOD_RUNTIME_PROFILE=dev
+)"
+
+grep -Eq 'cargo build .*--profile dev .*--bins' <<<"${dev_build_plan}"
+grep -Eq 'cargo build .*--profile dev .*--bin fod-rust-fuse' <<<"${dev_build_plan}"
+grep -Eq 'cargo build .*--profile dev .*--lib' <<<"${dev_build_plan}"
+grep -Fq '.fod-runtime-dev-build.stamp' <<<"${dev_build_plan}"
+if grep -Eq 'cargo build .*--profile debug' <<<"${dev_build_plan}"; then
+  echo "build-runtime must use Cargo profile dev, not debug" >&2
+  exit 1
+fi
+
+runtime_bin_plan="$(
+  cd "${repo_root}"
+  make --no-print-directory -n mount FOD_RUNTIME_PROFILE=dev
+)"
+grep -Fq 'target/debug/fod-bootstrap' <<<"${runtime_bin_plan}"
+if grep -Fq 'target/dev/fod-bootstrap' <<<"${runtime_bin_plan}"; then
+  echo "runtime bin lookup must use target/debug for FOD_RUNTIME_PROFILE=dev" >&2
   exit 1
 fi
 

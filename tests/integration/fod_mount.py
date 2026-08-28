@@ -24,6 +24,11 @@ def _runtime_profile() -> str:
     return os.environ.get("FOD_RUNTIME_PROFILE") or os.environ.get("FOD_CARGO_PROFILE") or "release-lto"
 
 
+def _runtime_artifact_profile() -> str:
+    profile = _runtime_profile()
+    return "debug" if profile == "dev" else profile
+
+
 @dataclass
 class MountConfig:
     root: Path
@@ -89,11 +94,12 @@ class FODMount:
 
     def _mkfs_binary(self) -> Path:
         profile = _runtime_profile()
+        artifact_profile = _runtime_artifact_profile()
         return self._resolve_binary(
             "FOD_MKFS_BIN",
             [
-                self.root / "target" / profile / "fod-rust-mkfs",
-                self.root / "rust_mkfs" / "target" / profile / "fod-rust-mkfs",
+                self.root / "target" / artifact_profile / "fod-rust-mkfs",
+                self.root / "rust_mkfs" / "target" / artifact_profile / "fod-rust-mkfs",
                 Path("/usr/local/bin/fod-rust-mkfs"),
             ],
             f"fod-rust-mkfs binary not found; build the {profile} runtime profile first",
@@ -101,11 +107,12 @@ class FODMount:
 
     def _bootstrap_binary(self) -> Path:
         profile = _runtime_profile()
+        artifact_profile = _runtime_artifact_profile()
         return self._resolve_binary(
             "FOD_BOOTSTRAP_BIN",
             [
-                self.root / "target" / profile / "fod-bootstrap",
-                self.root / "rust_mkfs" / "target" / profile / "fod-bootstrap",
+                self.root / "target" / artifact_profile / "fod-bootstrap",
+                self.root / "rust_mkfs" / "target" / artifact_profile / "fod-bootstrap",
                 Path("/usr/local/bin/fod-bootstrap"),
             ],
             f"fod-bootstrap binary not found; build the {profile} runtime profile first",

@@ -3018,3 +3018,38 @@ Validation on the FOD 3.3.29 working tree based on `f345e02`:
 This closes the Rust 1.98 / `release-lto` transition for FOD 3.3.25 through
 3.3.29. The SELinux per-inode xattr limitations documented for Rocky ordinary
 FUSE remain unchanged by this runtime-profile work.
+
+## 2026-08-28 - Dev runtime profile mapping prepared for FOD 3.3.30 on `efc4b29`
+
+FOD 3.3.30 keeps `FOD_RUNTIME_PROFILE` as the Cargo profile passed to
+`build-runtime`, but introduces a separate runtime artifact profile. The
+developer runtime value is now `FOD_RUNTIME_PROFILE=dev`: Cargo receives
+`--profile dev`, while FOD runtime binaries are resolved from `target/debug`.
+
+The production-oriented profiles keep 1:1 mapping between runtime profile and
+artifact directory: `release`, `release-lto`, and `profiling`. The default
+runtime profile remains `release-lto`, Rust remains pinned to 1.98.0 for
+production validation, and the workspace MSRV remains `rust-version = "1.85"`.
+
+The release defaults policy regression now checks the `dev` runtime profile:
+the dry-run build must use `--profile dev`, the runtime bin lookup must point to
+`target/debug/fod-bootstrap` and `target/debug/fod-rust-fuse`, and the runtime
+stamp must be `.fod-runtime-dev-build.stamp`. Documentation now uses
+`FOD_RUNTIME_PROFILE=dev` instead of `FOD_RUNTIME_PROFILE=debug`.
+
+Validation on the FOD 3.3.30 working tree based on `efc4b29`:
+
+| Command/profile | Result |
+| --- | --- |
+| `make test-rust-release-defaults-policy` | passed |
+| `cargo fmt --all -- --check` | passed after applying rustfmt once |
+| `cargo check --workspace --locked --profile release-lto` | passed after removing an invalid root `[profile.dev] inherits = "dev"` attempt |
+| `cargo clippy --workspace --all-targets --locked --profile release-lto` | passed |
+| `cargo test --workspace --locked` | passed |
+| `make FOD_RUNTIME_PROFILE=dev build-runtime` | passed; Cargo used `--profile dev`, artifacts resolved from `target/debug`, and `target/.fod-runtime-dev-build.stamp` was created |
+| `QNAP=0 make test-all` | passed on rerun after removing an orphaned temporary FOD FUSE mount from a previous test run |
+
+The `test-all` SELinux mount-label scenario still skipped on this host when the
+kernel rejected the label-bearing FUSE mount options with `EINVAL`; this matches
+the documented host/mount-stack limitation and is separate from the runtime
+profile mapping change.

@@ -47,11 +47,17 @@ def runtime_profile() -> str:
     return os.environ.get("FOD_RUNTIME_PROFILE") or os.environ.get("FOD_CARGO_PROFILE") or "release-lto"
 
 
+def runtime_artifact_profile() -> str:
+    profile = runtime_profile()
+    return "debug" if profile == "dev" else profile
+
+
 def resolve_fod_change_binary(root: Path) -> Path:
     profile = runtime_profile()
+    artifact_profile = runtime_artifact_profile()
     candidates = [
-        root / "target" / profile / "fod-change",
-        root / "rust_mkfs" / "target" / profile / "fod-change",
+        root / "target" / artifact_profile / "fod-change",
+        root / "rust_mkfs" / "target" / artifact_profile / "fod-change",
         Path("/usr/local/bin/fod-change"),
         Path("/usr/local/bin/fod.change"),
     ]
