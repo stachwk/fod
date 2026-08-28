@@ -49,6 +49,7 @@ cp -a "%{fod_payload}/." %{buildroot}/
 %{_sbindir}/mount.fod
 %{_libdir}/libfod.so
 %{_includedir}/fod/libfod.h
+%dir %{_localstatedir}/log/fod
 %license %{_licensedir}/$FOD_PACKAGE_NAME/LICENSE
 %doc %{_docdir}/$FOD_PACKAGE_NAME/README.md
 EOF_SPEC

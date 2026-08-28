@@ -4,6 +4,7 @@
 mod compatibility;
 mod copy_plan;
 mod fs;
+mod logging;
 mod pg_lanes;
 mod read_cache;
 mod startup;
@@ -15,9 +16,7 @@ use fod_rust_runtime::{
     env_var_truthy_with_legacy_alias, env_var_with_legacy_alias, RuntimeConfig,
     RuntimeEndpointRoutingSettings,
 };
-use log::LevelFilter;
 use rust_hotpath::pg::DbRepo;
-use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -28,28 +27,8 @@ struct Args {
     readonly: bool,
 }
 
-fn init_logging() {
-    let level = env_var_with_legacy_alias("FOD_LOG_LEVEL").unwrap_or_else(|| "info".to_string());
-    let filter = level.parse::<LevelFilter>().unwrap_or(LevelFilter::Info);
-    let mut builder = env_logger::Builder::new();
-    builder.filter_level(filter);
-    builder.format(|buf, record| {
-        writeln!(
-            buf,
-            "{} - {} - {}",
-            buf.timestamp_seconds(),
-            record.level(),
-            record.args()
-        )
-    });
-    if std::env::var_os("RUST_LOG").is_none() {
-        builder.parse_filters(&level);
-    }
-    builder.init();
-}
-
 fn main() {
-    init_logging();
+    logging::init();
     let args = Args::parse();
     let conninfo = env_var_with_legacy_alias("FOD_DSN_CONNINFO")
         .expect("FOD_DSN_CONNINFO must be set when launching fod-rust-fuse");

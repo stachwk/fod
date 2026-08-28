@@ -18,6 +18,7 @@ fod_package_stage_payload() {
   install -Dm0644 "$FOD_PACKAGE_CONFIG_SOURCE" "$stage/etc/fod/fod_config.ini"
   install -Dm0644 "$FOD_PACKAGE_LICENSE_FILE" "$stage$licensedir/${FOD_PACKAGE_NAME}/LICENSE"
   install -Dm0644 "$FOD_PACKAGE_README_FILE" "$stage/usr/share/doc/${FOD_PACKAGE_NAME}/README.md"
+  install -d -m0755 "$stage/var/log/fod"
 
   # Package payload directory modes must not depend on the caller's umask.
   # In particular, developer shells commonly use umask 0002, which otherwise

@@ -1,6 +1,6 @@
 # Native installation packages for Ubuntu and RHEL/RockyLinux
 
-Status: packaging infrastructure for the existing FOD runtime. The FOD runtime remains version 3.3.30; packaging-only corrections use the native package release suffix. Current package revision is `3.3.30-3`.
+Status: packaging infrastructure for FOD runtime 3.3.31. The first native package revision for this runtime is `3.3.31-1`.
 
 ## Targets
 
@@ -58,9 +58,12 @@ The native packages install:
 /usr/include/fod/libfod.h
 <distribution libdir>/libfod.so
 /etc/fod/fod_config.ini
+/var/log/fod/
 ```
 
 The packaged configuration comes from `fod_config.example.ini`, never from the local `fod_config.ini`. This prevents local database passwords from being copied into an installation package.
+
+FOD 3.3.31 adds INI-controlled per-instance file logging. The package creates `/var/log/fod` with mode `0755`; individual log files are opened by `fod-rust-fuse` in append mode and are created with mode `0640` subject to the system umask. The default packaged INI enables file logging and derives the file name from the selected INI basename. For example, `/etc/fod/db-primary.ini` writes to `/var/log/fod/db-primary.log`.
 
 For Debian packages `/etc/fod/fod_config.ini` is declared in `DEBIAN/conffiles`. For RPM it is `%config(noreplace)`, so a locally edited configuration is preserved across upgrades. Debian package dependencies for ELF libraries are generated with `dpkg-shlibdeps`; this also avoids hard-coding a specific Ubuntu FUSE library package name when the distribution changes SONAME packages. Because the package installs `libfod.so` into the dynamic-linker library path, the Debian package also declares the `activate-noawait ldconfig` trigger. On RHEL/Rocky 8 and newer, glibc transaction file triggers update the `ldconfig` cache, so no package-specific RPM scriptlet is added. RPM keeps automatic ELF dependency generation and adds explicit `bash` and `fuse3` runtime requirements.
 
@@ -82,14 +85,14 @@ The default package maintainer is the repository's GitHub noreply identity and c
 
 ## Package revision
 
-`FOD_PACKAGE_RELEASE` is incremented for packaging-only corrections that do not change FOD runtime code or ABI. This correction produces:
+Runtime 3.3.31 starts a new native package revision series:
 
 ```text
-FOD runtime:       3.3.30
-DEB/RPM revision:  3.3.30-3
+FOD runtime:       3.3.31
+DEB/RPM revision:  3.3.31-1
 ```
 
-A later runtime version resets/chooses its package release independently according to the packaging change being published.
+Packaging-only corrections after that use `3.3.31-2`, `3.3.31-3`, and so on without changing the FOD runtime version.
 
 ## Output
 

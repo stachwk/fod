@@ -17,7 +17,7 @@ deb_plan="$(bash "$driver" plan deb)"
 rpm_plan="$(bash "$driver" plan rpm)"
 grep -Fq 'resolved_format=deb' <<<"$deb_plan"
 grep -Fq 'resolved_format=rpm' <<<"$rpm_plan"
-grep -Fq 'package_release=3' <<<"$deb_plan"
+grep -Fq 'package_release=1' <<<"$deb_plan"
 grep -Fq 'production_profile=release-lto' <<<"$deb_plan"
 grep -Fq 'fod_config.example.ini' <<<"$deb_plan"
 grep -Fq 'Refusing cross-distro package build' "$driver"
@@ -27,10 +27,12 @@ grep -Fq -- '-e"$stage_rel/usr/bin/fod-bootstrap"' "$deb"
 grep -Fq "printf '/etc/fod/fod_config.ini" "$deb"
 grep -Fq 'activate-noawait ldconfig' "$deb"
 grep -Fq '%config(noreplace) %{_sysconfdir}/fod/fod_config.ini' "$rpm"
+grep -Fq '%dir %{_localstatedir}/log/fod' "$rpm"
 grep -Fq '$stage/usr/sbin/mkfs.fod' "$common"
 grep -Fq '$stage/usr/sbin/mount.fod' "$common"
 grep -Fq '$stage/usr/bin/fod-rust-fuse' "$common"
 grep -Fq '$stage/usr/include/fod/libfod.h' "$common"
+grep -Fq 'install -d -m0755 "$stage/var/log/fod"' "$common"
 grep -Fq 'find "$stage" -type d -exec chmod 0755 {} +' "$common"
 grep -Fq 'FOD Project <33524981+stachwk@users.noreply.github.com>' "$driver"
 grep -Fq 'FOD Project <33524981+stachwk@users.noreply.github.com>' "$pmk"
@@ -77,5 +79,13 @@ if [[ -n "$bad_dir" ]]; then
   printf 'package staging left non-0755 directory: %s\n' "$bad_dir" >&2
   exit 1
 fi
+[[ -d "$tmp/root/var/log/fod" ]] || {
+  echo 'package staging does not include /var/log/fod' >&2
+  exit 1
+}
+[[ "$(stat -c '%a' "$tmp/root/var/log/fod")" == "755" ]] || {
+  echo 'package /var/log/fod must use mode 0755' >&2
+  exit 1
+}
 
 echo 'OK native-package-policy'
