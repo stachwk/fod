@@ -60,7 +60,7 @@ The native packages install:
 
 The packaged configuration comes from `fod_config.example.ini`, never from the local `fod_config.ini`. This prevents local database passwords from being copied into an installation package.
 
-For Debian packages `/etc/fod/fod_config.ini` is declared in `DEBIAN/conffiles`. For RPM it is `%config(noreplace)`, so a locally edited configuration is preserved across upgrades. Debian package dependencies for ELF libraries are generated with `dpkg-shlibdeps`; this also avoids hard-coding a specific Ubuntu FUSE library package name when the distribution changes SONAME packages. RPM keeps automatic ELF dependency generation and adds explicit `bash` and `fuse3` runtime requirements.
+For Debian packages `/etc/fod/fod_config.ini` is declared in `DEBIAN/conffiles`. For RPM it is `%config(noreplace)`, so a locally edited configuration is preserved across upgrades. Debian package dependencies for ELF libraries are generated with `dpkg-shlibdeps`; this also avoids hard-coding a specific Ubuntu FUSE library package name when the distribution changes SONAME packages. Because the package installs `libfod.so` into the dynamic-linker library path, the Debian package also declares the `activate-noawait ldconfig` trigger. On RHEL/Rocky 8 and newer, glibc transaction file triggers update the `ldconfig` cache, so no package-specific RPM scriptlet is added. RPM keeps automatic ELF dependency generation and adds explicit `bash` and `fuse3` runtime requirements.
 
 ## Output
 
