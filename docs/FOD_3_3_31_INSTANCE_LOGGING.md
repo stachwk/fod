@@ -52,6 +52,14 @@ FOD opens the selected log file in append mode. If the configured file or direct
 
 Log records include timestamp, PID, level and message so concurrent processes or repeated mounts can be distinguished in one file.
 
+## Runtime privilege policy
+
+The supported operational model runs `mount.fod`, `fod-bootstrap` and `fod-rust-fuse` as `root`. Under that model `/var/log/fod` remains `root:root` with mode `0755`, while instance log files are root-owned and normally created with mode `0640` subject to umask.
+
+Running the daemon as `root` does not imply root-only access to mounted FOD data. Access to the mounted resource remains controlled by FOD UID/GID, mode bits, `default_permissions`, ACL and `allow_other` policy.
+
+The authoritative privilege and ownership policy is documented in [FOD_RUNTIME_PRIVILEGE_POLICY.md](FOD_RUNTIME_PRIVILEGE_POLICY.md).
+
 ## Packages
 
 Native DEB/RPM packages create:
