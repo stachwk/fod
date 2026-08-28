@@ -55,6 +55,7 @@ Description: PostgreSQL-backed FUSE filesystem
  FOD provides a Rust FUSE filesystem backed by PostgreSQL storage.
 EOF_CONTROL
 printf '/etc/fod/fod_config.ini\n' > "$stage/DEBIAN/conffiles"
+printf 'activate-noawait ldconfig\n' > "$stage/DEBIAN/triggers"
 
 out="$outdir/${FOD_PACKAGE_NAME}_${FOD_PACKAGE_VERSION}-${FOD_PACKAGE_RELEASE}_${arch}.deb"
 dpkg-deb --build --root-owner-group "$stage" "$out"
