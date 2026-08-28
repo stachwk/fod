@@ -98,3 +98,27 @@ test-rust-release-defaults-policy:
 # Keep lightweight policy regressions in the normal gate without modifying the
 # existing Makefile target definition.
 test-all: test-target-aux-clean-policy test-rust-toolchain-benchmark-policy test-rust-release-defaults-policy
+
+# Test-only FUSE cleanup. The helper is deliberately restricted to temporary
+# rust_fuse test workspaces under /tmp/fod-rust-fuse-*/mount.
+.PHONY: test-fuse-test-cleanup test-fuse-test-cleanup-policy
+
+test-fuse-test-cleanup:
+	@bash scripts/fod-test-fuse-cleanup.sh clean
+
+test-fuse-test-cleanup-policy:
+	@bash tests/test_fuse_test_cleanup_policy.sh
+
+# A stale Rust FUSE test mount must be removed before a destructive local DB
+# restore, otherwise the restore guard correctly refuses to continue.
+test-db-restore-local: test-fuse-test-cleanup
+
+# Run the policy in the normal gate, pre-clean test mounts at the start, and
+# assert/clean again after all regular test-all prerequisites complete.
+test-all: test-fuse-test-cleanup test-fuse-test-cleanup-policy
+	@bash scripts/fod-test-fuse-cleanup.sh clean
+
+# test-all-full adds more FUSE-backed tests after test-all, so verify cleanup
+# once more at the end of the extended gate.
+test-all-full:
+	@bash scripts/fod-test-fuse-cleanup.sh clean
