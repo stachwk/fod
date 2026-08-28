@@ -122,3 +122,5 @@ test-all: test-fuse-test-cleanup test-fuse-test-cleanup-policy
 # once more at the end of the extended gate.
 test-all-full:
 	@bash scripts/fod-test-fuse-cleanup.sh clean
+
+include packaging/fod-packaging.mk
