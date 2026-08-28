@@ -17,6 +17,9 @@ multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
 libdir="/usr/lib/$multiarch"
 mkdir -p "$work/debian" "$outdir"
 fod_package_stage_payload "$stage" "$libdir" /usr/share/doc
+# Dpkg identifies a binary package build root by its DEBIAN/ directory.
+# Create it before dpkg-shlibdeps scans the staged ELF objects.
+install -d -m0755 "$stage/DEBIAN"
 
 cat > "$work/debian/control" <<EOF_CONTROL
 Source: $FOD_PACKAGE_NAME
@@ -32,9 +35,8 @@ Description: PostgreSQL-backed FUSE filesystem
 EOF_CONTROL
 
 # Keep the payload in the conventional debian/<package>/ tree and pass paths
-# relative to the Debian build root. dpkg-shlibdeps can then associate every
-# ELF object with the package instead of warning that it is outside its package
-# directory.
+# relative to the Debian build root. With DEBIAN/ already present,
+# dpkg-shlibdeps can associate every ELF object with package fod.
 shlib_line="$(cd "$work" && dpkg-shlibdeps -O \
   -e"$stage_rel/usr/bin/fod-bootstrap" \
   -e"$stage_rel/usr/sbin/mkfs.fod" \
@@ -46,7 +48,6 @@ shlib_line="$(cd "$work" && dpkg-shlibdeps -O \
 deps="${shlib_line#shlibs:Depends=}"
 [[ "$deps" != "$shlib_line" && -n "$deps" ]] || { echo 'dpkg-shlibdeps did not produce shlibs:Depends' >&2; exit 1; }
 
-install -d -m0755 "$stage/DEBIAN"
 cat > "$stage/DEBIAN/control" <<EOF_CONTROL
 Package: $FOD_PACKAGE_NAME
 Version: $FOD_PACKAGE_VERSION-$FOD_PACKAGE_RELEASE

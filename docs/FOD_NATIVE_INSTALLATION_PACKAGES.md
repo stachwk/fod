@@ -1,6 +1,6 @@
 # Native installation packages for Ubuntu and RHEL/RockyLinux
 
-Status: packaging infrastructure for the existing FOD runtime. The FOD runtime remains version 3.3.30; packaging-only corrections use the native package release suffix. Current package revision is `3.3.30-2`.
+Status: packaging infrastructure for the existing FOD runtime. The FOD runtime remains version 3.3.30; packaging-only corrections use the native package release suffix. Current package revision is `3.3.30-3`.
 
 ## Targets
 
@@ -72,21 +72,21 @@ The Debian builder stages payload files under the conventional path:
 target/packages/work/deb/debian/fod/
 ```
 
-`dpkg-shlibdeps` is invoked from the Debian build root with `debian/fod/...` relative ELF paths. This lets the tool associate each binary with package `fod` and avoids the `binaries to analyze should already be installed in their package's directory` warning caused by staging payloads in an unrelated `work/deb/root/` directory.
+The staged package root creates `debian/fod/DEBIAN/` before `dpkg-shlibdeps` scans ELF objects. Dpkg uses that directory to recognize the binary package build root. The ELF paths passed to `dpkg-shlibdeps` are relative to the Debian build root (`debian/fod/...`). Together these rules prevent the `binaries to analyze should already be installed in their package's directory` warning.
 
 All payload directories are normalized to mode `0755` after staging. This is deliberate: package contents must not inherit a developer shell's `umask 0002` and become group-writable `0775` directories. Regular executable files remain `0755`; configuration, documentation, headers and `libfod.so` remain `0644`.
 
-On merged-/usr Ubuntu systems `dpkg-shlibdeps` can still report a libc loader diversion such as `/lib64/ld-linux-x86-64.so.2` -> `.usr-is-merged`. That warning describes the host's dpkg/libc diversion state and is separate from the package-directory staging warning. It is not suppressed; generated dependencies must still be reviewed in the resulting package metadata.
+On merged-/usr Ubuntu systems `dpkg-shlibdeps` can still report a libc loader diversion such as `/lib64/ld-linux-x86-64.so.2` -> `.usr-is-merged`. That warning describes the host's dpkg/libc diversion state and is separate from package-directory staging. It is not suppressed; generated dependencies must still be reviewed in the resulting package metadata.
 
 The default package maintainer is the repository's GitHub noreply identity and can be overridden with `FOD_PACKAGE_MAINTAINER`.
 
 ## Package revision
 
-`FOD_PACKAGE_RELEASE` is incremented for packaging-only corrections that do not change FOD runtime code or ABI. Consequently this staging/metadata correction produces:
+`FOD_PACKAGE_RELEASE` is incremented for packaging-only corrections that do not change FOD runtime code or ABI. This correction produces:
 
 ```text
 FOD runtime:       3.3.30
-DEB/RPM revision:  3.3.30-2
+DEB/RPM revision:  3.3.30-3
 ```
 
 A later runtime version resets/chooses its package release independently according to the packaging change being published.

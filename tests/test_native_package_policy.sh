@@ -17,7 +17,7 @@ deb_plan="$(bash "$driver" plan deb)"
 rpm_plan="$(bash "$driver" plan rpm)"
 grep -Fq 'resolved_format=deb' <<<"$deb_plan"
 grep -Fq 'resolved_format=rpm' <<<"$rpm_plan"
-grep -Fq 'package_release=2' <<<"$deb_plan"
+grep -Fq 'package_release=3' <<<"$deb_plan"
 grep -Fq 'production_profile=release-lto' <<<"$deb_plan"
 grep -Fq 'fod_config.example.ini' <<<"$deb_plan"
 grep -Fq 'Refusing cross-distro package build' "$driver"
@@ -40,13 +40,18 @@ grep -Eq '^package-rocky: package-artifacts' "$pmk"
 grep -Eq '^package-native: package-artifacts' "$pmk"
 grep -Fq 'Official FOD packages require FOD_CARGO_PROFILE=release-lto' "$pmk"
 
+debian_dir_line="$(grep -nF 'install -d -m0755 "$stage/DEBIAN"' "$deb" | head -1 | cut -d: -f1)"
+shlib_line_no="$(grep -nF 'shlib_line="$(cd "$work" && dpkg-shlibdeps -O' "$deb" | head -1 | cut -d: -f1)"
+if [[ -z "$debian_dir_line" || -z "$shlib_line_no" || "$debian_dir_line" -ge "$shlib_line_no" ]]; then
+  echo 'DEBIAN package root must exist before dpkg-shlibdeps scans ELF objects' >&2
+  exit 1
+fi
+
 if FOD_PACKAGE_ROOT=/tmp/fod-package-policy-outside bash "$driver" plan deb >/dev/null 2>&1; then
   echo 'package policy accepted package root outside repository target/' >&2
   exit 1
 fi
 
-# Reproduce a common developer umask and verify that staging normalizes all
-# package payload directories to 0755 rather than leaking 0775 into artifacts.
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/fod-package-policy.XXXXXX")"
 trap 'rm -rf -- "$tmp"' EXIT
 export FOD_PACKAGE_NAME=fod
@@ -62,7 +67,6 @@ export FOD_PACKAGE_LIBFOD_HEADER="$repo_root/LICENSE"
 export FOD_PACKAGE_CONFIG_SOURCE="$repo_root/fod_config.example.ini"
 export FOD_PACKAGE_LICENSE_FILE="$repo_root/LICENSE"
 export FOD_PACKAGE_README_FILE="$repo_root/README.md"
-# shellcheck source=../packaging/fod-package-common.sh
 . "$common"
 (
   umask 0002
