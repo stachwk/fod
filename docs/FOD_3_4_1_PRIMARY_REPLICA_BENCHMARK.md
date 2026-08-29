@@ -72,10 +72,35 @@ The repository helper:
 scripts/perf/run_primary_replica_focus.sh
 ```
 
-reuses the existing Makefile target `test-fio-primary-write-replica-read-qnap`. It does not create a parallel benchmark implementation.
+reuses the existing Makefile primary/replica matrix targets. It does not create a parallel benchmark implementation.
+
+Backend selection follows the repository convention:
+
+- `QNAP=0` (default) selects `test-fio-primary-write-replica-read-matrix` and local Docker;
+- `QNAP=1` selects `test-fio-primary-write-replica-read-qnap` and the QNAP Docker endpoint;
+- `FOD_PRIMARY_REPLICA_FOCUS_BACKEND=local|qnap` explicitly overrides the automatic selection.
+
+The runner prints both `backend=` and `make_target=` before any benchmark work starts.
+
+A no-Docker backend-selection precheck is available:
+
+```bash
+QNAP=0 FOD_PRIMARY_REPLICA_FOCUS_PRECHECK_ONLY=1 \
+    scripts/perf/run_primary_replica_focus.sh
+
+QNAP=1 FOD_PRIMARY_REPLICA_FOCUS_PRECHECK_ONLY=1 \
+    scripts/perf/run_primary_replica_focus.sh
+```
+
+Regression test:
+
+```bash
+bash tests/test_primary_replica_focus_backend.sh
+```
 
 Default focused test:
 
+- local Docker backend because repository default is `QNAP=0`;
 - `1G` file;
 - block sizes `64k 512k`;
 - three complete repetitions;
@@ -85,16 +110,31 @@ Default focused test:
 - aggregate mean/median/min/max/stdev generated;
 - internal FOD observability extracted from primary-write, primary-read and replica-read mount logs.
 
-Run:
+Local run:
 
 ```bash
 cd ~/git/fod
+QNAP=0 scripts/perf/run_primary_replica_focus.sh
+```
+
+QNAP run:
+
+```bash
+cd ~/git/fod
+QNAP=1 scripts/perf/run_primary_replica_focus.sh
+```
+
+Explicit backend selection can be used when desired:
+
+```bash
+FOD_PRIMARY_REPLICA_FOCUS_BACKEND=local \
 scripts/perf/run_primary_replica_focus.sh
 ```
 
 Overrides:
 
 ```bash
+QNAP=0 \
 FOD_PRIMARY_REPLICA_FOCUS_REPEAT=5 \
 FOD_PRIMARY_REPLICA_FOCUS_FILE_SIZE=2G \
 FOD_PRIMARY_REPLICA_FOCUS_BLOCK_SIZES="64k 512k" \
@@ -104,10 +144,20 @@ scripts/perf/run_primary_replica_focus.sh
 Results are written below:
 
 ```text
-artifacts/perf/<commit>/<host>-qnap-focus-<timestamp>/
+artifacts/perf/<commit>/<host>-<backend>-focus-<timestamp>/
 ```
 
 The aggregate table is `summary.tsv`, human-readable output is `summary.md`, and `profile-run-N.txt` contains selected FOD internal observability from each phase.
+
+## QNAP availability failure
+
+The QNAP target requires the configured remote Docker daemon to be reachable. An error such as:
+
+```text
+dial tcp 192.168.1.11:2376: connect: no route to host
+```
+
+means the QNAP Docker endpoint is not network-reachable from the laptop at that moment. It is not a FOD benchmark result and should not be mixed with performance data. Use `QNAP=0` for the local matrix or restore QNAP network reachability before a remote run.
 
 ## CPU profiling helper
 
