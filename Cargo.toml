@@ -23,4 +23,8 @@ strip = "symbols"
 
 [profile.profiling]
 inherits = "release"
-debug = "line-tables-only"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+debug = 2
+strip = "none"
