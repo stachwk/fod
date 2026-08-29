@@ -1,8 +1,8 @@
 # FOD 3.4.1 primary/replica benchmark baseline
 
-Status: recorded baseline and follow-up performance test plan.
+Status: recorded QNAP baseline, local focused baseline and follow-up performance test plan.
 
-## Recorded run
+## Recorded QNAP run
 
 - Runtime: FOD `3.4.1`.
 - Commit: `1ccd2435fab1458ec27bf9054a12f623b1479e12`.
@@ -15,7 +15,7 @@ Status: recorded baseline and follow-up performance test plan.
 - FOD read cache/read-ahead/prefetch are disabled by the benchmark and the FUSE mount uses `direct_io`.
 - The host kernel page cache is **not** dropped. These numbers are therefore a reproducible process/remount baseline with uncontrolled host page cache, not a cold-storage benchmark.
 
-## Result
+## QNAP result
 
 | block size | primary write MiB/s | primary write IOPS | primary read MiB/s | primary read IOPS | replica read MiB/s | replica read IOPS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -33,11 +33,11 @@ replica_operation_failures=0
 replica_write_guard=read_only_rejected
 ```
 
-## Interpretation
+## QNAP interpretation
 
 ### Read path
 
-`512 KiB` is the current best read point.
+`512 KiB` is the current best QNAP read point.
 
 From `4 KiB` to `512 KiB`:
 
@@ -55,14 +55,79 @@ At `512 KiB`, replica read is about `9.08%` faster than primary read. This must 
 
 ### Write path
 
-The primary write path peaks at `64 KiB` with `10.242 MiB/s`.
+The QNAP primary write path peaks at `64 KiB` with `10.242 MiB/s`.
 
 Compared with that point:
 
 - `512 KiB`: `9.481 MiB/s` (`-7.43%`);
 - `1 MiB`: `8.150 MiB/s` (`-20.43%`).
 
-Therefore the read and write paths currently have different optima. Do not force the write path to `512 KiB` merely because `512 KiB` is best for reads. The next write-path work should identify whether the dominant cost is dirty-block handling, persist batching, COPY/staging, PostgreSQL transaction work, WAL, or synchronization.
+The QNAP result alone therefore suggested different read and write optima. The local focused baseline below refines that interpretation: on the local backend the write difference between `64 KiB` and `512 KiB` disappears, so the QNAP `64 KiB` advantage should be treated as backend-dependent until profiling isolates the cause.
+
+## Recorded local focused run
+
+- Runtime: FOD `3.4.1`.
+- Commit: `9ec5ae310767f36037ec7301053788f6158b4036`.
+- Client host: `lt7300`.
+- Backend: local Docker primary/replica matrix (`QNAP=0`).
+- File size: `1G`.
+- Repetitions: `3` complete matrix runs per block size.
+- Block sizes: `64k`, `512k`.
+- Focus artifact: `artifacts/perf/9ec5ae3/lt7300-local-focus-20260829T102324Z`.
+- AC power was required by the runner.
+- The same existing primary/replica matrix implementation was reused; only backend selection and repeated aggregation differ.
+
+## Local focused result
+
+| block size | runs | primary write MiB/s mean ± stdev | primary read MiB/s mean ± stdev | replica read MiB/s mean ± stdev | replica vs primary read |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `64k` | 3 | `64.025 ± 0.580` | `202.566 ± 16.363` | `207.283 ± 9.134` | `+2.33%` |
+| `512k` | 3 | `64.542 ± 0.653` | `395.730 ± 8.077` | `415.975 ± 5.753` | `+5.12%` |
+
+Medians were:
+
+| block size | primary write MiB/s median | primary read MiB/s median | replica read MiB/s median |
+| --- | ---: | ---: | ---: |
+| `64k` | 63.880 | 207.371 | 211.178 |
+| `512k` | 64.419 | 393.846 | 412.737 |
+
+## Local focused interpretation
+
+### Read path
+
+Moving from `64 KiB` to `512 KiB` gives a clear and repeatable improvement:
+
+- primary read: `202.566 -> 395.730 MiB/s`, `+95.36%`;
+- replica read: `207.283 -> 415.975 MiB/s`, `+100.68%`.
+
+The `512 KiB` read results are also more stable across the three runs:
+
+- primary read coefficient of variation: about `2.04%` at `512 KiB` versus `8.08%` at `64 KiB`;
+- replica read coefficient of variation: about `1.38%` at `512 KiB` versus `4.41%` at `64 KiB`.
+
+This independently reinforces `512 KiB` as the preferred operational read size while keeping the storage block at `4 KiB`.
+
+### Write path
+
+Local primary write throughput is effectively flat between the two focused block sizes:
+
+- `64 KiB`: `64.025 ± 0.580 MiB/s`;
+- `512 KiB`: `64.542 ± 0.653 MiB/s`.
+
+The mean difference is only about `+0.81%` in favor of `512 KiB`, which is of the same order as run-to-run variation. Therefore there is no evidence from the local focused run that `64 KiB` is intrinsically better for the FOD write path.
+
+This changes the working interpretation of the QNAP result: the QNAP write optimum at `64 KiB` is likely influenced by the remote PostgreSQL/network/storage path rather than being a universal FOD write-size optimum. CPU and internal FOD profiling should compare `64 KiB` and `512 KiB` write paths before changing write batching policy.
+
+### Local versus QNAP
+
+The local Docker backend is intentionally not treated as a performance-equivalent replacement for QNAP. The large gap is diagnostic rather than a direct regression comparison.
+
+For the two focused points, local throughput is approximately:
+
+- `64 KiB`: `6.25x` QNAP primary write, `15.89x` QNAP primary read, `14.97x` QNAP replica read;
+- `512 KiB`: `6.81x` QNAP primary write, `10.71x` QNAP primary read, `10.32x` QNAP replica read.
+
+This strongly indicates that the remote/backend path is a dominant part of the QNAP measurements. The next optimization work should therefore distinguish FOD CPU/request overhead from PostgreSQL, network, WAL and storage costs instead of treating the QNAP numbers as pure FOD limits.
 
 ## Follow-up test suite
 
@@ -178,6 +243,16 @@ Recommended CPU profiles after the focused matrix:
 2. replica read at `512 KiB`;
 3. primary write at `64 KiB`;
 4. primary write at `512 KiB`.
+
+Before CPU profiling, inspect the already generated per-run internal summaries:
+
+```text
+profile-run-1.txt
+profile-run-2.txt
+profile-run-3.txt
+```
+
+Those files should be used to decide which FOD boundary/persist stages need CPU-level profiling first.
 
 ## Later cold-cache baseline
 
