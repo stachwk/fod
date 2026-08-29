@@ -1,6 +1,6 @@
 # FOD 3.4.1 primary/replica benchmark baseline
 
-Status: recorded QNAP baseline, local focused baseline and follow-up performance test plan.
+Status: recorded QNAP baseline, local focused baseline, internal observability analysis and follow-up performance test plan.
 
 ## Recorded QNAP run
 
@@ -129,6 +129,68 @@ For the two focused points, local throughput is approximately:
 
 This strongly indicates that the remote/backend path is a dominant part of the QNAP measurements. The next optimization work should therefore distinguish FOD CPU/request overhead from PostgreSQL, network, WAL and storage costs instead of treating the QNAP numbers as pure FOD limits.
 
+## Internal observability across the three local runs
+
+The generated `profile-run-1.txt`, `profile-run-2.txt` and `profile-run-3.txt` were compared using the final `stage=shutdown` logical-task counters and the final `stage=post-mount` PostgreSQL lane counters for every phase.
+
+### Primary write
+
+For both `64 KiB` and `512 KiB` fio requests, writing the `1 GiB` file resulted in exactly:
+
+```text
+persist_operation_count=16
+persist_input_bytes_total=1073741824
+persist_input_bytes_max=67108864
+```
+
+Therefore FOD persists the file as sixteen `64 MiB` payloads in both cases. The external request size does not change the high-level persist batch size.
+
+Mean counters across the three runs:
+
+| metric | 64 KiB | 512 KiB |
+| --- | ---: | ---: |
+| logical completed bytes/s | 68,988,767 | 69,027,067 |
+| operation time total | 15.398 s | 15.450 s |
+| persist time total | 14.825 s | 14.853 s |
+| COPY stage time total | 5.777 s | 5.707 s |
+| data-block merge time total | 8.803 s | 8.772 s |
+| persist operations | 16 | 16 |
+| max persist input | 64 MiB | 64 MiB |
+
+The write throughput difference in this internal counter is only about `+0.06%` for `512 KiB`, confirming that the local write path is effectively independent of whether fio sends `64 KiB` or `512 KiB` requests.
+
+The timing composition is also almost identical:
+
+- persist accounts for about `96.28%` of total PostgreSQL operation time at `64 KiB` and `96.13%` at `512 KiB`;
+- `persist_data_blocks_merge` accounts for about `59.38%` of persist time at `64 KiB` and `59.06%` at `512 KiB`;
+- `persist_copy_stage` accounts for about `38.97%` of persist time at `64 KiB` and `38.42%` at `512 KiB`.
+
+Queueing is not the limiting factor in these runs: acquisition wait totals stay in the tens of microseconds or below, and `write_transaction_backpressure_events=0` throughout. The next write optimization target is therefore the work inside each `64 MiB` persist, especially the measured data-block merge and COPY/transaction stages, rather than changing the FUSE request size.
+
+### Primary and replica read
+
+Mean `operation_micros_total` across three runs:
+
+| read phase | 64 KiB | 512 KiB | change |
+| --- | ---: | ---: | ---: |
+| primary | 4.823 s | 2.629 s | `-45.50%` |
+| replica | 4.693 s | 2.524 s | `-46.22%` |
+
+The logical completed-byte counters show the corresponding throughput increase. Internal logical-task throughput rises by about `96.35%` on primary and `102.22%` on replica when moving from `64 KiB` to `512 KiB`.
+
+Acquisition waits remain negligible and there are no operation failures. This confirms that the `512 KiB` read benefit comes from reducing per-request/database-operation overhead rather than from resolving pool contention.
+
+### Profiling decision
+
+The next CPU/system profiling should be deliberately narrow:
+
+1. primary write with `512 KiB` requests, focusing on the persist path;
+2. primary write with `64 KiB` requests only as an A/B control, because both converge to the same sixteen `64 MiB` persists;
+3. primary read at `512 KiB` as the optimized read reference;
+4. replica read at `512 KiB` only if the primary/replica CPU profiles differ materially.
+
+Because `persist_data_blocks_merge` and `persist_copy_stage` timings include PostgreSQL-facing work, CPU sampling of `fod-rust-fuse` alone may show blocking/waiting rather than the full cost. Follow-up interpretation must therefore combine FOD `perf` results with PostgreSQL/backend observations rather than assuming all measured persist time is FOD CPU time.
+
 ## Follow-up test suite
 
 The repository helper:
@@ -161,6 +223,7 @@ Regression test:
 
 ```bash
 bash tests/test_primary_replica_focus_backend.sh
+bash tests/test_primary_replica_profile_extract.sh
 ```
 
 Default focused test:
@@ -214,6 +277,19 @@ artifacts/perf/<commit>/<host>-<backend>-focus-<timestamp>/
 
 The aggregate table is `summary.tsv`, human-readable output is `summary.md`, and `profile-run-N.txt` contains selected FOD internal observability from each phase.
 
+The profile extractor now defaults to compact final counters:
+
+```bash
+scripts/perf/extract_primary_replica_profile.sh MATRIX_ARTIFACT_DIR
+```
+
+The historical verbose sampler output remains available when needed:
+
+```bash
+FOD_PROFILE_EXTRACT_MODE=full \
+scripts/perf/extract_primary_replica_profile.sh MATRIX_ARTIFACT_DIR
+```
+
 ## QNAP availability failure
 
 The QNAP target requires the configured remote Docker daemon to be reachable. An error such as:
@@ -239,20 +315,12 @@ Use a fixed interval rather than manually interrupting `perf record`; this avoid
 
 Recommended CPU profiles after the focused matrix:
 
-1. primary read at `512 KiB`;
-2. replica read at `512 KiB`;
-3. primary write at `64 KiB`;
-4. primary write at `512 KiB`.
+1. primary write at `512 KiB`;
+2. primary write at `64 KiB` as the A/B control;
+3. primary read at `512 KiB`;
+4. replica read at `512 KiB` only when needed to explain a primary/replica difference.
 
-Before CPU profiling, inspect the already generated per-run internal summaries:
-
-```text
-profile-run-1.txt
-profile-run-2.txt
-profile-run-3.txt
-```
-
-Those files should be used to decide which FOD boundary/persist stages need CPU-level profiling first.
+Before CPU profiling, inspect the already generated per-run internal summaries. Compact mode is sufficient for the normal comparison; use full mode only when the intermediate 5-second samples are specifically needed.
 
 ## Later cold-cache baseline
 
