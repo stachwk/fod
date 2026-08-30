@@ -23,6 +23,9 @@ grep -F '32768' "${PUBLISH}" >/dev/null
 grep -F 'docker push "${VERSION_TAG}"' "${PUBLISH}" >/dev/null
 
 grep -F 'ARG POSTGRES_BASE_IMAGE=postgres:16.15-alpine' "${DOCKERFILE}" >/dev/null
+grep -F 'pkgconf' "${DOCKERFILE}" >/dev/null
+grep -F 'icu-dev' "${DOCKERFILE}" >/dev/null
+grep -F -- '--with-icu' "${DOCKERFILE}" >/dev/null
 grep -F 'org.opencontainers.image.source' "${DOCKERFILE}" >/dev/null
 grep -F 'org.opencontainers.image.revision' "${DOCKERFILE}" >/dev/null
 grep -F 'org.opencontainers.image.version' "${DOCKERFILE}" >/dev/null
