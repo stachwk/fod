@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: docker/postgres-blocksize/Dockerfile
       args:
-        POSTGRES_BASE_IMAGE: ${POSTGRES_BLOCKSIZE_BASE_IMAGE:-postgres:16-alpine}
+        POSTGRES_BASE_IMAGE: ${POSTGRES_BLOCKSIZE_BASE_IMAGE:-postgres:16.15-alpine}
         POSTGRES_BLOCK_SIZE_KB: ${POSTGRES_BLOCK_SIZE_KB:-32}
     image: "fod-postgres-blocksize:16-${POSTGRES_BLOCK_SIZE_KB:-32}k"
     environment:
@@ -52,7 +52,7 @@ services:
       context: .
       dockerfile: docker/postgres-blocksize/Dockerfile
       args:
-        POSTGRES_BASE_IMAGE: ${POSTGRES_BLOCKSIZE_BASE_IMAGE:-postgres:16-alpine}
+        POSTGRES_BASE_IMAGE: ${POSTGRES_BLOCKSIZE_BASE_IMAGE:-postgres:16.15-alpine}
         POSTGRES_BLOCK_SIZE_KB: ${POSTGRES_BLOCK_SIZE_KB:-32}
     image: "fod-postgres-blocksize:16-${POSTGRES_BLOCK_SIZE_KB:-32}k"
     depends_on:
