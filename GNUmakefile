@@ -1,6 +1,6 @@
 include Makefile
 
-.PHONY: docker-perf-clean test-rust-release-defaults-policy
+.PHONY: docker-perf-clean test-docker-perf-clean-policy test-rust-release-defaults-policy
 
 # Safe cleanup for Docker resources created by the isolated primary/replica
 # performance benchmark. Build cache pruning is global to the Docker builder,
@@ -12,6 +12,9 @@ docker-perf-clean:
 	@FOD_DOCKER_PERF_CLEAN_FORCE="$(FOD_DOCKER_PERF_CLEAN_FORCE)" \
 		FOD_DOCKER_PERF_PRUNE_BUILD_CACHE="$(FOD_DOCKER_PERF_PRUNE_BUILD_CACHE)" \
 		bash scripts/perf/clean_replica_read_docker.sh
+
+test-docker-perf-clean-policy:
+	@bash tests/test_docker_perf_clean_policy.sh
 
 # Selective cleanup for known auxiliary Cargo targets. The allowlist is
 # enforced by scripts/fod-aux-target-clean.sh; these variables only tune the
@@ -108,7 +111,7 @@ test-rust-release-defaults-policy:
 
 # Keep lightweight policy regressions in the normal gate without modifying the
 # existing Makefile target definition.
-test-all: test-target-aux-clean-policy test-rust-toolchain-benchmark-policy test-rust-release-defaults-policy
+test-all: test-docker-perf-clean-policy test-target-aux-clean-policy test-rust-toolchain-benchmark-policy test-rust-release-defaults-policy
 
 # Test-only FUSE cleanup. The helper is deliberately restricted to temporary
 # rust_fuse test workspaces under /tmp/fod-rust-fuse-*/mount.
