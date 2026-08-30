@@ -23,6 +23,7 @@ RUN set -eux; \
         flex \
         pkgconf \
         icu-dev \
+        musl-locales \
         wget \
         ca-certificates; \
     pg_version="$(postgres --version | awk '{print $3}')"; \
@@ -66,7 +67,9 @@ ENV LD_LIBRARY_PATH="/opt/postgresql-custom/lib"
 COPY docker/replica-read/primary-init.sh /docker-entrypoint-initdb.d/10-fod-replication.sh
 COPY docker/replica-read/replica-entrypoint.sh /usr/local/bin/fod-replica-entrypoint.sh
 
-RUN chmod 0755 \
+RUN apk add --no-cache musl-locales \
+    && locale -a | grep -F 'en_US.UTF-8' >/dev/null \
+    && chmod 0755 \
         /docker-entrypoint-initdb.d/10-fod-replication.sh \
         /usr/local/bin/fod-replica-entrypoint.sh \
     && postgres --version \
