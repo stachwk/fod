@@ -222,6 +222,36 @@ impl FodFuse {
             })
     }
 
+    fn resize_existing_block_for_truncate(
+        &self,
+        state: &mut WriteState,
+        block_index: u64,
+        target_len: u64,
+        block_size: u64,
+    ) -> Result<(), libc::c_int> {
+        if target_len == 0 || target_len > block_size {
+            return Ok(());
+        }
+        let Some(mut block) =
+            self.load_existing_truncate_boundary_block(state, block_index, block_size)?
+        else {
+            // Sparse/missing block already represents zero-filled data.
+            return Ok(());
+        };
+        let original_len = block.len();
+        block.resize(target_len as usize, 0);
+        debug!(
+            "FOD truncate boundary resize file_id={} block_index={} target_len={} original_len={} stored_len={}",
+            state.file_id,
+            block_index,
+            target_len,
+            original_len,
+            block.len()
+        );
+        state.blocks_mut().insert(block_index, block);
+        Ok(())
+    }
+
     fn trim_existing_block_at_eof(
         &self,
         state: &mut WriteState,
@@ -236,25 +266,7 @@ impl FodFuse {
             return Ok(());
         }
         let block_index = eof / block_size;
-        let Some(mut block) =
-            self.load_existing_truncate_boundary_block(state, block_index, block_size)?
-        else {
-            // Sparse/missing block already represents zero-filled data.
-            return Ok(());
-        };
-        let original_len = block.len();
-        block.truncate(used_len as usize);
-        debug!(
-            "FOD truncate boundary trim file_id={} eof={} block_index={} used_len={} original_len={} stored_len={}",
-            state.file_id,
-            eof,
-            block_index,
-            used_len,
-            original_len,
-            block.len()
-        );
-        state.blocks_mut().insert(block_index, block);
-        Ok(())
+        self.resize_existing_block_for_truncate(state, block_index, used_len, block_size)
     }
 
     fn prepare_truncate_boundary_blocks(
@@ -266,33 +278,53 @@ impl FodFuse {
             return Ok(());
         }
 
-        // A shrink inside a storage block must physically shorten that block.
-        // Otherwise bytes after the new EOF stay in PostgreSQL and become visible
-        // again after a later extend, violating POSIX zero-fill semantics.
         let had_dirty_payload = state.buffered_bytes > 0 || !state.blocks().is_empty();
-        self.trim_existing_block_at_eof(state, state.file_size, block_size)?;
+        let new_size = state.file_size;
 
-        // For a clean size-only extend, also sanitize the previous persisted EOF.
-        // This repairs files that may have been shrunk by an older FOD version
-        // which kept stale bytes after an off-boundary EOF. Do not do this when
-        // the handle already owns dirty payload, because PostgreSQL size may lag
-        // the logical in-memory size in that case.
-        if !had_dirty_payload {
-            let persisted_size = self.repo.file_size(state.file_id).map_err(|err| {
-                warn!(
-                    "FOD truncate previous size lookup failed file_id={} err={}",
-                    state.file_id, err
-                );
-                EIO
-            })?;
-            if let Some(previous_size) = persisted_size {
-                if previous_size < state.file_size {
-                    self.trim_existing_block_at_eof(state, previous_size, block_size)?;
-                }
-            }
+        // With dirty in-memory payload PostgreSQL size can lag the logical size,
+        // so only the new EOF is authoritative. This also handles shrink: the
+        // partial final block is physically shortened before tail blocks are deleted.
+        if had_dirty_payload {
+            return self.trim_existing_block_at_eof(state, new_size, block_size);
         }
 
-        Ok(())
+        let persisted_size = self.repo.file_size(state.file_id).map_err(|err| {
+            warn!(
+                "FOD truncate previous size lookup failed file_id={} err={}",
+                state.file_id, err
+            );
+            EIO
+        })?;
+        let previous_size = persisted_size.unwrap_or(new_size);
+
+        if previous_size < new_size {
+            // POSIX requires the newly exposed range to read as zeroes. If the
+            // old EOF was inside a block, first discard stale bytes after it and
+            // then zero-extend that same block as far as the new logical size
+            // reaches. This also repairs files produced by older FOD versions.
+            let previous_used_len = previous_size % block_size;
+            if previous_size > 0 && previous_used_len != 0 {
+                let block_index = previous_size / block_size;
+                let block_start = block_index.saturating_mul(block_size);
+                let block_end = block_start.saturating_add(block_size);
+                let target_len = if new_size < block_end {
+                    new_size.saturating_sub(block_start)
+                } else {
+                    block_size
+                };
+                self.resize_existing_block_for_truncate(
+                    state,
+                    block_index,
+                    target_len,
+                    block_size,
+                )?;
+            }
+            return Ok(());
+        }
+
+        // Shrink or same-size truncate. Keeping only bytes before the new EOF
+        // prevents a future extend from exposing stale payload from this block.
+        self.trim_existing_block_at_eof(state, new_size, block_size)
     }
 
     pub(crate) fn flush_write_state(&self, state: &mut WriteState) -> Result<(), libc::c_int> {
