@@ -47,12 +47,28 @@ until "${PG[@]}" -Atqc 'SELECT 1' >/dev/null 2>>"$ERROR_LOG"; do
     sleep 0.1
 done
 
+if ! "${PG[@]}" -v ON_ERROR_STOP=1 -At -F $'\t' -c "
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+SELECT clock_timestamp(), pg_stat_statements_reset();
+" > "$OUT/pg-stat-statements-reset.tsv" 2>>"$ERROR_LOG"; then
+    echo 'pg_stat_statements is required; check shared_preload_libraries and extension availability' >&2
+    exit 1
+fi
+
 "${PG[@]}" -At -F $'\t' -c "
 SELECT 'track_io_timing', current_setting('track_io_timing')
 UNION ALL
 SELECT 'track_wal_io_timing', current_setting('track_wal_io_timing')
 UNION ALL
-SELECT 'synchronous_commit', current_setting('synchronous_commit');
+SELECT 'synchronous_commit', current_setting('synchronous_commit')
+UNION ALL
+SELECT 'shared_preload_libraries', current_setting('shared_preload_libraries')
+UNION ALL
+SELECT 'compute_query_id', current_setting('compute_query_id')
+UNION ALL
+SELECT 'pg_stat_statements.track', current_setting('pg_stat_statements.track')
+UNION ALL
+SELECT 'pg_stat_statements.track_utility', current_setting('pg_stat_statements.track_utility');
 " > "$OUT/settings.tsv" 2>>"$ERROR_LOG" || true
 
 find_primary_write_pid() {
@@ -77,6 +93,7 @@ echo "primary_write_pid=$PID"
 : > "$OUT/activity.tsv"
 : > "$OUT/wal.tsv"
 : > "$OUT/io.tsv"
+: > "$OUT/statements.tsv"
 
 sample_activity() {
     "${PG[@]}" -At -F $'\t' -c "
@@ -125,6 +142,62 @@ WHERE backend_type IN ('client backend', 'checkpointer', 'background writer')
 GROUP BY backend_type
 ORDER BY backend_type;
 " >> "$OUT/io.tsv" 2>>"$ERROR_LOG"
+
+    "${PG[@]}" -At -F $'\t' -c "
+WITH target AS (
+    SELECT
+        CASE
+            WHEN query ~* '^[[:space:]]*COPY[[:space:]]+fod_persist_block_stage'
+                THEN 'copy_stage'
+            WHEN query ~* '^[[:space:]]*INSERT[[:space:]]+INTO[[:space:]]+data_blocks'
+             AND query ~* 'FROM[[:space:]]+fod_persist_block_stage'
+             AND query ~* 'ON[[:space:]]+CONFLICT'
+                THEN 'insert_on_conflict'
+        END AS statement_kind,
+        calls,
+        total_exec_time,
+        rows,
+        shared_blks_hit,
+        shared_blks_read,
+        shared_blks_dirtied,
+        shared_blks_written,
+        temp_blks_read,
+        temp_blks_written,
+        blk_read_time,
+        blk_write_time,
+        temp_blk_read_time,
+        temp_blk_write_time,
+        wal_records,
+        wal_fpi,
+        wal_bytes
+    FROM pg_stat_statements
+    WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+)
+SELECT
+    statement_timestamp(),
+    statement_kind,
+    sum(calls),
+    round(sum(total_exec_time)::numeric, 3),
+    round((sum(total_exec_time) / NULLIF(sum(calls), 0))::numeric, 3),
+    sum(rows),
+    sum(shared_blks_hit),
+    sum(shared_blks_read),
+    sum(shared_blks_dirtied),
+    sum(shared_blks_written),
+    sum(temp_blks_read),
+    sum(temp_blks_written),
+    round(sum(blk_read_time)::numeric, 3),
+    round(sum(blk_write_time)::numeric, 3),
+    round(sum(temp_blk_read_time)::numeric, 3),
+    round(sum(temp_blk_write_time)::numeric, 3),
+    sum(wal_records),
+    sum(wal_fpi),
+    sum(wal_bytes)
+FROM target
+WHERE statement_kind IS NOT NULL
+GROUP BY statement_kind
+ORDER BY statement_kind;
+" >> "$OUT/statements.tsv" 2>>"$ERROR_LOG"
 }
 
 iteration=0
@@ -161,6 +234,21 @@ SUMMARY="$OUT/summary.txt"
     echo '=== IO FIRST/LAST ==='
     head -3 "$OUT/io.tsv" || true
     tail -3 "$OUT/io.tsv" || true
+    echo
+    echo '=== PG_STAT_STATEMENTS COLUMNS ==='
+    printf 'timestamp\tstatement_kind\tcalls\ttotal_exec_time_ms\tmean_exec_time_ms\trows\tshared_blks_hit\tshared_blks_read\tshared_blks_dirtied\tshared_blks_written\ttemp_blks_read\ttemp_blks_written\tblk_read_time_ms\tblk_write_time_ms\ttemp_blk_read_time_ms\ttemp_blk_write_time_ms\twal_records\twal_fpi\twal_bytes\n'
+    if [ -s "$OUT/statements.tsv" ]; then
+        first_statement_ts="$(head -1 "$OUT/statements.tsv" | cut -f1)"
+        last_statement_ts="$(tail -1 "$OUT/statements.tsv" | cut -f1)"
+        echo
+        echo '=== PG_STAT_STATEMENTS FIRST OBSERVED ==='
+        awk -F '\t' -v ts="$first_statement_ts" '$1 == ts' "$OUT/statements.tsv"
+        echo
+        echo '=== PG_STAT_STATEMENTS LAST / DELTA SINCE RESET ==='
+        awk -F '\t' -v ts="$last_statement_ts" '$1 == ts' "$OUT/statements.tsv"
+    else
+        echo 'no target pg_stat_statements rows captured'
+    fi
     echo
     echo "artifact_dir=$OUT"
 } | tee "$SUMMARY"
