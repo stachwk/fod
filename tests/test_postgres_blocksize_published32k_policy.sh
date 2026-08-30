@@ -18,6 +18,11 @@ grep -F 'FOD_PG32_MIN_EXTENSION_COUNT:-45' "${WRAPPER}" >/dev/null
 grep -F 'docker pull "${PUBLISHED_IMAGE}"' "${WRAPPER}" >/dev/null
 grep -F 'docker tag "${PUBLISHED_IMAGE}" "${LOCAL_IMAGE}"' "${WRAPPER}" >/dev/null
 grep -F 'LOCAL_IMAGE="fod-postgres-blocksize:16-32k"' "${WRAPPER}" >/dev/null
+grep -F '[[ -r "${BASE_RUNNER}" ]]' "${WRAPPER}" >/dev/null
+if grep -Fq '[[ -x "${BASE_RUNNER}" ]]' "${WRAPPER}"; then
+    echo "Base comparison runner is invoked via bash and must not require executable mode" >&2
+    exit 1
+fi
 grep -F 'Published PostgreSQL 32K image already prepared; skipping local 32K compose build.' "${WRAPPER}" >/dev/null
 grep -F 'POSTGRES_BLOCK_SIZE_KB:-' "${WRAPPER}" >/dev/null
 grep -F 'FOD_PG_BLOCK_COMPARISON_SIZES_KB:-8 32' "${WRAPPER}" >/dev/null
