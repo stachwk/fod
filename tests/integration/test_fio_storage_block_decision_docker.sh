@@ -166,7 +166,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 compose down -v --remove-orphans >/dev/null 2>&1 || true
-compose up -d primary replica
+compose up -d --build primary replica
 STACK_STARTED=1
 wait_for_role "false|off" primary
 wait_for_role "true|on" replica
@@ -193,18 +193,31 @@ if (( PREFILL )); then
         --size="${FILE_SIZE}" --numjobs=1 --group_reporting=1 --direct=0 --fsync_on_close=1 \
         --refill_buffers=1 --randrepeat=0 --output-format=json --output="${ARTIFACT_DIR}/prefill.json"
     fod_test_cleanup
-    BASELINE_LSN="$(psql_primary -c "CHECKPOINT; SELECT pg_current_wal_flush_lsn()::text" | tail -1 | tr -d '[:space:]')"
-    wait_for_replay_lsn "${BASELINE_LSN}"
-else
-    BASELINE_LSN="$(psql_primary -c "CHECKPOINT; SELECT pg_current_wal_flush_lsn()::text" | tail -1 | tr -d '[:space:]')"
-    wait_for_replay_lsn "${BASELINE_LSN}"
 fi
+BASELINE_LSN="$(psql_primary -c "CHECKPOINT; SELECT pg_current_wal_flush_lsn()::text" | tail -1 | tr -d '[:space:]')"
+wait_for_replay_lsn "${BASELINE_LSN}"
 wait_host_dirty | tee "${ARTIFACT_DIR}/pre-measure-settle.txt"
 
 FOD_PG_WRITE_PROFILE_OUT="${PROFILE_DIR}" \
 FOD_PG_WRITE_PROFILE_PROCESS_MATCH="/tmp/fod-storage-decision-measured." \
     bash "${PROFILER}" >"${ARTIFACT_DIR}/postgres-profile.log" 2>&1 &
 PROFILE_PID=$!
+
+# The database is already live here, so make sure pg_stat_statements has been
+# reset before the measured FOD process is allowed to start.
+profile_ready=0
+for _ in $(seq 1 100); do
+    if [[ -s "${PROFILE_DIR}/pg-stat-statements-reset.tsv" ]]; then
+        profile_ready=1
+        break
+    fi
+    if ! kill -0 "${PROFILE_PID}" 2>/dev/null; then
+        echo "PostgreSQL profiler exited before measurement" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
+(( profile_ready )) || { echo "PostgreSQL profiler did not become ready" >&2; exit 1; }
 
 fod_test_make_mountpoint "/tmp/fod-storage-decision-measured"
 FOD_TEST_LOG_ARCHIVE="${ARTIFACT_DIR}/measured-mount.log"
