@@ -201,6 +201,8 @@ RUN apk add --no-cache \
         lz4-libs \
         zstd-libs \
         libuuid \
+    && sed -ri "s!^#?(listen_addresses)[[:space:]]*=[[:space:]]*[^#]*!\1 = '*'!" /opt/postgresql-custom/share/postgresql.conf.sample \
+    && grep -F "listen_addresses = '*'" /opt/postgresql-custom/share/postgresql.conf.sample >/dev/null \
     && locale -a | sort -u >/tmp/fod-locales.txt \
     && cat /tmp/fod-locales.txt \
     && test "$(awk 'NF {n++} END {print n + 0}' /tmp/fod-locales.txt)" -ge 100 \
