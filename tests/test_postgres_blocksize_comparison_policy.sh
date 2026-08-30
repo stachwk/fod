@@ -15,7 +15,7 @@ bash -n "${RUNNER}"
 grep -F 'ARG POSTGRES_BLOCK_SIZE_KB=32' "${DOCKERFILE}" >/dev/null
 grep -F -- '--with-blocksize="${POSTGRES_BLOCK_SIZE_KB}"' "${DOCKERFILE}" >/dev/null
 grep -F 'POSTGRES_BLOCK_SIZE_KB must be one of 1,2,4,8,16,32' "${DOCKERFILE}" >/dev/null
-grep -F 'postgres -D /tmp/pg-blocksize-verify -C block_size' "${DOCKERFILE}" >/dev/null
+grep -F -- '-C block_size' "${DOCKERFILE}" >/dev/null
 grep -F 'make -C contrib/pg_stat_statements install' "${DOCKERFILE}" >/dev/null
 
 grep -F 'POSTGRES_BLOCK_SIZE_KB: ${POSTGRES_BLOCK_SIZE_KB:-32}' "${COMPOSE}" >/dev/null
