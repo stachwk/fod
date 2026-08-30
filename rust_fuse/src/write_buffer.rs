@@ -200,6 +200,101 @@ impl FodFuse {
         result
     }
 
+    fn load_existing_truncate_boundary_block(
+        &self,
+        state: &WriteState,
+        block_index: u64,
+        block_size: u64,
+    ) -> Result<Option<Vec<u8>>, libc::c_int> {
+        if let Some(block) = state.blocks().get(&block_index) {
+            return Ok(Some(block.clone()));
+        }
+        if let Some(block) = self.recent_write_block(state.file_id, block_index) {
+            return Ok(Some(block.as_ref().to_vec()));
+        }
+        self.load_block_profiled(state.file_id, block_index, block_size)
+            .map_err(|err| {
+                warn!(
+                    "FOD truncate boundary load failed file_id={} block_index={} err={}",
+                    state.file_id, block_index, err
+                );
+                EIO
+            })
+    }
+
+    fn trim_existing_block_at_eof(
+        &self,
+        state: &mut WriteState,
+        eof: u64,
+        block_size: u64,
+    ) -> Result<(), libc::c_int> {
+        if eof == 0 {
+            return Ok(());
+        }
+        let used_len = eof % block_size;
+        if used_len == 0 {
+            return Ok(());
+        }
+        let block_index = eof / block_size;
+        let Some(mut block) =
+            self.load_existing_truncate_boundary_block(state, block_index, block_size)?
+        else {
+            // Sparse/missing block already represents zero-filled data.
+            return Ok(());
+        };
+        let original_len = block.len();
+        block.truncate(used_len as usize);
+        debug!(
+            "FOD truncate boundary trim file_id={} eof={} block_index={} used_len={} original_len={} stored_len={}",
+            state.file_id,
+            eof,
+            block_index,
+            used_len,
+            original_len,
+            block.len()
+        );
+        state.blocks_mut().insert(block_index, block);
+        Ok(())
+    }
+
+    fn prepare_truncate_boundary_blocks(
+        &self,
+        state: &mut WriteState,
+        block_size: u64,
+    ) -> Result<(), libc::c_int> {
+        if !state.truncate_pending {
+            return Ok(());
+        }
+
+        // A shrink inside a storage block must physically shorten that block.
+        // Otherwise bytes after the new EOF stay in PostgreSQL and become visible
+        // again after a later extend, violating POSIX zero-fill semantics.
+        let had_dirty_payload = state.buffered_bytes > 0 || !state.blocks().is_empty();
+        self.trim_existing_block_at_eof(state, state.file_size, block_size)?;
+
+        // For a clean size-only extend, also sanitize the previous persisted EOF.
+        // This repairs files that may have been shrunk by an older FOD version
+        // which kept stale bytes after an off-boundary EOF. Do not do this when
+        // the handle already owns dirty payload, because PostgreSQL size may lag
+        // the logical in-memory size in that case.
+        if !had_dirty_payload {
+            let persisted_size = self.repo.file_size(state.file_id).map_err(|err| {
+                warn!(
+                    "FOD truncate previous size lookup failed file_id={} err={}",
+                    state.file_id, err
+                );
+                EIO
+            })?;
+            if let Some(previous_size) = persisted_size {
+                if previous_size < state.file_size {
+                    self.trim_existing_block_at_eof(state, previous_size, block_size)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn flush_write_state(&self, state: &mut WriteState) -> Result<(), libc::c_int> {
         self.flush_write_state_with_capacity_reservation(state, None)
     }
@@ -217,6 +312,11 @@ impl FodFuse {
         let prepare_started = Instant::now();
         let block_size = self.block_size.max(1);
         state.ensure_block_overlay(block_size);
+        if let Err(errno) = self.prepare_truncate_boundary_blocks(state, block_size) {
+            self.record_flush_prepare_plan_elapsed(prepare_started.elapsed());
+            self.record_flush_write_state_elapsed(started.elapsed());
+            return Err(errno);
+        }
         debug!(
             "FOD write_state_mode=block file_id={} buffered_bytes={}",
             state.file_id, state.buffered_bytes
