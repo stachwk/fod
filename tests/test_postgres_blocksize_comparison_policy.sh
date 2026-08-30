@@ -16,7 +16,8 @@ grep -F 'ARG POSTGRES_BLOCK_SIZE_KB=32' "${DOCKERFILE}" >/dev/null
 grep -F -- '--with-blocksize="${POSTGRES_BLOCK_SIZE_KB}"' "${DOCKERFILE}" >/dev/null
 grep -F 'POSTGRES_BLOCK_SIZE_KB must be one of 1,2,4,8,16,32' "${DOCKERFILE}" >/dev/null
 grep -F -- '-C block_size' "${DOCKERFILE}" >/dev/null
-grep -F 'make -C contrib/pg_stat_statements install' "${DOCKERFILE}" >/dev/null
+grep -F 'make -C contrib install' "${DOCKERFILE}" >/dev/null
+grep -F 'PGVECTOR_VERSION=0.8.6' "${DOCKERFILE}" >/dev/null
 
 grep -F 'POSTGRES_BLOCK_SIZE_KB: ${POSTGRES_BLOCK_SIZE_KB:-32}' "${COMPOSE}" >/dev/null
 grep -F 'FOD_EXPECTED_PG_BLOCK_SIZE_BYTES: ${FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768}' "${COMPOSE}" >/dev/null
