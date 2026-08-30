@@ -110,11 +110,16 @@ FROM pg_stat_wal;
 SELECT
     clock_timestamp(), backend_type,
     sum(coalesce(reads, 0)),
+    sum(coalesce(read_time, 0)),
     sum(coalesce(writes, 0)),
+    sum(coalesce(write_time, 0)),
     sum(coalesce(writebacks, 0)),
+    sum(coalesce(writeback_time, 0)),
     sum(coalesce(extends, 0)),
+    sum(coalesce(extend_time, 0)),
     sum(coalesce(hits, 0)),
-    sum(coalesce(fsyncs, 0))
+    sum(coalesce(fsyncs, 0)),
+    sum(coalesce(fsync_time, 0))
 FROM pg_stat_io
 WHERE backend_type IN ('client backend', 'checkpointer', 'background writer')
 GROUP BY backend_type
