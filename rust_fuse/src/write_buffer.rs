@@ -252,6 +252,41 @@ impl FodFuse {
         Ok(())
     }
 
+    fn zero_extend_existing_block_from_eof(
+        &self,
+        state: &mut WriteState,
+        block_index: u64,
+        previous_used_len: u64,
+        target_len: u64,
+        block_size: u64,
+    ) -> Result<(), libc::c_int> {
+        if previous_used_len == 0
+            || previous_used_len > target_len
+            || target_len > block_size
+        {
+            return Ok(());
+        }
+        let Some(mut block) =
+            self.load_existing_truncate_boundary_block(state, block_index, block_size)?
+        else {
+            return Ok(());
+        };
+        let original_len = block.len();
+        block.truncate(previous_used_len as usize);
+        block.resize(target_len as usize, 0);
+        debug!(
+            "FOD truncate boundary zero extend file_id={} block_index={} previous_used_len={} target_len={} original_len={} stored_len={}",
+            state.file_id,
+            block_index,
+            previous_used_len,
+            target_len,
+            original_len,
+            block.len()
+        );
+        state.blocks_mut().insert(block_index, block);
+        Ok(())
+    }
+
     fn trim_existing_block_at_eof(
         &self,
         state: &mut WriteState,
@@ -299,9 +334,9 @@ impl FodFuse {
 
         if previous_size < new_size {
             // POSIX requires the newly exposed range to read as zeroes. If the
-            // old EOF was inside a block, first discard stale bytes after it and
-            // then zero-extend that same block as far as the new logical size
-            // reaches. This also repairs files produced by older FOD versions.
+            // old EOF was inside a block, discard every byte after that old EOF
+            // before extending the block. This also repairs files created by an
+            // older FOD version which retained stale bytes after a shrink.
             let previous_used_len = previous_size % block_size;
             if previous_size > 0 && previous_used_len != 0 {
                 let block_index = previous_size / block_size;
@@ -312,9 +347,10 @@ impl FodFuse {
                 } else {
                     block_size
                 };
-                self.resize_existing_block_for_truncate(
+                self.zero_extend_existing_block_from_eof(
                     state,
                     block_index,
+                    previous_used_len,
                     target_len,
                     block_size,
                 )?;
