@@ -19,6 +19,7 @@ FIO_BLOCK_SIZE="${FOD_STORAGE_BLOCK_FIO_BLOCK_SIZE:-512k}"
 PAYLOAD_MODE="${FOD_STORAGE_BLOCK_PAYLOAD_MODE:-random}"
 RUNTIME_PROFILE="${FOD_RUNTIME_PROFILE:-profiling}"
 CARGO_PROFILE="${FOD_CARGO_PROFILE:-${RUNTIME_PROFILE}}"
+SKIP_BUILD="${FOD_STORAGE_BLOCK_SKIP_BUILD:-0}"
 SINGLE="${ROOT}/tests/integration/test_fio_primary_write_replica_read_docker.sh"
 PROFILER="${ROOT}/scripts/perf/profile_primary_write_postgres.sh"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -32,6 +33,14 @@ for cmd in bash make git awk grep sed chmod mktemp; do
         exit 2
     }
 done
+
+case "${SKIP_BUILD}" in
+    0|1) ;;
+    *)
+        echo "FOD_STORAGE_BLOCK_SKIP_BUILD must be 0 or 1" >&2
+        exit 2
+        ;;
+esac
 
 if [[ "${PAYLOAD_MODE}" != "random" ]]; then
     echo "WARN: this experiment is intended for random payloads; payload_mode=${PAYLOAD_MODE}" >&2
@@ -63,13 +72,19 @@ printf '=== FOD RANDOM STORAGE BLOCK MATRIX ===\n'
 printf 'storage_block_sizes=%s\n' "${STORAGE_BLOCK_SIZES}"
 printf 'fio_block_size=%s\nfile_size=%s\npayload_mode=%s\n' \
     "${FIO_BLOCK_SIZE}" "${FILE_SIZE}" "${PAYLOAD_MODE}"
+printf 'skip_build=%s\n' "${SKIP_BUILD}"
 printf 'artifact_dir=%s\n' "${ARTIFACT_DIR}"
 
-# Build once. The individual benchmark runs reuse these binaries while creating
-# fresh PostgreSQL primary/replica volumes for every storage block size.
-FOD_CARGO_PROFILE="${CARGO_PROFILE}" \
-FOD_RUNTIME_PROFILE="${RUNTIME_PROFILE}" \
-make --no-print-directory build-runtime
+# Standalone runs build once. Repeated stability harnesses can build once before
+# the series and set FOD_STORAGE_BLOCK_SKIP_BUILD=1 to keep compilation/filesystem
+# activity outside every measured run.
+if [[ "${SKIP_BUILD}" == "0" ]]; then
+    FOD_CARGO_PROFILE="${CARGO_PROFILE}" \
+    FOD_RUNTIME_PROFILE="${RUNTIME_PROFILE}" \
+    make --no-print-directory build-runtime
+else
+    echo "Runtime build skipped; caller is responsible for prebuilding artifacts."
+fi
 
 artifact_profile="${RUNTIME_PROFILE}"
 if [[ "${artifact_profile}" == "dev" ]]; then
