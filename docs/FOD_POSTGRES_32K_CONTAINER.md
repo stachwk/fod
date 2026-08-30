@@ -88,6 +88,65 @@ To make the reusable image less restricted, PostgreSQL is built with support for
 - UUID (`e2fs`/libuuid);
 - readline and zlib.
 
+## Multilingual locale support
+
+The runtime image installs `musl-locales`, `musl-locales-lang` and the full ICU data package (`icu-data-full`). `MUSL_LOCPATH` is configured so Alpine's musl locale files are visible to libc-based applications.
+
+The image keeps the neutral UTF-8 default:
+
+```text
+LANG=C.UTF-8
+```
+
+`LC_ALL` is deliberately **not** pinned. A deployment can therefore override `LANG` or individual `LC_*` variables when required.
+
+The build verifies a representative system-locale set including:
+
+```text
+C.UTF-8
+en_US.UTF-8
+en_GB.UTF-8
+de_DE.UTF-8
+fr_FR.UTF-8
+es_ES.UTF-8
+it_IT.UTF-8
+pt_BR.UTF-8
+ru_RU.UTF-8
+cs_CZ.UTF-8
+nl_NL.UTF-8
+sv_SE.UTF-8
+```
+
+For PostgreSQL collations, ICU is the preferred broad-language mechanism. Full ICU data provides substantially wider language/territory coverage than musl system locales. The publish verification explicitly creates temporary PostgreSQL ICU clusters for:
+
+```text
+pl-PL
+cs-CZ
+de-DE
+en-US
+fr-FR
+es-ES
+it-IT
+pt-BR
+ru-RU
+uk-UA
+hu-HU
+ja-JP
+zh-CN
+ko-KR
+tr-TR
+```
+
+This verifies Polish as well as Central/Western European, Cyrillic and East Asian ICU locale support. Other ICU locales remain available through the full ICU data set even when they are not individually smoke-tested during image publishing.
+
+Example: initialize a PostgreSQL cluster using Polish ICU collation rules:
+
+```bash
+initdb --locale-provider=icu --icu-locale=pl-PL -D /var/lib/postgresql/data/pgdata
+```
+
+For ordinary Docker usage the standard PostgreSQL entrypoint still initializes the database according to the environment/options supplied by the deployment; the image does not force Polish or any other language as a global default.
+
 ## Build and verify locally
 
 ```bash
@@ -99,7 +158,9 @@ The script verifies:
 - PostgreSQL version equals the requested version;
 - `postgres -C block_size` returns `32768` after `initdb`;
 - the bundled extension manifest contains at least the expected number of extensions;
-- required built-in and external extensions are present.
+- required built-in and external extensions are present;
+- the minimum set of musl system locales is present;
+- representative ICU PostgreSQL locales, including `pl-PL`, can initialize successfully.
 
 No image is pushed unless `FOD_CONTAINER_PUSH=1` is set.
 
