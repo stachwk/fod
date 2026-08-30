@@ -94,6 +94,7 @@ echo "primary_write_pid=$PID"
 : > "$OUT/wal.tsv"
 : > "$OUT/io.tsv"
 : > "$OUT/statements.tsv"
+: > "$OUT/relations.tsv"
 
 sample_activity() {
     "${PG[@]}" -At -F $'\t' -c "
@@ -161,6 +162,10 @@ WITH target AS (
         shared_blks_read,
         shared_blks_dirtied,
         shared_blks_written,
+        local_blks_hit,
+        local_blks_read,
+        local_blks_dirtied,
+        local_blks_written,
         temp_blks_read,
         temp_blks_written,
         blk_read_time,
@@ -184,6 +189,10 @@ SELECT
     sum(shared_blks_read),
     sum(shared_blks_dirtied),
     sum(shared_blks_written),
+    sum(local_blks_hit),
+    sum(local_blks_read),
+    sum(local_blks_dirtied),
+    sum(local_blks_written),
     sum(temp_blks_read),
     sum(temp_blks_written),
     round(sum(blk_read_time)::numeric, 3),
@@ -198,6 +207,24 @@ WHERE statement_kind IS NOT NULL
 GROUP BY statement_kind
 ORDER BY statement_kind;
 " >> "$OUT/statements.tsv" 2>>"$ERROR_LOG"
+
+    "${PG[@]}" -At -F $'\t' -c "
+SELECT
+    clock_timestamp(),
+    c.relname,
+    c.relpersistence,
+    CASE c.relpersistence
+        WHEN 'p' THEN 'permanent'
+        WHEN 'u' THEN 'unlogged'
+        WHEN 't' THEN 'temporary'
+        ELSE c.relpersistence::text
+    END,
+    n.nspname
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relname IN ('fod_persist_block_stage', 'data_blocks')
+ORDER BY c.relname, n.nspname;
+" >> "$OUT/relations.tsv" 2>>"$ERROR_LOG"
 }
 
 iteration=0
@@ -235,8 +262,16 @@ SUMMARY="$OUT/summary.txt"
     head -3 "$OUT/io.tsv" || true
     tail -3 "$OUT/io.tsv" || true
     echo
+    echo '=== RELATION PERSISTENCE OBSERVED ==='
+    printf 'timestamp\trelname\trelpersistence\tpersistence_kind\tnamespace\n'
+    if [ -s "$OUT/relations.tsv" ]; then
+        awk -F '\t' '!seen[$2 FS $3 FS $4 FS $5]++ {print}' "$OUT/relations.tsv"
+    else
+        echo 'no target relations observed'
+    fi
+    echo
     echo '=== PG_STAT_STATEMENTS COLUMNS ==='
-    printf 'timestamp\tstatement_kind\tcalls\ttotal_exec_time_ms\tmean_exec_time_ms\trows\tshared_blks_hit\tshared_blks_read\tshared_blks_dirtied\tshared_blks_written\ttemp_blks_read\ttemp_blks_written\tblk_read_time_ms\tblk_write_time_ms\ttemp_blk_read_time_ms\ttemp_blk_write_time_ms\twal_records\twal_fpi\twal_bytes\n'
+    printf 'timestamp\tstatement_kind\tcalls\ttotal_exec_time_ms\tmean_exec_time_ms\trows\tshared_blks_hit\tshared_blks_read\tshared_blks_dirtied\tshared_blks_written\tlocal_blks_hit\tlocal_blks_read\tlocal_blks_dirtied\tlocal_blks_written\ttemp_blks_read\ttemp_blks_written\tblk_read_time_ms\tblk_write_time_ms\ttemp_blk_read_time_ms\ttemp_blk_write_time_ms\twal_records\twal_fpi\twal_bytes\n'
     if [ -s "$OUT/statements.tsv" ]; then
         first_statement_ts="$(head -1 "$OUT/statements.tsv" | cut -f1)"
         last_statement_ts="$(tail -1 "$OUT/statements.tsv" | cut -f1)"
