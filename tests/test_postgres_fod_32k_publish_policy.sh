@@ -26,6 +26,8 @@ grep -F 'ARG POSTGRES_BASE_IMAGE=postgres:16.15-alpine' "${DOCKERFILE}" >/dev/nu
 grep -F 'pkgconf' "${DOCKERFILE}" >/dev/null
 grep -F 'icu-dev' "${DOCKERFILE}" >/dev/null
 grep -F -- '--with-icu' "${DOCKERFILE}" >/dev/null
+grep -F 'musl-locales' "${DOCKERFILE}" >/dev/null
+grep -F "locale -a | grep -F 'en_US.UTF-8'" "${DOCKERFILE}" >/dev/null
 grep -F 'org.opencontainers.image.source' "${DOCKERFILE}" >/dev/null
 grep -F 'org.opencontainers.image.revision' "${DOCKERFILE}" >/dev/null
 grep -F 'org.opencontainers.image.version' "${DOCKERFILE}" >/dev/null
