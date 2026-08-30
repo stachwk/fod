@@ -203,14 +203,14 @@ RUN apk add --no-cache \
         libuuid \
     && locale -a | sort -u >/tmp/fod-locales.txt \
     && cat /tmp/fod-locales.txt \
-    && test "$(awk 'NF {n++} END {print n + 0}' /tmp/fod-locales.txt)" -ge 12 \
-    && for loc in C.UTF-8 en_US.UTF-8 en_GB.UTF-8 de_DE.UTF-8 fr_FR.UTF-8 es_ES.UTF-8 it_IT.UTF-8 pt_BR.UTF-8 ru_RU.UTF-8 cs_CZ.UTF-8 nl_NL.UTF-8 sv_SE.UTF-8; do \
+    && test "$(awk 'NF {n++} END {print n + 0}' /tmp/fod-locales.txt)" -ge 100 \
+    && for loc in C.UTF-8 en_US en_GB de_DE fr_FR es_ES it_IT pt_BR ru_RU cs_CZ nl_NL sv_SE pl_PL hu_HU uk_UA ja_JP ko_KR zh_CN ar_SA; do \
         grep -Fx "${loc}" /tmp/fod-locales.txt >/dev/null; \
     done \
     && test "$(locale charmap)" = "UTF-8" \
     && icu_dir="$(mktemp -d)" \
     && chown postgres:postgres "${icu_dir}" \
-    && su-exec postgres initdb --locale-provider=icu --icu-locale=pl-PL -D "${icu_dir}" >/dev/null \
+    && su-exec postgres initdb --no-sync --locale-provider=icu --icu-locale=pl-PL -D "${icu_dir}" >/dev/null \
     && rm -rf "${icu_dir}" /tmp/fod-locales.txt \
     && chmod 0755 \
         /docker-entrypoint-initdb.d/10-fod-replication.sh \
