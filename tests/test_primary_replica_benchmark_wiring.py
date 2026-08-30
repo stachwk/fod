@@ -75,15 +75,26 @@ class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
         self.assertIn('export FOD_PG_DBNAME="${POSTGRES_DB:-foddbname}"', self.single)
         self.assertIn('export FOD_PG_USER="${POSTGRES_USER:-foduser}"', self.single)
         self.assertIn('export FOD_PG_PASSWORD="${POSTGRES_PASSWORD:-cichosza}"', self.single)
+        self.assertIn('PAYLOAD_MODE="${FIO_PAYLOAD_MODE:-pattern}"', self.single)
+        self.assertIn('FIO_WRITE_PAYLOAD_ARGS=(--buffer_pattern=0x5a)', self.single)
+        self.assertIn(
+            'FIO_WRITE_PAYLOAD_ARGS=(--refill_buffers=1 --randrepeat=0)',
+            self.single,
+        )
         self.assertIn("=== PHASE 1: PRIMARY WRITE ===", self.single)
         self.assertIn("FRESH PRIMARY READ", self.single)
         self.assertIn("FRESH REPLICA READ", self.single)
         self.assertIn("replica_write_guard=read_only_rejected", self.single)
+        self.assertIn("payload_mode=${PAYLOAD_MODE}", self.single)
         self.assertIn("PERF_RESULT block_size=", self.single)
 
     def test_matrix_collects_primary_and_replica_results(self) -> None:
         self.assertIn('BLOCK_SIZES="${FIO_BLOCK_SIZES:-', self.matrix)
+        self.assertIn('PAYLOAD_MODES="${FIO_PAYLOAD_MODES:-pattern}"', self.matrix)
         self.assertIn("for block_size in ${BLOCK_SIZES}; do", self.matrix)
+        self.assertIn("for payload_mode in ${PAYLOAD_MODES}; do", self.matrix)
+        self.assertIn('FIO_PAYLOAD_MODE="${payload_mode}"', self.matrix)
+        self.assertIn("payload_mode", self.matrix)
         self.assertIn("primary_write_mib_s", self.matrix)
         self.assertIn("primary_read_mib_s", self.matrix)
         self.assertIn("replica_read_mib_s", self.matrix)
