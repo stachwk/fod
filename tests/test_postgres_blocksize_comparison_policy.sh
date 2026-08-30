@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCKERFILE="${ROOT}/docker/postgres-blocksize/Dockerfile"
 COMPOSE="${ROOT}/docker-compose.postgres-blocksize.yml"
 RUNNER="${ROOT}/scripts/perf/run_postgres_blocksize_comparison.sh"
+REPLICA_ENTRYPOINT="${ROOT}/docker/replica-read/replica-entrypoint.sh"
 PRODUCTION_COMPOSE="${ROOT}/docker-compose.replica-read.yml"
 
 bash -n "${RUNNER}"
@@ -18,12 +19,16 @@ grep -F 'POSTGRES_BLOCK_SIZE_KB must be one of 1,2,4,8,16,32' "${DOCKERFILE}" >/
 grep -F -- '-C block_size' "${DOCKERFILE}" >/dev/null
 grep -F 'make -C contrib install' "${DOCKERFILE}" >/dev/null
 grep -F 'PGVECTOR_VERSION=0.8.6' "${DOCKERFILE}" >/dev/null
+grep -F "listen_addresses = '*'" "${DOCKERFILE}" >/dev/null
 
 grep -F 'POSTGRES_BLOCK_SIZE_KB: ${POSTGRES_BLOCK_SIZE_KB:-32}' "${COMPOSE}" >/dev/null
 grep -F 'FOD_EXPECTED_PG_BLOCK_SIZE_BYTES: ${FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768}' "${COMPOSE}" >/dev/null
 grep -F "'SHOW block_size'" "${COMPOSE}" >/dev/null
+grep -F 'listen_addresses=*' "${COMPOSE}" >/dev/null
+grep -F './docker/replica-read/replica-entrypoint.sh:/usr/local/bin/fod-replica-entrypoint.sh:ro' "${COMPOSE}" >/dev/null
 grep -F 'postgres_blocksize_primary_data:' "${COMPOSE}" >/dev/null
 grep -F 'postgres_blocksize_replica_data:' "${COMPOSE}" >/dev/null
+grep -F "-c listen_addresses='*'" "${REPLICA_ENTRYPOINT}" >/dev/null
 
 grep -F 'FOD_PG_BLOCK_COMPARISON_SIZES_KB:-8 32' "${RUNNER}" >/dev/null
 grep -F 'FOD_PG_BLOCK_COMPARISON_REPEATS:-3' "${RUNNER}" >/dev/null
