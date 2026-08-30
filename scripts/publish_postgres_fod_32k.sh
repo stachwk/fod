@@ -17,6 +17,7 @@ TAG_LATEST="${FOD_CONTAINER_TAG_LATEST:-0}"
 SOURCE="${FOD_CONTAINER_SOURCE:-https://github.com/stachwk/fod}"
 REVISION="$(git rev-parse HEAD)"
 MIN_EXTENSION_COUNT="${FOD_POSTGRES_MIN_EXTENSION_COUNT:-45}"
+MIN_SYSTEM_LOCALE_COUNT="${FOD_POSTGRES_MIN_SYSTEM_LOCALE_COUNT:-12}"
 REQUIRED_EXTENSIONS=(
     pg_stat_statements
     pgcrypto
@@ -35,12 +36,43 @@ REQUIRED_EXTENSIONS=(
     pg_stat_kcache
     pg_hint_plan
 )
+REQUIRED_SYSTEM_LOCALES=(
+    C.UTF-8
+    en_US.UTF-8
+    en_GB.UTF-8
+    de_DE.UTF-8
+    fr_FR.UTF-8
+    es_ES.UTF-8
+    it_IT.UTF-8
+    pt_BR.UTF-8
+    ru_RU.UTF-8
+    cs_CZ.UTF-8
+    nl_NL.UTF-8
+    sv_SE.UTF-8
+)
+REQUIRED_ICU_LOCALES=(
+    pl-PL
+    cs-CZ
+    de-DE
+    en-US
+    fr-FR
+    es-ES
+    it-IT
+    pt-BR
+    ru-RU
+    uk-UA
+    hu-HU
+    ja-JP
+    zh-CN
+    ko-KR
+    tr-TR
+)
 
 case "${PUSH}:${TAG_MAJOR}:${TAG_LATEST}" in
     *[!01:]*) echo "FOD_CONTAINER_PUSH, FOD_CONTAINER_TAG_MAJOR and FOD_CONTAINER_TAG_LATEST must be 0 or 1" >&2; exit 2 ;;
 esac
-case "${MIN_EXTENSION_COUNT}" in
-    ''|*[!0-9]*) echo "FOD_POSTGRES_MIN_EXTENSION_COUNT must be an integer" >&2; exit 2 ;;
+case "${MIN_EXTENSION_COUNT}:${MIN_SYSTEM_LOCALE_COUNT}" in
+    *[!0-9:]*) echo "FOD_POSTGRES_MIN_EXTENSION_COUNT and FOD_POSTGRES_MIN_SYSTEM_LOCALE_COUNT must be integers" >&2; exit 2 ;;
 esac
 
 IMAGE_BASE="${REGISTRY}/${NAMESPACE}/${REPOSITORY}"
@@ -48,7 +80,7 @@ VERSION_TAG="${IMAGE_BASE}:${POSTGRES_VERSION}"
 MAJOR_TAG="${IMAGE_BASE}:16"
 LATEST_TAG="${IMAGE_BASE}:latest"
 
-for cmd in docker git awk grep tail tr wc sort; do
+for cmd in docker git awk grep tail tr wc sort paste; do
     command -v "${cmd}" >/dev/null 2>&1 || { echo "Missing required command: ${cmd}" >&2; exit 2; }
 done
 
@@ -75,7 +107,7 @@ fi
 actual_block_size="$(docker run --rm --entrypoint /bin/sh "${VERSION_TAG}" -ceu '
     dir="$(mktemp -d)"
     chown postgres:postgres "${dir}"
-    su-exec postgres initdb -D "${dir}" >/dev/null
+    su-exec postgres initdb --no-sync -D "${dir}" >/dev/null
     su-exec postgres postgres -D "${dir}" -C block_size
 ' | tail -n 1 | tr -d '[:space:]')"
 if [[ "${actual_block_size}" != "32768" ]]; then
@@ -98,6 +130,33 @@ for extension in "${REQUIRED_EXTENSIONS[@]}"; do
     fi
 done
 
+system_locale_list="$(docker run --rm --entrypoint /bin/sh "${VERSION_TAG}" -ceu 'locale -a | sort -u')"
+system_locale_count="$(printf '%s\n' "${system_locale_list}" | awk 'NF {n++} END {print n + 0}')"
+if (( system_locale_count < MIN_SYSTEM_LOCALE_COUNT )); then
+    echo "System locale verification failed expected_at_least=${MIN_SYSTEM_LOCALE_COUNT} actual=${system_locale_count}" >&2
+    printf '%s\n' "${system_locale_list}" >&2
+    exit 1
+fi
+for locale_name in "${REQUIRED_SYSTEM_LOCALES[@]}"; do
+    if ! printf '%s\n' "${system_locale_list}" | grep -Fx "${locale_name}" >/dev/null; then
+        echo "Required system locale missing from image: ${locale_name}" >&2
+        exit 1
+    fi
+done
+
+icu_locale_csv="$(IFS=,; printf '%s' "${REQUIRED_ICU_LOCALES[*]}")"
+docker run --rm --entrypoint /bin/sh "${VERSION_TAG}" -ceu '
+    old_ifs="$IFS"
+    IFS=,
+    for locale_name in $1; do
+        dir="$(mktemp -d)"
+        chown postgres:postgres "${dir}"
+        su-exec postgres initdb --no-sync --locale-provider=icu --icu-locale="${locale_name}" -D "${dir}" >/dev/null
+        rm -rf "${dir}"
+    done
+    IFS="$old_ifs"
+' sh "${icu_locale_csv}"
+
 if [[ "${TAG_MAJOR}" == "1" ]]; then
     docker tag "${VERSION_TAG}" "${MAJOR_TAG}"
 fi
@@ -108,6 +167,9 @@ fi
 printf 'verified_postgres_version=%s\nverified_block_size=%s\n' "${actual_version}" "${actual_block_size}"
 printf 'verified_extension_count=%s\n' "${extension_count}"
 printf 'verified_external_extensions=%s\n' 'vector,pgaudit,pg_cron,pg_repack,hypopg,pg_stat_kcache,pg_hint_plan'
+printf 'verified_system_locale_count=%s\n' "${system_locale_count}"
+printf 'verified_system_locales=%s\n' "$(IFS=,; printf '%s' "${REQUIRED_SYSTEM_LOCALES[*]}")"
+printf 'verified_icu_locales=%s\n' "${icu_locale_csv}"
 printf 'image=%s\n' "${VERSION_TAG}"
 [[ "${TAG_MAJOR}" == "1" ]] && printf 'alias=%s\n' "${MAJOR_TAG}"
 [[ "${TAG_LATEST}" == "1" ]] && printf 'alias=%s\n' "${LATEST_TAG}"
