@@ -44,6 +44,8 @@ grep -F 'LANG="C.UTF-8"' "${DOCKERFILE}" >/dev/null
 grep -F 'C.UTF-8 en_US en_GB de_DE' "${DOCKERFILE}" >/dev/null
 grep -F 'pl_PL hu_HU uk_UA ja_JP ko_KR zh_CN ar_SA' "${DOCKERFILE}" >/dev/null
 grep -F -- '--locale-provider=icu --icu-locale=pl-PL' "${DOCKERFILE}" >/dev/null
+grep -F '/opt/postgresql-custom/share/postgresql.conf.sample' "${DOCKERFILE}" >/dev/null
+grep -F "listen_addresses = '*'" "${DOCKERFILE}" >/dev/null
 if grep -Fq 'ENV LC_ALL=' "${DOCKERFILE}"; then
     echo "LC_ALL must not be pinned because callers need to override LANG/LC_*" >&2
     exit 1
