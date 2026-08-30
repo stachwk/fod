@@ -25,13 +25,27 @@ PRIMARY_PORT="${REPLICA_READ_PRIMARY_PORT:-55441}"
 REPLICA_PORT="${REPLICA_READ_REPLICA_PORT:-55442}"
 FILE_SIZE="${FIO_FILE_SIZE:-1G}"
 BLOCK_SIZE="${FIO_BLOCK_SIZE:-4k}"
+PAYLOAD_MODE="${FIO_PAYLOAD_MODE:-pattern}"
 WAIT_SECONDS="${REPLICA_WAIT_SECONDS:-120}"
 LABEL="${REPLICA_READ_LABEL:-docker}"
 PROJECT="fod-replica-read-${BASHPID}"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 HEAD_SHORT="$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 HOST_NAME="$(hostname -s 2>/dev/null || hostname)"
-ARTIFACT_DIR="${ROOT}/artifacts/perf/${HEAD_SHORT}/${HOST_NAME}-${LABEL}-primary-replica-${BLOCK_SIZE}-${RUN_ID}"
+ARTIFACT_DIR="${ROOT}/artifacts/perf/${HEAD_SHORT}/${HOST_NAME}-${LABEL}-primary-replica-${BLOCK_SIZE}-${PAYLOAD_MODE}-${RUN_ID}"
+
+case "${PAYLOAD_MODE}" in
+    pattern)
+        FIO_WRITE_PAYLOAD_ARGS=(--buffer_pattern=0x5a)
+        ;;
+    random)
+        FIO_WRITE_PAYLOAD_ARGS=(--refill_buffers=1 --randrepeat=0)
+        ;;
+    *)
+        echo "FIO_PAYLOAD_MODE must be 'pattern' or 'random', got '${PAYLOAD_MODE}'" >&2
+        exit 2
+        ;;
+esac
 
 read -r -a COMPOSE_CMD <<<"${FOD_REPLICA_READ_COMPOSE:-docker compose}"
 
@@ -171,7 +185,7 @@ echo "docker_bind=${BIND_ADDRESS}"
 echo "primary=${PRIMARY_HOST}:${PRIMARY_PORT}"
 echo "replica=${REPLICA_HOST}:${REPLICA_PORT}"
 echo "database=${POSTGRES_DB:-foddbname} user=${POSTGRES_USER:-foduser}"
-echo "size=${FILE_SIZE} block_size=${BLOCK_SIZE}"
+echo "size=${FILE_SIZE} block_size=${BLOCK_SIZE} payload_mode=${PAYLOAD_MODE}"
 echo "artifact_dir=${ARTIFACT_DIR}"
 
 fod_test_write_power_metadata "${ARTIFACT_DIR}/power-before.txt" "before"
@@ -236,12 +250,12 @@ fio \
     --group_reporting=1 \
     --direct=0 \
     --fsync_on_close=1 \
-    --buffer_pattern=0x5a \
+    "${FIO_WRITE_PAYLOAD_ARGS[@]}" \
     --output-format=json \
     --output="${WRITE_JSON}"
 
 read -r WRITE_MIB WRITE_IOPS WRITE_LAT_US < <(fio_metrics "${WRITE_JSON}" write)
-echo "primary_write block_size=${BLOCK_SIZE} mib_s=${WRITE_MIB} iops=${WRITE_IOPS} lat_mean_us=${WRITE_LAT_US}"
+echo "primary_write block_size=${BLOCK_SIZE} payload_mode=${PAYLOAD_MODE} mib_s=${WRITE_MIB} iops=${WRITE_IOPS} lat_mean_us=${WRITE_LAT_US}"
 
 EXPECTED_SIZE="$(stat -c '%s' "${WRITE_FILE}")"
 [[ -n "${EXPECTED_SIZE}" && "${EXPECTED_SIZE}" != "0" ]] || {
@@ -403,15 +417,15 @@ fi
 
 fod_test_write_power_metadata "${ARTIFACT_DIR}/power-after.txt" "after"
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "block_size" "file_size" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "block_size" "file_size" "payload_mode" \
     "primary_write_mib_s" "primary_write_iops" \
     "primary_read_mib_s" "primary_read_iops" \
     "replica_read_mib_s" "replica_read_iops" \
     "replica_operation_failures" "replica_write_guard" \
     >"${ARTIFACT_DIR}/result.tsv"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "${BLOCK_SIZE}" "${FILE_SIZE}" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "${BLOCK_SIZE}" "${FILE_SIZE}" "${PAYLOAD_MODE}" \
     "${WRITE_MIB}" "${WRITE_IOPS}" \
     "${PRIMARY_READ_MIB}" "${PRIMARY_READ_IOPS}" \
     "${REPLICA_READ_MIB}" "${REPLICA_READ_IOPS}" \
@@ -429,5 +443,5 @@ echo "FOD read cache/read-ahead/prefetch disabled: yes"
 echo "FOD FUSE direct_io enabled: yes"
 echo "host kernel page cache dropped: no"
 
-echo "PERF_RESULT block_size=${BLOCK_SIZE} file_size=${FILE_SIZE} primary_write_mib_s=${WRITE_MIB} primary_write_iops=${WRITE_IOPS} primary_read_mib_s=${PRIMARY_READ_MIB} primary_read_iops=${PRIMARY_READ_IOPS} replica_read_mib_s=${REPLICA_READ_MIB} replica_read_iops=${REPLICA_READ_IOPS} replica_operation_failures=${FINAL_OPERATION_FAILURES} replica_write_guard=read_only_rejected"
+echo "PERF_RESULT block_size=${BLOCK_SIZE} file_size=${FILE_SIZE} payload_mode=${PAYLOAD_MODE} primary_write_mib_s=${WRITE_MIB} primary_write_iops=${WRITE_IOPS} primary_read_mib_s=${PRIMARY_READ_MIB} primary_read_iops=${PRIMARY_READ_IOPS} replica_read_mib_s=${REPLICA_READ_MIB} replica_read_iops=${REPLICA_READ_IOPS} replica_operation_failures=${FINAL_OPERATION_FAILURES} replica_write_guard=read_only_rejected"
 echo "OK: primary write/read -> WAL replay -> primary stopped -> replica read"
