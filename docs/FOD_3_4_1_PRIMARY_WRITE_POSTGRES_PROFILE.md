@@ -90,6 +90,15 @@ It intentionally does not run `pg_stat_statements_reset()` and does not require 
 
 It also intentionally does not query PostgreSQL after the primary-write process exits. The last successful continuous samples are used as the end-of-phase observations, avoiding the primary shutdown race.
 
+The sampler waits for the `fod-rust-fuse` primary-write process. Absence of that process is a normal waiting state and must not terminate the helper under `set -euo pipefail`. Process matching is a literal substring match, not an awk regular expression. The preferred override is:
+
+```bash
+FOD_PG_WRITE_PROFILE_PROCESS_MATCH='/tmp/fod-primary-write.' \
+    scripts/perf/profile_primary_write_postgres.sh
+```
+
+The historical `FOD_PG_WRITE_PROFILE_PROCESS_PATTERN` variable remains accepted for compatibility, but its value is also treated literally.
+
 Recommended workload in terminal 1:
 
 ```bash

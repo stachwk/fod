@@ -11,7 +11,7 @@ USER_NAME="${FOD_PG_WRITE_PROFILE_USER:-${POSTGRES_USER:-foduser}}"
 PASSWORD="${FOD_PG_WRITE_PROFILE_PASSWORD:-${POSTGRES_PASSWORD:-cichosza}}"
 POLL_SECONDS="${FOD_PG_WRITE_PROFILE_POLL_SECONDS:-0.25}"
 WAL_EVERY="${FOD_PG_WRITE_PROFILE_WAL_EVERY:-4}"
-PROCESS_PATTERN="${FOD_PG_WRITE_PROFILE_PROCESS_PATTERN:-/tmp/fod-primary-write\.}"
+PROCESS_MATCH="${FOD_PG_WRITE_PROFILE_PROCESS_MATCH:-${FOD_PG_WRITE_PROFILE_PROCESS_PATTERN:-/tmp/fod-primary-write.}}"
 PRECHECK_ONLY="${FOD_PG_WRITE_PROFILE_PRECHECK_ONLY:-0}"
 
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -27,8 +27,8 @@ if [ "$WAL_EVERY" -lt 1 ]; then
 fi
 
 printf '=== FOD PRIMARY WRITE POSTGRES PROFILE ===\n'
-printf 'host=%s\nport=%s\ndatabase=%s\nuser=%s\npoll_seconds=%s\nwal_every=%s\nprocess_pattern=%s\nartifact_dir=%s\n' \
-    "$HOST" "$PORT" "$DB" "$USER_NAME" "$POLL_SECONDS" "$WAL_EVERY" "$PROCESS_PATTERN" "$OUT"
+printf 'host=%s\nport=%s\ndatabase=%s\nuser=%s\npoll_seconds=%s\nwal_every=%s\nprocess_match=%s\nartifact_dir=%s\n' \
+    "$HOST" "$PORT" "$DB" "$USER_NAME" "$POLL_SECONDS" "$WAL_EVERY" "$PROCESS_MATCH" "$OUT"
 
 if [ "$PRECHECK_ONLY" = "1" ]; then
     echo 'precheck_only=1'
@@ -55,9 +55,19 @@ UNION ALL
 SELECT 'synchronous_commit', current_setting('synchronous_commit');
 " > "$OUT/settings.tsv" 2>>"$ERROR_LOG" || true
 
+find_primary_write_pid() {
+    local processes
+    processes="$(pgrep -af fod-rust-fuse 2>/dev/null || true)"
+    printf '%s\n' "$processes" \
+        | grep -F -- "$PROCESS_MATCH" \
+        | awk '{print $1}' \
+        | tail -1 \
+        || true
+}
+
 echo 'Waiting for primary-write FOD process...'
 while true; do
-    PID="$(pgrep -af fod-rust-fuse | awk -v pattern="$PROCESS_PATTERN" '$0 ~ pattern {print $1}' | tail -1)"
+    PID="$(find_primary_write_pid)"
     [ -n "$PID" ] && break
     sleep 0.05
 done
