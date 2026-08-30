@@ -1,6 +1,17 @@
 include Makefile
 
-.PHONY: test-rust-release-defaults-policy
+.PHONY: docker-perf-clean test-rust-release-defaults-policy
+
+# Safe cleanup for Docker resources created by the isolated primary/replica
+# performance benchmark. Build cache pruning is global to the Docker builder,
+# so it requires an explicit opt-in.
+FOD_DOCKER_PERF_CLEAN_FORCE ?= 0
+FOD_DOCKER_PERF_PRUNE_BUILD_CACHE ?= 0
+
+docker-perf-clean:
+	@FOD_DOCKER_PERF_CLEAN_FORCE="$(FOD_DOCKER_PERF_CLEAN_FORCE)" \
+		FOD_DOCKER_PERF_PRUNE_BUILD_CACHE="$(FOD_DOCKER_PERF_PRUNE_BUILD_CACHE)" \
+		bash scripts/perf/clean_replica_read_docker.sh
 
 # Selective cleanup for known auxiliary Cargo targets. The allowlist is
 # enforced by scripts/fod-aux-target-clean.sh; these variables only tune the
@@ -117,10 +128,3 @@ test-db-restore-local: test-fuse-test-cleanup
 # assert/clean again after all regular test-all prerequisites complete.
 test-all: test-fuse-test-cleanup test-fuse-test-cleanup-policy
 	@bash scripts/fod-test-fuse-cleanup.sh clean
-
-# test-all-full adds more FUSE-backed tests after test-all, so verify cleanup
-# once more at the end of the extended gate.
-test-all-full:
-	@bash scripts/fod-test-fuse-cleanup.sh clean
-
-include packaging/fod-packaging.mk
