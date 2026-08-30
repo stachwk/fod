@@ -90,7 +90,7 @@ enum Action {
 struct Cli {
     #[arg(value_enum)]
     action: Action,
-    #[arg(long, default_value_t = 4096)]
+    #[arg(long, default_value_t = 32768)]
     block_size: u64,
     #[arg(long)]
     schema_admin_password: Option<String>,
