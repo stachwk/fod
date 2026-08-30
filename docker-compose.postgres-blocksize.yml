@@ -16,6 +16,8 @@ services:
     command:
       - postgres
       - -c
+      - listen_addresses=*
+      - -c
       - wal_level=replica
       - -c
       - max_wal_senders=10
@@ -73,6 +75,7 @@ services:
       - "${REPLICA_READ_BIND_ADDRESS:-127.0.0.1}:${REPLICA_READ_REPLICA_PORT:-55442}:5432"
     volumes:
       - postgres_blocksize_replica_data:/var/lib/postgresql/data
+      - ./docker/replica-read/replica-entrypoint.sh:/usr/local/bin/fod-replica-entrypoint.sh:ro
     healthcheck:
       test:
         - CMD-SHELL
