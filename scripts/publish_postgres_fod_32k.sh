@@ -16,9 +16,31 @@ TAG_MAJOR="${FOD_CONTAINER_TAG_MAJOR:-1}"
 TAG_LATEST="${FOD_CONTAINER_TAG_LATEST:-0}"
 SOURCE="${FOD_CONTAINER_SOURCE:-https://github.com/stachwk/fod}"
 REVISION="$(git rev-parse HEAD)"
+MIN_EXTENSION_COUNT="${FOD_POSTGRES_MIN_EXTENSION_COUNT:-45}"
+REQUIRED_EXTENSIONS=(
+    pg_stat_statements
+    pgcrypto
+    hstore
+    citext
+    pg_trgm
+    amcheck
+    postgres_fdw
+    uuid-ossp
+    xml2
+    vector
+    pgaudit
+    pg_cron
+    pg_repack
+    hypopg
+    pg_stat_kcache
+    pg_hint_plan
+)
 
 case "${PUSH}:${TAG_MAJOR}:${TAG_LATEST}" in
     *[!01:]*) echo "FOD_CONTAINER_PUSH, FOD_CONTAINER_TAG_MAJOR and FOD_CONTAINER_TAG_LATEST must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${MIN_EXTENSION_COUNT}" in
+    ''|*[!0-9]*) echo "FOD_POSTGRES_MIN_EXTENSION_COUNT must be an integer" >&2; exit 2 ;;
 esac
 
 IMAGE_BASE="${REGISTRY}/${NAMESPACE}/${REPOSITORY}"
@@ -26,7 +48,7 @@ VERSION_TAG="${IMAGE_BASE}:${POSTGRES_VERSION}"
 MAJOR_TAG="${IMAGE_BASE}:16"
 LATEST_TAG="${IMAGE_BASE}:latest"
 
-for cmd in docker git awk grep tail tr; do
+for cmd in docker git awk grep tail tr wc sort; do
     command -v "${cmd}" >/dev/null 2>&1 || { echo "Missing required command: ${cmd}" >&2; exit 2; }
 done
 
@@ -61,6 +83,21 @@ if [[ "${actual_block_size}" != "32768" ]]; then
     exit 1
 fi
 
+extension_list="$(docker run --rm --entrypoint /bin/sh "${VERSION_TAG}" -ceu \
+    'cat /opt/postgresql-custom/share/fod/available-extensions.txt')"
+extension_count="$(printf '%s\n' "${extension_list}" | awk 'NF {n++} END {print n + 0}')"
+if (( extension_count < MIN_EXTENSION_COUNT )); then
+    echo "Extension bundle verification failed expected_at_least=${MIN_EXTENSION_COUNT} actual=${extension_count}" >&2
+    printf '%s\n' "${extension_list}" >&2
+    exit 1
+fi
+for extension in "${REQUIRED_EXTENSIONS[@]}"; do
+    if ! printf '%s\n' "${extension_list}" | grep -Fx "${extension}" >/dev/null; then
+        echo "Required extension missing from image: ${extension}" >&2
+        exit 1
+    fi
+done
+
 if [[ "${TAG_MAJOR}" == "1" ]]; then
     docker tag "${VERSION_TAG}" "${MAJOR_TAG}"
 fi
@@ -69,6 +106,8 @@ if [[ "${TAG_LATEST}" == "1" ]]; then
 fi
 
 printf 'verified_postgres_version=%s\nverified_block_size=%s\n' "${actual_version}" "${actual_block_size}"
+printf 'verified_extension_count=%s\n' "${extension_count}"
+printf 'verified_external_extensions=%s\n' 'vector,pgaudit,pg_cron,pg_repack,hypopg,pg_stat_kcache,pg_hint_plan'
 printf 'image=%s\n' "${VERSION_TAG}"
 [[ "${TAG_MAJOR}" == "1" ]] && printf 'alias=%s\n' "${MAJOR_TAG}"
 [[ "${TAG_LATEST}" == "1" ]] && printf 'alias=%s\n' "${LATEST_TAG}"
