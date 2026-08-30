@@ -21,11 +21,15 @@ grep -F 'POSTGRES_BLOCK_SIZE_KB=32' "${PUBLISH}" >/dev/null
 grep -F 'actual_block_size' "${PUBLISH}" >/dev/null
 grep -F '32768' "${PUBLISH}" >/dev/null
 grep -F 'FOD_POSTGRES_MIN_EXTENSION_COUNT:-45' "${PUBLISH}" >/dev/null
-grep -F 'FOD_POSTGRES_MIN_SYSTEM_LOCALE_COUNT:-12' "${PUBLISH}" >/dev/null
+grep -F 'FOD_POSTGRES_MIN_SYSTEM_LOCALE_COUNT:-100' "${PUBLISH}" >/dev/null
 grep -F 'verified_system_locale_count=' "${PUBLISH}" >/dev/null
 grep -F 'verified_icu_locales=' "${PUBLISH}" >/dev/null
+grep -F 'pl_PL' "${PUBLISH}" >/dev/null
 grep -F 'pl-PL' "${PUBLISH}" >/dev/null
+grep -F 'zh_CN' "${PUBLISH}" >/dev/null
 grep -F 'zh-CN' "${PUBLISH}" >/dev/null
+grep -F 'ar_SA' "${PUBLISH}" >/dev/null
+grep -F 'ar-SA' "${PUBLISH}" >/dev/null
 grep -F 'docker push "${VERSION_TAG}"' "${PUBLISH}" >/dev/null
 
 grep -F 'ARG POSTGRES_BASE_IMAGE=postgres:16.15-alpine' "${DOCKERFILE}" >/dev/null
@@ -37,12 +41,15 @@ grep -F 'musl-locales-lang' "${DOCKERFILE}" >/dev/null
 grep -F 'icu-data-full' "${DOCKERFILE}" >/dev/null
 grep -F 'MUSL_LOCPATH="/usr/share/i18n/locales/musl"' "${DOCKERFILE}" >/dev/null
 grep -F 'LANG="C.UTF-8"' "${DOCKERFILE}" >/dev/null
-grep -F 'en_US.UTF-8' "${DOCKERFILE}" >/dev/null
-grep -F 'de_DE.UTF-8' "${DOCKERFILE}" >/dev/null
-grep -F 'cs_CZ.UTF-8' "${DOCKERFILE}" >/dev/null
+grep -F 'C.UTF-8 en_US en_GB de_DE' "${DOCKERFILE}" >/dev/null
+grep -F 'pl_PL hu_HU uk_UA ja_JP ko_KR zh_CN ar_SA' "${DOCKERFILE}" >/dev/null
 grep -F -- '--locale-provider=icu --icu-locale=pl-PL' "${DOCKERFILE}" >/dev/null
 if grep -Fq 'ENV LC_ALL=' "${DOCKERFILE}"; then
     echo "LC_ALL must not be pinned because callers need to override LANG/LC_*" >&2
+    exit 1
+fi
+if grep -Eq 'en_US\.UTF-8|de_DE\.UTF-8|cs_CZ\.UTF-8|pl_PL\.UTF-8' "${DOCKERFILE}" "${PUBLISH}"; then
+    echo "musl locale names must be validated without a .UTF-8 suffix" >&2
     exit 1
 fi
 grep -F 'make -C contrib install' "${DOCKERFILE}" >/dev/null
