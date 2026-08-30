@@ -28,7 +28,7 @@ grep -F 'listen_addresses=*' "${COMPOSE}" >/dev/null
 grep -F './docker/replica-read/replica-entrypoint.sh:/usr/local/bin/fod-replica-entrypoint.sh:ro' "${COMPOSE}" >/dev/null
 grep -F 'postgres_blocksize_primary_data:' "${COMPOSE}" >/dev/null
 grep -F 'postgres_blocksize_replica_data:' "${COMPOSE}" >/dev/null
-grep -F "-c listen_addresses='*'" "${REPLICA_ENTRYPOINT}" >/dev/null
+grep -F -- "-c listen_addresses='*'" "${REPLICA_ENTRYPOINT}" >/dev/null
 
 grep -F 'FOD_PG_BLOCK_COMPARISON_SIZES_KB:-8 32' "${RUNNER}" >/dev/null
 grep -F 'FOD_PG_BLOCK_COMPARISON_REPEATS:-3' "${RUNNER}" >/dev/null
