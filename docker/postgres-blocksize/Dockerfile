@@ -182,6 +182,8 @@ COPY --from=builder /opt/postgresql-custom /opt/postgresql-custom
 
 ENV PATH="/opt/postgresql-custom/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/postgresql-custom/lib"
+ENV LANG="C.UTF-8"
+ENV LC_ALL="C.UTF-8"
 
 COPY docker/replica-read/primary-init.sh /docker-entrypoint-initdb.d/10-fod-replication.sh
 COPY docker/replica-read/replica-entrypoint.sh /usr/local/bin/fod-replica-entrypoint.sh
@@ -197,7 +199,8 @@ RUN apk add --no-cache \
         lz4-libs \
         zstd-libs \
         libuuid \
-    && locale -a | grep -F 'en_US.UTF-8' >/dev/null \
+    && locale -a | grep -F 'C.UTF-8' >/dev/null \
+    && test "$(locale charmap)" = "UTF-8" \
     && chmod 0755 \
         /docker-entrypoint-initdb.d/10-fod-replication.sh \
         /usr/local/bin/fod-replica-entrypoint.sh \
