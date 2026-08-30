@@ -182,14 +182,16 @@ COPY --from=builder /opt/postgresql-custom /opt/postgresql-custom
 
 ENV PATH="/opt/postgresql-custom/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/postgresql-custom/lib"
+ENV MUSL_LOCPATH="/usr/share/i18n/locales/musl"
 ENV LANG="C.UTF-8"
-ENV LC_ALL="C.UTF-8"
 
 COPY docker/replica-read/primary-init.sh /docker-entrypoint-initdb.d/10-fod-replication.sh
 COPY docker/replica-read/replica-entrypoint.sh /usr/local/bin/fod-replica-entrypoint.sh
 
 RUN apk add --no-cache \
         musl-locales \
+        musl-locales-lang \
+        icu-data-full \
         icu-libs \
         readline \
         zlib \
@@ -199,8 +201,17 @@ RUN apk add --no-cache \
         lz4-libs \
         zstd-libs \
         libuuid \
-    && locale -a | grep -F 'C.UTF-8' >/dev/null \
+    && locale -a | sort -u >/tmp/fod-locales.txt \
+    && cat /tmp/fod-locales.txt \
+    && test "$(awk 'NF {n++} END {print n + 0}' /tmp/fod-locales.txt)" -ge 12 \
+    && for loc in C.UTF-8 en_US.UTF-8 en_GB.UTF-8 de_DE.UTF-8 fr_FR.UTF-8 es_ES.UTF-8 it_IT.UTF-8 pt_BR.UTF-8 ru_RU.UTF-8 cs_CZ.UTF-8 nl_NL.UTF-8 sv_SE.UTF-8; do \
+        grep -Fx "${loc}" /tmp/fod-locales.txt >/dev/null; \
+    done \
     && test "$(locale charmap)" = "UTF-8" \
+    && icu_dir="$(mktemp -d)" \
+    && chown postgres:postgres "${icu_dir}" \
+    && su-exec postgres initdb --locale-provider=icu --icu-locale=pl-PL -D "${icu_dir}" >/dev/null \
+    && rm -rf "${icu_dir}" /tmp/fod-locales.txt \
     && chmod 0755 \
         /docker-entrypoint-initdb.d/10-fod-replication.sh \
         /usr/local/bin/fod-replica-entrypoint.sh \
@@ -217,7 +228,7 @@ RUN apk add --no-cache \
     done
 
 LABEL org.opencontainers.image.title="PostgreSQL for FOD with 32 KiB pages"
-LABEL org.opencontainers.image.description="PostgreSQL rebuilt for FOD with 32 KiB table pages, full PostgreSQL contrib and a curated external extension bundle"
+LABEL org.opencontainers.image.description="PostgreSQL rebuilt for FOD with 32 KiB table pages, full PostgreSQL contrib, multilingual locale/ICU data and a curated external extension bundle"
 LABEL org.opencontainers.image.source="${FOD_IMAGE_SOURCE}"
 LABEL org.opencontainers.image.revision="${FOD_IMAGE_REVISION}"
 LABEL org.opencontainers.image.version="${FOD_IMAGE_VERSION}"
