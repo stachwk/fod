@@ -21,6 +21,8 @@ RUN set -eux; \
         perl \
         bison \
         flex \
+        pkgconf \
+        icu-dev \
         wget \
         ca-certificates; \
     pg_version="$(postgres --version | awk '{print $3}')"; \
@@ -32,6 +34,7 @@ RUN set -eux; \
     ./configure \
         --prefix=/opt/postgresql-custom \
         --with-blocksize="${POSTGRES_BLOCK_SIZE_KB}" \
+        --with-icu \
         --without-readline \
         --without-zlib; \
     jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"; \
@@ -67,7 +70,8 @@ RUN chmod 0755 \
         /docker-entrypoint-initdb.d/10-fod-replication.sh \
         /usr/local/bin/fod-replica-entrypoint.sh \
     && postgres --version \
-    && pg_config --configure | grep -F -- "--with-blocksize=${POSTGRES_BLOCK_SIZE_KB}" >/dev/null
+    && pg_config --configure | grep -F -- "--with-blocksize=${POSTGRES_BLOCK_SIZE_KB}" >/dev/null \
+    && pg_config --configure | grep -F -- "--with-icu" >/dev/null
 
 LABEL org.opencontainers.image.title="PostgreSQL for FOD with 32 KiB pages"
 LABEL org.opencontainers.image.description="PostgreSQL rebuilt for FOD with configurable BLCKSZ; published FOD image uses 32 KiB table pages"
