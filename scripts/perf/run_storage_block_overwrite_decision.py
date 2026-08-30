@@ -9,12 +9,12 @@ Workloads:
   * 64 KiB random overwrite
   * 512 KiB sequential write
 
-The default file and measured I/O size are 256 MiB. That is large enough for
-four 64 MiB FOD flush windows while avoiding excessive temporary DB/WAL growth
-from 4 KiB random writes against 64 KiB storage blocks. Every successful cell
-is measured three times on a fresh Docker primary/replica database.
-Infrastructure failures are retried, but successful slow runs are retained: a
-real read-modify-write penalty must not be filtered out as a "stall".
+The default file and measured I/O size are 256 MiB. Every cell gets one
+successful warm-up run that is preserved in runs.tsv but excluded from the
+medians, followed by three measured successful runs. Before every attempt the
+host must pass a sync + Dirty/Writeback + fsync baseline gate. Infrastructure
+failures are retried, but successful slow measured runs are retained: a real
+read-modify-write penalty must not be filtered out as a stall.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ import socket
 import statistics
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,7 @@ RUN_FIELDS = (
     "insert_mean_ms", "insert_shared_blks_written", "insert_wal_bytes", "wal_bytes_delta",
     "wal_sync_time_delta_ms", "pg_io_wait_delta_ms", "wal_amplification",
     "copy_local_page_write_amplification", "insert_shared_page_write_amplification",
+    "pre_dirty_kb", "pre_writeback_kb", "pre_fsync_median_ms", "pre_fsync_max_ms",
     "run_quality", "profile_artifact_dir",
 )
 
@@ -105,6 +107,7 @@ def git_short() -> str:
 @dataclass(frozen=True)
 class Config:
     block_sizes: list[int]
+    warmup_runs: int
     target_runs: int
     max_attempts: int
     file_size: str
@@ -113,20 +116,32 @@ class Config:
     cargo_profile: str
     max_spread_pct: float
     max_4k_regression_pct: float
+    dirty_limit_kb: int
+    settle_timeout_seconds: int
+    settle_poll_seconds: float
+    cooldown_seconds: float
+    fsync_probe_count: int
+    fsync_median_limit_ms: float
+    fsync_max_limit_ms: float
     artifact_dir: Path
 
 
 def load_config() -> Config:
     runtime = os.environ.get("FOD_RUNTIME_PROFILE", "profiling")
+    warmup = env_int("FOD_STORAGE_DECISION_WARMUP_RUNS", 1, minimum=0)
     target = env_int("FOD_STORAGE_DECISION_RUNS", 3)
-    attempts = env_int("FOD_STORAGE_DECISION_MAX_ATTEMPTS", 5)
-    if attempts < target:
-        raise SystemExit("FOD_STORAGE_DECISION_MAX_ATTEMPTS must be >= FOD_STORAGE_DECISION_RUNS")
+    attempts = env_int("FOD_STORAGE_DECISION_MAX_ATTEMPTS", 8)
+    if attempts < warmup + target:
+        raise SystemExit(
+            "FOD_STORAGE_DECISION_MAX_ATTEMPTS must be >= "
+            "FOD_STORAGE_DECISION_WARMUP_RUNS + FOD_STORAGE_DECISION_RUNS"
+        )
     default_artifact = ROOT / "artifacts/perf" / git_short() / (
         f"{socket.gethostname().split('.')[0]}-storage-block-overwrite-decision-{utc_stamp()}"
     )
     return Config(
         block_sizes=parse_sizes(),
+        warmup_runs=warmup,
         target_runs=target,
         max_attempts=attempts,
         file_size=os.environ.get("FOD_STORAGE_DECISION_FILE_SIZE", "256M"),
@@ -135,6 +150,13 @@ def load_config() -> Config:
         cargo_profile=os.environ.get("FOD_CARGO_PROFILE", runtime),
         max_spread_pct=env_float("FOD_STORAGE_DECISION_MAX_SPREAD_PCT", 20.0),
         max_4k_regression_pct=env_float("FOD_STORAGE_DECISION_MAX_4K_REGRESSION_PCT", 10.0),
+        dirty_limit_kb=env_int("FOD_STORAGE_DECISION_HOST_DIRTY_LIMIT_KB", 8192),
+        settle_timeout_seconds=env_int("FOD_STORAGE_DECISION_HOST_SETTLE_TIMEOUT_SECONDS", 300),
+        settle_poll_seconds=env_float("FOD_STORAGE_DECISION_HOST_SETTLE_POLL_SECONDS", 2.0, minimum=0.1),
+        cooldown_seconds=env_float("FOD_STORAGE_DECISION_HOST_COOLDOWN_SECONDS", 20.0),
+        fsync_probe_count=env_int("FOD_STORAGE_DECISION_FSYNC_PROBE_COUNT", 8),
+        fsync_median_limit_ms=env_float("FOD_STORAGE_DECISION_FSYNC_MEDIAN_LIMIT_MS", 20.0),
+        fsync_max_limit_ms=env_float("FOD_STORAGE_DECISION_FSYNC_MAX_LIMIT_MS", 100.0),
         artifact_dir=Path(os.environ.get("FOD_STORAGE_DECISION_ARTIFACT_DIR", str(default_artifact))),
     )
 
@@ -164,6 +186,70 @@ def read_one(path: Path) -> dict[str, str]:
     if len(rows) != 1:
         raise RuntimeError(f"Expected one row in {path}, got {len(rows)}")
     return rows[0]
+
+
+def read_meminfo_kb() -> tuple[int, int]:
+    values: dict[str, int] = {}
+    with Path("/proc/meminfo").open("r", encoding="utf-8") as handle:
+        for line in handle:
+            fields = line.split()
+            if len(fields) >= 2 and fields[0] in {"Dirty:", "Writeback:"}:
+                values[fields[0][:-1]] = int(fields[1])
+    return values.get("Dirty", 0), values.get("Writeback", 0)
+
+
+def fsync_probe(path: Path, count: int) -> tuple[float, float]:
+    payload = os.urandom(4096)
+    samples: list[float] = []
+    fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    try:
+        for _ in range(count):
+            os.write(fd, payload)
+            started = time.perf_counter_ns()
+            os.fsync(fd)
+            samples.append((time.perf_counter_ns() - started) / 1_000_000.0)
+    finally:
+        os.close(fd)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    return statistics.median(samples), max(samples)
+
+
+def settle_host(config: Config, label: str) -> dict[str, float]:
+    print(f"Host settle start label={label}")
+    subprocess.run(["sync"], check=True)
+    started = time.monotonic()
+    probe_path = config.artifact_dir / ".overwrite-decision-fsync-probe"
+    while True:
+        dirty, writeback = read_meminfo_kb()
+        if dirty + writeback <= config.dirty_limit_kb:
+            time.sleep(config.cooldown_seconds)
+            dirty, writeback = read_meminfo_kb()
+            if dirty + writeback <= config.dirty_limit_kb:
+                median_ms, max_ms = fsync_probe(probe_path, config.fsync_probe_count)
+                if (
+                    median_ms <= config.fsync_median_limit_ms
+                    and max_ms <= config.fsync_max_limit_ms
+                ):
+                    print(
+                        "Host settle OK "
+                        f"dirty_kb={dirty} writeback_kb={writeback} "
+                        f"fsync_median_ms={median_ms:.3f} fsync_max_ms={max_ms:.3f}"
+                    )
+                    return {
+                        "dirty_kb": float(dirty),
+                        "writeback_kb": float(writeback),
+                        "fsync_median_ms": median_ms,
+                        "fsync_max_ms": max_ms,
+                    }
+        if time.monotonic() - started >= config.settle_timeout_seconds:
+            raise RuntimeError(
+                f"Host did not settle within {config.settle_timeout_seconds}s: "
+                f"label={label} dirty_kb={dirty} writeback_kb={writeback}"
+            )
+        time.sleep(config.settle_poll_seconds)
 
 
 def wal_metrics(path: Path) -> tuple[float, float]:
@@ -204,6 +290,34 @@ def mean(total: str, calls: str) -> float:
     return float(total) / count if count else 0.0
 
 
+def empty_row(
+    *, cycle: int, attempt: int, order: int, workload: str, block_size: int,
+    quality: str, profile_dir: Path, pre: dict[str, float] | None = None,
+) -> dict[str, object]:
+    row: dict[str, object] = {field: 0 for field in RUN_FIELDS}
+    row.update(
+        {
+            "cycle": cycle,
+            "attempt": attempt,
+            "order": order,
+            "workload": workload,
+            "storage_block_size": block_size,
+            "run_quality": quality,
+            "profile_artifact_dir": str(profile_dir),
+        }
+    )
+    if pre:
+        row.update(
+            {
+                "pre_dirty_kb": int(pre["dirty_kb"]),
+                "pre_writeback_kb": int(pre["writeback_kb"]),
+                "pre_fsync_median_ms": f"{pre['fsync_median_ms']:.3f}",
+                "pre_fsync_max_ms": f"{pre['fsync_max_ms']:.3f}",
+            }
+        )
+    return row
+
+
 def run_once(
     config: Config,
     *,
@@ -216,6 +330,24 @@ def run_once(
     run_dir = config.artifact_dir / f"cycle-{cycle}" / f"{workload}-block-{block_size}-attempt-{attempt}"
     profile_dir = run_dir / "postgres"
     run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        pre = settle_host(config, f"c{cycle}-o{order}-{workload}-b{block_size}-a{attempt}")
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+        print(
+            f"run_quality=infra_error workload={workload} block={block_size} "
+            f"attempt={attempt} preflight_error={error}",
+            file=sys.stderr,
+        )
+        return empty_row(
+            cycle=cycle,
+            attempt=attempt,
+            order=order,
+            workload=workload,
+            block_size=block_size,
+            quality="infra_error",
+            profile_dir=profile_dir,
+        )
+
     env = os.environ.copy()
     env.update(
         {
@@ -228,22 +360,23 @@ def run_once(
             "FOD_STORAGE_DECISION_PROFILE_DIR": str(profile_dir),
             "FOD_STORAGE_DECISION_RUN_DIR": str(run_dir),
             "FOD_STORAGE_DECISION_SKIP_BUILD": "1",
+            "FOD_STORAGE_DECISION_COOLDOWN_SECONDS": "0",
             "FOD_REQUIRE_AC_POWER": os.environ.get("FOD_REQUIRE_AC_POWER", "1"),
         }
     )
     print(f"\n--- cycle={cycle} order={order} workload={workload} block={block_size} attempt={attempt} ---")
     rc = stream(["bash", str(ONE)], env, run_dir / "run.log")
     if rc:
-        return {
-            **{field: 0 for field in RUN_FIELDS},
-            "cycle": cycle,
-            "attempt": attempt,
-            "order": order,
-            "workload": workload,
-            "storage_block_size": block_size,
-            "run_quality": "infra_error",
-            "profile_artifact_dir": str(profile_dir),
-        }
+        return empty_row(
+            cycle=cycle,
+            attempt=attempt,
+            order=order,
+            workload=workload,
+            block_size=block_size,
+            quality="infra_error",
+            profile_dir=profile_dir,
+            pre=pre,
+        )
 
     summary = read_one(run_dir / "summary.tsv")
     logical = size_bytes(summary["io_size"])
@@ -280,6 +413,10 @@ def run_once(
         "wal_amplification": f"{wal_bytes / logical:.4f}",
         "copy_local_page_write_amplification": f"{copy_page_bytes / logical:.4f}",
         "insert_shared_page_write_amplification": f"{insert_page_bytes / logical:.4f}",
+        "pre_dirty_kb": int(pre["dirty_kb"]),
+        "pre_writeback_kb": int(pre["writeback_kb"]),
+        "pre_fsync_median_ms": f"{pre['fsync_median_ms']:.3f}",
+        "pre_fsync_max_ms": f"{pre['fsync_max_ms']:.3f}",
         "run_quality": "clean",
         "profile_artifact_dir": str(profile_dir),
     }
@@ -299,8 +436,17 @@ def main() -> int:
     print("=== FOD 32K VS 64K OVERWRITE DECISION MATRIX ===")
     print(f"block_sizes={' '.join(map(str, config.block_sizes))}")
     print(f"workloads={' '.join(WORKLOADS)}")
-    print(f"target_runs={config.target_runs} max_attempts={config.max_attempts}")
+    print(
+        f"warmup_runs={config.warmup_runs} target_runs={config.target_runs} "
+        f"max_attempts={config.max_attempts}"
+    )
     print(f"file_size={config.file_size} io_size={config.io_size}")
+    print(
+        f"host_dirty_limit_kb={config.dirty_limit_kb} "
+        f"host_cooldown_s={config.cooldown_seconds} "
+        f"fsync_median_limit_ms={config.fsync_median_limit_ms} "
+        f"fsync_max_limit_ms={config.fsync_max_limit_ms}"
+    )
     print(f"artifact_dir={config.artifact_dir}")
 
     build_env = os.environ.copy()
@@ -319,18 +465,23 @@ def main() -> int:
 
     cells = [(workload, size) for workload in WORKLOADS for size in config.block_sizes]
     attempts = {cell: 0 for cell in cells}
+    warmup_counts = {cell: 0 for cell in cells}
     clean_counts = {cell: 0 for cell in cells}
     rows: list[dict[str, object]] = []
     cycle = 1
-    while any(
-        clean_counts[cell] < config.target_runs and attempts[cell] < config.max_attempts
-        for cell in cells
-    ):
+
+    def cell_pending(cell: tuple[str, int]) -> bool:
+        return (
+            warmup_counts[cell] < config.warmup_runs
+            or clean_counts[cell] < config.target_runs
+        ) and attempts[cell] < config.max_attempts
+
+    while any(cell_pending(cell) for cell in cells):
         rotation = (cycle - 1) % len(cells)
         ordered = cells[rotation:] + cells[:rotation]
         print(f"\n=== DECISION CYCLE {cycle} rotation={rotation} ===")
         for order, cell in enumerate(ordered, 1):
-            if clean_counts[cell] >= config.target_runs or attempts[cell] >= config.max_attempts:
+            if not cell_pending(cell):
                 continue
             workload, size = cell
             attempts[cell] += 1
@@ -342,12 +493,17 @@ def main() -> int:
                 workload=workload,
                 block_size=size,
             )
-            rows.append(row)
             if row["run_quality"] == "clean":
-                clean_counts[cell] += 1
+                if warmup_counts[cell] < config.warmup_runs:
+                    row["run_quality"] = "warmup"
+                    warmup_counts[cell] += 1
+                else:
+                    clean_counts[cell] += 1
+            rows.append(row)
             write_tsv(runs_path, RUN_FIELDS, rows)
             print(
                 f"progress workload={workload} block={size} "
+                f"warmup={warmup_counts[cell]}/{config.warmup_runs} "
                 f"clean={clean_counts[cell]}/{config.target_runs}"
             )
         cycle += 1
@@ -356,6 +512,7 @@ def main() -> int:
         "workload",
         "storage_block_size",
         "attempts",
+        "warmup_runs",
         "clean_runs",
         "infra_errors",
         "median_write_mib_s",
@@ -371,6 +528,8 @@ def main() -> int:
         "median_insert_shared_page_write_amplification",
         "median_wal_sync_time_delta_ms",
         "median_pg_io_wait_delta_ms",
+        "median_pre_fsync_ms",
+        "max_pre_fsync_ms",
         "status",
     ]
     medians: list[dict[str, object]] = []
@@ -381,13 +540,17 @@ def main() -> int:
             for row in rows
             if row["workload"] == workload and int(row["storage_block_size"]) == size
         ]
+        warmups = [row for row in all_cell if row["run_quality"] == "warmup"]
         clean = [row for row in all_cell if row["run_quality"] == "clean"]
+        infra = [row for row in all_cell if row["run_quality"] == "infra_error"]
         write = vals(clean, "write_mib_s")
         med = statistics.median(write) if write else 0.0
         lo, hi = (min(write), max(write)) if write else (0.0, 0.0)
         spread = ((hi - lo) * 100.0 / med) if med else 0.0
         status = "OK"
-        if len(clean) < config.target_runs:
+        if len(warmups) < config.warmup_runs:
+            status = "INSUFFICIENT_WARMUP"
+        elif len(clean) < config.target_runs:
             status = "INSUFFICIENT_RUNS"
         elif spread > config.max_spread_pct:
             status = "UNSTABLE"
@@ -398,8 +561,9 @@ def main() -> int:
                 "workload": workload,
                 "storage_block_size": size,
                 "attempts": len(all_cell),
+                "warmup_runs": len(warmups),
                 "clean_runs": len(clean),
-                "infra_errors": len(all_cell) - len(clean),
+                "infra_errors": len(infra),
                 "median_write_mib_s": f"{med:.3f}",
                 "min_write_mib_s": f"{lo:.3f}",
                 "max_write_mib_s": f"{hi:.3f}",
@@ -413,6 +577,8 @@ def main() -> int:
                 "median_insert_shared_page_write_amplification": f"{statistics.median(vals(clean, 'insert_shared_page_write_amplification')) if clean else 0:.4f}",
                 "median_wal_sync_time_delta_ms": f"{statistics.median(vals(clean, 'wal_sync_time_delta_ms')) if clean else 0:.3f}",
                 "median_pg_io_wait_delta_ms": f"{statistics.median(vals(clean, 'pg_io_wait_delta_ms')) if clean else 0:.3f}",
+                "median_pre_fsync_ms": f"{statistics.median(vals(clean, 'pre_fsync_median_ms')) if clean else 0:.3f}",
+                "max_pre_fsync_ms": f"{max(vals(clean, 'pre_fsync_max_ms')) if clean else 0:.3f}",
                 "status": status,
             }
         )
