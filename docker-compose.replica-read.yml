@@ -24,6 +24,8 @@ services:
       - track_io_timing=on
       - -c
       - track_wal_io_timing=on
+      - -c
+      - shared_preload_libraries=pg_stat_statements
     ports:
       - "${REPLICA_READ_BIND_ADDRESS:-127.0.0.1}:${REPLICA_READ_PRIMARY_PORT:-55441}:5432"
     volumes:
