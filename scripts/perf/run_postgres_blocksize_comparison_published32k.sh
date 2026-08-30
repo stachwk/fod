@@ -34,7 +34,7 @@ for cmd in docker awk tail tr grep mktemp; do
         exit 2
     }
 done
-[[ -x "${BASE_RUNNER}" ]] || { echo "Missing comparison runner: ${BASE_RUNNER}" >&2; exit 2; }
+[[ -r "${BASE_RUNNER}" ]] || { echo "Missing or unreadable comparison runner: ${BASE_RUNNER}" >&2; exit 2; }
 
 REAL_DOCKER="$(command -v docker)"
 
