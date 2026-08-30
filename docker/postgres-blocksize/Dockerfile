@@ -1,13 +1,11 @@
 # Copyright (c) 2026 Wojciech Stach
 # Licensed under BSL 1.1
 #
-# Benchmark-only PostgreSQL image. It rebuilds the same PostgreSQL major/version
-# shipped by the selected official base image with a configurable table-page
-# block size (BLCKSZ). The runtime remains based on the same official Alpine
-# image so the 8 KiB and 32 KiB variants differ primarily in the compile-time
-# block-size setting.
+# PostgreSQL image for FOD with a configurable compile-time table-page block
+# size (BLCKSZ). The default base is pinned for reproducible published images;
+# benchmark callers may override POSTGRES_BASE_IMAGE and POSTGRES_BLOCK_SIZE_KB.
 
-ARG POSTGRES_BASE_IMAGE=postgres:16-alpine
+ARG POSTGRES_BASE_IMAGE=postgres:16.15-alpine
 FROM ${POSTGRES_BASE_IMAGE} AS builder
 
 ARG POSTGRES_BLOCK_SIZE_KB=32
@@ -49,10 +47,13 @@ RUN set -eux; \
     echo "PostgreSQL compile-time block_size=${actual} expected=${expected}"; \
     test "${actual}" = "${expected}"
 
-ARG POSTGRES_BASE_IMAGE=postgres:16-alpine
+ARG POSTGRES_BASE_IMAGE=postgres:16.15-alpine
 FROM ${POSTGRES_BASE_IMAGE}
 
 ARG POSTGRES_BLOCK_SIZE_KB=32
+ARG FOD_IMAGE_SOURCE=https://github.com/stachwk/fod
+ARG FOD_IMAGE_REVISION=unknown
+ARG FOD_IMAGE_VERSION=16.15
 
 COPY --from=builder /opt/postgresql-custom /opt/postgresql-custom
 
@@ -68,5 +69,11 @@ RUN chmod 0755 \
     && postgres --version \
     && pg_config --configure | grep -F -- "--with-blocksize=${POSTGRES_BLOCK_SIZE_KB}" >/dev/null
 
+LABEL org.opencontainers.image.title="PostgreSQL for FOD with 32 KiB pages"
+LABEL org.opencontainers.image.description="PostgreSQL rebuilt for FOD with configurable BLCKSZ; published FOD image uses 32 KiB table pages"
+LABEL org.opencontainers.image.source="${FOD_IMAGE_SOURCE}"
+LABEL org.opencontainers.image.revision="${FOD_IMAGE_REVISION}"
+LABEL org.opencontainers.image.version="${FOD_IMAGE_VERSION}"
+LABEL org.opencontainers.image.licenses="BSL-1.1"
 LABEL org.fod.postgresql.block-size-kb="${POSTGRES_BLOCK_SIZE_KB}"
-LABEL org.fod.postgresql.purpose="FOD benchmark-only custom BLCKSZ experiment"
+LABEL org.fod.postgresql.purpose="FOD custom PostgreSQL BLCKSZ image"
