@@ -1,0 +1,92 @@
+services:
+  primary:
+    build:
+      context: .
+      dockerfile: docker/postgres-blocksize/Dockerfile
+      args:
+        POSTGRES_BASE_IMAGE: ${POSTGRES_BLOCKSIZE_BASE_IMAGE:-postgres:16-alpine}
+        POSTGRES_BLOCK_SIZE_KB: ${POSTGRES_BLOCK_SIZE_KB:-32}
+    image: "fod-postgres-blocksize:16-${POSTGRES_BLOCK_SIZE_KB:-32}k"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-foddbname}
+      POSTGRES_USER: ${POSTGRES_USER:-foduser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cichosza}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      FOD_EXPECTED_PG_BLOCK_SIZE_BYTES: ${FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768}
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - synchronous_commit=on
+      - -c
+      - track_io_timing=on
+      - -c
+      - track_wal_io_timing=on
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+    ports:
+      - "${REPLICA_READ_BIND_ADDRESS:-127.0.0.1}:${REPLICA_READ_PRIMARY_PORT:-55441}:5432"
+    volumes:
+      - postgres_blocksize_primary_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
+          test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
+          'SHOW block_size')" = "$$FOD_EXPECTED_PG_BLOCK_SIZE_BYTES"
+      interval: 1s
+      timeout: 5s
+      retries: 90
+      start_period: 3s
+
+  replica:
+    build:
+      context: .
+      dockerfile: docker/postgres-blocksize/Dockerfile
+      args:
+        POSTGRES_BASE_IMAGE: ${POSTGRES_BLOCKSIZE_BASE_IMAGE:-postgres:16-alpine}
+        POSTGRES_BLOCK_SIZE_KB: ${POSTGRES_BLOCK_SIZE_KB:-32}
+    image: "fod-postgres-blocksize:16-${POSTGRES_BLOCK_SIZE_KB:-32}k"
+    depends_on:
+      primary:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-foddbname}
+      POSTGRES_USER: ${POSTGRES_USER:-foduser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cichosza}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      FOD_REPLICATION_USER: fod_repl
+      FOD_REPLICATION_PASSWORD: fod_repl_pass
+      FOD_EXPECTED_PG_BLOCK_SIZE_BYTES: ${FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768}
+    entrypoint:
+      - /bin/sh
+      - /usr/local/bin/fod-replica-entrypoint.sh
+    ports:
+      - "${REPLICA_READ_BIND_ADDRESS:-127.0.0.1}:${REPLICA_READ_REPLICA_PORT:-55442}:5432"
+    volumes:
+      - postgres_blocksize_replica_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
+          test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
+          'SHOW block_size')" = "$$FOD_EXPECTED_PG_BLOCK_SIZE_BYTES" &&
+          test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
+          'SELECT pg_is_in_recovery()')" = "t"
+      interval: 1s
+      timeout: 5s
+      retries: 120
+      start_period: 3s
+
+volumes:
+  postgres_blocksize_primary_data:
+  postgres_blocksize_replica_data:
