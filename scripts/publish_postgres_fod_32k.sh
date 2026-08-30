@@ -17,7 +17,7 @@ TAG_LATEST="${FOD_CONTAINER_TAG_LATEST:-0}"
 SOURCE="${FOD_CONTAINER_SOURCE:-https://github.com/stachwk/fod}"
 REVISION="$(git rev-parse HEAD)"
 MIN_EXTENSION_COUNT="${FOD_POSTGRES_MIN_EXTENSION_COUNT:-45}"
-MIN_SYSTEM_LOCALE_COUNT="${FOD_POSTGRES_MIN_SYSTEM_LOCALE_COUNT:-12}"
+MIN_SYSTEM_LOCALE_COUNT="${FOD_POSTGRES_MIN_SYSTEM_LOCALE_COUNT:-100}"
 REQUIRED_EXTENSIONS=(
     pg_stat_statements
     pgcrypto
@@ -38,17 +38,24 @@ REQUIRED_EXTENSIONS=(
 )
 REQUIRED_SYSTEM_LOCALES=(
     C.UTF-8
-    en_US.UTF-8
-    en_GB.UTF-8
-    de_DE.UTF-8
-    fr_FR.UTF-8
-    es_ES.UTF-8
-    it_IT.UTF-8
-    pt_BR.UTF-8
-    ru_RU.UTF-8
-    cs_CZ.UTF-8
-    nl_NL.UTF-8
-    sv_SE.UTF-8
+    en_US
+    en_GB
+    de_DE
+    fr_FR
+    es_ES
+    it_IT
+    pt_BR
+    ru_RU
+    cs_CZ
+    nl_NL
+    sv_SE
+    pl_PL
+    hu_HU
+    uk_UA
+    ja_JP
+    ko_KR
+    zh_CN
+    ar_SA
 )
 REQUIRED_ICU_LOCALES=(
     pl-PL
@@ -66,6 +73,7 @@ REQUIRED_ICU_LOCALES=(
     zh-CN
     ko-KR
     tr-TR
+    ar-SA
 )
 
 case "${PUSH}:${TAG_MAJOR}:${TAG_LATEST}" in
