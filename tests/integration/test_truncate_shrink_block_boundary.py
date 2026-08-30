@@ -17,6 +17,31 @@ if str(ROOT) not in sys.path:
 from tests.integration.fod_mount import FODMount
 
 
+def assert_shrink_extend_zero_fill(
+    file_path: Path,
+    payload: bytes,
+    shrink_size: int,
+    extend_size: int,
+) -> None:
+    file_path.write_bytes(payload)
+
+    os.truncate(file_path, shrink_size)
+    assert file_path.stat().st_size == shrink_size
+    assert file_path.read_bytes() == payload[:shrink_size]
+
+    os.truncate(file_path, extend_size)
+    assert file_path.stat().st_size == extend_size
+
+    expected = payload[:shrink_size] + (b"\x00" * (extend_size - shrink_size))
+    actual = file_path.read_bytes()
+    assert len(actual) == extend_size, len(actual)
+    assert actual == expected, (
+        shrink_size,
+        extend_size,
+        actual[shrink_size : min(extend_size, shrink_size + 64)],
+    )
+
+
 def main() -> None:
     launcher = FODMount(str(ROOT))
     launcher.init_schema()
@@ -43,9 +68,32 @@ def main() -> None:
 
             data = file_path.read_bytes()
             assert len(data) == block_size * 2, len(data)
-            assert data == expected, data[block_size:block_size + 64]
+            assert data == expected, data[block_size : block_size + 64]
+
+            cross_block_path = dir_path / "off-boundary-cross-block.bin"
+            cross_block_payload = (
+                (b"C" * block_size)
+                + (b"D" * block_size)
+                + (b"E" * block_size)
+            )
+            assert_shrink_extend_zero_fill(
+                cross_block_path,
+                cross_block_payload,
+                block_size + 333,
+                block_size * 2 + 123,
+            )
+
+            same_block_path = dir_path / "off-boundary-same-block.bin"
+            same_block_payload = b"F" * block_size
+            assert_shrink_extend_zero_fill(
+                same_block_path,
+                same_block_payload,
+                333,
+                777,
+            )
 
             print("OK truncate shrink block boundary")
+            print("OK truncate off-boundary extend zero fill")
         finally:
             launcher.stop()
 
