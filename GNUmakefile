@@ -128,3 +128,10 @@ test-db-restore-local: test-fuse-test-cleanup
 # assert/clean again after all regular test-all prerequisites complete.
 test-all: test-fuse-test-cleanup test-fuse-test-cleanup-policy
 	@bash scripts/fod-test-fuse-cleanup.sh clean
+
+# test-all-full adds more FUSE-backed tests after test-all, so verify cleanup
+# once more at the end of the extended gate.
+test-all-full:
+	@bash scripts/fod-test-fuse-cleanup.sh clean
+
+include packaging/fod-packaging.mk
