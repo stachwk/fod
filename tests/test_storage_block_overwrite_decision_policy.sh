@@ -27,6 +27,8 @@ grep -Fq 'wait_for_replay_lsn "${MEASURED_LSN}"' "${ONE}"
 
 grep -Fq 'FOD_STORAGE_DECISION_BLOCK_SIZES", "32768 65536"' "${RUNNER}"
 grep -Fq 'FOD_STORAGE_DECISION_RUNS", 3' "${RUNNER}"
+grep -Fq 'FOD_STORAGE_DECISION_FILE_SIZE", "256M"' "${RUNNER}"
+grep -Fq 'FOD_STORAGE_DECISION_IO_SIZE", "256M"' "${RUNNER}"
 grep -Fq 'randwrite-4k' "${RUNNER}"
 grep -Fq 'randwrite-16k' "${RUNNER}"
 grep -Fq 'randwrite-64k' "${RUNNER}"
