@@ -13,6 +13,9 @@ grep -Fq 'STORAGE_BLOCK_SIZES="${FOD_STORAGE_BLOCK_SIZES:-4096 16384 65536}"' "$
 grep -Fq 'FILE_SIZE="${FOD_STORAGE_BLOCK_FILE_SIZE:-1G}"' "${SCRIPT}"
 grep -Fq 'FIO_BLOCK_SIZE="${FOD_STORAGE_BLOCK_FIO_BLOCK_SIZE:-512k}"' "${SCRIPT}"
 grep -Fq 'PAYLOAD_MODE="${FOD_STORAGE_BLOCK_PAYLOAD_MODE:-random}"' "${SCRIPT}"
+grep -Fq 'SKIP_BUILD="${FOD_STORAGE_BLOCK_SKIP_BUILD:-0}"' "${SCRIPT}"
+grep -Fq 'if [[ "${SKIP_BUILD}" == "0" ]]; then' "${SCRIPT}"
+grep -Fq 'Runtime build skipped; caller is responsible for prebuilding artifacts.' "${SCRIPT}"
 
 grep -Fq 'exec "${REAL}" "$@" --block-size "${BLOCK_SIZE}"' "${SCRIPT}"
 grep -Fq 'FOD_MKFS_BIN="${MKFS_WRAPPER}"' "${SCRIPT}"
