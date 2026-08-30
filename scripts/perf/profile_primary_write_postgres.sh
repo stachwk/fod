@@ -95,6 +95,7 @@ echo "primary_write_pid=$PID"
 : > "$OUT/io.tsv"
 : > "$OUT/statements.tsv"
 : > "$OUT/relations.tsv"
+RELATIONS_CAPTURED=0
 
 sample_activity() {
     "${PG[@]}" -At -F $'\t' -c "
@@ -114,6 +115,36 @@ WHERE datname = current_database()
   AND backend_type = 'client backend'
 ORDER BY pid;
 " >> "$OUT/activity.tsv" 2>>"$ERROR_LOG"
+}
+
+capture_relation_persistence() {
+    [ "$RELATIONS_CAPTURED" = "1" ] && return 0
+
+    local snapshot="$OUT/relations-current.tsv"
+    if ! "${PG[@]}" -At -F $'\t' -c "
+SELECT
+    clock_timestamp(),
+    c.relname,
+    c.relpersistence,
+    CASE c.relpersistence
+        WHEN 'p' THEN 'permanent'
+        WHEN 'u' THEN 'unlogged'
+        WHEN 't' THEN 'temporary'
+        ELSE c.relpersistence::text
+    END,
+    n.nspname
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relname IN ('fod_persist_block_stage', 'data_blocks')
+ORDER BY c.relname, n.nspname;
+" > "$snapshot" 2>>"$ERROR_LOG"; then
+        return 0
+    fi
+
+    if awk -F '\t' '$2 == "fod_persist_block_stage" {found=1} END {exit found ? 0 : 1}' "$snapshot"; then
+        cat "$snapshot" > "$OUT/relations.tsv"
+        RELATIONS_CAPTURED=1
+    fi
 }
 
 sample_wal_io() {
@@ -208,23 +239,7 @@ GROUP BY statement_kind
 ORDER BY statement_kind;
 " >> "$OUT/statements.tsv" 2>>"$ERROR_LOG"
 
-    "${PG[@]}" -At -F $'\t' -c "
-SELECT
-    clock_timestamp(),
-    c.relname,
-    c.relpersistence,
-    CASE c.relpersistence
-        WHEN 'p' THEN 'permanent'
-        WHEN 'u' THEN 'unlogged'
-        WHEN 't' THEN 'temporary'
-        ELSE c.relpersistence::text
-    END,
-    n.nspname
-FROM pg_class c
-JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE c.relname IN ('fod_persist_block_stage', 'data_blocks')
-ORDER BY c.relname, n.nspname;
-" >> "$OUT/relations.tsv" 2>>"$ERROR_LOG"
+    capture_relation_persistence
 }
 
 iteration=0
@@ -265,7 +280,7 @@ SUMMARY="$OUT/summary.txt"
     echo '=== RELATION PERSISTENCE OBSERVED ==='
     printf 'timestamp\trelname\trelpersistence\tpersistence_kind\tnamespace\n'
     if [ -s "$OUT/relations.tsv" ]; then
-        awk -F '\t' '!seen[$2 FS $3 FS $4 FS $5]++ {print}' "$OUT/relations.tsv"
+        cat "$OUT/relations.tsv"
     else
         echo 'no target relations observed'
     fi
