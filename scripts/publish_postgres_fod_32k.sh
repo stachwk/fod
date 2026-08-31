@@ -8,9 +8,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
 POSTGRES_VERSION="${FOD_POSTGRES_IMAGE_VERSION:-16.15}"
+BLOCK_SIZE_KB="${FOD_POSTGRES_BLOCK_SIZE_KB:-32}"
 REGISTRY="${FOD_CONTAINER_REGISTRY:-ghcr.io}"
 NAMESPACE="${FOD_CONTAINER_NAMESPACE:-stachwk}"
-REPOSITORY="${FOD_CONTAINER_REPOSITORY:-postgres-16-fod-32k}"
+REPOSITORY="${FOD_CONTAINER_REPOSITORY:-postgres-16-fod-${BLOCK_SIZE_KB}k}"
 PUSH="${FOD_CONTAINER_PUSH:-0}"
 TAG_MAJOR="${FOD_CONTAINER_TAG_MAJOR:-1}"
 TAG_LATEST="${FOD_CONTAINER_TAG_LATEST:-0}"
@@ -76,6 +77,10 @@ REQUIRED_ICU_LOCALES=(
     ar-SA
 )
 
+case "${BLOCK_SIZE_KB}" in
+    8|32) ;;
+    *) echo "FOD_POSTGRES_BLOCK_SIZE_KB must be 8 or 32" >&2; exit 2 ;;
+esac
 case "${PUSH}:${TAG_MAJOR}:${TAG_LATEST}" in
     *[!01:]*) echo "FOD_CONTAINER_PUSH, FOD_CONTAINER_TAG_MAJOR and FOD_CONTAINER_TAG_LATEST must be 0 or 1" >&2; exit 2 ;;
 esac
@@ -83,6 +88,7 @@ case "${MIN_EXTENSION_COUNT}:${MIN_SYSTEM_LOCALE_COUNT}" in
     *[!0-9:]*) echo "FOD_POSTGRES_MIN_EXTENSION_COUNT and FOD_POSTGRES_MIN_SYSTEM_LOCALE_COUNT must be integers" >&2; exit 2 ;;
 esac
 
+EXPECTED_BLOCK_SIZE="$((BLOCK_SIZE_KB * 1024))"
 IMAGE_BASE="${REGISTRY}/${NAMESPACE}/${REPOSITORY}"
 VERSION_TAG="${IMAGE_BASE}:${POSTGRES_VERSION}"
 MAJOR_TAG="${IMAGE_BASE}:16"
@@ -92,14 +98,14 @@ for cmd in docker git awk grep tail tr wc sort paste; do
     command -v "${cmd}" >/dev/null 2>&1 || { echo "Missing required command: ${cmd}" >&2; exit 2; }
 done
 
-printf '=== BUILD FOD POSTGRESQL 32K IMAGE ===\n'
-printf 'postgres_version=%s\nregistry=%s\nrepository=%s\nrevision=%s\npush=%s\n' \
-    "${POSTGRES_VERSION}" "${REGISTRY}" "${IMAGE_BASE}" "${REVISION}" "${PUSH}"
+printf '=== BUILD FOD POSTGRESQL %sK IMAGE ===\n' "${BLOCK_SIZE_KB}"
+printf 'postgres_version=%s\nblock_size_kb=%s\nregistry=%s\nrepository=%s\nrevision=%s\npush=%s\n' \
+    "${POSTGRES_VERSION}" "${BLOCK_SIZE_KB}" "${REGISTRY}" "${IMAGE_BASE}" "${REVISION}" "${PUSH}"
 
 docker build \
     -f docker/postgres-blocksize/Dockerfile \
     --build-arg "POSTGRES_BASE_IMAGE=postgres:${POSTGRES_VERSION}-alpine" \
-    --build-arg POSTGRES_BLOCK_SIZE_KB=32 \
+    --build-arg "POSTGRES_BLOCK_SIZE_KB=${BLOCK_SIZE_KB}" \
     --build-arg "FOD_IMAGE_SOURCE=${SOURCE}" \
     --build-arg "FOD_IMAGE_REVISION=${REVISION}" \
     --build-arg "FOD_IMAGE_VERSION=${POSTGRES_VERSION}" \
@@ -115,11 +121,11 @@ fi
 actual_block_size="$(docker run --rm --entrypoint /bin/sh "${VERSION_TAG}" -ceu '
     dir="$(mktemp -d)"
     chown postgres:postgres "${dir}"
-    su-exec postgres initdb --no-sync -D "${dir}" >/dev/null
+    su-exec postgres initdb --no-sync --auth-local=trust --auth-host=trust -D "${dir}" >/dev/null
     su-exec postgres postgres -D "${dir}" -C block_size
 ' | tail -n 1 | tr -d '[:space:]')"
-if [[ "${actual_block_size}" != "32768" ]]; then
-    echo "PostgreSQL block_size verification failed expected=32768 actual=${actual_block_size}" >&2
+if [[ "${actual_block_size}" != "${EXPECTED_BLOCK_SIZE}" ]]; then
+    echo "PostgreSQL block_size verification failed expected=${EXPECTED_BLOCK_SIZE} actual=${actual_block_size}" >&2
     exit 1
 fi
 
@@ -159,7 +165,7 @@ docker run --rm --entrypoint /bin/sh "${VERSION_TAG}" -ceu '
     for locale_name in $1; do
         dir="$(mktemp -d)"
         chown postgres:postgres "${dir}"
-        su-exec postgres initdb --no-sync --locale-provider=icu --icu-locale="${locale_name}" -D "${dir}" >/dev/null
+        su-exec postgres initdb --no-sync --auth-local=trust --auth-host=trust --locale-provider=icu --icu-locale="${locale_name}" -D "${dir}" >/dev/null
         rm -rf "${dir}"
     done
     IFS="$old_ifs"
