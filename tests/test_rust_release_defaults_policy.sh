@@ -11,6 +11,10 @@ public_make() {
   env -u FOD_INTERNAL_MAKE make --no-print-directory "$@"
 }
 
+internal_make() {
+  env -u FOD_INTERNAL_MAKE make -f make/fod-internal-entry.mk --no-print-directory "$@"
+}
+
 grep -Eq '^channel[[:space:]]*=[[:space:]]*"1\.98\.0"' "${repo_root}/rust-toolchain.toml"
 grep -Eq '^profile[[:space:]]*=[[:space:]]*"minimal"' "${repo_root}/rust-toolchain.toml"
 grep -Fq '"clippy"' "${repo_root}/rust-toolchain.toml"
@@ -93,7 +97,7 @@ fi
 
 build_plan="$(
   cd "${repo_root}"
-  public_make -nB build-fod-runtime FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto
+  internal_make -nB build-runtime FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto
 )"
 
 grep -Eq 'cargo build .*--profile release-lto .*--bins' <<<"${build_plan}"
@@ -117,7 +121,7 @@ grep -Fq 'FOD_RUNTIME_BUILD_STAMP=target/.fod-runtime-dev-build.stamp' <<<"${dev
 
 dev_build_plan="$(
   cd "${repo_root}"
-  public_make -nB build-fod-runtime FOD_RUNTIME_PROFILE=dev
+  internal_make -nB build-runtime FOD_RUNTIME_PROFILE=dev
 )"
 
 grep -Eq 'cargo build .*--profile dev .*--bins' <<<"${dev_build_plan}"
@@ -131,7 +135,7 @@ fi
 
 runtime_bin_plan="$(
   cd "${repo_root}"
-  public_make -n fod-mount FOD_RUNTIME_PROFILE=dev
+  internal_make -n mount FOD_RUNTIME_PROFILE=dev
 )"
 grep -Fq 'target/debug/fod-bootstrap' <<<"${runtime_bin_plan}"
 if grep -Fq 'target/dev/fod-bootstrap' <<<"${runtime_bin_plan}"; then
