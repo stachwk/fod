@@ -20,7 +20,9 @@ for pattern in \
     'ARG POSTGRES_CLIENT_MAJOR=16' \
     'libpq-dev' \
     'libfuse3-dev' \
-    'FOD_PACKAGE_ROOT=/tmp/fod-packages' \
+    'package_root=/src/fod/target/packages-docker' \
+    'FOD_PACKAGE_ROOT="${package_root}"' \
+    'find "${package_root}/deb"' \
     'package-ubuntu' \
     'COPY --from=builder /tmp/fod-client.deb /tmp/fod-client.deb' \
     'postgresql-client-${POSTGRES_CLIENT_MAJOR}' \
@@ -34,6 +36,11 @@ for pattern in \
     'org.fod.postgresql.client-major="${POSTGRES_CLIENT_MAJOR}"'; do
     grep -Fq -- "${pattern}" "${DOCKERFILE}" || { echo "Missing FOD client Docker policy: ${pattern}" >&2; exit 1; }
 done
+
+if grep -Fq 'FOD_PACKAGE_ROOT=/tmp/' "${DOCKERFILE}"; then
+    echo 'FOD client package root must remain below the repository target directory' >&2
+    exit 1
+fi
 
 for command in postgres initdb pg_ctl; do
     grep -Fq "command -v ${command}" "${DOCKERFILE}" || { echo "Missing negative server-command check: ${command}" >&2; exit 1; }
@@ -85,4 +92,4 @@ if grep -Eq 'docker[[:space:]]+(system[[:space:]]+)?prune|docker[[:space:]]+volu
     exit 1
 fi
 
-echo 'OK: FOD client container has PostgreSQL client tools and no PostgreSQL server'
+echo 'OK: FOD client container has PostgreSQL client tools, target-scoped package root and no PostgreSQL server'
