@@ -87,10 +87,27 @@ grep -Fq 'readlink -f -- "${MOUNT_DIR}"' "${SCRIPT}"
 grep -Fq '.fod-mkdir.err' "${SCRIPT}"
 grep -Fq 'cannot prepare FOD mount directory' "${SCRIPT}"
 
+# A failed run may leave several FUSE layers stacked over the valid shared
+# host bind. Enumerate every layer, remove only top fuse* layers in a loop, and
+# retain the underlying ext4/xfs bind. Root-owned FUSE gets an explicit sudo
+# path instead of falling through to mkdir.
+grep -Fq 'mount_fstypes()' "${SCRIPT}"
+grep -Fq 'fuse_mount_count()' "${SCRIPT}"
+grep -Fq 'top_mount_fstype()' "${SCRIPT}"
+grep -Fq 'cleanup_stale_fuse_mounts()' "${SCRIPT}"
+grep -Fq 'Detected stale FUSE mount layers=' "${SCRIPT}"
+grep -Fq 'Unmounting stale FUSE layer' "${SCRIPT}"
+grep -Fq 'fusermount3 -u "${MOUNT_DIR}"' "${SCRIPT}"
+grep -Fq '"${sudo_cmd[@]}" umount "${MOUNT_DIR}"' "${SCRIPT}"
+grep -Fq 'unexpected top mount fstype=' "${SCRIPT}"
+grep -Fq 'underlying mount retained' "${SCRIPT}"
+grep -Fq 'cleanup-stale-mounts)' "${SCRIPT}"
+grep -Fq 'cleanup_stale_fuse_mounts 1' "${SCRIPT}"
+
 # Startup must never hang indefinitely in compose up. The guard bypasses
 # already-validated dependencies, refreshes the mutable series image tag,
-# applies an AppArmor override when appropriate, and emits diagnostics on
-# timeout/failure.
+# delegates stale mount reconciliation to the shared cleanup implementation,
+# applies an AppArmor override when appropriate, and emits diagnostics.
 grep -Fq 'FOD_DOCKER_DEPLOY_FOD_START_TIMEOUT_SECONDS' "${GUARD}"
 grep -Fq 'FOD_DOCKER_DEPLOY_FOD_HEALTH_TIMEOUT_SECONDS' "${GUARD}"
 grep -Fq 'docker pull "${CLIENT_IMAGE}"' "${GUARD}"
@@ -100,16 +117,11 @@ grep -Fq 'apparmor=unconfined' "${GUARD}"
 grep -Fq 'FOD CONTAINER START DIAGNOSTICS' "${GUARD}"
 grep -Fq 'docker inspect' "${GUARD}"
 grep -Fq 'findmnt -T' "${GUARD}"
-
-# A failed previous FOD start may leave an orphan container and/or propagated
-# FUSE mount. Reconcile those before render. Never remove a normal shared bind
-# mount; only stale fuse* mounts are candidates for unmount.
 grep -Fq 'COMPOSE_IGNORE_ORPHANS=true' "${GUARD}"
 grep -Fq 'reconcile_stale_fod()' "${GUARD}"
 grep -Fq 'Removing stale FOD container' "${GUARD}"
 grep -Fq 'docker rm -f "${CONTAINER_NAME}"' "${GUARD}"
-grep -Fq 'Removing stale propagated FUSE mount' "${GUARD}"
-grep -Fq 'fusermount3 -u "${MOUNT_DIR}"' "${GUARD}"
+grep -Fq 'fod_action cleanup-stale-mounts' "${GUARD}"
 
 if MASTERS=2 SLAVES=1 FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR="${mount_dir}" bash "${SCRIPT}" plan >/dev/null 2>&1; then
   echo 'FOD Docker install must reject MASTERS>1 together with the database deployment.' >&2
