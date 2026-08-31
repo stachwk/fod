@@ -38,7 +38,7 @@ if grep -Eq '^FROM[[:space:]]+.*postgres' "${DOCKERFILE}"; then
     echo 'FOD client runtime/build stages must not use a PostgreSQL server image' >&2
     exit 1
 fi
-if grep -Eq 'apt-get[[:space:]]+install[^\n]*postgresql([[:space:]-]|$)' "${DOCKERFILE}"; then
+if grep -Eq '^[[:space:]]+(postgresql|postgresql-client|postgresql-common|postgresql-[0-9]+)([[:space:]\\]|$)' "${DOCKERFILE}"; then
     echo 'FOD client image must not install PostgreSQL server/client packages' >&2
     exit 1
 fi
