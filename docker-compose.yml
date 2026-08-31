@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-ghcr.io/stachwk/postgres-16-fod-32k:16}
     container_name: ${CONTAINER_POSTGRES_NAME:-fod-postgres}
     entrypoint:
       - /bin/sh
@@ -23,13 +23,19 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-foddbname}
       POSTGRES_USER: ${POSTGRES_USER:-foduser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cichosza}
+      POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"
       PGDATA: /var/lib/postgresql/data/pgdata
+      FOD_EXPECTED_PG_BLOCK_SIZE_BYTES: ${FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - fod_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
+          test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc 'SHOW block_size')" = "$$FOD_EXPECTED_PG_BLOCK_SIZE_BYTES"
       interval: 2s
       timeout: 5s
       retries: 30
