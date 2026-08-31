@@ -3,11 +3,14 @@
 # Licensed under BSL 1.1
 #
 # Isolate PostgreSQL BLCKSZ effects from host SSD sustained-write variability.
-# Primary and replica PGDATA are tmpfs-backed. Measured artifacts are collected
-# in /dev/shm and copied to the repository only after all measured runs finish.
-# This is NOT a durability/storage benchmark; fsync on tmpfs is not representative
-# of persistent media. It is intended only to compare PostgreSQL 8K vs 32K CPU,
-# executor/page-layout, WAL volume and FOD throughput without the SSD bottleneck.
+# Primary and replica PGDATA live in host /dev/shm directories bind-mounted into
+# the containers. This keeps them RAM-backed while preserving PGDATA across the
+# container restarts required by the primary/replica benchmark.
+# Measured artifacts are collected in /dev/shm and copied to the repository only
+# after all measured runs finish. This is NOT a durability/storage benchmark;
+# fsync on tmpfs is not representative of persistent media. It is intended only
+# to compare PostgreSQL 8K vs 32K CPU, executor/page-layout, WAL volume and FOD
+# throughput without the SSD bottleneck.
 
 set -euo pipefail
 
@@ -16,6 +19,7 @@ cd "${ROOT}"
 
 COMPOSE="${ROOT}/docker-compose.postgres-blocksize-tmpfs.yml"
 MATRIX="${ROOT}/scripts/perf/run_random_storage_block_matrix.sh"
+PREFLIGHT="${ROOT}/scripts/perf/check_postgres_blocksize_tmpfs_runtime.sh"
 PUBLISHED_32K="${FOD_PG32_IMAGE:-ghcr.io/stachwk/postgres-16-fod-32k:16.15}"
 REPEATS="${FOD_PG_BLOCK_TMPFS_REPEATS:-3}"
 FILE_SIZE="${FOD_PG_BLOCK_TMPFS_FILE_SIZE:-512M}"
@@ -33,14 +37,16 @@ MEDIANS="${RAM_ROOT}/median.tsv"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fod-pg-tmpfs.XXXXXX")"
 NO_BUILD_COMPOSE="${TMP_DIR}/docker-compose-no-build"
 
-for cmd in bash docker make git awk sort sync sleep cp mkdir mktemp; do
+for cmd in bash docker make git awk sort sync sleep cp mkdir mktemp rm; do
     command -v "${cmd}" >/dev/null 2>&1 || { echo "Missing required command: ${cmd}" >&2; exit 2; }
 done
 [[ -r "${COMPOSE}" ]] || { echo "Missing tmpfs compose: ${COMPOSE}" >&2; exit 2; }
 [[ -r "${MATRIX}" ]] || { echo "Missing matrix runner: ${MATRIX}" >&2; exit 2; }
+[[ -r "${PREFLIGHT}" ]] || { echo "Missing tmpfs runtime preflight: ${PREFLIGHT}" >&2; exit 2; }
 [[ -d /dev/shm && -w /dev/shm ]] || { echo "/dev/shm must be writable" >&2; exit 2; }
 case "${REPEATS}" in ''|*[!0-9]*) echo "FOD_PG_BLOCK_TMPFS_REPEATS must be a positive integer" >&2; exit 2;; esac
 (( REPEATS >= 1 )) || { echo "FOD_PG_BLOCK_TMPFS_REPEATS must be >= 1" >&2; exit 2; }
+case "${RAM_ROOT}" in /dev/shm/*) ;; *) echo "FOD_PG_BLOCK_TMPFS_RAM_ROOT must be under /dev/shm: ${RAM_ROOT}" >&2; exit 2;; esac
 
 cleanup() {
     local rc=$?
@@ -103,8 +109,14 @@ if [[ "${FOD_PG32_PULL_IMAGE:-1}" == "1" ]]; then
     docker pull "${PUBLISHED_32K}"
 fi
 docker tag "${PUBLISHED_32K}" fod-postgres-blocksize:16-32k
+build_primary_dir="${RAM_ROOT}/compose-build-primary"
+build_replica_dir="${RAM_ROOT}/compose-build-replica"
+mkdir -p "${build_primary_dir}" "${build_replica_dir}"
+FOD_PG_BLOCK_TMPFS_PRIMARY_DIR="${build_primary_dir}" \
+FOD_PG_BLOCK_TMPFS_REPLICA_DIR="${build_replica_dir}" \
 POSTGRES_BLOCK_SIZE_KB=8 FOD_EXPECTED_PG_BLOCK_SIZE_BYTES=8192 \
     docker compose -f "${COMPOSE}" build primary
+rm -rf "${build_primary_dir}" "${build_replica_dir}"
 
 for pg in 8 32; do
     image="fod-postgres-blocksize:16-${pg}k"
@@ -118,6 +130,10 @@ for pg in 8 32; do
     echo "verified_pg${pg}k_block_size=${actual}"
 done
 
+# Validate the exact property the benchmark requires: RAM-backed PGDATA must
+# survive docker restart within a measured run.
+bash "${PREFLIGHT}"
+
 for ((repeat=1; repeat<=REPEATS; repeat++)); do
     if (( repeat % 2 == 1 )); then order_list=(8 32); else order_list=(32 8); fi
     echo "=== REPEAT ${repeat}/${REPEATS} order=${order_list[*]} ==="
@@ -126,13 +142,18 @@ for ((repeat=1; repeat<=REPEATS; repeat++)); do
         order=$((order + 1))
         expected=$((pg * 1024))
         run_dir="${RAM_ROOT}/repeat-${repeat}/pg-${pg}k"
-        mkdir -p "${run_dir}"
+        primary_dir="${run_dir}/.pgdata-primary"
+        replica_dir="${run_dir}/.pgdata-replica"
+        rm -rf "${primary_dir}" "${replica_dir}"
+        mkdir -p "${run_dir}" "${primary_dir}" "${replica_dir}"
         sync
         sleep "${FOD_PG_BLOCK_TMPFS_IDLE_SECONDS:-5}"
         echo "--- repeat=${repeat} order=${order} pg=${pg}KiB ---"
 
         POSTGRES_BLOCK_SIZE_KB="${pg}" \
         FOD_EXPECTED_PG_BLOCK_SIZE_BYTES="${expected}" \
+        FOD_PG_BLOCK_TMPFS_PRIMARY_DIR="${primary_dir}" \
+        FOD_PG_BLOCK_TMPFS_REPLICA_DIR="${replica_dir}" \
         REPLICA_READ_COMPOSE_FILE="docker-compose.postgres-blocksize-tmpfs.yml" \
         FOD_REPLICA_READ_COMPOSE="${NO_BUILD_COMPOSE}" \
         FOD_CARGO_PROFILE="${CARGO_PROFILE}" \
@@ -158,6 +179,11 @@ for ((repeat=1; repeat<=REPEATS; repeat++)); do
         wal_sync="$(wal_delta "${wal_file}" 9 float)"
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "${repeat}" "${order}" "${pg}" "${write}" "${pread}" "${rread}" "${copy_mean}" "${insert_mean}" "${insert_wal}" "${wal_bytes}" "${wal_sync}" "${profile_dir}" >>"${RUNS}"
+
+        # The integration test has already stopped the Compose project here.
+        # Remove only the measured run's RAM-backed PGDATA so it is neither
+        # reused by another variant nor copied into the final disk artifact.
+        rm -rf "${primary_dir}" "${replica_dir}"
     done
 done
 
