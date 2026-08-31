@@ -55,7 +55,10 @@ for pattern in \
     'FOD_PG_BLOCK_TMPFS_REPLICA_DIR="${REPLICA_DIR}"' \
     'POSTGRES_BLOCK_SIZE_KB=8' \
     'FOD_EXPECTED_PG_BLOCK_SIZE_BYTES=8192' \
+    'postgres_uid=$(id -u postgres)' \
     'pgdata_owner=%u:%g' \
+    'test "$(stat -c %u "$PGDATA")" = "$(id -u postgres)"' \
+    'test "$(stat -c %a "$PGDATA")" = "700"' \
     '$PGDATA/.fod-tmpfs-writecheck' \
     '$PGDATA/.fod-tmpfs-restart-persistence' \
     'compose restart primary' \
@@ -65,6 +68,11 @@ for pattern in \
     'compose logs --no-color primary'; do
     grep -Fq -- "${pattern}" "${PREFLIGHT}" || { echo "Missing tmpfs preflight policy: ${pattern}" >&2; exit 1; }
 done
+
+if grep -Fq -- 'test "$(stat -c %g "$PGDATA")" = "70"' "${PREFLIGHT}"; then
+    echo 'Tmpfs preflight must not require a fixed PostgreSQL group id' >&2
+    exit 1
+fi
 
 # The isolation lab must not weaken PostgreSQL durability settings merely to
 # manufacture a throughput result. RAM storage itself is the explicit isolation.
