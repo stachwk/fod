@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        cls.makefile = (ROOT / "make/fod-internal.mk").read_text(encoding="utf-8")
         cls.compose = (ROOT / "docker-compose.replica-read.yml").read_text(
             encoding="utf-8"
         )
