@@ -96,10 +96,10 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: "size=${FOD_PG_BLOCK_TMPFS_VOLUME_SIZE:-5g},mode=0700"
+      o: "size=${FOD_PG_BLOCK_TMPFS_VOLUME_SIZE:-5g},mode=0700,uid=70,gid=70"
   postgres_blocksize_replica_tmpfs:
     driver: local
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: "size=${FOD_PG_BLOCK_TMPFS_VOLUME_SIZE:-5g},mode=0700"
+      o: "size=${FOD_PG_BLOCK_TMPFS_VOLUME_SIZE:-5g},mode=0700,uid=70,gid=70"
