@@ -6,14 +6,17 @@ cd "${ROOT}"
 
 COMPOSE="docker-compose.postgres-blocksize-tmpfs.yml"
 RUNNER="scripts/perf/run_postgres_blocksize_tmpfs_isolation.sh"
+PREFLIGHT="scripts/perf/check_postgres_blocksize_tmpfs_runtime.sh"
 
 [[ -r "${COMPOSE}" ]] || { echo "Missing ${COMPOSE}" >&2; exit 1; }
 [[ -r "${RUNNER}" ]] || { echo "Missing ${RUNNER}" >&2; exit 1; }
+[[ -r "${PREFLIGHT}" ]] || { echo "Missing ${PREFLIGHT}" >&2; exit 1; }
 
 for pattern in \
     'type: tmpfs' \
     'postgres_blocksize_primary_tmpfs' \
     'postgres_blocksize_replica_tmpfs' \
+    'uid=70,gid=70' \
     'synchronous_commit=on' \
     'wal_level=replica' \
     'shared_preload_libraries=pg_stat_statements'; do
@@ -33,16 +36,26 @@ for pattern in \
     grep -Fq -- "${pattern}" "${RUNNER}" || { echo "Missing tmpfs runner policy: ${pattern}" >&2; exit 1; }
 done
 
+for pattern in \
+    'POSTGRES_BLOCK_SIZE_KB=8' \
+    'FOD_EXPECTED_PG_BLOCK_SIZE_BYTES=8192' \
+    'data_owner=%u:%g' \
+    'su-exec postgres' \
+    'SHOW block_size' \
+    'compose logs --no-color primary'; do
+    grep -Fq -- "${pattern}" "${PREFLIGHT}" || { echo "Missing tmpfs preflight policy: ${pattern}" >&2; exit 1; }
+done
+
 # The isolation lab must not weaken PostgreSQL durability settings merely to
 # manufacture a throughput result. tmpfs itself is the explicit isolation.
-if grep -Eq -- 'synchronous_commit=(off|local)|fsync=off|full_page_writes=off' "${COMPOSE}" "${RUNNER}"; then
+if grep -Eq -- 'synchronous_commit=(off|local)|fsync=off|full_page_writes=off' "${COMPOSE}" "${RUNNER}" "${PREFLIGHT}"; then
     echo 'Tmpfs isolation must not disable PostgreSQL durability settings' >&2
     exit 1
 fi
 
 # It must not mutate or globally clean the user's Docker/storage state.
-if grep -Eq -- 'docker[[:space:]]+(system|volume)[[:space:]]+prune|fstrim|blkdiscard|rm[[:space:]]+-rf[[:space:]]+/docker' "${RUNNER}"; then
-    echo 'Tmpfs isolation runner contains destructive/global storage cleanup' >&2
+if grep -Eq -- 'docker[[:space:]]+(system|volume)[[:space:]]+prune|fstrim|blkdiscard|rm[[:space:]]+-rf[[:space:]]+/docker' "${RUNNER}" "${PREFLIGHT}"; then
+    echo 'Tmpfs isolation contains destructive/global storage cleanup' >&2
     exit 1
 fi
 
