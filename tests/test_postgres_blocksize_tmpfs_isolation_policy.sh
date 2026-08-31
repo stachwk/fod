@@ -40,7 +40,9 @@ for pattern in \
     'FOD_STORAGE_BLOCK_PAYLOAD_MODE=random' \
     'FOD_STORAGE_BLOCK_SKIP_BUILD=1' \
     'bash "${PREFLIGHT}"' \
-    'rm -rf "${primary_dir}" "${replica_dir}"' \
+    'cleanup_ram_tree "${primary_dir}"' \
+    'cleanup_ram_tree "${replica_dir}"' \
+    'docker run --rm --entrypoint /bin/sh' \
     'cp -a "${RAM_ROOT}/." "${FINAL_DIR}/"' \
     'tmpfs_pg32_vs_8_primary_write_pct=' \
     'tmpfs_pg32_vs_8_insert_wal_bytes_pct='; do
@@ -53,9 +55,12 @@ for pattern in \
     'FOD_PG_BLOCK_TMPFS_REPLICA_DIR="${REPLICA_DIR}"' \
     'POSTGRES_BLOCK_SIZE_KB=8' \
     'FOD_EXPECTED_PG_BLOCK_SIZE_BYTES=8192' \
-    '.fod-tmpfs-restart-persistence' \
+    'pgdata_owner=%u:%g' \
+    '$PGDATA/.fod-tmpfs-writecheck' \
+    '$PGDATA/.fod-tmpfs-restart-persistence' \
     'compose restart primary' \
     'restart_persistence=ok' \
+    'cleanup_ram_root' \
     'SHOW block_size' \
     'compose logs --no-color primary'; do
     grep -Fq -- "${pattern}" "${PREFLIGHT}" || { echo "Missing tmpfs preflight policy: ${pattern}" >&2; exit 1; }
