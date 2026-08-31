@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${ROOT}/scripts/perf/clean_replica_read_docker.sh"
-GNUMAKEFILE="${ROOT}/GNUmakefile"
+MAKEFILE="${ROOT}/Makefile"
 
 require_line() {
     local needle="$1"
@@ -27,8 +27,7 @@ require_line 'docker network ls --format' "${SCRIPT}"
 require_line 'docker image rm -f "${IMAGE_NAME}"' "${SCRIPT}"
 require_line 'docker builder prune -af' "${SCRIPT}"
 require_line 'Docker builder cache not pruned because it is shared across projects.' "${SCRIPT}"
-require_line 'docker-perf-clean:' "${GNUMAKEFILE}"
-require_line 'bash scripts/perf/clean_replica_read_docker.sh' "${GNUMAKEFILE}"
+require_line 'FOD_FORWARD_TARGET,docker-perf-clean,docker-perf-clean' "${MAKEFILE}"
 
 if grep -Fq 'docker system prune' "${SCRIPT}"; then
     echo "Unsafe global docker system prune is forbidden in FOD perf cleanup." >&2
