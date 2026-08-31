@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DOCKERFILE="${ROOT}/docker/fod-client/Dockerfile"
 DOCKERIGNORE="${ROOT}/docker/fod-client/Dockerfile.dockerignore"
 PUBLISH="${ROOT}/scripts/publish_fod_client.sh"
-MAKEFILE="${ROOT}/GNUmakefile"
+MAKEFILE="${ROOT}/Makefile"
 README="${ROOT}/docker/fod-client/README.md"
 
 for file in "${DOCKERFILE}" "${DOCKERIGNORE}" "${PUBLISH}" "${MAKEFILE}" "${README}"; do
@@ -23,7 +23,7 @@ for pattern in \
     'package_root=/src/fod/target/packages-docker' \
     'FOD_PACKAGE_ROOT="${package_root}"' \
     'find "${package_root}/deb"' \
-    'package-ubuntu' \
+    'package-deb-build' \
     'COPY --from=builder /tmp/fod-client.deb /tmp/fod-client.deb' \
     'postgresql-client-${POSTGRES_CLIENT_MAJOR}' \
     'command -v psql' \
@@ -75,17 +75,16 @@ for pattern in \
 done
 
 for pattern in \
-    'docker-fod-client-build:' \
-    'FOD_CONTAINER_PUSH=0 bash scripts/publish_fod_client.sh' \
-    'docker-fod-client-publish:' \
-    'FOD_CONTAINER_PUSH=1 bash scripts/publish_fod_client.sh' \
-    'docker-fod-client-test-policy:'; do
+    'FOD_FORWARD_TARGET,docker-fod-client-build,docker-fod-client-build' \
+    'FOD_FORWARD_TARGET,docker-fod-client-publish,docker-fod-client-publish' \
+    'test-docker-fod-client-policy:'; do
     grep -Fq -- "${pattern}" "${MAKEFILE}" || { echo "Missing normalized FOD client Docker Make target: ${pattern}" >&2; exit 1; }
 done
 
 for obsolete in \
     'fod-client-build:' \
     'fod-client-publish:' \
+    'docker-fod-client-test-policy:' \
     'test-fod-client-container-policy:'; do
     if grep -Fxq -- "${obsolete}" "${MAKEFILE}"; then
         echo "Obsolete FOD client Make target must not be restored: ${obsolete}" >&2
@@ -95,12 +94,12 @@ done
 
 for pattern in \
     'make docker-fod-client-build' \
-    'make docker-fod-client-test-policy' \
+    'make test-docker-fod-client-policy' \
     'make docker-fod-client-publish'; do
     grep -Fq -- "${pattern}" "${README}" || { echo "Missing normalized FOD client command in README: ${pattern}" >&2; exit 1; }
 done
 
-if grep -Eq 'make[[:space:]]+(fod-client-build|fod-client-publish|test-fod-client-container-policy)([[:space:]]|$)' "${README}"; then
+if grep -Eq 'make[[:space:]]+(fod-client-build|fod-client-publish|docker-fod-client-test-policy|test-fod-client-container-policy)([[:space:]]|$)' "${README}"; then
     echo 'FOD client README must not document obsolete Make targets' >&2
     exit 1
 fi
