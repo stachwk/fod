@@ -3,15 +3,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${ROOT}/scripts/docker_deploy.sh"
-PUBLIC="${ROOT}/Makefile"
+PUBLIC_DEPLOY="${ROOT}/make/fod-deploy-public.mk"
 PRIMARY_INIT="${ROOT}/docker/deploy/primary-init.sh"
 REPLICA_ENTRY="${ROOT}/docker/deploy/replica-entrypoint.sh"
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/fod-docker-deploy-policy.XXXXXX")"
 trap 'rm -rf "${tmpdir}"' EXIT
 
-for file in "${SCRIPT}" "${PRIMARY_INIT}" "${REPLICA_ENTRY}"; do
+for file in "${SCRIPT}" "${PUBLIC_DEPLOY}" "${PRIMARY_INIT}" "${REPLICA_ENTRY}"; do
   [[ -r "${file}" ]] || { echo "Missing deployment file: ${file}" >&2; exit 1; }
+done
+for file in "${SCRIPT}" "${PRIMARY_INIT}" "${REPLICA_ENTRY}"; do
   bash -n "${file}"
 done
 
@@ -95,7 +97,7 @@ for target in \
   docker-deploy-single-install \
   docker-deploy-one-replica-install \
   docker-deploy-two-replicas-install; do
-  grep -Eq "^${target}:" "${PUBLIC}" || {
+  grep -Eq "^${target}:" "${PUBLIC_DEPLOY}" || {
     echo "Missing public deployment target: ${target}" >&2
     exit 1
   }
