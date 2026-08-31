@@ -261,7 +261,7 @@ for pg_block_kb in "${PG_BLOCKS[@]}"; do
     verified_bytes="$(docker run --rm --entrypoint /bin/sh "${image}" -ceu '
         dir="$(mktemp -d)"
         chown postgres:postgres "${dir}"
-        su-exec postgres initdb -D "${dir}" >/dev/null
+        su-exec postgres initdb --no-sync --auth-local=trust --auth-host=trust -D "${dir}" >/dev/null
         su-exec postgres postgres -D "${dir}" -C block_size
     ')"
     verified_bytes="$(printf '%s' "${verified_bytes}" | tail -n 1 | tr -d '[:space:]')"
