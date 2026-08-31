@@ -51,6 +51,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 COPY --from=builder /tmp/fod-client.deb /tmp/fod-client.deb
 COPY docker/fod-client/fod-container-preflight.sh /usr/local/bin/fod-container-preflight
+COPY docker/fod-client/fod-container-entrypoint.sh /usr/local/bin/fod-container-entrypoint
 
 RUN set -eux; \
     apt-get update; \
@@ -67,7 +68,7 @@ RUN set -eux; \
       "postgresql-client-${POSTGRES_CLIENT_MAJOR}"; \
     rm -f /tmp/fod-client.deb; \
     rm -rf /var/lib/apt/lists/*; \
-    chmod 0755 /usr/local/bin/fod-container-preflight; \
+    chmod 0755 /usr/local/bin/fod-container-preflight /usr/local/bin/fod-container-entrypoint; \
     command -v fod-bootstrap; \
     command -v fod-change; \
     command -v fod-indexer; \
@@ -76,6 +77,7 @@ RUN set -eux; \
     command -v mkfs.fod; \
     command -v mount.fod; \
     command -v fod-container-preflight; \
+    command -v fod-container-entrypoint; \
     command -v capsh; \
     command -v findmnt; \
     command -v psql; \
@@ -127,4 +129,5 @@ LABEL org.fod.fuse.mount-propagation="rshared"
 LABEL org.fod.apparmor.policy="host-managed"
 LABEL org.fod.apparmor.recommended="unconfined-or-custom-fod-profile"
 
+ENTRYPOINT ["/usr/local/bin/fod-container-entrypoint"]
 CMD ["fod-bootstrap", "--help"]
