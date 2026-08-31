@@ -140,7 +140,7 @@ for pg in 8 32; do
     expected=$((pg * 1024))
     actual="$(docker run --rm --entrypoint /bin/sh "${image}" -ceu '
       d="$(mktemp -d)"; chown postgres:postgres "$d";
-      su-exec postgres initdb --no-sync -D "$d" >/dev/null;
+      su-exec postgres initdb --no-sync --auth-local=trust --auth-host=trust -D "$d" >/dev/null;
       su-exec postgres postgres -D "$d" -C block_size
     ' | tail -n 1 | tr -d '[:space:]')"
     [[ "${actual}" == "${expected}" ]] || { echo "block_size verify failed pg=${pg} expected=${expected} actual=${actual}" >&2; exit 1; }
