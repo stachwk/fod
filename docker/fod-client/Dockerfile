@@ -34,7 +34,7 @@ RUN set -eux; \
     make \
       FOD_CARGO_PROFILE="${FOD_CARGO_PROFILE}" \
       FOD_PACKAGE_ROOT="${package_root}" \
-      package-ubuntu; \
+      package-deb-build; \
     package_path="$(find "${package_root}/deb" -maxdepth 1 -type f -name 'fod_*.deb' -print -quit)"; \
     test -n "${package_path}"; \
     cp "${package_path}" /tmp/fod-client.deb

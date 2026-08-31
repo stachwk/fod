@@ -1,0 +1,2714 @@
+PYTHON ?= python3
+RUST_CARGO ?= cargo
+
+# If the root Cargo.toml exists, use the workspace.
+# If it does not, keep the legacy split-manifest mode.
+CARGO_ROOT_MANIFEST ?= Cargo.toml
+
+# Keep these package names aligned with Cargo.toml and CI.
+# Legacy RUST_* overrides still work by feeding the canonical FOD_* names.
+FOD_MKFS_PACKAGE ?= $(or $(RUST_MKFS_PACKAGE),fod-rust-mkfs)
+FOD_FUSE_PACKAGE ?= $(or $(RUST_FUSE_PACKAGE),fod-rust-fuse)
+FOD_HOTPATH_PACKAGE ?= $(or $(RUST_HOTPATH_PACKAGE),fod-rust-hotpath)
+FOD_INDEXER_PACKAGE ?= $(or $(RUST_INDEXER_PACKAGE),fod-rust-indexer)
+FOD_MONITOR_PACKAGE ?= $(or $(RUST_MONITOR_PACKAGE),fod-rust-monitor)
+FOD_LIB_PACKAGE ?= $(or $(RUST_LIB_PACKAGE),fod-lib)
+FOD_BOOTSTRAP_BIN ?= fod-bootstrap
+FOD_MKFS_BIN ?= fod-rust-mkfs
+FOD_CONFIG_BIN ?= fod-config
+FOD_CHANGE_BIN ?= fod-change
+FOD_FUSE_BIN ?= fod-rust-fuse
+FOD_INDEXER_BIN ?= fod-indexer
+FOD_MONITOR_BIN ?= fod-monitor
+FOD_LIBFOD_HEADER ?= rust_libfod/include/fod/libfod.h
+FOD_LIBFOD_HEADER_DEST ?= /usr/local/include/fod/libfod.h
+FOD_VERSION_FILE ?= fod_version.txt
+FOD_VERSION := $(shell cat $(FOD_VERSION_FILE))
+FOD_CARGO_PROFILE ?= release-lto
+FOD_RELEASE_FLAG := --profile $(FOD_CARGO_PROFILE)
+FOD_CARGO_TEST_PROFILE ?= $(FOD_CARGO_PROFILE)
+FOD_TEST_FLAG := --profile $(FOD_CARGO_TEST_PROFILE)
+FOD_RUST_PRODUCTION_TOOLCHAIN ?= 1.98.0
+FOD_RUNTIME_PROFILE ?= $(FOD_CARGO_PROFILE)
+FOD_RUNTIME_FLAG := --profile $(FOD_RUNTIME_PROFILE)
+FOD_RUNTIME_ARTIFACT_PROFILE := $(if $(filter dev,$(FOD_RUNTIME_PROFILE)),debug,$(FOD_RUNTIME_PROFILE))
+export FOD_CARGO_PROFILE
+export FOD_CARGO_TEST_PROFILE
+export FOD_RUNTIME_PROFILE
+
+# Cargo build artifact placement. The default remains the repository ./target.
+# FOD_CARGO_TARGET_MODE=shm redirects Cargo artifacts to a per-user tmpfs
+# directory after an explicit safety preflight.
+FOD_CARGO_TARGET_MODE ?= disk
+FOD_SHM_TARGET_ROOT ?= /dev/shm
+FOD_SHM_TARGET_KEY ?= $(shell printf '%s\n' "$(CURDIR)" | cksum | awk '{print $$1}')
+FOD_SHM_TARGET_DIR ?= $(FOD_SHM_TARGET_ROOT)/fod-target-$(shell id -u)-$(FOD_SHM_TARGET_KEY)
+FOD_SHM_MIN_FREE_BYTES ?= 2147483648
+
+# Controlled cleanup for the persistent repository ./target. This is never
+# invoked implicitly by normal builds or by the legacy `make clean`.
+FOD_TARGET_CLEAN_DIR ?= $(CURDIR)/target
+FOD_TARGET_CLEAN_MIN_SIZE_BYTES ?= 10737418240
+FOD_TARGET_CLEAN_MIN_AGE_DAYS ?= 14
+FOD_TARGET_CLEAN_CONFIRM ?=
+FOD_TARGET_CLEAN_FORCE ?= 0
+
+ifeq ($(filter $(FOD_CARGO_TARGET_MODE),disk shm),)
+$(error FOD_CARGO_TARGET_MODE must be 'disk' or 'shm', got '$(FOD_CARGO_TARGET_MODE)')
+endif
+
+ifeq ($(FOD_CARGO_TARGET_MODE),shm)
+override CARGO_TARGET_DIR := $(FOD_SHM_TARGET_DIR)
+endif
+
+ifneq ($(strip $(CARGO_TARGET_DIR)),)
+export CARGO_TARGET_DIR
+FOD_EFFECTIVE_CARGO_TARGET_DIR := $(CARGO_TARGET_DIR)
+else
+FOD_EFFECTIVE_CARGO_TARGET_DIR := target
+endif
+
+export FOD_CARGO_TARGET_MODE
+export FOD_SHM_TARGET_ROOT
+export FOD_SHM_TARGET_KEY
+export FOD_SHM_TARGET_DIR
+export FOD_SHM_MIN_FREE_BYTES
+
+ifeq ($(wildcard $(CARGO_ROOT_MANIFEST)),)
+CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path rust_mkfs/Cargo.toml
+CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path rust_fuse/Cargo.toml
+CARGO_BUILD_INDEXER := $(RUST_CARGO) build --manifest-path rust_indexer/Cargo.toml
+CARGO_BUILD_MONITOR := $(RUST_CARGO) build --manifest-path rust_monitor/Cargo.toml
+CARGO_BUILD_LIBFOD := $(RUST_CARGO) build --manifest-path rust_libfod/Cargo.toml
+
+CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path rust_mkfs/Cargo.toml
+CARGO_RUN_INDEXER := $(RUST_CARGO) run --manifest-path rust_indexer/Cargo.toml
+
+CARGO_TEST_MKFS := $(RUST_CARGO) test --manifest-path rust_mkfs/Cargo.toml $(FOD_TEST_FLAG)
+CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path rust_fuse/Cargo.toml $(FOD_TEST_FLAG)
+CARGO_TEST_HOTPATH := $(RUST_CARGO) test --manifest-path rust_hotpath/Cargo.toml $(FOD_TEST_FLAG)
+
+ifneq ($(strip $(CARGO_TARGET_DIR)),)
+RUST_MKFS_TARGET_DIR := $(CARGO_TARGET_DIR)
+RUST_FUSE_TARGET_DIR := $(CARGO_TARGET_DIR)
+RUST_INDEXER_TARGET_DIR := $(CARGO_TARGET_DIR)
+RUST_MONITOR_TARGET_DIR := $(CARGO_TARGET_DIR)
+RUST_LIBFOD_TARGET_DIR := $(CARGO_TARGET_DIR)
+else
+RUST_MKFS_TARGET_DIR := rust_mkfs/target
+RUST_FUSE_TARGET_DIR := rust_fuse/target
+RUST_INDEXER_TARGET_DIR := rust_indexer/target
+RUST_MONITOR_TARGET_DIR := rust_monitor/target
+RUST_LIBFOD_TARGET_DIR := rust_libfod/target
+endif
+else
+CARGO_BUILD_MKFS := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
+CARGO_BUILD_FUSE := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_FUSE_PACKAGE)
+CARGO_BUILD_INDEXER := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_INDEXER_PACKAGE)
+CARGO_BUILD_MONITOR := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MONITOR_PACKAGE)
+CARGO_BUILD_LIBFOD := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_LIB_PACKAGE)
+CARGO_BUILD_INSTALL_ROOT := $(RUST_CARGO) build --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_RELEASE_FLAG) -p $(FOD_MKFS_PACKAGE) --bins -p $(FOD_FUSE_PACKAGE) --bin $(FOD_FUSE_BIN) -p $(FOD_INDEXER_PACKAGE) --bin $(FOD_INDEXER_BIN) -p $(FOD_MONITOR_PACKAGE) --bin $(FOD_MONITOR_BIN)
+
+CARGO_RUN_MKFS := $(RUST_CARGO) run --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_MKFS_PACKAGE)
+CARGO_RUN_INDEXER := $(RUST_CARGO) run --manifest-path $(CARGO_ROOT_MANIFEST) -p $(FOD_INDEXER_PACKAGE)
+
+CARGO_TEST_MKFS := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_TEST_FLAG) -p $(FOD_MKFS_PACKAGE)
+CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_TEST_FLAG) -p $(FOD_FUSE_PACKAGE)
+CARGO_TEST_HOTPATH := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_TEST_FLAG) -p $(FOD_HOTPATH_PACKAGE)
+
+RUST_MKFS_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
+RUST_FUSE_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
+RUST_INDEXER_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
+RUST_MONITOR_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
+RUST_LIBFOD_TARGET_DIR := $(FOD_EFFECTIVE_CARGO_TARGET_DIR)
+endif
+
+FOD_BOOTSTRAP_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-bootstrap
+FOD_MKFS_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-rust-mkfs
+FOD_CONFIG_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-config
+FOD_CHANGE_DEBUG_BIN := $(RUST_MKFS_TARGET_DIR)/debug/fod-change
+FOD_FUSE_DEBUG_BIN := $(RUST_FUSE_TARGET_DIR)/debug/fod-rust-fuse
+FOD_INDEXER_DEBUG_BIN := $(RUST_INDEXER_TARGET_DIR)/debug/fod-indexer
+FOD_MONITOR_DEBUG_BIN := $(RUST_MONITOR_TARGET_DIR)/debug/fod-monitor
+FOD_DEBUG_BUILD_STAMP := $(RUST_MKFS_TARGET_DIR)/.fod-debug-build.stamp
+FOD_LOCKING_TARGET_DIR ?= $(abspath $(FOD_EFFECTIVE_CARGO_TARGET_DIR))/test-locking
+FOD_LOCKING_BUILD_JSON ?= $(FOD_LOCKING_TARGET_DIR)/lock_backend_smoke-build.json
+FOD_RUST_INPUT_ROOTS := Cargo.toml Cargo.lock fod_version.txt rust_mkfs rust_fuse rust_hotpath rust_runtime rust_indexer rust_monitor rust_libfod migrations
+FOD_RUST_INPUTS := $(shell find $(FOD_RUST_INPUT_ROOTS) -type f \( -name '*.rs' -o -name 'Cargo.toml' -o -name 'Cargo.lock' -o -name '*.sql' -o -name '*.txt' \) 2>/dev/null)
+
+FOD_BOOTSTRAP_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-bootstrap
+FOD_MKFS_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-rust-mkfs
+FOD_FUSE_PROFILE_BIN := $(RUST_FUSE_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-rust-fuse
+FOD_CONFIG_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-config
+FOD_CHANGE_PROFILE_BIN := $(RUST_MKFS_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-change
+FOD_INDEXER_PROFILE_BIN := $(RUST_INDEXER_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-indexer
+FOD_MONITOR_PROFILE_BIN := $(RUST_MONITOR_TARGET_DIR)/$(FOD_CARGO_PROFILE)/fod-monitor
+FOD_LIBFOD_PROFILE_SO := $(RUST_LIBFOD_TARGET_DIR)/$(FOD_CARGO_PROFILE)/libfod.so
+FOD_BOOTSTRAP_RUNTIME_BIN ?= $(RUST_MKFS_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-bootstrap
+FOD_MKFS_RUNTIME_BIN ?= $(RUST_MKFS_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-rust-mkfs
+FOD_CONFIG_RUNTIME_BIN ?= $(RUST_MKFS_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-config
+FOD_CHANGE_RUNTIME_BIN ?= $(RUST_MKFS_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-change
+FOD_FUSE_RUNTIME_BIN ?= $(RUST_FUSE_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-rust-fuse
+FOD_INDEXER_RUNTIME_BIN ?= $(RUST_INDEXER_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-indexer
+FOD_MONITOR_RUNTIME_BIN ?= $(RUST_MONITOR_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-monitor
+FOD_RUNTIME_BUILD_STAMP := $(RUST_MKFS_TARGET_DIR)/.fod-runtime-$(FOD_RUNTIME_PROFILE)-build.stamp
+
+ifeq ($(wildcard $(CARGO_ROOT_MANIFEST)),)
+CARGO_BUILD_INSTALL_ROOT := $(CARGO_BUILD_MKFS) $(FOD_RELEASE_FLAG) --bins && $(CARGO_BUILD_FUSE) $(FOD_RELEASE_FLAG) --bin $(FOD_FUSE_BIN) && $(CARGO_BUILD_INDEXER) $(FOD_RELEASE_FLAG) --bin $(FOD_INDEXER_BIN) && $(CARGO_BUILD_MONITOR) $(FOD_RELEASE_FLAG) --bin $(FOD_MONITOR_BIN)
+endif
+
+rust-production-toolchain-check:
+	@set -eu; \
+	actual="$$(rustc --version)"; \
+	expected="rustc $(FOD_RUST_PRODUCTION_TOOLCHAIN) "; \
+	case "$$actual " in \
+		"$$expected"*) ;; \
+		*) \
+			printf 'FOD production build requires Rust %s; active compiler: %s\n' "$(FOD_RUST_PRODUCTION_TOOLCHAIN)" "$$actual" >&2; \
+			printf 'Install/select the repository toolchain from rust-toolchain.toml before building release artifacts.\n' >&2; \
+			exit 1 ;; \
+	esac
+
+build-runtime: rust-production-toolchain-check $(FOD_RUNTIME_BUILD_STAMP)
+
+$(FOD_RUNTIME_BUILD_STAMP): Makefile GNUmakefile rust-toolchain.toml $(FOD_RUST_INPUTS)
+	$(CARGO_BUILD_MKFS) $(FOD_RUNTIME_FLAG) --bins
+	$(CARGO_BUILD_FUSE) $(FOD_RUNTIME_FLAG) --bin $(FOD_FUSE_BIN)
+	$(CARGO_BUILD_INDEXER) $(FOD_RUNTIME_FLAG) --bin $(FOD_INDEXER_BIN)
+	$(CARGO_BUILD_MONITOR) $(FOD_RUNTIME_FLAG) --bin $(FOD_MONITOR_BIN)
+	$(CARGO_BUILD_LIBFOD) $(FOD_RUNTIME_FLAG) --lib
+	mkdir -p $(dir $@)
+	touch $@
+
+build-debug: $(FOD_DEBUG_BUILD_STAMP)
+
+$(FOD_DEBUG_BUILD_STAMP): Makefile GNUmakefile rust-toolchain.toml $(FOD_RUST_INPUTS)
+	$(CARGO_BUILD_MKFS) --bins
+	$(CARGO_BUILD_FUSE) --bin $(FOD_FUSE_BIN)
+	$(CARGO_BUILD_INDEXER) --bin $(FOD_INDEXER_BIN)
+	$(CARGO_BUILD_MONITOR) --bin $(FOD_MONITOR_BIN)
+	mkdir -p $(dir $@)
+	touch $@
+
+.PHONY: rust-production-toolchain-check build-runtime build-debug
+
+.PHONY: cargo-target-info cargo-target-preflight build-runtime-shm build-debug-shm test-all-shm test-all-full-shm shm-target-status shm-target-clean
+
+cargo-target-info:
+	@printf 'cargo_target_mode=%s\n' "$(FOD_CARGO_TARGET_MODE)"
+	@printf 'effective_cargo_target_dir=%s\n' "$(FOD_EFFECTIVE_CARGO_TARGET_DIR)"
+	@if [ "$(FOD_CARGO_TARGET_MODE)" = "shm" ]; then \
+		FOD_CARGO_TARGET_MODE=shm \
+		FOD_SHM_TARGET_ROOT="$(FOD_SHM_TARGET_ROOT)" \
+		FOD_SHM_TARGET_DIR="$(FOD_SHM_TARGET_DIR)" \
+		FOD_SHM_MIN_FREE_BYTES="$(FOD_SHM_MIN_FREE_BYTES)" \
+		CARGO_TARGET_DIR="$(FOD_EFFECTIVE_CARGO_TARGET_DIR)" \
+		bash scripts/fod-shm-target.sh status; \
+	elif [ -d "$(FOD_EFFECTIVE_CARGO_TARGET_DIR)" ]; then \
+		du -sh "$(FOD_EFFECTIVE_CARGO_TARGET_DIR)"; \
+	else \
+		printf 'target_exists=no\n'; \
+	fi
+
+cargo-target-preflight:
+	@if [ "$(FOD_CARGO_TARGET_MODE)" = "shm" ]; then \
+		FOD_CARGO_TARGET_MODE=shm \
+		FOD_SHM_TARGET_ROOT="$(FOD_SHM_TARGET_ROOT)" \
+		FOD_SHM_TARGET_DIR="$(FOD_SHM_TARGET_DIR)" \
+		FOD_SHM_MIN_FREE_BYTES="$(FOD_SHM_MIN_FREE_BYTES)" \
+		CARGO_TARGET_DIR="$(FOD_EFFECTIVE_CARGO_TARGET_DIR)" \
+		bash scripts/fod-shm-target.sh check; \
+	else \
+		printf 'Cargo target preflight: disk mode, target=%s\n' "$(FOD_EFFECTIVE_CARGO_TARGET_DIR)"; \
+	fi
+
+build-runtime-shm:
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm cargo-target-preflight
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm build-runtime
+
+build-debug-shm:
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm cargo-target-preflight
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm build-debug
+
+test-all-shm:
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm cargo-target-preflight
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm test-all
+
+test-all-full-shm:
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm cargo-target-preflight
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm test-all-full
+
+shm-target-status:
+	@$(MAKE) --no-print-directory FOD_CARGO_TARGET_MODE=shm cargo-target-info
+
+shm-target-clean:
+	@FOD_CARGO_TARGET_MODE=shm \
+		FOD_SHM_TARGET_ROOT="$(FOD_SHM_TARGET_ROOT)" \
+		FOD_SHM_TARGET_DIR="$(FOD_SHM_TARGET_DIR)" \
+		FOD_SHM_MIN_FREE_BYTES="$(FOD_SHM_MIN_FREE_BYTES)" \
+		CARGO_TARGET_DIR="$(FOD_SHM_TARGET_DIR)" \
+		bash scripts/fod-shm-target.sh clean
+
+.PHONY: target-disk-status target-disk-clean-plan target-disk-clean test-target-disk-clean-policy
+
+target-disk-status:
+	@FOD_TARGET_CLEAN_DIR="$(FOD_TARGET_CLEAN_DIR)" \
+		FOD_TARGET_CLEAN_MIN_SIZE_BYTES="$(FOD_TARGET_CLEAN_MIN_SIZE_BYTES)" \
+		FOD_TARGET_CLEAN_MIN_AGE_DAYS="$(FOD_TARGET_CLEAN_MIN_AGE_DAYS)" \
+		FOD_TARGET_CLEAN_FORCE="$(FOD_TARGET_CLEAN_FORCE)" \
+		RUST_CARGO="$(RUST_CARGO)" \
+		bash scripts/fod-target-clean.sh status
+
+target-disk-clean-plan:
+	@FOD_TARGET_CLEAN_DIR="$(FOD_TARGET_CLEAN_DIR)" \
+		FOD_TARGET_CLEAN_MIN_SIZE_BYTES="$(FOD_TARGET_CLEAN_MIN_SIZE_BYTES)" \
+		FOD_TARGET_CLEAN_MIN_AGE_DAYS="$(FOD_TARGET_CLEAN_MIN_AGE_DAYS)" \
+		FOD_TARGET_CLEAN_FORCE="$(FOD_TARGET_CLEAN_FORCE)" \
+		RUST_CARGO="$(RUST_CARGO)" \
+		bash scripts/fod-target-clean.sh plan
+
+target-disk-clean:
+	@FOD_TARGET_CLEAN_DIR="$(FOD_TARGET_CLEAN_DIR)" \
+		FOD_TARGET_CLEAN_MIN_SIZE_BYTES="$(FOD_TARGET_CLEAN_MIN_SIZE_BYTES)" \
+		FOD_TARGET_CLEAN_MIN_AGE_DAYS="$(FOD_TARGET_CLEAN_MIN_AGE_DAYS)" \
+		FOD_TARGET_CLEAN_CONFIRM="$(FOD_TARGET_CLEAN_CONFIRM)" \
+		FOD_TARGET_CLEAN_FORCE="$(FOD_TARGET_CLEAN_FORCE)" \
+		RUST_CARGO="$(RUST_CARGO)" \
+		bash scripts/fod-target-clean.sh clean
+
+test-target-disk-clean-policy:
+	@bash tests/test_target_disk_clean_policy.sh
+
+# The local integration suites share one Docker/PostgreSQL database and FUSE
+# mount resources. Keep their prerequisites serial even when make receives -j.
+.NOTPARALLEL: test-integration test-all test-all-full
+
+# Benchmark targets are run sequentially because they share the same local
+# Docker/PostgreSQL state and often rebuild the same binaries.
+BENCHMARK_TARGETS := \
+	test-copy-dedupe-benchmark \
+	test-atime-benchmark \
+	test-read-cache-benchmark \
+	test-throughput \
+	test-throughput-sync \
+	test-flush-release-profile \
+	test-truncate-release-profile \
+	test-large-copy-benchmark \
+	test-data-blocks-conflict-benchmark \
+	test-data-blocks-conflict-noop-benchmark \
+	test-large-file-multiblock-benchmark \
+	test-remount-durability-benchmark \
+	test-tree-scale \
+	test-fio-sequential-io \
+	test-fifo-fuse-fairness \
+	test-fio-mixed-io \
+	test-fio-random-mixed-io \
+	test-rust-hotpath-copy-dedupe-benchmark
+
+POSTGRES_BENCHMARK_TARGETS := \
+	test-postgresql-wal-pressure \
+	test-postgresql-connection-churn
+
+POSTGRES_BENCHMARK_CHECKPOINT_TARGETS := \
+	test-postgresql-wal-pressure-checkpoint
+
+PG_WAL_PRESSURE_COUNT ?= 128
+POSTGRES_BENCHMARK_WAL_PRESET_MAX_WAL_SIZE ?= 8GB
+POSTGRES_BENCHMARK_WAL_PRESET_CHECKPOINT_TIMEOUT ?= 15min
+POSTGRES_BENCHMARK_WAL_PRESET_WAL_COMPRESSION ?= pglz
+POSTGRES_BENCHMARK_REPEAT ?= 1
+POSTGRES_BENCHMARK_PLANNER_PRESET_SHARED_BUFFERS ?= 512MB
+POSTGRES_BENCHMARK_PLANNER_PRESET_RANDOM_PAGE_COST ?= 1.1
+POSTGRES_BENCHMARK_PLANNER_PRESET_EFFECTIVE_CACHE_SIZE ?= 4GB
+POSTGRES_BENCHMARK_PLANNER_PRESET_MAINTENANCE_WORK_MEM ?= 512MB
+POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_MAX_WORKERS ?= 3
+POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM ?= 256MB
+PROFILE_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+PROFILE_HOST ?= $(shell hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown-host)
+ARTIFACTS_DIR ?= artifacts/perf/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)/$(PROFILE_HOST)-$(PROFILE_RUN_ID)
+PROFILE_CAPTURE_LABEL ?=
+PROFILE_CAPTURE_SUFFIX = $(if $(PROFILE_CAPTURE_LABEL),-$(PROFILE_CAPTURE_LABEL),)
+PERF_FREQ ?= 99
+PROFILE_SECONDS ?= 60
+PROFILE_WORKLOAD ?= test-large-copy-benchmark
+PROFILE_PID ?=
+PROFILE_MAKE ?= make
+PROFILE_SUDO ?= sudo -n
+PROFILE_WAL_BEFORE_LABEL ?= before
+PROFILE_WAL_AFTER_LABEL ?= after
+PROFILE_WAL_BEFORE_FILE ?= $(ARTIFACTS_DIR)/pg_wal_snapshot-$(PROFILE_WAL_BEFORE_LABEL).tsv
+PROFILE_WAL_AFTER_FILE ?= $(ARTIFACTS_DIR)/pg_wal_snapshot-$(PROFILE_WAL_AFTER_LABEL).tsv
+PROFILE_WAL_DELTA_FILE ?= $(ARTIFACTS_DIR)/pg_wal_delta-$(PROFILE_WAL_BEFORE_LABEL)-to-$(PROFILE_WAL_AFTER_LABEL).tsv
+PROFILE_TABLE_DML_BEFORE_LABEL ?= before
+PROFILE_TABLE_DML_AFTER_LABEL ?= after
+PROFILE_TABLE_DML_BEFORE_FILE ?= $(ARTIFACTS_DIR)/pg_table_dml_snapshot-$(PROFILE_TABLE_DML_BEFORE_LABEL).txt
+PROFILE_TABLE_DML_AFTER_FILE ?= $(ARTIFACTS_DIR)/pg_table_dml_snapshot-$(PROFILE_TABLE_DML_AFTER_LABEL).txt
+PROFILE_TABLE_DML_DELTA_FILE ?= $(ARTIFACTS_DIR)/pg_table_dml_delta-$(PROFILE_TABLE_DML_BEFORE_LABEL)-to-$(PROFILE_TABLE_DML_AFTER_LABEL).txt
+PROFILE_LARGE_COPY_LOG ?= /tmp/fod-data-blocks-current.log
+PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT ?= docs/performance-data-blocks-profile-$(shell date +%F).md
+PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION ?= Real-path data_blocks profile captured.
+PROFILE_DATA_BLOCKS_SUMMARY_NEXT ?= Keep runtime SQL unchanged until repeated local/QNAP data confirms the next bottleneck.
+PROFILE_DATA_BLOCKS_CONFLICT_LOG ?= /tmp/fod-data-blocks-conflict-current.log
+PROFILE_DATA_BLOCKS_CONFLICT_NOOP_LOG ?= /tmp/fod-data-blocks-conflict-noop-current.log
+PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG ?= /tmp/fod-data-blocks-swap-repeat-current.log
+PROFILE_DATA_BLOCKS_SWAP_REPEAT ?= 5
+PROFILE_COPY_BUFFER_SIZES ?= default 262144 1048576 4194304
+PROFILE_COPY_BUFFER_BYTES ?= default
+PROFILE_COPY_BUFFER_BLOCK_SIZE ?= 4M
+PROFILE_COPY_BUFFER_BLOCK_COUNT ?= 16
+PROFILE_COPY_BUFFER_LOG ?= /tmp/fod-copy-buffer-$(PROFILE_RUN_ID)-$(PROFILE_COPY_BUFFER_BYTES).log
+PROFILE_COPY_BUFFER_INCLUDE_QNAP ?= auto
+PROFILE_COPY_BUFFER_QNAP_PROBE_LOG ?= /tmp/fod-copy-buffer-qnap-probe-$(PROFILE_RUN_ID).log
+PROFILE_INDEXER_ALLOC_TOOL ?= auto
+PROFILE_INDEXER_ARGS ?= --help
+PROFILE_INDEXER_TIME_BIN ?= /usr/bin/time
+PROFILE_INDEXER_ALLOC_LOG ?= $(ARTIFACTS_DIR)/indexer_alloc$(PROFILE_CAPTURE_SUFFIX).txt
+PROFILE_INDEXER_HEAPTRACK_PREFIX ?= $(ARTIFACTS_DIR)/heaptrack-indexer$(PROFILE_CAPTURE_SUFFIX)
+PROFILE_INDEXER_MASSIF_OUT ?= $(ARTIFACTS_DIR)/massif-indexer$(PROFILE_CAPTURE_SUFFIX).out
+PROFILE_FUSE_WORKLOAD ?= test-fio-sequential-io-strace
+PROFILE_FUSE_LOG ?= $(ARTIFACTS_DIR)/fuse-$(PROFILE_FUSE_WORKLOAD)$(PROFILE_CAPTURE_SUFFIX).txt
+DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER ?=
+DATA_BLOCKS_CONFLICT_ID ?= data-blocks-conflict-current
+DATA_BLOCKS_CONFLICT_BLOCK_SIZE ?= 4M
+DATA_BLOCKS_CONFLICT_BLOCK_COUNT ?= 16
+DATA_OBJECT_GC_LIMIT ?= 1000000
+DATA_BLOCKS_EXPLAIN_FILLFACTORS ?= 100 90 75
+DATA_BLOCKS_EXPLAIN_FILLFACTOR ?= 100
+DATA_BLOCKS_EXPLAIN_INDEX_FILLFACTOR ?= 100
+DATA_BLOCKS_EXPLAIN_STAGE_ROWS ?= 16384
+DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES ?= 4096
+
+define RUN_POSTGRES_BENCHMARK_REPEAT
+	@set -eu; \
+	repeat="$(POSTGRES_BENCHMARK_REPEAT)"; \
+	case "$$repeat" in \
+		''|*[!0-9]*) \
+			echo "POSTGRES_BENCHMARK_REPEAT must be a positive integer, got: $$repeat" >&2; \
+			exit 1 ;; \
+	esac; \
+	if [ "$$repeat" -lt 1 ]; then \
+		echo "POSTGRES_BENCHMARK_REPEAT must be at least 1, got: $$repeat" >&2; \
+		exit 1; \
+	fi; \
+	i=1; \
+	while [ "$$i" -le "$$repeat" ]; do \
+		printf '%s\n' "PostgreSQL benchmark run $$i/$$repeat"; \
+		$(MAKE) --no-print-directory $(1); \
+		i=$$((i + 1)); \
+	done
+endef
+
+define RUN_POSTGRES_BENCHMARKS
+	@set -eu; \
+	for target in $(1); do \
+		$(MAKE) --no-print-directory $(2) QNAP=$(3) $$target; \
+	done
+endef
+
+VENV_DIR ?= .venv
+VENV_PYTHON := $(VENV_DIR)/bin/python
+VENV_PIP := $(VENV_DIR)/bin/pip
+VENV_STAMP := $(VENV_DIR)/.fod-venv.stamp
+SYSTEM_SITE_PACKAGES := $(shell $(PYTHON) -c 'import site; print(":".join(site.getsitepackages()))')
+COMPOSE ?= docker compose
+COMPOSE_FILE ?= docker-compose.yml
+SELINUX_ACL_COMPOSE_FILE ?= docker-compose.selinux-acl.yml
+REPLICA_READ_COMPOSE_FILE ?= docker-compose.replica-read.yml
+REPLICA_READ_BIND_ADDRESS ?= 127.0.0.1
+REPLICA_READ_PRIMARY_HOST ?= 127.0.0.1
+REPLICA_READ_REPLICA_HOST ?= $(REPLICA_READ_PRIMARY_HOST)
+REPLICA_READ_PRIMARY_PORT ?= 55441
+REPLICA_READ_REPLICA_PORT ?= 55442
+REPLICA_READ_FIO_FILE_SIZE ?= 1G
+REPLICA_READ_FIO_BLOCK_SIZE ?= 4k
+REPLICA_READ_FIO_BLOCK_SIZES ?= $(REPLICA_READ_FIO_BLOCK_SIZE)
+REPLICA_READ_WAIT_SECONDS ?= 120
+QNAP_REPLICA_READ_BIND_ADDRESS ?= $(QNAP_PG_HOST)
+QNAP_REPLICA_READ_PRIMARY_PORT ?= 55441
+QNAP_REPLICA_READ_REPLICA_PORT ?= 55442
+QNAP_REPLICA_READ_FIO_FILE_SIZE ?= 256M
+QNAP_REPLICA_READ_FIO_BLOCK_SIZES ?= 4k 16k 64k 256k 512k 1m
+QNAP_REPLICA_READ_WAIT_SECONDS ?= 180
+FOD_CONFIG_SOURCE ?= fod_config.ini
+FOD_CONFIG_SOURCE_ABS := $(abspath $(FOD_CONFIG_SOURCE))
+FOD_CONFIG_DEST ?= /etc/fod/fod_config.ini
+CONTAINER_POSTGRES_NAME ?= fod-postgres
+CONTAINER_POSTGRES_SELINUX_ACL_NAME ?= fod-postgres-selinux-acl
+CONTAINER_FOD_SELINUX_ACL_NAME ?= fod-selinux-acl
+POSTGRES_DB_BASE ?= foddbname
+POSTGRES_USER_BASE ?= foduser
+POSTGRES_PASSWORD_BASE ?= cichosza
+POSTGRES_PORT_BASE ?= 5432
+POSTGRES_SHARED_PRELOAD_LIBRARIES ?= pg_stat_statements
+POSTGRES_SHARED_BUFFERS ?=
+POSTGRES_MAX_CONNECTIONS ?=
+POSTGRES_MAX_WAL_SIZE ?=
+POSTGRES_CHECKPOINT_TIMEOUT ?=
+POSTGRES_CHECKPOINT_COMPLETION_TARGET ?=
+POSTGRES_WAL_COMPRESSION ?=
+POSTGRES_RANDOM_PAGE_COST ?=
+POSTGRES_EFFECTIVE_CACHE_SIZE ?=
+POSTGRES_MAINTENANCE_WORK_MEM ?=
+POSTGRES_AUTOVACUUM_MAX_WORKERS ?=
+POSTGRES_AUTOVACUUM_WORK_MEM ?=
+POSTGRES_SERVER_TUNING_ENV := POSTGRES_SHARED_PRELOAD_LIBRARIES=$(POSTGRES_SHARED_PRELOAD_LIBRARIES) POSTGRES_SHARED_BUFFERS=$(POSTGRES_SHARED_BUFFERS) POSTGRES_MAX_CONNECTIONS=$(POSTGRES_MAX_CONNECTIONS) POSTGRES_MAX_WAL_SIZE=$(POSTGRES_MAX_WAL_SIZE) POSTGRES_CHECKPOINT_TIMEOUT=$(POSTGRES_CHECKPOINT_TIMEOUT) POSTGRES_CHECKPOINT_COMPLETION_TARGET=$(POSTGRES_CHECKPOINT_COMPLETION_TARGET) POSTGRES_WAL_COMPRESSION=$(POSTGRES_WAL_COMPRESSION) POSTGRES_RANDOM_PAGE_COST=$(POSTGRES_RANDOM_PAGE_COST) POSTGRES_EFFECTIVE_CACHE_SIZE=$(POSTGRES_EFFECTIVE_CACHE_SIZE) POSTGRES_MAINTENANCE_WORK_MEM=$(POSTGRES_MAINTENANCE_WORK_MEM) POSTGRES_AUTOVACUUM_MAX_WORKERS=$(POSTGRES_AUTOVACUUM_MAX_WORKERS) POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_AUTOVACUUM_WORK_MEM)
+QNAP ?= 0
+QNAP_ENABLED := $(filter 1 true yes on,$(QNAP))
+QNAP_ALLOW_DESTRUCTIVE_RESET ?= 0
+QNAP_ALLOW_DESTRUCTIVE_RESET_ENABLED := $(filter 1 true yes on,$(QNAP_ALLOW_DESTRUCTIVE_RESET))
+QNAP_DOCKER_HOST ?= tcp://192.168.1.11:2376
+QNAP_DOCKER_TLS_VERIFY ?= 1
+QNAP_DOCKER_CERT_PATH ?= $(HOME)/.docker
+QNAP_PG_HOST ?= 192.168.1.11
+QNAP_PG_PORT ?= 5432
+QNAP_PG_DBNAME ?= $(POSTGRES_DB_BASE)
+QNAP_PG_USER ?= postgresql
+QNAP_PG_PASSWORD ?= postgresqlfod
+COMPOSE_RUN := $(if $(QNAP_ENABLED),DOCKER_HOST=$(QNAP_DOCKER_HOST) DOCKER_TLS_VERIFY=$(QNAP_DOCKER_TLS_VERIFY) DOCKER_CERT_PATH=$(QNAP_DOCKER_CERT_PATH),) $(POSTGRES_SERVER_TUNING_ENV) $(COMPOSE)
+FOD_REMOTE_PG_HOST ?= $(QNAP_PG_HOST)
+FOD_REMOTE_PG_PORT ?= $(QNAP_PG_PORT)
+FOD_REMOTE_PG_DBNAME ?= $(QNAP_PG_DBNAME)
+FOD_REMOTE_PG_USER ?= $(QNAP_PG_USER)
+FOD_REMOTE_PG_PASSWORD ?= $(QNAP_PG_PASSWORD)
+FOD_REMOTE_PG_ENV := FOD_PG_HOST=$(FOD_REMOTE_PG_HOST) FOD_PG_PORT=$(FOD_REMOTE_PG_PORT) FOD_PG_DBNAME=$(FOD_REMOTE_PG_DBNAME) FOD_PG_USER=$(FOD_REMOTE_PG_USER) FOD_PG_PASSWORD=$(FOD_REMOTE_PG_PASSWORD)
+FOD_PG_HOST ?= $(if $(QNAP_ENABLED),$(QNAP_PG_HOST),127.0.0.1)
+FOD_PG_PORT ?= $(if $(QNAP_ENABLED),$(QNAP_PG_PORT),$(POSTGRES_PORT))
+FOD_PG_DBNAME ?= $(if $(QNAP_ENABLED),$(QNAP_PG_DBNAME),$(POSTGRES_DB))
+FOD_PG_USER ?= $(if $(QNAP_ENABLED),$(QNAP_PG_USER),$(POSTGRES_USER))
+FOD_PG_PASSWORD ?= $(if $(QNAP_ENABLED),$(QNAP_PG_PASSWORD),$(POSTGRES_PASSWORD))
+POSTGRES_DB := $(if $(QNAP_ENABLED),$(QNAP_PG_DBNAME),$(POSTGRES_DB_BASE))
+POSTGRES_USER := $(if $(QNAP_ENABLED),$(QNAP_PG_USER),$(POSTGRES_USER_BASE))
+POSTGRES_PASSWORD := $(if $(QNAP_ENABLED),$(QNAP_PG_PASSWORD),$(POSTGRES_PASSWORD_BASE))
+POSTGRES_PORT := $(if $(QNAP_ENABLED),$(QNAP_PG_PORT),$(POSTGRES_PORT_BASE))
+# Legacy integration tests still read POSTGRES_HOST. Keep that compatibility
+# variable aligned with the endpoint selected by FOD_PG_HOST so QNAP=1 cannot
+# silently fall back to a local 127.0.0.1 PostgreSQL instance.
+POSTGRES_HOST := $(FOD_PG_HOST)
+# Legacy tests still consume POSTGRES_* directly. Export the complete selected
+# endpoint so QNAP=1 cannot combine the remote host with local default
+# credentials such as foduser/cichosza.
+export POSTGRES_HOST
+export POSTGRES_PORT
+export POSTGRES_DB
+export POSTGRES_USER
+export POSTGRES_PASSWORD
+export FOD_PG_HOST
+export FOD_PG_PORT
+export FOD_PG_DBNAME
+export FOD_PG_USER
+export FOD_PG_PASSWORD
+PSQL ?= PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h $(FOD_PG_HOST) -p $(FOD_PG_PORT) -U $(FOD_PG_USER) -d $(FOD_PG_DBNAME)
+MOUNTPOINT ?= /tmp/fod-mount
+FOD_SELINUX ?= auto
+FOD_DEFAULT_PERMISSIONS ?= 1
+FOD_ATIME_POLICY ?= default
+FOD_ROLE ?= auto
+FOD_PROFILE ?=
+ADMP_TRACE_INI ?= admpanch_trace.fod.local.ini
+ADMP_TRACE_TARGET ?= test-fio-sequential-io-strace
+ADMP_TRACE_INI_ABS := $(abspath $(ADMP_TRACE_INI))
+ADMP_TRACE_ENV ?=
+export ADMP_TRACE_ENV
+FOD_CHANGE_CONFIG_PATH ?= $(FOD_CONFIG_SOURCE)
+FOD_SCHEMA_ADMIN_PASSWORD_FILE ?= .fod/schema-admin-password
+FOD_CHANGE_KEY ?=
+FOD_CHANGE_VALUE ?=
+FOD_CHANGE_PASSWORD ?=
+FOD_LOG_LEVEL ?= INFO
+FOD_ACL ?= off
+ifndef FOD_SCHEMA_ADMIN_PASSWORD
+FOD_SCHEMA_ADMIN_PASSWORD := $(shell $(PYTHON) -c 'import secrets; print("fod-" + secrets.token_urlsafe(24))')
+endif
+export FOD_SCHEMA_ADMIN_PASSWORD
+FOD_SELINUX_CONTEXT ?=
+FOD_SELINUX_FSCONTEXT ?=
+FOD_SELINUX_DEFCONTEXT ?=
+FOD_SELINUX_ROOTCONTEXT ?=
+FOD_LAZYTIME ?= 0
+FOD_SYNC ?= 0
+FOD_DIRSYNC ?= 0
+export CONTAINER_POSTGRES_NAME
+export CONTAINER_POSTGRES_SELINUX_ACL_NAME
+export CONTAINER_FOD_SELINUX_ACL_NAME
+MOUNT_HELPER_DEST ?= /usr/local/sbin/mount.fod
+SUDO ?= sudo
+STRIP ?= strip
+STRIP_FLAGS ?= --strip-unneeded
+UBUNTU_BUILD_DEPS := cargo rustc build-essential pkg-config libpq-dev libfuse3-dev python3 openssl
+UBUNTU_LEGACY_PYTHON_DEPS := python3-venv python3-pip
+REDHAT_BUILD_DEPS := cargo rustc rustfmt gcc make pkgconf-pkg-config libpq-devel fuse3-devel python3 openssl
+REDHAT_LEGACY_PYTHON_DEPS := python3-pip
+REDHAT_SELINUX_ACL_DEPS := git fuse3 postgresql policycoreutils policycoreutils-python-utils setools-console audit attr acl findutils util-linux diffutils procps-ng httpd curl
+REDHAT_POSTGRES_SERVER_DEPS := postgresql-server
+ROCKY_SELINUX_HOST ?= 192.168.1.188
+ROCKY_SELINUX_SSH ?= ssh
+ROCKY_SELINUX_WORKDIR ?= $(HOME)/git/fod
+ROCKY_SELINUX_REPO_URL ?= $(shell git config --get remote.origin.url 2>/dev/null || printf '%s\n' https://github.com/stachwk/fod.git)
+ROCKY_SELINUX_PG_DB ?= fod_selinux_test
+ROCKY_SELINUX_PG_USER ?= fod_selinux_test
+ROCKY_SELINUX_PG_ENV_FILE ?= /tmp/fod-rocky-selinux-pg.env
+
+.PHONY: help benchmark benchmarks postgres-benchmarks postgres-benchmarks-local postgres-benchmarks-qnap postgres-benchmarks-checkpoint postgres-benchmarks-compare postgres-benchmarks-wal-preset postgres-benchmarks-planner-preset venv deps deps-ubuntu deps-redhat rocky-selinux-deps rocky-selinux-install-deps rocky-selinux-postgres-prepare rocky-selinux-preflight rocky-selinux-prepare rocky-selinux-test-strict rocky-selinux-test-operational remote-rocky-selinux-install-deps remote-rocky-selinux-sync remote-rocky-selinux-postgres-prepare remote-rocky-selinux-preflight remote-rocky-selinux-prepare remote-rocky-selinux-test-strict remote-rocky-selinux-test-operational up down restart logs wait wait-client init init-qnap reset test-db-destructive-guard test-db-restore-local test-db-restore-selected smoke enable-pg-stat-statements mount mount-qnap mount-user demo unmount db-shell cargo-profile-show reload-runtime change-runtime change-runtime-list change-runtime-get change-runtime-set install-config install-config-user install-mount-helper build-libfod install-root-scripts install-on-root uninstall-on-root install-on-root-venv pip-build pip-install pip-install-editable config-show postgres-config-show qnap-config-show qnap-config-show-inner qnap-up qnap-down qnap-restart qnap-logs qnap-wait qnap-init qnap-smoke qnap-reset qnap-mount warn-config-secret docker-selinux-acl-up docker-selinux-acl-wait docker-selinux-acl-down docker-selinux-acl-shell docker-selinux-acl-smoke test-integration test-xattr test-acl-mount-option test-df test-two-mount-quota test-locking test-pg-lock-manager test-permissions test-journal test-destroy test-dirhooks test-hardlink test-fallocate test-copy-file-range test-copy-dedupe-benchmark test-copy-block-crc-table test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-persist-block-plan test-rust-hotpath-persist-block-crc-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-dedupe-benchmark test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-hotpath-runtime-size-limits test-ioctl test-mknod test-lseek test-poll test-access-groups test-inode-model test-ownership-inheritance test-rename-root-conflict test-statfs-use-ino test-mount-workflow test-mount-root-permissions test-mount-wrapper-options test-fuse-context-identity test-files test-directories test-metadata test-symlink test-pool-connections test-postgresql-requirements test-postgresql-requirements-autocommit-off test-postgresql-requirements-autocommit-on test-runtime-profile test-runtime-reload test-metadata-cache test-truncate-shrink-block-boundary test-mount-suite test-fio-sequential-io test-fio-sequential-io-strace test-fio-primary-write-replica-read-docker test-fio-primary-write-replica-read-matrix test-fio-primary-write-replica-read-qnap test-primary-replica-benchmark-wiring test-admpanch-trace test-fio-mixed-io test-fio-random-mixed-io test-atime-noatime test-atime-nodiratime test-atime-relatime test-atime-benchmark test-timestamp-touch-once test-read-ahead-sequence test-read-cache-benchmark test-workers-read-parallel test-workers-write-parallel-copy test-runtime-config test-runtime-validation test-schema-upgrade test-schema-status test-throughput test-throughput-sync test-large-copy-benchmark test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark test-data-blocks-conflict-benchmark test-large-file-multiblock-benchmark test-remount-durability-benchmark test-tree-scale test-flush-release-profile test-truncate-release-profile test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-ext4-vs-fod-permissions test-root-owned-permissions test-allow-other-visibility test-multi-open-unique-handles test-version test-block-read test-primary-read-fused test-connection-recovery test-postgresql-wal-pressure test-postgresql-wal-pressure-checkpoint test-postgresql-connection-churn test-all test-all-full clean test-rust-hotpath-helper-parity test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-mkfs-pg-tls test-mkfs-config-suite test-rust-mkfs-suite test-rust-mkfs-suite-restored test-fod-indexer-parallel-smoke
+
+help:
+	@printf '%s\n' \
+		'Targets:' \
+	'  make cargo-profile-show - print the active Cargo build/test profile used by Makefile targets' \
+		'  make target-disk-status - report persistent ./target size, newest activity, thresholds, and largest entries' \
+		'  make target-disk-clean-plan - run the cleanup policy plus Cargo dry-run; never deletes files' \
+		'  make target-disk-clean FOD_TARGET_CLEAN_CONFIRM=clean-disk-target - clean eligible stale ./target through Cargo' \
+		'  make qnap-config-show - print the resolved QNAP Docker, PostgreSQL endpoint, and server tuning preset' \
+		'  make postgres-config-show - print the resolved PostgreSQL server tuning preset' \
+		'  make change-runtime-list - show the effective live reloadable snapshot via fod.change' \
+		'  make change-runtime-get - print one live reloadable key via fod.change (set FOD_CHANGE_KEY=...)' \
+		'  make reload-runtime - apply reloadable FOD_* values from the current config via fod.change (no remount needed)' \
+		'  make change-runtime-set - persist one live reloadable key via fod.change (set FOD_CHANGE_KEY, FOD_CHANGE_VALUE, and FOD_CHANGE_PASSWORD)' \
+		'  make venv       - create .venv for legacy Python integration tests' \
+		'  make deps       - refresh the legacy Python test dependencies in .venv' \
+		'  make deps-ubuntu - print the Ubuntu/Debian packages needed to build FOD' \
+		'  make deps-redhat - print the Fedora/RHEL packages needed to build FOD' \
+		'  make rocky-selinux-deps - print Rocky/RHEL SELinux+ACL validation package prerequisites' \
+		'  make rocky-selinux-prepare - install packages, verify Enforcing preflight, pull main, and build locally' \
+		'  make remote-rocky-selinux-prepare ROCKY_SELINUX_HOST=192.168.1.188 - prepare a Rocky SELinux host over SSH' \
+		'  make up         - start local PostgreSQL in Docker' \
+		'  make qnap-up    - start PostgreSQL in Docker using QNAP=1' \
+		'  make docker-selinux-acl-up - start the SELinux/ACL test lab in Docker' \
+		'  make docker-selinux-acl-wait - wait until the SELinux/ACL lab PostgreSQL is ready' \
+		'  make down       - stop local PostgreSQL' \
+		'  make qnap-down  - stop PostgreSQL using QNAP=1' \
+		'  make docker-selinux-acl-down - stop the SELinux/ACL test lab' \
+	'  make restart    - restart local PostgreSQL' \
+		'  make qnap-restart - restart PostgreSQL using QNAP=1' \
+		'  make logs       - show local PostgreSQL logs' \
+		'  make qnap-logs  - show PostgreSQL logs using QNAP=1' \
+		'  make wait       - wait until PostgreSQL is ready inside the selected Docker container' \
+		'  make wait-client - wait until the selected PostgreSQL endpoint accepts a host-side SQL connection' \
+		'  make qnap-wait  - wait until PostgreSQL is ready using QNAP=1' \
+		'  make init       - create the FOD schema in local PostgreSQL with --schema-admin-password' \
+		'  make qnap-init  - create the FOD schema using the QNAP transport preset' \
+		'  make init-qnap  - create the FOD schema using the remote QNAP PostgreSQL preset' \
+		'  make qnap-smoke - run the PostgreSQL smoke check using QNAP=1' \
+		'  make reset      - destructive down -v / up / wait / init; QNAP requires QNAP_ALLOW_DESTRUCTIVE_RESET=1' \
+		'  make test-db-restore-local - reset only the local Docker test DB after mkfs schema tests' \
+		'  make test-db-restore-selected - restore the selected local/QNAP test DB; QNAP requires explicit destructive opt-in' \
+		'  make qnap-reset - run reset using QNAP=1; requires QNAP_ALLOW_DESTRUCTIVE_RESET=1' \
+		'  make enable-pg-stat-statements - create pg_stat_statements in the local PostgreSQL database for diagnostics' \
+		'  make install-config - install fod_config.ini to /etc/fod/fod_config.ini (warns if password is still cichosza)' \
+		'  make install-config-user - install fod_config.ini to $$HOME/.config/fod/fod_config.ini without sudo (warns if password is still cichosza)' \
+		'  make test-config-warning - verify the install-config password warning behavior' \
+		'  make install-mount-helper - install mount.fod to $(MOUNT_HELPER_DEST)' \
+		'  make build-libfod - build libfod.so, the external command-surface aggregate library' \
+	'  make install-root-scripts - install FOD Rust binaries, libfod.so, and libfod.h (release-lto by default)' \
+		'  make install-on-root - install system config, Rust binaries, libfod.so/libfod.h, and mount helper' \
+		'  make uninstall-on-root - unmount active FOD resources, then remove root-style config, Rust binaries, libfod.so/libfod.h, and mount helper' \
+		'  make install-on-root-venv - create .venv for legacy tests, then run the full root-style install' \
+		'  make pip-build - removed; Rust binaries are built directly' \
+		'  make pip-install - removed; Rust binaries are built directly' \
+		'  make pip-install-editable - legacy Python test helper install' \
+		'  make config-show - show which file FOD uses for configuration' \
+		'  make indexer - run fod-indexer with INDEXER_ARGS="..."' \
+		'  make indexer-import - materialize a source into FOD (set INDEXER_SOURCE=...)' \
+		'  make test-fod-indexer-smoke - smoke the fod-indexer materialize pipeline' \
+		'  make test-fod-indexer-materialize - alias for make test-fod-indexer-smoke' \
+		'  make test-fod-indexer-materialize-rollback - smoke automatic rollback for failed materialize' \
+		'  make test-fod-indexer-usability - smoke help, browse, progress, dry-run, and clean UX' \
+		'  make test-fod-indexer-json-output - smoke JSON output and snapshot exports for fod-indexer' \
+		'  make test-fod-indexer-plan-import-scope - smoke the fod-indexer plan-import source scoping' \
+		'  make test-fod-indexer-cleanup-failed - smoke cleanup for failed fod-indexer materialization' \
+		'  make test-fod-indexer-parallel-smoke - run selected fod-indexer smokes concurrently' \
+		'  make smoke      - quick database connectivity test' \
+		'  make benchmarks - run the benchmark suite sequentially' \
+		'  make benchmark  - alias for make benchmarks' \
+		'  make postgres-benchmarks - run PostgreSQL optimization benchmark targets sequentially on the selected backend' \
+		'  make postgres-benchmarks-local - run PostgreSQL optimization benchmarks on local Docker' \
+		'  make postgres-benchmarks-qnap - run PostgreSQL optimization benchmarks on QNAP' \
+		'  make postgres-benchmarks-checkpoint - run the checkpoint-forcing PostgreSQL WAL benchmark on the selected backend' \
+		'  make postgres-benchmarks-wal-preset - run the WAL/checkpoint benchmark preset across local Docker and QNAP; set POSTGRES_BENCHMARK_REPEAT=N to repeat the full preset' \
+		'  make postgres-benchmarks-planner-preset - run the planner/autovacuum benchmark preset across local Docker and QNAP' \
+		'  make postgres-benchmarks-compare - run the PostgreSQL optimization benchmarks on local Docker and QNAP' \
+		'  make profile-env - capture local environment fingerprint under artifacts/perf/<commit>' \
+		'  make profile-local-baseline - run PROFILE_WORKLOAD with pg_stat capture before/after' \
+		'  make profile-perf-stat - run perf stat around PROFILE_WORKLOAD' \
+		'  make profile-perf-record - record perf samples around PROFILE_WORKLOAD' \
+		'  make profile-pg-wal-snapshot - capture machine-readable WAL/checkpointer counters' \
+		'  make profile-pg-wal-delta - compare PROFILE_WAL_BEFORE_LABEL and PROFILE_WAL_AFTER_LABEL snapshots' \
+		'  make profile-pg-table-dml-snapshot - capture storage table/index DML counters' \
+		'  make profile-pg-table-dml-delta - compare storage table/index DML snapshots before/after a workload' \
+		'  make profile-pg-top-io-wal - capture pg_stat_statements with local buffers and per-statement WAL' \
+		'  make profile-pg-metadata-top - capture high-call metadata lookup statements from pg_stat_statements' \
+		'  make profile-indexer-alloc - profile fod-indexer memory with time/heaptrack/massif; set PROFILE_INDEXER_ARGS="..."' \
+		'  make profile-fuse-sequential-io - capture FOD_PROFILE_IO plus strace output for PROFILE_FUSE_WORKLOAD' \
+		'  make profile-fuse-sudo-perf-stat - run sudo perf system counters while PROFILE_FUSE_WORKLOAD runs as current user' \
+		'  make profile-fuse-sudo-bpftrace-syscalls - run sudo bpftrace syscall sampling while PROFILE_FUSE_WORKLOAD runs as current user' \
+		'  make profile-data-blocks-copy-buffer-matrix - run large-copy matrix with DML/WAL/top-io-wal captures; set QNAP=1 for QNAP' \
+		'  make profile-data-blocks-copy-buffer-matrix-compare - run local matrix and optional QNAP matrix; set PROFILE_COPY_BUFFER_INCLUDE_QNAP=0/1/auto' \
+		'  make profile-data-blocks-conflict-dml - seed then profile overwrite-only data_blocks conflict updates' \
+		'  make profile-data-blocks-conflict-noop-dml - seed then profile same-payload overwrite filtering' \
+		'  make profile-data-blocks-swap-repeat-dml - profile repeated full-overwrite data-object swaps; set PROFILE_DATA_BLOCKS_SWAP_REPEAT=N' \
+		'  make profile-pg-data-object-gc - purge unreferenced data objects for deferred cleanup experiments' \
+		'  make profile-data-blocks-summary - write a markdown summary from data_blocks profiling artifacts' \
+		'  make profile-sudo-perf-stat-system - run system-wide sudo perf while PROFILE_WORKLOAD runs as the current user' \
+		'  make profile-sudo-bpftrace-syscalls-workload - run sudo bpftrace syscall sampling while PROFILE_WORKLOAD runs as the current user' \
+		'  make profile-pg-data-blocks-merge-explain - capture temp-table EXPLAIN for the current data_blocks merge shape' \
+		'  make profile-pg-data-blocks-merge-fillfactor-explain - capture temp-table EXPLAIN matrix for fillfactor variants' \
+		'  make profile-pg-data-blocks-bloat - capture real data_blocks table/index size and churn diagnostics' \
+		'  make profile-fuse-attach PROFILE_PID=<pid> - attach perf to a running fod-rust-fuse process' \
+		'  make mount      - mount FOD at $(MOUNTPOINT)' \
+		'  make qnap-mount - mount FOD at $(MOUNTPOINT) using QNAP=1' \
+		'  make mount-qnap - mount using the remote QNAP PostgreSQL preset (no local Docker)' \
+	'  make mount-user - prefer $$HOME/.config/fod/fod_config.ini and fall back to local ./fod_config.ini' \
+		'  make demo       - up/init and then mount FOD at $(MOUNTPOINT)' \
+	'  make docker-selinux-acl-shell - enter the SELinux/ACL Docker lab container' \
+	'  make docker-selinux-acl-smoke - run the SELinux/ACL lab smoke checks inside the Docker container' \
+		'  make unmount    - unmount FOD from $(MOUNTPOINT)' \
+		'  make test-integration - run mkdir/create/write/read tests against local PostgreSQL' \
+		'  make test-role-autodetect - verify runtime role and lock autodetection logic' \
+		'  make test-postgresql-requirements - alias for autocommit=off PostgreSQL requirements smoke' \
+		'  make test-postgresql-requirements-autocommit-off - verify PostgreSQL version, time zone, connection budget, and autocommit=off' \
+		'  make test-postgresql-requirements-autocommit-on - verify PostgreSQL version, time zone, connection budget, and autocommit=on' \
+		'  make test-xattr - run xattr/SELinux backend tests' \
+		'  make test-acl-mount-option - verify mount.fod -o acl=on enables POSIX ACL storage and enforcement' \
+		'  make rocky-selinux-test-strict - run strict SELinux+ACL xattr tests without fallback acceptance' \
+		'  make rocky-selinux-test-operational - verify Rocky SELinux enforcement for FOD fusefs_t content via httpd_t' \
+		'  make remote-rocky-selinux-test-strict - run strict SELinux+ACL xattr tests on the configured Rocky host' \
+		'  make remote-rocky-selinux-test-operational - run the Rocky SELinux operational proof on the configured host' \
+		'  make test-df   - verify df -Ph and df -Phi on a mounted FOD' \
+		'  make test-two-mount-quota - force concurrent quota decisions through two FUSE daemons' \
+		'  make test-locking - verify FOD lock backends and replica behavior' \
+		'  make test-pg-lock-manager - verify PostgreSQL-backed flock and range leases in Rust' \
+		'  make test-permissions - verify sticky bit and chown permission semantics' \
+		'  make test-journal - verify journal entries for mutating operations' \
+		'  make test-destroy - verify the destroy cleanup hook' \
+		'  make test-dirhooks - verify opendir/releasedir/fsyncdir on a directory' \
+		'  make test-hardlink - verify hardlinks through the FOD backend' \
+		'  make test-fallocate - verify fallocate through the FOD backend' \
+		'  make test-copy-file-range - verify copy_file_range through the FOD backend' \
+		'  make test-copy-dedupe-benchmark - benchmark repeated copy dedupe in Rust hotpath' \
+		'  make test-copy-block-crc-table - verify CRC cache population for unchanged-block dedupe' \
+		'  make test-worker-thresholds-block-size - verify worker thresholds against block-sized transfers' \
+		'  make test-ioctl - verify ioctl/FIONREAD through the FOD backend' \
+		'  make test-mknod - verify FIFO mknod through the FOD backend' \
+		'  make test-lseek - verify backend lseek through the FOD backend' \
+		'  make test-poll - verify backend poll through the FOD backend' \
+		'  make test-utimens-noop - verify utimens same-timestamp no-op behavior' \
+		'  make test-write-noop - verify zero-length write no-op behavior' \
+		'  make test-unlink-after-write - verify unlink after a flushed write' \
+		'  make test-local-vs-fod-permissions - compare local filesystem and FOD permission behavior' \
+		'  make test-root-owned-permissions - compare root-owned file handling on ext4 and FOD' \
+		'  make test-allow-other-visibility - verify allow_other visibility between users (host-dependent skip if not exposed)' \
+		'  make test-multi-open-unique-handles - verify independent fh values for concurrent opens' \
+		'  make test-version - verify the published FOD version string from Rust' \
+		'  make test-access-groups - verify access() for owner, primary group, and supplementary groups' \
+		'  make test-inode-model - verify a stable inode model after FS restart' \
+		'  make test-ownership-inheritance - verify gid inheritance after parent chmod/chown' \
+		'  make test-rename-root-conflict - verify rename replace semantics and edge cases' \
+		'  make test-statfs-use-ino - verify statfs and use_ino behavior on a mount' \
+		'  make test-atime-noatime - smoke test for FOD atime behavior (noatime)' \
+		'  make test-atime-nodiratime - smoke test for FOD atime behavior (nodiratime)' \
+		'  make test-atime-relatime - smoke test for FOD atime behavior (relatime)' \
+		'  make test-atime-benchmark - benchmark FOD atime behavior (file and directory reads)' \
+		'  make test-timestamp-touch-once - relatime-style one-touch-at-a-time timestamp regression' \
+		'  make test-read-ahead-sequence - regression for sequential read-ahead cache behavior' \
+		'  make test-read-cache-benchmark - benchmark FOD block cache size under sequential reads' \
+		'  make test-workers-read-parallel - verify workers_read only parallelize disjoint read gaps' \
+		'  make test-workers-write-parallel-copy - verify small copy stays sequential and large copy threads' \
+		'  make test-runtime-config - verify fod_config.ini runtime tuning values in Rust' \
+		'  make test-runtime-validation - verify runtime config rejects invalid values in Rust' \
+		'  make test-runtime-profile - verify named runtime profiles against fod_config.ini' \
+		'  make test-runtime-reload - verify live reload accepts safe knobs and rejects mount-only ones' \
+		'  make change-runtime - alias for make change-runtime-set' \
+		'  make change-runtime-sync - alias for make reload-runtime' \
+		'  make test-mkfs-pg-tls - verify PostgreSQL TLS path resolution and generated client pair handling' \
+		'  make test-schema-upgrade - verify schema version reporting for upgrade flow' \
+		'  make test-files - files: create/write/truncate/rename/unlink' \
+		'  make test-block-read - range reads, block cache, and read-ahead' \
+		'  make test-truncate-shrink-block-boundary - verify truncate shrink/extend boundaries stay zero-filled' \
+		'  make test-directories - directories: mkdir/rmdir/rename/stat/ls' \
+		'  make test-metadata - metadata: stat/chmod/chown/access' \
+		'  make test-mount-workflow - mount + dd + stat + ls + rename + chown + chmod + access' \
+		'  make test-mount-root-permissions - fresh mount + directory chmod/chown/write smoke' \
+		'  make test-mount-wrapper-options - verify mount.fod wrapper option parsing and PATH/ro handling' \
+		'  make test-fuse-context-identity - verify FUSE uid/gid context handling' \
+		'  make test-symlink - mount + ln -s + readlink + rename symlink + orphaned symlink ls on the symlink path' \
+		'  make test-throughput - benchmark FOD writes with dd if=/dev/zero' \
+		'  make test-throughput-sync - benchmark FOD writes with conv=fsync' \
+		'  make test-postgresql-wal-pressure - benchmark WAL pressure during mounted write bursts' \
+		'  make test-postgresql-wal-pressure-checkpoint - benchmark WAL pressure with a forced CHECKPOINT' \
+		'  make test-postgresql-connection-churn - benchmark repeated short PostgreSQL connections' \
+		'  make test-rust-hotpath-helper-parity - run the shared Rust hot-path helper parity test suite once' \
+		'  make test-rust-hotpath-copy-plan - Rust helper parity tests for copy planner and related helpers' \
+		'  make test-rust-hotpath-copy-dedupe - Rust helper parity tests for changed-copy dedupe' \
+		'  make test-rust-hotpath-copy-dedupe-benchmark - benchmark repeated copy dedupe in Rust hotpath' \
+		'  make test-rust-hotpath-copy-pack - Rust helper parity tests for changed-run packing' \
+		'  make test-rust-hotpath-persist-pad - Rust helper parity tests for block padding' \
+		'  make test-rust-hotpath-read-assemble - Rust helper parity tests for read assembly' \
+		'  make test-rust-pg-query - verify PostgreSQL query paths and metadata helpers through Rust' \
+		'  make test-rust-hotpath-runtime-size-limits - verify config size parsing and PG-visible fs cap in Rust' \
+		'  make test-rust-hotpath-read-ahead - Rust helper parity tests for read-ahead formulas' \
+		'  make test-rust-hotpath-read-sequence - Rust helper parity tests for read-sequence helpers' \
+		'  make test-rust-hotpath-read-fetch-bounds - Rust helper parity tests for read fetch planning' \
+		'  make test-rust-hotpath-read-slice-plan - Rust helper parity tests for read slice planning' \
+		'  make test-rust-hotpath-read-missing-range-worker-count - Rust helper parity tests for missing-range parallelism' \
+		'  make test-rust-hotpath-block-count - Rust helper parity tests for block counting' \
+		'  make test-rust-hotpath-dirty-block-size - Rust helper parity tests for dirty block sizing' \
+		'  make test-rust-hotpath-logical-resize-plan - Rust helper parity tests for logical resize planning' \
+		'  make test-rust-hotpath-persist-layout-plan - Rust helper parity tests for persist layout planning' \
+		'  make test-rust-hotpath-persist-block-plan - Rust helper parity tests for persist block planning' \
+		'  make test-rust-hotpath-persist-block-crc-plan - Rust helper parity tests for persist block CRC planning' \
+		'  make test-rust-hotpath-write-copy-worker-count - Rust helper parity tests for write copy worker counting' \
+		'  make test-rust-hotpath-block-transfer-plan - Rust helper parity tests for block transfer planning' \
+		'  make test-rust-hotpath-write-copy-plan - Rust helper parity tests for write copy planning' \
+		'  make test-rust-hotpath-parallel-worker-count - Rust helper parity tests for shared worker counting' \
+		'  make test-rust-hotpath-missing-ranges - Rust helper parity tests for missing-range handling' \
+		'  make test-large-copy-benchmark - benchmark large copy_file_range transfers' \
+		'  make test-large-copy-object-adoption - verify one-request whole-file data-object adoption' \
+		'  make test-data-blocks-conflict-benchmark - benchmark overwrite conflict updates in data_blocks' \
+		'  make test-data-blocks-conflict-noop-benchmark - benchmark same-payload overwrite filtering in data_blocks' \
+		'  make test-large-file-multiblock-benchmark - benchmark large multi-block file writes' \
+		'  make test-remount-durability-benchmark - benchmark data survival across remounts' \
+		'  make test-tree-scale - benchmark getattr/readdir on a larger tree' \
+		'  make test-flush-release-profile - verify clean flush/release and dirty flush regression handling' \
+		'  make test-truncate-release-profile - benchmark truncate-only flush/release on large files' \
+		'  make test-write-flush-threshold - verify automatic flush when the write buffer threshold is exceeded' \
+		'  make test-all-full - full integration suite + atime checks' \
+		'  make test-pool-connections - verify ThreadedConnectionPool configuration' \
+		'  make test-metadata-cache - verify short-TTL metadata and statfs cache behavior' \
+		'  make test-mount-suite - shared Python mount smoke runner' \
+		'  make test-fio-sequential-io - fio sequential read/write smoke for the block path' \
+		'  make test-fio-primary-write-replica-read-docker - Docker primary write, stop primary, restart replica, then replica read' \
+		'  make test-fio-sequential-io-strace - fio sequential smoke with strace syscall tables for the block path' \
+		'  make test-admpanch-trace - run ADMP_TRACE_TARGET with ADMP_INI=$(ADMP_TRACE_INI_ABS) (override ADMP_TRACE_TARGET=...)' \
+		'  make test-fio-primary-write-replica-read-qnap - isolated QNAP primary/replica FOD speed matrix (primary write/read, replica read)' \
+		'    QNAP_REPLICA_READ_FIO_FILE_SIZE=1G QNAP_REPLICA_READ_FIO_BLOCK_SIZES="4k 64k 512k 1m" make test-fio-primary-write-replica-read-qnap' \
+		'  make test-fio-mixed-io - fio mixed sequential rw smoke for the block path' \
+		'  make test-fio-random-mixed-io - fio random mixed rw negative control for the block path' \
+		'  make test-all   - smoke + current integration suite; QNAP=1 destructive runs require QNAP_ALLOW_DESTRUCTIVE_RESET=1' \
+		'  make db-shell   - open psql on local PostgreSQL' \
+		'  make clean      - remove .venv'
+
+$(VENV_PYTHON):
+	$(PYTHON) -m venv $(VENV_DIR)
+
+$(VENV_STAMP): requirements-test.txt $(VENV_PYTHON)
+	$(VENV_PYTHON) -m ensurepip --upgrade
+	$(VENV_PIP) install -r requirements-test.txt
+	@touch $@
+
+venv: $(VENV_STAMP)
+
+deps: venv
+
+deps-ubuntu:
+	@printf '%s\n' \
+		'Ubuntu/Debian build prerequisites for FOD:' \
+		'  sudo apt-get update' \
+		"  sudo apt-get install -y $(UBUNTU_BUILD_DEPS)" \
+		"  Optional legacy Python helpers/tests: sudo apt-get install -y $(UBUNTU_LEGACY_PYTHON_DEPS)"
+
+deps-redhat:
+	@printf '%s\n' \
+		'Fedora/RHEL build prerequisites for FOD:' \
+		"  sudo dnf install -y $(REDHAT_BUILD_DEPS)" \
+		"  Optional legacy Python helpers/tests: sudo dnf install -y $(REDHAT_LEGACY_PYTHON_DEPS)"
+
+rocky-selinux-deps:
+	@printf '%s\n' \
+		'Rocky/RHEL SELinux+ACL host prerequisites for FOD validation:' \
+		"  sudo dnf install -y $(REDHAT_BUILD_DEPS) $(REDHAT_LEGACY_PYTHON_DEPS) $(REDHAT_SELINUX_ACL_DEPS) $(REDHAT_POSTGRES_SERVER_DEPS)" \
+		'If a package name changes on this Rocky release, resolve it with dnf repoquery or dnf provides before changing FOD.'
+
+rocky-selinux-install-deps:
+	$(SUDO) dnf install -y $(REDHAT_BUILD_DEPS) $(REDHAT_LEGACY_PYTHON_DEPS) $(REDHAT_SELINUX_ACL_DEPS) $(REDHAT_POSTGRES_SERVER_DEPS)
+	@set -eu; \
+	if command -v systemctl >/dev/null 2>&1; then \
+		$(SUDO) systemctl enable --now auditd || true; \
+	fi; \
+	if [ -f /etc/fuse.conf ] && ! grep -Eq '^[[:space:]]*user_allow_other([[:space:]]*|$$)' /etc/fuse.conf; then \
+		$(SUDO) cp -a /etc/fuse.conf /etc/fuse.conf.fod-pre-selinux-test; \
+		$(SUDO) sed -i 's/^[[:space:]]*#[[:space:]]*user_allow_other[[:space:]]*$$/user_allow_other/' /etc/fuse.conf; \
+		grep -Eq '^[[:space:]]*user_allow_other([[:space:]]*|$$)' /etc/fuse.conf || printf '\nuser_allow_other\n' | $(SUDO) tee -a /etc/fuse.conf >/dev/null; \
+	fi
+
+rocky-selinux-postgres-prepare: rocky-selinux-install-deps
+	@set -eu; \
+	if command -v postgresql-setup >/dev/null 2>&1 && [ ! -s /var/lib/pgsql/data/PG_VERSION ] && ! $(SUDO) find /var/lib/pgsql/data -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then \
+		$(SUDO) postgresql-setup --initdb; \
+	fi; \
+	if command -v systemctl >/dev/null 2>&1; then \
+		$(SUDO) systemctl enable --now postgresql; \
+	fi; \
+	hba_file="$$($(SUDO) -u postgres psql -v ON_ERROR_STOP=1 -d postgres -tAc 'SHOW hba_file')"; \
+	marker="# FOD Rocky SELinux test auth"; \
+	if ! $(SUDO) grep -Fqx "$$marker" "$$hba_file"; then \
+		$(SUDO) cp -a "$$hba_file" "$$hba_file.fod-pre-selinux-test"; \
+		tmp_hba="$$(mktemp)"; \
+		$(SUDO) awk -v marker="$$marker" -v db="$(ROCKY_SELINUX_PG_DB)" -v user="$(ROCKY_SELINUX_PG_USER)" '\
+			{ print } \
+			/^#[[:space:]]*TYPE[[:space:]]+DATABASE[[:space:]]+USER[[:space:]]+ADDRESS[[:space:]]+METHOD/ { \
+				print marker; \
+				print "host    " db " " user " 127.0.0.1/32 scram-sha-256"; \
+				print "host    " db " " user " ::1/128 scram-sha-256"; \
+			}' "$$hba_file" >"$$tmp_hba"; \
+		$(SUDO) install -m 0600 -o postgres -g postgres "$$tmp_hba" "$$hba_file"; \
+		rm -f "$$tmp_hba"; \
+		$(SUDO) systemctl reload postgresql; \
+	fi; \
+	password="$$(if [ -f "$(ROCKY_SELINUX_PG_ENV_FILE)" ]; then sed -n 's/^FOD_PG_PASSWORD=//p' "$(ROCKY_SELINUX_PG_ENV_FILE)" | tail -n 1; fi)"; \
+	if [ -z "$$password" ]; then \
+		password="$$(openssl rand -hex 24)"; \
+	fi; \
+	$(SUDO) -u postgres psql -v ON_ERROR_STOP=1 -d postgres -c "DO \$$$$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$(ROCKY_SELINUX_PG_USER)') THEN CREATE ROLE $(ROCKY_SELINUX_PG_USER) LOGIN PASSWORD '$$password'; ELSE ALTER ROLE $(ROCKY_SELINUX_PG_USER) WITH LOGIN PASSWORD '$$password'; END IF; END \$$$$;"; \
+	if ! $(SUDO) -u postgres psql -v ON_ERROR_STOP=1 -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$(ROCKY_SELINUX_PG_DB)'" | grep -qx 1; then \
+		$(SUDO) -u postgres createdb -O "$(ROCKY_SELINUX_PG_USER)" "$(ROCKY_SELINUX_PG_DB)"; \
+	fi; \
+	umask 077; \
+	{ \
+		printf 'FOD_PG_HOST=127.0.0.1\n'; \
+		printf 'FOD_PG_PORT=5432\n'; \
+		printf 'FOD_PG_DBNAME=%s\n' "$(ROCKY_SELINUX_PG_DB)"; \
+		printf 'FOD_PG_USER=%s\n' "$(ROCKY_SELINUX_PG_USER)"; \
+		printf 'FOD_PG_PASSWORD=%s\n' "$$password"; \
+		printf 'POSTGRES_HOST=127.0.0.1\n'; \
+		printf 'POSTGRES_PORT=5432\n'; \
+		printf 'POSTGRES_DB=%s\n' "$(ROCKY_SELINUX_PG_DB)"; \
+		printf 'POSTGRES_USER=%s\n' "$(ROCKY_SELINUX_PG_USER)"; \
+		printf 'POSTGRES_PASSWORD=%s\n' "$$password"; \
+	} >"$(ROCKY_SELINUX_PG_ENV_FILE)"; \
+	printf 'Wrote PostgreSQL test environment to %s\n' "$(ROCKY_SELINUX_PG_ENV_FILE)"
+
+rocky-selinux-preflight:
+	@set -eu; \
+	printf 'timestamp=%s\n' "$$(date -Is)"; \
+	cat /etc/os-release; \
+	uname -a; \
+	hostnamectl; \
+	getenforce; \
+	sestatus; \
+	id; \
+	ls -l /dev/fuse; \
+	fusermount3 --version || true; \
+	git rev-parse HEAD; \
+	cat fod_version.txt; \
+	git status --short; \
+	test "$$(getenforce)" = Enforcing; \
+	for tool in git cargo rustc make python3 psql getfattr setfattr getfacl setfacl ausearch audit2why fusermount3; do \
+		command -v "$$tool" >/dev/null || { printf 'missing_tool=%s\n' "$$tool" >&2; exit 1; }; \
+	done
+
+rocky-selinux-prepare:
+	$(MAKE) --no-print-directory rocky-selinux-postgres-prepare
+	$(MAKE) --no-print-directory rocky-selinux-preflight
+	git pull --ff-only
+	$(RUST_CARGO) check --workspace --locked $(FOD_RELEASE_FLAG)
+	$(MAKE) --no-print-directory build-runtime
+
+rocky-selinux-test-strict:
+	$(MAKE) --no-print-directory rocky-selinux-preflight
+	$(MAKE) --no-print-directory venv
+	@set -eu; \
+	if [ -f "$(ROCKY_SELINUX_PG_ENV_FILE)" ]; then set -a; . "$(ROCKY_SELINUX_PG_ENV_FILE)"; set +a; fi; \
+	FOD_SELINUX=on FOD_ACL=on FOD_XATTR_STRICT_SECURITY=1 FOD_XATTR_STRICT_ACL=1 $(VENV_PYTHON) tests/integration/test_xattr.py; \
+	FOD_TEST_ACL_MOUNT_SELINUX=on $(VENV_PYTHON) tests/integration/test_acl_mount_option.py
+
+rocky-selinux-test-operational:
+	$(MAKE) --no-print-directory rocky-selinux-preflight
+	$(MAKE) --no-print-directory build-runtime
+	@set -eu; \
+	if [ -f "$(ROCKY_SELINUX_PG_ENV_FILE)" ]; then set -a; . "$(ROCKY_SELINUX_PG_ENV_FILE)"; set +a; fi; \
+	FOD_SELINUX=on FOD_ACL=on FOD_ALLOW_OTHER=1 bash tests/integration/test_rocky_selinux_operational.sh
+
+remote-rocky-selinux-install-deps:
+	$(ROCKY_SELINUX_SSH) -tt $(ROCKY_SELINUX_HOST) 'set -eu; sudo dnf install -y $(REDHAT_BUILD_DEPS) $(REDHAT_LEGACY_PYTHON_DEPS) $(REDHAT_SELINUX_ACL_DEPS) $(REDHAT_POSTGRES_SERVER_DEPS); if command -v systemctl >/dev/null 2>&1; then sudo systemctl enable --now auditd || true; fi'
+
+remote-rocky-selinux-sync: remote-rocky-selinux-install-deps
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; mkdir -p "$$(dirname "$(ROCKY_SELINUX_WORKDIR)")"; if [ -d "$(ROCKY_SELINUX_WORKDIR)/.git" ]; then cd "$(ROCKY_SELINUX_WORKDIR)" && git checkout main && git pull --ff-only; else git clone --branch main "$(ROCKY_SELINUX_REPO_URL)" "$(ROCKY_SELINUX_WORKDIR)"; fi'
+
+remote-rocky-selinux-preflight: remote-rocky-selinux-sync
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; cd "$(ROCKY_SELINUX_WORKDIR)"; $(MAKE) --no-print-directory rocky-selinux-preflight'
+
+remote-rocky-selinux-postgres-prepare: remote-rocky-selinux-sync
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; cd "$(ROCKY_SELINUX_WORKDIR)"; $(MAKE) --no-print-directory rocky-selinux-postgres-prepare'
+
+remote-rocky-selinux-prepare: remote-rocky-selinux-sync
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; cd "$(ROCKY_SELINUX_WORKDIR)"; $(MAKE) --no-print-directory rocky-selinux-prepare'
+
+remote-rocky-selinux-test-strict: remote-rocky-selinux-prepare
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; cd "$(ROCKY_SELINUX_WORKDIR)"; $(MAKE) --no-print-directory rocky-selinux-test-strict'
+
+remote-rocky-selinux-test-operational: remote-rocky-selinux-prepare
+	$(ROCKY_SELINUX_SSH) $(ROCKY_SELINUX_HOST) 'set -eu; cd "$(ROCKY_SELINUX_WORKDIR)"; $(MAKE) --no-print-directory rocky-selinux-test-operational'
+
+up:
+	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) up -d postgres
+	@$(MAKE) wait QNAP=$(QNAP)
+	@$(MAKE) wait-client QNAP=$(QNAP)
+
+docker-selinux-acl-up:
+	@COMPOSE_PROJECT_NAME=fod-selinux-acl POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) FOD_ROLE=auto FOD_PROFILE=bulk_write FOD_SELINUX=on FOD_ACL=on FOD_LOG_LEVEL=DEBUG FOD_ALLOW_OTHER=1 \
+	$(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) up -d postgres fod-selinux-acl
+	@$(MAKE) docker-selinux-acl-wait
+
+down:
+	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) down
+
+docker-selinux-acl-down:
+	@COMPOSE_PROJECT_NAME=fod-selinux-acl POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) down -v
+
+docker-selinux-acl-wait:
+	@set -eu; \
+	echo "Waiting for PostgreSQL in the SELinux/ACL Docker lab..."; \
+	for i in $$(seq 1 60); do \
+		if COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T postgres pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB) >/dev/null 2>&1; then \
+			echo "SELinux/ACL lab PostgreSQL ready."; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "SELinux/ACL lab PostgreSQL did not start within the expected time."; \
+	exit 1
+
+docker-selinux-acl-shell:
+	COMPOSE_PROJECT_NAME=fod-selinux-acl \
+	$(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec fod-selinux-acl bash
+
+docker-selinux-acl-smoke: docker-selinux-acl-up
+	# This lab builds inside the container because it validates the container-local FUSE/SELinux toolchain.
+	COMPOSE_PROJECT_NAME=fod-selinux-acl $(COMPOSE_RUN) -f $(SELINUX_ACL_COMPOSE_FILE) exec -T fod-selinux-acl bash -c 'set -euo pipefail; source /usr/local/cargo/env; $(CARGO_BUILD_MKFS) $(FOD_RELEASE_FLAG) --bin fod-bootstrap --bin fod-rust-mkfs; $(CARGO_BUILD_FUSE) $(FOD_RELEASE_FLAG) --bin fod-rust-fuse; python3 tests/integration/test_fuse_context_identity.py; FOD_SELINUX=off FOD_ACL=off python3 tests/integration/test_xattr.py; FOD_TEST_ACL_MOUNT_SELINUX=on python3 tests/integration/test_acl_mount_option.py; $(CARGO_TEST_FUSE) --test root_permissions_smoke -- --nocapture'
+
+restart: down up
+
+logs:
+	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) logs -f postgres
+
+wait:
+	@set -eu; \
+	echo "Waiting for PostgreSQL in Docker..."; \
+	for i in $$(seq 1 60); do \
+		if COMPOSE_PROJECT_NAME=fod $(COMPOSE_RUN) -f $(COMPOSE_FILE) exec -T postgres pg_isready -U $(POSTGRES_USER) -d $(POSTGRES_DB) >/dev/null 2>&1; then \
+			echo "PostgreSQL ready."; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "PostgreSQL did not start within the expected time."; \
+	exit 1
+
+
+wait-client:
+	@set -eu; \
+	echo "Waiting for PostgreSQL client endpoint $(FOD_PG_HOST):$(FOD_PG_PORT)..."; \
+	for i in $$(seq 1 60); do \
+		if PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d "$(FOD_PG_DBNAME)" -tAc 'SELECT 1' 2>/dev/null | grep -qx 1; then \
+			echo "PostgreSQL client endpoint ready."; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "PostgreSQL client endpoint $(FOD_PG_HOST):$(FOD_PG_PORT) did not become reachable." >&2; \
+	exit 1
+
+
+init: build-runtime up
+	@set -eu; \
+	status_output="$$($(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
+	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
+		echo 'FOD schema already initialized; skipping init.'; \
+	else \
+		POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_RUNTIME_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
+		mkdir -p .fod; \
+		printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"; \
+	fi
+
+init-qnap: build-runtime
+	@set -eu; \
+	status_output="$$($(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
+	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
+		echo 'FOD schema already initialized; skipping qnap init.'; \
+	else \
+		$(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
+		mkdir -p .fod; \
+		printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"; \
+	fi
+
+
+reset: build-runtime
+	@set -eu; \
+	if [ -n "$(QNAP_ENABLED)" ] && [ -z "$(QNAP_ALLOW_DESTRUCTIVE_RESET_ENABLED)" ]; then \
+		echo "Refusing reset: QNAP=$(QNAP) would run docker compose down -v on the remote QNAP test database." >&2; \
+		echo "Re-run only for a dedicated disposable QNAP test database with QNAP_ALLOW_DESTRUCTIVE_RESET=1." >&2; \
+		exit 2; \
+	fi
+	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) down -v
+	$(MAKE) up QNAP=$(QNAP)
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_RUNTIME_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"
+	mkdir -p .fod
+	@printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"
+
+test-db-destructive-guard:
+	@set -eu; \
+	if [ -n "$(QNAP_ENABLED)" ] && [ -z "$(QNAP_ALLOW_DESTRUCTIVE_RESET_ENABLED)" ]; then \
+		echo "Refusing destructive database test: QNAP=$(QNAP) requires QNAP_ALLOW_DESTRUCTIVE_RESET=1." >&2; \
+		exit 2; \
+	fi
+
+test-db-restore-local: build-runtime
+	@set -eu; \
+	if [ -n "$(QNAP_ENABLED)" ]; then \
+		echo "Refusing test-db-restore-local: QNAP=$(QNAP) selects a remote Docker/PostgreSQL target." >&2; \
+		exit 2; \
+	fi; \
+	if [ "$(COMPOSE_FILE)" != "docker-compose.yml" ] || [ "$(FOD_PG_HOST)" != "127.0.0.1" ] || [ "$(POSTGRES_PORT)" != "$(POSTGRES_PORT_BASE)" ] || [ "$(POSTGRES_DB)" != "$(POSTGRES_DB_BASE)" ] || [ "$(POSTGRES_USER)" != "$(POSTGRES_USER_BASE)" ]; then \
+		echo "Refusing test-db-restore-local: expected local test Docker endpoint docker-compose.yml 127.0.0.1:$(POSTGRES_PORT_BASE) $(POSTGRES_DB_BASE)/$(POSTGRES_USER_BASE)." >&2; \
+		echo "Resolved endpoint: COMPOSE_FILE=$(COMPOSE_FILE) FOD_PG_HOST=$(FOD_PG_HOST) POSTGRES_PORT=$(POSTGRES_PORT) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER)." >&2; \
+		exit 2; \
+	fi; \
+	if findmnt -rn -S fod >/dev/null 2>&1 || pgrep -x fod-rust-fuse >/dev/null 2>&1 || pgrep -x fod-bootstrap >/dev/null 2>&1; then \
+		echo "Refusing test-db-restore-local: an active FOD mount or daemon is present." >&2; \
+		exit 2; \
+	fi; \
+	echo "Restoring local FOD test database after mkfs schema tests: docker-compose.yml project=fod database=$(POSTGRES_DB)."
+	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB_BASE) POSTGRES_USER=$(POSTGRES_USER_BASE) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD_BASE) POSTGRES_PORT=$(POSTGRES_PORT_BASE) \
+	$(POSTGRES_SERVER_TUNING_ENV) $(COMPOSE) -f docker-compose.yml down -v
+	$(MAKE) up QNAP=0
+	@POSTGRES_DB=$(POSTGRES_DB_BASE) POSTGRES_USER=$(POSTGRES_USER_BASE) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD_BASE) $(FOD_MKFS_RUNTIME_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"
+	mkdir -p .fod
+	@printf '%s\n' "$(FOD_SCHEMA_ADMIN_PASSWORD)" > "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"
+
+test-db-restore-selected: test-db-destructive-guard
+	@set -eu; \
+	if [ -n "$(QNAP_ENABLED)" ]; then \
+		$(MAKE) --no-print-directory reset QNAP="$(QNAP)" QNAP_ALLOW_DESTRUCTIVE_RESET="$(QNAP_ALLOW_DESTRUCTIVE_RESET)"; \
+	else \
+		$(MAKE) --no-print-directory test-db-restore-local QNAP=0; \
+	fi
+
+warn-config-secret:
+	@set -eu; \
+	if [ -f "$(FOD_CONFIG_SOURCE)" ] && grep -Eq '^[[:space:]]*password[[:space:]]*=[[:space:]]*cichosza([[:space:]]*([#;].*)?)?$$' "$(FOD_CONFIG_SOURCE)"; then \
+		printf '%s\n' "Warning: $(FOD_CONFIG_SOURCE) still contains password = cichosza."; \
+		printf '%s\n' "Warning: use fod_config.example.ini for shared installs and keep fod_config.ini local."; \
+	fi
+
+install-config:
+	$(MAKE) warn-config-secret
+	@printf '%s\n' "Installing $(FOD_CONFIG_SOURCE) -> $(FOD_CONFIG_DEST)"
+	sudo install -D -m 0644 $(FOD_CONFIG_SOURCE) $(FOD_CONFIG_DEST)
+
+install-config-user:
+	$(MAKE) warn-config-secret
+	@printf '%s\n' "Installing $(FOD_CONFIG_SOURCE) -> $$HOME/.config/fod/fod_config.ini"
+	install -D -m 0644 $(FOD_CONFIG_SOURCE) $$HOME/.config/fod/fod_config.ini
+
+test-config-warning:
+	tests/integration/test_config_warning.sh
+
+test-makefile-db-restore-order:
+	$(PYTHON) tests/test_makefile_db_restore_order.py
+
+.PHONY: test-makefile-db-restore-order
+
+test-makefile-uninstall-on-root:
+	$(PYTHON) tests/test_makefile_uninstall_on_root.py
+
+.PHONY: test-makefile-uninstall-on-root
+
+install-mount-helper:
+	@printf '%s\n' "Installing mount.fod -> $(MOUNT_HELPER_DEST)"
+	sudo install -D -m 0755 mount.fod $(MOUNT_HELPER_DEST)
+
+
+build-libfod:
+	$(CARGO_BUILD_LIBFOD) $(FOD_RELEASE_FLAG) --lib
+	@test -f "$(FOD_LIBFOD_PROFILE_SO)"
+	@printf '%s\n' "Built $(FOD_LIBFOD_PROFILE_SO)"
+
+
+build-libfod install-root-scripts: rust-production-toolchain-check
+
+install-root-scripts:
+	@printf '%s\n' "Installing FOD $(FOD_VERSION): Rust binaries -> /usr/local/bin, libfod.so -> /usr/local/lib, libfod.h -> $(FOD_LIBFOD_HEADER_DEST)"
+	$(CARGO_BUILD_INSTALL_ROOT)
+	$(CARGO_BUILD_LIBFOD) $(FOD_RELEASE_FLAG) --lib
+	sudo install -D -m 0755 "$(FOD_BOOTSTRAP_PROFILE_BIN)" /usr/local/bin/fod-bootstrap
+	sudo install -D -m 0755 "$(FOD_MKFS_PROFILE_BIN)" /usr/local/bin/mkfs.fod
+	sudo install -D -m 0755 "$(FOD_CHANGE_PROFILE_BIN)" /usr/local/bin/fod-change
+	sudo ln -sf fod-change /usr/local/bin/fod.change
+	sudo install -D -m 0755 "$(FOD_INDEXER_PROFILE_BIN)" /usr/local/bin/fod-indexer
+	sudo install -D -m 0755 "$(FOD_MONITOR_PROFILE_BIN)" /usr/local/bin/fod-monitor
+	sudo install -D -m 0755 "$(FOD_FUSE_PROFILE_BIN)" /usr/local/bin/fod-rust-fuse
+	sudo install -D -m 0644 "$(FOD_LIBFOD_PROFILE_SO)" /usr/local/lib/libfod.so
+	sudo install -D -m 0644 "$(FOD_LIBFOD_HEADER)" "$(FOD_LIBFOD_HEADER_DEST)"
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-bootstrap
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/mkfs.fod
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-change
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-indexer
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-monitor
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/bin/fod-rust-fuse
+	sudo $(STRIP) $(STRIP_FLAGS) /usr/local/lib/libfod.so
+
+
+install-on-root: install-config install-root-scripts install-mount-helper
+	@printf '%s\n' "FOD installed for root-style use: config, Rust binaries including fod-indexer and fod-monitor, libfod.so/libfod.h, and mount helper"
+
+uninstall-on-root:
+	@set -eu; \
+	if ! command -v findmnt >/dev/null 2>&1; then \
+		printf '%s\n' "Cannot safely uninstall FOD: findmnt is required to detect active FOD mounts." >&2; \
+		exit 1; \
+	fi; \
+	mount_list="$$(mktemp)"; \
+	trap 'rm -f "$$mount_list"' EXIT HUP INT TERM; \
+	LC_ALL=C findmnt -rn -S fod -o TARGET,FSTYPE 2>/dev/null | awk '$$2 ~ /^fuse([.]|$$)/ {print $$1}' > "$$mount_list"; \
+	if [ -s "$$mount_list" ]; then \
+		printf '%s\n' "Detected active FOD mounts:"; \
+		sed 's/^/  /' "$$mount_list"; \
+		while IFS= read -r mountpoint; do \
+			[ -n "$$mountpoint" ] || continue; \
+			printf '%s\n' "Unmounting FOD resource: $$mountpoint"; \
+			$(SUDO) umount -- "$$mountpoint"; \
+		done < "$$mount_list"; \
+	fi; \
+	: > "$$mount_list"; \
+	LC_ALL=C findmnt -rn -S fod -o TARGET,FSTYPE 2>/dev/null | awk '$$2 ~ /^fuse([.]|$$)/ {print $$1}' > "$$mount_list"; \
+	if [ -s "$$mount_list" ]; then \
+		printf '%s\n' "Cannot uninstall FOD: these FOD mounts are still active:" >&2; \
+		sed 's/^/  /' "$$mount_list" >&2; \
+		exit 1; \
+	fi; \
+	printf '%s\n' "Removing FOD root-style installation"; \
+	$(SUDO) rm -f \
+		/usr/local/bin/fod-bootstrap \
+		/usr/local/bin/mkfs.fod \
+		/usr/local/bin/fod-change \
+		/usr/local/bin/fod.change \
+		/usr/local/bin/fod-indexer \
+		/usr/local/bin/fod-monitor \
+		/usr/local/bin/fod-rust-fuse \
+		/usr/local/lib/libfod.so \
+		"$(FOD_LIBFOD_HEADER_DEST)" \
+		"$(MOUNT_HELPER_DEST)" \
+		"$(FOD_CONFIG_DEST)"; \
+	config_dir="$$(dirname -- "$(FOD_CONFIG_DEST)")"; \
+	$(SUDO) rmdir -- "$$(dirname -- "$(FOD_LIBFOD_HEADER_DEST)")" 2>/dev/null || true; \
+	$(SUDO) rmdir -- "$$config_dir" 2>/dev/null || true; \
+	rm -f "$$mount_list"; \
+	trap - EXIT HUP INT TERM; \
+	printf '%s\n' "FOD root-style installation removed"
+
+install-on-root-venv: venv install-on-root
+	@printf '%s\n' "FOD root-style install ready in $(VENV_DIR): config, legacy test venv, Rust binaries, libfod.so/libfod.h, and mount helper"
+
+pip-build:
+	@printf '%s\n' "Python packaging has been removed; build the Rust binaries directly." >&2
+	@exit 1
+
+pip-install:
+	@printf '%s\n' "Python packaging has been removed; use the Rust binaries directly." >&2
+	@exit 1
+
+pip-install-editable:
+	@printf '%s\n' "Python packaging has been removed; use the Rust binaries directly." >&2
+	@exit 1
+
+
+config-show: build-runtime
+	$(FOD_CONFIG_RUNTIME_BIN) --config-path . resolve-path
+
+indexer: build-runtime
+	@set -eu; \
+	if [ -z "$(strip $(INDEXER_ARGS))" ]; then \
+		echo 'Set INDEXER_ARGS=...'; \
+		exit 1; \
+	fi; \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_INDEXER_RUNTIME_BIN) $(INDEXER_ARGS)
+
+indexer-import: build-runtime init
+	@set -eu; \
+	if [ -z "$(strip $(INDEXER_SOURCE))" ]; then \
+		echo 'Set INDEXER_SOURCE=...'; \
+		exit 1; \
+	fi; \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_INDEXER_RUNTIME_BIN) materialize --source "$(INDEXER_SOURCE)"
+
+.PHONY: indexer indexer-import
+
+test-fod-indexer-smoke: venv init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_materialize.py
+
+.PHONY: test-fod-indexer-smoke
+
+test-fod-indexer-materialize: test-fod-indexer-smoke
+
+.PHONY: test-fod-indexer-materialize
+
+test-fod-indexer-materialize-rollback: venv init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_materialize_rollback.py
+
+.PHONY: test-fod-indexer-materialize-rollback
+
+test-fod-indexer-usability: venv init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_usability.py
+
+.PHONY: test-fod-indexer-usability
+
+test-fod-indexer-json-output: venv init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_json_output.py
+
+.PHONY: test-fod-indexer-json-output
+
+test-fod-indexer-plan-import-scope: venv init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_plan_import_scope.py
+
+.PHONY: test-fod-indexer-plan-import-scope
+
+test-fod-indexer-cleanup-failed: venv init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) $(VENV_PYTHON) tests/integration/test_fod_indexer_cleanup_failed.py
+
+.PHONY: test-fod-indexer-cleanup-failed
+
+test-fod-indexer-parallel-smoke: venv init
+	@set -u; \
+	$(MAKE) --no-print-directory test-fod-indexer-plan-import-scope & \
+	pid_plan=$$!; \
+	$(MAKE) --no-print-directory test-fod-indexer-cleanup-failed & \
+	pid_cleanup=$$!; \
+	wait $$pid_plan; \
+	status_plan=$$?; \
+	wait $$pid_cleanup; \
+	status_cleanup=$$?; \
+	if [ "$$status_plan" -ne 0 ] || [ "$$status_cleanup" -ne 0 ]; then \
+		echo "fod-indexer parallel smoke failed: plan-import-scope=$$status_plan cleanup-failed=$$status_cleanup" >&2; \
+		exit 1; \
+	fi
+
+.PHONY: test-fod-indexer-parallel-smoke
+
+cargo-profile-show:
+	@printf '%s\n' "FOD_VERSION=$(FOD_VERSION)"
+	@printf '%s\n' "FOD_CARGO_PROFILE=$(FOD_CARGO_PROFILE)"
+	@printf '%s\n' "FOD_RELEASE_FLAG=$(FOD_RELEASE_FLAG)"
+	@printf '%s\n' "FOD_CARGO_TEST_PROFILE=$(FOD_CARGO_TEST_PROFILE)"
+	@printf '%s\n' "FOD_TEST_FLAG=$(FOD_TEST_FLAG)"
+	@printf '%s\n' "FOD_RUNTIME_PROFILE=$(FOD_RUNTIME_PROFILE)"
+	@printf '%s\n' "FOD_RUNTIME_FLAG=$(FOD_RUNTIME_FLAG)"
+	@printf '%s\n' "FOD_RUNTIME_ARTIFACT_PROFILE=$(FOD_RUNTIME_ARTIFACT_PROFILE)"
+	@printf '%s\n' "FOD_RUNTIME_BUILD_STAMP=$(FOD_RUNTIME_BUILD_STAMP)"
+	@printf '%s\n' "install-root-scripts outputs: $(FOD_BOOTSTRAP_PROFILE_BIN), $(FOD_MKFS_PROFILE_BIN), $(FOD_CHANGE_PROFILE_BIN), $(FOD_INDEXER_PROFILE_BIN), $(FOD_MONITOR_PROFILE_BIN), $(FOD_FUSE_PROFILE_BIN), $(FOD_LIBFOD_PROFILE_SO), $(FOD_LIBFOD_HEADER)"
+
+smoke: up
+	@set -eu; \
+	for attempt in 1 2 3 4 5; do \
+		if PGPASSWORD=$(POSTGRES_PASSWORD) psql -h $(FOD_PG_HOST) -p $(FOD_PG_PORT) -U $(POSTGRES_USER) -d $(POSTGRES_DB) -tAc 'SELECT 1' | grep -qx 1; then \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	exit 1
+
+enable-pg-stat-statements: up
+	@COMPOSE_PROJECT_NAME=fod POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) \
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) exec -T postgres sh -lc 'PGPASSWORD="$$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"'
+
+mount: build-runtime up
+	mkdir -p $(MOUNTPOINT)
+	@printf '%s\n' "Using explicit FOD config file: $(FOD_CONFIG_SOURCE_ABS)"
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_RUNTIME_BIN) --config "$(FOD_CONFIG_SOURCE_ABS)" --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
+
+mount-qnap: build-runtime
+	mkdir -p $(MOUNTPOINT)
+	@printf '%s\n' "Using remote PostgreSQL at $(FOD_REMOTE_PG_HOST):$(FOD_REMOTE_PG_PORT) (db=$(FOD_REMOTE_PG_DBNAME), user=$(FOD_REMOTE_PG_USER))"
+	@$(FOD_REMOTE_PG_ENV) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_RUNTIME_BIN) --config "$(FOD_CONFIG_SOURCE_ABS)" --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
+
+mount-user: build-runtime up
+	mkdir -p $(MOUNTPOINT)
+	@set -eu; \
+	config_path="$$HOME/.config/fod/fod_config.ini"; \
+	if [ ! -f "$$config_path" ]; then \
+		echo "Explicit FOD user config is required: $$config_path" >&2; \
+		exit 2; \
+	fi; \
+	echo "Using explicit FOD config file: $$config_path"; \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_RUNTIME_BIN) --config "$$config_path" --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
+demo: build-runtime init
+	mkdir -p $(MOUNTPOINT)
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_ROLE=$(FOD_ROLE) FOD_PROFILE=$(FOD_PROFILE) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_LOG_LEVEL=$(FOD_LOG_LEVEL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(FOD_BOOTSTRAP_RUNTIME_BIN) --config "$(FOD_CONFIG_SOURCE_ABS)" --role $(FOD_ROLE) $(if $(strip $(FOD_PROFILE)),--profile $(FOD_PROFILE)) --selinux $(FOD_SELINUX) --acl $(FOD_ACL) --atime-policy $(FOD_ATIME_POLICY) $(if $(filter 0 false False no,$(FOD_DEFAULT_PERMISSIONS)),--no-default-permissions,--default-permissions) -f $(MOUNTPOINT)
+
+unmount:
+	@set -eu; \
+	if command -v fusermount3 >/dev/null 2>&1; then \
+		fusermount3 -u $(MOUNTPOINT); \
+	elif command -v fusermount >/dev/null 2>&1; then \
+		fusermount -u $(MOUNTPOINT); \
+	else \
+		umount $(MOUNTPOINT); \
+	fi
+
+test-integration: test-makefile-db-restore-order test-primary-replica-benchmark-wiring venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-mkfs-suite-restored test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-schema-upgrade test-block-read test-primary-read-fused test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-acl-mount-option test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary test-two-mount-quota
+test-integration: test-rust-hotpath-persist-block-plan
+test-integration: test-rust-hotpath-persist-block-crc-plan
+test-integration: test-config-warning
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_mkdir_create_write_read.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test mount_smoke mkdir_parent_missing --offline
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test mount_smoke truncate_rename --offline
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_chmod_rmdir.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_rename_root_conflict.sh
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_destroy.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_dirhooks.sh
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_hardlink.sh
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ioctl.py
+	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_mknod.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test mount_smoke --offline -- --nocapture --test-threads=1
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_lseek.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_poll.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_access_groups.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_inode_model.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ownership_inheritance.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_permissions.py
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_xattr.py
+
+test-role-autodetect:
+	$(RUST_CARGO) test --manifest-path rust_runtime/Cargo.toml $(FOD_TEST_FLAG) --lib resolves_auto_and_replica_lock_roles --offline
+
+test-xattr: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_xattr.py
+
+test-acl-mount-option: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_acl_mount_option.py
+
+test-locking: init
+	mkdir -p $(FOD_LOCKING_TARGET_DIR)
+	CARGO_TARGET_DIR=$(FOD_LOCKING_TARGET_DIR) $(CARGO_TEST_FUSE) --test lock_backend_smoke --no-run --message-format=json > $(FOD_LOCKING_BUILD_JSON)
+	@test_bin="$$($(PYTHON) -c 'import json, sys; print(*[message["executable"] for message in map(json.loads, sys.stdin) if message.get("reason") == "compiler-artifact" and message.get("target", {}).get("name") == "lock_backend_smoke" and message.get("executable")], sep="\n")' < $(FOD_LOCKING_BUILD_JSON) | tail -n 1)"; \
+		test -n "$$test_bin"; \
+		test -x "$$test_bin"; \
+		sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) "$$test_bin" --nocapture
+
+test-pg-lock-manager: init
+	$(CARGO_TEST_HOTPATH) --test lock_manager
+
+test-permissions: build-runtime up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_permissions.py
+
+test-journal: build-runtime up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_journal.py
+
+test-destroy: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_destroy.py
+
+test-dirhooks: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_dirhooks.sh
+
+test-hardlink: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_hardlink.sh
+
+test-fallocate: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate.py
+
+test-copy-file-range: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range.py
+
+
+test-copy-dedupe-benchmark: test-rust-hotpath-copy-dedupe-benchmark
+	@:
+test-copy-block-crc-table: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke copy_block_crc_table --offline
+
+test-worker-thresholds-block-size: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity write_worker_thresholds_block_size_plan_matches_expected_values
+
+test-ioctl: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ioctl.py
+
+test-mknod: init
+	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) POSTGRES_PORT=$(POSTGRES_PORT) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mknod.py
+
+
+test-lseek: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_lseek.py
+
+test-post-731-capability-fallbacks: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POST731_PROBE_OUTPUT=$(FOD_POST731_PROBE_OUTPUT) $(VENV_PYTHON) tests/integration/test_post_731_capability_fallbacks.py
+
+test-poll: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_poll.py
+
+test-access-groups: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_access_groups.py
+
+test-inode-model: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_inode_model.py
+
+test-ownership-inheritance: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ownership_inheritance.py
+
+test-rename-root-conflict: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) tests/integration/test_rename_root_conflict.sh
+
+test-statfs-use-ino: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_statfs_use_ino.sh
+
+test-atime-noatime: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=noatime FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_atime_policy.sh
+
+test-atime-nodiratime: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=nodiratime FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_atime_policy.sh
+
+test-atime-relatime: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=relatime FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_atime_policy.sh
+
+test-atime-benchmark: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) ATIME_BENCH_KIND=file bash tests/integration/test_atime_benchmark.sh
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) ATIME_BENCH_KIND=dir bash tests/integration/test_atime_benchmark.sh
+
+test-timestamp-touch-once: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_ATIME_POLICY=relatime FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) bash tests/integration/test_timestamp_touch_once.sh
+
+test-read-ahead-sequence: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity read_ahead_sequence_plan_matches_expected_values
+
+test-read-cache-benchmark: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity read_cache_benchmark_plan_matches_expected_values
+
+test-workers-read-parallel: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity read_workers_parallel_plan_matches_expected_values
+
+test-workers-write-parallel-copy: init
+	$(CARGO_TEST_HOTPATH) --test helper_parity write_workers_parallel_copy_plan_matches_expected_values
+
+
+test-mkfs-config-suite:
+	$(CARGO_TEST_MKFS) --test fod_config
+
+test-runtime-config: init test-mkfs-config-suite
+	@:
+
+test-rust-mkfs-suite:
+	$(CARGO_TEST_MKFS)
+
+# The complete mkfs suite intentionally exercises malformed and incomplete
+# schemas. Restore the selected test database before later FUSE integration
+# tests consume it. QNAP restore is allowed only with an explicit destructive
+# opt-in, and restore is attempted even when the suite fails.
+test-rust-mkfs-suite-restored: test-db-destructive-guard
+	@set -u; \
+		suite_status=0; \
+		restore_status=0; \
+		$(MAKE) --no-print-directory test-rust-mkfs-suite || suite_status=$$?; \
+		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
+		if [ "$$suite_status" -ne 0 ]; then \
+			if [ "$$restore_status" -ne 0 ]; then \
+				echo "mkfs suite failed with status $$suite_status and selected database restore failed with status $$restore_status" >&2; \
+			fi; \
+			exit "$$suite_status"; \
+		fi; \
+		exit "$$restore_status"
+
+.PHONY: test-rust-mkfs-suite-restored
+
+test-rust-mkfs-suite-local-restored:
+	@$(MAKE) --no-print-directory QNAP=0 test-rust-mkfs-suite-restored
+
+.PHONY: test-rust-mkfs-suite-local-restored
+
+test-runtime-validation: test-rust-mkfs-suite
+	@:
+
+test-rust-hotpath-runtime-size-limits: test-rust-mkfs-suite
+	@:
+test-schema-upgrade: up
+	@$(MAKE) --no-print-directory test-db-destructive-guard
+	@set -u; \
+		test_status=0; \
+		restore_status=0; \
+		$(CARGO_TEST_MKFS) --test schema_upgrade schema_upgrade_non_destructive_password_protected --offline || test_status=$$?; \
+		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
+		if [ "$$test_status" -ne 0 ]; then \
+			if [ "$$restore_status" -ne 0 ]; then \
+				echo "test-schema-upgrade failed with status $$test_status and selected database restore failed with status $$restore_status" >&2; \
+			fi; \
+			exit "$$test_status"; \
+		fi; \
+		exit "$$restore_status"
+
+test-schema-status: up
+	@$(MAKE) --no-print-directory test-db-destructive-guard
+	@set -u; \
+		test_status=0; \
+		restore_status=0; \
+		$(CARGO_TEST_MKFS) --test schema_upgrade schema_status_reports_version_secret_and_pending_migrations --offline || test_status=$$?; \
+		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
+		if [ "$$test_status" -ne 0 ]; then \
+			if [ "$$restore_status" -ne 0 ]; then \
+				echo "test-schema-status failed with status $$test_status and selected database restore failed with status $$restore_status" >&2; \
+			fi; \
+			exit "$$test_status"; \
+		fi; \
+		exit "$$restore_status"
+
+test-df: build-runtime venv up
+	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_df.sh
+
+test-two-mount-quota: build-runtime venv init
+	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_two_mount_quota.py
+
+test-mount-workflow: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_mount_workflow.sh
+
+test-mount-root-permissions: reset
+	@ADMP_TRACE_ENV="$(ADMP_TRACE_ENV)" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_mount_root_permissions.sh
+
+test-mount-wrapper-options:
+	bash tests/integration/test_mount_wrapper_options.sh
+	bash tests/integration/test_mount_wrapper_path_and_ro.sh
+
+test-fuse-context-identity: build-runtime venv
+	$(VENV_PYTHON) tests/integration/test_fuse_context_identity.py
+
+test-files: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_files.sh
+
+test-block-read: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test mount_smoke block_read_range --offline
+
+test-primary-read-fused: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test mount_smoke noatime_direct_uncached_read_uses_fused_postgres_query --offline -- --nocapture
+
+test-directories: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_directories.sh
+
+test-metadata: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_metadata.sh
+
+test-metadata-cache: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) $(VENV_PYTHON) tests/integration/test_metadata_cache.py
+
+test-truncate-shrink-block-boundary: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) $(VENV_PYTHON) tests/integration/test_truncate_shrink_block_boundary.py
+
+test-symlink: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_symlink.sh
+
+test-throughput: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) THROUGHPUT_BLOCK_SIZE=$(THROUGHPUT_BLOCK_SIZE) THROUGHPUT_COUNT=$(THROUGHPUT_COUNT) THROUGHPUT_SYNC=$(THROUGHPUT_SYNC) bash tests/integration/test_throughput.sh
+
+test-throughput-sync: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) THROUGHPUT_BLOCK_SIZE=$(THROUGHPUT_BLOCK_SIZE) THROUGHPUT_COUNT=$(THROUGHPUT_COUNT) THROUGHPUT_SYNC=1 bash tests/integration/test_throughput.sh
+
+test-postgresql-wal-pressure: venv init
+	@POSTGRES_BENCHMARK_LABEL=$(if $(QNAP_ENABLED),qnap,local) PG_WAL_PRESSURE_COUNT=$(PG_WAL_PRESSURE_COUNT) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PG_HOST=$(FOD_PG_HOST) FOD_PG_PORT=$(FOD_PG_PORT) FOD_PG_DBNAME=$(FOD_PG_DBNAME) FOD_PG_USER=$(FOD_PG_USER) FOD_PG_PASSWORD=$(FOD_PG_PASSWORD) FOD_PG_SSLMODE=$(FOD_PG_SSLMODE) FOD_PG_SSLROOTCERT=$(FOD_PG_SSLROOTCERT) FOD_PG_SSLCERT=$(FOD_PG_SSLCERT) FOD_PG_SSLKEY=$(FOD_PG_SSLKEY) $(VENV_PYTHON) tests/integration/test_postgresql_wal_pressure.py
+
+test-postgresql-wal-pressure-checkpoint: venv init
+	@POSTGRES_BENCHMARK_LABEL=$(if $(QNAP_ENABLED),qnap,local) PG_WAL_PRESSURE_COUNT=$(PG_WAL_PRESSURE_COUNT) PG_WAL_PRESSURE_FORCE_CHECKPOINT=1 POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PG_HOST=$(FOD_PG_HOST) FOD_PG_PORT=$(FOD_PG_PORT) FOD_PG_DBNAME=$(FOD_PG_DBNAME) FOD_PG_USER=$(FOD_PG_USER) FOD_PG_PASSWORD=$(FOD_PG_PASSWORD) FOD_PG_SSLMODE=$(FOD_PG_SSLMODE) FOD_PG_SSLROOTCERT=$(FOD_PG_SSLROOTCERT) FOD_PG_SSLCERT=$(FOD_PG_SSLCERT) FOD_PG_SSLKEY=$(FOD_PG_SSLKEY) $(VENV_PYTHON) tests/integration/test_postgresql_wal_pressure.py
+
+test-postgresql-connection-churn: venv init
+	@POSTGRES_BENCHMARK_LABEL=$(if $(QNAP_ENABLED),qnap,local) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PG_HOST=$(FOD_PG_HOST) FOD_PG_PORT=$(FOD_PG_PORT) FOD_PG_DBNAME=$(FOD_PG_DBNAME) FOD_PG_USER=$(FOD_PG_USER) FOD_PG_PASSWORD=$(FOD_PG_PASSWORD) FOD_PG_SSLMODE=$(FOD_PG_SSLMODE) FOD_PG_SSLROOTCERT=$(FOD_PG_SSLROOTCERT) FOD_PG_SSLCERT=$(FOD_PG_SSLCERT) FOD_PG_SSLKEY=$(FOD_PG_SSLKEY) $(VENV_PYTHON) tests/integration/test_postgresql_connection_churn.py
+
+test-fio-sequential-io: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_REQUIRE_AC_POWER=$(FOD_REQUIRE_AC_POWER) bash tests/integration/test_fio_sequential_io.sh
+
+test-fio-sequential-io-strace: init
+	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_REQUIRE_AC_POWER=$(FOD_REQUIRE_AC_POWER) FOD_PROFILE_IO=1 FOD_FOPEN_DIRECT_IO=1 FOD_STRACE=1 FIO_FILE_SIZE=$(FIO_FILE_SIZE) bash tests/integration/test_fio_sequential_io.sh
+
+
+.PHONY: test-fio-primary-write-replica-read-docker
+test-fio-primary-write-replica-read-docker: build-runtime
+	@FOD_REPLICA_READ_COMPOSE="$(COMPOSE)" \
+	REPLICA_READ_LABEL="docker" \
+	REPLICA_READ_COMPOSE_FILE="$(REPLICA_READ_COMPOSE_FILE)" \
+	REPLICA_READ_BIND_ADDRESS="$(REPLICA_READ_BIND_ADDRESS)" \
+	REPLICA_READ_PRIMARY_HOST="$(REPLICA_READ_PRIMARY_HOST)" \
+	REPLICA_READ_REPLICA_HOST="$(REPLICA_READ_REPLICA_HOST)" \
+	REPLICA_READ_PRIMARY_PORT="$(REPLICA_READ_PRIMARY_PORT)" \
+	REPLICA_READ_REPLICA_PORT="$(REPLICA_READ_REPLICA_PORT)" \
+	FIO_FILE_SIZE="$(REPLICA_READ_FIO_FILE_SIZE)" \
+	FIO_BLOCK_SIZE="$(REPLICA_READ_FIO_BLOCK_SIZE)" \
+	REPLICA_WAIT_SECONDS="$(REPLICA_READ_WAIT_SECONDS)" \
+	POSTGRES_DB="$(POSTGRES_DB)" \
+	POSTGRES_USER="$(POSTGRES_USER)" \
+	POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" \
+	FOD_REQUIRE_AC_POWER="$(FOD_REQUIRE_AC_POWER)" \
+	bash tests/integration/test_fio_primary_write_replica_read_docker.sh
+
+test-fio-primary-write-replica-read-matrix: build-runtime
+	@FOD_REPLICA_READ_COMPOSE="$(COMPOSE)" \
+	REPLICA_READ_LABEL="docker-matrix" \
+	REPLICA_READ_COMPOSE_FILE="$(REPLICA_READ_COMPOSE_FILE)" \
+	REPLICA_READ_BIND_ADDRESS="$(REPLICA_READ_BIND_ADDRESS)" \
+	REPLICA_READ_PRIMARY_HOST="$(REPLICA_READ_PRIMARY_HOST)" \
+	REPLICA_READ_REPLICA_HOST="$(REPLICA_READ_REPLICA_HOST)" \
+	REPLICA_READ_PRIMARY_PORT="$(REPLICA_READ_PRIMARY_PORT)" \
+	REPLICA_READ_REPLICA_PORT="$(REPLICA_READ_REPLICA_PORT)" \
+	FIO_FILE_SIZE="$(REPLICA_READ_FIO_FILE_SIZE)" \
+	FIO_BLOCK_SIZES="$(REPLICA_READ_FIO_BLOCK_SIZES)" \
+	REPLICA_WAIT_SECONDS="$(REPLICA_READ_WAIT_SECONDS)" \
+	POSTGRES_DB="$(POSTGRES_DB)" \
+	POSTGRES_USER="$(POSTGRES_USER)" \
+	POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" \
+	FOD_REQUIRE_AC_POWER="$(FOD_REQUIRE_AC_POWER)" \
+	bash tests/integration/test_fio_primary_write_replica_read_matrix.sh
+
+test-fio-primary-write-replica-read-qnap: build-runtime
+	@DOCKER_HOST="$(QNAP_DOCKER_HOST)" \
+	DOCKER_TLS_VERIFY="$(QNAP_DOCKER_TLS_VERIFY)" \
+	DOCKER_CERT_PATH="$(QNAP_DOCKER_CERT_PATH)" \
+	FOD_REPLICA_READ_COMPOSE="$(COMPOSE)" \
+	REPLICA_READ_LABEL="qnap" \
+	REPLICA_READ_COMPOSE_FILE="$(REPLICA_READ_COMPOSE_FILE)" \
+	REPLICA_READ_BIND_ADDRESS="$(QNAP_REPLICA_READ_BIND_ADDRESS)" \
+	REPLICA_READ_PRIMARY_HOST="$(QNAP_PG_HOST)" \
+	REPLICA_READ_REPLICA_HOST="$(QNAP_PG_HOST)" \
+	REPLICA_READ_PRIMARY_PORT="$(QNAP_REPLICA_READ_PRIMARY_PORT)" \
+	REPLICA_READ_REPLICA_PORT="$(QNAP_REPLICA_READ_REPLICA_PORT)" \
+	FIO_FILE_SIZE="$(QNAP_REPLICA_READ_FIO_FILE_SIZE)" \
+	FIO_BLOCK_SIZES="$(QNAP_REPLICA_READ_FIO_BLOCK_SIZES)" \
+	REPLICA_WAIT_SECONDS="$(QNAP_REPLICA_READ_WAIT_SECONDS)" \
+	POSTGRES_DB="$(QNAP_PG_DBNAME)" \
+	POSTGRES_USER="$(QNAP_PG_USER)" \
+	POSTGRES_PASSWORD="$(QNAP_PG_PASSWORD)" \
+	FOD_PG_HOST="$(QNAP_PG_HOST)" \
+	FOD_PG_PORT="$(QNAP_REPLICA_READ_PRIMARY_PORT)" \
+	FOD_PG_DBNAME="$(QNAP_PG_DBNAME)" \
+	FOD_PG_USER="$(QNAP_PG_USER)" \
+	FOD_PG_PASSWORD="$(QNAP_PG_PASSWORD)" \
+	FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" \
+	FOD_REQUIRE_AC_POWER="$(FOD_REQUIRE_AC_POWER)" \
+	bash tests/integration/test_fio_primary_write_replica_read_matrix.sh
+
+test-primary-replica-benchmark-wiring:
+	@python3 tests/test_primary_replica_benchmark_wiring.py
+
+test-admpanch-trace:
+	@printf '%s\n' "Running $(ADMP_TRACE_TARGET) with ADMP_INI=$(ADMP_TRACE_INI_ABS)"
+	ADMP_INI="$(ADMP_TRACE_INI_ABS)" ADMP_TRACE_ENV="ADMP_INI=$(ADMP_TRACE_INI_ABS)" $(MAKE) $(ADMP_TRACE_TARGET)
+
+test-fio-mixed-io: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) bash tests/integration/test_fio_mixed_io.sh
+
+test-fio-random-mixed-io: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FIO_RW_MODE=randrw FIO_RWMIXREAD=50 bash tests/integration/test_fio_mixed_io.sh
+
+
+test-rust-hotpath-helper-parity:
+	$(CARGO_TEST_HOTPATH) --test helper_parity
+
+test-rust-hotpath-copy-plan \
+test-rust-hotpath-crc32 \
+test-rust-hotpath-read-ahead \
+test-rust-hotpath-read-sequence \
+test-rust-hotpath-read-fetch-bounds \
+test-rust-hotpath-read-slice-plan \
+test-rust-hotpath-read-missing-range-worker-count \
+test-rust-hotpath-block-count \
+test-rust-hotpath-dirty-block-size \
+test-rust-hotpath-logical-resize-plan \
+test-rust-hotpath-persist-layout-plan \
+test-rust-hotpath-persist-block-plan \
+test-rust-hotpath-persist-block-crc-plan \
+test-rust-hotpath-write-copy-worker-count \
+test-rust-hotpath-block-transfer-plan \
+test-rust-hotpath-write-copy-plan \
+test-rust-hotpath-parallel-worker-count \
+test-rust-hotpath-missing-ranges \
+test-rust-hotpath-copy-dedupe \
+test-rust-hotpath-copy-pack \
+test-rust-hotpath-persist-pad \
+test-rust-hotpath-read-assemble: test-rust-hotpath-helper-parity
+	@:
+
+test-rust-hotpath-copy-dedupe-benchmark:
+	$(CARGO_TEST_HOTPATH) --test copy_dedupe_benchmark -- --nocapture
+
+test-rust-pg-query: init
+	$(CARGO_TEST_HOTPATH) --test pg_query
+
+test-large-copy-benchmark: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
+
+test-large-copy-object-adoption: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) LARGE_COPY_REQUEST_SIZE=full LARGE_COPY_EXPECT_SHARED_OBJECT=1 $(CARGO_TEST_FUSE) --test large_copy_benchmark --offline -- --nocapture
+
+.PHONY: test-large-copy-object-adoption
+
+test-data-blocks-conflict-seed: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_seed --offline -- --nocapture
+
+test-data-blocks-conflict-overwrite-benchmark: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER="$(DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER)" $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_overwrite_benchmark --offline -- --nocapture
+
+test-data-blocks-conflict-noop-overwrite-benchmark: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) $(CARGO_TEST_FUSE) --test data_blocks_conflict_benchmark data_blocks_conflict_noop_overwrite_benchmark --offline -- --nocapture
+
+test-data-blocks-conflict-benchmark: test-data-blocks-conflict-seed test-data-blocks-conflict-overwrite-benchmark
+	@:
+
+test-data-blocks-conflict-noop-benchmark: test-data-blocks-conflict-seed test-data-blocks-conflict-noop-overwrite-benchmark
+	@:
+
+test-large-file-multiblock-benchmark: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test large_file_multiblock_benchmark --offline -- --nocapture
+
+test-remount-durability-benchmark: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test remount_durability_benchmark --offline -- --nocapture
+
+test-tree-scale: build-runtime venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) TREE_SCALE_DIRS=$(TREE_SCALE_DIRS) TREE_SCALE_FILES=$(TREE_SCALE_FILES) bash tests/integration/test_tree_scale.sh
+
+test-flush-release-profile: reset
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke flush_release_profile --offline
+
+test-truncate-release-profile: reset
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke truncate_release_profile --offline
+
+test-persist-buffer-chunking: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke persist_buffer_chunking --offline
+
+test-write-flush-threshold: init
+	$(CARGO_TEST_FUSE) --test profile_smoke write_flush_threshold --offline -- --nocapture
+
+test-utimens-noop: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test profile_smoke utimens_noop --offline
+
+test-write-noop: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke write_noop
+
+test-unlink-after-write: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke unlink_after_write
+
+test-local-vs-fod-permissions: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_local_vs_fod_permissions.py
+
+test-ext4-vs-fod-permissions: test-local-vs-fod-permissions
+
+test-root-owned-permissions: init
+	@ADMP_TRACE_ENV="$(ADMP_TRACE_ENV)" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_FUSE) --test root_permissions_smoke -- --nocapture
+
+test-allow-other-visibility: init
+	bash tests/integration/test_allow_other_visibility.sh
+
+test-multi-open-unique-handles: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke multi_open_unique_handles
+
+
+test-version: test-mkfs-config-suite
+	@:
+test-connection-recovery: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(CARGO_TEST_HOTPATH) --test connection_recovery --offline
+
+test-pool-connections: venv
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_pool_connections.py
+
+test-postgresql-requirements-autocommit-off: venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=off $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
+
+test-postgresql-requirements-autocommit-on: venv up
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=on $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
+
+test-postgresql-requirements: test-postgresql-requirements-autocommit-off
+	@:
+
+test-runtime-profile: venv build-runtime up
+	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_profile.py
+
+test-runtime-reload: venv build-runtime
+	$(MAKE) reset
+	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_reload.py
+
+.PHONY: test-runtime-reload
+
+change-runtime-list: build-runtime up wait
+	$(FOD_CHANGE_RUNTIME_BIN) --config-path $(FOD_CHANGE_CONFIG_PATH) --list
+
+change-runtime-get: build-runtime up wait
+	@set -eu; \
+	if [ -z "$(strip $(FOD_CHANGE_KEY))" ]; then \
+		echo 'Set FOD_CHANGE_KEY=...'; \
+		exit 1; \
+	fi; \
+	$(FOD_CHANGE_RUNTIME_BIN) --config-path $(FOD_CHANGE_CONFIG_PATH) --get $(FOD_CHANGE_KEY)
+
+change-runtime-set: build-runtime up wait
+	@set -eu; \
+	if [ -z "$(strip $(FOD_CHANGE_KEY))" ]; then \
+		echo 'Set FOD_CHANGE_KEY=...'; \
+		exit 1; \
+	fi; \
+	if [ -z "$(strip $(FOD_CHANGE_VALUE))" ]; then \
+		echo 'Set FOD_CHANGE_VALUE=...'; \
+		exit 1; \
+	fi; \
+	if [ -z "$(strip $(FOD_CHANGE_PASSWORD))" ]; then \
+		echo 'Set FOD_CHANGE_PASSWORD=...'; \
+		exit 1; \
+	fi; \
+	$(FOD_CHANGE_RUNTIME_BIN) --config-path $(FOD_CHANGE_CONFIG_PATH) --password $(FOD_CHANGE_PASSWORD) --set $(FOD_CHANGE_KEY)=$(FOD_CHANGE_VALUE)
+
+change-runtime: change-runtime-set
+	@:
+
+change-runtime-sync: reload-runtime
+
+reload-runtime: build-runtime up wait
+	@set -eu; \
+	$(FOD_CHANGE_RUNTIME_BIN) --config-path $(FOD_CHANGE_CONFIG_PATH) --sync-config
+
+.PHONY: reload-runtime change-runtime change-runtime-sync change-runtime-list change-runtime-get change-runtime-set
+
+test-mkfs-pg-tls: test-mkfs-config-suite
+	@:
+
+test-mount-suite: venv
+	$(MAKE) reset
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mount_suite.py
+
+test-all: test-target-disk-clean-policy smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
+test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke
+test-integration: test-runtime-profile
+
+benchmark: benchmarks
+
+benchmarks:
+	@set -eu; \
+	for target in $(BENCHMARK_TARGETS); do \
+		$(MAKE) --no-print-directory $$target; \
+	done
+
+postgres-benchmarks:
+	@$(call RUN_POSTGRES_BENCHMARKS,$(POSTGRES_BENCHMARK_TARGETS),$(if $(QNAP_ENABLED),$(FOD_REMOTE_PG_ENV),),$(QNAP))
+
+postgres-benchmarks-local:
+	$(call RUN_POSTGRES_BENCHMARKS,$(POSTGRES_BENCHMARK_TARGETS),,0)
+
+postgres-benchmarks-qnap:
+	@$(call RUN_POSTGRES_BENCHMARKS,$(POSTGRES_BENCHMARK_TARGETS),$(FOD_REMOTE_PG_ENV),1)
+
+postgres-benchmarks-checkpoint:
+	@$(call RUN_POSTGRES_BENCHMARKS,$(POSTGRES_BENCHMARK_CHECKPOINT_TARGETS),$(if $(QNAP_ENABLED),$(FOD_REMOTE_PG_ENV),),$(QNAP))
+
+postgres-benchmarks-compare:
+	@set -eu; \
+	$(MAKE) --no-print-directory postgres-benchmarks-local; \
+	$(MAKE) --no-print-directory postgres-benchmarks-qnap; \
+	$(MAKE) --no-print-directory QNAP=0 postgres-benchmarks-checkpoint; \
+	$(MAKE) --no-print-directory QNAP=1 postgres-benchmarks-checkpoint
+
+postgres-benchmarks-wal-preset:
+	$(call RUN_POSTGRES_BENCHMARK_REPEAT,POSTGRES_MAX_WAL_SIZE=$(POSTGRES_BENCHMARK_WAL_PRESET_MAX_WAL_SIZE) POSTGRES_CHECKPOINT_TIMEOUT=$(POSTGRES_BENCHMARK_WAL_PRESET_CHECKPOINT_TIMEOUT) POSTGRES_WAL_COMPRESSION=$(POSTGRES_BENCHMARK_WAL_PRESET_WAL_COMPRESSION) postgres-benchmarks-compare)
+
+postgres-benchmarks-planner-preset:
+	@$(MAKE) --no-print-directory \
+		POSTGRES_SHARED_BUFFERS=$(POSTGRES_BENCHMARK_PLANNER_PRESET_SHARED_BUFFERS) \
+		POSTGRES_RANDOM_PAGE_COST=$(POSTGRES_BENCHMARK_PLANNER_PRESET_RANDOM_PAGE_COST) \
+		POSTGRES_EFFECTIVE_CACHE_SIZE=$(POSTGRES_BENCHMARK_PLANNER_PRESET_EFFECTIVE_CACHE_SIZE) \
+		POSTGRES_MAINTENANCE_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_MAINTENANCE_WORK_MEM) \
+		POSTGRES_AUTOVACUUM_MAX_WORKERS=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_MAX_WORKERS) \
+		POSTGRES_AUTOVACUUM_WORK_MEM=$(POSTGRES_BENCHMARK_PLANNER_PRESET_AUTOVACUUM_WORK_MEM) \
+		postgres-benchmarks-compare
+
+.PHONY: profile-env profile-pg-stat-statements-ready profile-pg-reset profile-pg-top profile-pg-top-io-wal profile-pg-metadata-top profile-pg-wal profile-pg-wal-snapshot profile-pg-wal-delta profile-pg-table-dml-snapshot profile-pg-table-dml-delta profile-pg-data-object-gc profile-pg-io profile-pg-activity profile-perf-stat profile-perf-record profile-sudo-perf-stat-system profile-sudo-bpftrace-syscalls-workload profile-fuse-attach profile-indexer-attach profile-indexer-alloc profile-fuse-sequential-io profile-fuse-sudo-perf-stat profile-fuse-sudo-bpftrace-syscalls profile-bpftrace-syscalls profile-bpftrace-read-hist profile-bpftrace-write-hist profile-local-baseline profile-data-blocks-summary profile-data-blocks-copy-buffer-run profile-data-blocks-copy-buffer-matrix profile-data-blocks-copy-buffer-matrix-local profile-data-blocks-copy-buffer-matrix-qnap profile-data-blocks-copy-buffer-matrix-compare profile-data-blocks-conflict-dml profile-data-blocks-conflict-noop-dml profile-data-blocks-swap-repeat-dml
+
+profile-env:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@{ \
+		echo "commit=$$(git rev-parse HEAD 2>/dev/null || true)"; \
+		echo "fod_version=$$(cat fod_version.txt 2>/dev/null || true)"; \
+		echo "date=$$(date -Is)"; \
+		echo "uname=$$(uname -a)"; \
+		echo "cargo=$$(cargo --version 2>/dev/null || true)"; \
+		echo "rustc=$$(rustc --version 2>/dev/null || true)"; \
+		echo "psql=$$(psql --version 2>/dev/null || true)"; \
+		echo "--- lscpu ---"; lscpu 2>/dev/null || true; \
+		echo "--- free -h ---"; free -h 2>/dev/null || true; \
+		echo "--- df -hT ---"; df -hT 2>/dev/null || true; \
+	} > $(ARTIFACTS_DIR)/env.txt
+	@printf '%s\n' "Wrote $(ARTIFACTS_DIR)/env.txt"
+
+profile-pg-stat-statements-ready:
+	$(PSQL) -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+
+profile-pg-reset: profile-pg-stat-statements-ready
+	$(PSQL) -f scripts/perf/pg/reset.sql
+
+profile-pg-top: profile-pg-stat-statements-ready
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/top_statements.sql > $(ARTIFACTS_DIR)/pg_top_statements$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_top_statements$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-top-io-wal: profile-pg-stat-statements-ready
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/top_statements_io_wal.sql > $(ARTIFACTS_DIR)/pg_top_io_wal$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_top_io_wal$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-metadata-top: profile-pg-stat-statements-ready
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/top_metadata_statements.sql > $(ARTIFACTS_DIR)/pg_top_metadata$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_top_metadata$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-indexer-alloc: build-runtime profile-env
+	@mkdir -p $(ARTIFACTS_DIR)
+	@set +e; \
+	tool="$(PROFILE_INDEXER_ALLOC_TOOL)"; \
+	log="$(PROFILE_INDEXER_ALLOC_LOG)"; \
+	stdout="$${log}.stdout"; \
+	stderr="$${log}.stderr"; \
+	time_out="$${log}.time"; \
+	rm -f "$$log" "$$stdout" "$$stderr" "$$time_out"; \
+	if [ "$$tool" = "auto" ]; then \
+		if command -v heaptrack >/dev/null 2>&1; then \
+			tool="heaptrack"; \
+		elif command -v valgrind >/dev/null 2>&1; then \
+			tool="massif"; \
+		else \
+			tool="time"; \
+		fi; \
+	fi; \
+	{ \
+		echo "profile=indexer-alloc"; \
+		echo "date=$$(date -Is)"; \
+		echo "commit=$$(git rev-parse HEAD 2>/dev/null || true)"; \
+		echo "fod_version=$$(cat fod_version.txt 2>/dev/null || true)"; \
+		echo "tool=$$tool"; \
+		echo "args=$(PROFILE_INDEXER_ARGS)"; \
+		echo "artifact_dir=$(ARTIFACTS_DIR)"; \
+		echo "binary=$(FOD_INDEXER_RUNTIME_BIN)"; \
+	} > "$$log"; \
+	case "$$tool" in \
+		time) \
+			if [ ! -x "$(PROFILE_INDEXER_TIME_BIN)" ]; then \
+				echo "Missing executable PROFILE_INDEXER_TIME_BIN=$(PROFILE_INDEXER_TIME_BIN)" >> "$$log"; \
+				status=127; \
+			else \
+				$(PROFILE_INDEXER_TIME_BIN) -v -o "$$time_out" \
+					env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+					$(FOD_INDEXER_RUNTIME_BIN) $(PROFILE_INDEXER_ARGS) > "$$stdout" 2> "$$stderr"; \
+				status="$$?"; \
+			fi ;; \
+		heaptrack) \
+			if ! command -v heaptrack >/dev/null 2>&1; then \
+				echo "Missing heaptrack; set PROFILE_INDEXER_ALLOC_TOOL=time or install heaptrack." >> "$$log"; \
+				status=127; \
+			else \
+				heaptrack -o "$(PROFILE_INDEXER_HEAPTRACK_PREFIX)" -- \
+					env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+					$(FOD_INDEXER_RUNTIME_BIN) $(PROFILE_INDEXER_ARGS) > "$$stdout" 2> "$$stderr"; \
+				status="$$?"; \
+				echo "heaptrack_prefix=$(PROFILE_INDEXER_HEAPTRACK_PREFIX)" >> "$$log"; \
+			fi ;; \
+		massif) \
+			if ! command -v valgrind >/dev/null 2>&1; then \
+				echo "Missing valgrind; set PROFILE_INDEXER_ALLOC_TOOL=time or install valgrind." >> "$$log"; \
+				status=127; \
+			else \
+				valgrind --tool=massif --massif-out-file="$(PROFILE_INDEXER_MASSIF_OUT)" \
+					env POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+					$(FOD_INDEXER_RUNTIME_BIN) $(PROFILE_INDEXER_ARGS) > "$$stdout" 2> "$$stderr"; \
+				status="$$?"; \
+				echo "massif_out=$(PROFILE_INDEXER_MASSIF_OUT)" >> "$$log"; \
+			fi ;; \
+		*) \
+			echo "Unknown PROFILE_INDEXER_ALLOC_TOOL=$$tool; use auto, time, heaptrack, or massif." >> "$$log"; \
+			status=2 ;; \
+	esac; \
+	{ \
+		echo "status=$$status"; \
+		echo "--- stdout ---"; \
+		cat "$$stdout" 2>/dev/null || true; \
+		echo "--- stderr ---"; \
+		cat "$$stderr" 2>/dev/null || true; \
+		if [ -f "$$time_out" ]; then \
+			echo "--- time -v ---"; \
+			cat "$$time_out"; \
+		fi; \
+	} >> "$$log"; \
+	cat "$$log"; \
+	exit "$$status"
+
+profile-fuse-sequential-io: profile-env
+	@mkdir -p $(ARTIFACTS_DIR)
+	@{ \
+		echo "profile=fuse-sequential-io"; \
+		echo "date=$$(date -Is)"; \
+		echo "commit=$$(git rev-parse HEAD 2>/dev/null || true)"; \
+		echo "fod_version=$$(cat fod_version.txt 2>/dev/null || true)"; \
+		echo "workload=$(PROFILE_FUSE_WORKLOAD)"; \
+		echo "fuse_log=$(PROFILE_FUSE_LOG)"; \
+		echo "--- workload ---"; \
+	} > "$(PROFILE_FUSE_LOG)"
+	@bash -o pipefail -c 'FOD_PROFILE_IO=1 $(PROFILE_MAKE) --no-print-directory $(PROFILE_FUSE_WORKLOAD) 2>&1 | tee -a "$(PROFILE_FUSE_LOG)"'
+	@printf '%s\n' "Wrote $(PROFILE_FUSE_LOG)"
+
+profile-fuse-sudo-perf-stat:
+	@$(MAKE) --no-print-directory PROFILE_WORKLOAD=$(PROFILE_FUSE_WORKLOAD) PROFILE_CAPTURE_LABEL=$(if $(PROFILE_CAPTURE_LABEL),$(PROFILE_CAPTURE_LABEL),fuse) profile-sudo-perf-stat-system
+
+profile-fuse-sudo-bpftrace-syscalls:
+	@$(MAKE) --no-print-directory PROFILE_WORKLOAD=$(PROFILE_FUSE_WORKLOAD) PROFILE_CAPTURE_LABEL=$(if $(PROFILE_CAPTURE_LABEL),$(PROFILE_CAPTURE_LABEL),fuse) profile-sudo-bpftrace-syscalls-workload
+
+profile-pg-wal:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/wal_checkpointer.sql > $(ARTIFACTS_DIR)/pg_wal_checkpointer$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_wal_checkpointer$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-wal-snapshot:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/wal_snapshot.sql > $(ARTIFACTS_DIR)/pg_wal_snapshot$(PROFILE_CAPTURE_SUFFIX).tsv
+	@cat $(ARTIFACTS_DIR)/pg_wal_snapshot$(PROFILE_CAPTURE_SUFFIX).tsv
+
+profile-pg-wal-delta:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@before="$(PROFILE_WAL_BEFORE_FILE)"; \
+	after="$(PROFILE_WAL_AFTER_FILE)"; \
+	out="$(PROFILE_WAL_DELTA_FILE)"; \
+	test -f "$$before" || { echo "Missing before WAL snapshot: $$before" >&2; exit 2; }; \
+	test -f "$$after" || { echo "Missing after WAL snapshot: $$after" >&2; exit 2; }; \
+	$(PYTHON) scripts/perf/pg/wal_delta.py "$$before" "$$after" > "$$out"; \
+	cat "$$out"
+
+profile-pg-table-dml-snapshot:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/table_dml_snapshot.sql > $(ARTIFACTS_DIR)/pg_table_dml_snapshot$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_table_dml_snapshot$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-table-dml-delta:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@before="$(PROFILE_TABLE_DML_BEFORE_FILE)"; \
+	after="$(PROFILE_TABLE_DML_AFTER_FILE)"; \
+	out="$(PROFILE_TABLE_DML_DELTA_FILE)"; \
+	test -f "$$before" || { echo "Missing before table DML snapshot: $$before" >&2; exit 2; }; \
+	test -f "$$after" || { echo "Missing after table DML snapshot: $$after" >&2; exit 2; }; \
+	$(PYTHON) scripts/perf/pg/table_dml_delta.py "$$before" "$$after" > "$$out"; \
+	cat "$$out"
+
+profile-pg-data-object-gc:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -v gc_limit=$(DATA_OBJECT_GC_LIMIT) -f scripts/perf/pg/data_object_gc.sql > $(ARTIFACTS_DIR)/pg_data_object_gc$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_data_object_gc$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-data-blocks-summary:
+	$(PYTHON) scripts/perf/summarize_data_blocks_profile.py \
+		--artifact-dir "$(ARTIFACTS_DIR)" \
+		--large-copy-log "$(PROFILE_LARGE_COPY_LOG)" \
+		--pg-top "$(ARTIFACTS_DIR)/pg_top_statements$(PROFILE_CAPTURE_SUFFIX).txt" \
+		--wal-delta "$(PROFILE_WAL_DELTA_FILE)" \
+		--table-dml-delta "$(PROFILE_TABLE_DML_DELTA_FILE)" \
+		--data-blocks-bloat "$(ARTIFACTS_DIR)/pg_data_blocks_bloat$(PROFILE_CAPTURE_SUFFIX).txt" \
+		--output "$(PROFILE_DATA_BLOCKS_SUMMARY_OUTPUT)" \
+		--run-id "$(PROFILE_RUN_ID)" \
+		--host "$(PROFILE_HOST)" \
+		--conclusion "$(PROFILE_DATA_BLOCKS_SUMMARY_CONCLUSION)" \
+		--next-candidate "$(PROFILE_DATA_BLOCKS_SUMMARY_NEXT)"
+
+profile-data-blocks-copy-buffer-run:
+	@test -n "$(PROFILE_COPY_BUFFER_BYTES)" || { echo "Set PROFILE_COPY_BUFFER_BYTES"; exit 2; }
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-env
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-reset
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-wal-snapshot
+	@set -eu; \
+	buffer="$(PROFILE_COPY_BUFFER_BYTES)"; \
+	if [ "$$buffer" = "default" ]; then \
+		buffer_env=""; \
+	else \
+		buffer_env="FOD_PERSIST_COPY_SEND_BUFFER_BYTES=$$buffer"; \
+	fi; \
+	printf 'FOD copy-buffer profile buffer=%s block_size=%s block_count=%s qnap=%s\n' "$$buffer" "$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" "$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" "$(QNAP)" | tee "$(PROFILE_COPY_BUFFER_LOG)"; \
+	bash -o pipefail -c "$$buffer_env FOD_PROFILE_IO=1 LARGE_COPY_BLOCK_SIZE='$(PROFILE_COPY_BUFFER_BLOCK_SIZE)' LARGE_COPY_BLOCK_COUNT='$(PROFILE_COPY_BUFFER_BLOCK_COUNT)' $(MAKE) --no-print-directory QNAP=$(QNAP) test-large-copy-benchmark 2>&1 | tee -a '$(PROFILE_COPY_BUFFER_LOG)'"
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-table-dml-delta
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-wal-snapshot
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=buffer-$(PROFILE_COPY_BUFFER_BYTES) profile-pg-top-io-wal
+	@$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=buffer-$(PROFILE_COPY_BUFFER_BYTES) profile-pg-data-blocks-bloat
+
+profile-data-blocks-copy-buffer-matrix:
+	@set -eu; \
+	base_run="$(PROFILE_RUN_ID)"; \
+	mode="local"; \
+	if [ "$(QNAP_ENABLED)" = "1" ]; then mode="qnap"; fi; \
+	for buffer in $(PROFILE_COPY_BUFFER_SIZES); do \
+		run_id="$${base_run}-$${mode}-buffer-$${buffer}"; \
+		log="/tmp/fod-copy-buffer-$${mode}-$${buffer}-$${base_run}.log"; \
+		printf '%s\n' "FOD copy-buffer matrix run mode=$$mode buffer=$$buffer run_id=$$run_id"; \
+		$(MAKE) --no-print-directory QNAP=$(QNAP) PROFILE_RUN_ID="$$run_id" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_BYTES="$$buffer" PROFILE_COPY_BUFFER_LOG="$$log" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-run; \
+	done
+
+profile-data-blocks-copy-buffer-matrix-local:
+	@$(MAKE) --no-print-directory QNAP=0 PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_SIZES="$(PROFILE_COPY_BUFFER_SIZES)" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-matrix
+
+profile-data-blocks-copy-buffer-matrix-qnap:
+	@$(MAKE) --no-print-directory QNAP=1 $(FOD_REMOTE_PG_ENV) PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_SIZES="$(PROFILE_COPY_BUFFER_SIZES)" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-matrix
+
+profile-data-blocks-copy-buffer-matrix-compare:
+	@set -eu; \
+	include_qnap="$(PROFILE_COPY_BUFFER_INCLUDE_QNAP)"; \
+	case "$$include_qnap" in \
+		auto|0|1|true|false|yes|no|on|off) ;; \
+		*) echo "Unsupported PROFILE_COPY_BUFFER_INCLUDE_QNAP=$$include_qnap; use auto, 0, or 1" >&2; exit 2 ;; \
+	esac; \
+	printf '%s\n' "FOD copy-buffer compare run_id=$(PROFILE_RUN_ID) include_qnap=$$include_qnap"; \
+	$(MAKE) --no-print-directory PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_SIZES="$(PROFILE_COPY_BUFFER_SIZES)" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-matrix-local; \
+	case "$$include_qnap" in \
+		0|false|no|off) printf '%s\n' "Skipping QNAP copy-buffer matrix because PROFILE_COPY_BUFFER_INCLUDE_QNAP=$$include_qnap"; exit 0 ;; \
+	esac; \
+	if [ "$$include_qnap" = "auto" ]; then \
+		probe_log="$(PROFILE_COPY_BUFFER_QNAP_PROBE_LOG)"; \
+		if $(MAKE) --no-print-directory QNAP=1 $(FOD_REMOTE_PG_ENV) smoke >"$$probe_log" 2>&1; then \
+			printf '%s\n' "QNAP smoke probe passed; running QNAP copy-buffer matrix."; \
+		else \
+			printf '%s\n' "Skipping QNAP copy-buffer matrix because smoke probe failed; see $$probe_log"; \
+			cat "$$probe_log"; \
+			exit 0; \
+		fi; \
+	fi; \
+	$(MAKE) --no-print-directory PROFILE_RUN_ID="$(PROFILE_RUN_ID)" PROFILE_HOST="$(PROFILE_HOST)" PROFILE_COPY_BUFFER_SIZES="$(PROFILE_COPY_BUFFER_SIZES)" PROFILE_COPY_BUFFER_BLOCK_SIZE="$(PROFILE_COPY_BUFFER_BLOCK_SIZE)" PROFILE_COPY_BUFFER_BLOCK_COUNT="$(PROFILE_COPY_BUFFER_BLOCK_COUNT)" profile-data-blocks-copy-buffer-matrix-qnap
+
+profile-data-blocks-conflict-dml:
+	@$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-seed
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-env
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-reset
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-wal-snapshot
+	@bash -o pipefail -c '$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-overwrite-benchmark 2>&1 | tee "$(PROFILE_DATA_BLOCKS_CONFLICT_LOG)"'
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-table-dml-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-wal-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict profile-pg-top
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict profile-pg-data-blocks-bloat
+
+profile-data-blocks-conflict-noop-dml:
+	@$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-seed
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-env
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-reset
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-wal-snapshot
+	@bash -o pipefail -c '$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-noop-overwrite-benchmark 2>&1 | tee "$(PROFILE_DATA_BLOCKS_CONFLICT_NOOP_LOG)"'
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-table-dml-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-wal-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict-noop profile-pg-top
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=conflict-noop profile-pg-data-blocks-bloat
+
+profile-data-blocks-swap-repeat-dml:
+	@$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) test-data-blocks-conflict-seed
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-env
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-reset
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=before profile-pg-wal-snapshot
+	@: > "$(PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG)"
+	@set -eu; \
+	repeat="$(PROFILE_DATA_BLOCKS_SWAP_REPEAT)"; \
+	case "$$repeat" in \
+		''|*[!0-9]*) echo "PROFILE_DATA_BLOCKS_SWAP_REPEAT must be a positive integer, got: $$repeat" >&2; exit 1 ;; \
+	esac; \
+	if [ "$$repeat" -lt 1 ]; then \
+		echo "PROFILE_DATA_BLOCKS_SWAP_REPEAT must be at least 1, got: $$repeat" >&2; \
+		exit 1; \
+	fi; \
+	i=1; \
+	while [ "$$i" -le "$$repeat" ]; do \
+		marker="fod-data-blocks-conflict-overwrite-$(PROFILE_RUN_ID)-$$i-"; \
+		printf 'FOD data-blocks swap repeat %s/%s marker=%s\n' "$$i" "$$repeat" "$$marker" | tee -a "$(PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG)"; \
+		$(MAKE) --no-print-directory DATA_BLOCKS_CONFLICT_ID=$(DATA_BLOCKS_CONFLICT_ID) DATA_BLOCKS_CONFLICT_BLOCK_SIZE=$(DATA_BLOCKS_CONFLICT_BLOCK_SIZE) DATA_BLOCKS_CONFLICT_BLOCK_COUNT=$(DATA_BLOCKS_CONFLICT_BLOCK_COUNT) DATA_BLOCKS_CONFLICT_OVERWRITE_MARKER="$$marker" test-data-blocks-conflict-overwrite-benchmark 2>&1 | tee -a "$(PROFILE_DATA_BLOCKS_SWAP_REPEAT_LOG)"; \
+		i=$$((i + 1)); \
+	done
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-table-dml-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-table-dml-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=after profile-pg-wal-snapshot
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) profile-pg-wal-delta
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=swap-repeat profile-pg-top
+	@$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=swap-repeat profile-pg-data-blocks-bloat
+
+profile-pg-io:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@set +e; \
+	$(PSQL) -f scripts/perf/pg/io_stats.sql > $(ARTIFACTS_DIR)/pg_io_stats$(PROFILE_CAPTURE_SUFFIX).txt 2>&1; \
+	status=$$?; \
+	cat $(ARTIFACTS_DIR)/pg_io_stats$(PROFILE_CAPTURE_SUFFIX).txt; \
+	if [ "$$status" -ne 0 ]; then \
+		if grep -q "pg_stat_io" $(ARTIFACTS_DIR)/pg_io_stats$(PROFILE_CAPTURE_SUFFIX).txt; then \
+			echo "Optional pg_stat_io capture failed with status $$status; this usually means PostgreSQL does not expose pg_stat_io."; \
+			exit 0; \
+		fi; \
+		exit "$$status"; \
+	fi; \
+	exit 0
+
+profile-pg-activity:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/activity.sql > $(ARTIFACTS_DIR)/pg_activity$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_activity$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-perf-stat:
+	@mkdir -p $(ARTIFACTS_DIR)
+	perf stat -d -d -d -r 5 -o $(ARTIFACTS_DIR)/perf-stat-$(PROFILE_WORKLOAD).txt -- $(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD)
+
+profile-perf-record:
+	@mkdir -p $(ARTIFACTS_DIR)
+	perf record -F $(PERF_FREQ) -g --call-graph dwarf,16384 -o $(ARTIFACTS_DIR)/perf-$(PROFILE_WORKLOAD).data -- $(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD)
+	@printf '%s\n' "Run: perf report -i $(ARTIFACTS_DIR)/perf-$(PROFILE_WORKLOAD).data"
+
+profile-sudo-perf-stat-system:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@set +e; \
+	out="$(ARTIFACTS_DIR)/perf-stat-system-$(PROFILE_WORKLOAD)$(PROFILE_CAPTURE_SUFFIX).txt"; \
+	status_file="$(ARTIFACTS_DIR)/.profile-workload-status-$$$$"; \
+	rm -f "$$status_file"; \
+	( sleep 1; $(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD); echo "$$?" > "$$status_file" ) & \
+	workload_pid="$$!"; \
+	$(PROFILE_SUDO) perf stat -a -d -d -d -o "$$out" -- sh -c 'sleep 1; while [ ! -f "$$1" ]; do sleep 0.2; done' sh "$$status_file"; \
+	perf_status="$$?"; \
+	wait "$$workload_pid"; \
+	workload_status="$$(cat "$$status_file" 2>/dev/null || echo 1)"; \
+	rm -f "$$status_file"; \
+	$(PROFILE_SUDO) chown "$$(id -u):$$(id -g)" "$$out" 2>/dev/null || true; \
+	printf 'workload_status=%s\nperf_status=%s\n' "$$workload_status" "$$perf_status" >> "$$out"; \
+	cat "$$out"; \
+	if [ "$$workload_status" -ne 0 ]; then exit "$$workload_status"; fi; \
+	if [ "$$perf_status" -ne 0 ]; then exit "$$perf_status"; fi
+
+profile-sudo-bpftrace-syscalls-workload:
+	@mkdir -p $(ARTIFACTS_DIR)
+	@set +e; \
+	out="$(ARTIFACTS_DIR)/bpftrace-syscalls-$(PROFILE_WORKLOAD)$(PROFILE_CAPTURE_SUFFIX).txt"; \
+	$(PROFILE_SUDO) timeout $(PROFILE_SECONDS)s bpftrace scripts/perf/bpftrace/syscalls_by_comm.bt > "$$out" 2>&1 & \
+	trace_pid="$$!"; \
+	sleep 1; \
+	$(PROFILE_MAKE) --no-print-directory $(PROFILE_WORKLOAD); \
+	workload_status="$$?"; \
+	wait "$$trace_pid"; \
+	trace_status="$$?"; \
+	printf 'workload_status=%s\nbpftrace_status=%s\n' "$$workload_status" "$$trace_status" >> "$$out"; \
+	cat "$$out"; \
+	if [ "$$workload_status" -ne 0 ]; then exit "$$workload_status"; fi; \
+	if [ "$$trace_status" -ne 0 ] && [ "$$trace_status" -ne 124 ]; then exit "$$trace_status"; fi
+
+profile-fuse-attach:
+	@test -n "$(PROFILE_PID)" || { echo "Set PROFILE_PID to fod-rust-fuse PID"; exit 2; }
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo perf record -F $(PERF_FREQ) -g --call-graph dwarf,16384 -p $(PROFILE_PID) -o $(ARTIFACTS_DIR)/perf-fuse-attach.data -- sleep $(PROFILE_SECONDS)
+
+profile-indexer-attach:
+	@test -n "$(PROFILE_PID)" || { echo "Set PROFILE_PID to fod-indexer PID"; exit 2; }
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo perf record -F $(PERF_FREQ) -g --call-graph dwarf,16384 -p $(PROFILE_PID) -o $(ARTIFACTS_DIR)/perf-indexer-attach.data -- sleep $(PROFILE_SECONDS)
+
+profile-bpftrace-syscalls:
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo timeout $(PROFILE_SECONDS)s bpftrace scripts/perf/bpftrace/syscalls_by_comm.bt | tee $(ARTIFACTS_DIR)/bpftrace-syscalls.txt
+
+profile-bpftrace-read-hist:
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo timeout $(PROFILE_SECONDS)s bpftrace scripts/perf/bpftrace/read_size_hist.bt | tee $(ARTIFACTS_DIR)/bpftrace-read-hist.txt
+
+profile-bpftrace-write-hist:
+	@mkdir -p $(ARTIFACTS_DIR)
+	sudo timeout $(PROFILE_SECONDS)s bpftrace scripts/perf/bpftrace/write_size_hist.bt | tee $(ARTIFACTS_DIR)/bpftrace-write-hist.txt
+
+profile-local-baseline: profile-env profile-pg-reset
+	$(PROFILE_MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_WORKLOAD=$(PROFILE_WORKLOAD) $(PROFILE_WORKLOAD)
+	$(PROFILE_MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=$(PROFILE_CAPTURE_LABEL) profile-pg-top
+	$(PROFILE_MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=$(PROFILE_CAPTURE_LABEL) profile-pg-wal
+
+db-shell:
+	$(COMPOSE_RUN) -f $(COMPOSE_FILE) exec postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
+
+qnap-config-show:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) qnap-config-show-inner
+
+qnap-config-show-inner:
+	@printf '%s\n' \
+		'QNAP transport preset:' \
+		"  QNAP=$(if $(QNAP_ENABLED),1,0)" \
+		"  DOCKER_HOST=$(if $(QNAP_ENABLED),$(QNAP_DOCKER_HOST),<local docker>)" \
+		"  DOCKER_TLS_VERIFY=$(if $(QNAP_ENABLED),$(QNAP_DOCKER_TLS_VERIFY),<default>)" \
+		"  DOCKER_CERT_PATH=$(if $(QNAP_ENABLED),$(QNAP_DOCKER_CERT_PATH),<default>)" \
+		"  FOD_PG_HOST=$(FOD_PG_HOST)" \
+		"  FOD_PG_PORT=$(FOD_PG_PORT)" \
+		"  FOD_PG_DBNAME=$(FOD_PG_DBNAME)" \
+		"  FOD_PG_USER=$(FOD_PG_USER)" \
+		"  FOD_PG_PASSWORD=$(FOD_PG_PASSWORD)" \
+		'PostgreSQL server tuning preset:' \
+		"  POSTGRES_SHARED_PRELOAD_LIBRARIES=$(POSTGRES_SHARED_PRELOAD_LIBRARIES)" \
+		"  POSTGRES_SHARED_BUFFERS=$(if $(strip $(POSTGRES_SHARED_BUFFERS)),$(POSTGRES_SHARED_BUFFERS),<default>)" \
+		"  POSTGRES_MAX_CONNECTIONS=$(if $(strip $(POSTGRES_MAX_CONNECTIONS)),$(POSTGRES_MAX_CONNECTIONS),<default>)" \
+		"  POSTGRES_MAX_WAL_SIZE=$(if $(strip $(POSTGRES_MAX_WAL_SIZE)),$(POSTGRES_MAX_WAL_SIZE),<default>)" \
+		"  POSTGRES_CHECKPOINT_TIMEOUT=$(if $(strip $(POSTGRES_CHECKPOINT_TIMEOUT)),$(POSTGRES_CHECKPOINT_TIMEOUT),<default>)" \
+		"  POSTGRES_CHECKPOINT_COMPLETION_TARGET=$(if $(strip $(POSTGRES_CHECKPOINT_COMPLETION_TARGET)),$(POSTGRES_CHECKPOINT_COMPLETION_TARGET),<default>)" \
+		"  POSTGRES_WAL_COMPRESSION=$(if $(strip $(POSTGRES_WAL_COMPRESSION)),$(POSTGRES_WAL_COMPRESSION),<default>)" \
+		"  POSTGRES_RANDOM_PAGE_COST=$(if $(strip $(POSTGRES_RANDOM_PAGE_COST)),$(POSTGRES_RANDOM_PAGE_COST),<default>)" \
+		"  POSTGRES_EFFECTIVE_CACHE_SIZE=$(if $(strip $(POSTGRES_EFFECTIVE_CACHE_SIZE)),$(POSTGRES_EFFECTIVE_CACHE_SIZE),<default>)" \
+		"  POSTGRES_MAINTENANCE_WORK_MEM=$(if $(strip $(POSTGRES_MAINTENANCE_WORK_MEM)),$(POSTGRES_MAINTENANCE_WORK_MEM),<default>)" \
+		"  POSTGRES_AUTOVACUUM_MAX_WORKERS=$(if $(strip $(POSTGRES_AUTOVACUUM_MAX_WORKERS)),$(POSTGRES_AUTOVACUUM_MAX_WORKERS),<default>)" \
+		"  POSTGRES_AUTOVACUUM_WORK_MEM=$(if $(strip $(POSTGRES_AUTOVACUUM_WORK_MEM)),$(POSTGRES_AUTOVACUUM_WORK_MEM),<default>)"
+
+postgres-config-show:
+	@printf '%s\n' \
+		'PostgreSQL server tuning preset:' \
+		"  POSTGRES_SHARED_PRELOAD_LIBRARIES=$(POSTGRES_SHARED_PRELOAD_LIBRARIES)" \
+		"  POSTGRES_SHARED_BUFFERS=$(if $(strip $(POSTGRES_SHARED_BUFFERS)),$(POSTGRES_SHARED_BUFFERS),<default>)" \
+		"  POSTGRES_MAX_CONNECTIONS=$(if $(strip $(POSTGRES_MAX_CONNECTIONS)),$(POSTGRES_MAX_CONNECTIONS),<default>)" \
+		"  POSTGRES_MAX_WAL_SIZE=$(if $(strip $(POSTGRES_MAX_WAL_SIZE)),$(POSTGRES_MAX_WAL_SIZE),<default>)" \
+		"  POSTGRES_CHECKPOINT_TIMEOUT=$(if $(strip $(POSTGRES_CHECKPOINT_TIMEOUT)),$(POSTGRES_CHECKPOINT_TIMEOUT),<default>)" \
+		"  POSTGRES_CHECKPOINT_COMPLETION_TARGET=$(if $(strip $(POSTGRES_CHECKPOINT_COMPLETION_TARGET)),$(POSTGRES_CHECKPOINT_COMPLETION_TARGET),<default>)" \
+		"  POSTGRES_WAL_COMPRESSION=$(if $(strip $(POSTGRES_WAL_COMPRESSION)),$(POSTGRES_WAL_COMPRESSION),<default>)" \
+		"  POSTGRES_RANDOM_PAGE_COST=$(if $(strip $(POSTGRES_RANDOM_PAGE_COST)),$(POSTGRES_RANDOM_PAGE_COST),<default>)" \
+		"  POSTGRES_EFFECTIVE_CACHE_SIZE=$(if $(strip $(POSTGRES_EFFECTIVE_CACHE_SIZE)),$(POSTGRES_EFFECTIVE_CACHE_SIZE),<default>)" \
+		"  POSTGRES_MAINTENANCE_WORK_MEM=$(if $(strip $(POSTGRES_MAINTENANCE_WORK_MEM)),$(POSTGRES_MAINTENANCE_WORK_MEM),<default>)" \
+		"  POSTGRES_AUTOVACUUM_MAX_WORKERS=$(if $(strip $(POSTGRES_AUTOVACUUM_MAX_WORKERS)),$(POSTGRES_AUTOVACUUM_MAX_WORKERS),<default>)" \
+		"  POSTGRES_AUTOVACUUM_WORK_MEM=$(if $(strip $(POSTGRES_AUTOVACUUM_WORK_MEM)),$(POSTGRES_AUTOVACUUM_WORK_MEM),<default>)"
+
+qnap-up:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) up
+
+qnap-down:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) down
+
+qnap-restart:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) restart
+
+qnap-logs:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) logs
+
+qnap-wait:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) wait
+
+qnap-init:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) init
+
+qnap-smoke:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) smoke
+
+qnap-reset:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) reset
+
+qnap-mount:
+	@$(MAKE) QNAP=1 $(FOD_REMOTE_PG_ENV) mount
+
+clean:
+	rm -rf $(VENV_DIR)
+
+.PHONY: profile-pg-data-blocks-semantics profile-pg-data-blocks-merge-explain profile-pg-data-blocks-merge-fillfactor-explain-one profile-pg-data-blocks-merge-fillfactor-explain profile-pg-data-blocks-bloat
+
+profile-pg-data-blocks-semantics:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/data_blocks_semantics.sql > $(ARTIFACTS_DIR)/pg_data_blocks_semantics$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_data_blocks_semantics$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-data-blocks-merge-explain:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/explain_data_blocks_merge.sql > $(ARTIFACTS_DIR)/pg_data_blocks_merge_explain$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_data_blocks_merge_explain$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-data-blocks-merge-fillfactor-explain-one:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -v fillfactor=$(DATA_BLOCKS_EXPLAIN_FILLFACTOR) -v index_fillfactor=$(DATA_BLOCKS_EXPLAIN_INDEX_FILLFACTOR) -v stage_rows=$(DATA_BLOCKS_EXPLAIN_STAGE_ROWS) -v payload_bytes=$(DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES) -f scripts/perf/pg/explain_data_blocks_merge_fillfactor.sql > $(ARTIFACTS_DIR)/pg_data_blocks_merge_fillfactor_$(DATA_BLOCKS_EXPLAIN_FILLFACTOR)$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_data_blocks_merge_fillfactor_$(DATA_BLOCKS_EXPLAIN_FILLFACTOR)$(PROFILE_CAPTURE_SUFFIX).txt
+
+profile-pg-data-blocks-merge-fillfactor-explain:
+	@set -eu; \
+	for fillfactor in $(DATA_BLOCKS_EXPLAIN_FILLFACTORS); do \
+		$(MAKE) --no-print-directory PROFILE_RUN_ID=$(PROFILE_RUN_ID) PROFILE_HOST=$(PROFILE_HOST) PROFILE_CAPTURE_LABEL=fillfactor-$$fillfactor DATA_BLOCKS_EXPLAIN_FILLFACTOR=$$fillfactor DATA_BLOCKS_EXPLAIN_INDEX_FILLFACTOR=$(DATA_BLOCKS_EXPLAIN_INDEX_FILLFACTOR) DATA_BLOCKS_EXPLAIN_STAGE_ROWS=$(DATA_BLOCKS_EXPLAIN_STAGE_ROWS) DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES=$(DATA_BLOCKS_EXPLAIN_PAYLOAD_BYTES) profile-pg-data-blocks-merge-fillfactor-explain-one; \
+	done
+
+profile-pg-data-blocks-bloat:
+	@mkdir -p $(ARTIFACTS_DIR)
+	$(PSQL) -f scripts/perf/pg/data_blocks_bloat.sql > $(ARTIFACTS_DIR)/pg_data_blocks_bloat$(PROFILE_CAPTURE_SUFFIX).txt
+	@cat $(ARTIFACTS_DIR)/pg_data_blocks_bloat$(PROFILE_CAPTURE_SUFFIX).txt
+
+FIFO_ADMISSION_PROFILE_SCRIPT ?= tests/integration/test_fifo_admission_profile.sh
+FIFO_ADMISSION_PROFILE_REPEAT ?= 5
+FIFO_ADMISSION_PROFILE_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+FIFO_ADMISSION_PROFILE_ARTIFACT_DIR ?= /tmp/fod-fifo-admission-profile/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)-$(FIFO_ADMISSION_PROFILE_RUN_ID)
+
+.PHONY: test-fifo-admission-benchmark test-fifo-admission-strace test-fifo-admission-profile test-fifo-admission-analysis
+
+test-fifo-admission-benchmark:
+	FIFO_PROFILE_REPEAT="$(FIFO_ADMISSION_PROFILE_REPEAT)" \
+	FIFO_PROFILE_RUN_ID="$(FIFO_ADMISSION_PROFILE_RUN_ID)" \
+	FIFO_PROFILE_ARTIFACT_DIR="$(FIFO_ADMISSION_PROFILE_ARTIFACT_DIR)" \
+	bash "$(FIFO_ADMISSION_PROFILE_SCRIPT)" baseline
+
+test-fifo-admission-strace:
+	FIFO_PROFILE_REPEAT="$(FIFO_ADMISSION_PROFILE_REPEAT)" \
+	FIFO_PROFILE_RUN_ID="$(FIFO_ADMISSION_PROFILE_RUN_ID)" \
+	FIFO_PROFILE_ARTIFACT_DIR="$(FIFO_ADMISSION_PROFILE_ARTIFACT_DIR)" \
+	bash "$(FIFO_ADMISSION_PROFILE_SCRIPT)" strace
+
+test-fifo-admission-profile:
+	FIFO_PROFILE_REPEAT="$(FIFO_ADMISSION_PROFILE_REPEAT)" \
+	FIFO_PROFILE_RUN_ID="$(FIFO_ADMISSION_PROFILE_RUN_ID)" \
+	FIFO_PROFILE_ARTIFACT_DIR="$(FIFO_ADMISSION_PROFILE_ARTIFACT_DIR)" \
+	bash "$(FIFO_ADMISSION_PROFILE_SCRIPT)" profile
+
+test-fifo-admission-analysis:
+	FIFO_PROFILE_REPEAT="$(FIFO_ADMISSION_PROFILE_REPEAT)" \
+	FIFO_PROFILE_RUN_ID="$(FIFO_ADMISSION_PROFILE_RUN_ID)" \
+	FIFO_PROFILE_ARTIFACT_DIR="$(FIFO_ADMISSION_PROFILE_ARTIFACT_DIR)" \
+	bash "$(FIFO_ADMISSION_PROFILE_SCRIPT)" all
+
+FIFO_FUSE_FAIRNESS_SCRIPT ?= tests/integration/test_fifo_fuse_fairness.sh
+FIFO_FUSE_FAIRNESS_LIMITS ?= 0 1 2 4
+FIFO_FUSE_FAIRNESS_REPEAT ?= 3
+FIFO_FUSE_FAIRNESS_EVENT_THREADS ?= 8
+FIFO_FUSE_FAIRNESS_CLONE_FD ?= 0
+FIFO_FUSE_FAIRNESS_LARGE_WORKERS ?= 8
+FIFO_FUSE_FAIRNESS_LARGE_ITERATIONS ?= 8
+FIFO_FUSE_FAIRNESS_LARGE_WRITE_BYTES ?= 262144
+FIFO_FUSE_FAIRNESS_SMALL_FILES ?= 24
+FIFO_FUSE_FAIRNESS_SMALL_BYTES ?= 4096
+FIFO_FUSE_FAIRNESS_INJECTION_DELAY_MS ?= 5
+FIFO_FUSE_FAIRNESS_OVERLAP_MIN_PERCENT ?= 90
+FIFO_FUSE_FAIRNESS_MINIMUM_TAIL_LARGE_OPERATIONS ?= 8
+FIFO_FUSE_FAIRNESS_MINIMUM_PEAK_QUEUED ?= 2
+FIFO_FUSE_FAIRNESS_MINIMUM_BASELINE_ACTIVE ?= 2
+FIFO_FUSE_FAIRNESS_TIMEOUT_SECONDS ?= 180
+FIFO_FUSE_FAIRNESS_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+FIFO_FUSE_FAIRNESS_ARTIFACT_DIR ?= /tmp/fod-fifo-fuse-fairness/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)-$(FIFO_FUSE_FAIRNESS_RUN_ID)
+
+.PHONY: test-fifo-fuse-fairness
+
+test-fifo-fuse-fairness: init
+	@POSTGRES_DB="$(POSTGRES_DB)" \
+	POSTGRES_USER="$(POSTGRES_USER)" \
+	POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" \
+	FIFO_FUSE_FAIRNESS_LIMITS="$(FIFO_FUSE_FAIRNESS_LIMITS)" \
+	FIFO_FUSE_FAIRNESS_REPEAT="$(FIFO_FUSE_FAIRNESS_REPEAT)" \
+	FIFO_FUSE_FAIRNESS_EVENT_THREADS="$(FIFO_FUSE_FAIRNESS_EVENT_THREADS)" \
+	FIFO_FUSE_FAIRNESS_CLONE_FD="$(FIFO_FUSE_FAIRNESS_CLONE_FD)" \
+	FIFO_FUSE_FAIRNESS_LARGE_WORKERS="$(FIFO_FUSE_FAIRNESS_LARGE_WORKERS)" \
+	FIFO_FUSE_FAIRNESS_LARGE_ITERATIONS="$(FIFO_FUSE_FAIRNESS_LARGE_ITERATIONS)" \
+	FIFO_FUSE_FAIRNESS_LARGE_WRITE_BYTES="$(FIFO_FUSE_FAIRNESS_LARGE_WRITE_BYTES)" \
+	FIFO_FUSE_FAIRNESS_SMALL_FILES="$(FIFO_FUSE_FAIRNESS_SMALL_FILES)" \
+	FIFO_FUSE_FAIRNESS_SMALL_BYTES="$(FIFO_FUSE_FAIRNESS_SMALL_BYTES)" \
+	FIFO_FUSE_FAIRNESS_INJECTION_DELAY_MS="$(FIFO_FUSE_FAIRNESS_INJECTION_DELAY_MS)" \
+	FIFO_FUSE_FAIRNESS_OVERLAP_MIN_PERCENT="$(FIFO_FUSE_FAIRNESS_OVERLAP_MIN_PERCENT)" \
+	FIFO_FUSE_FAIRNESS_MINIMUM_TAIL_LARGE_OPERATIONS="$(FIFO_FUSE_FAIRNESS_MINIMUM_TAIL_LARGE_OPERATIONS)" \
+	FIFO_FUSE_FAIRNESS_MINIMUM_PEAK_QUEUED="$(FIFO_FUSE_FAIRNESS_MINIMUM_PEAK_QUEUED)" \
+	FIFO_FUSE_FAIRNESS_MINIMUM_BASELINE_ACTIVE="$(FIFO_FUSE_FAIRNESS_MINIMUM_BASELINE_ACTIVE)" \
+	FIFO_FUSE_FAIRNESS_TIMEOUT_SECONDS="$(FIFO_FUSE_FAIRNESS_TIMEOUT_SECONDS)" \
+	FIFO_FUSE_FAIRNESS_RUN_ID="$(FIFO_FUSE_FAIRNESS_RUN_ID)" \
+	FIFO_FUSE_FAIRNESS_ARTIFACT_DIR="$(FIFO_FUSE_FAIRNESS_ARTIFACT_DIR)" \
+	bash "$(FIFO_FUSE_FAIRNESS_SCRIPT)"
+
+
+FUSE_ADMISSION_MATRIX_SCRIPT ?= tests/integration/test_fuse_admission_matrix.sh
+FUSE_ADMISSION_MATRIX_EVENT_THREADS ?= 2 4 8 16
+FUSE_ADMISSION_MATRIX_LIMITS ?= 0 1 2 4 8
+FUSE_ADMISSION_MATRIX_REPEAT ?= 3
+FUSE_ADMISSION_MATRIX_CLONE_FD ?= 0
+FUSE_ADMISSION_MATRIX_LARGE_WORKERS ?= 16
+FUSE_ADMISSION_MATRIX_LARGE_ITERATIONS ?= 8
+FUSE_ADMISSION_MATRIX_LARGE_WRITE_BYTES ?= 262144
+FUSE_ADMISSION_MATRIX_SMALL_FILES ?= 32
+FUSE_ADMISSION_MATRIX_SMALL_BYTES ?= 4096
+FUSE_ADMISSION_MATRIX_INJECTION_DELAY_MS ?= 5
+FUSE_ADMISSION_MATRIX_OVERLAP_MIN_PERCENT ?= 90
+FUSE_ADMISSION_MATRIX_MINIMUM_TAIL_LARGE_OPERATIONS ?= 16
+FUSE_ADMISSION_MATRIX_MINIMUM_PEAK_QUEUED ?= 2
+FUSE_ADMISSION_MATRIX_MINIMUM_BASELINE_ACTIVE ?= 2
+FUSE_ADMISSION_MATRIX_TIMEOUT_SECONDS ?= 240
+FUSE_ADMISSION_MATRIX_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+FUSE_ADMISSION_MATRIX_ARTIFACT_DIR ?= /tmp/fod-fuse-admission-matrix/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)-$(FUSE_ADMISSION_MATRIX_RUN_ID)
+
+.PHONY: test-fuse-admission-matrix
+
+test-fuse-admission-matrix: init
+	@POSTGRES_DB="$(POSTGRES_DB)" \
+	POSTGRES_USER="$(POSTGRES_USER)" \
+	POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" \
+	FUSE_ADMISSION_MATRIX_EVENT_THREADS="$(FUSE_ADMISSION_MATRIX_EVENT_THREADS)" \
+	FUSE_ADMISSION_MATRIX_LIMITS="$(FUSE_ADMISSION_MATRIX_LIMITS)" \
+	FUSE_ADMISSION_MATRIX_REPEAT="$(FUSE_ADMISSION_MATRIX_REPEAT)" \
+	FUSE_ADMISSION_MATRIX_CLONE_FD="$(FUSE_ADMISSION_MATRIX_CLONE_FD)" \
+	FUSE_ADMISSION_MATRIX_LARGE_WORKERS="$(FUSE_ADMISSION_MATRIX_LARGE_WORKERS)" \
+	FUSE_ADMISSION_MATRIX_LARGE_ITERATIONS="$(FUSE_ADMISSION_MATRIX_LARGE_ITERATIONS)" \
+	FUSE_ADMISSION_MATRIX_LARGE_WRITE_BYTES="$(FUSE_ADMISSION_MATRIX_LARGE_WRITE_BYTES)" \
+	FUSE_ADMISSION_MATRIX_SMALL_FILES="$(FUSE_ADMISSION_MATRIX_SMALL_FILES)" \
+	FUSE_ADMISSION_MATRIX_SMALL_BYTES="$(FUSE_ADMISSION_MATRIX_SMALL_BYTES)" \
+	FUSE_ADMISSION_MATRIX_INJECTION_DELAY_MS="$(FUSE_ADMISSION_MATRIX_INJECTION_DELAY_MS)" \
+	FUSE_ADMISSION_MATRIX_OVERLAP_MIN_PERCENT="$(FUSE_ADMISSION_MATRIX_OVERLAP_MIN_PERCENT)" \
+	FUSE_ADMISSION_MATRIX_MINIMUM_TAIL_LARGE_OPERATIONS="$(FUSE_ADMISSION_MATRIX_MINIMUM_TAIL_LARGE_OPERATIONS)" \
+	FUSE_ADMISSION_MATRIX_MINIMUM_PEAK_QUEUED="$(FUSE_ADMISSION_MATRIX_MINIMUM_PEAK_QUEUED)" \
+	FUSE_ADMISSION_MATRIX_MINIMUM_BASELINE_ACTIVE="$(FUSE_ADMISSION_MATRIX_MINIMUM_BASELINE_ACTIVE)" \
+	FUSE_ADMISSION_MATRIX_TIMEOUT_SECONDS="$(FUSE_ADMISSION_MATRIX_TIMEOUT_SECONDS)" \
+	FUSE_ADMISSION_MATRIX_RUN_ID="$(FUSE_ADMISSION_MATRIX_RUN_ID)" \
+	FUSE_ADMISSION_MATRIX_ARTIFACT_DIR="$(FUSE_ADMISSION_MATRIX_ARTIFACT_DIR)" \
+	bash "$(FUSE_ADMISSION_MATRIX_SCRIPT)"
+
+
+FUSE_ADMISSION_CONFIRM_SCRIPT ?= tests/integration/test_fuse_admission_confirmation.sh
+FUSE_ADMISSION_CONFIRM_CANDIDATES ?= 8:4 16:4 4:8 8:0
+FUSE_ADMISSION_CONFIRM_REPEAT ?= 10
+FUSE_ADMISSION_CONFIRM_FIO_REPEAT ?= 3
+FUSE_ADMISSION_CONFIRM_CLONE_FD ?= 0
+FUSE_ADMISSION_CONFIRM_LARGE_WORKERS ?= 16
+FUSE_ADMISSION_CONFIRM_LARGE_ITERATIONS ?= 8
+FUSE_ADMISSION_CONFIRM_LARGE_WRITE_BYTES ?= 262144
+FUSE_ADMISSION_CONFIRM_SMALL_FILES ?= 32
+FUSE_ADMISSION_CONFIRM_SMALL_BYTES ?= 4096
+FUSE_ADMISSION_CONFIRM_INJECTION_DELAY_MS ?= 5
+FUSE_ADMISSION_CONFIRM_OVERLAP_MIN_PERCENT ?= 90
+FUSE_ADMISSION_CONFIRM_MINIMUM_TAIL_LARGE_OPERATIONS ?= 16
+FUSE_ADMISSION_CONFIRM_MINIMUM_PEAK_QUEUED ?= 2
+FUSE_ADMISSION_CONFIRM_MINIMUM_BASELINE_ACTIVE ?= 2
+FUSE_ADMISSION_CONFIRM_TIMEOUT_SECONDS ?= 240
+FUSE_ADMISSION_CONFIRM_MINIMUM_THROUGHPUT_GAIN_PERCENT ?= 10
+FUSE_ADMISSION_CONFIRM_MINIMUM_LATENCY_IMPROVEMENT_PERCENT ?= 10
+FUSE_ADMISSION_CONFIRM_MAXIMUM_STABILITY_CV_PERCENT ?= 25
+FUSE_ADMISSION_CONFIRM_REQUIRE_CONFIRMED ?= 0
+FUSE_ADMISSION_CONFIRM_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+FUSE_ADMISSION_CONFIRM_ARTIFACT_DIR ?= /tmp/fod-fuse-admission-confirmation/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)-$(FUSE_ADMISSION_CONFIRM_RUN_ID)
+
+.PHONY: test-fuse-admission-confirmation
+
+test-fuse-admission-confirmation: init
+	@POSTGRES_DB="$(POSTGRES_DB)" \
+	POSTGRES_USER="$(POSTGRES_USER)" \
+	POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	FOD_SCHEMA_ADMIN_PASSWORD="$(FOD_SCHEMA_ADMIN_PASSWORD)" \
+	FUSE_ADMISSION_CONFIRM_CANDIDATES="$(FUSE_ADMISSION_CONFIRM_CANDIDATES)" \
+	FUSE_ADMISSION_CONFIRM_REPEAT="$(FUSE_ADMISSION_CONFIRM_REPEAT)" \
+	FUSE_ADMISSION_CONFIRM_FIO_REPEAT="$(FUSE_ADMISSION_CONFIRM_FIO_REPEAT)" \
+	FUSE_ADMISSION_CONFIRM_CLONE_FD="$(FUSE_ADMISSION_CONFIRM_CLONE_FD)" \
+	FUSE_ADMISSION_CONFIRM_LARGE_WORKERS="$(FUSE_ADMISSION_CONFIRM_LARGE_WORKERS)" \
+	FUSE_ADMISSION_CONFIRM_LARGE_ITERATIONS="$(FUSE_ADMISSION_CONFIRM_LARGE_ITERATIONS)" \
+	FUSE_ADMISSION_CONFIRM_LARGE_WRITE_BYTES="$(FUSE_ADMISSION_CONFIRM_LARGE_WRITE_BYTES)" \
+	FUSE_ADMISSION_CONFIRM_SMALL_FILES="$(FUSE_ADMISSION_CONFIRM_SMALL_FILES)" \
+	FUSE_ADMISSION_CONFIRM_SMALL_BYTES="$(FUSE_ADMISSION_CONFIRM_SMALL_BYTES)" \
+	FUSE_ADMISSION_CONFIRM_INJECTION_DELAY_MS="$(FUSE_ADMISSION_CONFIRM_INJECTION_DELAY_MS)" \
+	FUSE_ADMISSION_CONFIRM_OVERLAP_MIN_PERCENT="$(FUSE_ADMISSION_CONFIRM_OVERLAP_MIN_PERCENT)" \
+	FUSE_ADMISSION_CONFIRM_MINIMUM_TAIL_LARGE_OPERATIONS="$(FUSE_ADMISSION_CONFIRM_MINIMUM_TAIL_LARGE_OPERATIONS)" \
+	FUSE_ADMISSION_CONFIRM_MINIMUM_PEAK_QUEUED="$(FUSE_ADMISSION_CONFIRM_MINIMUM_PEAK_QUEUED)" \
+	FUSE_ADMISSION_CONFIRM_MINIMUM_BASELINE_ACTIVE="$(FUSE_ADMISSION_CONFIRM_MINIMUM_BASELINE_ACTIVE)" \
+	FUSE_ADMISSION_CONFIRM_TIMEOUT_SECONDS="$(FUSE_ADMISSION_CONFIRM_TIMEOUT_SECONDS)" \
+	FUSE_ADMISSION_CONFIRM_MINIMUM_THROUGHPUT_GAIN_PERCENT="$(FUSE_ADMISSION_CONFIRM_MINIMUM_THROUGHPUT_GAIN_PERCENT)" \
+	FUSE_ADMISSION_CONFIRM_MINIMUM_LATENCY_IMPROVEMENT_PERCENT="$(FUSE_ADMISSION_CONFIRM_MINIMUM_LATENCY_IMPROVEMENT_PERCENT)" \
+	FUSE_ADMISSION_CONFIRM_MAXIMUM_STABILITY_CV_PERCENT="$(FUSE_ADMISSION_CONFIRM_MAXIMUM_STABILITY_CV_PERCENT)" \
+	FUSE_ADMISSION_CONFIRM_REQUIRE_CONFIRMED="$(FUSE_ADMISSION_CONFIRM_REQUIRE_CONFIRMED)" \
+	FUSE_ADMISSION_CONFIRM_RUN_ID="$(FUSE_ADMISSION_CONFIRM_RUN_ID)" \
+	FUSE_ADMISSION_CONFIRM_ARTIFACT_DIR="$(FUSE_ADMISSION_CONFIRM_ARTIFACT_DIR)" \
+	bash "$(FUSE_ADMISSION_CONFIRM_SCRIPT)"
+
+
+FUSE_PRODUCTION_VALIDATION_SCRIPT ?= tests/integration/test_fuse_production_validation.py
+FUSE_PRODUCTION_VALIDATION_REPEAT ?= 3
+FUSE_PRODUCTION_VALIDATION_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+FUSE_PRODUCTION_VALIDATION_ARTIFACT_DIR ?= /tmp/fod-fuse-production-validation/$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)-$(FUSE_PRODUCTION_VALIDATION_RUN_ID)
+FUSE_PRODUCTION_VALIDATION_ENDURANCE_SECONDS_PER_CONFIG ?= 150
+
+.PHONY: test-fuse-production-validation
+
+test-fuse-production-validation: init
+	python3 "$(FUSE_PRODUCTION_VALIDATION_SCRIPT)" \
+		--root "$(CURDIR)" \
+		--artifact-dir "$(FUSE_PRODUCTION_VALIDATION_ARTIFACT_DIR)" \
+		--repeat "$(FUSE_PRODUCTION_VALIDATION_REPEAT)" \
+		--endurance-seconds-per-config "$(FUSE_PRODUCTION_VALIDATION_ENDURANCE_SECONDS_PER_CONFIG)"
+
+FUSE_POSTGRES_TELEMETRY_RUN_ID ?= $(shell date -u +%Y%m%dT%H%M%SZ)
+FUSE_POSTGRES_TELEMETRY_ARTIFACT_DIR ?= /tmp/fod-postgres-telemetry/$(FOD_VERSION)-$(FUSE_POSTGRES_TELEMETRY_RUN_ID)
+
+.PHONY: test-fuse-postgres-telemetry
+test-fuse-postgres-telemetry:
+	@mkdir -p "$(FUSE_POSTGRES_TELEMETRY_ARTIFACT_DIR)"
+	$(PYTHON) tests/integration/test_fuse_production_validation.py \
+		--root "$(CURDIR)" \
+		--artifact-dir "$(FUSE_POSTGRES_TELEMETRY_ARTIFACT_DIR)" \
+		--repeat 1 \
+		--endurance-seconds-per-config 1 \
+		--postgres-telemetry-smoke
+
+.PHONY: test-postgresql-transaction-admission
+test-postgresql-transaction-admission:
+	@$(MAKE) --no-print-directory up
+	@$(MAKE) --no-print-directory wait
+	@$(MAKE) --no-print-directory init
+	@POSTGRES_HOST="$(FOD_PG_HOST)" \
+	POSTGRES_PORT="$(FOD_PG_PORT)" \
+	POSTGRES_DB="$(FOD_PG_DBNAME)" \
+	POSTGRES_USER="$(FOD_PG_USER)" \
+	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
+	$(RUST_CARGO) test --locked $(FOD_TEST_FLAG) -p fod-rust-hotpath \
+		transaction_admission_limits_real_postgres_transactions_by_lane -- --test-threads=1
+
+.PHONY: test-postgresql-payload-budget
+test-postgresql-payload-budget:
+	@$(RUST_CARGO) test --locked $(FOD_TEST_FLAG) -p fod-rust-monitor payload_budget -- --test-threads=1
+	@$(RUST_CARGO) test --locked $(FOD_TEST_FLAG) -p fod-rust-hotpath payload_persist_guard_uses_global_byte_budget -- --test-threads=1
+
+.PHONY: test-makefile-secret-echo-audit
+test-makefile-secret-echo-audit:
+	@$(PYTHON) scripts/audit_makefile_secret_echo.py --makefile Makefile --check
+
+.PHONY: test-postgresql-endpoint-routing
+test-postgresql-endpoint-routing:
+	@$(MAKE) --no-print-directory up
+	@$(MAKE) --no-print-directory wait
+	@$(MAKE) --no-print-directory init
+	@POSTGRES_HOST="$(FOD_PG_HOST)" \
+	POSTGRES_PORT="$(FOD_PG_PORT)" \
+	POSTGRES_DB="$(FOD_PG_DBNAME)" \
+	POSTGRES_USER="$(FOD_PG_USER)" \
+	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
+	$(RUST_CARGO) test --locked $(FOD_TEST_FLAG) -p fod-rust-fuse --test pg_lanes_mount \
+		endpoint_routing_skips_unreachable_primary_and_mounts_selected_primary -- --test-threads=1
+
+.PHONY: test-postgresql-runtime-failover
+test-postgresql-runtime-failover:
+	@$(MAKE) --no-print-directory up
+	@$(MAKE) --no-print-directory wait
+	@$(MAKE) --no-print-directory init
+	@POSTGRES_HOST="$(FOD_PG_HOST)" \
+	POSTGRES_PORT="$(FOD_PG_PORT)" \
+	POSTGRES_DB="$(FOD_PG_DBNAME)" \
+	POSTGRES_USER="$(FOD_PG_USER)" \
+	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
+	$(RUST_CARGO) test --locked $(FOD_TEST_FLAG) -p fod-rust-hotpath --test runtime_failover -- --test-threads=1
+
+.PHONY: test-postgresql-replica-read-consistency
+test-postgresql-replica-read-consistency:
+	@$(MAKE) --no-print-directory up
+	@$(MAKE) --no-print-directory wait
+	@$(MAKE) --no-print-directory init
+	@POSTGRES_HOST="$(FOD_PG_HOST)" \
+	POSTGRES_PORT="$(FOD_PG_PORT)" \
+	POSTGRES_DB="$(FOD_PG_DBNAME)" \
+	POSTGRES_USER="$(FOD_PG_USER)" \
+	POSTGRES_PASSWORD="$(FOD_PG_PASSWORD)" \
+	$(RUST_CARGO) test --locked $(FOD_TEST_FLAG) -p fod-rust-hotpath --test replica_read_consistency -- --test-threads=1
+
+
+.PHONY: test-postgresql-replica-scoring
+test-postgresql-replica-scoring:
+	@$(RUST_CARGO) test --locked $(FOD_TEST_FLAG) -p fod-rust-hotpath replica_scoring_tests -- --test-threads=1
+
+
+.PHONY: test-postgresql-primary-promotion-safety
+test-postgresql-primary-promotion-safety:
+	@$(RUST_CARGO) test --locked $(FOD_TEST_FLAG) -p fod-rust-hotpath primary_promotion_guard_tests -- --test-threads=1
+	@$(MAKE) --no-print-directory test-postgresql-runtime-failover
+
+# FOD block read regression matrix (production block path only).
+READ_REGRESSION_REPEAT ?= 5
+READ_REGRESSION_SIZES ?= 4M 128M
+READ_REGRESSION_BLOCK_SIZE ?= 4k
+READ_REGRESSION_VERBOSE ?= 1
+
+.PHONY: profile-read-regression-matrix profile-read-regression-matrix-record
+
+profile-read-regression-matrix:
+	$(PYTHON) scripts/perf/read_regression_matrix.py 		--repeat $(READ_REGRESSION_REPEAT) 		--sizes $(READ_REGRESSION_SIZES) 		--block-size $(READ_REGRESSION_BLOCK_SIZE) 		--verbose $(READ_REGRESSION_VERBOSE)
+
+profile-read-regression-matrix-record:
+	$(PYTHON) scripts/perf/read_regression_matrix.py 		--repeat $(READ_REGRESSION_REPEAT) 		--sizes $(READ_REGRESSION_SIZES) 		--block-size $(READ_REGRESSION_BLOCK_SIZE) 		--record BENCHMARKS.md 		--verbose $(READ_REGRESSION_VERBOSE)
