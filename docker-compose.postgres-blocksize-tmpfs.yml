@@ -36,7 +36,9 @@ services:
     ports:
       - "${REPLICA_READ_BIND_ADDRESS:-127.0.0.1}:${REPLICA_READ_PRIMARY_PORT:-55441}:5432"
     volumes:
-      - postgres_blocksize_primary_tmpfs:/var/lib/postgresql/data
+      - type: bind
+        source: ${FOD_PG_BLOCK_TMPFS_PRIMARY_DIR:?FOD_PG_BLOCK_TMPFS_PRIMARY_DIR must point into /dev/shm}
+        target: /var/lib/postgresql/data
     healthcheck:
       test:
         - CMD-SHELL
@@ -74,7 +76,9 @@ services:
     ports:
       - "${REPLICA_READ_BIND_ADDRESS:-127.0.0.1}:${REPLICA_READ_REPLICA_PORT:-55442}:5432"
     volumes:
-      - postgres_blocksize_replica_tmpfs:/var/lib/postgresql/data
+      - type: bind
+        source: ${FOD_PG_BLOCK_TMPFS_REPLICA_DIR:?FOD_PG_BLOCK_TMPFS_REPLICA_DIR must point into /dev/shm}
+        target: /var/lib/postgresql/data
       - ./docker/replica-read/replica-entrypoint.sh:/usr/local/bin/fod-replica-entrypoint.sh:ro
     healthcheck:
       test:
@@ -89,17 +93,3 @@ services:
       timeout: 5s
       retries: 120
       start_period: 3s
-
-volumes:
-  postgres_blocksize_primary_tmpfs:
-    driver: local
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: "size=${FOD_PG_BLOCK_TMPFS_VOLUME_SIZE:-5g},mode=0700,uid=70,gid=70"
-  postgres_blocksize_replica_tmpfs:
-    driver: local
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: "size=${FOD_PG_BLOCK_TMPFS_VOLUME_SIZE:-5g},mode=0700,uid=70,gid=70"
