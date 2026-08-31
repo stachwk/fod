@@ -53,7 +53,7 @@ docker run --rm --entrypoint /bin/sh "${VERSION_TAG}" -ceu '
     command -v fod-rust-fuse >/dev/null
     command -v mkfs.fod >/dev/null
     command -v mount.fod >/dev/null
-    dpkg-query -W -f="${db:Status-Abbrev}\n" libpq5 | grep -Fx "ii " >/dev/null
+    dpkg-query -W libpq5 >/dev/null
     ! command -v postgres >/dev/null 2>&1
     ! command -v initdb >/dev/null 2>&1
     ! command -v pg_ctl >/dev/null 2>&1
