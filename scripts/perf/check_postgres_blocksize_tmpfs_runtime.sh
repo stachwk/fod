@@ -30,10 +30,10 @@ compose() {
 }
 
 cleanup_ram_root() {
-    # PostgreSQL creates PGDATA content as uid 70 with mode 0700. The host user
-    # must not be required to own those files. Remove only this preflight's
-    # bind-mounted RAM directories through a root container, then remove the
-    # now-empty host directories normally.
+    # PostgreSQL creates PGDATA content owned by the postgres uid with mode
+    # 0700. The host user must not be required to own those files. Remove only
+    # this preflight's bind-mounted RAM directories through a root container,
+    # then remove the now-empty host directory normally.
     if docker image inspect "${CLEANUP_IMAGE}" >/dev/null 2>&1; then
         docker run --rm --entrypoint /bin/sh \
             -v "${RAM_ROOT}:/fod-ram-cleanup" \
@@ -84,10 +84,11 @@ wait_primary_healthy "${container}"
 
 docker exec "${container}" /bin/sh -ceu '
     echo "runtime_uid=$(id -u) runtime_gid=$(id -g)"
+    echo "postgres_uid=$(id -u postgres) postgres_gid=$(id -g postgres)"
     stat -c "data_bind_owner=%u:%g data_bind_mode=%a" /var/lib/postgresql/data
     stat -c "pgdata_owner=%u:%g pgdata_mode=%a" "$PGDATA"
-    test "$(stat -c %u "$PGDATA")" = "70"
-    test "$(stat -c %g "$PGDATA")" = "70"
+    test "$(stat -c %u "$PGDATA")" = "$(id -u postgres)"
+    test "$(stat -c %a "$PGDATA")" = "700"
     su-exec postgres sh -ceu '\''touch "$PGDATA/.fod-tmpfs-writecheck"; rm -f "$PGDATA/.fod-tmpfs-writecheck"; touch "$PGDATA/.fod-tmpfs-restart-persistence"'\''
     test "$(psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SHOW block_size")" = "8192"
 '
@@ -100,6 +101,8 @@ wait_primary_healthy "${container}"
 docker exec "${container}" /bin/sh -ceu '
     test -f "$PGDATA/.fod-tmpfs-restart-persistence"
     test -s "$PGDATA/PG_VERSION"
+    test "$(stat -c %u "$PGDATA")" = "$(id -u postgres)"
+    test "$(stat -c %a "$PGDATA")" = "700"
     test "$(psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SHOW block_size")" = "8192"
     rm -f "$PGDATA/.fod-tmpfs-restart-persistence"
 '
