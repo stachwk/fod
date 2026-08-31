@@ -137,10 +137,12 @@ test-all: test-fuse-test-cleanup test-fuse-test-cleanup-policy
 test-all-full:
 	@bash scripts/fod-test-fuse-cleanup.sh clean
 
-# Publish custom PostgreSQL images used by FOD. Both targets validate the image
-# before push and publish the PostgreSQL version tag plus the :16 alias. :latest
-# remains disabled unless explicitly requested through FOD_CONTAINER_TAG_LATEST.
-.PHONY: postgres-8k-publish postgres-32k-publish postgres-all-publish test-postgres-container-publish-policy
+# PostgreSQL BLCKSZ=32K is the accepted FOD default and target. The 8K image is
+# kept for compatibility/regression comparisons only. Both explicit targets
+# remain available, while postgres-publish always follows the FOD default.
+.PHONY: postgres-publish postgres-8k-publish postgres-32k-publish postgres-all-publish test-postgres-container-publish-policy test-postgres-32k-default-policy
+
+postgres-publish: postgres-32k-publish
 
 postgres-8k-publish:
 	@FOD_CONTAINER_PUSH=1 bash scripts/publish_postgres_fod_8k.sh
@@ -152,6 +154,11 @@ postgres-all-publish: postgres-8k-publish postgres-32k-publish
 
 test-postgres-container-publish-policy:
 	@bash tests/test_postgres_container_publish_targets_policy.sh
+
+test-postgres-32k-default-policy:
+	@bash tests/test_postgres_32k_default_policy.sh
+
+test-all: test-postgres-32k-default-policy
 
 # Standalone FOD client container. The final image contains the FOD/FUSE
 # runtime plus PostgreSQL client/diagnostic tools (psql, pg_isready, dump/restore);
