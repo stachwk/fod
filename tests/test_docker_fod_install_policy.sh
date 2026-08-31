@@ -74,6 +74,19 @@ grep -Fq 'FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR' "${SCRIPT}"
 grep -Fq 'mount --make-rshared' "${SCRIPT}"
 grep -Fq 'FOD schema is not initialized' "${SCRIPT}"
 
+# Mountpoint creation must tolerate existing directory entries, mounted paths,
+# and dangling symlinks without surfacing an unqualified mkdir EEXIST. Any real
+# error must identify the stage, command and mount path.
+grep -Fq 'set -Eeuo pipefail' "${SCRIPT}"
+grep -Fq 'trap on_error ERR' "${SCRIPT}"
+grep -Fq 'stage=${CURRENT_STAGE}' "${SCRIPT}"
+grep -Fq 'command=${cmd}' "${SCRIPT}"
+grep -Fq '[[ -e "${MOUNT_DIR}" || -L "${MOUNT_DIR}" ]]' "${SCRIPT}"
+grep -Fq 'mountpoint -q "${MOUNT_DIR}"' "${SCRIPT}"
+grep -Fq 'readlink -f -- "${MOUNT_DIR}"' "${SCRIPT}"
+grep -Fq '.fod-mkdir.err' "${SCRIPT}"
+grep -Fq 'cannot prepare FOD mount directory' "${SCRIPT}"
+
 # Startup must never hang indefinitely in compose up. The guard bypasses
 # already-validated dependencies, refreshes the mutable series image tag,
 # applies an AppArmor override when appropriate, and emits diagnostics on
@@ -89,16 +102,14 @@ grep -Fq 'docker inspect' "${GUARD}"
 grep -Fq 'findmnt -T' "${GUARD}"
 
 # A failed previous FOD start may leave an orphan container and/or propagated
-# FUSE mount. Reconcile those before render so an existing mount path cannot
-# fail with a misleading "mkdir: Already exists" error. Never remove a normal
-# shared bind mount; only stale fuse* mounts are candidates for unmount.
+# FUSE mount. Reconcile those before render. Never remove a normal shared bind
+# mount; only stale fuse* mounts are candidates for unmount.
 grep -Fq 'COMPOSE_IGNORE_ORPHANS=true' "${GUARD}"
 grep -Fq 'reconcile_stale_fod()' "${GUARD}"
 grep -Fq 'Removing stale FOD container' "${GUARD}"
 grep -Fq 'docker rm -f "${CONTAINER_NAME}"' "${GUARD}"
 grep -Fq 'Removing stale propagated FUSE mount' "${GUARD}"
 grep -Fq 'fusermount3 -u "${MOUNT_DIR}"' "${GUARD}"
-grep -Fq 'mkdir -p -- "${MOUNT_DIR}"' "${GUARD}"
 
 if MASTERS=2 SLAVES=1 FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR="${mount_dir}" bash "${SCRIPT}" plan >/dev/null 2>&1; then
   echo 'FOD Docker install must reject MASTERS>1 together with the database deployment.' >&2
