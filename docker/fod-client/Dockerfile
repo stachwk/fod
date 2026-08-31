@@ -44,15 +44,17 @@ FROM ${FOD_RUNTIME_IMAGE}
 ARG FOD_IMAGE_SOURCE=https://github.com/stachwk/fod
 ARG FOD_IMAGE_REVISION=unknown
 ARG FOD_IMAGE_VERSION=unknown
+ARG FOD_IMAGE_VARIANT=fuse1
 ARG POSTGRES_CLIENT_MAJOR=16
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 COPY --from=builder /tmp/fod-client.deb /tmp/fod-client.deb
+COPY docker/fod-client/fod-container-preflight.sh /usr/local/bin/fod-container-preflight
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg libcap2-bin util-linux; \
     install -d -m0755 /usr/share/postgresql-common/pgdg; \
     curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
       | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg; \
@@ -65,6 +67,7 @@ RUN set -eux; \
       "postgresql-client-${POSTGRES_CLIENT_MAJOR}"; \
     rm -f /tmp/fod-client.deb; \
     rm -rf /var/lib/apt/lists/*; \
+    chmod 0755 /usr/local/bin/fod-container-preflight; \
     command -v fod-bootstrap; \
     command -v fod-change; \
     command -v fod-indexer; \
@@ -72,6 +75,9 @@ RUN set -eux; \
     command -v fod-rust-fuse; \
     command -v mkfs.fod; \
     command -v mount.fod; \
+    command -v fod-container-preflight; \
+    command -v capsh; \
+    command -v findmnt; \
     command -v psql; \
     command -v pg_isready; \
     command -v pg_dump; \
@@ -99,7 +105,8 @@ RUN set -eux; \
     rm -f /tmp/fod-ldd.txt; \
     if [ -f /etc/fuse.conf ] && ! grep -q '^user_allow_other$' /etc/fuse.conf; then \
       printf '%s\n' user_allow_other >> /etc/fuse.conf; \
-    fi
+    fi; \
+    fod-container-preflight --image-only
 
 WORKDIR /work
 VOLUME ["/mnt/fod"]
@@ -111,7 +118,13 @@ LABEL org.opencontainers.image.revision="${FOD_IMAGE_REVISION}"
 LABEL org.opencontainers.image.version="${FOD_IMAGE_VERSION}"
 LABEL org.opencontainers.image.licenses="BSL-1.1"
 LABEL org.fod.container.role="client"
+LABEL org.fod.container.variant="${FOD_IMAGE_VARIANT}"
 LABEL org.fod.postgresql.runtime="client-tools"
 LABEL org.fod.postgresql.client-major="${POSTGRES_CLIENT_MAJOR}"
+LABEL org.fod.fuse.required-device="/dev/fuse"
+LABEL org.fod.fuse.required-capability="SYS_ADMIN"
+LABEL org.fod.fuse.mount-propagation="rshared"
+LABEL org.fod.apparmor.policy="host-managed"
+LABEL org.fod.apparmor.recommended="unconfined-or-custom-fod-profile"
 
 CMD ["fod-bootstrap", "--help"]
