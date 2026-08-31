@@ -3,7 +3,7 @@
 # Licensed under BSL 1.1
 #
 # Runtime-only FOD client image. PostgreSQL server binaries are intentionally
-# excluded; only the client-side libpq runtime required by FOD is installed.
+# excluded; libpq and PostgreSQL client/diagnostic tools are included.
 
 ARG FOD_BUILDER_IMAGE=rust:1.98.0-bookworm
 ARG FOD_RUNTIME_IMAGE=debian:bookworm-slim
@@ -43,6 +43,7 @@ FROM ${FOD_RUNTIME_IMAGE}
 ARG FOD_IMAGE_SOURCE=https://github.com/stachwk/fod
 ARG FOD_IMAGE_REVISION=unknown
 ARG FOD_IMAGE_VERSION=unknown
+ARG POSTGRES_CLIENT_MAJOR=16
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -50,7 +51,17 @@ COPY --from=builder /tmp/fod-client.deb /tmp/fod-client.deb
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates /tmp/fod-client.deb; \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg; \
+    install -d -m0755 /usr/share/postgresql-common/pgdg; \
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg; \
+    printf '%s\n' \
+      'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main' \
+      > /etc/apt/sources.list.d/pgdg.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      /tmp/fod-client.deb \
+      "postgresql-client-${POSTGRES_CLIENT_MAJOR}"; \
     rm -f /tmp/fod-client.deb; \
     rm -rf /var/lib/apt/lists/*; \
     command -v fod-bootstrap; \
@@ -60,11 +71,20 @@ RUN set -eux; \
     command -v fod-rust-fuse; \
     command -v mkfs.fod; \
     command -v mount.fod; \
+    command -v psql; \
+    command -v pg_isready; \
+    command -v pg_dump; \
+    command -v pg_restore; \
+    command -v createdb; \
+    command -v dropdb; \
+    command -v reindexdb; \
+    command -v vacuumdb; \
     dpkg-query -W -f='${db:Status-Abbrev}\n' libpq5 | grep -Fx 'ii '; \
+    dpkg-query -W -f='${db:Status-Abbrev}\n' "postgresql-client-${POSTGRES_CLIENT_MAJOR}" | grep -Fx 'ii '; \
+    psql --version | grep -Eq "^psql \(PostgreSQL\) ${POSTGRES_CLIENT_MAJOR}\\."; \
     command -v postgres >/dev/null 2>&1 && exit 1 || true; \
     command -v initdb >/dev/null 2>&1 && exit 1 || true; \
     command -v pg_ctl >/dev/null 2>&1 && exit 1 || true; \
-    command -v psql >/dev/null 2>&1 && exit 1 || true; \
     for binary in \
       /usr/bin/fod-bootstrap \
       /usr/bin/fod-change \
@@ -84,12 +104,13 @@ WORKDIR /work
 VOLUME ["/mnt/fod"]
 
 LABEL org.opencontainers.image.title="FOD client"
-LABEL org.opencontainers.image.description="FOD PostgreSQL-backed FUSE client with libpq runtime only; no PostgreSQL server"
+LABEL org.opencontainers.image.description="FOD PostgreSQL-backed FUSE client with PostgreSQL 16 client/diagnostic tools; no PostgreSQL server"
 LABEL org.opencontainers.image.source="${FOD_IMAGE_SOURCE}"
 LABEL org.opencontainers.image.revision="${FOD_IMAGE_REVISION}"
 LABEL org.opencontainers.image.version="${FOD_IMAGE_VERSION}"
 LABEL org.opencontainers.image.licenses="BSL-1.1"
 LABEL org.fod.container.role="client"
-LABEL org.fod.postgresql.runtime="libpq-only"
+LABEL org.fod.postgresql.runtime="client-tools"
+LABEL org.fod.postgresql.client-major="${POSTGRES_CLIENT_MAJOR}"
 
 CMD ["fod-bootstrap", "--help"]
