@@ -31,33 +31,47 @@ def logical_recipe_commands(lines: list[str]):
         index += 1
 
 
+def audit_paths(requested: Path) -> list[Path]:
+    paths = [requested]
+    internal = requested.parent / "make" / "fod-internal.mk"
+    if (
+        requested.name == "Makefile"
+        and internal.is_file()
+        and "Public FOD Make interface."
+        in requested.read_text(encoding="utf-8", errors="replace")
+    ):
+        paths.append(internal)
+    return paths
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--makefile", default="Makefile")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
-    path = Path(args.makefile)
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    paths = audit_paths(Path(args.makefile))
     problems: list[str] = []
     checked = 0
 
-    for line_number, block in logical_recipe_commands(lines):
-        command = "".join(block)
-        if not any(token in command for token in SENSITIVE_EXPANSIONS):
-            continue
-        checked += 1
-        first = block[0][1:] if block[0].startswith("\t") else block[0]
-        if not first.startswith("@"):
-            tokens = [token for token in SENSITIVE_EXPANSIONS if token in command]
-            problems.append(
-                f"{path}:{line_number}: secret-bearing recipe is echoable: "
-                + ", ".join(tokens)
-            )
+    for path in paths:
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        for line_number, block in logical_recipe_commands(lines):
+            command = "".join(block)
+            if not any(token in command for token in SENSITIVE_EXPANSIONS):
+                continue
+            checked += 1
+            first = block[0][1:] if block[0].startswith("\t") else block[0]
+            if not first.startswith("@"):
+                tokens = [token for token in SENSITIVE_EXPANSIONS if token in command]
+                problems.append(
+                    f"{path}:{line_number}: secret-bearing recipe is echoable: "
+                    + ", ".join(tokens)
+                )
 
     print(
         f"Makefile secret-echo audit: checked_secret_commands={checked} "
-        f"problems={len(problems)}"
+        f"problems={len(problems)} files={len(paths)}"
     )
     for problem in problems:
         print(problem)
