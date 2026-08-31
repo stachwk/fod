@@ -28,6 +28,7 @@ SLAVES ?= 1
 	docker-deploy-fod-smoke \
 	docker-deploy-fod-logs \
 	docker-deploy-fod-shell \
+	docker-deploy-fod-diagnostics \
 	docker-deploy-single-install \
 	docker-deploy-one-replica-install \
 	docker-deploy-two-replicas-install \
@@ -51,11 +52,11 @@ docker-deploy-pull:
 # Final installation: PostgreSQL cluster + FOD schema + persistent FOD/FUSE client.
 docker-deploy-install:
 	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_deploy.sh install
-	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_install.sh start
+	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_start_guard.sh start
 
 docker-deploy-up:
 	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_deploy.sh up
-	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_install.sh start
+	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_start_guard.sh start
 
 docker-deploy-down:
 	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_install.sh down || true
@@ -96,10 +97,10 @@ docker-deploy-fod-host-prepare:
 	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_install.sh host-prepare
 
 docker-deploy-fod-install:
-	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_install.sh install
+	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_start_guard.sh install
 
 docker-deploy-fod-up:
-	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_install.sh up
+	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_start_guard.sh up
 
 docker-deploy-fod-down:
 	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_install.sh down
@@ -115,6 +116,9 @@ docker-deploy-fod-logs:
 
 docker-deploy-fod-shell:
 	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_install.sh shell
+
+docker-deploy-fod-diagnostics:
+	@MASTERS="$(MASTERS)" SLAVES="$(SLAVES)" bash scripts/docker_fod_start_guard.sh diagnostics
 
 docker-deploy-single-install:
 	@$(MAKE) --no-print-directory docker-deploy-install MASTERS=1 SLAVES=0
@@ -172,8 +176,14 @@ help-docker-deploy:
 		'  make docker-deploy-fod-status MASTERS=1 SLAVES=2' \
 		'  make docker-deploy-fod-smoke MASTERS=1 SLAVES=2' \
 		'  make docker-deploy-fod-logs MASTERS=1 SLAVES=2' \
+		'  make docker-deploy-fod-diagnostics MASTERS=1 SLAVES=2' \
 		'  make docker-deploy-fod-shell MASTERS=1 SLAVES=2' \
 		'  make docker-deploy-fod-down MASTERS=1 SLAVES=2' \
+		'' \
+		'FOD startup guard:' \
+		'  FOD_DOCKER_DEPLOY_FOD_START_TIMEOUT_SECONDS=30' \
+		'  FOD_DOCKER_DEPLOY_FOD_HEALTH_TIMEOUT_SECONDS=90' \
+		'  FOD_DOCKER_DEPLOY_FOD_APPARMOR=auto|unconfined|default' \
 		'' \
 		'FOD host mount:' \
 		'  FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR=/path/on/host' \
