@@ -7,6 +7,10 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 impl="${repo_root}/make/fod-internal.mk"
 
+public_make() {
+  env -u FOD_INTERNAL_MAKE make --no-print-directory "$@"
+}
+
 grep -Eq '^channel[[:space:]]*=[[:space:]]*"1\.98\.0"' "${repo_root}/rust-toolchain.toml"
 grep -Eq '^profile[[:space:]]*=[[:space:]]*"minimal"' "${repo_root}/rust-toolchain.toml"
 grep -Fq '"clippy"' "${repo_root}/rust-toolchain.toml"
@@ -89,7 +93,7 @@ fi
 
 build_plan="$(
   cd "${repo_root}"
-  make --no-print-directory -nB build-fod-runtime FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto
+  public_make -nB build-fod-runtime FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto
 )"
 
 grep -Eq 'cargo build .*--profile release-lto .*--bins' <<<"${build_plan}"
@@ -103,7 +107,7 @@ fi
 
 dev_profile="$(
   cd "${repo_root}"
-  make --no-print-directory rust-profile-show FOD_RUNTIME_PROFILE=dev
+  public_make rust-profile-show FOD_RUNTIME_PROFILE=dev
 )"
 
 grep -Fq 'FOD_RUNTIME_PROFILE=dev' <<<"${dev_profile}"
@@ -113,7 +117,7 @@ grep -Fq 'FOD_RUNTIME_BUILD_STAMP=target/.fod-runtime-dev-build.stamp' <<<"${dev
 
 dev_build_plan="$(
   cd "${repo_root}"
-  make --no-print-directory -nB build-fod-runtime FOD_RUNTIME_PROFILE=dev
+  public_make -nB build-fod-runtime FOD_RUNTIME_PROFILE=dev
 )"
 
 grep -Eq 'cargo build .*--profile dev .*--bins' <<<"${dev_build_plan}"
@@ -127,7 +131,7 @@ fi
 
 runtime_bin_plan="$(
   cd "${repo_root}"
-  make --no-print-directory -n fod-mount FOD_RUNTIME_PROFILE=dev
+  public_make -n fod-mount FOD_RUNTIME_PROFILE=dev
 )"
 grep -Fq 'target/debug/fod-bootstrap' <<<"${runtime_bin_plan}"
 if grep -Fq 'target/dev/fod-bootstrap' <<<"${runtime_bin_plan}"; then
