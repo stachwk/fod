@@ -16,11 +16,33 @@ done
 bash -n "${PUBLISH_8}"
 bash -n "${PUBLISH}"
 
-grep -F 'postgres-8k-publish:' "${MAKEFILE}" >/dev/null
-grep -F 'FOD_CONTAINER_PUSH=1 bash scripts/publish_postgres_fod_8k.sh' "${MAKEFILE}" >/dev/null
-grep -F 'postgres-32k-publish:' "${MAKEFILE}" >/dev/null
-grep -F 'FOD_CONTAINER_PUSH=1 bash scripts/publish_postgres_fod_32k.sh' "${MAKEFILE}" >/dev/null
-grep -F 'postgres-all-publish: postgres-8k-publish postgres-32k-publish' "${MAKEFILE}" >/dev/null
+for pattern in \
+    'docker-postgres-8k-build:' \
+    'FOD_CONTAINER_PUSH=0 bash scripts/publish_postgres_fod_8k.sh' \
+    'docker-postgres-8k-publish:' \
+    'FOD_CONTAINER_PUSH=1 bash scripts/publish_postgres_fod_8k.sh' \
+    'docker-postgres-32k-build:' \
+    'FOD_CONTAINER_PUSH=0 bash scripts/publish_postgres_fod_32k.sh' \
+    'docker-postgres-32k-publish:' \
+    'FOD_CONTAINER_PUSH=1 bash scripts/publish_postgres_fod_32k.sh' \
+    'docker-postgres-all-build: docker-postgres-8k-build docker-postgres-32k-build' \
+    'docker-postgres-all-publish: docker-postgres-8k-publish docker-postgres-32k-publish' \
+    'docker-postgres-test-policy:'; do
+    grep -Fq -- "${pattern}" "${MAKEFILE}" || { echo "Missing normalized PostgreSQL Docker Make target: ${pattern}" >&2; exit 1; }
+done
+
+for obsolete in \
+    'postgres-publish:' \
+    'postgres-8k-publish:' \
+    'postgres-32k-publish:' \
+    'postgres-all-publish:' \
+    'test-postgres-container-publish-policy:' \
+    'test-postgres-32k-default-policy:'; do
+    if grep -Fxq -- "${obsolete}" "${MAKEFILE}"; then
+        echo "Obsolete PostgreSQL Make target must not be restored: ${obsolete}" >&2
+        exit 1
+    fi
+done
 
 grep -F 'FOD_POSTGRES_BLOCK_SIZE_KB=8' "${PUBLISH_8}" >/dev/null
 grep -F 'postgres-16-fod-8k' "${PUBLISH_8}" >/dev/null
@@ -45,4 +67,4 @@ if grep -Eq 'docker[[:space:]]+(system[[:space:]]+)?prune|docker[[:space:]]+volu
     exit 1
 fi
 
-echo 'OK: PostgreSQL 8K/32K publish targets and explicit initdb auth policy'
+echo 'OK: normalized PostgreSQL Docker Make targets, 8K/32K publishers and explicit initdb auth policy'
