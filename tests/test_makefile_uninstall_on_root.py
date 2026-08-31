@@ -37,7 +37,7 @@ class MakefileUninstallOnRootTests(unittest.TestCase):
             env = os.environ.copy()
             env['PATH'] = str(fake_bin) + os.pathsep + env.get('PATH', '')
             proc = subprocess.run([
-                'make', '--no-print-directory', 'uninstall-on-root',
+                'make', '--no-print-directory', 'uninstall-root',
                 f'SUDO={fake_bin / "sudo"}',
                 f'FOD_CONFIG_DEST={tmp / "etc/fod/fod_config.ini"}',
                 f'MOUNT_HELPER_DEST={tmp / "usr/local/sbin/mount.fod"}',
