@@ -8,6 +8,10 @@ ENTRY="${ROOT}/make/fod-internal-entry.mk"
 INTERNAL="${ROOT}/make/fod-internal.mk"
 EXTRA="${ROOT}/make/fod-extra-internal.mk"
 
+public_make() {
+    env -u FOD_INTERNAL_MAKE make -C "${ROOT}" --no-print-directory "$@"
+}
+
 for file in "${PUBLIC}" "${GNU}" "${ENTRY}" "${INTERNAL}" "${EXTRA}"; do
     [[ -r "${file}" ]] || { echo "Missing Make interface file: ${file}" >&2; exit 1; }
 done
@@ -108,15 +112,16 @@ grep -Eq '^up:' "${INTERNAL}"
 grep -Eq '^init:' "${INTERNAL}"
 grep -Eq '^mount:' "${INTERNAL}"
 
-# Public parsing must succeed and the default goal must be help.
-make -C "${ROOT}" --no-print-directory -n help >/dev/null
-make -C "${ROOT}" --no-print-directory -n postgres-up >/dev/null
-make -C "${ROOT}" --no-print-directory -n fod-init >/dev/null
-make -C "${ROOT}" --no-print-directory -n package-deb-build >/dev/null
+# Public parsing must succeed regardless of whether a parent internal Make
+# invocation exported FOD_INTERNAL_MAKE=1.
+public_make -n help >/dev/null
+public_make -n postgres-up >/dev/null
+public_make -n fod-init >/dev/null
+public_make -n package-deb-build >/dev/null
 
 # Removed public aliases must fail to resolve.
 for target in up qnap-up init mount benchmark change-runtime pip-build package-ubuntu; do
-    if make -C "${ROOT}" --no-print-directory -n "${target}" >/dev/null 2>&1; then
+    if public_make -n "${target}" >/dev/null 2>&1; then
         echo "Obsolete Make target still resolves publicly: ${target}" >&2
         exit 1
     fi
