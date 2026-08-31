@@ -3,12 +3,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${ROOT}/scripts/docker_fod_install.sh"
+GUARD="${ROOT}/scripts/docker_fod_start_guard.sh"
 PUBLIC="${ROOT}/make/fod-deploy-public.mk"
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/fod-docker-fod-install-policy.XXXXXX")"
 trap 'rm -rf "${tmpdir}"' EXIT
 
-bash -n "${SCRIPT}"
+for file in "${SCRIPT}" "${GUARD}"; do
+  [[ -r "${file}" ]] || { echo "Missing FOD Docker script: ${file}" >&2; exit 1; }
+  bash -n "${file}"
+done
 
 state="${tmpdir}/state"
 mount_dir="${tmpdir}/mount"
@@ -54,6 +58,7 @@ for target in \
   docker-deploy-fod-smoke \
   docker-deploy-fod-logs \
   docker-deploy-fod-shell \
+  docker-deploy-fod-diagnostics \
   test-docker-fod-install-policy; do
   grep -Eq "^${target}:" "${PUBLIC}" || {
     echo "Missing public FOD Docker target: ${target}" >&2
@@ -62,10 +67,24 @@ for target in \
 done
 
 grep -A3 '^docker-deploy-install:' "${PUBLIC}" | grep -Fq 'scripts/docker_deploy.sh install'
-grep -A3 '^docker-deploy-install:' "${PUBLIC}" | grep -Fq 'scripts/docker_fod_install.sh start'
+grep -A3 '^docker-deploy-install:' "${PUBLIC}" | grep -Fq 'scripts/docker_fod_start_guard.sh start'
+grep -A2 '^docker-deploy-fod-install:' "${PUBLIC}" | grep -Fq 'scripts/docker_fod_start_guard.sh install'
+grep -A2 '^docker-deploy-fod-up:' "${PUBLIC}" | grep -Fq 'scripts/docker_fod_start_guard.sh up'
 grep -Fq 'FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR' "${SCRIPT}"
 grep -Fq 'mount --make-rshared' "${SCRIPT}"
 grep -Fq 'FOD schema is not initialized' "${SCRIPT}"
+
+# Startup must never hang indefinitely in compose up. The guard bypasses
+# already-validated dependencies, applies an AppArmor override when appropriate,
+# and emits diagnostics on timeout/failure.
+grep -Fq 'FOD_DOCKER_DEPLOY_FOD_START_TIMEOUT_SECONDS' "${GUARD}"
+grep -Fq 'FOD_DOCKER_DEPLOY_FOD_HEALTH_TIMEOUT_SECONDS' "${GUARD}"
+grep -Fq 'timeout --foreground' "${GUARD}"
+grep -Fq 'up -d --no-deps fod' "${GUARD}"
+grep -Fq 'apparmor=unconfined' "${GUARD}"
+grep -Fq 'FOD CONTAINER START DIAGNOSTICS' "${GUARD}"
+grep -Fq 'docker inspect' "${GUARD}"
+grep -Fq 'findmnt -T' "${GUARD}"
 
 if MASTERS=2 SLAVES=1 FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR="${mount_dir}" bash "${SCRIPT}" plan >/dev/null 2>&1; then
   echo 'FOD Docker install must reject MASTERS>1 together with the database deployment.' >&2
