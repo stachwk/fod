@@ -104,7 +104,7 @@ rust-toolchain-benchmark: venv up
 		bash scripts/fod-rust-toolchain-benchmark.sh run
 
 test-rust-toolchain-benchmark-policy:
-	@bash tests/test_rust-toolchain-benchmark-policy.sh
+	@bash tests/test_rust_toolchain_benchmark_policy.sh
 
 test-rust-release-defaults-policy:
 	@bash tests/test_rust_release_defaults_policy.sh
