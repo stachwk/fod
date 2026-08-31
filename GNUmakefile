@@ -137,4 +137,20 @@ test-all: test-fuse-test-cleanup test-fuse-test-cleanup-policy
 test-all-full:
 	@bash scripts/fod-test-fuse-cleanup.sh clean
 
+# Publish custom PostgreSQL images used by FOD. Both targets validate the image
+# before push and publish the PostgreSQL version tag plus the :16 alias. :latest
+# remains disabled unless explicitly requested through FOD_CONTAINER_TAG_LATEST.
+.PHONY: postgres-8k-publish postgres-32k-publish postgres-all-publish test-postgres-container-publish-policy
+
+postgres-8k-publish:
+	@FOD_CONTAINER_PUSH=1 bash scripts/publish_postgres_fod_8k.sh
+
+postgres-32k-publish:
+	@FOD_CONTAINER_PUSH=1 bash scripts/publish_postgres_fod_32k.sh
+
+postgres-all-publish: postgres-8k-publish postgres-32k-publish
+
+test-postgres-container-publish-policy:
+	@bash tests/test_postgres_container_publish_targets_policy.sh
+
 include packaging/fod-packaging.mk
