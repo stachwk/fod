@@ -50,7 +50,7 @@ FOD_CLIENT_POSTGRES_MAJOR=16 make docker-fod-client-build
 ## Validate container policy
 
 ```bash
-make docker-fod-client-test-policy
+make test-docker-fod-client-policy
 ```
 
 ## Publish to GHCR
