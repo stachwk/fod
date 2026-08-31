@@ -137,43 +137,48 @@ test-all: test-fuse-test-cleanup test-fuse-test-cleanup-policy
 test-all-full:
 	@bash scripts/fod-test-fuse-cleanup.sh clean
 
-# PostgreSQL BLCKSZ=32K is the accepted FOD default and target. The 8K image is
-# kept for compatibility/regression comparisons only. Both explicit targets
-# remain available, while postgres-publish always follows the FOD default.
-.PHONY: postgres-publish postgres-8k-publish postgres-32k-publish postgres-all-publish test-postgres-container-publish-policy test-postgres-32k-default-policy
+# Docker image targets use one naming convention:
+# docker-<component>-<variant>-<action>.
+# PostgreSQL 32K is the accepted FOD default/target; 8K remains explicit for
+# compatibility and regression comparisons.
+.PHONY: docker-postgres-8k-build docker-postgres-8k-publish docker-postgres-32k-build docker-postgres-32k-publish docker-postgres-all-build docker-postgres-all-publish docker-postgres-test-policy
 
-postgres-publish: postgres-32k-publish
+docker-postgres-8k-build:
+	@FOD_CONTAINER_PUSH=0 bash scripts/publish_postgres_fod_8k.sh
 
-postgres-8k-publish:
+docker-postgres-8k-publish:
 	@FOD_CONTAINER_PUSH=1 bash scripts/publish_postgres_fod_8k.sh
 
-postgres-32k-publish:
+docker-postgres-32k-build:
+	@FOD_CONTAINER_PUSH=0 bash scripts/publish_postgres_fod_32k.sh
+
+docker-postgres-32k-publish:
 	@FOD_CONTAINER_PUSH=1 bash scripts/publish_postgres_fod_32k.sh
 
-postgres-all-publish: postgres-8k-publish postgres-32k-publish
+docker-postgres-all-build: docker-postgres-8k-build docker-postgres-32k-build
 
-test-postgres-container-publish-policy:
+docker-postgres-all-publish: docker-postgres-8k-publish docker-postgres-32k-publish
+
+docker-postgres-test-policy:
 	@bash tests/test_postgres_container_publish_targets_policy.sh
-
-test-postgres-32k-default-policy:
 	@bash tests/test_postgres_32k_default_policy.sh
 
-test-all: test-postgres-32k-default-policy
+test-all: docker-postgres-test-policy
 
-# Standalone FOD client container. The final image contains the FOD/FUSE
-# runtime plus PostgreSQL client/diagnostic tools (psql, pg_isready, dump/restore);
-# PostgreSQL server binaries remain banned by the Dockerfile and policy test.
-.PHONY: fod-client-build fod-client-publish test-fod-client-container-policy
+# Standalone FOD client image follows the same docker-<component>-<action>
+# convention. The image includes FOD/FUSE plus PostgreSQL client diagnostics,
+# but no PostgreSQL server binaries.
+.PHONY: docker-fod-client-build docker-fod-client-publish docker-fod-client-test-policy
 
-fod-client-build:
+docker-fod-client-build:
 	@FOD_CONTAINER_PUSH=0 bash scripts/publish_fod_client.sh
 
-fod-client-publish:
+docker-fod-client-publish:
 	@FOD_CONTAINER_PUSH=1 bash scripts/publish_fod_client.sh
 
-test-fod-client-container-policy:
+docker-fod-client-test-policy:
 	@bash tests/test_fod_client_container_policy.sh
 
-test-all: test-fod-client-container-policy
+test-all: docker-fod-client-test-policy
 
 include packaging/fod-packaging.mk
