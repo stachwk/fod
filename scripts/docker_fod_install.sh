@@ -13,6 +13,7 @@ NETWORK_NAME="${FOD_DOCKER_DEPLOY_NETWORK:-${PROJECT}-network}"
 CLIENT_IMAGE="${FOD_DOCKER_DEPLOY_CLIENT_IMAGE:-ghcr.io/stachwk/fod-client:3.4}"
 MOUNT_DIR="${FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/fod/mount}"
 CONTAINER_MOUNT="${FOD_DOCKER_DEPLOY_FOD_CONTAINER_MOUNT:-/mnt/fod}"
+CONTAINER_NAME="${PROJECT}-fod"
 
 BASE_COMPOSE="${STATE_DIR}/compose.yml"
 FOD_COMPOSE="${STATE_DIR}/compose-fod.yml"
@@ -50,10 +51,87 @@ validate() {
   [[ "${MOUNT_DIR}" == /* ]] || fail "FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR must be absolute"
 }
 
+mount_fstypes() {
+  command -v findmnt >/dev/null 2>&1 || return 0
+  findmnt -rn -T "${MOUNT_DIR}" -o FSTYPE 2>/dev/null || true
+}
+
+fuse_mount_count() {
+  local count="0"
+  count="$(mount_fstypes | grep -Ec '^(fuse|fuse\..*|fuse3)$' || true)"
+  printf '%s\n' "${count:-0}"
+}
+
+top_mount_fstype() {
+  mount_fstypes | tail -1 | tr -d '[:space:]'
+}
+
+fod_container_healthy() {
+  command -v docker >/dev/null 2>&1 || return 1
+  [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)" == healthy ]]
+}
+
+cleanup_stale_fuse_mounts() {
+  local interactive_sudo="${1:-0}" before="0" after="0" top="" attempts=0
+  CURRENT_STAGE=cleanup-stale-fuse
+
+  before="$(fuse_mount_count)"
+  (( before > 0 )) || return 0
+
+  if fod_container_healthy; then
+    echo "FOD container is healthy; preserving active FUSE mount layers=${before}: ${MOUNT_DIR}"
+    return 0
+  fi
+
+  echo "Detected stale FUSE mount layers=${before} at ${MOUNT_DIR}; preserving the underlying non-FUSE/shared bind."
+  while (( before > 0 )); do
+    (( attempts += 1 ))
+    (( attempts <= 64 )) || fail "too many stacked FUSE mount layers at ${MOUNT_DIR}"
+
+    top="$(top_mount_fstype)"
+    case "${top}" in
+      fuse|fuse.*|fuse3) ;;
+      *)
+        fail "stale FUSE layer exists below unexpected top mount fstype=${top:-unknown}; refusing to unmount a non-FUSE layer"
+        ;;
+    esac
+
+    echo "Unmounting stale FUSE layer ${before}: ${MOUNT_DIR} fstype=${top}"
+    if command -v fusermount3 >/dev/null 2>&1; then
+      fusermount3 -u "${MOUNT_DIR}" >/dev/null 2>&1 || true
+    elif command -v fusermount >/dev/null 2>&1; then
+      fusermount -u "${MOUNT_DIR}" >/dev/null 2>&1 || true
+    fi
+
+    after="$(fuse_mount_count)"
+    if (( after >= before )); then
+      local sudo_cmd=()
+      if (( EUID != 0 )); then
+        command -v sudo >/dev/null 2>&1 || \
+          fail "root is required to unmount stale root-owned FUSE layer; run sudo umount '${MOUNT_DIR}' once per FUSE layer"
+        if [[ "${interactive_sudo}" == 1 ]]; then
+          sudo_cmd=(sudo)
+        elif sudo -n true >/dev/null 2>&1; then
+          sudo_cmd=(sudo -n)
+        else
+          fail "stale root-owned FUSE mount requires sudo; run: make docker-deploy-fod-host-prepare MASTERS=${MASTERS} SLAVES=${SLAVES}"
+        fi
+      fi
+      "${sudo_cmd[@]}" umount "${MOUNT_DIR}"
+      after="$(fuse_mount_count)"
+    fi
+
+    (( after < before )) || fail "failed to remove stale FUSE layer at ${MOUNT_DIR}"
+    before="${after}"
+  done
+
+  echo "OK: stale FUSE layers removed; underlying mount retained:"
+  if command -v findmnt >/dev/null 2>&1; then
+    findmnt -T "${MOUNT_DIR}" -o TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS 2>/dev/null || true
+  fi
+}
+
 path_entry_exists() {
-  # -e follows symlinks and can be false for a dangling symlink. -L detects
-  # the directory entry itself. mountpoint/findmnt cover mounted paths whose
-  # underlying filesystem may currently reject stat(2).
   [[ -e "${MOUNT_DIR}" || -L "${MOUNT_DIR}" ]] && return 0
   mountpoint -q "${MOUNT_DIR}" 2>/dev/null && return 0
   if command -v findmnt >/dev/null 2>&1; then
@@ -82,9 +160,6 @@ ensure_mount_dir() {
     return 0
   fi
 
-  # A stale/disconnected mount can make test -e return false while the path
-  # entry still exists. Try creation once, then re-check all path/mount forms
-  # before treating EEXIST as fatal.
   set +e
   mkdir -p -- "${MOUNT_DIR}" 2>"${STATE_DIR}/.fod-mkdir.err"
   local mkdir_rc=$?
@@ -195,7 +270,7 @@ EOF
 
 mount_propagation() {
   if command -v findmnt >/dev/null 2>&1; then
-    findmnt -n -o PROPAGATION -T "${MOUNT_DIR}" 2>/dev/null | tr -d '[:space:]'
+    findmnt -rn -o PROPAGATION -T "${MOUNT_DIR}" 2>/dev/null | tail -1 | tr -d '[:space:]'
   fi
 }
 
@@ -207,6 +282,12 @@ preflight() {
   }
 
   ensure_mount_dir
+  local stale_count="0"
+  stale_count="$(fuse_mount_count)"
+  if (( stale_count > 0 )) && ! fod_container_healthy; then
+    fail "stale FUSE mount layers=${stale_count} remain at ${MOUNT_DIR}; run make docker-deploy-fod-host-prepare MASTERS=${MASTERS} SLAVES=${SLAVES}"
+  fi
+
   local propagation=""
   propagation="$(mount_propagation || true)"
   case "${propagation}" in
@@ -232,6 +313,8 @@ EOF
 }
 
 host_prepare() {
+  CURRENT_STAGE=host-prepare-cleanup
+  cleanup_stale_fuse_mounts 1
   CURRENT_STAGE=host-prepare
   ensure_mount_dir
   local sudo_cmd=()
@@ -327,6 +410,7 @@ plan() {
 }
 
 validate
+mkdir -p -- "${STATE_DIR}"
 
 case "${ACTION}" in
   plan)
@@ -340,9 +424,13 @@ case "${ACTION}" in
     preflight
     echo "OK: FOD Docker host preflight"
     ;;
+  cleanup-stale-mounts)
+    cleanup_stale_fuse_mounts 0
+    ensure_mount_dir
+    ;;
   host-prepare)
-    render >/dev/null
     host_prepare
+    render >/dev/null
     ;;
   start)
     require_docker
