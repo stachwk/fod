@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
@@ -18,11 +18,24 @@ BASE_COMPOSE="${STATE_DIR}/compose.yml"
 FOD_COMPOSE="${STATE_DIR}/compose-fod.yml"
 CONTAINER_CONFIG="${STATE_DIR}/fod-container.ini"
 POSTGRES_ENV="${STATE_DIR}/postgres.env"
+CURRENT_STAGE=init
 
 fail() {
   echo "ERROR: $*" >&2
   exit 2
 }
+
+on_error() {
+  local rc=$? line="${BASH_LINENO[0]:-?}" cmd="${BASH_COMMAND:-?}"
+  echo "ERROR: docker_fod_install stage=${CURRENT_STAGE} rc=${rc} line=${line} command=${cmd}" >&2
+  echo "ERROR: mount_dir=${MOUNT_DIR}" >&2
+  if command -v findmnt >/dev/null 2>&1; then
+    findmnt -T "${MOUNT_DIR}" -o TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS >&2 2>/dev/null || true
+  fi
+  ls -ld -- "${MOUNT_DIR}" >&2 2>/dev/null || true
+  exit "${rc}"
+}
+trap on_error ERR
 
 require_uint() {
   local name="$1" value="$2" min="$3" max="$4"
@@ -37,18 +50,68 @@ validate() {
   [[ "${MOUNT_DIR}" == /* ]] || fail "FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR must be absolute"
 }
 
+path_entry_exists() {
+  # -e follows symlinks and can be false for a dangling symlink. -L detects
+  # the directory entry itself. mountpoint/findmnt cover mounted paths whose
+  # underlying filesystem may currently reject stat(2).
+  [[ -e "${MOUNT_DIR}" || -L "${MOUNT_DIR}" ]] && return 0
+  mountpoint -q "${MOUNT_DIR}" 2>/dev/null && return 0
+  if command -v findmnt >/dev/null 2>&1; then
+    findmnt -n -T "${MOUNT_DIR}" >/dev/null 2>&1 && [[ -e "${MOUNT_DIR}" || -L "${MOUNT_DIR}" ]] && return 0
+  fi
+  return 1
+}
+
 ensure_mount_dir() {
-  # A running FOD instance may already have a FUSE mount propagated onto this
-  # path. Do not call mkdir on an active mountpoint: some FUSE states report
-  # EEXIST instead of behaving like a normal directory during mkdir -p.
+  CURRENT_STAGE=ensure-mount-dir
+
   if mountpoint -q "${MOUNT_DIR}" 2>/dev/null; then
     return 0
   fi
+
+  if [[ -L "${MOUNT_DIR}" ]]; then
+    local resolved=""
+    resolved="$(readlink -f -- "${MOUNT_DIR}" 2>/dev/null || true)"
+    [[ -n "${resolved}" && -d "${resolved}" ]] || \
+      fail "FOD mount path is a dangling/non-directory symlink: ${MOUNT_DIR}"
+    return 0
+  fi
+
   if [[ -e "${MOUNT_DIR}" ]]; then
     [[ -d "${MOUNT_DIR}" ]] || fail "FOD mount path exists but is not a directory: ${MOUNT_DIR}"
     return 0
   fi
-  mkdir -p -- "${MOUNT_DIR}"
+
+  # A stale/disconnected mount can make test -e return false while the path
+  # entry still exists. Try creation once, then re-check all path/mount forms
+  # before treating EEXIST as fatal.
+  set +e
+  mkdir -p -- "${MOUNT_DIR}" 2>"${STATE_DIR}/.fod-mkdir.err"
+  local mkdir_rc=$?
+  set -e
+  if (( mkdir_rc != 0 )); then
+    if mountpoint -q "${MOUNT_DIR}" 2>/dev/null || [[ -d "${MOUNT_DIR}" ]]; then
+      rm -f "${STATE_DIR}/.fod-mkdir.err"
+      return 0
+    fi
+    if [[ -L "${MOUNT_DIR}" ]]; then
+      local resolved_after=""
+      resolved_after="$(readlink -f -- "${MOUNT_DIR}" 2>/dev/null || true)"
+      if [[ -n "${resolved_after}" && -d "${resolved_after}" ]]; then
+        rm -f "${STATE_DIR}/.fod-mkdir.err"
+        return 0
+      fi
+    fi
+    echo "ERROR: cannot prepare FOD mount directory: ${MOUNT_DIR}" >&2
+    cat "${STATE_DIR}/.fod-mkdir.err" >&2 2>/dev/null || true
+    rm -f "${STATE_DIR}/.fod-mkdir.err"
+    if command -v findmnt >/dev/null 2>&1; then
+      findmnt -T "${MOUNT_DIR}" -o TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS >&2 2>/dev/null || true
+    fi
+    ls -ld -- "$(dirname -- "${MOUNT_DIR}")" "${MOUNT_DIR}" >&2 2>/dev/null || true
+    fail "mount directory preparation failed; inspect the path diagnostics above"
+  fi
+  rm -f "${STATE_DIR}/.fod-mkdir.err"
 }
 
 base_action() {
@@ -74,12 +137,16 @@ require_docker() {
 }
 
 render() {
+  CURRENT_STAGE=render-base
   base_action render >/dev/null
+  mkdir -p -- "${STATE_DIR}"
+  CURRENT_STAGE=render-mount-dir
   ensure_mount_dir
-  if ! mountpoint -q "${MOUNT_DIR}" 2>/dev/null; then
+  if ! mountpoint -q "${MOUNT_DIR}" 2>/dev/null && [[ -d "${MOUNT_DIR}" && ! -L "${MOUNT_DIR}" ]]; then
     chmod 0755 "${MOUNT_DIR}"
   fi
 
+  CURRENT_STAGE=render-compose
   cat > "${FOD_COMPOSE}" <<EOF
 services:
   fod:
@@ -133,6 +200,7 @@ mount_propagation() {
 }
 
 preflight() {
+  CURRENT_STAGE=preflight
   [[ -e /dev/fuse ]] || fail "/dev/fuse does not exist on the Docker host"
   [[ -r /dev/fuse && -w /dev/fuse ]] || {
     echo "WARNING: current user cannot directly read/write /dev/fuse; Docker daemon may still be able to pass it through." >&2
@@ -164,6 +232,7 @@ EOF
 }
 
 host_prepare() {
+  CURRENT_STAGE=host-prepare
   ensure_mount_dir
   local sudo_cmd=()
   if (( EUID != 0 )); then
@@ -188,6 +257,7 @@ schema_exists() {
 }
 
 wait_for_fod() {
+  CURRENT_STAGE=wait-for-fod
   local attempt status=""
   for attempt in $(seq 1 90); do
     status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
@@ -203,6 +273,7 @@ wait_for_fod() {
 }
 
 smoke() {
+  CURRENT_STAGE=smoke
   [[ -f "${POSTGRES_ENV}" ]] || fail "missing ${POSTGRES_ENV}; render/install the database deployment first"
   source "${POSTGRES_ENV}"
 
