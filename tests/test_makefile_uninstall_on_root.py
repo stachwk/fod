@@ -35,6 +35,7 @@ class MakefileUninstallOnRootTests(unittest.TestCase):
             write_executable(fake_bin / 'sudo', sudo)
 
             env = os.environ.copy()
+            env.pop('FOD_INTERNAL_MAKE', None)
             env['PATH'] = str(fake_bin) + os.pathsep + env.get('PATH', '')
             proc = subprocess.run([
                 'make', '--no-print-directory', 'uninstall-root',
