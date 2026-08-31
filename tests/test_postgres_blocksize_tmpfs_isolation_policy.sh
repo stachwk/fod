@@ -43,11 +43,17 @@ for pattern in \
     'cleanup_ram_tree "${primary_dir}"' \
     'cleanup_ram_tree "${replica_dir}"' \
     'docker run --rm --entrypoint /bin/sh' \
+    'initdb --no-sync --auth-local=trust --auth-host=trust' \
     'cp -a "${RAM_ROOT}/." "${FINAL_DIR}/"' \
     'tmpfs_pg32_vs_8_primary_write_pct=' \
     'tmpfs_pg32_vs_8_insert_wal_bytes_pct='; do
     grep -Fq -- "${pattern}" "${RUNNER}" || { echo "Missing tmpfs runner policy: ${pattern}" >&2; exit 1; }
 done
+
+if grep -Eq -- 'initdb([[:space:]]|[^\n])* -D ' "${RUNNER}" && ! grep -Fq -- 'initdb --no-sync --auth-local=trust --auth-host=trust' "${RUNNER}"; then
+    echo 'Tmpfs runner must make temporary initdb authentication explicit' >&2
+    exit 1
+fi
 
 for pattern in \
     'RAM_ROOT="/dev/shm/${PROJECT}"' \
