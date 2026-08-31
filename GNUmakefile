@@ -153,9 +153,9 @@ postgres-all-publish: postgres-8k-publish postgres-32k-publish
 test-postgres-container-publish-policy:
 	@bash tests/test_postgres_container_publish_targets_policy.sh
 
-# Standalone FOD client container. The final image contains the FOD runtime,
-# FUSE runtime and libpq client library only; PostgreSQL server/tools are banned
-# by docker/fod-client/Dockerfile and the policy test below.
+# Standalone FOD client container. The final image contains the FOD/FUSE
+# runtime plus PostgreSQL client/diagnostic tools (psql, pg_isready, dump/restore);
+# PostgreSQL server binaries remain banned by the Dockerfile and policy test.
 .PHONY: fod-client-build fod-client-publish test-fod-client-container-policy
 
 fod-client-build:
