@@ -5,6 +5,7 @@
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
+impl="${repo_root}/make/fod-internal.mk"
 
 grep -Eq '^channel[[:space:]]*=[[:space:]]*"1\.98\.0"' "${repo_root}/rust-toolchain.toml"
 grep -Eq '^profile[[:space:]]*=[[:space:]]*"minimal"' "${repo_root}/rust-toolchain.toml"
@@ -12,20 +13,24 @@ grep -Fq '"clippy"' "${repo_root}/rust-toolchain.toml"
 grep -Fq '"rustfmt"' "${repo_root}/rust-toolchain.toml"
 
 grep -Eq '^rust-version[[:space:]]*=[[:space:]]*"1\.85"' "${repo_root}/Cargo.toml"
-grep -Eq '^FOD_CARGO_PROFILE[[:space:]]*\?=[[:space:]]*release-lto$' "${repo_root}/Makefile"
-grep -Fq 'FOD_CARGO_TEST_PROFILE ?= $(FOD_CARGO_PROFILE)' "${repo_root}/Makefile"
-grep -Fq 'FOD_TEST_FLAG := --profile $(FOD_CARGO_TEST_PROFILE)' "${repo_root}/Makefile"
-grep -Fq 'FOD_RUNTIME_FLAG := --profile $(FOD_RUNTIME_PROFILE)' "${repo_root}/Makefile"
-grep -Fq 'FOD_RUNTIME_ARTIFACT_PROFILE := $(if $(filter dev,$(FOD_RUNTIME_PROFILE)),debug,$(FOD_RUNTIME_PROFILE))' "${repo_root}/Makefile"
-grep -Eq '^FOD_RUST_PRODUCTION_TOOLCHAIN[[:space:]]*\?=[[:space:]]*1\.98\.0$' "${repo_root}/Makefile"
-grep -Fq 'build-runtime: rust-production-toolchain-check $(FOD_RUNTIME_BUILD_STAMP)' "${repo_root}/Makefile"
-grep -Fq 'FOD_RUNTIME_BUILD_STAMP := $(RUST_MKFS_TARGET_DIR)/.fod-runtime-$(FOD_RUNTIME_PROFILE)-build.stamp' "${repo_root}/Makefile"
-grep -Fq '$(CARGO_BUILD_MKFS) $(FOD_RUNTIME_FLAG) --bins' "${repo_root}/Makefile"
-grep -Fq 'FOD_BOOTSTRAP_RUNTIME_BIN ?= $(RUST_MKFS_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-bootstrap' "${repo_root}/Makefile"
-grep -Fq '$(CARGO_BUILD_LIBFOD) $(FOD_RELEASE_FLAG) --lib' "${repo_root}/Makefile"
-grep -Fq 'build-libfod install-root-scripts: rust-production-toolchain-check' "${repo_root}/Makefile"
-grep -Fq '$(FOD_DEBUG_BUILD_STAMP): Makefile GNUmakefile rust-toolchain.toml' "${repo_root}/Makefile"
-grep -Fq 'CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_TEST_FLAG) -p $(FOD_FUSE_PACKAGE)' "${repo_root}/Makefile"
+grep -Eq '^FOD_CARGO_PROFILE[[:space:]]*\?=[[:space:]]*release-lto$' "${impl}"
+grep -Fq 'FOD_CARGO_TEST_PROFILE ?= $(FOD_CARGO_PROFILE)' "${impl}"
+grep -Fq 'FOD_TEST_FLAG := --profile $(FOD_CARGO_TEST_PROFILE)' "${impl}"
+grep -Fq 'FOD_RUNTIME_FLAG := --profile $(FOD_RUNTIME_PROFILE)' "${impl}"
+grep -Fq 'FOD_RUNTIME_ARTIFACT_PROFILE := $(if $(filter dev,$(FOD_RUNTIME_PROFILE)),debug,$(FOD_RUNTIME_PROFILE))' "${impl}"
+grep -Eq '^FOD_RUST_PRODUCTION_TOOLCHAIN[[:space:]]*\?=[[:space:]]*1\.98\.0$' "${impl}"
+grep -Fq 'build-runtime: rust-production-toolchain-check $(FOD_RUNTIME_BUILD_STAMP)' "${impl}"
+grep -Fq 'FOD_RUNTIME_BUILD_STAMP := $(RUST_MKFS_TARGET_DIR)/.fod-runtime-$(FOD_RUNTIME_PROFILE)-build.stamp' "${impl}"
+grep -Fq '$(CARGO_BUILD_MKFS) $(FOD_RUNTIME_FLAG) --bins' "${impl}"
+grep -Fq 'FOD_BOOTSTRAP_RUNTIME_BIN ?= $(RUST_MKFS_TARGET_DIR)/$(FOD_RUNTIME_ARTIFACT_PROFILE)/fod-bootstrap' "${impl}"
+grep -Fq '$(CARGO_BUILD_LIBFOD) $(FOD_RELEASE_FLAG) --lib' "${impl}"
+grep -Fq 'build-libfod install-root-scripts: rust-production-toolchain-check' "${impl}"
+grep -Fq '$(FOD_DEBUG_BUILD_STAMP): Makefile GNUmakefile rust-toolchain.toml' "${impl}"
+grep -Fq 'CARGO_TEST_FUSE := $(RUST_CARGO) test --manifest-path $(CARGO_ROOT_MANIFEST) $(FOD_TEST_FLAG) -p $(FOD_FUSE_PACKAGE)' "${impl}"
+
+grep -Fq 'FOD_FORWARD_TARGET,build-fod-runtime,build-runtime' "${repo_root}/Makefile"
+grep -Fq 'FOD_FORWARD_TARGET,rust-profile-show,cargo-profile-show' "${repo_root}/Makefile"
+grep -Fq 'FOD_FORWARD_TARGET,fod-mount,mount' "${repo_root}/Makefile"
 
 grep -Fq 'target/release-lto/fod-rust-fuse' "${repo_root}/rust_mkfs/src/bin/fod-bootstrap.rs"
 grep -Fq 'sibling_rust_fuse_binary' "${repo_root}/rust_mkfs/src/bin/fod-bootstrap.rs"
@@ -61,7 +66,6 @@ exit 0
 EOF
 chmod +x "${checkout}/target/release-lto/fod-rust-fuse"
 
-# Stale alternatives must not win for a normal (non-debug) mount.
 for profile in release debug; do
   cat >"${checkout}/target/${profile}/fod-bootstrap" <<'EOF'
 #!/usr/bin/env bash
@@ -85,7 +89,7 @@ fi
 
 build_plan="$(
   cd "${repo_root}"
-  make --no-print-directory -nB build-runtime FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto
+  make --no-print-directory -nB build-fod-runtime FOD_CARGO_PROFILE=release FOD_RUNTIME_PROFILE=release-lto
 )"
 
 grep -Eq 'cargo build .*--profile release-lto .*--bins' <<<"${build_plan}"
@@ -93,13 +97,13 @@ grep -Eq 'cargo build .*--profile release-lto .*--bin fod-rust-fuse' <<<"${build
 grep -Eq 'cargo build .*--profile release-lto .*--lib' <<<"${build_plan}"
 grep -Fq '.fod-runtime-release-lto-build.stamp' <<<"${build_plan}"
 if grep -Eq 'cargo build .*--profile release .*--bins' <<<"${build_plan}"; then
-  echo "build-runtime must not use FOD_CARGO_PROFILE when FOD_RUNTIME_PROFILE differs" >&2
+  echo "build-fod-runtime must not use FOD_CARGO_PROFILE when FOD_RUNTIME_PROFILE differs" >&2
   exit 1
 fi
 
 dev_profile="$(
   cd "${repo_root}"
-  make --no-print-directory cargo-profile-show FOD_RUNTIME_PROFILE=dev
+  make --no-print-directory rust-profile-show FOD_RUNTIME_PROFILE=dev
 )"
 
 grep -Fq 'FOD_RUNTIME_PROFILE=dev' <<<"${dev_profile}"
@@ -109,7 +113,7 @@ grep -Fq 'FOD_RUNTIME_BUILD_STAMP=target/.fod-runtime-dev-build.stamp' <<<"${dev
 
 dev_build_plan="$(
   cd "${repo_root}"
-  make --no-print-directory -nB build-runtime FOD_RUNTIME_PROFILE=dev
+  make --no-print-directory -nB build-fod-runtime FOD_RUNTIME_PROFILE=dev
 )"
 
 grep -Eq 'cargo build .*--profile dev .*--bins' <<<"${dev_build_plan}"
@@ -117,13 +121,13 @@ grep -Eq 'cargo build .*--profile dev .*--bin fod-rust-fuse' <<<"${dev_build_pla
 grep -Eq 'cargo build .*--profile dev .*--lib' <<<"${dev_build_plan}"
 grep -Fq '.fod-runtime-dev-build.stamp' <<<"${dev_build_plan}"
 if grep -Eq 'cargo build .*--profile debug' <<<"${dev_build_plan}"; then
-  echo "build-runtime must use Cargo profile dev, not debug" >&2
+  echo "build-fod-runtime must use Cargo profile dev, not debug" >&2
   exit 1
 fi
 
 runtime_bin_plan="$(
   cd "${repo_root}"
-  make --no-print-directory -n mount FOD_RUNTIME_PROFILE=dev
+  make --no-print-directory -n fod-mount FOD_RUNTIME_PROFILE=dev
 )"
 grep -Fq 'target/debug/fod-bootstrap' <<<"${runtime_bin_plan}"
 if grep -Fq 'target/dev/fod-bootstrap' <<<"${runtime_bin_plan}"; then
