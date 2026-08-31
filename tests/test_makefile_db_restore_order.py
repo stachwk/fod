@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAKEFILE = ROOT / "Makefile"
+MAKEFILE = ROOT / "make" / "fod-internal.mk"
 
 
 def target_line(text: str, target: str) -> str:
@@ -14,7 +14,7 @@ def target_line(text: str, target: str) -> str:
     for line in text.splitlines():
         if line.startswith(prefix):
             return line
-    raise AssertionError(f"missing Makefile target: {target}")
+    raise AssertionError(f"missing internal Make target: {target}")
 
 
 def target_block(text: str, target: str, next_target: str) -> str:
@@ -22,11 +22,11 @@ def target_block(text: str, target: str, next_target: str) -> str:
     end_marker = f"\n{next_target}:"
     start = text.find(start_marker)
     if start < 0:
-        raise AssertionError(f"missing Makefile target: {target}")
+        raise AssertionError(f"missing internal Make target: {target}")
     end = text.find(end_marker, start)
     if end < 0:
         raise AssertionError(
-            f"missing target {next_target} after Makefile target {target}"
+            f"missing target {next_target} after internal Make target {target}"
         )
     return text[start:end]
 
