@@ -40,6 +40,7 @@ services:
       - type: bind
         source: ${FOD_PG_BLOCK_TMPFS_PRIMARY_DIR:?FOD_PG_BLOCK_TMPFS_PRIMARY_DIR must point into /dev/shm}
         target: /var/lib/postgresql/data
+      - ./docker/replica-read/primary-init.sh:/docker-entrypoint-initdb.d/10-fod-replication.sh:ro
     healthcheck:
       test:
         - CMD-SHELL
