@@ -132,9 +132,10 @@ reconcile_stale_fod() {
     docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   fi
 
-  # The install helper enumerates every mount layer at MOUNT_DIR and removes
-  # only stacked fuse* layers. The underlying ext4/xfs shared bind is retained.
-  fod_action cleanup-stale-mounts
+  # User-facing `up/install` may need sudo to remove root-owned propagated
+  # FUSE layers. A healthy container with exactly one layer is preserved; an
+  # invalid healthy stack (>1 layers) is recreated by the helper.
+  FOD_DOCKER_DEPLOY_FOD_INTERACTIVE_SUDO=1 fod_action cleanup-stale-mounts
 }
 
 schema_exists() {
