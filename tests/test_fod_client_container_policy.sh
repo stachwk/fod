@@ -93,6 +93,18 @@ for obsolete in \
     fi
 done
 
+for pattern in \
+    'make docker-fod-client-build' \
+    'make docker-fod-client-test-policy' \
+    'make docker-fod-client-publish'; do
+    grep -Fq -- "${pattern}" "${README}" || { echo "Missing normalized FOD client command in README: ${pattern}" >&2; exit 1; }
+done
+
+if grep -Eq 'make[[:space:]]+(fod-client-build|fod-client-publish|test-fod-client-container-policy)([[:space:]]|$)' "${README}"; then
+    echo 'FOD client README must not document obsolete Make targets' >&2
+    exit 1
+fi
+
 for pattern in '.git' 'artifacts' 'target' '.venv' '*.local.ini' '*.db.ini'; do
     grep -Fxq -- "${pattern}" "${DOCKERIGNORE}" || { echo "Missing client Docker ignore pattern: ${pattern}" >&2; exit 1; }
 done
