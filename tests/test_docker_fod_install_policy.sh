@@ -75,10 +75,12 @@ grep -Fq 'mount --make-rshared' "${SCRIPT}"
 grep -Fq 'FOD schema is not initialized' "${SCRIPT}"
 
 # Startup must never hang indefinitely in compose up. The guard bypasses
-# already-validated dependencies, applies an AppArmor override when appropriate,
-# and emits diagnostics on timeout/failure.
+# already-validated dependencies, refreshes the mutable series image tag,
+# applies an AppArmor override when appropriate, and emits diagnostics on
+# timeout/failure.
 grep -Fq 'FOD_DOCKER_DEPLOY_FOD_START_TIMEOUT_SECONDS' "${GUARD}"
 grep -Fq 'FOD_DOCKER_DEPLOY_FOD_HEALTH_TIMEOUT_SECONDS' "${GUARD}"
+grep -Fq 'docker pull "${CLIENT_IMAGE}"' "${GUARD}"
 grep -Fq 'timeout --foreground' "${GUARD}"
 grep -Fq 'up -d --no-deps fod' "${GUARD}"
 grep -Fq 'apparmor=unconfined' "${GUARD}"
