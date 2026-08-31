@@ -138,9 +138,15 @@ prepare() {
   compose config --quiet
 }
 
+pull_client_image() {
+  echo "Pulling FOD client image: ${CLIENT_IMAGE}"
+  docker pull "${CLIENT_IMAGE}"
+}
+
 start_container() {
   command -v timeout >/dev/null 2>&1 || fail "GNU timeout is required for guarded Docker FOD startup"
   prepare
+  pull_client_image
 
   local current=""
   current="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
@@ -199,7 +205,6 @@ case "${ACTION}" in
   install)
     base_action up
     base_action fod-init
-    docker pull "${CLIENT_IMAGE}"
     start_container
     fod_action smoke
     ;;
