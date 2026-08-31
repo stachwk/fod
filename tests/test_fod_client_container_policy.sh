@@ -75,12 +75,22 @@ for pattern in \
 done
 
 for pattern in \
-    'fod-client-build:' \
+    'docker-fod-client-build:' \
     'FOD_CONTAINER_PUSH=0 bash scripts/publish_fod_client.sh' \
-    'fod-client-publish:' \
+    'docker-fod-client-publish:' \
     'FOD_CONTAINER_PUSH=1 bash scripts/publish_fod_client.sh' \
+    'docker-fod-client-test-policy:'; do
+    grep -Fq -- "${pattern}" "${MAKEFILE}" || { echo "Missing normalized FOD client Docker Make target: ${pattern}" >&2; exit 1; }
+done
+
+for obsolete in \
+    'fod-client-build:' \
+    'fod-client-publish:' \
     'test-fod-client-container-policy:'; do
-    grep -Fq -- "${pattern}" "${MAKEFILE}" || { echo "Missing FOD client make target: ${pattern}" >&2; exit 1; }
+    if grep -Fxq -- "${obsolete}" "${MAKEFILE}"; then
+        echo "Obsolete FOD client Make target must not be restored: ${obsolete}" >&2
+        exit 1
+    fi
 done
 
 for pattern in '.git' 'artifacts' 'target' '.venv' '*.local.ini' '*.db.ini'; do
@@ -92,4 +102,4 @@ if grep -Eq 'docker[[:space:]]+(system[[:space:]]+)?prune|docker[[:space:]]+volu
     exit 1
 fi
 
-echo 'OK: FOD client container has PostgreSQL client tools, target-scoped package root and no PostgreSQL server'
+echo 'OK: normalized FOD client Docker Make targets, PostgreSQL client tools and no PostgreSQL server'
