@@ -3,17 +3,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="${ROOT}/scripts/docker_deploy.sh"
-PUBLIC_DEPLOY="${ROOT}/make/fod-deploy-public.mk"
+PUBLIC="${ROOT}/make/fod-deploy-public.mk"
 PRIMARY_INIT="${ROOT}/docker/deploy/primary-init.sh"
 REPLICA_ENTRY="${ROOT}/docker/deploy/replica-entrypoint.sh"
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/fod-docker-deploy-policy.XXXXXX")"
 trap 'rm -rf "${tmpdir}"' EXIT
 
-for file in "${SCRIPT}" "${PUBLIC_DEPLOY}" "${PRIMARY_INIT}" "${REPLICA_ENTRY}"; do
-  [[ -r "${file}" ]] || { echo "Missing deployment file: ${file}" >&2; exit 1; }
-done
 for file in "${SCRIPT}" "${PRIMARY_INIT}" "${REPLICA_ENTRY}"; do
+  [[ -r "${file}" ]] || { echo "Missing deployment file: ${file}" >&2; exit 1; }
   bash -n "${file}"
 done
 
@@ -91,16 +89,21 @@ for target in \
   docker-deploy-status \
   docker-deploy-smoke \
   docker-deploy-logs \
-  docker-deploy-fod-init \
-  docker-deploy-fod-upgrade \
+  docker-deploy-schema-init \
+  docker-deploy-schema-upgrade \
   docker-deploy-destroy \
   docker-deploy-single-install \
   docker-deploy-one-replica-install \
   docker-deploy-two-replicas-install; do
-  grep -Eq "^${target}:" "${PUBLIC_DEPLOY}" || {
+  grep -Eq "^${target}:" "${PUBLIC}" || {
     echo "Missing public deployment target: ${target}" >&2
     exit 1
   }
 done
+
+if grep -Eq '^docker-deploy-fod-(init|upgrade):' "${PUBLIC}"; then
+  echo 'Schema lifecycle must use docker-deploy-schema-* names, not docker-deploy-fod-*.' >&2
+  exit 1
+fi
 
 echo 'OK docker-deploy-policy'
