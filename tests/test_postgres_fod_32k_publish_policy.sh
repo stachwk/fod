@@ -13,17 +13,20 @@ COMPOSE="${ROOT}/docker-compose.postgres-blocksize.yml"
 bash -n "${PUBLISH}"
 
 grep -F 'FOD_POSTGRES_IMAGE_VERSION:-16.15' "${PUBLISH}" >/dev/null
+grep -F 'FOD_POSTGRES_BLOCK_SIZE_KB:-32' "${PUBLISH}" >/dev/null
+grep -F 'FOD_POSTGRES_BLOCK_SIZE_KB must be 8 or 32' "${PUBLISH}" >/dev/null
 grep -F 'FOD_CONTAINER_REGISTRY:-ghcr.io' "${PUBLISH}" >/dev/null
 grep -F 'FOD_CONTAINER_NAMESPACE:-stachwk' "${PUBLISH}" >/dev/null
-grep -F 'FOD_CONTAINER_REPOSITORY:-postgres-16-fod-32k' "${PUBLISH}" >/dev/null
+grep -F 'postgres-16-fod-${BLOCK_SIZE_KB}k' "${PUBLISH}" >/dev/null
 grep -F 'FOD_CONTAINER_PUSH:-0' "${PUBLISH}" >/dev/null
-grep -F 'POSTGRES_BLOCK_SIZE_KB=32' "${PUBLISH}" >/dev/null
+grep -F -- '--build-arg "POSTGRES_BLOCK_SIZE_KB=${BLOCK_SIZE_KB}"' "${PUBLISH}" >/dev/null
+grep -F 'EXPECTED_BLOCK_SIZE="$((BLOCK_SIZE_KB * 1024))"' "${PUBLISH}" >/dev/null
 grep -F 'actual_block_size' "${PUBLISH}" >/dev/null
-grep -F '32768' "${PUBLISH}" >/dev/null
 grep -F 'FOD_POSTGRES_MIN_EXTENSION_COUNT:-45' "${PUBLISH}" >/dev/null
 grep -F 'FOD_POSTGRES_MIN_SYSTEM_LOCALE_COUNT:-100' "${PUBLISH}" >/dev/null
 grep -F 'verified_system_locale_count=' "${PUBLISH}" >/dev/null
 grep -F 'verified_icu_locales=' "${PUBLISH}" >/dev/null
+grep -F 'initdb --no-sync --auth-local=trust --auth-host=trust' "${PUBLISH}" >/dev/null
 grep -F 'pl_PL' "${PUBLISH}" >/dev/null
 grep -F 'pl-PL' "${PUBLISH}" >/dev/null
 grep -F 'zh_CN' "${PUBLISH}" >/dev/null
@@ -43,9 +46,11 @@ grep -F 'MUSL_LOCPATH="/usr/share/i18n/locales/musl"' "${DOCKERFILE}" >/dev/null
 grep -F 'LANG="C.UTF-8"' "${DOCKERFILE}" >/dev/null
 grep -F 'C.UTF-8 en_US en_GB de_DE' "${DOCKERFILE}" >/dev/null
 grep -F 'pl_PL hu_HU uk_UA ja_JP ko_KR zh_CN ar_SA' "${DOCKERFILE}" >/dev/null
+grep -F -- '--auth-local=trust --auth-host=trust' "${DOCKERFILE}" >/dev/null
 grep -F -- '--locale-provider=icu --icu-locale=pl-PL' "${DOCKERFILE}" >/dev/null
 grep -F '/opt/postgresql-custom/share/postgresql.conf.sample' "${DOCKERFILE}" >/dev/null
 grep -F "listen_addresses = '*'" "${DOCKERFILE}" >/dev/null
+grep -F 'org.fod.postgresql.block-size-kb="${POSTGRES_BLOCK_SIZE_KB}"' "${DOCKERFILE}" >/dev/null
 if grep -Fq 'ENV LC_ALL=' "${DOCKERFILE}"; then
     echo "LC_ALL must not be pinned because callers need to override LANG/LC_*" >&2
     exit 1
@@ -67,6 +72,7 @@ grep -F 'org.opencontainers.image.revision' "${DOCKERFILE}" >/dev/null
 grep -F 'org.opencontainers.image.version' "${DOCKERFILE}" >/dev/null
 
 grep -F 'postgres:16.15-alpine' "${COMPOSE}" >/dev/null
+grep -F 'POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"' "${COMPOSE}" >/dev/null
 grep -F 'ghcr.io/stachwk/postgres-16-fod-32k:16.15' "${DOC}" >/dev/null
 grep -F 'FOD_CONTAINER_REGISTRY=docker.io' "${DOC}" >/dev/null
 
@@ -80,4 +86,4 @@ if grep -Eq 'docker[[:space:]]+(system[[:space:]]+)?prune|docker[[:space:]]+volu
     exit 1
 fi
 
-echo "OK: PostgreSQL 32K image publishing policy"
+echo "OK: PostgreSQL image publishing policy (default 32K, supports 8K)"
