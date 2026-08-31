@@ -79,11 +79,20 @@ cleanup_stale_fuse_mounts() {
   (( before > 0 )) || return 0
 
   if fod_container_healthy; then
-    echo "FOD container is healthy; preserving active FUSE mount layers=${before}: ${MOUNT_DIR}"
-    return 0
+    if (( before == 1 )); then
+      echo "FOD container is healthy; preserving its single active FUSE layer: ${MOUNT_DIR}"
+      return 0
+    fi
+
+    echo "FOD container is healthy but FUSE stack is invalid layers=${before}; recreating the FOD container and mount."
+    docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    sleep 1
+    before="$(fuse_mount_count)"
   fi
 
+  (( before > 0 )) || return 0
   echo "Detected stale FUSE mount layers=${before} at ${MOUNT_DIR}; preserving the underlying non-FUSE/shared bind."
+
   while (( before > 0 )); do
     (( attempts += 1 ))
     (( attempts <= 64 )) || fail "too many stacked FUSE mount layers at ${MOUNT_DIR}"
@@ -143,6 +152,13 @@ path_entry_exists() {
 ensure_mount_dir() {
   CURRENT_STAGE=ensure-mount-dir
 
+  # A propagated FUSE mount can make stat(2)/mountpoint(1) behave unusually.
+  # findmnt still sees the stack, so never attempt mkdir while any FUSE layer
+  # is mounted at the target path.
+  if (( $(fuse_mount_count) > 0 )); then
+    return 0
+  fi
+
   if mountpoint -q "${MOUNT_DIR}" 2>/dev/null; then
     return 0
   fi
@@ -165,7 +181,7 @@ ensure_mount_dir() {
   local mkdir_rc=$?
   set -e
   if (( mkdir_rc != 0 )); then
-    if mountpoint -q "${MOUNT_DIR}" 2>/dev/null || [[ -d "${MOUNT_DIR}" ]]; then
+    if (( $(fuse_mount_count) > 0 )) || mountpoint -q "${MOUNT_DIR}" 2>/dev/null || [[ -d "${MOUNT_DIR}" ]]; then
       rm -f "${STATE_DIR}/.fod-mkdir.err"
       return 0
     fi
@@ -217,7 +233,7 @@ render() {
   mkdir -p -- "${STATE_DIR}"
   CURRENT_STAGE=render-mount-dir
   ensure_mount_dir
-  if ! mountpoint -q "${MOUNT_DIR}" 2>/dev/null && [[ -d "${MOUNT_DIR}" && ! -L "${MOUNT_DIR}" ]]; then
+  if (( $(fuse_mount_count) == 0 )) && ! mountpoint -q "${MOUNT_DIR}" 2>/dev/null && [[ -d "${MOUNT_DIR}" && ! -L "${MOUNT_DIR}" ]]; then
     chmod 0755 "${MOUNT_DIR}"
   fi
 
@@ -274,6 +290,19 @@ mount_propagation() {
   fi
 }
 
+assert_preflight_mount_stack() {
+  local count="0"
+  count="$(fuse_mount_count)"
+  (( count > 0 )) || return 0
+
+  if fod_container_healthy; then
+    (( count == 1 )) || fail "healthy FOD container has invalid FUSE stack layers=${count}; run make docker-deploy-fod-up to reconcile it"
+    return 0
+  fi
+
+  fail "stale FUSE mount layers=${count} remain at ${MOUNT_DIR}; run make docker-deploy-fod-host-prepare MASTERS=${MASTERS} SLAVES=${SLAVES}"
+}
+
 preflight() {
   CURRENT_STAGE=preflight
   [[ -e /dev/fuse ]] || fail "/dev/fuse does not exist on the Docker host"
@@ -282,11 +311,7 @@ preflight() {
   }
 
   ensure_mount_dir
-  local stale_count="0"
-  stale_count="$(fuse_mount_count)"
-  if (( stale_count > 0 )) && ! fod_container_healthy; then
-    fail "stale FUSE mount layers=${stale_count} remain at ${MOUNT_DIR}; run make docker-deploy-fod-host-prepare MASTERS=${MASTERS} SLAVES=${SLAVES}"
-  fi
+  assert_preflight_mount_stack
 
   local propagation=""
   propagation="$(mount_propagation || true)"
@@ -315,6 +340,15 @@ EOF
 host_prepare() {
   CURRENT_STAGE=host-prepare-cleanup
   cleanup_stale_fuse_mounts 1
+
+  # If one healthy FOD layer is already active and valid, the mount is already
+  # propagated; do not try to re-bind the active FUSE target.
+  if fod_container_healthy && (( $(fuse_mount_count) == 1 )); then
+    preflight
+    echo "OK: FOD host mount is already active and correctly propagated: ${MOUNT_DIR}"
+    return 0
+  fi
+
   CURRENT_STAGE=host-prepare
   ensure_mount_dir
   local sudo_cmd=()
@@ -366,11 +400,10 @@ smoke() {
     pg_isready -h primary -p 5432 -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" >/dev/null
   "
 
-  if ! mountpoint -q "${MOUNT_DIR}" 2>/dev/null; then
-    if command -v findmnt >/dev/null 2>&1; then
-      findmnt -T "${MOUNT_DIR}" -t fuse,fuse.fod,fuse3 >/dev/null 2>&1 || \
-        echo "WARNING: host cannot positively identify ${MOUNT_DIR} as a FUSE mount; container health is OK." >&2
-    fi
+  if command -v findmnt >/dev/null 2>&1; then
+    local fuse_count="0"
+    fuse_count="$(fuse_mount_count)"
+    (( fuse_count == 1 )) || fail "FOD container is healthy but host FUSE stack layers=${fuse_count}; expected exactly 1"
   fi
 
   printf 'OK: FOD Docker client healthy image=%s host_mount=%s\n' "${CLIENT_IMAGE}" "${MOUNT_DIR}"
@@ -425,7 +458,7 @@ case "${ACTION}" in
     echo "OK: FOD Docker host preflight"
     ;;
   cleanup-stale-mounts)
-    cleanup_stale_fuse_mounts 0
+    cleanup_stale_fuse_mounts "${FOD_DOCKER_DEPLOY_FOD_INTERACTIVE_SUDO:-0}"
     ensure_mount_dir
     ;;
   host-prepare)
@@ -448,8 +481,10 @@ case "${ACTION}" in
   down)
     require_docker
     [[ -f "${FOD_COMPOSE}" ]] || render >/dev/null
-    compose stop fod
-    compose rm -f fod
+    compose stop fod || true
+    compose rm -f fod || true
+    cleanup_stale_fuse_mounts 1
+    ensure_mount_dir
     ;;
   status)
     require_docker
