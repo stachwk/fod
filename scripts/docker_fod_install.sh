@@ -37,6 +37,20 @@ validate() {
   [[ "${MOUNT_DIR}" == /* ]] || fail "FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR must be absolute"
 }
 
+ensure_mount_dir() {
+  # A running FOD instance may already have a FUSE mount propagated onto this
+  # path. Do not call mkdir on an active mountpoint: some FUSE states report
+  # EEXIST instead of behaving like a normal directory during mkdir -p.
+  if mountpoint -q "${MOUNT_DIR}" 2>/dev/null; then
+    return 0
+  fi
+  if [[ -e "${MOUNT_DIR}" ]]; then
+    [[ -d "${MOUNT_DIR}" ]] || fail "FOD mount path exists but is not a directory: ${MOUNT_DIR}"
+    return 0
+  fi
+  mkdir -p -- "${MOUNT_DIR}"
+}
+
 base_action() {
   MASTERS="${MASTERS}" SLAVES="${SLAVES}" \
     FOD_DOCKER_DEPLOY_STATE_DIR="${STATE_DIR}" \
@@ -61,8 +75,10 @@ require_docker() {
 
 render() {
   base_action render >/dev/null
-  mkdir -p "${MOUNT_DIR}"
-  chmod 0755 "${MOUNT_DIR}"
+  ensure_mount_dir
+  if ! mountpoint -q "${MOUNT_DIR}" 2>/dev/null; then
+    chmod 0755 "${MOUNT_DIR}"
+  fi
 
   cat > "${FOD_COMPOSE}" <<EOF
 services:
@@ -122,7 +138,7 @@ preflight() {
     echo "WARNING: current user cannot directly read/write /dev/fuse; Docker daemon may still be able to pass it through." >&2
   }
 
-  mkdir -p "${MOUNT_DIR}"
+  ensure_mount_dir
   local propagation=""
   propagation="$(mount_propagation || true)"
   case "${propagation}" in
@@ -148,7 +164,7 @@ EOF
 }
 
 host_prepare() {
-  mkdir -p "${MOUNT_DIR}"
+  ensure_mount_dir
   local sudo_cmd=()
   if (( EUID != 0 )); then
     command -v sudo >/dev/null 2>&1 || fail "sudo is required to prepare host mount propagation"
