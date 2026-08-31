@@ -6,7 +6,8 @@ driver="$repo_root/scripts/fod-native-package.sh"
 deb="$repo_root/packaging/fod-package-deb.sh"
 rpm="$repo_root/packaging/fod-package-rpm.sh"
 common="$repo_root/packaging/fod-package-common.sh"
-makefile="$repo_root/GNUmakefile"
+makefile="$repo_root/Makefile"
+entry="$repo_root/make/fod-internal-entry.mk"
 pmk="$repo_root/packaging/fod-packaging.mk"
 
 for script in "$driver" "$deb" "$rpm" "$common"; do
@@ -36,7 +37,25 @@ grep -Fq 'install -d -m0755 "$stage/var/log/fod"' "$common"
 grep -Fq 'find "$stage" -type d -exec chmod 0755 {} +' "$common"
 grep -Fq 'FOD Project <33524981+stachwk@users.noreply.github.com>' "$driver"
 grep -Fq 'FOD Project <33524981+stachwk@users.noreply.github.com>' "$pmk"
-grep -Fq 'include packaging/fod-packaging.mk' "$makefile"
+
+# Internal implementation remains unchanged, while the public Make interface
+# exposes only format/action names and no distro aliases.
+grep -Fq 'include packaging/fod-packaging.mk' "$entry"
+grep -Fq 'FOD_FORWARD_TARGET,package-build-artifacts,package-artifacts' "$makefile"
+grep -Fq 'FOD_FORWARD_TARGET,package-native-build,package-native' "$makefile"
+grep -Fq 'FOD_FORWARD_TARGET,package-deb-build,package-ubuntu' "$makefile"
+grep -Fq 'FOD_FORWARD_TARGET,package-rpm-build,package-rocky' "$makefile"
+grep -Fq 'FOD_FORWARD_TARGET,package-deb-deps-show,package-deps-ubuntu' "$makefile"
+grep -Fq 'FOD_FORWARD_TARGET,package-rpm-deps-show,package-deps-redhat' "$makefile"
+grep -Fq 'test-package-native-policy:' "$makefile"
+
+for obsolete in package-info package-native package-ubuntu package-deb package-rocky package-redhat package-rpm test-native-package-policy; do
+  if grep -Eq "^${obsolete}:" "$makefile"; then
+    echo "obsolete public package target remains: ${obsolete}" >&2
+    exit 1
+  fi
+done
+
 grep -Eq '^package-ubuntu: package-artifacts' "$pmk"
 grep -Eq '^package-rocky: package-artifacts' "$pmk"
 grep -Eq '^package-native: package-artifacts' "$pmk"
