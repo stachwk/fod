@@ -186,9 +186,9 @@ ENV LD_LIBRARY_PATH="/opt/postgresql-custom/lib"
 ENV MUSL_LOCPATH="/usr/share/i18n/locales/musl"
 ENV LANG="C.UTF-8"
 
-COPY docker/replica-read/primary-init.sh /docker-entrypoint-initdb.d/10-fod-replication.sh
-COPY docker/replica-read/replica-entrypoint.sh /usr/local/bin/fod-replica-entrypoint.sh
-
+# Replication benchmark helpers are intentionally not baked into this image.
+# Benchmark compose files mount them explicitly, keeping the published image
+# safe as the default standalone PostgreSQL service for FOD.
 RUN apk add --no-cache \
         musl-locales \
         musl-locales-lang \
@@ -215,9 +215,6 @@ RUN apk add --no-cache \
     && chown postgres:postgres "${icu_dir}" \
     && su-exec postgres initdb --no-sync --auth-local=trust --auth-host=trust --locale-provider=icu --icu-locale=pl-PL -D "${icu_dir}" >/dev/null \
     && rm -rf "${icu_dir}" /tmp/fod-locales.txt \
-    && chmod 0755 \
-        /docker-entrypoint-initdb.d/10-fod-replication.sh \
-        /usr/local/bin/fod-replica-entrypoint.sh \
     && postgres --version \
     && pg_config --configure | grep -F -- "--with-blocksize=${POSTGRES_BLOCK_SIZE_KB}" >/dev/null \
     && pg_config --configure | grep -F -- "--with-icu" >/dev/null \
