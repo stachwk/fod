@@ -61,6 +61,7 @@ RUN set -eux; \
     make -C contrib install; \
     install -d -o postgres -g postgres /tmp/pg-blocksize-verify; \
     su-exec postgres /opt/postgresql-custom/bin/initdb \
+        --no-sync --auth-local=trust --auth-host=trust \
         -D /tmp/pg-blocksize-verify >/dev/null; \
     actual="$(su-exec postgres /opt/postgresql-custom/bin/postgres \
         -D /tmp/pg-blocksize-verify -C block_size)"; \
@@ -212,7 +213,7 @@ RUN apk add --no-cache \
     && test "$(locale charmap)" = "UTF-8" \
     && icu_dir="$(mktemp -d)" \
     && chown postgres:postgres "${icu_dir}" \
-    && su-exec postgres initdb --no-sync --locale-provider=icu --icu-locale=pl-PL -D "${icu_dir}" >/dev/null \
+    && su-exec postgres initdb --no-sync --auth-local=trust --auth-host=trust --locale-provider=icu --icu-locale=pl-PL -D "${icu_dir}" >/dev/null \
     && rm -rf "${icu_dir}" /tmp/fod-locales.txt \
     && chmod 0755 \
         /docker-entrypoint-initdb.d/10-fod-replication.sh \
@@ -229,8 +230,8 @@ RUN apk add --no-cache \
         test -f "/opt/postgresql-custom/share/extension/${ext}.control"; \
     done
 
-LABEL org.opencontainers.image.title="PostgreSQL for FOD with 32 KiB pages"
-LABEL org.opencontainers.image.description="PostgreSQL rebuilt for FOD with 32 KiB table pages, full PostgreSQL contrib, multilingual locale/ICU data and a curated external extension bundle"
+LABEL org.opencontainers.image.title="PostgreSQL for FOD custom BLCKSZ"
+LABEL org.opencontainers.image.description="PostgreSQL rebuilt for FOD with configurable table pages, full PostgreSQL contrib, multilingual locale/ICU data and a curated external extension bundle"
 LABEL org.opencontainers.image.source="${FOD_IMAGE_SOURCE}"
 LABEL org.opencontainers.image.revision="${FOD_IMAGE_REVISION}"
 LABEL org.opencontainers.image.version="${FOD_IMAGE_VERSION}"
