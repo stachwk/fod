@@ -11,6 +11,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-foddbname}
       POSTGRES_USER: ${POSTGRES_USER:-foduser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cichosza}
+      POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"
       PGDATA: /var/lib/postgresql/data/pgdata
       FOD_EXPECTED_PG_BLOCK_SIZE_BYTES: ${FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768}
     command:
