@@ -104,7 +104,7 @@ rust-toolchain-benchmark: venv up
 		bash scripts/fod-rust-toolchain-benchmark.sh run
 
 test-rust-toolchain-benchmark-policy:
-	@bash tests/test_rust_toolchain_benchmark_policy.sh
+	@bash tests/test_rust-toolchain-benchmark-policy.sh
 
 test-rust-release-defaults-policy:
 	@bash tests/test_rust_release_defaults_policy.sh
@@ -152,5 +152,21 @@ postgres-all-publish: postgres-8k-publish postgres-32k-publish
 
 test-postgres-container-publish-policy:
 	@bash tests/test_postgres_container_publish_targets_policy.sh
+
+# Standalone FOD client container. The final image contains the FOD runtime,
+# FUSE runtime and libpq client library only; PostgreSQL server/tools are banned
+# by docker/fod-client/Dockerfile and the policy test below.
+.PHONY: fod-client-build fod-client-publish test-fod-client-container-policy
+
+fod-client-build:
+	@FOD_CONTAINER_PUSH=0 bash scripts/publish_fod_client.sh
+
+fod-client-publish:
+	@FOD_CONTAINER_PUSH=1 bash scripts/publish_fod_client.sh
+
+test-fod-client-container-policy:
+	@bash tests/test_fod_client_container_policy.sh
+
+test-all: test-fod-client-container-policy
 
 include packaging/fod-packaging.mk
