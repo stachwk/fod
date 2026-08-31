@@ -7,7 +7,7 @@ BENCH_COMPOSE="${ROOT}/docker-compose.postgres-blocksize.yml"
 TMPFS_COMPOSE="${ROOT}/docker-compose.postgres-blocksize-tmpfs.yml"
 DOCKERFILE="${ROOT}/docker/postgres-blocksize/Dockerfile"
 STANDALONE_INIT="${ROOT}/docker/postgres-blocksize/standalone-init.sh"
-MAKEFILE="${ROOT}/GNUmakefile"
+MAKEFILE="${ROOT}/Makefile"
 DECISION="${ROOT}/docs/FOD_POSTGRES_BLCKSZ_32K_DEFAULT_DECISION.md"
 
 for file in "${MAIN_COMPOSE}" "${BENCH_COMPOSE}" "${TMPFS_COMPOSE}" "${DOCKERFILE}" "${STANDALONE_INIT}" "${MAKEFILE}" "${DECISION}"; do
@@ -45,9 +45,9 @@ for compose in "${BENCH_COMPOSE}" "${TMPFS_COMPOSE}"; do
     grep -F './docker/replica-read/replica-entrypoint.sh:/usr/local/bin/fod-replica-entrypoint.sh:ro' "${compose}" >/dev/null
 done
 
-grep -F 'docker-postgres-32k-build:' "${MAKEFILE}" >/dev/null
-grep -F 'docker-postgres-32k-publish:' "${MAKEFILE}" >/dev/null
-grep -F 'docker-postgres-test-policy:' "${MAKEFILE}" >/dev/null
+grep -F 'FOD_FORWARD_TARGET,docker-postgres-32k-build,docker-postgres-32k-build' "${MAKEFILE}" >/dev/null
+grep -F 'FOD_FORWARD_TARGET,docker-postgres-32k-publish,docker-postgres-32k-publish' "${MAKEFILE}" >/dev/null
+grep -F 'test-docker-postgres-policy:' "${MAKEFILE}" >/dev/null
 
 grep -F 'PostgreSQL compiled with `BLCKSZ=32K` is the default and target PostgreSQL variant.' "${DECISION}" >/dev/null
 grep -F 'It is not the default or target configuration for new FOD deployments.' "${DECISION}" >/dev/null
