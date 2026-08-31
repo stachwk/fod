@@ -55,7 +55,7 @@ COPY docker/fod-client/fod-container-entrypoint.sh /usr/local/bin/fod-container-
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl gnupg libcap2-bin util-linux; \
+    apt-get install -y --no-install-recommends ca-certificates curl fuse3 gnupg libcap2-bin util-linux; \
     install -d -m0755 /usr/share/postgresql-common/pgdg; \
     curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
       | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg; \
