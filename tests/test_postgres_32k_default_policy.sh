@@ -45,8 +45,11 @@ for compose in "${BENCH_COMPOSE}" "${TMPFS_COMPOSE}"; do
     grep -F './docker/replica-read/replica-entrypoint.sh:/usr/local/bin/fod-replica-entrypoint.sh:ro' "${compose}" >/dev/null
 done
 
-grep -F 'postgres-publish: postgres-32k-publish' "${MAKEFILE}" >/dev/null
+grep -F 'docker-postgres-32k-build:' "${MAKEFILE}" >/dev/null
+grep -F 'docker-postgres-32k-publish:' "${MAKEFILE}" >/dev/null
+grep -F 'docker-postgres-test-policy:' "${MAKEFILE}" >/dev/null
+
 grep -F 'PostgreSQL compiled with `BLCKSZ=32K` is the default and target PostgreSQL variant.' "${DECISION}" >/dev/null
 grep -F 'It is not the default or target configuration for new FOD deployments.' "${DECISION}" >/dev/null
 
-echo 'OK: PostgreSQL BLCKSZ=32K is the guarded FOD default and target'
+echo 'OK: PostgreSQL BLCKSZ=32K is the guarded FOD default and target with normalized Docker Make targets'
