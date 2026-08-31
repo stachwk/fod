@@ -19,11 +19,17 @@ for pattern in \
     'type: bind' \
     'source: ${FOD_PG_BLOCK_TMPFS_PRIMARY_DIR:' \
     'source: ${FOD_PG_BLOCK_TMPFS_REPLICA_DIR:' \
+    'POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"' \
     'synchronous_commit=on' \
     'wal_level=replica' \
     'shared_preload_libraries=pg_stat_statements'; do
     grep -Fq -- "${pattern}" "${COMPOSE}" || { echo "Missing tmpfs compose policy: ${pattern}" >&2; exit 1; }
 done
+
+if grep -Eq -- 'POSTGRES_INITDB_ARGS:.*--auth-host=trust' "${COMPOSE}"; then
+    echo 'Benchmark container host authentication must not use trust' >&2
+    exit 1
+fi
 
 if grep -Eq -- 'type:[[:space:]]*tmpfs|driver_opts:|postgres_blocksize_(primary|replica)_tmpfs:' "${COMPOSE}"; then
     echo 'Tmpfs isolation must use host /dev/shm bind directories, not restart-volatile Docker tmpfs volumes' >&2
