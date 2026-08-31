@@ -38,6 +38,7 @@ services:
       - "${REPLICA_READ_BIND_ADDRESS:-127.0.0.1}:${REPLICA_READ_PRIMARY_PORT:-55441}:5432"
     volumes:
       - postgres_blocksize_primary_data:/var/lib/postgresql/data
+      - ./docker/replica-read/primary-init.sh:/docker-entrypoint-initdb.d/10-fod-replication.sh:ro
     healthcheck:
       test:
         - CMD-SHELL
