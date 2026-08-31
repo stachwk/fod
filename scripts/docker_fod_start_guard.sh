@@ -111,7 +111,7 @@ dump_diagnostics() {
   docker logs --tail=120 "${CONTAINER_NAME}" >&2 2>/dev/null || true
   echo '--- /dev/fuse ---' >&2
   ls -l /dev/fuse >&2 2>/dev/null || true
-  echo '--- host mount propagation ---' >&2
+  echo '--- host mount stack ---' >&2
   if command -v findmnt >/dev/null 2>&1; then
     findmnt -T "${MOUNT_DIR}" -o TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS >&2 2>/dev/null || true
   fi
@@ -122,13 +122,8 @@ dump_diagnostics() {
   echo '=======================================' >&2
 }
 
-mount_fstype() {
-  command -v findmnt >/dev/null 2>&1 || return 0
-  findmnt -n -o FSTYPE -T "${MOUNT_DIR}" 2>/dev/null | head -1 | tr -d '[:space:]'
-}
-
 reconcile_stale_fod() {
-  local state="" health="" fstype=""
+  local state="" health=""
   state="$(docker inspect --format '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
   health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
 
@@ -137,26 +132,9 @@ reconcile_stale_fod() {
     docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   fi
 
-  fstype="$(mount_fstype || true)"
-  case "${fstype}" in
-    fuse|fuse.*|fuse3)
-      echo "Removing stale propagated FUSE mount: ${MOUNT_DIR} fstype=${fstype}"
-      if command -v fusermount3 >/dev/null 2>&1; then
-        fusermount3 -u "${MOUNT_DIR}" >/dev/null 2>&1 || true
-      elif command -v fusermount >/dev/null 2>&1; then
-        fusermount -u "${MOUNT_DIR}" >/dev/null 2>&1 || true
-      fi
-      if mountpoint -q "${MOUNT_DIR}" 2>/dev/null && [[ "$(mount_fstype || true)" == fuse* ]]; then
-        fail "stale FUSE mount remains at ${MOUNT_DIR}; run: sudo umount '${MOUNT_DIR}'"
-      fi
-      ;;
-  esac
-
-  if [[ -e "${MOUNT_DIR}" ]]; then
-    [[ -d "${MOUNT_DIR}" ]] || fail "FOD mount path exists but is not a directory: ${MOUNT_DIR}"
-  else
-    mkdir -p -- "${MOUNT_DIR}"
-  fi
+  # The install helper enumerates every mount layer at MOUNT_DIR and removes
+  # only stacked fuse* layers. The underlying ext4/xfs shared bind is retained.
+  fod_action cleanup-stale-mounts
 }
 
 schema_exists() {
