@@ -44,7 +44,8 @@ validate() {
 }
 
 base_action() {
-  MASTERS="${MASTERS}" SLAVES="${SLAVES}" \
+  COMPOSE_IGNORE_ORPHANS=true \
+    MASTERS="${MASTERS}" SLAVES="${SLAVES}" \
     FOD_DOCKER_DEPLOY_STATE_DIR="${STATE_DIR}" \
     FOD_DOCKER_DEPLOY_PROJECT="${PROJECT}" \
     FOD_DOCKER_DEPLOY_CLIENT_IMAGE="${CLIENT_IMAGE}" \
@@ -121,6 +122,43 @@ dump_diagnostics() {
   echo '=======================================' >&2
 }
 
+mount_fstype() {
+  command -v findmnt >/dev/null 2>&1 || return 0
+  findmnt -n -o FSTYPE -T "${MOUNT_DIR}" 2>/dev/null | head -1 | tr -d '[:space:]'
+}
+
+reconcile_stale_fod() {
+  local state="" health="" fstype=""
+  state="$(docker inspect --format '{{.State.Status}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+
+  if [[ -n "${state}" && ! ( "${state}" == running && "${health}" == healthy ) ]]; then
+    echo "Removing stale FOD container: ${CONTAINER_NAME} status=${state} health=${health:-none}"
+    docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  fi
+
+  fstype="$(mount_fstype || true)"
+  case "${fstype}" in
+    fuse|fuse.*|fuse3)
+      echo "Removing stale propagated FUSE mount: ${MOUNT_DIR} fstype=${fstype}"
+      if command -v fusermount3 >/dev/null 2>&1; then
+        fusermount3 -u "${MOUNT_DIR}" >/dev/null 2>&1 || true
+      elif command -v fusermount >/dev/null 2>&1; then
+        fusermount -u "${MOUNT_DIR}" >/dev/null 2>&1 || true
+      fi
+      if mountpoint -q "${MOUNT_DIR}" 2>/dev/null && [[ "$(mount_fstype || true)" == fuse* ]]; then
+        fail "stale FUSE mount remains at ${MOUNT_DIR}; run: sudo umount '${MOUNT_DIR}'"
+      fi
+      ;;
+  esac
+
+  if [[ -e "${MOUNT_DIR}" ]]; then
+    [[ -d "${MOUNT_DIR}" ]] || fail "FOD mount path exists but is not a directory: ${MOUNT_DIR}"
+  else
+    mkdir -p -- "${MOUNT_DIR}"
+  fi
+}
+
 schema_exists() {
   [[ -f "${POSTGRES_ENV}" ]] || return 1
   # shellcheck disable=SC1090
@@ -131,6 +169,7 @@ schema_exists() {
 }
 
 prepare() {
+  reconcile_stale_fod
   fod_action render >/dev/null
   fod_action preflight
   schema_exists || fail "FOD schema is not initialized; run make docker-deploy-schema-init first"
@@ -145,8 +184,8 @@ pull_client_image() {
 
 start_container() {
   command -v timeout >/dev/null 2>&1 || fail "GNU timeout is required for guarded Docker FOD startup"
-  prepare
   pull_client_image
+  prepare
 
   local current=""
   current="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
