@@ -88,6 +88,18 @@ grep -Fq 'FOD CONTAINER START DIAGNOSTICS' "${GUARD}"
 grep -Fq 'docker inspect' "${GUARD}"
 grep -Fq 'findmnt -T' "${GUARD}"
 
+# A failed previous FOD start may leave an orphan container and/or propagated
+# FUSE mount. Reconcile those before render so an existing mount path cannot
+# fail with a misleading "mkdir: Already exists" error. Never remove a normal
+# shared bind mount; only stale fuse* mounts are candidates for unmount.
+grep -Fq 'COMPOSE_IGNORE_ORPHANS=true' "${GUARD}"
+grep -Fq 'reconcile_stale_fod()' "${GUARD}"
+grep -Fq 'Removing stale FOD container' "${GUARD}"
+grep -Fq 'docker rm -f "${CONTAINER_NAME}"' "${GUARD}"
+grep -Fq 'Removing stale propagated FUSE mount' "${GUARD}"
+grep -Fq 'fusermount3 -u "${MOUNT_DIR}"' "${GUARD}"
+grep -Fq 'mkdir -p -- "${MOUNT_DIR}"' "${GUARD}"
+
 if MASTERS=2 SLAVES=1 FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR="${mount_dir}" bash "${SCRIPT}" plan >/dev/null 2>&1; then
   echo 'FOD Docker install must reject MASTERS>1 together with the database deployment.' >&2
   exit 1
