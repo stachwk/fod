@@ -36,6 +36,7 @@ RUNS="${RAM_ROOT}/runs.tsv"
 MEDIANS="${RAM_ROOT}/median.tsv"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fod-pg-tmpfs.XXXXXX")"
 NO_BUILD_COMPOSE="${TMP_DIR}/docker-compose-no-build"
+CLEANUP_IMAGE="${FOD_PG_BLOCK_TMPFS_CLEANUP_IMAGE:-fod-postgres-blocksize:16-8k}"
 
 for cmd in bash docker make git awk sort sync sleep cp mkdir mktemp rm; do
     command -v "${cmd}" >/dev/null 2>&1 || { echo "Missing required command: ${cmd}" >&2; exit 2; }
@@ -48,12 +49,28 @@ case "${REPEATS}" in ''|*[!0-9]*) echo "FOD_PG_BLOCK_TMPFS_REPEATS must be a pos
 (( REPEATS >= 1 )) || { echo "FOD_PG_BLOCK_TMPFS_REPEATS must be >= 1" >&2; exit 2; }
 case "${RAM_ROOT}" in /dev/shm/*) ;; *) echo "FOD_PG_BLOCK_TMPFS_RAM_ROOT must be under /dev/shm: ${RAM_ROOT}" >&2; exit 2;; esac
 
+cleanup_ram_tree() {
+    local dir="$1"
+    [[ -d "${dir}" ]] || return 0
+    # PGDATA is owned by PostgreSQL uid 70 and normally mode 0700. Clean only
+    # the supplied RAM-backed directory through a root container so the host
+    # user's uid does not need permission inside PGDATA.
+    if docker image inspect "${CLEANUP_IMAGE}" >/dev/null 2>&1; then
+        docker run --rm --entrypoint /bin/sh \
+            -v "${dir}:/fod-ram-cleanup" \
+            "${CLEANUP_IMAGE}" -ceu \
+            'rm -rf /fod-ram-cleanup/* /fod-ram-cleanup/.[!.]* /fod-ram-cleanup/..?*' \
+            >/dev/null 2>&1 || true
+    fi
+    rm -rf "${dir}" >/dev/null 2>&1 || true
+}
+
 cleanup() {
     local rc=$?
     set +e
     rm -rf "${TMP_DIR}"
     if [[ "${FOD_PG_BLOCK_TMPFS_KEEP_RAM_ARTIFACTS:-0}" != "1" ]]; then
-        rm -rf "${RAM_ROOT}"
+        cleanup_ram_tree "${RAM_ROOT}"
     fi
     exit "${rc}"
 }
@@ -144,7 +161,6 @@ for ((repeat=1; repeat<=REPEATS; repeat++)); do
         run_dir="${RAM_ROOT}/repeat-${repeat}/pg-${pg}k"
         primary_dir="${run_dir}/.pgdata-primary"
         replica_dir="${run_dir}/.pgdata-replica"
-        rm -rf "${primary_dir}" "${replica_dir}"
         mkdir -p "${run_dir}" "${primary_dir}" "${replica_dir}"
         sync
         sleep "${FOD_PG_BLOCK_TMPFS_IDLE_SECONDS:-5}"
@@ -181,9 +197,10 @@ for ((repeat=1; repeat<=REPEATS; repeat++)); do
             "${repeat}" "${order}" "${pg}" "${write}" "${pread}" "${rread}" "${copy_mean}" "${insert_mean}" "${insert_wal}" "${wal_bytes}" "${wal_sync}" "${profile_dir}" >>"${RUNS}"
 
         # The integration test has already stopped the Compose project here.
-        # Remove only the measured run's RAM-backed PGDATA so it is neither
-        # reused by another variant nor copied into the final disk artifact.
-        rm -rf "${primary_dir}" "${replica_dir}"
+        # Remove only the measured run's RAM-backed PGDATA through a root
+        # container; PostgreSQL owns the PGDATA contents as uid 70/mode 0700.
+        cleanup_ram_tree "${primary_dir}"
+        cleanup_ram_tree "${replica_dir}"
     done
 done
 
