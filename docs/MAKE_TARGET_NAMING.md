@@ -4,7 +4,7 @@
 
 This document defines the public Make target namespace for FOD.
 
-The public interface is `Makefile` (and therefore the normal `make` command). Historical recipe implementations live under `make/fod-internal.mk` and `make/fod-extra-internal.mk`; those implementation target names are not a compatibility interface and must not be documented as user commands.
+The normal user interface is the repository `make` command. `GNUmakefile` loads the main public `Makefile` plus focused public modules such as `make/fod-deploy-public.mk`. Historical recipe implementations live under `make/fod-internal.mk` and `make/fod-extra-internal.mk`; those implementation target names are not a compatibility interface and must not be documented as user commands.
 
 ## Naming rule
 
@@ -21,6 +21,7 @@ Examples:
 ```text
 postgres-up
 docker-postgres-32k-publish
+docker-deploy-two-replicas-install
 build-fod-runtime
 runtime-config-reload
 package-deb-build
@@ -42,7 +43,7 @@ Use nouns first and the action last. Prefer one established area name instead of
 - `install-*` / `uninstall-*` — native installation lifecycle.
 - `indexer-*` — fod-indexer commands.
 - `benchmark-*` — benchmark orchestration.
-- `docker-*` — Docker labs/images/cleanup.
+- `docker-*` — Docker labs, images, cleanup and final deployment scenarios.
 - `selinux-*` — SELinux validation environments.
 - `package-*` — native package generation.
 - `test-*` — tests and policy checks.
@@ -63,6 +64,8 @@ QNAP=1 make fod-init
 ```
 
 A dedicated target may contain `remote` or `qnap` only when its behavior is genuinely different, for example a remote-only FOD operation that intentionally does not start Docker.
+
+Docker deployment topology follows the same rule: topology is parameterized with `MASTERS=1 SLAVES=N`, while explicit preset targets such as `docker-deploy-two-replicas-install` are allowed because they encode a useful fixed scenario rather than preserving an obsolete alias.
 
 ## No compatibility aliases
 
@@ -100,6 +103,7 @@ Use:
 make help
 make help-tests
 make help-profiles
+make help-docker-deploy
 ```
 
 The naming policy is guarded by:
@@ -108,4 +112,4 @@ The naming policy is guarded by:
 make test-make-target-naming-policy
 ```
 
-New public targets should be added to the facade using the canonical convention and should extend the naming-policy test when they introduce a new area or naming form.
+New public targets should be added to the facade or a focused public module using the canonical convention and should extend the relevant policy test when they introduce a new area or naming form.
