@@ -30,7 +30,7 @@ The image build and publisher explicitly verify that the PostgreSQL server-side 
 ## Build
 
 ```bash
-make fod-client-build
+make docker-fod-client-build
 ```
 
 Default local image/tag:
@@ -44,7 +44,13 @@ For FOD 3.4.1 this is `ghcr.io/stachwk/fod-client:3.4.1`; a `:3.4` series alias 
 The PostgreSQL client major can be overridden when a future server generation requires it:
 
 ```bash
-FOD_CLIENT_POSTGRES_MAJOR=16 make fod-client-build
+FOD_CLIENT_POSTGRES_MAJOR=16 make docker-fod-client-build
+```
+
+## Validate container policy
+
+```bash
+make docker-fod-client-test-policy
 ```
 
 ## Publish to GHCR
@@ -52,7 +58,7 @@ FOD_CLIENT_POSTGRES_MAJOR=16 make fod-client-build
 After Docker is logged in to `ghcr.io`:
 
 ```bash
-make fod-client-publish
+make docker-fod-client-publish
 ```
 
 ## Database diagnostics
