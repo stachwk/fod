@@ -9,15 +9,12 @@ MASTERS="${MASTERS:-${FOD_DOCKER_DEPLOY_MASTERS:-1}}"
 SLAVES="${SLAVES:-${FOD_DOCKER_DEPLOY_SLAVES:-1}}"
 STATE_DIR="${FOD_DOCKER_DEPLOY_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/fod/docker-deploy}"
 PROJECT="${FOD_DOCKER_DEPLOY_PROJECT:-fod-deploy}"
-NETWORK_NAME="${FOD_DOCKER_DEPLOY_NETWORK:-${PROJECT}-network}"
-CLIENT_IMAGE="${FOD_DOCKER_DEPLOY_CLIENT_IMAGE:-ghcr.io/stachwk/fod-client:3.4}"
 MOUNT_DIR="${FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/fod/mount}"
 CONTAINER_MOUNT="${FOD_DOCKER_DEPLOY_FOD_CONTAINER_MOUNT:-/mnt/fod}"
 CONTAINER_NAME="${PROJECT}-fod"
-
+LEGACY="${ROOT}/scripts/docker_fod_install_legacy.sh"
 BASE_COMPOSE="${STATE_DIR}/compose.yml"
 FOD_COMPOSE="${STATE_DIR}/compose-fod.yml"
-CONTAINER_CONFIG="${STATE_DIR}/fod-container.ini"
 POSTGRES_ENV="${STATE_DIR}/postgres.env"
 CURRENT_STAGE=init
 
@@ -31,39 +28,62 @@ on_error() {
   echo "ERROR: docker_fod_install stage=${CURRENT_STAGE} rc=${rc} line=${line} command=${cmd}" >&2
   echo "ERROR: mount_dir=${MOUNT_DIR}" >&2
   if command -v findmnt >/dev/null 2>&1; then
-    findmnt -T "${MOUNT_DIR}" -o TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS >&2 2>/dev/null || true
+    findmnt -T "${MOUNT_DIR}" -o ID,PARENT,MAJ:MIN,TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS >&2 2>/dev/null || true
   fi
-  ls -ld -- "${MOUNT_DIR}" >&2 2>/dev/null || true
   exit "${rc}"
 }
 trap on_error ERR
 
-require_uint() {
-  local name="$1" value="$2" min="$3" max="$4"
-  [[ "${value}" =~ ^[0-9]+$ ]] || fail "${name} must be an integer"
-  (( value >= min && value <= max )) || fail "${name} must be in range ${min}..${max}"
+legacy() {
+  MASTERS="${MASTERS}" SLAVES="${SLAVES}" \
+    FOD_DOCKER_DEPLOY_STATE_DIR="${STATE_DIR}" \
+    FOD_DOCKER_DEPLOY_PROJECT="${PROJECT}" \
+    FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR="${MOUNT_DIR}" \
+    FOD_DOCKER_DEPLOY_FOD_CONTAINER_MOUNT="${CONTAINER_MOUNT}" \
+    bash "${LEGACY}" "$@"
 }
 
-validate() {
-  require_uint MASTERS "${MASTERS}" 1 1
-  require_uint SLAVES "${SLAVES}" 0 32
-  [[ "${CONTAINER_MOUNT}" == /* ]] || fail "FOD_DOCKER_DEPLOY_FOD_CONTAINER_MOUNT must be absolute"
-  [[ "${MOUNT_DIR}" == /* ]] || fail "FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR must be absolute"
+is_fuse_type() {
+  case "$1" in
+    fuse|fuse.*|fuse3) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
-mount_fstypes() {
+host_fuse_rows() {
   command -v findmnt >/dev/null 2>&1 || return 0
-  findmnt -rn -T "${MOUNT_DIR}" -o FSTYPE 2>/dev/null || true
+  findmnt -rn -T "${MOUNT_DIR}" -o FSTYPE,MAJ:MIN 2>/dev/null \
+    | awk '$1 == "fuse" || $1 == "fuse3" || $1 ~ /^fuse\./ {print $1, $2}'
 }
 
-fuse_mount_count() {
-  local count="0"
-  count="$(mount_fstypes | grep -Ec '^(fuse|fuse\..*|fuse3)$' || true)"
-  printf '%s\n' "${count:-0}"
+host_fuse_row_count() {
+  host_fuse_rows | awk 'NF {n++} END {print n+0}'
 }
 
-top_mount_fstype() {
-  mount_fstypes | tail -1 | tr -d '[:space:]'
+host_fuse_devices() {
+  host_fuse_rows | awk 'NF >= 2 {print $2}' | sort -u
+}
+
+host_fuse_device_count() {
+  host_fuse_devices | awk 'NF {n++} END {print n+0}'
+}
+
+container_fuse_rows() {
+  command -v docker >/dev/null 2>&1 || return 0
+  docker exec "${CONTAINER_NAME}" findmnt -rn -T "${CONTAINER_MOUNT}" -o FSTYPE,MAJ:MIN 2>/dev/null \
+    | awk '$1 == "fuse" || $1 == "fuse3" || $1 ~ /^fuse\./ {print $1, $2}' || true
+}
+
+container_fuse_row_count() {
+  container_fuse_rows | awk 'NF {n++} END {print n+0}'
+}
+
+container_fuse_devices() {
+  container_fuse_rows | awk 'NF >= 2 {print $2}' | sort -u
+}
+
+container_fuse_device_count() {
+  container_fuse_devices | awk 'NF {n++} END {print n+0}'
 }
 
 fod_container_healthy() {
@@ -71,279 +91,168 @@ fod_container_healthy() {
   [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)" == healthy ]]
 }
 
-cleanup_stale_fuse_mounts() {
-  local interactive_sudo="${1:-0}" before="0" after="0" top="" attempts=0
-  CURRENT_STAGE=cleanup-stale-fuse
+active_fuse_identity_valid() {
+  fod_container_healthy || return 1
 
-  before="$(fuse_mount_count)"
+  local host_rows host_devices container_rows container_devices host_dev container_dev
+  host_rows="$(host_fuse_row_count)"
+  host_devices="$(host_fuse_device_count)"
+  container_rows="$(container_fuse_row_count)"
+  container_devices="$(container_fuse_device_count)"
+
+  (( host_rows >= 1 && host_devices == 1 )) || return 1
+  (( container_rows >= 1 && container_devices == 1 )) || return 1
+
+  host_dev="$(host_fuse_devices | head -1)"
+  container_dev="$(container_fuse_devices | head -1)"
+  [[ -n "${host_dev}" && "${host_dev}" == "${container_dev}" ]]
+}
+
+validate_active_fuse_identity() {
+  CURRENT_STAGE=validate-active-fuse
+  fod_container_healthy || fail "FOD container is not healthy: ${CONTAINER_NAME}"
+
+  local host_rows host_devices container_rows container_devices host_dev container_dev
+  host_rows="$(host_fuse_row_count)"
+  host_devices="$(host_fuse_device_count)"
+  container_rows="$(container_fuse_row_count)"
+  container_devices="$(container_fuse_device_count)"
+
+  (( host_rows >= 1 )) || fail "healthy FOD container has no propagated host FUSE mount at ${MOUNT_DIR}"
+  (( host_devices == 1 )) || {
+    findmnt -T "${MOUNT_DIR}" -o ID,PARENT,MAJ:MIN,TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS >&2 2>/dev/null || true
+    fail "host FUSE rows=${host_rows} refer to ${host_devices} distinct devices; expected one FOD filesystem identity"
+  }
+  (( container_rows >= 1 )) || fail "healthy FOD container has no FUSE mount at ${CONTAINER_MOUNT}"
+  (( container_devices == 1 )) || fail "container FUSE rows=${container_rows} refer to ${container_devices} distinct devices"
+
+  host_dev="$(host_fuse_devices | head -1)"
+  container_dev="$(container_fuse_devices | head -1)"
+  [[ "${host_dev}" == "${container_dev}" ]] || \
+    fail "host/container FUSE device mismatch host=${host_dev:-none} container=${container_dev:-none}"
+
+  echo "OK: FOD FUSE identity device=${host_dev} host_rows=${host_rows} container_rows=${container_rows}"
+}
+
+top_mount_fstype() {
+  command -v findmnt >/dev/null 2>&1 || return 0
+  findmnt -rn -T "${MOUNT_DIR}" -o FSTYPE 2>/dev/null | tail -1 | tr -d '[:space:]'
+}
+
+cleanup_stale_fuse_mounts() {
+  local interactive_sudo="${1:-0}" before after top attempts=0
+  CURRENT_STAGE=cleanup-stale-fuse
+  before="$(host_fuse_row_count)"
   (( before > 0 )) || return 0
 
-  if fod_container_healthy; then
-    if (( before == 1 )); then
-      echo "FOD container is healthy; preserving its single active FUSE layer: ${MOUNT_DIR}"
-      return 0
-    fi
+  if active_fuse_identity_valid; then
+    echo "FOD container is healthy; preserving one FUSE filesystem identity across host propagation rows=${before} device=$(host_fuse_devices | head -1)."
+    return 0
+  fi
 
-    echo "FOD container is healthy but FUSE stack is invalid layers=${before}; recreating the FOD container and mount."
+  if fod_container_healthy; then
+    echo "FOD container is healthy but host/container FUSE identities disagree; recreating the FOD container and mount."
     docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
     sleep 1
-    before="$(fuse_mount_count)"
+    before="$(host_fuse_row_count)"
   fi
 
   (( before > 0 )) || return 0
-  echo "Detected stale FUSE mount layers=${before} at ${MOUNT_DIR}; preserving the underlying non-FUSE/shared bind."
+  echo "Detected stale FUSE mount rows=${before} at ${MOUNT_DIR}; preserving the underlying non-FUSE/shared bind."
 
   while (( before > 0 )); do
     (( attempts += 1 ))
-    (( attempts <= 64 )) || fail "too many stacked FUSE mount layers at ${MOUNT_DIR}"
-
+    (( attempts <= 64 )) || fail "too many stacked FUSE mount rows at ${MOUNT_DIR}"
     top="$(top_mount_fstype)"
-    case "${top}" in
-      fuse|fuse.*|fuse3) ;;
-      *)
-        fail "stale FUSE layer exists below unexpected top mount fstype=${top:-unknown}; refusing to unmount a non-FUSE layer"
-        ;;
-    esac
+    is_fuse_type "${top}" || fail "refusing to unmount non-FUSE top layer fstype=${top:-unknown} at ${MOUNT_DIR}"
 
-    echo "Unmounting stale FUSE layer ${before}: ${MOUNT_DIR} fstype=${top}"
+    echo "Unmounting stale FUSE row(s), before=${before}: ${MOUNT_DIR} fstype=${top}"
     if command -v fusermount3 >/dev/null 2>&1; then
       fusermount3 -u "${MOUNT_DIR}" >/dev/null 2>&1 || true
     elif command -v fusermount >/dev/null 2>&1; then
       fusermount -u "${MOUNT_DIR}" >/dev/null 2>&1 || true
     fi
 
-    after="$(fuse_mount_count)"
+    after="$(host_fuse_row_count)"
     if (( after >= before )); then
       local sudo_cmd=()
       if (( EUID != 0 )); then
-        command -v sudo >/dev/null 2>&1 || \
-          fail "root is required to unmount stale root-owned FUSE layer; run sudo umount '${MOUNT_DIR}' once per FUSE layer"
+        command -v sudo >/dev/null 2>&1 || fail "sudo is required to remove stale root-owned FUSE mounts"
         if [[ "${interactive_sudo}" == 1 ]]; then
           sudo_cmd=(sudo)
         elif sudo -n true >/dev/null 2>&1; then
           sudo_cmd=(sudo -n)
         else
-          fail "stale root-owned FUSE mount requires sudo; run: make docker-deploy-fod-host-prepare MASTERS=${MASTERS} SLAVES=${SLAVES}"
+          fail "stale root-owned FUSE mount requires sudo; run make docker-deploy-fod-host-prepare MASTERS=${MASTERS} SLAVES=${SLAVES}"
         fi
       fi
       "${sudo_cmd[@]}" umount "${MOUNT_DIR}"
-      after="$(fuse_mount_count)"
+      after="$(host_fuse_row_count)"
     fi
 
-    (( after < before )) || fail "failed to remove stale FUSE layer at ${MOUNT_DIR}"
+    (( after < before )) || fail "failed to remove stale FUSE mount row at ${MOUNT_DIR}"
     before="${after}"
   done
 
-  echo "OK: stale FUSE layers removed; underlying mount retained:"
-  if command -v findmnt >/dev/null 2>&1; then
-    findmnt -T "${MOUNT_DIR}" -o TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS 2>/dev/null || true
-  fi
-}
-
-path_entry_exists() {
-  [[ -e "${MOUNT_DIR}" || -L "${MOUNT_DIR}" ]] && return 0
-  mountpoint -q "${MOUNT_DIR}" 2>/dev/null && return 0
-  if command -v findmnt >/dev/null 2>&1; then
-    findmnt -n -T "${MOUNT_DIR}" >/dev/null 2>&1 && [[ -e "${MOUNT_DIR}" || -L "${MOUNT_DIR}" ]] && return 0
-  fi
-  return 1
+  echo "OK: stale FUSE mounts removed; underlying mount retained:"
+  findmnt -T "${MOUNT_DIR}" -o ID,PARENT,MAJ:MIN,TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS 2>/dev/null || true
 }
 
 ensure_mount_dir() {
   CURRENT_STAGE=ensure-mount-dir
-
-  # A propagated FUSE mount can make stat(2)/mountpoint(1) behave unusually.
-  # findmnt still sees the stack, so never attempt mkdir while any FUSE layer
-  # is mounted at the target path.
-  if (( $(fuse_mount_count) > 0 )); then
-    return 0
-  fi
-
-  if mountpoint -q "${MOUNT_DIR}" 2>/dev/null; then
-    return 0
-  fi
-
+  (( $(host_fuse_row_count) > 0 )) && return 0
+  mountpoint -q "${MOUNT_DIR}" 2>/dev/null && return 0
   if [[ -L "${MOUNT_DIR}" ]]; then
-    local resolved=""
+    local resolved
     resolved="$(readlink -f -- "${MOUNT_DIR}" 2>/dev/null || true)"
-    [[ -n "${resolved}" && -d "${resolved}" ]] || \
-      fail "FOD mount path is a dangling/non-directory symlink: ${MOUNT_DIR}"
+    [[ -n "${resolved}" && -d "${resolved}" ]] || fail "FOD mount path is a dangling/non-directory symlink: ${MOUNT_DIR}"
     return 0
   fi
-
   if [[ -e "${MOUNT_DIR}" ]]; then
     [[ -d "${MOUNT_DIR}" ]] || fail "FOD mount path exists but is not a directory: ${MOUNT_DIR}"
     return 0
   fi
-
-  set +e
-  mkdir -p -- "${MOUNT_DIR}" 2>"${STATE_DIR}/.fod-mkdir.err"
-  local mkdir_rc=$?
-  set -e
-  if (( mkdir_rc != 0 )); then
-    if (( $(fuse_mount_count) > 0 )) || mountpoint -q "${MOUNT_DIR}" 2>/dev/null || [[ -d "${MOUNT_DIR}" ]]; then
-      rm -f "${STATE_DIR}/.fod-mkdir.err"
-      return 0
-    fi
-    if [[ -L "${MOUNT_DIR}" ]]; then
-      local resolved_after=""
-      resolved_after="$(readlink -f -- "${MOUNT_DIR}" 2>/dev/null || true)"
-      if [[ -n "${resolved_after}" && -d "${resolved_after}" ]]; then
-        rm -f "${STATE_DIR}/.fod-mkdir.err"
-        return 0
-      fi
-    fi
-    echo "ERROR: cannot prepare FOD mount directory: ${MOUNT_DIR}" >&2
-    cat "${STATE_DIR}/.fod-mkdir.err" >&2 2>/dev/null || true
-    rm -f "${STATE_DIR}/.fod-mkdir.err"
-    if command -v findmnt >/dev/null 2>&1; then
-      findmnt -T "${MOUNT_DIR}" -o TARGET,SOURCE,FSTYPE,PROPAGATION,OPTIONS >&2 2>/dev/null || true
-    fi
-    ls -ld -- "$(dirname -- "${MOUNT_DIR}")" "${MOUNT_DIR}" >&2 2>/dev/null || true
-    fail "mount directory preparation failed; inspect the path diagnostics above"
-  fi
-  rm -f "${STATE_DIR}/.fod-mkdir.err"
-}
-
-base_action() {
-  MASTERS="${MASTERS}" SLAVES="${SLAVES}" \
-    FOD_DOCKER_DEPLOY_STATE_DIR="${STATE_DIR}" \
-    FOD_DOCKER_DEPLOY_PROJECT="${PROJECT}" \
-    FOD_DOCKER_DEPLOY_NETWORK="${NETWORK_NAME}" \
-    FOD_DOCKER_DEPLOY_CLIENT_IMAGE="${CLIENT_IMAGE}" \
-    bash "${ROOT}/scripts/docker_deploy.sh" "$@"
-}
-
-compose() {
-  docker compose \
-    -p "${PROJECT}" \
-    -f "${BASE_COMPOSE}" \
-    -f "${FOD_COMPOSE}" \
-    "$@"
-}
-
-require_docker() {
-  command -v docker >/dev/null 2>&1 || fail "docker is required"
-  docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is required"
-}
-
-render() {
-  CURRENT_STAGE=render-base
-  base_action render >/dev/null
-  mkdir -p -- "${STATE_DIR}"
-  CURRENT_STAGE=render-mount-dir
-  ensure_mount_dir
-  if (( $(fuse_mount_count) == 0 )) && ! mountpoint -q "${MOUNT_DIR}" 2>/dev/null && [[ -d "${MOUNT_DIR}" && ! -L "${MOUNT_DIR}" ]]; then
-    chmod 0755 "${MOUNT_DIR}"
-  fi
-
-  CURRENT_STAGE=render-compose
-  cat > "${FOD_COMPOSE}" <<EOF
-services:
-  fod:
-    image: ${CLIENT_IMAGE}
-    container_name: ${PROJECT}-fod
-    restart: unless-stopped
-    depends_on:
-      primary:
-        condition: service_healthy
-    env_file:
-      - ./postgres.env
-    devices:
-      - /dev/fuse:/dev/fuse
-    cap_add:
-      - SYS_ADMIN
-    volumes:
-      - ./fod-container.ini:/etc/fod/fod.ini:ro
-      - type: bind
-        source: ${MOUNT_DIR}
-        target: ${CONTAINER_MOUNT}
-        bind:
-          propagation: rshared
-    command:
-      - mount.fod
-      - none
-      - ${CONTAINER_MOUNT}
-      - -o
-      - ini=/etc/fod/fod.ini,role=auto,selinux=off,acl=off
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - grep -Fq ' ${CONTAINER_MOUNT} ' /proc/mounts
-      interval: 2s
-      timeout: 5s
-      retries: 60
-      start_period: 5s
-EOF
-
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    compose config --quiet
-  fi
-
-  printf 'fod_compose=%s\nfod_image=%s\nfod_host_mount=%s\nfod_container_mount=%s\n' \
-    "${FOD_COMPOSE}" "${CLIENT_IMAGE}" "${MOUNT_DIR}" "${CONTAINER_MOUNT}"
+  mkdir -p -- "${MOUNT_DIR}"
 }
 
 mount_propagation() {
-  if command -v findmnt >/dev/null 2>&1; then
-    findmnt -rn -o PROPAGATION -T "${MOUNT_DIR}" 2>/dev/null | tail -1 | tr -d '[:space:]'
-  fi
+  command -v findmnt >/dev/null 2>&1 || return 0
+  findmnt -rn -o PROPAGATION -T "${MOUNT_DIR}" 2>/dev/null | tail -1 | tr -d '[:space:]'
 }
 
-assert_preflight_mount_stack() {
-  local count="0"
-  count="$(fuse_mount_count)"
-  (( count > 0 )) || return 0
-
-  if fod_container_healthy; then
-    (( count == 1 )) || fail "healthy FOD container has invalid FUSE stack layers=${count}; run make docker-deploy-fod-up to reconcile it"
-    return 0
-  fi
-
-  fail "stale FUSE mount layers=${count} remain at ${MOUNT_DIR}; run make docker-deploy-fod-host-prepare MASTERS=${MASTERS} SLAVES=${SLAVES}"
+ensure_rendered() {
+  [[ -f "${BASE_COMPOSE}" && -f "${FOD_COMPOSE}" ]] || legacy render >/dev/null
 }
 
 preflight() {
   CURRENT_STAGE=preflight
   [[ -e /dev/fuse ]] || fail "/dev/fuse does not exist on the Docker host"
-  [[ -r /dev/fuse && -w /dev/fuse ]] || {
-    echo "WARNING: current user cannot directly read/write /dev/fuse; Docker daemon may still be able to pass it through." >&2
-  }
-
+  ensure_rendered
   ensure_mount_dir
-  assert_preflight_mount_stack
 
-  local propagation=""
+  local rows propagation
+  rows="$(host_fuse_row_count)"
+  if (( rows > 0 )); then
+    if fod_container_healthy; then
+      validate_active_fuse_identity
+    else
+      fail "stale FUSE mount rows=${rows} remain at ${MOUNT_DIR}; run make docker-deploy-fod-host-prepare MASTERS=${MASTERS} SLAVES=${SLAVES}"
+    fi
+  fi
+
   propagation="$(mount_propagation || true)"
   case "${propagation}" in
-    shared|rshared)
-      ;;
-    "")
-      echo "WARNING: cannot determine mount propagation for ${MOUNT_DIR}; continuing." >&2
-      ;;
-    *)
-      cat >&2 <<EOF
-ERROR: ${MOUNT_DIR} is on a '${propagation}' mount.
-A FUSE submount created inside the container will not propagate back to the host.
-
-Prepare the host mountpoint once, then retry:
-  sudo mount --bind '${MOUNT_DIR}' '${MOUNT_DIR}'
-  sudo mount --make-rshared '${MOUNT_DIR}'
-
-For persistence across reboot, configure an equivalent systemd mount/unit or host mount policy.
-EOF
-      exit 2
-      ;;
+    shared|rshared) ;;
+    "") echo "WARNING: cannot determine mount propagation for ${MOUNT_DIR}; continuing." >&2 ;;
+    *) fail "${MOUNT_DIR} is on a '${propagation}' mount; run make docker-deploy-fod-host-prepare MASTERS=${MASTERS} SLAVES=${SLAVES}" ;;
   esac
+  echo "OK: FOD Docker host preflight"
 }
 
 host_prepare() {
   CURRENT_STAGE=host-prepare-cleanup
   cleanup_stale_fuse_mounts 1
-
-  # If one healthy FOD layer is already active and valid, the mount is already
-  # propagated; do not try to re-bind the active FUSE target.
-  if fod_container_healthy && (( $(fuse_mount_count) == 1 )); then
+  if active_fuse_identity_valid; then
     preflight
     echo "OK: FOD host mount is already active and correctly propagated: ${MOUNT_DIR}"
     return 0
@@ -356,106 +265,61 @@ host_prepare() {
     command -v sudo >/dev/null 2>&1 || fail "sudo is required to prepare host mount propagation"
     sudo_cmd=(sudo)
   fi
-
   if ! mountpoint -q "${MOUNT_DIR}" 2>/dev/null; then
     "${sudo_cmd[@]}" mount --bind "${MOUNT_DIR}" "${MOUNT_DIR}"
   fi
   "${sudo_cmd[@]}" mount --make-rshared "${MOUNT_DIR}"
+  legacy render >/dev/null
   preflight
   echo "OK: FOD host mount propagation prepared for current boot: ${MOUNT_DIR}"
 }
 
-schema_exists() {
-  [[ -f "${POSTGRES_ENV}" ]] || return 1
-  source "${POSTGRES_ENV}"
-  docker compose -p "${PROJECT}" -f "${BASE_COMPOSE}" exec -T primary \
-    psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -Atqc \
-    "SELECT to_regclass('fod.config') IS NOT NULL" 2>/dev/null | tr -d '\r' | grep -Fxq t
-}
-
-wait_for_fod() {
-  CURRENT_STAGE=wait-for-fod
-  local attempt status=""
-  for attempt in $(seq 1 90); do
-    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
-      "${PROJECT}-fod" 2>/dev/null || true)"
-    [[ "${status}" == healthy ]] && break
-    [[ "${status}" == exited || "${status}" == dead ]] && break
-    sleep 1
-  done
-  [[ "${status}" == healthy ]] || {
-    compose logs --tail=100 fod >&2 || true
-    fail "FOD container did not become healthy; status=${status:-missing}"
-  }
+compose() {
+  docker compose -p "${PROJECT}" -f "${BASE_COMPOSE}" -f "${FOD_COMPOSE}" "$@"
 }
 
 smoke() {
   CURRENT_STAGE=smoke
+  ensure_rendered
   [[ -f "${POSTGRES_ENV}" ]] || fail "missing ${POSTGRES_ENV}; render/install the database deployment first"
-  source "${POSTGRES_ENV}"
+  fod_container_healthy || fail "FOD container is not healthy: ${CONTAINER_NAME}"
 
-  compose exec -T fod sh -ceu "
+  docker exec "${CONTAINER_NAME}" sh -ceu "
     grep -Fq ' ${CONTAINER_MOUNT} ' /proc/mounts
     test -d '${CONTAINER_MOUNT}'
     pg_isready -h primary -p 5432 -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" >/dev/null
   "
-
-  if command -v findmnt >/dev/null 2>&1; then
-    local fuse_count="0"
-    fuse_count="$(fuse_mount_count)"
-    (( fuse_count == 1 )) || fail "FOD container is healthy but host FUSE stack layers=${fuse_count}; expected exactly 1"
-  fi
-
-  printf 'OK: FOD Docker client healthy image=%s host_mount=%s\n' "${CLIENT_IMAGE}" "${MOUNT_DIR}"
+  validate_active_fuse_identity
+  printf 'OK: FOD Docker client healthy host_mount=%s\n' "${MOUNT_DIR}"
 }
 
-start_fod() {
-  render >/dev/null
-  preflight
-  schema_exists || fail "FOD schema is not initialized; run docker-deploy-fod-install or docker-deploy-install"
-  compose up -d fod
-  wait_for_fod
+down() {
+  CURRENT_STAGE=down
+  ensure_rendered
+  compose stop fod || true
+  compose rm -f fod || true
+  cleanup_stale_fuse_mounts 1
+  ensure_mount_dir
 }
 
-install_fod() {
-  require_docker
-  base_action up
-  base_action fod-init
-  render >/dev/null
-  preflight
-  docker pull "${CLIENT_IMAGE}"
-  compose up -d fod
-  wait_for_fod
-  smoke
+validate_inputs() {
+  [[ "${MASTERS}" =~ ^[0-9]+$ && "${MASTERS}" -eq 1 ]] || fail "MASTERS must be exactly 1"
+  [[ "${SLAVES}" =~ ^[0-9]+$ && "${SLAVES}" -ge 0 && "${SLAVES}" -le 32 ]] || fail "SLAVES must be in range 0..32"
+  [[ "${MOUNT_DIR}" == /* ]] || fail "FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR must be absolute"
+  [[ "${CONTAINER_MOUNT}" == /* ]] || fail "FOD_DOCKER_DEPLOY_FOD_CONTAINER_MOUNT must be absolute"
+  [[ -r "${LEGACY}" ]] || fail "missing legacy renderer/lifecycle helper: ${LEGACY}"
 }
 
-plan() {
-  printf '%s\n' \
-    '=== FOD DOCKER CLIENT PLAN ===' \
-    "masters=${MASTERS}" \
-    "slaves=${SLAVES}" \
-    "client_image=${CLIENT_IMAGE}" \
-    "network=${NETWORK_NAME}" \
-    "host_mount=${MOUNT_DIR}" \
-    "container_mount=${CONTAINER_MOUNT}" \
-    "config=${CONTAINER_CONFIG}" \
-    'requires=/dev/fuse + SYS_ADMIN + rshared host mount propagation'
-}
-
-validate
+validate_inputs
 mkdir -p -- "${STATE_DIR}"
 
 case "${ACTION}" in
-  plan)
-    plan
-    ;;
-  render)
-    render
+  plan|render|status|logs|shell)
+    exec bash "${LEGACY}" "${ACTION}"
     ;;
   preflight)
-    render >/dev/null
+    legacy render >/dev/null
     preflight
-    echo "OK: FOD Docker host preflight"
     ;;
   cleanup-stale-mounts)
     cleanup_stale_fuse_mounts "${FOD_DOCKER_DEPLOY_FOD_INTERACTIVE_SUDO:-0}"
@@ -463,49 +327,15 @@ case "${ACTION}" in
     ;;
   host-prepare)
     host_prepare
-    render >/dev/null
     ;;
-  start)
-    require_docker
-    start_fod
-    ;;
-  install)
-    install_fod
-    ;;
-  up)
-    require_docker
-    base_action up
-    start_fod
+  smoke)
     smoke
     ;;
   down)
-    require_docker
-    [[ -f "${FOD_COMPOSE}" ]] || render >/dev/null
-    compose stop fod || true
-    compose rm -f fod || true
-    cleanup_stale_fuse_mounts 1
-    ensure_mount_dir
+    down
     ;;
-  status)
-    require_docker
-    [[ -f "${FOD_COMPOSE}" ]] || render >/dev/null
-    compose ps fod
-    ;;
-  logs)
-    require_docker
-    [[ -f "${FOD_COMPOSE}" ]] || render >/dev/null
-    compose logs -f fod
-    ;;
-  smoke)
-    require_docker
-    [[ -f "${FOD_COMPOSE}" ]] || render >/dev/null
-    wait_for_fod
-    smoke
-    ;;
-  shell)
-    require_docker
-    [[ -f "${FOD_COMPOSE}" ]] || render >/dev/null
-    compose exec fod /bin/sh
+  start|install|up)
+    fail "direct action '${ACTION}' is handled by scripts/docker_fod_start_guard.sh; use the public make docker-deploy-fod-* target"
     ;;
   *)
     fail "unknown FOD Docker action: ${ACTION}"
