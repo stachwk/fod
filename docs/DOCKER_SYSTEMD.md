@@ -24,10 +24,10 @@ That file contains topology, state paths, mount paths and the exact FOD image ta
 
 ## Exact image pin
 
-The normal Make interface derives the FOD client image from `fod_version.txt`. FOD 3.4.2 therefore installs:
+The normal Make interface derives the FOD client image from `fod_version.txt`. FOD 3.4.3 therefore installs:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.2
+ghcr.io/stachwk/fod-client:3.4.3
 ```
 
 The mutable `:3.4` tag remains a convenience alias only and is not the default final deployment image.
@@ -102,9 +102,11 @@ This refreshes the root-owned runtime copy and environment with the new exact im
 
 ## Validation
 
-Policy check without root/systemd changes:
+Policy checks without root/systemd changes:
 
 ```bash
+make test-version
+make test-cargo-lock-integrity
 make test-docker-deploy-systemd-policy
 ```
 

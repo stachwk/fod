@@ -4,10 +4,10 @@ The persistent FOD/FUSE client completes the Docker deployment on top of Postgre
 
 ## Exact release image
 
-The normal Make interface pins the client to the exact `fod_version.txt` release. For FOD 3.4.2:
+The normal Make interface pins the client to the exact `fod_version.txt` release. For FOD 3.4.3:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.2
+ghcr.io/stachwk/fod-client:3.4.3
 ```
 
 The series alias `ghcr.io/stachwk/fod-client:3.4` is retained for convenience but is not the default final deployment image. The historical transitional image `3.4.1-fuse1` remains immutable.
@@ -15,7 +15,7 @@ The series alias `ghcr.io/stachwk/fod-client:3.4` is retained for convenience bu
 Override explicitly when required:
 
 ```bash
-FOD_DOCKER_DEPLOY_CLIENT_IMAGE=ghcr.io/stachwk/fod-client:3.4.2 \
+FOD_DOCKER_DEPLOY_CLIENT_IMAGE=ghcr.io/stachwk/fod-client:3.4.3 \
   make docker-deploy-fod-install MASTERS=1 SLAVES=2
 ```
 
@@ -113,9 +113,10 @@ Healthy propagated rows have one unique FUSE `MAJ:MIN`, matching the device seen
 
 `docker-deploy-fod-down` removes the FOD container and propagated FUSE views while preserving the underlying shared host bind.
 
-## Publishing FOD 3.4.2
+## Publishing FOD 3.4.3
 
 ```bash
+make test-version
 make test-docker-fod-client-policy
 make docker-fod-client-build
 ```
@@ -129,7 +130,7 @@ make docker-fod-client-publish
 The normal Make path builds/publishes:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.2
+ghcr.io/stachwk/fod-client:3.4.3
 ghcr.io/stachwk/fod-client:3.4   # refreshed series alias
 ```
 
@@ -148,6 +149,7 @@ See `docs/DOCKER_SYSTEMD.md`.
 ## Policy checks
 
 ```bash
+make test-cargo-lock-integrity
 make test-docker-fod-client-policy
 make test-docker-deploy-policy
 make test-docker-fod-install-policy

@@ -4,10 +4,10 @@ The FOD client image contains the FOD runtime/FUSE frontend plus PostgreSQL clie
 
 ## Release tags
 
-For normal repository-driven builds and deployment, the image is pinned to the exact FOD release from `fod_version.txt`. For FOD 3.4.2 the immutable deployment image is:
+For normal repository-driven builds and deployment, the image is pinned to the exact FOD release from `fod_version.txt`. For FOD 3.4.3 the immutable deployment image is:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.2
+ghcr.io/stachwk/fod-client:3.4.3
 ```
 
 Publishing also refreshes the convenience series alias:
@@ -18,7 +18,7 @@ ghcr.io/stachwk/fod-client:3.4
 
 The deployment Make interface exports `FOD_CLIENT_IMAGE_VERSION` and `FOD_DOCKER_DEPLOY_CLIENT_IMAGE` from the authoritative repository version, so ordinary `make docker-fod-client-build`, `make docker-fod-client-publish`, and `make docker-deploy-*` commands use the exact release tag rather than the mutable series alias.
 
-Historical note: `ghcr.io/stachwk/fod-client:3.4.1-fuse1` was the transitional FUSE/AppArmor container revision before the container fixes were folded into FOD 3.4.2. That historical tag is not overwritten.
+Historical note: `ghcr.io/stachwk/fod-client:3.4.1-fuse1` was the transitional FUSE/AppArmor container revision before the container fixes were folded into the 3.4 release line. That historical tag is not overwritten.
 
 `latest` remains disabled by default.
 
@@ -62,7 +62,7 @@ Image-only preflight:
 
 ```bash
 docker run --rm \
-  ghcr.io/stachwk/fod-client:3.4.2 \
+  ghcr.io/stachwk/fod-client:3.4.3 \
   fod-container-preflight --image-only
 ```
 
@@ -73,7 +73,7 @@ docker run --rm \
   --device /dev/fuse \
   --cap-add SYS_ADMIN \
   --security-opt apparmor=unconfined \
-  ghcr.io/stachwk/fod-client:3.4.2 \
+  ghcr.io/stachwk/fod-client:3.4.3 \
   fod-container-preflight --runtime
 ```
 
@@ -86,7 +86,7 @@ docker run --rm -it \
   --security-opt apparmor=unconfined \
   -v /path/on/host:/mnt/fod:rshared \
   -v /path/to/fod.ini:/etc/fod/fod.ini:ro \
-  ghcr.io/stachwk/fod-client:3.4.2 \
+  ghcr.io/stachwk/fod-client:3.4.3 \
   mount.fod none /mnt/fod -o ini=/etc/fod/fod.ini,role=auto
 ```
 
