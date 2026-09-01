@@ -14,6 +14,7 @@ MOUNT_DIR="${FOD_DOCKER_DEPLOY_FOD_MOUNT_DIR:-${XDG_DATA_HOME:-${HOME}/.local/sh
 START_TIMEOUT="${FOD_DOCKER_DEPLOY_FOD_START_TIMEOUT_SECONDS:-30}"
 HEALTH_TIMEOUT="${FOD_DOCKER_DEPLOY_FOD_HEALTH_TIMEOUT_SECONDS:-90}"
 APPARMOR_MODE="${FOD_DOCKER_DEPLOY_FOD_APPARMOR:-auto}"
+PULL_MODE="${FOD_DOCKER_DEPLOY_FOD_PULL_MODE:-always}"
 
 BASE_COMPOSE="${STATE_DIR}/compose.yml"
 FOD_COMPOSE="${STATE_DIR}/compose-fod.yml"
@@ -40,6 +41,10 @@ validate() {
   case "${APPARMOR_MODE}" in
     auto|unconfined|default) ;;
     *) fail "FOD_DOCKER_DEPLOY_FOD_APPARMOR must be auto, unconfined or default" ;;
+  esac
+  case "${PULL_MODE}" in
+    always|if-missing|never) ;;
+    *) fail "FOD_DOCKER_DEPLOY_FOD_PULL_MODE must be always, if-missing or never" ;;
   esac
 }
 
@@ -132,9 +137,6 @@ reconcile_stale_fod() {
     docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   fi
 
-  # User-facing `up/install` may need sudo to remove root-owned propagated
-  # FUSE layers. A healthy container with exactly one layer is preserved; an
-  # invalid healthy stack (>1 layers) is recreated by the helper.
   FOD_DOCKER_DEPLOY_FOD_INTERACTIVE_SUDO=1 fod_action cleanup-stale-mounts
 }
 
@@ -157,8 +159,25 @@ prepare() {
 }
 
 pull_client_image() {
-  echo "Pulling FOD client image: ${CLIENT_IMAGE}"
-  docker pull "${CLIENT_IMAGE}"
+  case "${PULL_MODE}" in
+    always)
+      echo "Pulling FOD client image: ${CLIENT_IMAGE}"
+      docker pull "${CLIENT_IMAGE}"
+      ;;
+    if-missing)
+      if docker image inspect "${CLIENT_IMAGE}" >/dev/null 2>&1; then
+        echo "Using cached exact FOD client image: ${CLIENT_IMAGE}"
+      else
+        echo "FOD client image is not cached; pulling: ${CLIENT_IMAGE}"
+        docker pull "${CLIENT_IMAGE}"
+      fi
+      ;;
+    never)
+      docker image inspect "${CLIENT_IMAGE}" >/dev/null 2>&1 || \
+        fail "FOD client image is not cached and pull mode is never: ${CLIENT_IMAGE}"
+      echo "Using cached FOD client image without registry access: ${CLIENT_IMAGE}"
+      ;;
+  esac
 }
 
 start_container() {

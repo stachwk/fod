@@ -9,6 +9,7 @@ ENTRYPOINT="${ROOT}/docker/fod-client/fod-container-entrypoint.sh"
 PUBLISH="${ROOT}/scripts/publish_fod_client.sh"
 MAKEFILE="${ROOT}/Makefile"
 README="${ROOT}/docker/fod-client/README.md"
+VERSION="$(tr -d '[:space:]' < "${ROOT}/fod_version.txt")"
 
 for file in "${DOCKERFILE}" "${DOCKERIGNORE}" "${PREFLIGHT}" "${ENTRYPOINT}" "${PUBLISH}" "${MAKEFILE}" "${README}"; do
     [[ -r "${file}" ]] || { echo "Missing ${file}" >&2; exit 1; }
@@ -91,7 +92,7 @@ fi
 for pattern in \
     'FOD_CLIENT_CONTAINER_REPOSITORY:-fod-client' \
     'FOD_CLIENT_IMAGE_VARIANT:-fuse1' \
-    'FOD_CLIENT_IMAGE_VERSION:-${BASE_VERSION}-${VARIANT}' \
+    'FOD_CLIENT_IMAGE_VERSION:-${BASE_VERSION}' \
     'FOD_CLIENT_POSTGRES_MAJOR:-16' \
     'docker/fod-client/Dockerfile' \
     'FOD_IMAGE_VARIANT=${VARIANT}' \
@@ -131,6 +132,7 @@ for pattern in \
     'make docker-fod-client-build' \
     'make test-docker-fod-client-policy' \
     'make docker-fod-client-publish' \
+    "ghcr.io/stachwk/fod-client:${VERSION}" \
     '3.4.1-fuse1' \
     'apparmor=unconfined' \
     'fod-container-preflight --runtime'; do
@@ -151,4 +153,4 @@ if grep -Eq 'docker[[:space:]]+(system[[:space:]]+)?prune|docker[[:space:]]+volu
     exit 1
 fi
 
-echo 'OK: FOD client image is FUSE/AppArmor-aware, PostgreSQL-client-only and uses normalized Make targets'
+echo "OK: FOD client exact release image=${VERSION} is FUSE/AppArmor-aware, PostgreSQL-client-only and uses normalized Make targets"

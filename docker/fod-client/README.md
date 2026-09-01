@@ -1,117 +1,52 @@
 # FOD client container
 
-This image contains the FOD client/runtime plus PostgreSQL client and diagnostic tools. It does **not** contain a PostgreSQL server.
+The FOD client image contains the FOD runtime/FUSE frontend plus PostgreSQL client and diagnostic tools. It does **not** contain the PostgreSQL server.
 
-The final image is based on `debian:bookworm-slim`. FOD is built as the normal Debian package and then installed into the runtime stage so Debian resolves the exact shared-library dependencies detected by `dpkg-shlibdeps`. PostgreSQL access uses `libpq` plus the PostgreSQL 16 client package from the PGDG repository.
+## Release tags
 
-Expected FOD commands in the image:
-
-- `fod-bootstrap`
-- `fod-change` / `fod.change`
-- `fod-indexer`
-- `fod-monitor`
-- `fod-rust-fuse`
-- `mkfs.fod`
-- `mount.fod`
-- `fod-container-preflight`
-
-PostgreSQL diagnostic/client commands include:
-
-- `psql`
-- `pg_isready`
-- `pg_dump`
-- `pg_restore`
-- `createdb`
-- `dropdb`
-- `reindexdb`
-- `vacuumdb`
-
-The image build and publisher explicitly verify that the PostgreSQL server-side commands `postgres`, `initdb`, and `pg_ctl` are absent. `psql` is intentionally present and its major version is checked against the configured client major (16 by default).
-
-## Image revision
-
-The FOD binaries remain version `3.4.1`, while the corrected container/FUSE runtime is published as:
+For normal repository-driven builds and deployment, the image is pinned to the exact FOD release from `fod_version.txt`. For FOD 3.4.2 the immutable deployment image is:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.1-fuse1
+ghcr.io/stachwk/fod-client:3.4.2
 ```
 
-The `fuse1` suffix identifies the container runtime revision. Publishing also updates the `:3.4` series alias to this image. The historical `:3.4.1` image is not overwritten, and `:latest` remains disabled by default.
-
-## Build
-
-```bash
-make docker-fod-client-build
-```
-
-Default local image/tag:
+Publishing also refreshes the convenience series alias:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.1-fuse1
+ghcr.io/stachwk/fod-client:3.4
 ```
 
-The PostgreSQL client major can be overridden when a future server generation requires it:
+The deployment Make interface exports `FOD_CLIENT_IMAGE_VERSION` and `FOD_DOCKER_DEPLOY_CLIENT_IMAGE` from the authoritative repository version, so ordinary `make docker-fod-client-build`, `make docker-fod-client-publish`, and `make docker-deploy-*` commands use the exact release tag rather than the mutable series alias.
 
-```bash
-FOD_CLIENT_POSTGRES_MAJOR=16 make docker-fod-client-build
-```
+Historical note: `ghcr.io/stachwk/fod-client:3.4.1-fuse1` was the transitional FUSE/AppArmor container revision before the container fixes were folded into FOD 3.4.2. That historical tag is not overwritten.
 
-The container revision can also be overridden explicitly:
+`latest` remains disabled by default.
 
-```bash
-FOD_CLIENT_IMAGE_VARIANT=fuse2 make docker-fod-client-build
-```
-
-## Validate container policy
+## Build and validation
 
 ```bash
 make test-docker-fod-client-policy
+make docker-fod-client-build
 ```
 
-## Publish to GHCR
-
-After Docker is logged in to `ghcr.io`:
+After `docker login ghcr.io`:
 
 ```bash
 make docker-fod-client-publish
 ```
 
-This publishes the immutable revision tag and updates the series alias:
+The image build verifies that FOD binaries, `libpq`, PostgreSQL 16 client tools, `fuse3`, `capsh`, and `findmnt` are available, while server-side commands such as `postgres`, `initdb`, and `pg_ctl` remain absent.
 
-```text
-ghcr.io/stachwk/fod-client:3.4.1-fuse1
-ghcr.io/stachwk/fod-client:3.4
-```
+## Runtime contract
 
-## Database diagnostics
+The image requires:
 
-Example connectivity check:
+- `/dev/fuse`,
+- `CAP_SYS_ADMIN`,
+- `rshared` bind propagation for a host-visible FUSE mount,
+- host AppArmor policy that permits FUSE mount operations.
 
-```bash
-docker run --rm \
-  ghcr.io/stachwk/fod-client:3.4.1-fuse1 \
-  pg_isready -h postgres-host -p 5432 -d foddbname
-```
-
-Example interactive SQL session:
-
-```bash
-docker run --rm -it \
-  -e PGPASSWORD='secret' \
-  ghcr.io/stachwk/fod-client:3.4.1-fuse1 \
-  psql -h postgres-host -p 5432 -U foduser -d foddbname
-```
-
-## FUSE and AppArmor runtime
-
-AppArmor is enforced by the **Docker host**, not by files inside the image. The image therefore does not pretend that it can load or change the host AppArmor profile. Instead it contains a runtime preflight and labels that state the required host configuration:
-
-- device `/dev/fuse`,
-- capability `SYS_ADMIN`,
-- `rshared` mount propagation for a host-visible FUSE mount,
-- AppArmor `unconfined` or a host-loaded custom profile that explicitly permits the FUSE mount operations.
-
-The following labels are included in the image:
+The image carries these labels:
 
 ```text
 org.fod.fuse.required-device=/dev/fuse
@@ -121,28 +56,28 @@ org.fod.apparmor.policy=host-managed
 org.fod.apparmor.recommended=unconfined-or-custom-fod-profile
 ```
 
-`fod-container-preflight` verifies the image prerequisites and, at runtime, checks `/dev/fuse`, `CAP_SYS_ADMIN` and the active AppArmor profile.
+AppArmor is controlled by the Docker host. On hosts using Docker's restrictive default profile, the FOD deployment startup guard uses `apparmor=unconfined` unless a compatible host policy is selected explicitly.
 
-Image-only validation:
+Image-only preflight:
 
 ```bash
 docker run --rm \
-  ghcr.io/stachwk/fod-client:3.4.1-fuse1 \
+  ghcr.io/stachwk/fod-client:3.4.2 \
   fod-container-preflight --image-only
 ```
 
-Runtime validation:
+Runtime preflight:
 
 ```bash
 docker run --rm \
   --device /dev/fuse \
   --cap-add SYS_ADMIN \
   --security-opt apparmor=unconfined \
-  ghcr.io/stachwk/fod-client:3.4.1-fuse1 \
+  ghcr.io/stachwk/fod-client:3.4.2 \
   fod-container-preflight --runtime
 ```
 
-A container that actually mounts FOD through FUSE typically needs:
+A host-visible FOD mount additionally needs a shared source mount, for example:
 
 ```bash
 docker run --rm -it \
@@ -150,10 +85,13 @@ docker run --rm -it \
   --cap-add SYS_ADMIN \
   --security-opt apparmor=unconfined \
   -v /path/on/host:/mnt/fod:rshared \
-  ghcr.io/stachwk/fod-client:3.4.1-fuse1 \
+  -v /path/to/fod.ini:/etc/fod/fod.ini:ro \
+  ghcr.io/stachwk/fod-client:3.4.2 \
   mount.fod none /mnt/fod -o ini=/etc/fod/fod.ini,role=auto
 ```
 
-The image entrypoint automatically runs `fod-container-preflight --runtime` before `mount.fod` and `fod-rust-fuse`, so missing FUSE privileges or the default restrictive Docker AppArmor profile fail with a direct diagnostic instead of an opaque mount error.
+The entrypoint runs `fod-container-preflight --runtime` before `mount.fod` or `fod-rust-fuse`, so missing FUSE privileges or an incompatible AppArmor profile fail with a direct diagnostic.
 
-Exact FOD configuration/database parameters should be supplied in the same way as for the native FOD client. The PostgreSQL database remains an external service; it is never started inside this container.
+## PostgreSQL tools
+
+The runtime includes `psql`, `pg_isready`, `pg_dump`, `pg_restore`, `createdb`, `dropdb`, `reindexdb`, and `vacuumdb`. The database remains an external service and is never started inside this image.
