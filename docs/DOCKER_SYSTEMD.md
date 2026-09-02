@@ -24,10 +24,10 @@ That file contains topology, state paths, mount paths and the exact FOD image ta
 
 ## Exact image pin
 
-The normal Make interface derives the FOD client image from `fod_version.txt`. FOD 3.4.4 therefore installs:
+The normal Make interface derives the FOD client image from `fod_version.txt`. FOD 3.4.5 therefore installs:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.4
+ghcr.io/stachwk/fod-client:3.4.5
 ```
 
 The mutable `:3.4` tag remains a convenience alias only and is not the default final deployment image.
@@ -99,6 +99,15 @@ make docker-deploy-systemd-install MASTERS=1 SLAVES=2
 ```
 
 This refreshes the root-owned runtime copy and environment with the new exact image tag.
+
+When the service is already active, reinstall uses `systemctl reload` rather
+than a full restart. The reload runs the normal start/reconciliation path
+without executing `ExecStop`, so an FOD client image upgrade does not stop or
+recreate the PostgreSQL primary and replica containers.
+
+`docker-deploy-systemd-restart` remains an explicit full-service restart and
+does stop and recreate the running deployment containers while preserving
+persistent volumes.
 
 ## Validation
 

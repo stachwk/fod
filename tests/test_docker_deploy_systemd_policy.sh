@@ -18,6 +18,25 @@ for file in "${SCRIPT}" "${BOOT}" "${RELEASE_MK}" "${GNU}"; do
 done
 
 bash -n "${SCRIPT}"
+
+install_body="$(sed -n '/^install_systemd()/,/^}/p' "${SCRIPT}")"
+
+for pattern in \
+  'systemctl is-active --quiet "${UNIT_NAME}"' \
+  'systemctl reload "${UNIT_NAME}"' \
+  'systemctl start "${UNIT_NAME}"'; do
+  grep -Fq -- "${pattern}" <<<"${install_body}" || {
+    echo "Missing non-disruptive systemd install policy: ${pattern}" >&2
+    exit 1
+  }
+done
+
+if grep -Fq 'systemctl restart "${UNIT_NAME}"' <<<"${install_body}"; then
+  echo 'Active systemd reinstall must not restart PostgreSQL deployment.' >&2
+  exit 1
+fi
+
+
 bash -n "${BOOT}"
 
 grep -Fq 'include make/fod-deploy-release.mk' "${GNU}"
@@ -48,7 +67,9 @@ for pattern in \
   'install -m0755 docker/deploy/replica-entrypoint.sh' \
   'user checkout is not executed by systemd' \
   'systemctl enable "${UNIT_NAME}"' \
-  'systemctl restart "${UNIT_NAME}"' \
+  'systemctl is-active --quiet "${UNIT_NAME}"' \
+  'systemctl reload "${UNIT_NAME}"' \
+  'systemctl start "${UNIT_NAME}"' \
   'Docker volumes and deployment state were preserved'; do
   grep -Fq -- "${pattern}" "${SCRIPT}" || { echo "Missing systemd safety/lifecycle policy: ${pattern}" >&2; exit 1; }
 done
@@ -85,7 +106,7 @@ for pattern in \
   'RemainAfterExit=yes' \
   'ExecStart=/usr/local/libexec/fod-docker-deploy/boot.sh start' \
   'ExecStop=/usr/local/libexec/fod-docker-deploy/boot.sh stop' \
-  'ExecReload=/usr/local/libexec/fod-docker-deploy/boot.sh smoke' \
+  'ExecReload=/usr/local/libexec/fod-docker-deploy/boot.sh start' \
   'WantedBy=multi-user.target'; do
   grep -Fq -- "${pattern}" "${unit}" || { echo "Missing rendered unit policy: ${pattern}" >&2; exit 1; }
 done

@@ -122,7 +122,7 @@ RemainAfterExit=yes
 EnvironmentFile=${ENV_FILE}
 ExecStart=${RUNTIME_ROOT}/boot.sh start
 ExecStop=${RUNTIME_ROOT}/boot.sh stop
-ExecReload=${RUNTIME_ROOT}/boot.sh smoke
+ExecReload=${RUNTIME_ROOT}/boot.sh start
 TimeoutStartSec=600
 TimeoutStopSec=180
 
@@ -155,7 +155,11 @@ install_systemd() {
   as_root systemctl daemon-reload
   as_root systemctl enable "${UNIT_NAME}"
   if [[ "${START_NOW}" == 1 ]]; then
-    as_root systemctl restart "${UNIT_NAME}"
+    if as_root systemctl is-active --quiet "${UNIT_NAME}"; then
+      as_root systemctl reload "${UNIT_NAME}"
+    else
+      as_root systemctl start "${UNIT_NAME}"
+    fi
   fi
   echo "OK: installed ${UNIT_NAME}; exact FOD image=${CLIENT_IMAGE}"
 }
