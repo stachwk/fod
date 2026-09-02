@@ -2,1023 +2,165 @@
   <img src="assets/logo.png" alt="FOD logo" width="180">
 </p>
 
-
 # FOD
 
-[Roadmap](ROADMAP.md) [Benchmarks](BENCHMARKS.md)
+FOD (Filesystem On DataBaseEngine) to system plikow oparty o PostgreSQL i udostepniany przez FUSE. Runtime jest napisany w Rust, trwaly stan systemu plikow znajduje sie w PostgreSQL, a aplikacje korzystaja ze standardowych operacji filesystemu Linux.
 
-FOD (Filesystem On DataBaseEngine) to filesystem oparty o PostgreSQL, wystawiany przez FUSE. Ma zachowywać się jak praktyczny filesystem Linuksa: z przewidywalnymi metadanymi, sensowną semantyką katalogów, advisory locking, access checkami świadomymi ACL oraz testami, które sprawdzają realne ścieżki wykonania od końca do końca.
+Autorytatywna wersja projektu znajduje sie w [`fod_version.txt`](fod_version.txt).
 
-# FOD — Filesystem On DataBaseEngine
+## Co zapewnia FOD
 
-Słowa kluczowe:
-- system plików
-- FUSE
-- PostgreSQL
-- system plików oparty o bazę danych
-- przechowywanie obiektów
-- przechowywanie plików
-- Rust
-- Linux
+- semantyke filesystemu Linux/FUSE dla operacji na plikach i katalogach,
+- trwale metadane i payload w PostgreSQL,
+- blokady i koordynacje sesji przez PostgreSQL dla zapisywalnych mountow,
+- obsluge deploymentu primary/replica PostgreSQL,
+- buforowanie zapisu, cache odczytu, read-ahead i kontrolowane limity rownoleglosci,
+- deployment Docker z jednym zapisywalnym primary PostgreSQL, opcjonalnymi replikami streaming i stalym klientem FOD/FUSE,
+- integracje systemd do startu po reboot oraz aktualizacji klienta FOD bez niepotrzebnego restartu PostgreSQL,
+- narzedzia Rust do schematu, monitoringu i indeksowania zewnetrznych zrodel.
 
-Projekt skupia się na:
+## Aktualna architektura
 
-- stabilnych metadanych filesystemu
-- sensownej zgodności z Linux/VFS
-- jawnych opcjach runtime dla SELinux, ACL i polityki `atime`
-- testach integracyjnych, które sprawdzają rzeczywiste zachowanie mounta, a nie tylko backend helpery
+| Warstwa | Rola |
+| --- | --- |
+| `rust_fuse` | frontend FUSE i callbacki filesystemu |
+| `rust_runtime` | runtime PostgreSQL, konfiguracja i uslugi wspolne |
+| `rust_hotpath` | gorace sciezki storage/read/write |
+| `rust_mkfs` | schemat, bootstrap i narzedzia konfiguracyjne |
+| `rust_monitor` | diagnostyka runtime i klastra |
+| `rust_indexer` | rejestracja zrodel, scan/hash/import |
+| PostgreSQL | trwale metadane, payload, locki, sesje i replikacja |
 
-Aktualna uwaga runtime: FOD działa w pełni na Rustowym runtime. Wzmianki o Pythonie niżej są historycznymi baseline'ami migracyjnymi, a nie aktywną ścieżką fallback.
+Referencyjny deployment Docker uzywa PostgreSQL 16 z serwerowym block size 32 KiB. Ten rozmiar strony PostgreSQL jest niezalezny od bloku storage FOD i od rozmiaru requestow FUSE.
 
-## O projekcie
+Aktualne defaulty i lifecycle sa opisane w [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md).
 
-FOD, czyli Filesystem On DataBaseEngine, to filesystem działający nad PostgreSQL. Projekt ma uprościć integrację aplikacji z przechowywaniem plików w bazie danych.
+## Dokumentacja wedlug zadania
 
-W wielu aplikacjach trzeba przechowywać dokumenty, obrazy, backupy, logi albo inne dane binarne w bazie. Zwykle oznacza to budowę i utrzymywanie dodatkowych warstw odpowiedzialnych za:
+Glownym indeksem jest [`docs/README.md`](docs/README.md). Dokumentacja jest tam pogrupowana wedlug tego, co chcesz zrobic, a nie wedlug kolejnosci historycznych zmian projektu.
 
-- upload i download plików
-- zarządzanie katalogami
-- synchronizację danych
-- kontrolę wersji
-- obsługę replikacji
-- udostępnianie danych tylko do odczytu
-- backup i restore
+| Chce... | Dokument |
+| --- | --- |
+| poznac aktualna architekture i defaulty | [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) |
+| wdrozyc PostgreSQL + FOD w Docker | [`docs/DOCKER_DEPLOYMENT.md`](docs/DOCKER_DEPLOYMENT.md) |
+| obslugiwac lub aktualizowac deployment | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) |
+| zarzadzac tylko kontenerem FOD/FUSE | [`docs/DOCKER_FOD_INSTALL.md`](docs/DOCKER_FOD_INSTALL.md) |
+| skonfigurowac start po reboot przez systemd | [`docs/DOCKER_SYSTEMD.md`](docs/DOCKER_SYSTEMD.md) |
+| sprawdzic wymagania PostgreSQL | [`docs/POSTGRESQL_REQUIREMENTS.md`](docs/POSTGRESQL_REQUIREMENTS.md) |
+| sprawdzic wymagania FUSE/kernela | [`docs/FUSE_REQUIREMENTS.md`](docs/FUSE_REQUIREMENTS.md) |
+| przejrzec benchmarki | [`BENCHMARKS.md`](BENCHMARKS.md) |
+| sprawdzic plan prac | [`ROADMAP.md`](ROADMAP.md), [`TODO.md`](TODO.md) |
+| wykonac procedury testowe | [`zasady_sprawdzen.md`](zasady_sprawdzen.md) |
 
-To zwiększa złożoność aplikacji i dokłada kolejny kod do utrzymania.
+Pliki `docs/FOD_3_*` sa historycznymi zapisami implementacji i pomiarow. Nie nalezy traktowac ich jako glownego zrodla aktualnych defaultow.
 
-FOD nadal jest projektem na wczesnym etapie, więc API, benchmarki i charakterystyka wydajności nadal się zmieniają. Obecny cel to poprawność, architektura i praktyczne zachowanie filesystemu, a nie deklarowanie dojrzałej, maksymalnej przepustowości.
-
-FOD usuwa ten problem, bo wystawia standardowy interfejs filesystemu. Dla użytkownika i aplikacji zachowuje się jak zwykły filesystem, taki jak ext4 czy xfs.
-
-Aplikacje mogą korzystać ze standardowych operacji:
-
-- `open`
-- `read`
-- `write`
-- `mkdir`
-- `rename`
-- `cp`
-- `rsync`
-- `tar`
-
-bez potrzeby wiedzy, że dane fizycznie trafiają do PostgreSQL.
-
-### Główne zalety
-
-- Prostota integracji: aplikacje zapisują pliki w zwykły sposób, bez własnej logiki binarnego storage.
-- Centralizacja danych: pliki i metadane są w jednym spójnym systemie zarządzanym przez PostgreSQL.
-- Wykorzystanie możliwości PostgreSQL: FOD korzysta naturalnie ze streaming replication, standby/read-only replicas, backup i restore, Point In Time Recovery (PITR), transakcyjności, kontroli integralności oraz pracy w wielu lokalizacjach.
-- Replikacja i skalowanie odczytu: można uruchamiać wiele instancji read-only na replikach PostgreSQL, co pozwala budować rozproszone systemy dystrybucji plików, archiwa i środowiska HA/DR.
-- Transparentność: użytkownik nie musi znać schematu bazy ani korzystać ze specjalnych API.
-
-### Przykładowe zastosowania
-
-- centralne repozytoria dokumentów
-- systemy backupowe
-- przechowywanie logów
-- systemy HA/DR
-- klastry read-only
-- archiwizacja danych
-- współdzielony storage dla aplikacji
-- kontenery i środowiska chmurowe
-- systemy edge z lokalnymi replikami
-
-### Idea projektu
-
-FOD łączy wygodę klasycznego filesystemu z możliwościami nowoczesnego silnika bazodanowego.
-
-Zamiast budować kolejne warstwy pośrednie do obsługi plików, aplikacje mogą korzystać z jednego, spójnego interfejsu filesystemu, podczas gdy PostgreSQL odpowiada za trwałość, spójność, replikację i bezpieczeństwo danych.
-
-## Licencjonowanie
-
-FOD to oprogramowanie source-available licencjonowane na warunkach Business Source License 1.1 (BSL 1.1).
-
-- Użycie niekomercyjne jest dozwolone.
-- Użycie komercyjne wymaga odrębnej pisemnej umowy z właścicielem praw autorskich.
-- Pełne warunki znajdują się w pliku [`LICENSE`](LICENSE), a kontakt do licencjonowania komercyjnego w [`LICENSE-COMMERCIAL`](LICENSE-COMMERCIAL).
-
-## Aktualny Stan
-
-- Główne operacje FUSE są zaimplementowane i pokryte testami integracyjnymi.
-- `make test-all` jest główną lokalną bramką regresji, a `make test-all-full` zawiera ten zestaw i rozszerza go o szersze testy mounta oraz indexera. Od FOD 3.2.48 przebieg integracyjny odtwarza zabezpieczoną lokalną bazę testową Docker po pełnym zestawie mkfs, zanim ruszą kolejne testy FUSE.
-- Odczyty korzystają teraz z blokowego ładowania z małym cache i read-ahead zamiast pełnego ładowania pliku przy każdym dostępie.
-- Test porównujący uprawnienia jest świadomie local-filesystem-vs-FOD, a nie tylko ext4-vs-FOD; porównuje hostowy zapisywalny local filesystem z FOD i sprawdza zgodność semantyki dla mode, ownership, access checków, sticky-bit unlink/rmdir oraz plików należących do root.
-- Widoczność `allow_other` zależy od hosta: dedykowany test robi skip, jeśli host nie wystawia mounta dla `nobody`, więc jest to test diagnostyczny, a nie uniwersalna gwarancja pass/fail.
-- Runtime jest teraz w całości oparty o Rust: frontend mounta żyje w `rust_fuse`, bootstrap/schemat/mkfs w `rust_mkfs`, a indeksowanie w `rust_indexer`.
-- Lookup, CRUD namespace, metadane, permissions, xattr, locking, storage i journal handling żyją już w Rust zamiast w Pythonowych helperach.
-- Wspólny core `fod-indexer` obsługuje rejestrację źródeł, `scan`, `hash`, raport duplikatów, `plan-import`, `materialize` i `cleanup-failed` przez jeden model możliwości. Obecne typy źródeł pozostają oparte o ścieżkę, mirror albo eksport (`local`, `smb`, `qnap`, `adb`, `github`), a `--name` nadal jest jawnym nadpisaniem.
-- Przy wyborze backendu FUSE `libfuse3` jest strategicznym baseline'em, jeśli najważniejsze są kompatybilność, standardowość i łatwiejsze debugowanie zgodne z upstream; inne stacki zostają do porównań, prototypów i diagnostyki.
-- Na Rocky Linux 10.2 FOD wspiera operational enforcement (egzekwowanie operacyjne) SELinux przez hostowy label FUSE `fusefs_t` i zwykłą politykę domen SELinux. Per-inode `security.selinux` labeling (etykietowanie per plik) zależy od hosta i stosu mounta; w przetestowanym zwykłym modelu FUSE nie jest wspierane.
-- PostgreSQL TLS jest opcjonalny i konfigurowalny; FOD może też wygenerować lokalną parę certyfikat/klucz na żądanie.
-- Przejściowe zerwania połączenia PostgreSQL w gorącej ścieżce odczytu/zapisu są ponawiane raz, z zachowaniem stanu po stronie procesu klienta, więc aktywny dirty write state i cache odczytu mogą przetrwać próbę reconnect.
-- Migracja lock managera już się dokonała: PostgreSQL-backed leases są produkcyjną ścieżką dla zarówno `flock`, jak i range-locków `fcntl`, z TTL i heartbeat. `make test-locking` pozostaje zestawem semantyki locków, `make test-pg-lock-manager` pokrywa produkcyjny backend PostgreSQL, a `rust_fuse/tests/lock_backend_smoke.rs` sprawdza dwa niezależne primary mounty wobec tej samej bazy oraz repliki, która zostaje przy backendzie pamięciowym.
-- Rustowy runtime trzyma osobne cache'owane połączenia dla zapisu i dla control plane, więc heartbeat i lease maintenance nie muszą czekać za długim flush.
-- Wygasłe sesje writable są sprzątane przez okresowy `client_sessions` maintenance niezależny od backendu locków. Usunięcie wygasłego `client_sessions` odpala trigger PostgreSQL, który czyści jego lock leases i range leases po `session_id`; sam trigger nie wyszukuje wygasłych sesji.
-- FOD 3.3.2 porzadkuje kontrakt schematu: `0022_monitor_session_stats.sql` jest oficjalna migracja schema version 22, `fod-mkfs status` weryfikuje tez najnowszy ksztalt schematu, a test manifestu blokuje dodanie numerowanej migracji bez aktualizacji `SCHEMA_VERSION`. Aktualna kolejnosc dalszych prac jest w `docs/FOD_CURRENT_ACTION_PLAN.md`.
-- FOD 3.3.3 oddziela maintenance `client_sessions` od heartbeatow lock managera: writable mounty sprzataja wygasle sesje takze przy `lock_backend=memory`, `HOSTNAME` ma bezpieczny fallback do systemowego `gethostname()`, a heartbeat lockow PostgreSQL zachowuje dotychczasowa semantyke.
-- FOD 3.3.4 domyka rozdzielenie lifecycle sesji od lockow: osobny heartbeat sesji odnawia `client_sessions` TTL wyliczony z interwalu `FOD_MONITOR_PUBLISH_INTERVAL_MS`, lock heartbeat odnawia tylko lock leases/owner state, a publisher `fod-monitor` nie zmienia TTL sesji.
-- FOD 3.3.5 dodaje stabilne `fod-monitor cluster --json` i `fod-monitor report --json`, normalizuje `source_authority` bez maski CIDR i pokazuje w widoku klastra wskazniki efektywnosci: sredni rozmiar callbacku oraz przyblizone operacje DB na read/write task.
-- FOD 3.3.6 pozwala read-only mountom publikowac centralna telemetrie przez osobny writable primary endpoint: przy endpoint routing sink jest wybierany z primary hosts, a bez routingu mozna uzyc `FOD_TELEMETRY_DSN` lub fallbacku `FOD_MONITOR_DSN`. Awaria tego endpointu nie zatrzymuje odczytu repliki.
-- Od FOD 3.3.1 `fod-monitor` ma wspólny widok międzyhostowy: writable mounty publikują okresowo wersjonowane, skumulowane statystyki do `fod.monitor_session_stats`, a `status`, `cluster`, `top` i `report` agregują ruch wszystkich aktywnych sesji korzystających z tej samej bazy. Lokalne `/proc` pozostaje dodatkową diagnostyką hosta.
-- Wymagane ustawienia PostgreSQL, budżet `max_connections`, wymagania trwałości i kontrola primary/replica są zebrane w `docs/POSTGRESQL_REQUIREMENTS.md`.
-- Metodyka random I/O, diagnostyka warm/cold oraz plan tuningu PostgreSQL per-session/reload/restart sa zebrane w `docs/FOD_RANDOM_IO_POSTGRESQL_TUNING.md`. Dokument wymaga A/B przed kazda zmiana runtime i nie wlacza automatycznego tuningu PostgreSQL.
-- Wymagania i tuning FUSE/kernela, w tym `fs.fuse.max_pages_limit`, domyslny limit 1 MiB oraz opcjonalny profil 2 MiB/512 stron, sa zebrane w `docs/FUSE_REQUIREMENTS.md`.
-- Świeże instalacje używają `migrations/base_schema.sql`, a `migrations/` trzyma numerowaną ścieżkę upgrade ze starszych stanów schematu i jawny eksport `mkfs.fod status`.
-- FOD 3.3.10 utwardza testy QNAP: zdalny `reset` z `down -v` wymaga `QNAP_ALLOW_DESTRUCTIVE_RESET=1`, `up` czeka także na host-side SQL endpoint, testy mkfs przywracają wybrany backend, komplet legacy `POSTGRES_*` jest eksportowany zgodnie z `FOD_PG_*`, a live endpoint probe, schema-upgrade, hotpath `pg_query` i lock-manager preferują `FOD_PG_*`. Test runtime-profile sprawdza tez aktualny log cache z `direct_io_read_prefetch_blocks=512`. Test FUSE compatibility sprawdza osobno ABI/capabilities oraz linię `FOD FUSE negotiated:` i relacje requested/effective zamiast historycznego `max_write=unavailable`. Dzięki temu `QNAP=1` nie może łączyć zdalnego hosta z lokalnymi domyślnymi danymi logowania ani cicho wracać do `127.0.0.1`.
-- FOD 3.3.11 dodaje izolowany benchmark QNAP primary/replica. `make test-fio-primary-write-replica-read-qnap` uruchamia na zdalnym Dockerze tymczasowy PostgreSQL primary+replica na osobnych wolumenach i portach, mierzy FOD primary write, świeży primary read i świeży replica read dla macierzy rozmiarów bloków, czeka na replay WAL, zatrzymuje primary przed odczytem z repliki oraz sprawdza, że zapis na replice jest odrzucony. Domyślnie: `256M` i `4k 16k 64k 256k 512k 1m`; wynik trafia do `artifacts/perf/`. Benchmark jawnie normalizuje komplet `FOD_PG_HOST/PORT/DBNAME/USER/PASSWORD` do danych tymczasowego stosu, aby eksportowane lokalne `FOD_PG_*` nie mogły przeciec do testu QNAP. Pierwszy pełny baseline QNAP 256M przeszedł dla `4k 16k 64k 256k 512k 1m`; najlepszy odczyt uzyskano przy `256k`: primary `15.784 MiB/s`, replica `26.064 MiB/s`. Szczegóły i warunki pomiaru są w `BENCHMARKS.md`.
-- FOD 3.3.12 optymalizuje primary-read dla `noatime + direct_io` przy wyłączonych cache/read-ahead/prefetch: `fod_fetch_block_range_with_size` używa prostego `UNION ALL`, aby zwrócić aktualny rozmiar pliku i bloki w jednym wykonaniu PostgreSQL zamiast osobnych `fod_file_read_metadata` i `fod_fetch_block_range`. Nie cache'uje EOF na writable primary; read-after-write w `noatime` omija też zbędny metadata SELECT. Lokalny powtarzany A/B (`QNAP=0`, 256 MiB, fio 256 KiB, 3 pary) dał medianę odczytu `164 -> 238 MiB/s` (`+45.1%`) oraz medianę `fuse_read_total_us` `1,463,130 -> 994,450` (`-32.0%`).
-- FOD 3.3.13 podnosi domyślny `FOD_FUSE_MAX_WRITE_BYTES` z `512KiB` do `1MiB`, co przy standardowym `fs.fuse.max_pages_limit=256` zmniejsza fragmentację dużych direct-I/O requestów. Lokalny A/B (`QNAP=0`, 1 GiB, fio 1 MiB, 3 przebiegi) dał medianę read `283 -> 322 MiB/s` (`+13.8%`) i callbacki `3072 -> 2048`, bez istotnej zmiany write (`60.8 -> 61.3 MiB/s`). FOD loguje także rozmiar strony, `fs.fuse.max_pages_limit`, wynikający limit requestu i estymowany rzeczywisty ceiling. Opcjonalny tuning hosta `fs.fuse.max_pages_limit=512` razem z `FOD_FUSE_MAX_WRITE_BYTES=2MiB` dał `374 MiB/s`, ale FOD nie zmienia globalnego sysctl automatycznie.
-- FOD 3.3.15 dokumentuje pierwszy powtarzany baseline random I/O i zasade, ze bottleneck nalezy rozdzielic miedzy FOD/FUSE, PostgreSQL, cache kernela i storage. Dalszy tuning PostgreSQL ma zaczynac sie od `pg_settings.context`, `pg_stat_io`, `pg_stat_wal` i kontrolowanego A/B; parametry bezpieczne per-session moga byc kandydatem do przyszlych profili FOD, ale 3.3.15 nie zmienia jeszcze runtime ani durability.
-- Źródłem wersji FOD jest `fod_version.txt`; wersja workspace w `Cargo.toml` musi pozostać z nim zgodna. Każdy kolejny commit podbija część patch `x.y.z` do `x.y.(z+1)`, a temat commita używa formatu `FOD X.Y.Z: <english description>`. Pełny kontrakt opisuje `docs/versioning.md`. `fod-config`, `fod-bootstrap --version` i `mkfs.fod --version` muszą publikować tę samą wartość.
-- Kanoniczny schemat storage FOD nazywa się `fod` celowo: trzyma obiekty FOD poza `public`, żeby inne aplikacje w tej samej bazie nie kolidowały z tabelami FOD. Innymi słowy, `fod = canonical FOD storage schema`. W przyszłości można dodać parametr `fod.schema_name` dla wielu instancji FOD w jednej bazie, ale obecny runtime jest celowo przypięty do `fod`.
-- Prace nad wydajnością są już w kodzie, a aktualne baseline'y benchmarków są zapisane w `BENCHMARKS.md`.
-- Rustowy hot-path działa teraz w natywnym backendzie i współdzielonej bibliotece hot-path. Obejmuje planner, changed-run packing, padding bloków, składanie odczytu, logical resize planner dla `truncate()`/`fallocate()` oraz pierwsze lookupi/mutacje repo. Changed-copy dedupe zostaje opt-in, bo potrafi zauważalnie spowolnić workloady kopiujące.
-- Lokalny stack Docker Compose preloaduje `pg_stat_statements`, a `make enable-pg-stat-statements` może utworzyć extension w lokalnej bazie, jeśli użytkownik DB ma do tego uprawnienia. Dzięki temu analiza zapytań i profilowanie runtime są dostępne w lokalnym stacku, ale inicjalizacja FOD nie zależy od uprawnień do tworzenia extension.
-- `TODO.md` służy teraz jako log decyzji i notatek, a nie aktywny backlog implementacyjny.
-
-## Pokrycie testami
-
-Repozytorium nie ma obecnie aktywnego workflow GitHub Actions. Walidacja jest
-uruchamiana jawnie przez targety Makefile: `make test-all` jest główną lokalną
-bramką regresji, a `make test-all-full` zawiera ją i dodaje szersze testy
-mounta oraz indexera. Przyszły workflow automatyczny musi zostać dodany i
-włączony jawnie, zamiast wynikać z nieaktywnego pliku.
-
-Lokalne zestawy integracyjne są wykonywane sekwencyjnie nawet przy `make -j`,
-ponieważ współdzielą jedną bazę Docker/PostgreSQL i zasoby mounta FUSE. Pełny
-zestaw mkfs celowo sprawdza również uszkodzone i niepełne stany schematu.
-Wewnątrz `test-integration` jest uruchamiany przez
-`test-rust-mkfs-suite-local-restored`, który zawsze próbuje wykonać
-zabezpieczone `test-db-restore-local` przed dalszymi testami FUSE, również
-wtedy, gdy sam zestaw mkfs zakończy się błędem.
-
-Bezpośrednie `cargo test --workspace --locked` wykrywa także
-`lock_backend_smoke`, którego cztery testy mountowanych blokad wymagają
-`sudo`. Ten zestaw należy uruchamiać przez `make test-locking`. Po samodzielnym
-wykonaniu `cargo test --locked -p fod-rust-mkfs`,
-`make test-runtime-validation` albo
-`make test-rust-hotpath-runtime-size-limits` należy uruchomić
-`make test-db-restore-local` przed kolejnymi testami mounta.
-
-Dla krok-po-kroku profili sprawdzeń lokalnych zobacz [zasady_sprawdzen.md](zasady_sprawdzen.md).
-
-## Znane Ograniczenia
-
-- Pełna polityka mount-label SELinux jest celowo poza zakresem. Na Rocky Linux 10.2 zwykła zawartość FUSE dostaje label `fusefs_t`; SELinux egzekwuje dostęp przez politykę hosta dla tego typu, ale per-inode relabeling (zmiana etykiet per plik) przez `security.selinux` nie działa w przetestowanym modelu FUSE/SELinux.
-- Obsługa `ioctl` obejmuje już `FIONREAD`, `FIGETBSZ`, `FS_IOC_GETFLAGS` i `FS_IOC_FSGETXATTR`; `FS_IOC_SETFLAGS` oraz `FS_IOC_FSSETXATTR` przyjmują tylko żądanie z `0` jako bezpieczny no-op do czasu ustalenia realnej polityki flag.
-- `FICLONE` nadal jest eksperymentalny i na niektórych stackach może zostać ucięty przed userspace, więc reflinki nie są jeszcze obietnicą produkcyjną.
-- Metadane specjalnych urządzeń są zapisywane, ale pełna semantyka uruchamiania takich node'ów nie jest głównym celem projektu.
-- FOD jest nadal na wczesnym etapie, więc API, benchmarki i domyślne ustawienia wydajności mogą się jeszcze zmieniać.
-- `make test-all` jest głównym targetem regresji; workflow mounta są pokryte lokalnie, ale automatyczna bramka GitHub Actions nie jest obecnie włączona.
-- Upgrade schematu jest na razie zachowawczy: `init` stosuje base schema dla świeżej instalacji, `upgrade` naprawia brakujący stan schematu i przywraca bieżącą wersję, a repo nadal trzyma numerowane pliki migracji dla starszych baz.
-- FOD normalizuje timestampy przez sesję PostgreSQL ustawioną na UTC oraz konwersje w Rustowym runtime, więc lokalne różnice stref czasowych nie przesuwają metadanych. Ustawienie UTC jest inicjalizowane raz na fizyczne połączenie z puli, a nie przy każdej operacji filesystemu, i nie opiera się na domyślnych ustawieniach tworzenia bazy.
-- Recovery jest ograniczone do ponawiania przejściowych disconnectów w gorącej ścieżce odczytu/zapisu; FOD trzyma stan dirty i cache w pamięci procesu, ale nie robi jeszcze pełnego replay dowolnych trwających operacji SQL i tylko ponawia ograniczoną ścieżkę reconnectu.
-
-## Wymagania
-
-- Rust 1.85 lub nowszy wraz z Cargo; wszystkie crate'y workspace pozostają na Edition 2021
-- PostgreSQL
-- wsparcie FUSE na hoście
-- `openssl`, jeśli FOD ma automatycznie generować parę certyfikat/klucz TLS dla PostgreSQL
-
-## Binaria Rust
-
-FOD jest budowany i instalowany z crate'ów Rustowych. Główny sposób instalacji to:
+## Szybki start developerski
 
 ```bash
-make install-on-root
+make up
+make init
+make smoke
+make mount
 ```
 
-To instaluje binaria projektu do aktywnego środowiska:
+W drugim terminalu:
+
+```bash
+make unmount
+```
+
+Glowna lokalna bramka regresji:
+
+```bash
+make test-all
+```
+
+Szerszy zestaw testow mount/indexer:
+
+```bash
+make test-all-full
+```
+
+Repozytorium celowo nie ma aktywnego workflow GitHub Actions. Walidacja jest wykonywana przez lokalne targety Make/Cargo.
+
+## Referencyjny deployment Docker
+
+Obslugiwany uklad:
+
+```text
+1 zapisywalny PostgreSQL primary
+0..32 replik PostgreSQL streaming
+1 staly klient FOD/FUSE
+```
+
+`MASTERS>1` jest odrzucane, poniewaz deployment nie implementuje bezpiecznej elekcji multi-primary PostgreSQL.
+
+Instalacja:
+
+```bash
+make docker-deploy-plan MASTERS=1 SLAVES=2
+make docker-deploy-fod-host-prepare MASTERS=1 SLAVES=2
+make docker-deploy-install MASTERS=1 SLAVES=2
+make docker-deploy-smoke MASTERS=1 SLAVES=2
+```
+
+Staly start hosta:
+
+```bash
+sudo make docker-deploy-systemd-install MASTERS=1 SLAVES=2
+```
+
+Jesli usluga systemd jest juz aktywna, reinstall/upgrade uzywa reload i reconcile zamiast pelnego restartu. Aktualizacja klienta FOD nie zatrzymuje ani nie odtwarza zdrowych kontenerow PostgreSQL primary/replica. Jawny target `docker-deploy-systemd-restart` nadal wykonuje pelny restart deploymentu.
+
+Procedura weryfikacji upgrade jest w [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+## Konfiguracja i rozmiary I/O
+
+Glowne pliki:
+
+- [`fod_config.ini`](fod_config.ini) - konfiguracja lokalna/testowa,
+- [`fod_config.example.ini`](fod_config.example.ini) - szablon do udostepniania.
+
+Warstwy rozmiarow sa niezalezne:
+
+- blok storage FOD: 4 KiB,
+- domyslny maksymalny request zapisu FUSE: 1 MiB,
+- domyslny FUSE readahead: 512 KiB,
+- bazowy persist chunk: 128 blokow FOD = 512 KiB,
+- block size PostgreSQL w produkcyjnym obrazie Docker: 32 KiB.
+
+Zmiana rozmiaru requestu FUSE nie zmienia formatu blokow storage FOD w bazie.
+
+## Glowne programy
 
 - `fod-bootstrap`
 - `fod-config`
 - `mkfs.fod`
 - `mount.fod`
+- `fod-monitor`
 - `fod-indexer`
 
-W drzewie źródłowym nie ma już Pythonowych launcherów runtime. FOD dostarcza bezpośrednio binaria Rust: `fod-bootstrap`, `fod-config`, `mkfs.fod` i `fod-indexer`. Zainstalowany `mount.fod` najpierw wybiera `target/debug/fod-bootstrap` i `target/release/fod-bootstrap` z bieżącego checkoutu, potem stare ścieżki `rust_mkfs/target/debug/fod-bootstrap` i `rust_mkfs/target/release/fod-bootstrap`, a dopiero później `fod-bootstrap` z `PATH` oraz `/usr/local/bin/fod-bootstrap`. Sam `fod-bootstrap` najpierw wybiera `rust_fuse/target/debug/fod-rust-fuse`, potem `fod-rust-fuse` z `PATH`, a na końcu `/usr/local/bin/fod-rust-fuse`. Jeśli `FOD_CONFIG` nie jest ustawione, a w bieżącym katalogu istnieje lokalny `./fod_config.ini`, wrapper eksportuje go automatycznie. Nieznane opcje wyglądające na FOD-owe wypisują ostrzeżenie na stderr, więc literówki typu `rool=primary` nie przechodzą po cichu; typowe opcje systemowe typu `_netdev`, `nofail` i `x-systemd.*` nadal są ignorowane. Jeśli nie znajdzie żadnego poprawnego bootstrappera ani sensownego pliku konfiguracyjnego, kończy się jasnym komunikatem zamiast zgadywać interpreter Pythona.
+## Testy przed commitem
 
-Przykład:
-
-```bash
-mount.fod /mnt/fod
-```
-
-Jeśli chcesz nazwany profil runtime, ustaw `FOD_PROFILE` jawnie albo podaj `--profile` / `-o profile=...` wtedy, gdy naprawdę potrzebujesz strojenia pod konkretny workload.
-
-Wymagania PostgreSQL dla obecnego zestawu funkcji:
-
-- PostgreSQL 9.5 lub nowszy
-- `max_connections` powinno być wyraźnie większe niż `pool_max_connections`; jako praktyczne minimum zostaw co najmniej dwa dodatkowe połączenia dla administracji i równoległych klientów FOD
-- nie są potrzebne specjalne parametry lock managera; domyślne `read committed` wystarcza
-- FOD oczekuje transakcyjnych połączeń PostgreSQL z wyłączonym `autocommit`
-- FOD inicjalizuje stan sesji UTC raz na cache'owane fizyczne połączenie i w stanie ustalonym zostaje tylko tani `rollback()`. Zapis i control plane używają osobnych cache'owanych połączeń, więc długi flush nie blokuje heartbeatów ani maintenance lease'ów.
-- `sslmode=require` wystarcza do szyfrowania połączenia, a `verify-full` jest właściwe, jeśli chcesz też weryfikację certyfikatu
-
-| Wymaganie | Wartość |
-| --- | --- |
-| Wersja PostgreSQL | `9.5+` |
-| Tryb transakcyjny | `autocommit = off` |
-| Poziom izolacji | `read committed` |
-| `max_connections` | `pool_max_connections + 2` lub więcej |
-| TLS | `sslmode=require` do szyfrowania, `verify-full` do weryfikacji certyfikatu |
-
-Opcjonalna ścieżka osobnych pul PostgreSQL
-(`FOD_PG_POOL_LANES_ENABLED=true`) raportuje skumulowane dane o pulach,
-transakcjach, heartbeat, payloadach, RSS procesu i presji serwera. Próbki pul
-PostgreSQL są domyślnie wykonywane co 5000 ms. Interwał można ustawić w
-zakresie od `100` do `3600000` ms przez
-`FOD_PG_OBSERVABILITY_INTERVAL_MS`.
-
-Obserwacja logicznych zadań FUSE jest osobnym samplerem. Każdy mount raportuje
-skumulowane kolejki i przepustowość operacji `read`, `write` oraz
-`copy_file_range`. Domyślny interwał wynosi 30000 ms, a
-`FOD_TASK_OBSERVABILITY_INTERVAL_MS` przyjmuje wartości od `100` do
-`3600000` ms.
-
-FOD 3.2.50 dodaje włączane jawnie, procesowo-lokalne ograniczenie aktywnych
-callbacków. `FOD_TASK_READ_ACTIVE_LIMIT` ogranicza odczyty, a
-`FOD_TASK_WRITE_ACTIVE_LIMIT` jest wspólny dla zapisów i `copy_file_range`.
-Domyślne `0` zachowuje poprzednią
-ścieżkę wyłącznie obserwacyjną bez oczekiwania na permit. Wartość dodatnia
-przydziela uporządkowane bilety i wpuszcza oczekujące zadania FIFO w obrębie
-każdej bramki. Zadanie oczekujące zapisuje jedno zdarzenie backpressure, a
-zadanie ustępujące wcześniejszemu biletowi zapisuje jedno fairness yield.
-Pojemność jest zwalniana przez permit RAII na każdej ścieżce wyjścia. Od FOD
-3.2.55 każdy bilet w kolejce ma prywatny sygnał wybudzenia, dlatego zwolnienie
-pojemności budzi wyłącznie najstarsze uprawnione zadanie zamiast całej kolejki.
-Limity nie ograniczają jeszcze transakcji PostgreSQL, nie rezerwują bajtów
-payloadu i nie włączają automatycznego routingu endpointów. Kolejność FIFO jest
-lokalna dla procesu i osobna dla bramki odczytu oraz wspólnej bramki
-zapisu/kopiowania. Szczegóły opisuje
-[`docs/postgresql-multi-endpoint-phase-4.md`](docs/postgresql-multi-endpoint-phase-4.md).
-
-## Przykładowy `fod_config.example.ini`
-
-To jest minimalny punkt startowy. Repo-root `fod_config.ini` zostaje lokalnym configiem do dev/test, a `fod_config.example.ini` jest szablonem do kopiowania. Jeśli chcesz zainstalować konfigurację na współdzielonym hoście, skopiuj przykład i zmień hasło przed uruchomieniem `make install-config`.
-
-```ini
-[database]
-host = 127.0.0.1
-port = 5432
-dbname = foddbname
-user = foduser
-password = cichosza
-
-[fod]
-pool_max_connections = 10
-synchronous_commit = on
-write_flush_threshold_bytes = 67108864
-read_cache_blocks = 1024
-read_ahead_blocks = 4
-sequential_read_ahead_blocks = 8
-small_file_read_threshold_blocks = 8
-workers_read = 4
-workers_read_min_blocks = 8
-workers_write = 4
-workers_write_min_blocks = 8
-metadata_cache_ttl_seconds = 1
-statfs_cache_ttl_seconds = 2
-
-[fod.profile.bulk_write]
-write_flush_threshold_bytes = 268435456
-read_cache_blocks = 512
-read_ahead_blocks = 2
-sequential_read_ahead_blocks = 4
-small_file_read_threshold_blocks = 4
-workers_read = 4
-workers_read_min_blocks = 8
-workers_write = 8
-workers_write_min_blocks = 8
-metadata_cache_ttl_seconds = 2
-statfs_cache_ttl_seconds = 2
-
-[fod.profile.metadata_heavy]
-write_flush_threshold_bytes = 67108864
-read_cache_blocks = 1024
-read_ahead_blocks = 4
-sequential_read_ahead_blocks = 8
-small_file_read_threshold_blocks = 8
-workers_read = 4
-workers_read_min_blocks = 8
-workers_write = 4
-workers_write_min_blocks = 8
-metadata_cache_ttl_seconds = 5
-statfs_cache_ttl_seconds = 5
-
-[fod.profile.pg_locking]
-lock_backend = postgres_lease
-lock_lease_ttl_seconds = 30
-lock_heartbeat_interval_seconds = 10
-lock_poll_interval_seconds = 0.05
-```
-
-## Pierwsze uruchomienie
-
-Jeżeli uruchamiasz FOD pierwszy raz, zrób to w takiej kolejności:
-
-1. Zainstaluj zależności wymienione wyżej.
-1. Przygotuj PostgreSQL i upewnij się, że użytkownik oraz hasło w `fod_config.ini` są poprawne.
-1. Wybierz, skąd FOD ma czytać konfigurację:
-   - `/etc/fod/fod_config.ini`
-   - albo lokalny plik `./fod_config.ini`
-1. Jeśli config źródłowy nadal ma `password = cichosza`, `make install-config` wypisze ostrzeżenie przed skopiowaniem.
-1. Utwórz schemat:
-
-   ```bash
-   mkfs.fod init
-   ```
-
-1. Zamontuj filesystem:
-
-   ```bash
-   fod-bootstrap -f /ścieżka/do/mountpointu
-   ```
-
-1. Zapisz plik do montażu, odczytaj go ponownie i sprawdź, czy dane przeżywają ponowne zamontowanie.
-1. Po zakończeniu odmontuj filesystem:
-
-   ```bash
-   fusermount3 -u /ścieżka/do/mountpointu
-   ```
-
-## Minimalny start
-
-Jeśli chcesz najszybszą drogę od zera do zamontowanego filesystemu, uruchom:
+Minimalny zestaw release/policy:
 
 ```bash
-make up
-make init
-make mount
+make test-cargo-lock-integrity
+make test-version
+make test-docker-deploy-policy
+make test-docker-fod-install-policy
+make test-docker-deploy-systemd-policy
+make test-docker-fod-client-policy
 ```
 
-Jeśli chcesz użyć user-level pliku konfiguracyjnego zamiast `/etc/fod/fod_config.ini`, użyj:
+Szersze profile sa w [`zasady_sprawdzen.md`](zasady_sprawdzen.md).
 
-```bash
-make install-config-user
-make mount-user
-```
+Kazdy commit podnosi patch version. Zasada jest opisana w [`docs/versioning.md`](docs/versioning.md).
 
-`make install-on-root` łączy `install-config`, `install-root-scripts`, `install-rust-hotpath` i `install-mount-helper` w jeden krok dla instalacji typu root-style. To instaluje config, Rustowe binarki w tym `fod-indexer`, współdzieloną bibliotekę hot-path oraz helper mounta.
+## Licencja
 
-Jeśli chcesz finalny, bardziej zoptymalizowany build z ThinLTO i stripem symboli, użyj `make install-on-root FOD_CARGO_PROFILE=release-lto`.
+FOD jest oprogramowaniem source-available na licencji Business Source License 1.1.
 
-`make install-on-root-venv` to odpowiednik `make venv` + `make install-on-root`.
-
-`make uninstall-on-root` wykonuje operację odwrotną do instalacji root-style. Najpierw wykrywa wszystkie aktywne mounty FOD typu FUSE ze źródłem filesystemu `fod`, odmontowuje je i sprawdza ponownie, czy żaden mount FOD nie pozostał. Jeżeli odmontowanie się nie powiedzie, uninstall zatrzymuje się przed usunięciem plików instalacji. Po poprawnym odmontowaniu usuwa zainstalowane binaria Rust, `mount.fod` oraz `FOD_CONFIG_DEST` (domyślnie `/etc/fod/fod_config.ini`). Katalog konfiguracji usuwa tylko wtedy, gdy jest pusty.
-
-Oba targety instalacyjne ostrzegają, jeśli config źródłowy nadal używa domyślnego hasła developerskiego `cichosza`.
-
-## Szybki start
-
-1. Skonfiguruj `/etc/fod/fod_config.ini` albo lokalny `fod_config.ini`.
-1. Opcjonalnie uruchom `make install-config`, żeby skopiować wybrany plik konfiguracyjny do `/etc/fod/fod_config.ini`.
-1. Dla instalacji typu root-style uruchom `make install-on-root`, żeby zainstalować config, Rustowe binarki w tym `fod-indexer`, współdzieloną bibliotekę hot-path i helper mounta jednym krokiem.
-1. Dla lokalnego developmentu możesz uruchomić `make install-config-user`, żeby zainstalować wybrany plik konfiguracyjny do `~/.config/fod/fod_config.ini` bez `sudo`.
-1. `make config-show` pokazuje, którego pliku konfiguracyjnego FOD użyje, a `make mount-user` preferuje user-level `~/.config/fod/fod_config.ini` i wraca do lokalnego `fod_config.ini`, jeśli plik użytkownika nie istnieje.
-1. Zainicjalizuj schemat:
-
-   ```bash
-   mkfs.fod init
-   ```
-
-   Jeśli chcesz, żeby FOD wygenerował lokalną parę certyfikat/klucz TLS PostgreSQL podczas tworzenia schematu, użyj:
-
-   ```bash
-   mkfs.fod init --generate-client-tls-pair 1
-   ```
-
-   Ta sama opcja działa też z `upgrade`:
-
-   ```bash
-   mkfs.fod upgrade --generate-client-tls-pair 1
-   ```
-
-   Wartość `--tls-common-name` jest walidowana przed zbudowaniem `openssl -subj`. Dozwolone są litery ASCII, cyfry, kropka, podkreślenie i myślnik.
-
-1. Zamontuj filesystem:
-
-   ```bash
-   fod-bootstrap -f /ścieżka/do/mountpointu
-   ```
-
-## Obsługiwane parametry
-
-FOD jest sterowany przez flagi CLI, zmienne środowiskowe oraz wartości z pliku konfiguracyjnego.
-
-### Główne parametry runtime FOD
-
-| Parametr | Typ | Domyślnie | Efekt |
-| --- | --- | --- | --- |
-| `-f`, `--mountpoint` | CLI | wymagane | Punkt montowania filesystemu FUSE. |
-| `--role auto|primary|replica` | CLI / `FOD_ROLE` | `auto` | Steruje wykrywaniem repliki i wyborem backendu locków. `-o ro` daje mount tylko do odczytu bez zmiany roli. |
-| `--selinux auto|on|off` | CLI / `FOD_SELINUX` | `off` | Włącza lub wyłącza obsługę xattr SELinux w FOD, gdy hostowy stos FUSE/SELinux przekazuje żądania `security.selinux`. Nie wymusza na kernelu zgody na per-inode relabeling (etykietowanie per plik). |
-| `--acl on|off` | CLI / `FOD_ACL` | `off` | Włącza lub wyłącza egzekwowanie POSIX ACL. |
-| `--default-permissions` / `--no-default-permissions` | CLI / `FOD_DEFAULT_PERMISSIONS` | on | Steruje tym, czy kernelowe sprawdzanie uprawnień jest aktywne. |
-| `--atime-policy default|noatime|nodiratime|relatime|strictatime` | CLI / `FOD_ATIME_POLICY` | `default` | Wybiera wewnętrzne zachowanie `atime` FOD. |
-| `--lazytime` | CLI / `FOD_LAZYTIME` | off | Włącza opcję montowania `lazytime`. |
-| `--sync` | CLI / `FOD_SYNC` | off | Włącza opcję montowania `sync`. |
-| `--dirsync` | CLI / `FOD_DIRSYNC` | off | Włącza opcję montowania `dirsync`. |
-| `FOD_ALLOW_OTHER=1` | Zmienna środowiskowa | off | Włącza `allow_other`, jeśli FUSE na to pozwala. |
-| `FOD_USE_FUSE_CONTEXT=1` | Zmienna środowiskowa | on | Używa per-request uid/gid/pid dla access, ACL, sticky-bit i operacji zależnych od właściciela zamiast credentiali procesu demona. |
-| `FOD_DEBUG=1` | Zmienna środowiskowa | off | Włącza debugowy tryb montowania jako domyślny. |
-| `FOD_LOG_LEVEL=DEBUG|INFO|...` | Zmienna środowiskowa | `INFO` | Steruje poziomem logowania. |
-| `FOD_CONFIG` | Zmienna środowiskowa | auto-detekcja | Wymusza konkretną ścieżkę do pliku konfiguracyjnego. Jeśli wskazuje na brakujący albo nieczytelny plik, FOD kończy pracę błędem zamiast robić fallback. |
-| `FOD_SELINUX_CONTEXT` | Zmienna środowiskowa | nieustawione | Ustawia opcję mount `context=` dla SELinux. |
-| `FOD_SELINUX_FSCONTEXT` | Zmienna środowiskowa | nieustawione | Ustawia opcję mount `fscontext=` dla SELinux. |
-| `FOD_SELINUX_DEFCONTEXT` | Zmienna środowiskowa | nieustawione | Ustawia opcję mount `defcontext=` dla SELinux. |
-| `FOD_SELINUX_ROOTCONTEXT` | Zmienna środowiskowa | nieustawione | Ustawia opcję mount `rootcontext=` dla SELinux. |
-| `FOD_DEFAULT_PERMISSIONS` | Zmienna środowiskowa | `1` | Steruje tym, czy domyślne checki uprawnień są przekazywane do FUSE. |
-| `FOD_ENTRY_TIMEOUT_SECONDS` | Zmienna środowiskowa | `0` | Steruje TTL cache wpisów katalogu w FUSE. |
-| `FOD_ATTR_TIMEOUT_SECONDS` | Zmienna środowiskowa | `0` | Steruje TTL cache atrybutów w FUSE. |
-| `FOD_NEGATIVE_TIMEOUT_SECONDS` | Zmienna środowiskowa | `0` | Steruje TTL cache negatywnych wpisów w FUSE. |
-| `FOD_SYNCHRONOUS_COMMIT` | Zmienna środowiskowa | `on` | Steruje `synchronous_commit` PostgreSQL dla każdego połączenia. |
-| `FOD_PG_VISIBLE_PATH` | Zmienna środowiskowa | nieustawione | Nadpisuje ścieżkę używaną do pomiaru widocznej dla PostgreSQL pojemności filesystemu dla `statfs()`. |
-| `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER`, `FOD_PG_PASSWORD` | Zmienna środowiskowa | nieustawione | Nadpisuje endpoint i dane logowania PostgreSQL z sekcji `[database]` bez edytowania pliku konfiguracyjnego. |
-| `FOD_PERSIST_BUFFER_CHUNK_BLOCKS` | Zmienna środowiskowa | `128` | Steruje liczbą dirty bloków pakowanych do jednego zapytania `persist_buffer()`. |
-| `FOD_PG_SSLMODE`, `FOD_PG_SSLROOTCERT`, `FOD_PG_SSLCERT`, `FOD_PG_SSLKEY` | Zmienna środowiskowa | nieustawione | Nadpisuje parametry TLS połączenia do PostgreSQL. |
-
-### Plik konfiguracyjny
-
-`fod_config.ini` powinien zawierać sekcję `[database]` z parametrami połączenia do PostgreSQL:
-
-- `host`
-- `port`
-- `dbname`
-- `user`
-- `password`
-- `sslmode` dla szyfrowanego połączenia PostgreSQL, na przykład `require` albo `verify-full`
-- `sslrootcert` dla certyfikatu CA używanego do weryfikacji serwera
-- `sslcert` i `sslkey` dla opcjonalnej autoryzacji certyfikatem klienta
-
-Może też zawierać sekcję `[fod]` z:
-
-- `pool_max_connections`
-- `write_flush_threshold_bytes`
-- `read_cache_blocks`
-- `read_ahead_blocks`
-- `sequential_read_ahead_blocks`
-- `small_file_read_threshold_blocks`
-- `workers_read`
-- `workers_read_min_blocks`
-- `workers_write`
-- `workers_write_min_blocks`
-- `persist_buffer_chunk_blocks`
-- `max_fs_size_bytes`
-- `pg_visible_path`
-- `copy_dedupe_enabled`
-- `copy_dedupe_min_blocks`
-- `copy_dedupe_max_blocks`
-- `copy_dedupe_crc_table`
-- `metadata_cache_ttl_seconds`
-- `statfs_cache_ttl_seconds`
-- `lock_lease_ttl_seconds`
-- `lock_heartbeat_interval_seconds`
-- `lock_poll_interval_seconds`
-- `synchronous_commit`
-
-Dla zdalnego PostgreSQL można zostawić lokalny plik konfiguracyjny i nadpisać połączenie w czasie uruchomienia przez `FOD_PG_HOST`, `FOD_PG_PORT`, `FOD_PG_DBNAME`, `FOD_PG_USER` i `FOD_PG_PASSWORD`. Targety `make init-qnap` i `make mount-qnap` ustawiają te zmienne dla domyślnego presetu QNAP.
-
-Jeśli Docker działa na QNAP-ie przez zdalny daemon, ustaw `QNAP=1` dla targetow Compose albo użyj wrapperów `qnap-*`. To kieruje `docker compose` na `tcp://192.168.1.11:2376` z TLS i przełącza host oraz dane PostgreSQL na preset QNAP. W razie potrzeby nadpisz `QNAP_DOCKER_HOST`, `QNAP_DOCKER_TLS_VERIFY`, `QNAP_DOCKER_CERT_PATH`, `QNAP_PG_HOST`, `QNAP_PG_PORT`, `QNAP_PG_DBNAME`, `QNAP_PG_USER` i `QNAP_PG_PASSWORD`.
-
-Kanoniczne reguły zakresów dla wartości runtime są w [`rust_runtime/src/lib.rs`](/media/wojtek/virtdata/home/wojtek/git/fod/rust_runtime/src/lib.rs); ta lista jest tylko skrótem dla czytelnika. `pool_max_connections` musi być większe od zera, bo ustawia limit połączeń w puli PostgreSQL.
-
-### Narzędzie do tworzenia schematu
-
-`mkfs.fod` obsługuje:
-
-`init` stosuje świeży bootstrap z `migrations/base_schema.sql` do dedykowanego schematu `fod` i odmawia działania, jeśli obiekty FOD już istnieją; `upgrade` najpierw weryfikuje hasło schema-admin, a potem stosuje brakujące migracje do istniejącego schematu `fod`; `clean` usuwa cały schemat `fod` i zostawia obce obiekty w `public` nietknięte. `clean` weryfikuje istniejący sekret schema-admin i zamiast go odtwarzać kończy się błędem, jeśli tabela lub wpis sekretu zniknęły. Narzędzie schematu używa jednego jawnego źródła hasła administracyjnego schematu: `--schema-admin-password`. Jeśli hasła brakuje, `init`, `upgrade` i `clean` kończą się natychmiast, bez promptu i bez ukrytej generacji sekretu. `mkfs.fod status` pokazuje `FOD version`, `FOD schema name`, `FOD schema version`, aktywny schemat, to czy obiekty FOD istnieją, to czy schemat jest gotowy, oraz zaległe migracje, bez ujawniania samego sekretu. Bieżąca wersja schematu jest eksportowana przez `mkfs.fod status`; wersja 17 przeniosła własność payloadu do `data_objects`, wersja 18 dodała transakcyjne rezerwacje pojemności payloadu, wersja 19 dodała niezmienne snapshoty katalogu indexera, a wersje 20-21 rezerwują i finalizują kanoniczny układ block-only.
-
-| Parametr | Typ | Domyślnie | Efekt |
-| --- | --- | --- | --- |
-| `init` | akcja | wymagane | Stosuje `migrations/base_schema.sql`, żeby utworzyć świeży schemat FOD w `fod`; odmawia działania, jeśli obiekty FOD już istnieją. |
-| `upgrade` | akcja | wymagane | Najpierw weryfikuje hasło schema-admin, a potem stosuje brakujące migracje do istniejącego schematu `fod` i przywraca `schema_version` do wersji kodu. |
-| `clean` | akcja | wymagane | Usuwa cały schemat `fod`; obce obiekty w `public` zostają nietknięte. |
-| `--block-size N` | CLI | `4096` | Ustawia domyślny rozmiar bloku używany przy inicjalizacji schematu. |
-| `--schema-admin-password PASS` | CLI | generowane przy pierwszym `init`/`upgrade` | Sekret narzędzia schematu zapisany w bazie i wymagany przy późniejszych wywołaniach `init` / `upgrade` / `clean` na istniejącej bazie. |
-| `--generate-client-tls-pair 1` | CLI | wyłączone | Generuje lokalną parę certyfikat/klucz TLS PostgreSQL podczas `init` lub `upgrade`. Użyj `0`, żeby wyłączyć jawnie. |
-| `--tls-material-dir PATH` | CLI | `.fod/tls` | Ustawia katalog dla wygenerowanych materiałów TLS PostgreSQL. |
-| `--tls-common-name NAME` | CLI | `fod` | Ustawia common name dla wygenerowanych materiałów TLS. Dozwolone znaki: litery ASCII, cyfry, kropka, podkreślenie i myślnik. |
-| `--tls-cert-days N` | CLI | `365` | Ustawia czas ważności wygenerowanych materiałów TLS. |
-
-## Docker Lab
-
-Dla lokalnego backendu PostgreSQL:
-
-```bash
-# lokalny Docker:
-make up
-make init
-make smoke
-make mount
-# w drugim terminalu:
-make unmount
-
-# Docker na QNAP:
-make qnap-config-show
-make qnap-up
-make qnap-init
-make qnap-smoke
-make qnap-mount
-
-# demo w jednym kroku:
-make demo
-
-# test integracyjny:
-make test-integration
-
-# autodetekcja roli:
-make test-role-autodetect
-
-# pełny lokalny check:
-make test-all
-
-# rozszerzony pełny lokalny check:
-make test-all-full
-```
-
-Osobne targety są rozdzielone tak, żeby można było odpalać tylko interesujący obszar:
-
-- `make test-files`
-- `make test-block-read`
-- `make test-directories`
-- `make test-metadata`
-- `make test-symlink`
-- `make test-destroy`
-- `make test-locking`
-- `make test-permissions`
-- `make test-hardlink`
-- `make test-fallocate`
-- `make test-copy-file-range`
-- `make test-ioctl`
-- `make test-mknod`
-- `make test-lseek`
-- `make test-poll`
-- `make test-utimens-noop`
-- `make test-timestamp-touch-once`
-- `make test-read-ahead-sequence`
-- `make test-read-cache-benchmark`
-- `make test-runtime-config`
-- `make test-runtime-validation`
-- `make test-mkfs-pg-tls`
-- `make test-metadata-cache`
-- `make test-runtime-profile`
-- `make test-schema-upgrade`
-- `make test-schema-status`
-- `make test-access-groups`
-- `make test-inode-model`
-- `make test-ownership-inheritance`
-- `make test-statfs-use-ino`
-- `make test-atime-noatime`
-- `make test-atime-relatime`
-- `make test-pool-connections`
-- `make test-mount-suite`
-- `make test-all-full`
-
-## Helper montowania
-
-Jeśli chcesz, żeby FOD działał jak helper `mount.fod`, zainstaluj skrypt do katalogu z `PATH`:
-
-```bash
-sudo install -m 755 mount.fod /usr/local/sbin/mount.fod
-```
-
-To samo możesz zrobić przez:
-
-```bash
-make install-mount-helper
-```
-
-Potem możesz montować FOD tak:
-
-```bash
-mount.fod /mnt/fod
-```
-
-Opcje specyficzne dla FOD możesz przekazać przez `-o`, na przykład:
-
-```bash
-mount.fod /mnt/fod -o role=auto,selinux=off,acl=off,default_permissions
-```
-
-Jeśli chcesz, żeby mount był widoczny także dla innych użytkowników niż właściciel mounta, dodaj `allow_other` i upewnij się, że `/etc/fuse.conf` zawiera `user_allow_other`. Bez tego FUSE nie pozwoli FOD wystawić mounta innym użytkownikom, nawet jeśli sam filesystem jest zapisywalny.
-
-Jeśli potrzebujesz własnego pliku konfiguracyjnego, ustaw `FOD_CONFIG` przed uruchomieniem helpera:
-
-```bash
-FOD_CONFIG=/ścieżka/do/fod_config.ini mount.fod /mnt/fod
-```
-
-Co sprawdzają testy:
-
-- `make test-files` sprawdza create/write/truncate/rename/unlink.
-- `make test-directories` sprawdza mkdir/rmdir/rename/stat/ls na drzewach katalogów oraz potwierdza, że `unlink()` na katalogu kończy się `EPERM`.
-- `make test-metadata` sprawdza stat, chmod, chown, read, write, touch, truncate, access, stabilne raportowanie `st_dev` oraz aktualizacje `ctime`/`mtime`/`atime` przy zmianach metadanych, w tym jawne semantyki `touch -a` i `touch -m` oraz no-op `truncate` dla niezmienionego rozmiaru.
-- `make test-write-noop` sprawdza, że zero-length `write()` jest no-op i nie podbija `ctime`, `mtime` ani rozmiaru pliku.
-- `make test-symlink` sprawdza `ln -s`, `readlink`, `cat` przez symlink, `mv` na samym symlinku oraz przypadek osieroconego symlinka po usunięciu targetu. Test pokazuje też uszkodzony link przez `ls -al` na samej ścieżce symlinka.
-- `make test-destroy` sprawdza, że `destroy()` flushuje bufory i zostawia dane trwałe dla nowej instancji FOD.
-- `make test-journal` sprawdza, że journal zapisuje główne operacje mutujące w kolejności i przechowuje aktualny uid procesu.
-- `make test-locking` sprawdza semantykę locków i zachowanie własności, w tym konflikty zakresów, współistnienie shared locków i czyszczenie po unlock.
-- `make test-pg-lock-manager` sprawdza produkcyjny backend locków oparty o PostgreSQL z TTL i heartbeat, w tym regresję dla dwóch klientów piszących do tego samego pliku oraz Rust smoke coverage dla dwóch primary mountów i repliki.
-- `make test-permissions` sprawdza egzekwowanie sticky bit przy `unlink`/`rmdir`, odrzucanie `chmod` na symlinkach, root-only `chown` na symlinkach, sprawdzanie właściciela/roota plus `chown` z uwzględnieniem grup dodatkowych, traktowanie `chown(-1, -1)` jako no-op, traktowanie `chown` z niezmienioną własnością jako no-op zarówno na plikach, jak i katalogach, traktowanie `chmod` z niezmienionym trybem jako no-op zarówno na plikach, jak i katalogach, zdejmowanie `setuid`/`setgid` przy zmianie własności zwykłych plików oraz zachowanie `setgid` na katalogach przy jednoczesnym zdejmowaniu `setuid` po zmianie własności.
-- `make test-utimens-noop` sprawdza, że `utimens` z niezmienionymi timestampami jest no-op i nie podbija `ctime` zarówno na zwykłych plikach, jak i katalogach.
-- Uwagi zgodności z `pjdfstest`: FOD zostawia `unlink()` na katalogach jako `EPERM`, zachowuje bit `setgid` katalogów przy zmianach własności i traktuje przypadki brzegowe `utimens` oraz zmian własności zgodnie z zachowaniem Linux/POSIX widocznym w tym zestawie testów.
-- `make test-hardlink` sprawdza tworzenie hardlinków, rename i zachowanie link count przez backend.
-- `make test-fallocate` sprawdza preallocation i wzrost wypełniony zerami przez backend.
-- `make test-copy-file-range` sprawdza kopiowanie danych z offsetami przez backend.
-- `make test-ioctl` sprawdza wsparcie `FIONREAD` przez backend.
-- `make test-mknod` sprawdza tworzenie FIFO i char-device oraz raportowanie `stat` typu i `rdev`. `open` dla special node'ów nadal jest unsupported.
-- `make test-lseek` sprawdza backendowy seek helper dla `SEEK_SET`, `SEEK_CUR` i `SEEK_END`.
-- `make test-poll` sprawdza backendowy poll helper dla plików regularnych.
-- `make test-access-groups` sprawdza `access()` dla właściciela, grupy podstawowej i grup dodatkowych.
-- `make test-inode-model` sprawdza, że `st_ino` przeżywa rename i restart FOD dla katalogów, plików, hardlinków i symlinków.
-- Model inode używa trwałych `inode_seed`, a zapytania ścieżki krytycznej są oparte o `UNION ALL` oraz indeksy na `hardlinks.id_file` i `data_blocks(data_object_id, _order)`.
-- `make test-ownership-inheritance` sprawdza, że `chmod`/`chown` na katalogu z `setgid` powoduje dziedziczenie `gid` przez nowe dzieci, a `rename` zachowuje metadane źródła i `mkdir` propaguje `setgid` do nowych podkatalogów.
-- `make test-rename-root-conflict` sprawdza replace semantics dla plików i katalogów oraz edge-case'y dla `rename` na root.
-- `make test-statfs-use-ino` sprawdza, przez mały shell smoke, że inode widoczne na mountcie zgadzają się z backendem, a `statvfs()` zwraca te same wartości filesystemowe co backendowy helper `statfs()`.
-- `make test-mount-root-permissions` sprawdza świeży mount root oraz zachowanie chmod/chown/write dla katalogu na nowo zamontowanym filesystemie.
-- `make test-atime-noatime` sprawdza zachowanie `atime` FOD w trybie `noatime` i potwierdza, że odczyt nie podnosi `atime`.
-- `make test-atime-relatime` sprawdza zachowanie `atime` FOD w trybie `relatime` i potwierdza, że stary `atime` aktualizuje się po odczycie.
-- `make test-timestamp-touch-once` sprawdza relatime-style one-touch dla pliku i katalogu, potwierdzając, że pierwszy stary odczyt/listing podnosi `atime`, a drugi już nie.
-- `make test-atime-benchmark` wypisuje krótki baseline wall-time dla zachowania `atime` FOD na odczytach plików i listowaniu katalogów, żeby porównać uruchomienia `default`, `noatime` i `nodiratime` bez długiej pętli smoke.
-- `make test-pool-connections` sprawdza, że FOD startuje pulę PostgreSQL z ustawionym limitem połączeń.
-- `make test-mount-suite` to główny Pythonowy mount smoke suite; obejmuje pliki, katalogi, metadane, access modes, symlinki, `ioctl/FIONREAD`, `read`-driven `atime` dla plików, runtime-off dla ACL/SELinux, SELinux-on gdy jest włączony, `df` i tryb read-only dla repliki.
-- `make test-throughput` uruchamia prosty benchmark `dd if=/dev/zero` na zamontowanym FOD i wypisuje czas oraz MiB/s.
-- `make test-throughput-sync` to wariant z `conv=fsync`.
-- `make test-large-copy-benchmark` mierzy duży transfer `copy_file_range()` przez backend i wypisuje czas oraz MiB/s.
-- `make test-large-file-multiblock-benchmark` mierzy duży zapis wieloblokowego pliku i wypisuje czasy write/persist/flush.
-- `make test-remount-durability-benchmark` sprawdza, że dane przeżywają cykl stop/remount/reopen i wypisuje czas round-trip.
-- `make test-tree-scale` benchmarkuje `getattr` i `readdir` na większym, zasilonym drzewie i pokazuje czasy `ls`/`find`.
-- `make test-flush-release-profile` sprawdza, że czyste `flush()` / `release()` są tanie, a dirty flush persystuje dane dokładnie raz.
-- `make test-write-flush-threshold` sprawdza, że niski próg auto-flush potrafi wypchnąć dirty dane przed zamknięciem i że bufor nie zostaje dirty po zapisie.
-- `make test-all-full` rozszerza `make test-all` o workflow dla files/directories/metadata/symlink, shellowy smoke `statfs/use_ino`, mount workflow, oba smoke profile `atime` i benchmark throughput.
-
-`make test-all` zawiera check xattr/SELinux/trusted/ACL oraz złożony mount smoke suite.
-Mount repliki można wymusić przez `--role replica`. Domyślne `--role auto` wykrywa replikę przez `pg_is_in_recovery()` i montuje filesystem jako read-only. Jeśli chcesz tylko mount read-only bez zmiany roli na replikę, użyj `-o ro`.
-
-Aktualne baseline'y porównawcze dla throughput, dużego copy, dużych wieloblokowych plików, durability po remount, read cache i zachowania `atime` są zapisane w [BENCHMARKS.md](BENCHMARKS.md). Na tym hoście uruchomienie `THROUGHPUT_SYNC=1` pozostało w podobnym zakresie wydajności jak wariant bez `fsync`, a największy batch był minimalnie lepszy, więc `synchronous_commit` zostaje knobem strojenia, a nie domyślną rekomendacją dla wszystkich workloadów. Porównanie `bulk_write` vs `metadata_heavy` dla dużego copy jest już baseline'em, a Rust POC w `rust_hotpath/` obejmuje teraz copy planner, helper changed-copy dedupe i changed-run packer; historyczne wzmianki o Pythonie w tych porównaniach są zachowane wyłącznie jako baseline'e migracyjne.
-
-## Opcje runtime
-
-Jeśli potrzebujesz `allow_other`, uruchom mount z `FOD_ALLOW_OTHER=1`, ale tylko wtedy, gdy `/etc/fuse.conf` na to pozwala.
-W `/etc/fod/fod_config.ini` można też dodać sekcję `[fod]` z `pool_max_connections = N`, żeby ograniczyć budżet połączeń PostgreSQL używany przez cache'owane połączenia runtime. Ta sama sekcja może także ustawiać domyślne parametry storage/read, takie jak `write_flush_threshold_bytes`, `max_fs_size_bytes`, `read_cache_blocks`, `read_ahead_blocks`, `sequential_read_ahead_blocks`, `small_file_read_threshold_blocks`, `metadata_cache_ttl_seconds` i `statfs_cache_ttl_seconds`. `max_fs_size_bytes` przyjmuje zwykłe bajty albo binarne rozmiary typu `50GiB` czy `1TiB`, a `pg_visible_path` pozwala wskazać ścieżkę, którą PostgreSQL faktycznie widzi na dysku, żeby `statfs()` mógł ograniczyć raportowany rozmiar do rzeczywistego. Jeśli tego pliku nie ma, FOD użyje `fod_config.ini` z katalogu projektu.
-Ta sama sekcja może też ustawiać parametry wielowątkowości dla większych odczytów i kopiowania, takie jak `workers_read`, `workers_read_min_blocks`, `workers_write` i `workers_write_min_blocks`, oraz `persist_buffer_chunk_blocks`, które decyduje o wielkości paczek flushu. `persist_block_transport` wybiera sposób zapisu bloków: `copy_binary_staging` (domyślnie), `binary_bytea` albo `legacy_hex`. `workers_read` jest używane tylko wtedy, gdy brakujące bloki w odczycie dzielą się na kilka rozłącznych zakresów, a `workers_write` tylko wtedy, gdy kopiowanie można podzielić na kilka segmentów źródłowych. `block_size` nadal ma znaczenie, bo heurystyki workerów działają na blokach, a nie na surowych bajtach, więc mniejszy albo większy blok zmienia moment, w którym wielowątkowość zaczyna mieć sens, ale nie oznacza automatycznie "4 KiB = jeden wątek". Dla powtarzanych kopii typu rsync można też włączyć `copy_dedupe_enabled`, żeby porównywać bloki docelowe i pomijać niezmienione zakresy podczas `copy_file_range()`. `copy_dedupe_min_blocks` jest dolną bramką, `copy_dedupe_max_blocks` opcjonalnym górnym limitem dla bardzo dużych plików, a `copy_dedupe_crc_table` może przy tym utrzymywać tabelę CRC w PostgreSQL i uzupełniać ją lazy podczas porównań. Knoby dedupe zostają domyślnie wyłączone, jeśli nie wiesz, że workload faktycznie na tym korzysta. `lock_heartbeat_interval_seconds` steruje odświeżaniem lease'ów locków PostgreSQL. Heartbeat `client_sessions` jest osobny, korzysta z interwalu `FOD_MONITOR_PUBLISH_INTERVAL_MS`, a TTL sesji wynosi `max(30 s, 3 * publish_interval)` i nie zalezy od `lock_lease_ttl_seconds`. Gdy martwy `client_sessions` zostanie usunięty, trigger w PostgreSQL czyści lock leases i range leases dla jego `owner_key`'ów. Może też ustawiać `synchronous_commit`, żeby sterować trwałością sesji PostgreSQL dla każdego połączenia; dozwolone wartości to `on`, `off`, `local`, `remote_write` i `remote_apply`.
-O ile nie zaznaczono inaczej, numeryczne parametry runtime są nieujemne; `0` wyłącza odpowiedni cache albo limit tam, gdzie kod to obsługuje. `lock_lease_ttl_seconds`, `lock_heartbeat_interval_seconds`, `lock_poll_interval_seconds` i `persist_buffer_chunk_blocks` muszą być większe od zera. `max_fs_size_bytes` przyjmuje dodatni rozmiar albo może zostać pominięty, jeśli filesystem ma działać bez limitu.
-Przy starcie mounta FOD loguje aktywny profil runtime, `FOD version`, `FOD schema name`, `FOD schema version`, ustawienia PostgreSQL TLS, trwałość sesji PostgreSQL (`synchronous_commit`), strojenie storage, opcje mounta i backend locków, żebyś mógł sprawdzić aktywną konfigurację bez zgadywania, które domyślne wartości zostały użyte.
-Jeśli chcesz gotowy preset produkcyjny, ustaw `FOD_PROFILE=bulk_write`, `FOD_PROFILE=metadata_heavy` albo `FOD_PROFILE=pg_locking` przed mountem. Wybrany profil nadpisuje bazowe wartości z `[fod]` w `fod_config.ini`.
-Profil możesz też podać jawnie jako `--profile bulk_write` do `fod-bootstrap` albo jako `-o profile=bulk_write` do `mount.fod`.
-Ta sama zmienna `FOD_PROFILE` działa też z `make mount`, `make mount-user` i `make demo`.
-Do dynamicznego strojenia użyj `make change-runtime-list`, `make change-runtime-get` i `make change-runtime-set`, które korzystają z `fod.change`; target `change-runtime-set` oczekuje `FOD_CHANGE_KEY`, `FOD_CHANGE_VALUE` i `FOD_CHANGE_PASSWORD`.
-Jeśli zmieniłeś tylko reloadowalne parametry w `fod_config.ini`, użyj `make reload-runtime` (albo aliasu `make change-runtime-sync`), aby przepchnąć bieżący config do działającego mounta przez `fod.change` bez remountu; target sync nie potrzebuje hasła schema-admin, bo tylko odtwarza reloadowalny snapshot z bieżącego configu.
-Na writable primary FOD używa backendu locków PostgreSQL lease, a każdy mount read-only, także `--role replica` albo `-o ro`, przełącza się na backend pamięciowy, bo mount i tak jest tylko do odczytu. Testy locków sprawdzają zarówno konflikt między dwoma primary mountami, jak i rozdzielenie primary/replica na tej samej bazie.
-
-Wsparcie xattr dla SELinux jest sterowane przez `--selinux auto|on|off` albo `FOD_SELINUX=auto|on|off`.
-Domyślnie jest `off`. `on` wymusza ścieżkę xattr SELinux po stronie FOD, a `auto` używa wykrywania po stronie hosta, ale kernel i polityka SELinux nadal decydują, czy żądania `security.selinux` zostaną przekazane do FOD.
-Wsparcie POSIX ACL jest sterowane przez `--acl on|off` albo `FOD_ACL=on|off`.
-Domyślnie jest `off`.
-Przy starcie FOD loguje efektywny profil runtime, wersję schematu, ustawienia TLS PostgreSQL, trwałość sesji PostgreSQL (`synchronous_commit`), tuning storage, opcje mounta i backend locków, więc można łatwo sprawdzić, jakie wartości faktycznie zostały zastosowane.
-`FOD_WRITE_FLUSH_THRESHOLD_BYTES` steruje tym, ile dirty danych może się zebrać, zanim FOD auto-persystuje duży bufor podczas `write()`, `truncate()`, `fallocate()` albo `copy_file_range()`. Domyślna wartość to `67108864` bajtów.
-`metadata_cache_ttl_seconds` steruje krótkim cache TTL dla odczytów metadanych `getattr()` i `readdir()`. Domyślna wartość to `1` sekunda.
-`statfs_cache_ttl_seconds` steruje krótkim cache TTL dla `statfs()`. Domyślna wartość to `2` sekundy.
-`FOD_METADATA_CACHE_TTL_SECONDS` i `FOD_STATFS_CACHE_TTL_SECONDS` nadpisują odpowiednie wartości z `fod_config.ini`, jeśli chcesz stroić te cache per środowisko.
-`FOD_PROFILE` wybiera nazwany profil runtime z `fod_config.ini`, na przykład `bulk_write`, `metadata_heavy` albo `pg_locking`.
-`FOD_ATIME_POLICY` jest wewnętrznym przełącznikiem FOD, a nie surową opcją mounta FUSE. Steruje tym, kiedy FOD aktualizuje `atime` w swoim własnym read path; `noatime`, `nodiratime`, `relatime` i `strictatime` są obsługiwane wewnętrznie i nie są przekazywane do frontendu mounta.
-Dla jednego uchwytu FOD zapisuje `access_date` tylko raz, aby nie przepisywać ciągle tego samego rekordu podczas pojedynczej sekwencji open/read lub open/readdir. Kolejne dotknięcia są pomijane aż do zwolnienia uchwytu.
-Ten sam model dotyczy też zapisu `mtime`/`ctime`: wiele zapisów na tym samym otwartym pliku aktualizuje te znaczniki dopiero przy persystencji dirty bufora, a nie przy każdym pośrednim wywołaniu `write()`.
-Cache odczytu można ustawić przez `FOD_READ_CACHE_EVICTION_POLICY`; obecny domyślny wariant to FIFO, a sekwencyjne odczyty automatycznie zwiększają read-ahead, dzięki czemu sąsiednie odczyty częściej trafiają w prefetche zamiast ponownie walić w PostgreSQL.
-
-### Dockerowy lab SELinux/ACL
-
-Do pracy z uprawnieniami i xattrami, gdy potrzebujesz razem `FOD_USE_FUSE_CONTEXT=1`, `--acl on` i `--selinux on`, użyj opcjonalnego stacka `docker-compose.selinux-acl.yml` oraz serwisu `fod-selinux-acl`. `make docker-selinux-acl-up` uruchamia lab, a `make docker-selinux-acl-shell` otwiera shell w kontenerze, żeby można było tam uruchamiać mounty i smoke testy.
-`make docker-selinux-acl-smoke` uruchamia w tym kontenerze zestaw smoke: identyfikację kontekstu FUSE, xattr SELinux/ACL oraz test root-owned permissions. Lab montuje `docker/selinux-acl/fod_config.ini` nad repo root configiem, żeby testy w kontenerze łączyły się do compose'owego `postgres`, a nie do localhosta hosta.
-Ten lab nadal wymaga hosta/runtime, które wspierają etykiety SELinux; Docker nie włączy SELinux, jeśli kernel ma go wyłączonego.
-
-## Backup i restore
-
-Backup i restore FOD to w praktyce backup i restore PostgreSQL.
-
-1. Użyj `pg_dump` / `pg_dumpall` albo standardowych narzędzi backupu PostgreSQL.
-1. Odtwarzaj do instancji PostgreSQL zgodnej z wersją schematu FOD.
-1. Po restore możesz uruchomić `make test-schema-upgrade`, żeby szybko sprawdzić bezpieczeństwo `init` i naprawę wersji schematu.
-1. Trzymaj dump bazy i użyty profil `fod_config.ini` razem, żeby restore wrócił do tego samego baseline strojenia.
-
-Opcje widoczne w mount:
-
-- `--default-permissions` jest włączone domyślnie; wyłącz przez `--no-default-permissions`, jeśli chcesz tylko checks FUSE.
-- Zachowanie `atime` FOD można wybrać przez `--atime-policy default|noatime|nodiratime|relatime|strictatime`.
-- `noatime` wyłącza aktualizację `atime` dla odczytów plików i listowania katalogów; `nodiratime` wyłącza aktualizację `atime` katalogów, ale zostawia aktualizację `atime` plików.
-- Dostępne są też `--lazytime`, `--sync` i `--dirsync`.
-- Label SELinux można podać przez `FOD_SELINUX_CONTEXT`, `FOD_SELINUX_FSCONTEXT`, `FOD_SELINUX_DEFCONTEXT` i `FOD_SELINUX_ROOTCONTEXT`; host może jednak odrzucić te opcje dla zwykłego FUSE.
-- Ustaw `FOD_LOG_LEVEL=DEBUG`, jeśli chcesz pełne diagnostyczne tracebacki; domyślnie jest `INFO`, więc oczekiwane przypadki `ENODATA` nie będą zaśmiecały logów.
-- `--acl on` jest wymagane, jeśli chcesz egzekwować ACL podczas runtime; inaczej xattr ACL pozostają nieaktywne.
-- `--selinux on` lub `--selinux auto` jest wymagane, jeśli chcesz aktywować handler `security.selinux` po stronie FOD; inaczej xattr SELinux pozostają nieaktywne w FOD. To nie omija hostowych decyzji FUSE/SELinux.
-- `make test-mount-suite` zawiera zarówno smoke dla SELinux-off, jak i SELinux-on; przypadek SELinux-on jest pomijany automatycznie, jeśli mount nie startuje z `FOD_SELINUX=on|auto`.
-- `make rocky-selinux-test-operational` sprawdza wspierany model Rocky Linux 10.2: zawartość FOD ma label `fusefs_t`, a egzekwowanie SELinux jest potwierdzane przez realną domenę konsumenta `httpd_t`. `make remote-rocky-selinux-test-operational` uruchamia ten sam dowód przez SSH.
-- `make rocky-selinux-test-strict` pozostaje ścisłą diagnostyką realnego per-inode `security.selinux` xattr. Na przetestowanym zwykłym FUSE Rocky Linux 10.2 kończy się hostowym `ENOTSUP`, zanim `FUSE_SETXATTR` dotrze do FOD.
-- Na Rocky Linux 10.2 polityka SELinux klasyfikuje zwykłe FUSE przez `genfscon fuse / ... fusefs_t`, a nie przez `fs_use_xattr`; FOD wspiera więc operational enforcement (egzekwowanie operacyjne) przez `fusefs_t` i politykę domen, nie per-file relabeling (etykietowanie per plik) na tym stosie mounta.
-- Szczegółowa definicja wsparcia Rocky, porównanie z XFS/ext4 oraz granica `FUSE_SETXATTR` są opisane w [`docs/FOD_3_3_22_ROCKY_SELINUX.md`](docs/FOD_3_3_22_ROCKY_SELINUX.md).
-- `mknod` tworzy FIFO i char device metadata; `st_rdev` i `st_dev` są raportowane, ale `open` dla special node'ów nadal jest unsupported.
-- `system.posix_acl_*` działa dla access ACL i default ACL inheritance; backend zapisuje, propaguje i egzekwuje ACL.
-- `poll` działa przez Rustowy frontend mounta dla zwykłych plików.
-
-## Troubleshooting
-
-- Zacznij od `mkfs.fod status`, żeby zobaczyć, czy sekret administracyjny schematu jest obecny i czy FOD jest gotowy.
-- Jeśli `mkfs.fod init` kończy się błędem, sprawdź czy PostgreSQL działa i czy dane w `fod_config.ini` zgadzają się z serwerem.
-- Jeśli montowanie kończy się `fod schema is not initialized`, uruchom najpierw `make init`; dla operacji `mkfs.fod` zawsze podawaj `--schema-admin-password`.
-- Jeśli montowanie kończy się `fod schema version mismatch`, uruchom `mkfs.fod upgrade` z sekretem administracyjnym schematu, żeby schemat `fod` zgadzał się z kodem.
-- Przy udanym starcie mounta FOD loguje `FOD version=<release> FOD schema name=fod FOD schema version=<db> initialized=<bool>`, więc możesz od razu potwierdzić zgodność wersji przed użyciem mounta.
-- Jeśli montowanie kończy się `ENOTCONN` albo błędem połączenia, uruchom najpierw `make smoke`, żeby potwierdzić łączność z bazą.
-- Jeśli brakuje `fusermount3`, spróbuj `fusermount` albo doinstaluj narzędzia userspace FUSE dla swojej dystrybucji.
-- Jeśli `allow_other` jest ignorowane albo inni użytkownicy nie widzą mounta, sprawdź `/etc/fuse.conf` i upewnij się, że `user_allow_other` jest włączone.
-- Jeśli ACL albo SELinux wyglądają na nieaktywne, upewnij się, że mount został uruchomiony z `--acl on` albo `--selinux on|auto`.
-
-## Rekomendowane profile mounta
-
-| Profil | Zastosowanie | Kluczowe opcje |
-| --- | --- | --- |
-| `fod-relaxed` | Lokalny dev i smoke testy | `--no-default-permissions`, `FOD_ACL=off`, `FOD_SELINUX=off`, `--atime-policy default` |
-| `fod-linux-default` | Najbliżej typowego mounta Linuksa | `--default-permissions`, `FOD_ACL=off`, `FOD_SELINUX=off`, `--atime-policy relatime` |
-| `fod-selinux` | Środowiska z SELinux | `--default-permissions`, `FOD_ACL=on`, `FOD_SELINUX=auto` albo `on`; na Rocky Linux 10.2 zwykłe FUSE używa hostowego labela `fusefs_t` i polityki domen |
-
-## Rekomendowane workloady
-
-| Profil runtime | Dobry dla | Dlaczego |
-| --- | --- | --- |
-| `fod-relaxed` | Lokalny development, smoke runy i szybkie testy ręczne | Najmniej restrykcyjna polityka i najluźniejsza semantyka mounta. |
-| `fod-linux-default` | Mieszane workloady z zachowaniem zbliżonym do typowego mounta Linuksa | Zbalansowane ustawienia dla ACL-off, SELinux-off i zachowania podobnego do relatime. |
-| `bulk_write` | Duży ingest sekwencyjny, `copy_file_range()`, testy throughputu, durability po remount | Większe batchowanie flush i bardziej agresywne strojenie strony zapisu. |
-| `metadata_heavy` | `ls`, `find`, `stat`, przeglądanie głębokich drzew, operacje tylko na metadanych | Dłuższy TTL cache metadanych i bardziej zachowawcza presja na write path. |
-| `pg_locking` | Koordynacja wielu klientów i testy regresji locków | Strojenie backendu locków z krótszym poll interval do sprawdzania lease'ów. |
-
-## Antywzorce
-
-- Nie używaj `bulk_write` do nawigacji po metadanych albo pracy na wielu małych plikach; ten profil jest pod throughput, nie pod niską latencję namespace.
-- Nie używaj `metadata_heavy` do dużego sekwencyjnego ingestu albo `copy_file_range()`; ten profil jest świadomie bardziej zachowawczy po stronie zapisu.
-- Nie używaj `fod-relaxed` dla wieloużytkowych albo produkcyjnych mountów, gdzie potrzebujesz bardziej linuksowej semantyki uprawnień.
-- Nie traktuj `synchronous_commit=off` jako domyślnego ustawienia trwałości; stosuj je tylko wtedy, gdy workload akceptuje kompromis i benchmark pokazuje sens.
-- Nie oczekuj, że `pg_locking` sam poprawi throughput zapisu; ten profil dotyczy koordynacji i semantyki, a nie przyspieszania data path.
-## Historyczna Notatka Architektury
-
-Aktualny runtime jest w pełni Rustowy. Notatki poniżej są zachowane wyłącznie jako kontekst migracyjny i nie opisują aktywnej ścieżki fallback w Pythonie.
-
-- W erze Pythona bootstrap, `mkfs`, ładowanie configów i profili, callbacki FUSE, logika administracyjna, migracje schematu, testy integracyjne oraz warstwy polityk typu ACL/permissions/journal/runtime validation żyły w Pythonie.
-- Rust teraz odpowiada za runtime hot-path i core storage opisane wyżej.
-
-## Wielowątkowa pętla zdarzeń FUSE (FOD 3.2.58)
-
-`FOD_FUSE_EVENT_THREADS` ustala liczbę wątków obsługi żądań fuser. Domyślna
-wartość `1` zachowuje dotychczasowe działanie; dozwolony zakres to `1`–`256`.
-Limity admission większe od jednego działają rzeczywiście dopiero przy więcej
-niż jednym wątku pętli FUSE.
-
-`FOD_FUSE_CLONE_FD` może nadać każdemu wątkowi osobny sklonowany deskryptor
-`/dev/fuse`. Domyślnie opcja jest wyłączona. Benchmark używa ośmiu wątków FUSE
-i pozostawia klonowanie deskryptora wyłączone.
-
-## Macierz strojenia admission FUSE (FOD 3.2.59)
-
-`make test-fuse-admission-matrix` porównuje współbieżność pętli FUSE z limitami
-logicznego admission zapisu bez zmiany wartości domyślnych produkcji. Domyślna
-macierz obejmuje:
-
-- `FOD_FUSE_EVENT_THREADS`: `2`, `4`, `8`, `16`;
-- `FOD_TASK_WRITE_ACTIVE_LIMIT`: `0`, `1`, `2`, `4`, `8`;
-- trzy rotowane powtórzenia każdej komórki;
-- wyłączone klonowanie deskryptora FUSE.
-
-Raport zapisuje przepustowość dużego strumienia, medianę i p95 małych zapisów,
-współczynnik zmienności między przebiegami, szczyty kolejki i aktywności oraz
-zmiany względem konfiguracji bez limitu. Powstaje także ranking diagnostyczny.
-Ranking jest materiałem do późniejszej decyzji konfiguracyjnej; FOD 3.2.59 nie
-zmienia automatycznie wartości domyślnych runtime.
-
-## Test potwierdzający admission (FOD 3.2.60)
-
-`make test-fuse-admission-confirmation` wykonuje pomiar potwierdzający na większej
-próbie, bez zmiany wartości domyślnych runtime. Porównywane są dokładnie cztery
-konfiguracje:
-
-- 8 wątków FUSE, limit zapisu 4 — lider FOD 3.2.59;
-- 16 wątków FUSE, limit zapisu 4;
-- 4 wątki FUSE, limit zapisu 8;
-- 8 wątków FUSE, limit zapisu 0 — baza bez limitu dla tej samej liczby wątków.
-
-Każda konfiguracja jest domyślnie wykonywana dziesięć razy, ze zmienianą
-kolejnością i świeżym mountem. Następnie dla `8/4` wykonywane są trzy rzeczywiste
-testy fio sequential oraz trzy odpowiadające im pomiary strace. Raport ocenia
-ranking, zmianę przepustowości względem `8/0`, poprawę mediany i p95 małych
-zapisów oraz stabilność między przebiegami. Wynik wydajności jest zapisywany jako
-dowód, ale sam w sobie nie blokuje zapisania infrastruktury testowej.
-
-## Zalecana współbieżność FUSE (FOD 3.2.61)
-
-Konfiguracja trwała zawiera teraz kandydata potwierdzonego w FOD 3.2.60:
-
-```ini
-[fod]
-fuse_event_threads = 8
-fuse_clone_fd = false
-task_read_active_limit = 0
-task_write_active_limit = 4
-```
-
-Odpowiadające zmienne `FOD_*` pozostają nadpisaniami o wyższym priorytecie.
-Znaczenie parametrów, zakresy, kolejność nadpisywania, wyniki benchmarków oraz
-audyt env-vs-INI opisuje `docs/runtime-configuration.md`.
-
-## Walidacja telemetrii PostgreSQL
-
-FOD 3.2.62 dodaje szybki test telemetrii PostgreSQL dla produkcyjnego zestawu
-walidacyjnego:
-
-```bash
-make test-fuse-postgres-telemetry
-```
-
-Test używa tych samych eksportowanych parametrów `FOD_PG_*` co Makefile i
-runtime FOD, wykonuje snapshot `pg_stat_database` przed i po rzeczywistym
-sekwencyjnym obciążeniu FUSE i kończy się błędem, jeśli snapshotów nie można
-odczytać. Hasło PostgreSQL nigdy nie trafia do raportu.
-
-Kolejność dalszych prac po potwierdzeniu konfiguracji FUSE `8/4` znajduje się w
-`docs/fod-roadmap-3.2.62-plus.md`.
-
-## Dopuszczanie transakcji PostgreSQL
-
-FOD 3.2.63 dodaje procesowy limit dokładnie na granicy rzeczywistej transakcji
-PostgreSQL. Transakcje zapisu oraz transakcje sterujące/lease mają niezależne
-limity:
-
-```ini
-pg_write_transaction_limit = 4
-pg_control_transaction_limit = 2
-```
-
-Odpowiadające zmienne środowiskowe to `FOD_PG_WRITE_TRANSACTION_LIMIT` i
-`FOD_PG_CONTROL_TRANSACTION_LIMIT`. Wartość `0` wyłącza dany limit. Zezwolenie
-jest pobierane bezpośrednio przed `BEGIN` i zwalniane po `COMMIT`, `ROLLBACK`
-albo obsłudze błędu.
-
-## Budżet bajtów danych PostgreSQL
-
-FOD 3.2.64 dodaje globalny, procesowy budżet bajtów dla danych przekazywanych do
-operacji persist PostgreSQL:
-
-```ini
-pg_payload_in_flight_limit_bytes = 64MiB
-```
-
-Zmiana środowiskowa to `FOD_PG_PAYLOAD_IN_FLIGHT_LIMIT_BYTES`. Wartość `0`
-wyłącza ograniczenie. Żądania są dopuszczane kolejką FIFO z uwzględnieniem ich
-rozmiaru. Pojedyncze żądanie większe od limitu może wejść tylko wtedy, gdy nie
-ma innego zarezerwowanego payloadu, dzięki czemu taki przypadek nie powoduje
-zakleszczenia.
-
-FOD 3.2.64 wycisza również linie poleceń Makefile zawierające hasła PostgreSQL
-lub hasło administratora schematu. Kontrolę regresji wykonuje
-`make test-makefile-secret-echo-audit`.
-
-## Routing endpointów PostgreSQL zależny od roli
-
-FOD 3.2.65 uruchamia bezpieczny wybór endpointu podczas startu dla
-`primary_hosts` / `replica_hosts` albo odkrywanej listy `hosts`.
-
-Zapisywalny mount `primary` wybiera wyłącznie zdrowy, zweryfikowany zapisywalny
-primary. Mount `replica` wybiera zdrową rozpoznaną replikę. Tryb `auto`
-preferuje zapisywalny primary, a przy jego braku może wybrać zdrowy endpoint
-tylko do odczytu; snapshot startowy pozostawia wtedy cały mount read-only.
-
-Zapisywalny mount pozostaje w tej wersji przypięty do jednego wybranego primary,
-więc zwykłe odczyty nie trafiają na potencjalnie opóźnioną replikę i zachowana
-jest spójność odczytu po zapisie. Dynamiczne przełączenie podczas pracy mountu
-pozostaje następnym etapem.
-
-## Przełączanie primary PostgreSQL podczas pracy
-
-FOD 3.2.66 dodaje przełączanie podczas pracy pomiędzy skonfigurowanymi
-zapisywalnymi punktami wejścia PostgreSQL primary. Mechanizm jest przeznaczony
-dla punktów HA/proxy prowadzących do tego samego autorytatywnego primary/klastra
-PostgreSQL, a nie dla niezależnych węzłów multi-primary.
-
-Każde połączenie `DbRepo` ma generację routingu. Błąd połączenia kwalifikujący
-się do replay powoduje zmianę generacji i, gdy runtime failover jest włączony,
-przejście do następnego punktu primary. Połączenia z cache należące do starszej
-generacji są odrzucane i nie wracają do obsługi. Nowe połączenie jest ponownie
-sprawdzane: `pg_is_in_recovery() = false` oraz
-`transaction_read_only = false`.
-
-Dotychczasowy mechanizm potwierdzania replay nadal obsługuje niejednoznaczne
-przypadki utraty potwierdzenia COMMIT. Routing odczytów na repliki nie jest
-jeszcze włączony.
-
-## Odczyty z repliki chronione barierą WAL
-
-FOD 3.2.67 dodaje opcjonalny routing odczytów wymagających świeżych danych na
-zdrowe repliki PostgreSQL. Po poprawnej pracy na zapisywalnym primary FOD
-zapamiętuje `pg_current_wal_lsn()`. Replika może obsłużyć taki odczyt tylko,
-gdy `pg_last_wal_replay_lsn()` osiągnął co najmniej tę pozycję.
-
-Nieznana bariera, opóźnienie repliki, zła rola albo błąd odczytu powodują
-automatyczny fallback na primary. Zapisy, control/lease, potwierdzanie replay i
-ogólne zapytania diagnostyczne pozostają primary-only.
-
-```ini
-[fod]
-pg_replica_read_routing_enabled = true
-```
-
-Gwarancja read-after-write jest na tym etapie procesowa/sesyjna.
-
-## Jawne przypisanie pliku INI do każdego mounta
-
-FOD 3.2.68 wymaga jawnego wskazania pliku konfiguracyjnego przy każdym
-montowaniu. Dzięki temu jeden host może utrzymywać kilka niezależnych
-filesystemów FOD podłączonych do różnych instancji/klastrów PostgreSQL.
-
-Przykład:
-
-```bash
-mount.fod /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini
-mount.fod /mnt/fod.db02 -o ini=/etc/fod/fod.db02.ini
-```
-
-Przez systemowy `mount`:
-
-```bash
-mount -t fod none /mnt/fod.db01 -o ini=/etc/fod/fod.db01.ini,_netdev
-mount -t fod none /mnt/fod.db02 -o ini=/etc/fod/fod.db02.ini,_netdev
-```
-
-W `/etc/fstab`:
-
-```fstab
-none /mnt/fod.db01 fod ini=/etc/fod/fod.db01.ini,_netdev 0 0
-none /mnt/fod.db02 fod ini=/etc/fod/fod.db02.ini,_netdev 0 0
-```
-
-Po takim wpisie wystarczy `mount /mnt/fod.db01`.
-
-Ścieżka `ini=` musi być bezwzględna oraz wskazywać istniejący, czytelny zwykły
-plik. Dziedziczony `FOD_CONFIG` ani przypadkowy `./fod_config.ini` nie zastępują
-już opcji mounta. `config=` i `fod_config=` pozostają przejściowo jako jawne,
-ale przestarzałe aliasy.
-
-## Adaptacyjne ocenianie replik
-
-FOD 3.2.69 ocenia kandydatów na repliki bez osłabiania bariery WAL wprowadzonej
-w 3.2.67. Wynik uwzględnia:
-
-- obserwowane opóźnienie replay WAL;
-- EWMA czasu zestawienia/walidacji połączenia;
-- EWMA czasu poprawnych operacji odczytu;
-- karę za kolejne błędy danego endpointu.
-
-Replika pozostająca za wymaganą pozycją WAL nigdy nie obsłuży odczytu
-wymagającego świeżych danych. FOD zapisuje jej lag i może sprawdzić kolejną
-replikę; fallback na primary następuje dopiero, gdy nie uda się znaleźć
-bezpiecznej repliki.
-
-Mechanizm ogranicza również przełączanie tam i z powrotem:
-- mała poprawa wyniku nie przełącza repliki dzięki hysteresis (histerezie);
-- dwa kolejne błędy otwierają circuit breaker (wyłącznik awaryjny) na 5 sekund;
-- endpoint w cooldown jest pomijany;
-- jeżeli pula replik jest wyraźnie bardziej obciążona od puli primary, odczyt
-  może od razu wrócić na primary zamiast czekać w kolejce repliki.
-
-Scoring jest lokalny dla procesu i nie zastępuje walidacji roli PostgreSQL,
-kontroli replay WAL, zabezpieczeń promocji ani spójności globalnej pomiędzy
-wieloma procesami FOD.
-
-## Ochrona promocji primary
-
-FOD 3.2.70 dodaje mechanizm fail-closed chroniący zmianę aktywnego primary.
-FOD nadal sam nie promuje PostgreSQL. Promocja pozostaje zadaniem zewnętrznego
-systemu HA/fencing.
-
-Gdy runtime failover musi wybrać nowy zapisywalny endpoint, FOD skanuje
-skonfigurowane wejścia primary i odczytuje identyfikator klastra PostgreSQL z
-`pg_control_system().system_identifier`. Tworzony jest również fingerprint
-serwera z adresu/portu serwera i czasu startu postmastera.
-
-Przejście jest dozwolone tylko wtedy, gdy:
-- zapisywalny jest dokładnie jeden klaster PostgreSQL;
-- dla tego klastra istnieje dokładnie jedna odrębna tożsamość zapisywalnego
-  serwera;
-- aliasy/entrypointy HA prowadzące do tego samego serwera nie są błędnie
-  traktowane jako split brain.
-
-FOD zatrzymuje failover, gdy nie ma primary, pojawi się zapisywalny endpoint
-obcego klastra albo równocześnie dwa różne serwery są writable. Zmiana
-fingerprintu serwera za aktywnym entrypointem wymusza ponowny pełny skan przed
-zaakceptowaniem połączenia.
-
-Wspólna generacja routingu nadal unieważnia stare połączenia write/control/lease
-po zmianie primary. Mechanizm nie zastępuje zewnętrznego STONITH ani fencing
-opartego o konsensus: operacji już wykonywanej na starym primary FOD nie może
-cofnąć po fakcie.
-
-## Kanoniczna persystencja blokowa
-
-FOD przechowuje payload plików wyłącznie w kanonicznym układzie `data_blocks`. Runtime, konfiguracja, testy i narzędzia wydajnościowe obsługują tylko storage blokowy. Aktualizacja z wycofanych eksperymentalnych układów payloadu nie jest wspierana; taki schemat należy odtworzyć przez aktualne `mkfs.fod init`.
+- Uzycie niekomercyjne jest dozwolone.
+- Uzycie komercyjne wymaga oddzielnej pisemnej umowy.
+- Szczegoly: [`LICENSE`](LICENSE) i [`LICENSE-COMMERCIAL`](LICENSE-COMMERCIAL).

@@ -18,10 +18,10 @@ The production PostgreSQL image remains pinned to:
 ghcr.io/stachwk/postgres-16-fod-32k:16.15
 ```
 
-The normal Make interface pins the FOD client to the exact repository release. For FOD 3.4.5:
+The normal Make interface pins the FOD client to the exact repository release. For FOD 3.4.6:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.5
+ghcr.io/stachwk/fod-client:3.4.6
 ```
 
 The mutable `ghcr.io/stachwk/fod-client:3.4` tag remains a convenience series alias only. Override the exact image explicitly with `FOD_DOCKER_DEPLOY_CLIENT_IMAGE` when required.
@@ -122,7 +122,7 @@ make docker-deploy-systemd-smoke MASTERS=1 SLAVES=2
 make docker-deploy-systemd-restart MASTERS=1 SLAVES=2
 ```
 
-See `docs/DOCKER_SYSTEMD.md` for the complete host-boot contract and reboot acceptance test. See `docs/DOCKER_FOD_INSTALL.md` for the FOD/FUSE layer.
+See `docs/DOCKER_SYSTEMD.md` for the complete host-boot contract and reboot acceptance test. See `docs/DOCKER_FOD_INSTALL.md` for the FOD/FUSE layer. For day-2 operation and non-disruptive FOD upgrades, see `docs/OPERATIONS.md`.
 
 ## Policy checks
 

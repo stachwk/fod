@@ -4,10 +4,10 @@ The persistent FOD/FUSE client completes the Docker deployment on top of Postgre
 
 ## Exact release image
 
-The normal Make interface pins the client to the exact `fod_version.txt` release. For FOD 3.4.5:
+The normal Make interface pins the client to the exact `fod_version.txt` release. For FOD 3.4.6:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.5
+ghcr.io/stachwk/fod-client:3.4.6
 ```
 
 The series alias `ghcr.io/stachwk/fod-client:3.4` is retained for convenience but is not the default final deployment image. The historical transitional image `3.4.1-fuse1` remains immutable.
@@ -15,7 +15,7 @@ The series alias `ghcr.io/stachwk/fod-client:3.4` is retained for convenience bu
 Override explicitly when required:
 
 ```bash
-FOD_DOCKER_DEPLOY_CLIENT_IMAGE=ghcr.io/stachwk/fod-client:3.4.5 \
+FOD_DOCKER_DEPLOY_CLIENT_IMAGE=ghcr.io/stachwk/fod-client:3.4.6 \
   make docker-deploy-fod-install MASTERS=1 SLAVES=2
 ```
 
@@ -113,7 +113,7 @@ Healthy propagated rows have one unique FUSE `MAJ:MIN`, matching the device seen
 
 `docker-deploy-fod-down` removes the FOD container and propagated FUSE views while preserving the underlying shared host bind.
 
-## Publishing FOD 3.4.5
+## Publishing FOD 3.4.6
 
 ```bash
 make test-version
@@ -130,7 +130,7 @@ make docker-fod-client-publish
 The normal Make path builds/publishes:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.5
+ghcr.io/stachwk/fod-client:3.4.6
 ghcr.io/stachwk/fod-client:3.4   # refreshed series alias
 ```
 
@@ -144,7 +144,7 @@ The one-boot `host-prepare` mount namespace state is made persistent operational
 make docker-deploy-systemd-install MASTERS=1 SLAVES=2
 ```
 
-See `docs/DOCKER_SYSTEMD.md`.
+See `docs/DOCKER_SYSTEMD.md`. For day-2 operation and upgrade verification, see `docs/OPERATIONS.md`.
 
 ## Policy checks
 
