@@ -46,13 +46,18 @@ Glownym indeksem jest [`docs/README.md`](docs/README.md). Dokumentacja jest tam 
 | obslugiwac lub aktualizowac deployment | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) |
 | zarzadzac tylko kontenerem FOD/FUSE | [`docs/DOCKER_FOD_INSTALL.md`](docs/DOCKER_FOD_INSTALL.md) |
 | skonfigurowac start po reboot przez systemd | [`docs/DOCKER_SYSTEMD.md`](docs/DOCKER_SYSTEMD.md) |
+| konfigurowac runtime lub mount | [`docs/runtime-configuration.md`](docs/runtime-configuration.md) |
 | sprawdzic wymagania PostgreSQL | [`docs/POSTGRESQL_REQUIREMENTS.md`](docs/POSTGRESQL_REQUIREMENTS.md) |
 | sprawdzic wymagania FUSE/kernela | [`docs/FUSE_REQUIREMENTS.md`](docs/FUSE_REQUIREMENTS.md) |
-| przejrzec benchmarki | [`BENCHMARKS.md`](BENCHMARKS.md) |
+| sprawdzic bezpieczenstwo, uprawnienia i polityke hosta | [`docs/SECURITY.md`](docs/SECURITY.md) |
+| profilowac lub optymalizowac wydajnosc | [`docs/performance.md`](docs/performance.md) |
+| indeksowac/importowac zewnetrzne zrodla | [`docs/fod-indexer.md`](docs/fod-indexer.md) |
+| rozwijac FOD lub zmieniac schemat/kontrakty | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
+| przejrzec historie benchmarkow | [`BENCHMARKS.md`](BENCHMARKS.md), [`docs/HISTORY.md`](docs/HISTORY.md) |
 | sprawdzic plan prac | [`ROADMAP.md`](ROADMAP.md), [`TODO.md`](TODO.md) |
 | wykonac procedury testowe | [`zasady_sprawdzen.md`](zasady_sprawdzen.md) |
 
-Pliki `docs/FOD_3_*` sa historycznymi zapisami implementacji i pomiarow. Nie nalezy traktowac ich jako glownego zrodla aktualnych defaultow.
+Pliki `docs/FOD_3_*` sa historycznymi zapisami implementacji i pomiarow. Nie nalezy traktowac ich jako glownego zrodla aktualnych defaultow. [`docs/HISTORY.md`](docs/HISTORY.md) grupuje te materialy wedlug tematu.
 
 ## Szybki start developerski
 

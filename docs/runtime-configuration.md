@@ -9,10 +9,13 @@ For normal mounts through `fod-bootstrap`:
 3. explicit `FOD_*` environment variables override INI;
 4. bootstrap CLI options override startup fields they own.
 
-FOD 3.2.61 makes FUSE startup/admission controls available through INI while
-preserving environment overrides. FOD 3.2.85 adds explicit FUSE write and
-readahead negotiation limits. FOD 3.2.90 restores 512 KiB as the default write
-limit; the default readahead limit remains 512 KiB.
+FOD 3.2.61 made FUSE startup/admission controls available through INI while
+preserving environment overrides. FOD 3.2.85 added explicit FUSE write and
+readahead negotiation limits, and FOD 3.2.90 historically restored a 512 KiB
+write default. The current standard repository configuration uses `1MiB` for
+`fuse_max_write_bytes` and `512KiB` for `fuse_max_readahead_bytes`. For the
+compact list of current defaults, see [`CURRENT_STATE.md`](CURRENT_STATE.md)
+and the current `../fod_config.ini` / `../fod_config.example.ini` files.
 
 ## FUSE concurrency and logical admission
 
@@ -66,14 +69,15 @@ FOD 3.2.60 confirmed `8/4` over ten runs:
 Environment override: `FOD_FUSE_MAX_WRITE_BYTES`.
 
 Startup-only maximum write request size requested from `fuser::KernelConfig`
-during the FUSE `init` handshake. The default is `512KiB` (`524288` bytes).
-The value must be positive and fit in `u32`. If `fuser` reports a smaller
-supported value, FOD retries with that value and continues mounting.
+during the FUSE `init` handshake. The current standard repository default is
+`1MiB` (`1048576` bytes). The value must be positive and fit in `u32`. If
+`fuser` reports a smaller supported value, FOD retries with that value and
+continues mounting.
 
 This setting does not change the FOD storage block size. Storage blocks remain
-schema-defined (normally 4 KiB), so a 512 KiB FUSE write request may span 128
-normal FOD blocks. `256KiB` remains supported as an explicit INI or
-`FOD_FUSE_MAX_WRITE_BYTES` override.
+schema-defined (normally 4 KiB), so a 1 MiB FUSE write request may span 256
+normal FOD blocks. `512KiB` and `256KiB` remain supported as explicit INI or
+`FOD_FUSE_MAX_WRITE_BYTES` overrides.
 
 ### `fuse_max_readahead_bytes`
 
@@ -98,11 +102,15 @@ fetches behind 4 KiB direct-I/O callbacks. Set
 `FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=0` to reproduce the old no-prefetch
 diagnostic path.
 
-The startup log reports both requested and effective limits:
+The startup log reports both requested and effective limits. With the current
+standard request sizes a representative line is:
 
 ```text
-FOD FUSE negotiated: requested_max_write=524288 effective_max_write=524288 requested_max_readahead=524288 effective_max_readahead=524288 ...
+FOD FUSE negotiated: requested_max_write=1048576 effective_max_write=1048576 requested_max_readahead=524288 effective_max_readahead=524288 ...
 ```
+
+The effective values may be lower when the host kernel/FUSE stack advertises a
+smaller supported ceiling.
 
 ### `allow_other`
 

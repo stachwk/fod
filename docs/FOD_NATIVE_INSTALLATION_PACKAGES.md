@@ -1,6 +1,6 @@
 # Native installation packages for Ubuntu and RHEL/RockyLinux
 
-Status: packaging infrastructure for FOD runtime 3.4.1. The first native package revision for this runtime is `3.4.1-1`.
+Status: current native packaging infrastructure. Package builds derive the FOD runtime version from the repository release metadata; the `3.4.1-1` values below are retained only as the historical example that introduced this packaging layout.
 
 ## Targets
 
@@ -97,14 +97,14 @@ The default package maintainer is the repository's GitHub noreply identity and c
 
 ## Package revision
 
-Runtime 3.4.1 starts a new native package revision series:
+The native packaging layout was introduced with the historical example:
 
 ```text
 FOD runtime:       3.4.1
 DEB/RPM revision:  3.4.1-1
 ```
 
-Packaging-only corrections after that use `3.4.1-2`, `3.4.1-3`, and so on without changing the FOD runtime version.
+Current package builds use the current FOD repository release rather than treating `3.4.1` as a fixed package runtime. Repository changes continue to follow [`versioning.md`](versioning.md): every FOD commit increments the FOD patch version and keeps package/release metadata aligned.
 
 ## Output
 

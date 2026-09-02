@@ -46,13 +46,18 @@ Start with [`docs/README.md`](docs/README.md). It groups documentation by the jo
 | operate or upgrade an installed deployment | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) |
 | manage only the FOD/FUSE container | [`docs/DOCKER_FOD_INSTALL.md`](docs/DOCKER_FOD_INSTALL.md) |
 | configure persistent startup with systemd | [`docs/DOCKER_SYSTEMD.md`](docs/DOCKER_SYSTEMD.md) |
+| configure runtime/mount behavior | [`docs/runtime-configuration.md`](docs/runtime-configuration.md) |
 | verify PostgreSQL requirements | [`docs/POSTGRESQL_REQUIREMENTS.md`](docs/POSTGRESQL_REQUIREMENTS.md) |
 | verify FUSE/kernel requirements | [`docs/FUSE_REQUIREMENTS.md`](docs/FUSE_REQUIREMENTS.md) |
-| inspect benchmark history | [`BENCHMARKS.md`](BENCHMARKS.md) |
+| review security/permissions/host policy | [`docs/SECURITY.md`](docs/SECURITY.md) |
+| profile or optimize performance | [`docs/performance.md`](docs/performance.md) |
+| index/import external sources | [`docs/fod-indexer.md`](docs/fod-indexer.md) |
+| develop FOD or change schema/contracts | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
+| inspect benchmark history | [`BENCHMARKS.md`](BENCHMARKS.md), [`docs/HISTORY.md`](docs/HISTORY.md) |
 | inspect planned work | [`ROADMAP.md`](ROADMAP.md), [`TODO.md`](TODO.md) |
 | follow validation procedures | [`zasady_sprawdzen.md`](zasady_sprawdzen.md) |
 
-Versioned documents such as `docs/FOD_3_*` are historical implementation and measurement records. They remain useful evidence, but they are not the canonical source for current defaults.
+Versioned documents such as `docs/FOD_3_*` are historical implementation and measurement records. They remain useful evidence, but they are not the canonical source for current defaults. [`docs/HISTORY.md`](docs/HISTORY.md) maps that evidence by topic.
 
 ## Quick local development path
 
