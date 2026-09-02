@@ -185,11 +185,37 @@ start_container() {
   pull_client_image
   prepare
 
-  local current=""
+  local current="" container_image_id="" expected_image_id=""
   current="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${CONTAINER_NAME}" 2>/dev/null || true)"
+
   if [[ "${current}" == healthy ]]; then
-    echo "FOD container is already healthy: ${CONTAINER_NAME}"
-    return 0
+    container_image_id="$(
+      docker inspect \
+        --format '{{.Image}}' \
+        "${CONTAINER_NAME}"
+    )"
+
+    expected_image_id="$(
+      docker image inspect \
+        --format '{{.Id}}' \
+        "${CLIENT_IMAGE}"
+    )"
+
+    if [[ "${container_image_id}" == "${expected_image_id}" ]]; then
+      echo "FOD container is already healthy and uses the required image: ${CONTAINER_NAME} image=${CLIENT_IMAGE}"
+      return 0
+    fi
+
+    echo "Replacing healthy FOD container because image changed:"
+    echo "  container=${CONTAINER_NAME}"
+    echo "  configured_image=${CLIENT_IMAGE}"
+    echo "  current_image_id=${container_image_id}"
+    echo "  required_image_id=${expected_image_id}"
+
+    docker rm -f "${CONTAINER_NAME}" >/dev/null
+
+    FOD_DOCKER_DEPLOY_FOD_INTERACTIVE_SUDO=1 \
+      fod_action cleanup-stale-mounts
   fi
 
   echo "Starting FOD container with timeout=${START_TIMEOUT}s apparmor=${APPARMOR_MODE}..."

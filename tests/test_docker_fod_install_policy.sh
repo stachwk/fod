@@ -83,6 +83,13 @@ grep -A8 '^down()' "${SCRIPT}" | grep -Fq 'cleanup_stale_fuse_mounts 1'
 # has bounded startup and applies AppArmor override where required.
 for pattern in \
   'docker pull "${CLIENT_IMAGE}"' \
+  'docker inspect' \
+  "'{{.Image}}'" \
+  'docker image inspect' \
+  "'{{.Id}}'" \
+  '"${container_image_id}" == "${expected_image_id}"' \
+  'Replacing healthy FOD container because image changed:' \
+  'docker rm -f "${CONTAINER_NAME}"' \
   'timeout --foreground' \
   'up -d --no-deps fod' \
   'apparmor=unconfined' \

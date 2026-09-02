@@ -24,10 +24,10 @@ That file contains topology, state paths, mount paths and the exact FOD image ta
 
 ## Exact image pin
 
-The normal Make interface derives the FOD client image from `fod_version.txt`. FOD 3.4.3 therefore installs:
+The normal Make interface derives the FOD client image from `fod_version.txt`. FOD 3.4.4 therefore installs:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.3
+ghcr.io/stachwk/fod-client:3.4.4
 ```
 
 The mutable `:3.4` tag remains a convenience alias only and is not the default final deployment image.

@@ -18,10 +18,10 @@ The production PostgreSQL image remains pinned to:
 ghcr.io/stachwk/postgres-16-fod-32k:16.15
 ```
 
-The normal Make interface pins the FOD client to the exact repository release. For FOD 3.4.3:
+The normal Make interface pins the FOD client to the exact repository release. For FOD 3.4.4:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.3
+ghcr.io/stachwk/fod-client:3.4.4
 ```
 
 The mutable `ghcr.io/stachwk/fod-client:3.4` tag remains a convenience series alias only. Override the exact image explicitly with `FOD_DOCKER_DEPLOY_CLIENT_IMAGE` when required.
