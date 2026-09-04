@@ -11,3 +11,10 @@ and [`../README.md`](../README.md).
 Historical files are intentionally preserved as recorded. Do not edit an old
 measurement or release note merely to make it match a newer default; update the
 current task documentation instead.
+
+Some archived plans deliberately retain contemporary wording such as `active`,
+`current` or `canonical`. Inside `history/` those words describe the status at
+the time the record was written, not the present documentation authority. The
+current source-of-truth order in [`../README.md`](../README.md), the categorized
+index in [`../HISTORY.md`](../HISTORY.md), and the maintained plan in
+[`../plans/CURRENT.md`](../plans/CURRENT.md) supersede that historical wording.

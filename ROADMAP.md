@@ -10,7 +10,7 @@
   integration suite.
 - The repository currently has no active GitHub Actions workflow. `make test-all` is the main local regression gate, while `make test-all-full` adds wider mounted and indexer coverage.
 - Benchmark baselines are tracked in [`BENCHMARKS.md`](BENCHMARKS.md), while [`TODO.md`](TODO.md) records open follow-ups, accepted decisions, completed work, and regression notes.
-- The ordered implementation sequence is tracked in [`docs/plans/FOD_CURRENT_ACTION_PLAN.md`](docs/plans/FOD_CURRENT_ACTION_PLAN.md).
+- The maintained next implementation sequence is tracked in [`docs/plans/CURRENT.md`](docs/plans/CURRENT.md).
 - SELinux mount-label policy is a deliberate non-goal. Rocky Linux 10.2 support is defined as operational SELinux enforcement through the host FUSE `fusefs_t` label and normal domain policy; per-inode `security.selinux` labeling depends on host/mount-stack support.
 - Schema init, upgrade, and clean operations are non-destructive by default on existing databases and are protected by the schema-admin secret flow.
 - The runtime is Rust-backed end to end: mount entrypoints, namespace operations, metadata, permissions, locking, payload storage, schema tooling, and indexing no longer depend on the removed Python runtime.
@@ -39,6 +39,11 @@
 - mounted `df`/`du`/sparse/shared-object regression before and after remount
 - forced concurrent two-mount quota regression
 - explicit ADR for storage-format versioning
+- role-aware PostgreSQL endpoint selection without list-position semantics
+- runtime primary failover for HA/proxy entrypoints representing one authoritative cluster
+- WAL-gated replica reads with primary fallback
+- replica health/latency scoring and circuit-breaker cooldown
+- fail-closed primary promotion validation and process-local primary-generation fencing
 
 ## Near Term
 
@@ -46,7 +51,6 @@
 - optimize replica reads from measured `read_block_map -> repo_fetch_block_range` evidence: profile the SQL/repository operations behind one 512 KiB callback, remove avoidable per-callback round trips, and re-run the 4 KiB / 64 KiB / 512 KiB physical-replica matrix after each change
 - treat 512 KiB as the current effective FUSE callback ceiling until negotiation is changed and re-measured; a fio 1 MiB read is currently split into two ~512 KiB callbacks
 - tune read and write sizes independently: the 2026-08-19 Docker matrix shows read throughput increasing through large callbacks while 1 MiB writes regress sharply; 512 KiB is the best measured common point, not a universal final setting
-
 - keep `make test-all`, `make test-all-full`, `cargo fmt --all -- --check`, `cargo check --workspace --locked`, and `make test-version` as the documented local quality gates
 - keep planning documentation synchronized with `fod_version.txt`, the Cargo
   workspace version, and the Rust schema manifest before closing further TODO
@@ -67,8 +71,9 @@
 
 ## Medium Term
 
-- design role-aware multi-endpoint PostgreSQL routing with explicit primary and replica roles, operation-aware selection, and read-after-write consistency
-- add endpoint health, latency, pool, replay-lag, and circuit-breaker diagnostics before enabling automatic replica routing
+- harden the existing role-aware multi-endpoint runtime only through explicit measured gaps; do not reopen the already delivered startup routing, WAL-gated replica-read, scoring, failover or promotion-guard stages as if they were unimplemented
+- keep external/cross-process fencing and fairness separate from process-local generation fencing; add either only with a concrete ownership model, failure scenario and acceptance test
+- keep multiple writable endpoints limited to HA/proxy entrypoints for the same authoritative PostgreSQL cluster unless an explicitly selected database technology provides real multi-primary conflict handling
 - keep expanding `fod-rust-monitor` as the shared home for process, PostgreSQL, lane, queue, and throughput diagnostics instead of growing `pg_lanes.rs` or `pg.rs` further
 - strengthen production-style fault tests for reconnect, promotion, lag, lock/session safety, and replay confirmation without presenting independent primaries as a safe multi-primary filesystem
 - continue performance work only from measured SQL, WAL, connection, memory, or FUSE callback evidence

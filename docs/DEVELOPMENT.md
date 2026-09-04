@@ -64,8 +64,12 @@ Classify documentation before editing or adding it:
   ADR document,
 - **release-specific measurement or implementation evidence** -> store it under
   [`history/`](history/) and add it to [`HISTORY.md`](HISTORY.md),
-- **future work** -> keep it in `../ROADMAP.md`, `../TODO.md` or
-  [`plans/`](plans/),
+- **active/future work** -> keep the maintained next-step plan in
+  [`plans/CURRENT.md`](plans/CURRENT.md), longer-term ideas in
+  [`plans/`](plans/) / `../ROADMAP.md`, and supporting follow-ups in
+  `../TODO.md`,
+- **completed plan/project** -> move it to [`history/`](history/) and index it in
+  [`HISTORY.md`](HISTORY.md),
 - **execution journal** -> keep it out of current task guides; `../commands.md`
   and `../conclusions.md` are retained only as chronological work evidence.
 
@@ -142,9 +146,10 @@ The profiling workflow is in [`performance.md`](performance.md), while accepted
 benchmark baselines are summarized in [`../BENCHMARKS.md`](../BENCHMARKS.md)
 and [`performance-baselines.md`](performance-baselines.md).
 
-Keep historical benchmark/experiment documents under [`history/`](history/) as
-evidence; do not make them the source of current defaults. See
-[`HISTORY.md`](HISTORY.md).
+The maintained next optimization target belongs in
+[`plans/CURRENT.md`](plans/CURRENT.md). Completed performance plans and dated
+experiments belong under [`history/`](history/) as evidence; they are not a
+source of current defaults. See [`HISTORY.md`](HISTORY.md).
 
 ## Indexer changes
 
@@ -172,10 +177,10 @@ current; add or update canonical task documentation instead.
 Current direction and implementation sequence are tracked separately from
 current behavior:
 
+- [`plans/CURRENT.md`](plans/CURRENT.md),
 - [`../ROADMAP.md`](../ROADMAP.md),
-- [`../TODO.md`](../TODO.md),
-- [`plans/FOD_CURRENT_ACTION_PLAN.md`](plans/FOD_CURRENT_ACTION_PLAN.md),
-- [`plans/FOD_FUTURE_IDEAS.md`](plans/FOD_FUTURE_IDEAS.md).
+- [`plans/FOD_FUTURE_IDEAS.md`](plans/FOD_FUTURE_IDEAS.md),
+- [`../TODO.md`](../TODO.md).
 
 Plans describe intended work. `CURRENT_STATE.md`, current configuration and the
 runtime/tests describe what exists now.

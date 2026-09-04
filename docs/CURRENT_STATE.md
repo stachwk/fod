@@ -39,6 +39,14 @@ By default the FOD client uses the exact release from `fod_version.txt`. `FOD_CL
 
 Image build/publish remains source-version based by default. Selecting `FOD_CLIENT_VERSION` for deployment does not retag binaries built from the current checkout as an older release.
 
+## Storage payload model
+
+The production payload model is **block-only**. Durable file payload is canonical in `fod.data_blocks`; the former extent runtime path was retired after migration of legacy extent data back to blocks.
+
+The logical FOD storage block remains 4 KiB. Historical extent-engine plans, measurements and migration records are retained under [`history/`](history/) as evidence, but they are not alternate current runtime paths and must not be used to infer present storage behavior.
+
+A future payload-format change requires an explicit storage-format/compatibility decision and migration plan; it must not be introduced as an implicit performance shortcut.
+
 ## I/O size layers
 
 These values describe different layers and must not be conflated:

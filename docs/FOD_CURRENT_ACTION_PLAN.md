@@ -1,7 +1,12 @@
 # FOD current action plan moved
 
-The active implementation plan is now stored at
-[`plans/FOD_CURRENT_ACTION_PLAN.md`](plans/FOD_CURRENT_ACTION_PLAN.md).
+The maintained implementation plan is now:
 
-This compatibility pointer is retained so older references from long-running
-project journals and archived notes do not become dead links.
+- [`plans/CURRENT.md`](plans/CURRENT.md)
+
+The former 2026-08-26 action plan is preserved as historical execution evidence:
+
+- [`history/FOD_CURRENT_ACTION_PLAN_2026-08-26.md`](history/FOD_CURRENT_ACTION_PLAN_2026-08-26.md)
+
+This compatibility pointer remains because older TODO/journal entries reference
+`docs/FOD_CURRENT_ACTION_PLAN.md` directly.

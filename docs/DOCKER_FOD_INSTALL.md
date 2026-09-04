@@ -4,10 +4,10 @@ The persistent FOD/FUSE client completes the Docker deployment on top of Postgre
 
 ## Exact release image
 
-The normal Make interface selects the exact `fod_version.txt` release by default. For FOD 3.4.10:
+The normal Make interface selects the exact `fod_version.txt` release by default. For FOD 3.4.11:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.10
+ghcr.io/stachwk/fod-client:3.4.11
 ```
 
 The series alias `ghcr.io/stachwk/fod-client:3.4` is retained for convenience but is not the default final deployment image. The historical transitional image `3.4.1-fuse1` remains immutable.
@@ -136,7 +136,7 @@ Healthy propagated rows have one unique FUSE `MAJ:MIN`, matching the device seen
 
 `docker-deploy-fod-down` removes the FOD container and propagated FUSE views while preserving the underlying shared host bind.
 
-## Publishing FOD 3.4.10
+## Publishing FOD 3.4.11
 
 ```bash
 make test-version
@@ -153,7 +153,7 @@ make docker-fod-client-publish
 The normal Make path builds/publishes the current source release:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.10
+ghcr.io/stachwk/fod-client:3.4.11
 ghcr.io/stachwk/fod-client:3.4   # refreshed series alias
 ```
 

@@ -61,9 +61,8 @@ Current high-level defaults are summarized in [`CURRENT_STATE.md`](CURRENT_STATE
 - [`../BENCHMARKS.md`](../BENCHMARKS.md) - accepted benchmark baselines.
 - [`performance-baselines.md`](performance-baselines.md) - baseline details.
 - [`FOD_RANDOM_IO_POSTGRESQL_TUNING.md`](FOD_RANDOM_IO_POSTGRESQL_TUNING.md) - PostgreSQL random-I/O tuning background.
-- [`plans/block-only-performance-plan.md`](plans/block-only-performance-plan.md) - active storage-performance architecture/order.
-- [`plans/mounted-fuse-write-profile-plan.md`](plans/mounted-fuse-write-profile-plan.md) - active mounted-FUSE performance subplan.
-- [`HISTORY.md`](HISTORY.md) - dated and release-specific performance evidence.
+- [`plans/CURRENT.md`](plans/CURRENT.md) - maintained next optimization target and acceptance boundary.
+- [`HISTORY.md`](HISTORY.md) - dated, release-specific and completed performance-plan evidence.
 
 ## 6. Index or import external sources
 
@@ -99,11 +98,10 @@ Historical files remain as recorded and are not canonical sources for later defa
 
 ## 10. Plans and future work
 
-- [`plans/README.md`](plans/README.md) - plans index and classification rule.
-- [`plans/FOD_CURRENT_ACTION_PLAN.md`](plans/FOD_CURRENT_ACTION_PLAN.md) - ordered current implementation sequence.
-- [`plans/FOD_FUTURE_IDEAS.md`](plans/FOD_FUTURE_IDEAS.md) - future ideas.
-- [`plans/transactional-replay-project.md`](plans/transactional-replay-project.md) - bounded transactional replay project.
-- [`../ROADMAP.md`](../ROADMAP.md) - roadmap.
-- [`../TODO.md`](../TODO.md) - follow-ups/decisions.
+- [`plans/README.md`](plans/README.md) - plans index and lifecycle rule.
+- [`plans/CURRENT.md`](plans/CURRENT.md) - compact maintained current implementation order.
+- [`plans/FOD_FUTURE_IDEAS.md`](plans/FOD_FUTURE_IDEAS.md) - longer-term ideas and proposals.
+- [`../ROADMAP.md`](../ROADMAP.md) - long-term roadmap.
+- [`../TODO.md`](../TODO.md) - mixed follow-up/archive record.
 
 Completed plans and old execution roadmaps are retained under [`history/`](history/) rather than mixed with active/future plans.

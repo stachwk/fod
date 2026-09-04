@@ -18,10 +18,10 @@ The production PostgreSQL image remains pinned to:
 ghcr.io/stachwk/postgres-16-fod-32k:16.15
 ```
 
-The normal Make interface selects the exact repository release by default. For FOD 3.4.10:
+The normal Make interface selects the exact repository release by default. For FOD 3.4.11:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.10
+ghcr.io/stachwk/fod-client:3.4.11
 ```
 
 To run another already-published FOD client build without changing the repository/source version, pass:

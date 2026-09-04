@@ -7,7 +7,8 @@ and work records that help explain how current FOD behavior was reached.
 Historical documents are stored physically under [`history/`](history/). For
 current behavior start from [`README.md`](README.md) and
 [`CURRENT_STATE.md`](CURRENT_STATE.md). For intended future work use
-`../ROADMAP.md`, `../TODO.md` and [`plans/`](plans/).
+[`plans/CURRENT.md`](plans/CURRENT.md), `../ROADMAP.md`, `../TODO.md` and the
+remaining documents under [`plans/`](plans/).
 
 ## FUSE, storage and I/O evolution
 
@@ -90,11 +91,20 @@ report.
 
 ## Completed project and planning records
 
-These documents have plan/roadmap-style names but their own status or content
-shows that they now primarily record completed implementation/design work:
+These documents have plan/roadmap-style names but now primarily record completed
+implementation, design or measurement work:
 
+- [`FOD_CURRENT_ACTION_PLAN_2026-08-26.md`](history/FOD_CURRENT_ACTION_PLAN_2026-08-26.md)
+  - former ordered implementation plan; its completed sequence is preserved
+  without making it the current backlog,
+- [`block-only-performance-plan.md`](history/block-only-performance-plan.md) -
+  completed block-only write/performance execution record,
+- [`mounted-fuse-write-profile-plan.md`](history/mounted-fuse-write-profile-plan.md)
+  - completed mounted-FUSE write profiling/optimization record,
 - [`quota-lock-concurrency-plan.md`](history/quota-lock-concurrency-plan.md) -
   completed quota-lock concurrency redesign/validation record,
+- [`transactional-replay-project.md`](history/transactional-replay-project.md) -
+  stabilized bounded transactional replay project and smoke-coverage record,
 - [`storage-engine-v2-plan.md`](history/storage-engine-v2-plan.md) - retired
   Storage Engine v2/extent experiment record,
 - [`indexer-catalog-snapshot-regression-plan.md`](history/indexer-catalog-snapshot-regression-plan.md)
@@ -102,7 +112,8 @@ shows that they now primarily record completed implementation/design work:
 - [`fod-roadmap-3.2.62-plus.md`](history/fod-roadmap-3.2.62-plus.md) - execution
   roadmap tied to the historical 3.2.62+ sequence.
 
-Active and future plans are indexed from [`plans/README.md`](plans/README.md).
+The maintained next-step plan is [`plans/CURRENT.md`](plans/CURRENT.md). Longer
+term proposals stay under [`plans/`](plans/) or `../ROADMAP.md`.
 
 ## Long-running work journals
 
