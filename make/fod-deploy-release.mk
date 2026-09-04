@@ -1,10 +1,18 @@
 # Release-facing Docker deployment defaults and persistent boot integration.
-# The normal `make` entry point pins the FOD client to the exact repository
-# version. The :3.4 series alias remains available for manual/compatibility use.
+# The normal `make` entry point selects the exact repository release by default.
+# FOD_CLIENT_VERSION may select another already-published FOD client build for
+# deployment without changing the repository/source version. A fully-qualified
+# FOD_DOCKER_DEPLOY_CLIENT_IMAGE remains the highest-priority deployment override.
+#
+# FOD_CLIENT_IMAGE_VERSION is intentionally separate: build/publish defaults to
+# the repository/source version so selecting an older runtime image does not
+# accidentally retag current source binaries as that older release.
 
 FOD_RELEASE_VERSION := $(strip $(shell cat fod_version.txt))
-FOD_DOCKER_DEPLOY_CLIENT_IMAGE ?= ghcr.io/stachwk/fod-client:$(FOD_RELEASE_VERSION)
+FOD_CLIENT_VERSION ?= $(FOD_RELEASE_VERSION)
+FOD_DOCKER_DEPLOY_CLIENT_IMAGE ?= ghcr.io/stachwk/fod-client:$(FOD_CLIENT_VERSION)
 FOD_CLIENT_IMAGE_VERSION ?= $(FOD_RELEASE_VERSION)
+export FOD_CLIENT_VERSION
 export FOD_DOCKER_DEPLOY_CLIENT_IMAGE
 export FOD_CLIENT_IMAGE_VERSION
 
@@ -64,7 +72,11 @@ help-docker-deploy-release-tests:
 help-docker-deploy-release:
 	@printf '%s\n' \
 		'Docker release defaults:' \
+		'  repository FOD version: $(FOD_RELEASE_VERSION)' \
+		'  selected client version: $(FOD_CLIENT_VERSION)' \
 		'  exact FOD image: $(FOD_DOCKER_DEPLOY_CLIENT_IMAGE)' \
+		'  select published client: FOD_CLIENT_VERSION=X.Y.Z' \
+		'  full image override: FOD_DOCKER_DEPLOY_CLIENT_IMAGE=registry/path:tag' \
 		'  docker-deploy-systemd-plan | docker-deploy-systemd-install | docker-deploy-systemd-status' \
 		'  docker-deploy-systemd-smoke | docker-deploy-systemd-restart | docker-deploy-systemd-uninstall' \
 		''

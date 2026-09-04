@@ -18,13 +18,27 @@ The production PostgreSQL image remains pinned to:
 ghcr.io/stachwk/postgres-16-fod-32k:16.15
 ```
 
-The normal Make interface pins the FOD client to the exact repository release. For FOD 3.4.7:
+The normal Make interface selects the exact repository release by default. For FOD 3.4.8:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.7
+ghcr.io/stachwk/fod-client:3.4.8
 ```
 
-The mutable `ghcr.io/stachwk/fod-client:3.4` tag remains a convenience series alias only. Override the exact image explicitly with `FOD_DOCKER_DEPLOY_CLIENT_IMAGE` when required.
+To run another already-published FOD client build without changing the repository/source version, pass:
+
+```bash
+make docker-deploy-fod-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+```
+
+Deployment image precedence is:
+
+```text
+1. FOD_DOCKER_DEPLOY_CLIENT_IMAGE=registry/path:tag
+2. FOD_CLIENT_VERSION=X.Y.Z
+3. fod_version.txt
+```
+
+The mutable `ghcr.io/stachwk/fod-client:3.4` tag remains a convenience series alias only. `FOD_CLIENT_VERSION` selects a published runtime image; it does not change the source version or the default image build/publish tag.
 
 ## Complete installation
 
@@ -80,6 +94,12 @@ make docker-deploy-fod-smoke MASTERS=1 SLAVES=2
 make docker-deploy-fod-down MASTERS=1 SLAVES=2
 ```
 
+Any deployment target that consumes the FOD client image may receive the same selector, for example:
+
+```bash
+make docker-deploy-fod-up MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+```
+
 Schema operations are separate:
 
 ```bash
@@ -110,7 +130,13 @@ make docker-deploy-systemd-plan MASTERS=1 SLAVES=2
 make docker-deploy-systemd-install MASTERS=1 SLAVES=2
 ```
 
-The installer copies the minimal runtime to root-owned `/usr/local/libexec/fod-docker-deploy`; systemd does not execute the user-owned Git checkout. `/etc/fod/docker-deploy.env` records topology/paths/exact image but does not duplicate database passwords.
+To persist a selected already-published FOD build instead of the repository default:
+
+```bash
+make docker-deploy-systemd-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+```
+
+The installer copies the minimal runtime to root-owned `/usr/local/libexec/fod-docker-deploy`; systemd does not execute the user-owned Git checkout. `/etc/fod/docker-deploy.env` records topology/paths/the resolved exact image but does not duplicate database passwords. Because the full image is persisted, later reboots keep the selected build even if the checkout version changes.
 
 At boot the service restores the shared host mount, starts PostgreSQL and replicas, starts FOD, then executes smoke checks.
 

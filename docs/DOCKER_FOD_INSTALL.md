@@ -4,20 +4,36 @@ The persistent FOD/FUSE client completes the Docker deployment on top of Postgre
 
 ## Exact release image
 
-The normal Make interface pins the client to the exact `fod_version.txt` release. For FOD 3.4.7:
+The normal Make interface selects the exact `fod_version.txt` release by default. For FOD 3.4.8:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.7
+ghcr.io/stachwk/fod-client:3.4.8
 ```
 
 The series alias `ghcr.io/stachwk/fod-client:3.4` is retained for convenience but is not the default final deployment image. The historical transitional image `3.4.1-fuse1` remains immutable.
 
-Override explicitly when required:
+To run an already-published client build independently of the checkout version, use:
 
 ```bash
-FOD_DOCKER_DEPLOY_CLIENT_IMAGE=ghcr.io/stachwk/fod-client:3.4.7 \
+make docker-deploy-fod-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+```
+
+The resolution order is:
+
+```text
+1. FOD_DOCKER_DEPLOY_CLIENT_IMAGE=registry/path:tag
+2. FOD_CLIENT_VERSION=X.Y.Z
+3. fod_version.txt
+```
+
+Use the full-image override when a registry/repository other than the normal FOD client repository is required:
+
+```bash
+FOD_DOCKER_DEPLOY_CLIENT_IMAGE=registry.example/fod-client:validated-build \
   make docker-deploy-fod-install MASTERS=1 SLAVES=2
 ```
+
+`FOD_CLIENT_VERSION` changes only which published runtime image deployment consumes. It does not change the repository/source version and does not alter the default tag used when building/publishing an image from the current checkout.
 
 ## FOD-only lifecycle
 
@@ -28,6 +44,13 @@ make docker-deploy-fod-host-prepare MASTERS=1 SLAVES=2
 make docker-deploy-fod-install MASTERS=1 SLAVES=2
 make docker-deploy-fod-status MASTERS=1 SLAVES=2
 make docker-deploy-fod-smoke MASTERS=1 SLAVES=2
+```
+
+The selector may be supplied to FOD-only lifecycle targets as well:
+
+```bash
+make docker-deploy-fod-plan MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+make docker-deploy-fod-up MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
 ```
 
 Other operations:
@@ -113,7 +136,7 @@ Healthy propagated rows have one unique FUSE `MAJ:MIN`, matching the device seen
 
 `docker-deploy-fod-down` removes the FOD container and propagated FUSE views while preserving the underlying shared host bind.
 
-## Publishing FOD 3.4.7
+## Publishing FOD 3.4.8
 
 ```bash
 make test-version
@@ -127,12 +150,14 @@ After `docker login ghcr.io`:
 make docker-fod-client-publish
 ```
 
-The normal Make path builds/publishes:
+The normal Make path builds/publishes the current source release:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.7
+ghcr.io/stachwk/fod-client:3.4.8
 ghcr.io/stachwk/fod-client:3.4   # refreshed series alias
 ```
+
+`FOD_CLIENT_VERSION` is a deployment selector and does not change this default build/publish tag. The existing advanced `FOD_CLIENT_IMAGE_VERSION` build variable remains separate for deliberate image-build workflows.
 
 `latest` remains disabled by default.
 
@@ -142,6 +167,12 @@ The one-boot `host-prepare` mount namespace state is made persistent operational
 
 ```bash
 make docker-deploy-systemd-install MASTERS=1 SLAVES=2
+```
+
+To persist a selected published FOD client build:
+
+```bash
+make docker-deploy-systemd-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
 ```
 
 See `docs/DOCKER_SYSTEMD.md`. For day-2 operation and upgrade verification, see `docs/OPERATIONS.md`.

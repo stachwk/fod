@@ -4,10 +4,10 @@ The FOD client image contains the FOD runtime/FUSE frontend plus PostgreSQL clie
 
 ## Release tags
 
-For normal repository-driven builds and deployment, the image is pinned to the exact FOD release from `fod_version.txt`. For FOD 3.4.7 the immutable deployment image is:
+For normal repository-driven builds, the image is tagged with the exact FOD source release from `fod_version.txt`. For FOD 3.4.8 the immutable source-build image is:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.7
+ghcr.io/stachwk/fod-client:3.4.8
 ```
 
 Publishing also refreshes the convenience series alias:
@@ -16,7 +16,15 @@ Publishing also refreshes the convenience series alias:
 ghcr.io/stachwk/fod-client:3.4
 ```
 
-The deployment Make interface exports `FOD_CLIENT_IMAGE_VERSION` and `FOD_DOCKER_DEPLOY_CLIENT_IMAGE` from the authoritative repository version, so ordinary `make docker-fod-client-build`, `make docker-fod-client-publish`, and `make docker-deploy-*` commands use the exact release tag rather than the mutable series alias.
+The deployment Make interface may independently select an already-published runtime build with `FOD_CLIENT_VERSION`, for example:
+
+```bash
+make docker-deploy-fod-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+```
+
+Deployment resolution is `FOD_DOCKER_DEPLOY_CLIENT_IMAGE` first, then `FOD_CLIENT_VERSION`, then the repository release from `fod_version.txt`.
+
+`FOD_CLIENT_VERSION` is intentionally a deployment selector only. Normal `make docker-fod-client-build` and `make docker-fod-client-publish` continue to use the source release from `fod_version.txt`; selecting an older runtime build does not retag current source binaries as that older release. The existing advanced `FOD_CLIENT_IMAGE_VERSION` variable remains the explicit build/publish tag override when such a workflow is deliberately required.
 
 Historical note: `ghcr.io/stachwk/fod-client:3.4.1-fuse1` was the transitional FUSE/AppArmor container revision before the container fixes were folded into the 3.4 release line. That historical tag is not overwritten.
 
@@ -62,7 +70,7 @@ Image-only preflight:
 
 ```bash
 docker run --rm \
-  ghcr.io/stachwk/fod-client:3.4.7 \
+  ghcr.io/stachwk/fod-client:3.4.8 \
   fod-container-preflight --image-only
 ```
 
@@ -73,7 +81,7 @@ docker run --rm \
   --device /dev/fuse \
   --cap-add SYS_ADMIN \
   --security-opt apparmor=unconfined \
-  ghcr.io/stachwk/fod-client:3.4.7 \
+  ghcr.io/stachwk/fod-client:3.4.8 \
   fod-container-preflight --runtime
 ```
 
@@ -86,7 +94,7 @@ docker run --rm -it \
   --security-opt apparmor=unconfined \
   -v /path/on/host:/mnt/fod:rshared \
   -v /path/to/fod.ini:/etc/fod/fod.ini:ro \
-  ghcr.io/stachwk/fod-client:3.4.7 \
+  ghcr.io/stachwk/fod-client:3.4.8 \
   mount.fod none /mnt/fod -o ini=/etc/fod/fod.ini,role=auto
 ```
 

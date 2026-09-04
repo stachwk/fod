@@ -19,9 +19,28 @@ sudo make docker-deploy-systemd-smoke MASTERS=1 SLAVES=2
 docker ps
 ```
 
+## Select the FOD client build
+
+By default deployment uses the exact FOD client tag derived from `fod_version.txt`. To run an already-published client build independently of the checkout version, pass:
+
+```bash
+make docker-deploy-fod-plan MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+make docker-deploy-fod-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+```
+
+The deployment image precedence is:
+
+```text
+1. FOD_DOCKER_DEPLOY_CLIENT_IMAGE=registry/path:tag
+2. FOD_CLIENT_VERSION=X.Y.Z
+3. fod_version.txt
+```
+
+`FOD_CLIENT_VERSION` selects an existing runtime image only. Image build/publish remains tied to the repository/source version by default, so this parameter does not retag current source binaries as an older release.
+
 ## Upgrade the FOD client without restarting PostgreSQL
 
-The normal release path pins the systemd environment to the exact FOD image derived from `fod_version.txt`.
+The normal release path pins the systemd environment to the resolved exact FOD image. Without an override it comes from `fod_version.txt`; with `FOD_CLIENT_VERSION` it comes from the selected published client build.
 
 Before reinstall, record PostgreSQL container identities:
 
@@ -41,11 +60,19 @@ docker inspect fod-deploy-fod \
   --format 'configured_image={{.Config.Image}} image_id={{.Image}} created={{.Created}}'
 ```
 
-Install/reinstall the current release:
+Install/reinstall the repository-default client:
 
 ```bash
 sudo make docker-deploy-systemd-install MASTERS=1 SLAVES=2
 ```
+
+Or deliberately select another already-published build:
+
+```bash
+sudo make docker-deploy-systemd-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+```
+
+The installer resolves the selected version to a full image and stores it in `/etc/fod/docker-deploy.env`. A later reboot therefore retains that image selection even if the repository checkout moves to another version.
 
 When the service is already active this uses `systemctl reload`, so `ExecStop` is not executed.
 

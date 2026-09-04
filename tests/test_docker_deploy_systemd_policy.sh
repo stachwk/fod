@@ -36,13 +36,14 @@ if grep -Fq 'systemctl restart "${UNIT_NAME}"' <<<"${install_body}"; then
   exit 1
 fi
 
-
 bash -n "${BOOT}"
 
 grep -Fq 'include make/fod-deploy-release.mk' "${GNU}"
 grep -Fq 'FOD_RELEASE_VERSION := $(strip $(shell cat fod_version.txt))' "${RELEASE_MK}"
-grep -Fq 'FOD_DOCKER_DEPLOY_CLIENT_IMAGE ?= ghcr.io/stachwk/fod-client:$(FOD_RELEASE_VERSION)' "${RELEASE_MK}"
+grep -Fq 'FOD_CLIENT_VERSION ?= $(FOD_RELEASE_VERSION)' "${RELEASE_MK}"
+grep -Fq 'FOD_DOCKER_DEPLOY_CLIENT_IMAGE ?= ghcr.io/stachwk/fod-client:$(FOD_CLIENT_VERSION)' "${RELEASE_MK}"
 grep -Fq 'FOD_CLIENT_IMAGE_VERSION ?= $(FOD_RELEASE_VERSION)' "${RELEASE_MK}"
+grep -Fq 'export FOD_CLIENT_VERSION' "${RELEASE_MK}"
 grep -Fq 'export FOD_DOCKER_DEPLOY_CLIENT_IMAGE' "${RELEASE_MK}"
 grep -Fq 'export FOD_CLIENT_IMAGE_VERSION' "${RELEASE_MK}"
 
@@ -130,11 +131,30 @@ if MASTERS=2 SLAVES=1 FOD_DOCKER_DEPLOY_SYSTEMD_HOME="${tmp}/home" bash "${SCRIP
   exit 1
 fi
 
-make -C "${ROOT}" --no-print-directory -n docker-deploy-systemd-plan MASTERS=1 SLAVES=2 >/dev/null
+default_plan="$(env -u FOD_DOCKER_DEPLOY_CLIENT_IMAGE -u FOD_CLIENT_VERSION make -C "${ROOT}" --no-print-directory -s docker-deploy-systemd-plan MASTERS=1 SLAVES=2)"
+grep -Fxq "client_image=${EXPECTED_IMAGE}" <<<"${default_plan}" || {
+  echo "Default Make deployment must select repository client image: ${EXPECTED_IMAGE}" >&2
+  exit 1
+}
+
+custom_version="3.4.5"
+custom_expected="ghcr.io/stachwk/fod-client:${custom_version}"
+version_plan="$(env -u FOD_DOCKER_DEPLOY_CLIENT_IMAGE -u FOD_CLIENT_VERSION make -C "${ROOT}" --no-print-directory -s docker-deploy-systemd-plan MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION="${custom_version}")"
+grep -Fxq "client_image=${custom_expected}" <<<"${version_plan}" || {
+  echo "FOD_CLIENT_VERSION did not select expected client image: ${custom_expected}" >&2
+  exit 1
+}
+
+custom_image="registry.example.invalid/fod-client:validated-build"
+image_plan="$(env -u FOD_DOCKER_DEPLOY_CLIENT_IMAGE -u FOD_CLIENT_VERSION make -C "${ROOT}" --no-print-directory -s docker-deploy-systemd-plan MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION="${custom_version}" FOD_DOCKER_DEPLOY_CLIENT_IMAGE="${custom_image}")"
+grep -Fxq "client_image=${custom_image}" <<<"${image_plan}" || {
+  echo 'Full FOD_DOCKER_DEPLOY_CLIENT_IMAGE override must take precedence over FOD_CLIENT_VERSION.' >&2
+  exit 1
+}
 
 if grep -Eq 'docker[[:space:]]+(system[[:space:]]+)?prune|docker[[:space:]]+volume[[:space:]]+prune' "${SCRIPT}" "${BOOT}"; then
   echo 'systemd deployment must not perform global Docker pruning' >&2
   exit 1
 fi
 
-echo "OK docker-deploy-systemd-policy image=${EXPECTED_IMAGE}"
+echo "OK docker-deploy-systemd-policy image=${EXPECTED_IMAGE} selectable_client_version=1"

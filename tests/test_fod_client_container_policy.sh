@@ -8,10 +8,11 @@ PREFLIGHT="${ROOT}/docker/fod-client/fod-container-preflight.sh"
 ENTRYPOINT="${ROOT}/docker/fod-client/fod-container-entrypoint.sh"
 PUBLISH="${ROOT}/scripts/publish_fod_client.sh"
 MAKEFILE="${ROOT}/Makefile"
+RELEASE_MK="${ROOT}/make/fod-deploy-release.mk"
 README="${ROOT}/docker/fod-client/README.md"
 VERSION="$(tr -d '[:space:]' < "${ROOT}/fod_version.txt")"
 
-for file in "${DOCKERFILE}" "${DOCKERIGNORE}" "${PREFLIGHT}" "${ENTRYPOINT}" "${PUBLISH}" "${MAKEFILE}" "${README}"; do
+for file in "${DOCKERFILE}" "${DOCKERIGNORE}" "${PREFLIGHT}" "${ENTRYPOINT}" "${PUBLISH}" "${MAKEFILE}" "${RELEASE_MK}" "${README}"; do
     [[ -r "${file}" ]] || { echo "Missing ${file}" >&2; exit 1; }
 done
 
@@ -110,6 +111,20 @@ for pattern in \
     grep -Fq -- "${pattern}" "${PUBLISH}" || { echo "Missing FOD client publisher policy: ${pattern}" >&2; exit 1; }
 done
 
+# Deployment selection and image build versioning are deliberately independent.
+grep -Fq 'FOD_CLIENT_VERSION ?= $(FOD_RELEASE_VERSION)' "${RELEASE_MK}" || {
+    echo 'Missing deployment-only FOD_CLIENT_VERSION selector' >&2
+    exit 1
+}
+grep -Fq 'FOD_CLIENT_IMAGE_VERSION ?= $(FOD_RELEASE_VERSION)' "${RELEASE_MK}" || {
+    echo 'Image build/publish must default to repository release version' >&2
+    exit 1
+}
+if grep -Fq 'FOD_CLIENT_VERSION' "${PUBLISH}"; then
+    echo 'FOD_CLIENT_VERSION must not retag binaries in the image publisher' >&2
+    exit 1
+fi
+
 for pattern in \
     'FOD_FORWARD_TARGET,docker-fod-client-build,docker-fod-client-build' \
     'FOD_FORWARD_TARGET,docker-fod-client-publish,docker-fod-client-publish' \
@@ -132,6 +147,8 @@ for pattern in \
     'make docker-fod-client-build' \
     'make test-docker-fod-client-policy' \
     'make docker-fod-client-publish' \
+    'FOD_CLIENT_VERSION' \
+    'FOD_CLIENT_IMAGE_VERSION' \
     "ghcr.io/stachwk/fod-client:${VERSION}" \
     '3.4.1-fuse1' \
     'apparmor=unconfined' \
@@ -153,4 +170,4 @@ if grep -Eq 'docker[[:space:]]+(system[[:space:]]+)?prune|docker[[:space:]]+volu
     exit 1
 fi
 
-echo "OK: FOD client exact release image=${VERSION} is FUSE/AppArmor-aware, PostgreSQL-client-only and uses normalized Make targets"
+echo "OK: FOD client exact release image=${VERSION} is FUSE/AppArmor-aware, PostgreSQL-client-only, deployment-selectable and uses normalized Make targets"

@@ -109,10 +109,24 @@ make docker-deploy-install MASTERS=1 SLAVES=2
 make docker-deploy-smoke MASTERS=1 SLAVES=2
 ```
 
+By default the deployed FOD client tag follows `fod_version.txt`. To run an already-published client build independently of the checkout version, pass `FOD_CLIENT_VERSION`:
+
+```bash
+make docker-deploy-fod-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+```
+
+A full `FOD_DOCKER_DEPLOY_CLIENT_IMAGE=registry/path:tag` override has higher priority than `FOD_CLIENT_VERSION`.
+
 Persistent host startup:
 
 ```bash
 sudo make docker-deploy-systemd-install MASTERS=1 SLAVES=2
+```
+
+The same build selection works for systemd and the resolved full image is persisted in `/etc/fod/docker-deploy.env`:
+
+```bash
+sudo make docker-deploy-systemd-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
 ```
 
 When the systemd service is already active, reinstall/upgrade uses reload and reconciliation instead of a full service restart. Updating the FOD client does not stop or recreate healthy PostgreSQL primary/replica containers. The explicit `docker-deploy-systemd-restart` target remains a full deployment restart.

@@ -35,7 +35,9 @@ Current production PostgreSQL image:
 ghcr.io/stachwk/postgres-16-fod-32k:16.15
 ```
 
-The FOD client is pinned to the exact release from `fod_version.txt`. The mutable `:3.4` tag is only a convenience alias.
+By default the FOD client uses the exact release from `fod_version.txt`. `FOD_CLIENT_VERSION=X.Y.Z` may select another already-published client build without changing the repository/source version. A fully-qualified `FOD_DOCKER_DEPLOY_CLIENT_IMAGE=registry/path:tag` override has the highest deployment priority. The mutable `:3.4` tag remains only a convenience alias.
+
+Image build/publish remains source-version based by default. Selecting `FOD_CLIENT_VERSION` for deployment does not retag binaries built from the current checkout as an older release.
 
 ## I/O size layers
 
@@ -94,6 +96,8 @@ systemctl reload
 This path does not execute `ExecStop`. Healthy PostgreSQL primary/replica containers are therefore preserved during an FOD client reinstall/upgrade.
 
 The image reconciliation guard compares the running FOD container image ID with the required exact image ID. If they differ, only the FOD container/mount is recreated.
+
+For systemd installs the selected client version is resolved to a full image name and persisted as `FOD_DOCKER_DEPLOY_CLIENT_IMAGE` in `/etc/fod/docker-deploy.env`. Later reboots therefore keep using that selected image even if the Git checkout advances to another FOD release.
 
 The behavior was live-validated during the `3.4.4 -> 3.4.5` upgrade: the FOD container changed to the new exact image while primary and both replica container IDs remained unchanged.
 

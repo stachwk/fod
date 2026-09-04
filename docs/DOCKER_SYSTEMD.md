@@ -20,17 +20,31 @@ Systemd configuration is stored in:
 /etc/fod/docker-deploy.env
 ```
 
-That file contains topology, state paths, mount paths and the exact FOD image tag. It does not duplicate PostgreSQL, replication or FOD schema passwords; those remain in the existing protected deployment state under `~/.local/state/fod/docker-deploy/`.
+That file contains topology, state paths, mount paths and the resolved exact FOD image tag. It does not duplicate PostgreSQL, replication or FOD schema passwords; those remain in the existing protected deployment state under `~/.local/state/fod/docker-deploy/`.
 
-## Exact image pin
+## Exact image selection
 
-The normal Make interface derives the FOD client image from `fod_version.txt`. FOD 3.4.7 therefore installs:
+The normal Make interface derives the default FOD client image from `fod_version.txt`. FOD 3.4.8 therefore defaults to:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.7
+ghcr.io/stachwk/fod-client:3.4.8
 ```
 
-The mutable `:3.4` tag remains a convenience alias only and is not the default final deployment image.
+To install systemd with another already-published client build, pass:
+
+```bash
+make docker-deploy-systemd-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
+```
+
+The deployment image precedence is:
+
+```text
+1. FOD_DOCKER_DEPLOY_CLIENT_IMAGE=registry/path:tag
+2. FOD_CLIENT_VERSION=X.Y.Z
+3. fod_version.txt
+```
+
+The selected version is resolved to a full image and written to `/etc/fod/docker-deploy.env` as `FOD_DOCKER_DEPLOY_CLIENT_IMAGE`. A later reboot therefore keeps using that image even if the Git checkout advances to another release. The mutable `:3.4` tag remains a convenience alias only.
 
 ## Install
 
@@ -39,6 +53,12 @@ Inspect the intended unit without changing systemd:
 ```bash
 make docker-deploy-systemd-plan MASTERS=1 SLAVES=2
 make docker-deploy-systemd-render MASTERS=1 SLAVES=2
+```
+
+The same plan can verify an explicit client build before installation:
+
+```bash
+make docker-deploy-systemd-plan MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
 ```
 
 Install, enable and start the unit:
@@ -92,13 +112,14 @@ Uninstalling removes the unit, `/etc/fod/docker-deploy.env`, and the root-owned 
 
 ## Reinstall after a FOD upgrade
 
-After pulling a newer FOD release and publishing its client image, rerun:
+After pulling a newer FOD release, rerun the installer with either the repository-default client image or an explicitly selected published build:
 
 ```bash
 make docker-deploy-systemd-install MASTERS=1 SLAVES=2
+make docker-deploy-systemd-install MASTERS=1 SLAVES=2 FOD_CLIENT_VERSION=3.4.5
 ```
 
-This refreshes the root-owned runtime copy and environment with the new exact image tag.
+This refreshes the root-owned runtime copy and environment with the resolved exact image tag.
 
 When the service is already active, reinstall uses `systemctl reload` rather
 than a full restart. The reload runs the normal start/reconciliation path
