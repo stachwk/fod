@@ -54,6 +54,30 @@ The complete rule is in [`versioning.md`](versioning.md).
 After committing, compare the new commit with its parent and inspect the whole
 change for accidental files, missing updates, regressions and scope drift.
 
+## Documentation maintenance
+
+Classify documentation before editing or adding it:
+
+- **current behavior** -> update `CURRENT_STATE.md` or the relevant task guide
+  linked from [`README.md`](README.md),
+- **durable contract/decision** -> update the relevant requirements, contract or
+  ADR document,
+- **release-specific measurement or implementation evidence** -> keep it as a
+  versioned/dated evidence document and add it to [`HISTORY.md`](HISTORY.md),
+- **future work** -> keep it in `../ROADMAP.md`, `../TODO.md`,
+  `FOD_CURRENT_ACTION_PLAN.md`, `FOD_FUTURE_IDEAS.md` or a focused `*-plan.md`,
+- **execution journal** -> keep it out of current task guides; `../commands.md`
+  and `../conclusions.md` are retained only as chronological work evidence.
+
+Do not edit historical evidence merely to make an old result look current. If a
+new default or lifecycle rule replaces it, update the canonical task document
+and preserve the old evidence as recorded. New canonical guides should be
+linked from `docs/README.md`; new historical evidence should be linked from
+`HISTORY.md`.
+
+The source-of-truth order and documentation classes are defined at the top of
+[`README.md`](README.md).
+
 ## Local validation
 
 The repository intentionally has no active GitHub Actions workflow. Local

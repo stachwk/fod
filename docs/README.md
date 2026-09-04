@@ -4,6 +4,27 @@ Documentation is organized primarily by **task**. Start from the section that
 matches what you want to do. Versioned `FOD_3_*`, dated performance reports and
 plan documents are evidence/history, not the first source for current defaults.
 
+## Documentation classes and source-of-truth order
+
+| Class | Use it for | Primary locations |
+| --- | --- | --- |
+| Current behavior | What FOD does now and how to operate it | [`CURRENT_STATE.md`](CURRENT_STATE.md) and the task guides below |
+| Durable contracts | Compatibility, security, schema/storage and architecture decisions expected to outlive one release | requirement/contract documents and [`adr/`](adr/) |
+| Historical evidence | Release-specific implementation notes, measurements and migration/toolchain baselines | [`HISTORY.md`](HISTORY.md), `FOD_<version>_*.md`, dated profile documents |
+| Plans | Intended work that is not yet a statement of current capability | `../ROADMAP.md`, `../TODO.md`, `FOD_CURRENT_ACTION_PLAN.md`, `FOD_FUTURE_IDEAS.md`, `*-plan.md` |
+| Work journals | Execution logs and accumulated conclusions retained for traceability | `../commands.md`, `../conclusions.md` |
+
+When documents disagree about **current behavior**, use this order:
+
+1. current code, tests, configuration and authoritative version metadata,
+2. [`CURRENT_STATE.md`](CURRENT_STATE.md) and the current task guide for the area,
+3. durable requirement/contract/ADR documents,
+4. historical evidence and work journals,
+5. plans and proposals.
+
+Historical evidence is intentionally not rewritten to match later defaults.
+Update the current task documentation instead.
+
 ## 1. I want to understand the current system
 
 - [`CURRENT_STATE.md`](CURRENT_STATE.md) - compact current architecture,
@@ -138,10 +159,19 @@ uses local Make/Cargo gates.
 - [`adr/storage-object-segment-manifest.md`](adr/storage-object-segment-manifest.md)
   - storage object/segment manifest ADR.
 
-## 12. I want plans, future ideas or historical evidence
+## 12. I want historical evidence or future plans
 
-- [`HISTORY.md`](HISTORY.md) - categorized map of versioned implementation and
-  benchmark evidence.
+### Historical evidence
+
+- [`HISTORY.md`](HISTORY.md) - categorized map of versioned implementation,
+  compatibility/toolchain baselines and benchmark evidence.
+- `../commands.md` - execution journal retained for traceability, not a current
+  operations runbook.
+- `../conclusions.md` - accumulated implementation/benchmark conclusions,
+  potentially spanning older releases.
+
+### Future work
+
 - [`FOD_CURRENT_ACTION_PLAN.md`](FOD_CURRENT_ACTION_PLAN.md) - ordered current
   implementation sequence.
 - [`FOD_FUTURE_IDEAS.md`](FOD_FUTURE_IDEAS.md) - future ideas.
