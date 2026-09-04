@@ -371,7 +371,7 @@ FOD_MONITOR_DSN="host=pg-primary dbname=fod user=fod_monitor ..." fod-monitor cl
 ```
 
 Monitor nie wypisuje DSN ani hasla. Pelny kontrakt jest w
-`docs/FOD_3_3_1_SHARED_MONITORING.md`.
+`docs/history/FOD_3_3_1_SHARED_MONITORING.md`.
 
 Od FOD 3.3.5 `fod-monitor cluster --json` i `fod-monitor report --json` sa
 stabilnym interfejsem maszynowym z `schema_version=1`. `cluster --json` zwraca

@@ -69,7 +69,7 @@ not supported and the request does not reach the FOD userspace xattr callback.
 
 The positive operational support path is host policy controlling access to
 `fusefs_t` content. The detailed support definition, test targets and host
-observations are in [`FOD_3_3_22_ROCKY_SELINUX.md`](FOD_3_3_22_ROCKY_SELINUX.md).
+observations are in [`history/FOD_3_3_22_ROCKY_SELINUX.md`](history/FOD_3_3_22_ROCKY_SELINUX.md).
 
 ## UID/GID, mode bits, ACL and `allow_other`
 

@@ -62,10 +62,10 @@ Classify documentation before editing or adding it:
   linked from [`README.md`](README.md),
 - **durable contract/decision** -> update the relevant requirements, contract or
   ADR document,
-- **release-specific measurement or implementation evidence** -> keep it as a
-  versioned/dated evidence document and add it to [`HISTORY.md`](HISTORY.md),
-- **future work** -> keep it in `../ROADMAP.md`, `../TODO.md`,
-  `FOD_CURRENT_ACTION_PLAN.md`, `FOD_FUTURE_IDEAS.md` or a focused `*-plan.md`,
+- **release-specific measurement or implementation evidence** -> store it under
+  [`history/`](history/) and add it to [`HISTORY.md`](HISTORY.md),
+- **future work** -> keep it in `../ROADMAP.md`, `../TODO.md` or
+  [`plans/`](plans/),
 - **execution journal** -> keep it out of current task guides; `../commands.md`
   and `../conclusions.md` are retained only as chronological work evidence.
 
@@ -73,7 +73,7 @@ Do not edit historical evidence merely to make an old result look current. If a
 new default or lifecycle rule replaces it, update the canonical task document
 and preserve the old evidence as recorded. New canonical guides should be
 linked from `docs/README.md`; new historical evidence should be linked from
-`HISTORY.md`.
+`HISTORY.md`; maintained plans should be linked from `plans/README.md`.
 
 The source-of-truth order and documentation classes are defined at the top of
 [`README.md`](README.md).
@@ -142,8 +142,9 @@ The profiling workflow is in [`performance.md`](performance.md), while accepted
 benchmark baselines are summarized in [`../BENCHMARKS.md`](../BENCHMARKS.md)
 and [`performance-baselines.md`](performance-baselines.md).
 
-Keep historical benchmark/experiment documents as evidence; do not make them
-the source of current defaults. See [`HISTORY.md`](HISTORY.md).
+Keep historical benchmark/experiment documents under [`history/`](history/) as
+evidence; do not make them the source of current defaults. See
+[`HISTORY.md`](HISTORY.md).
 
 ## Indexer changes
 
@@ -173,8 +174,8 @@ current behavior:
 
 - [`../ROADMAP.md`](../ROADMAP.md),
 - [`../TODO.md`](../TODO.md),
-- [`FOD_CURRENT_ACTION_PLAN.md`](FOD_CURRENT_ACTION_PLAN.md),
-- [`FOD_FUTURE_IDEAS.md`](FOD_FUTURE_IDEAS.md).
+- [`plans/FOD_CURRENT_ACTION_PLAN.md`](plans/FOD_CURRENT_ACTION_PLAN.md),
+- [`plans/FOD_FUTURE_IDEAS.md`](plans/FOD_FUTURE_IDEAS.md).
 
 Plans describe intended work. `CURRENT_STATE.md`, current configuration and the
 runtime/tests describe what exists now.

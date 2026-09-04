@@ -24,10 +24,10 @@ That file contains topology, state paths, mount paths and the resolved exact FOD
 
 ## Exact image selection
 
-The normal Make interface derives the default FOD client image from `fod_version.txt`. FOD 3.4.9 therefore defaults to:
+The normal Make interface derives the default FOD client image from `fod_version.txt`. FOD 3.4.10 therefore defaults to:
 
 ```text
-ghcr.io/stachwk/fod-client:3.4.9
+ghcr.io/stachwk/fod-client:3.4.10
 ```
 
 To install systemd with another already-published client build, pass:

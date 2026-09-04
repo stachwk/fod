@@ -53,11 +53,11 @@ Start with [`docs/README.md`](docs/README.md). It groups documentation by the jo
 | profile or optimize performance | [`docs/performance.md`](docs/performance.md) |
 | index/import external sources | [`docs/fod-indexer.md`](docs/fod-indexer.md) |
 | develop FOD or change schema/contracts | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
-| inspect benchmark history | [`BENCHMARKS.md`](BENCHMARKS.md), [`docs/HISTORY.md`](docs/HISTORY.md) |
-| inspect planned work | [`ROADMAP.md`](ROADMAP.md), [`TODO.md`](TODO.md) |
+| inspect benchmark/history evidence | [`BENCHMARKS.md`](BENCHMARKS.md), [`docs/HISTORY.md`](docs/HISTORY.md), [`docs/history/`](docs/history/) |
+| inspect planned work | [`ROADMAP.md`](ROADMAP.md), [`TODO.md`](TODO.md), [`docs/plans/`](docs/plans/) |
 | follow validation procedures | [`zasady_sprawdzen.md`](zasady_sprawdzen.md) |
 
-Versioned documents such as `docs/FOD_3_*` are historical implementation and measurement records. They remain useful evidence, but they are not the canonical source for current defaults. [`docs/HISTORY.md`](docs/HISTORY.md) maps that evidence by topic.
+Versioned documents such as `docs/history/FOD_3_*` are historical implementation and measurement records. They remain useful evidence, but they are not the canonical source for current defaults. [`docs/HISTORY.md`](docs/HISTORY.md) maps that evidence by topic.
 
 ## Quick local development path
 

@@ -1,32 +1,31 @@
 # FOD historical evidence map
 
 This file indexes **historical evidence**: release-specific implementation
-notes, measurements, compatibility/toolchain baselines and work records that
-help explain how current FOD behavior was reached.
+notes, measurements, compatibility/toolchain baselines, completed design plans
+and work records that help explain how current FOD behavior was reached.
 
-For current behavior start from [`README.md`](README.md) and
+Historical documents are stored physically under [`history/`](history/). For
+current behavior start from [`README.md`](README.md) and
 [`CURRENT_STATE.md`](CURRENT_STATE.md). For intended future work use
-`../ROADMAP.md`, `../TODO.md`, `FOD_CURRENT_ACTION_PLAN.md` and
-`FOD_FUTURE_IDEAS.md`. Plans are deliberately not indexed here as implemented
-history.
+`../ROADMAP.md`, `../TODO.md` and [`plans/`](plans/).
 
 ## FUSE, storage and I/O evolution
 
 Release-specific sizing/buffering work:
 
-- `FOD_3_2_85_FUSE_512K_IO_PLAN.md`
-- `FOD_3_2_87_FUSE_SPLIT_WRITE_BUFFERING.md`
-- `FOD_3_2_88_MULTI_HANDLE_WRITE_VISIBILITY.md`
-- `FOD_3_2_89_DEFAULT_WRITE_256K.md`
-- `FOD_3_2_90_DEFAULT_WRITE_512K.md`
-- `FOD_3_2_90_IO_BASELINE_4K_1M.md`
-- `FOD_3_3_19_FUSE_MAX_WRITE_CONFIG_DEFAULT.md`
+- [`FOD_3_2_85_FUSE_512K_IO_PLAN.md`](history/FOD_3_2_85_FUSE_512K_IO_PLAN.md)
+- [`FOD_3_2_87_FUSE_SPLIT_WRITE_BUFFERING.md`](history/FOD_3_2_87_FUSE_SPLIT_WRITE_BUFFERING.md)
+- [`FOD_3_2_88_MULTI_HANDLE_WRITE_VISIBILITY.md`](history/FOD_3_2_88_MULTI_HANDLE_WRITE_VISIBILITY.md)
+- [`FOD_3_2_89_DEFAULT_WRITE_256K.md`](history/FOD_3_2_89_DEFAULT_WRITE_256K.md)
+- [`FOD_3_2_90_DEFAULT_WRITE_512K.md`](history/FOD_3_2_90_DEFAULT_WRITE_512K.md)
+- [`FOD_3_2_90_IO_BASELINE_4K_1M.md`](history/FOD_3_2_90_IO_BASELINE_4K_1M.md)
+- [`FOD_3_3_19_FUSE_MAX_WRITE_CONFIG_DEFAULT.md`](history/FOD_3_3_19_FUSE_MAX_WRITE_CONFIG_DEFAULT.md)
 
 FUSE/library compatibility baselines:
 
-- `fuse-abi-7-31-current-baseline.md`
-- `fuse-protocol-7-32-7-40-capabilities.md`
-- `fuser-0-17-migration-baseline.md`
+- [`fuse-abi-7-31-current-baseline.md`](history/fuse-abi-7-31-current-baseline.md)
+- [`fuse-protocol-7-32-7-40-capabilities.md`](history/fuse-protocol-7-32-7-40-capabilities.md)
+- [`fuser-0-17-migration-baseline.md`](history/fuser-0-17-migration-baseline.md)
 
 These documents explain how request/buffer and protocol decisions evolved.
 They do not override current `fod_config*.ini`, tests or
@@ -34,13 +33,13 @@ They do not override current `fod_config*.ini`, tests or
 
 ## PostgreSQL, routing and failover evolution
 
-- `FOD_3_3_18_POSTGRESQL_PLANNER_STABILITY.md`
-- `FOD_3_4_1_PRIMARY_REPLICA_BENCHMARK.md`
-- `FOD_3_4_1_PRIMARY_WRITE_POSTGRES_PROFILE.md`
-- `postgresql-multi-endpoint-phase-1.md`
-- `postgresql-multi-endpoint-phase-2.md`
-- `postgresql-multi-endpoint-phase-3.md`
-- `postgresql-multi-endpoint-phase-4.md`
+- [`FOD_3_3_18_POSTGRESQL_PLANNER_STABILITY.md`](history/FOD_3_3_18_POSTGRESQL_PLANNER_STABILITY.md)
+- [`FOD_3_4_1_PRIMARY_REPLICA_BENCHMARK.md`](history/FOD_3_4_1_PRIMARY_REPLICA_BENCHMARK.md)
+- [`FOD_3_4_1_PRIMARY_WRITE_POSTGRES_PROFILE.md`](history/FOD_3_4_1_PRIMARY_WRITE_POSTGRES_PROFILE.md)
+- [`postgresql-multi-endpoint-phase-1.md`](history/postgresql-multi-endpoint-phase-1.md)
+- [`postgresql-multi-endpoint-phase-2.md`](history/postgresql-multi-endpoint-phase-2.md)
+- [`postgresql-multi-endpoint-phase-3.md`](history/postgresql-multi-endpoint-phase-3.md)
+- [`postgresql-multi-endpoint-phase-4.md`](history/postgresql-multi-endpoint-phase-4.md)
 
 For the current runtime contract use
 [`POSTGRESQL_REQUIREMENTS.md`](POSTGRESQL_REQUIREMENTS.md),
@@ -50,22 +49,23 @@ For the current runtime contract use
 
 ## Runtime, observability and build/tooling history
 
-- `FOD_3_3_1_SHARED_MONITORING.md`
-- `FOD_3_3_20_SHM_CARGO_TARGET.md`
-- `FOD_3_3_21_CONTROLLED_TARGET_CLEANUP.md`
-- `FOD_3_3_22_AUX_TARGET_CLEANUP.md`
-- `FOD_TEST_FUSE_CLEANUP_HARDENING.md`
-- `FOD_3_3_31_INSTANCE_LOGGING.md`
-- `FOD_3_3_23_RUST_TOOLCHAIN_BENCHMARK.md`
-- `FOD_3_3_24_RUST_1_98_RELEASE_LTO.md`
+- [`FOD_3_3_1_SHARED_MONITORING.md`](history/FOD_3_3_1_SHARED_MONITORING.md)
+- [`FOD_3_3_20_SHM_CARGO_TARGET.md`](history/FOD_3_3_20_SHM_CARGO_TARGET.md)
+- [`FOD_3_3_21_CONTROLLED_TARGET_CLEANUP.md`](history/FOD_3_3_21_CONTROLLED_TARGET_CLEANUP.md)
+- [`FOD_3_3_22_AUX_TARGET_CLEANUP.md`](history/FOD_3_3_22_AUX_TARGET_CLEANUP.md)
+- [`FOD_TEST_FUSE_CLEANUP_HARDENING.md`](history/FOD_TEST_FUSE_CLEANUP_HARDENING.md)
+- [`FOD_3_3_31_INSTANCE_LOGGING.md`](history/FOD_3_3_31_INSTANCE_LOGGING.md)
+- [`FOD_3_3_23_RUST_TOOLCHAIN_BENCHMARK.md`](history/FOD_3_3_23_RUST_TOOLCHAIN_BENCHMARK.md)
+- [`FOD_3_3_24_RUST_1_98_RELEASE_LTO.md`](history/FOD_3_3_24_RUST_1_98_RELEASE_LTO.md)
 
 The current Rust toolchain comes from `../rust-toolchain.toml`; old toolchain
 benchmarks are evidence, not a version pin.
 
 ## Host-security evidence
 
-- `FOD_3_3_22_ROCKY_SELINUX.md` - verified Rocky Linux SELinux behavior behind
-  the current host-security guidance.
+- [`FOD_3_3_22_ROCKY_SELINUX.md`](history/FOD_3_3_22_ROCKY_SELINUX.md) -
+  verified Rocky Linux SELinux behavior behind the current host-security
+  guidance.
 
 For current policy use [`SECURITY.md`](SECURITY.md) and
 [`FOD_RUNTIME_PRIVILEGE_POLICY.md`](FOD_RUNTIME_PRIVILEGE_POLICY.md).
@@ -74,19 +74,35 @@ For current policy use [`SECURITY.md`](SECURITY.md) and
 
 These reports are tied to their recorded commit, environment and workload:
 
-- `performance-data-blocks-profile-2026-07-01.md`
-- `performance-profile-io-visibility-2026-07-01.md`
-- `performance-data-blocks-conflict-noop-profile-2026-07-03.md`
-- `performance-data-blocks-conflict-profile-2026-07-03.md`
-- `performance-data-blocks-dml-profile-2026-07-03.md`
-- `performance-data-blocks-swap-profile-2026-07-03.md`
-- `performance-data-blocks-swap-repeat-profile-2026-07-04.md`
+- [`performance-data-blocks-profile-2026-07-01.md`](history/performance-data-blocks-profile-2026-07-01.md)
+- [`performance-profile-io-visibility-2026-07-01.md`](history/performance-profile-io-visibility-2026-07-01.md)
+- [`performance-data-blocks-conflict-noop-profile-2026-07-03.md`](history/performance-data-blocks-conflict-noop-profile-2026-07-03.md)
+- [`performance-data-blocks-conflict-profile-2026-07-03.md`](history/performance-data-blocks-conflict-profile-2026-07-03.md)
+- [`performance-data-blocks-dml-profile-2026-07-03.md`](history/performance-data-blocks-dml-profile-2026-07-03.md)
+- [`performance-data-blocks-swap-profile-2026-07-03.md`](history/performance-data-blocks-swap-profile-2026-07-03.md)
+- [`performance-data-blocks-swap-repeat-profile-2026-07-04.md`](history/performance-data-blocks-swap-repeat-profile-2026-07-04.md)
 
 For a new optimization start from [`performance.md`](performance.md), capture a
 current baseline and compare like-for-like runs. Accepted baseline summaries
 belong in `../BENCHMARKS.md` and
 [`performance-baselines.md`](performance-baselines.md), not in an old dated
 report.
+
+## Completed project and planning records
+
+These documents have plan/roadmap-style names but their own status or content
+shows that they now primarily record completed implementation/design work:
+
+- [`quota-lock-concurrency-plan.md`](history/quota-lock-concurrency-plan.md) -
+  completed quota-lock concurrency redesign/validation record,
+- [`storage-engine-v2-plan.md`](history/storage-engine-v2-plan.md) - retired
+  Storage Engine v2/extent experiment record,
+- [`indexer-catalog-snapshot-regression-plan.md`](history/indexer-catalog-snapshot-regression-plan.md)
+  - implemented catalogue-snapshot regression plan,
+- [`fod-roadmap-3.2.62-plus.md`](history/fod-roadmap-3.2.62-plus.md) - execution
+  roadmap tied to the historical 3.2.62+ sequence.
+
+Active and future plans are indexed from [`plans/README.md`](plans/README.md).
 
 ## Long-running work journals
 
@@ -123,9 +139,10 @@ task guide.
 When behavior changes:
 
 - update the current task/canonical document,
-- add a release-specific or dated evidence document only when its measurement,
-  compatibility result or implementation reasoning is useful on its own,
+- add a release-specific, dated or completed-project evidence document under
+  `history/` only when its measurement, compatibility result or implementation
+  reasoning is useful on its own,
 - add new historical evidence to this index,
 - do not rewrite old evidence to make it appear to describe later defaults,
-- keep future plans in roadmap/TODO/plan documents rather than mixing them into
-  this historical index.
+- keep active/future plans under `plans/`, `ROADMAP.md` or `TODO.md` rather than
+  mixing them into this historical index.
