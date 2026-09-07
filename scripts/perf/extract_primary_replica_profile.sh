@@ -51,6 +51,22 @@ profile_named_line() {
     grep "${record} name=${name} " "${phase_log}" | tail -n 1 || true
 }
 
+profile_named_line_any() {
+    local phase_log="$1"
+    local record="$2"
+    shift 2
+
+    local name line
+    for name in "$@"; do
+        line="$(profile_named_line "${phase_log}" "${record}" "${name}")"
+        if [[ -n "${line}" ]]; then
+            printf '%s' "${line}"
+            return 0
+        fi
+    done
+    return 0
+}
+
 ratio() {
     local numerator="${1:-0}"
     local denominator="${2:-0}"
@@ -78,7 +94,7 @@ print_compact_phase() {
     local phase_log="$2"
     local logical_line lane_line
     local fuse_read_line read_block_map_line repo_fetch_line assemble_line reply_data_line
-    local fetch_line decode_line
+    local fetch_line decode_line fetch_statement_name
     local admitted_tasks operation_count fetch_count fetch_rows fetch_bytes fetch_total_us
     local decode_total_us decode_rows decode_bytes
 
@@ -95,11 +111,14 @@ print_compact_phase() {
     repo_fetch_line="$(profile_field_line "${phase_log}" repo_fetch_block_range_us)"
     assemble_line="$(profile_field_line "${phase_log}" assemble_read_slice_us)"
     reply_data_line="$(profile_field_line "${phase_log}" reply_data_us)"
-    fetch_line="$(profile_named_line "${phase_log}" pg_prepared_statement fod_fetch_block_range)"
-    decode_line="$(profile_named_line "${phase_log}" pg_result_decode fod_fetch_block_range)"
+    fetch_line="$(profile_named_line_any "${phase_log}" pg_prepared_statement \
+        fod_fetch_block_range_with_size fod_fetch_block_range)"
+    decode_line="$(profile_named_line_any "${phase_log}" pg_result_decode \
+        fod_fetch_block_range_with_size fod_fetch_block_range)"
 
     admitted_tasks="$(field_value "${logical_line}" admitted_tasks)"
     operation_count="$(field_value "${lane_line}" operation_count)"
+    fetch_statement_name="$(field_value "${fetch_line}" name)"
     fetch_count="$(field_value "${fetch_line}" count)"
     fetch_rows="$(field_value "${fetch_line}" result_rows)"
     fetch_bytes="$(field_value "${fetch_line}" result_bytes)"
@@ -130,6 +149,7 @@ print_compact_phase() {
     printf ' write_transaction_backpressure_events=%s' "$(field_value "${lane_line}" write_transaction_backpressure_events)"
 
     printf ' profile_attribution_available=%s' "$([[ -n "${fetch_line}" ]] && echo 1 || echo 0)"
+    printf ' fetch_statement_name=%s' "${fetch_statement_name}"
     printf ' fuse_read_total_us=%s' "$(field_value "${fuse_read_line}" fuse_read_total_us)"
     printf ' read_block_map_us=%s' "$(field_value "${read_block_map_line}" read_block_map_us)"
     printf ' repo_fetch_block_range_us=%s' "$(field_value "${repo_fetch_line}" repo_fetch_block_range_us)"
