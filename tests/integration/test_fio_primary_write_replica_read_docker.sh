@@ -228,6 +228,20 @@ export FOD_LOG_LEVEL=info
 fod_test_setup "${ROOT}"
 fod_test_init_schema
 
+STORAGE_BLOCK_SIZE_BYTES="$(
+    psql_primary -c "SELECT value FROM fod.config WHERE key = 'block_size'"
+)"
+STORAGE_BLOCK_SIZE_BYTES="$(
+    printf '%s' "${STORAGE_BLOCK_SIZE_BYTES}" | tr -d '[:space:]'
+)"
+if [[ ! "${STORAGE_BLOCK_SIZE_BYTES}" =~ ^[0-9]+$ ]] \
+    || [[ "${STORAGE_BLOCK_SIZE_BYTES}" -le 0 ]]; then
+    echo "Invalid persisted FOD storage block size: ${STORAGE_BLOCK_SIZE_BYTES:-empty}" >&2
+    exit 1
+fi
+printf 'storage_block_size_bytes=%s\n' "${STORAGE_BLOCK_SIZE_BYTES}" \
+    | tee "${ARTIFACT_DIR}/storage-geometry.txt"
+
 TEST_BASENAME="fio-primary-replica-${RUN_ID}.bin"
 
 echo "=== PHASE 1: PRIMARY WRITE ==="
@@ -417,15 +431,15 @@ fi
 
 fod_test_write_power_metadata "${ARTIFACT_DIR}/power-after.txt" "after"
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "block_size" "file_size" "payload_mode" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "block_size" "storage_block_size_bytes" "file_size" "payload_mode" \
     "primary_write_mib_s" "primary_write_iops" \
     "primary_read_mib_s" "primary_read_iops" \
     "replica_read_mib_s" "replica_read_iops" \
     "replica_operation_failures" "replica_write_guard" \
     >"${ARTIFACT_DIR}/result.tsv"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "${BLOCK_SIZE}" "${FILE_SIZE}" "${PAYLOAD_MODE}" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "${BLOCK_SIZE}" "${STORAGE_BLOCK_SIZE_BYTES}" "${FILE_SIZE}" "${PAYLOAD_MODE}" \
     "${WRITE_MIB}" "${WRITE_IOPS}" \
     "${PRIMARY_READ_MIB}" "${PRIMARY_READ_IOPS}" \
     "${REPLICA_READ_MIB}" "${REPLICA_READ_IOPS}" \
@@ -434,6 +448,8 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 
 echo "=== RESULT ==="
 cat "${ARTIFACT_DIR}/result.tsv"
+echo "--- storage geometry ---"
+cat "${ARTIFACT_DIR}/storage-geometry.txt"
 echo "--- replication ---"
 cat "${ARTIFACT_DIR}/replication.txt"
 echo "primary stopped before replica read: yes"
@@ -443,5 +459,5 @@ echo "FOD read cache/read-ahead/prefetch disabled: yes"
 echo "FOD FUSE direct_io enabled: yes"
 echo "host kernel page cache dropped: no"
 
-echo "PERF_RESULT block_size=${BLOCK_SIZE} file_size=${FILE_SIZE} payload_mode=${PAYLOAD_MODE} primary_write_mib_s=${WRITE_MIB} primary_write_iops=${WRITE_IOPS} primary_read_mib_s=${PRIMARY_READ_MIB} primary_read_iops=${PRIMARY_READ_IOPS} replica_read_mib_s=${REPLICA_READ_MIB} replica_read_iops=${REPLICA_READ_IOPS} replica_operation_failures=${FINAL_OPERATION_FAILURES} replica_write_guard=read_only_rejected"
+echo "PERF_RESULT block_size=${BLOCK_SIZE} storage_block_size_bytes=${STORAGE_BLOCK_SIZE_BYTES} file_size=${FILE_SIZE} payload_mode=${PAYLOAD_MODE} primary_write_mib_s=${WRITE_MIB} primary_write_iops=${WRITE_IOPS} primary_read_mib_s=${PRIMARY_READ_MIB} primary_read_iops=${PRIMARY_READ_IOPS} replica_read_mib_s=${REPLICA_READ_MIB} replica_read_iops=${REPLICA_READ_IOPS} replica_operation_failures=${FINAL_OPERATION_FAILURES} replica_write_guard=read_only_rejected"
 echo "OK: primary write/read -> WAL replay -> primary stopped -> replica read"

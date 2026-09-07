@@ -20,8 +20,8 @@ SINGLE="${ROOT}/tests/integration/test_fio_primary_write_replica_read_docker.sh"
 
 mkdir -p "${ARTIFACT_DIR}"
 SUMMARY="${ARTIFACT_DIR}/summary.tsv"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "block_size" "file_size" "payload_mode" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "block_size" "storage_block_size_bytes" "file_size" "payload_mode" \
     "primary_write_mib_s" "primary_write_iops" \
     "primary_read_mib_s" "primary_read_iops" \
     "replica_read_mib_s" "replica_read_iops" \
@@ -63,8 +63,16 @@ for block_size in ${BLOCK_SIZES}; do
             exit 1
         }
 
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        storage_block_size_bytes="$(field "${result}" storage_block_size_bytes)"
+        if [[ ! "${storage_block_size_bytes}" =~ ^[0-9]+$ ]] \
+            || [[ "${storage_block_size_bytes}" -le 0 ]]; then
+            echo "Missing or invalid storage_block_size_bytes for block_size=${block_size} payload_mode=${payload_mode}" >&2
+            exit 1
+        fi
+
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$(field "${result}" block_size)" \
+            "${storage_block_size_bytes}" \
             "$(field "${result}" file_size)" \
             "$(field "${result}" payload_mode)" \
             "$(field "${result}" primary_write_mib_s)" \

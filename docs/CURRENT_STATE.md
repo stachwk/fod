@@ -43,7 +43,9 @@ Image build/publish remains source-version based by default. Selecting `FOD_CLIE
 
 The production payload model is **block-only**. Durable file payload is canonical in `fod.data_blocks`; the former extent runtime path was retired after migration of legacy extent data back to blocks.
 
-The logical FOD storage block remains 4 KiB. Historical extent-engine plans, measurements and migration records are retained under [`history/`](history/) as evidence, but they are not alternate current runtime paths and must not be used to infer present storage behavior.
+The default logical FOD storage block for **newly initialized** filesystems is 32 KiB. The storage block size is persisted per filesystem in `fod.config` as `block_size`; existing filesystems keep the value with which they were initialized, including historical 4 KiB filesystems. Changing an existing filesystem to another block size requires an explicit data-format migration/rewrite and is not a runtime tuning operation.
+
+Historical extent-engine plans, measurements and migration records are retained under [`history/`](history/) as evidence, but they are not alternate current runtime paths and must not be used to infer present storage behavior.
 
 A future payload-format change requires an explicit storage-format/compatibility decision and migration plan; it must not be introduced as an implicit performance shortcut.
 
@@ -53,15 +55,15 @@ These values describe different layers and must not be conflated:
 
 | Layer | Current default/reference | Meaning |
 | --- | ---: | --- |
-| FOD storage block | 4 KiB | logical block used by FOD storage layout |
+| FOD storage block | 32 KiB for newly initialized filesystems | logical block persisted per filesystem in `fod.config`; existing filesystems retain their recorded value |
 | FUSE max write | 1 MiB | request ceiling exposed/configured for FUSE writes |
 | FUSE max readahead | 512 KiB | readahead ceiling |
-| base persist chunk | 128 FOD blocks = 512 KiB | normal PostgreSQL payload batching unit |
+| base persist chunk | 128 FOD blocks = 4 MiB at the 32 KiB default | normal PostgreSQL payload batching unit; byte size scales with the filesystem's persisted storage block size |
 | PostgreSQL server block | 32 KiB | `BLCKSZ` of the reference PostgreSQL Docker image |
 
-The storage block remains 4 KiB. Increasing a FUSE request size does **not** change the on-database FOD storage format.
+Increasing a FUSE request size does **not** change the on-database FOD storage format. A 32 KiB default applies only when a new filesystem is initialized without an explicit `--block-size`; an existing filesystem continues to use its persisted `block_size`.
 
-Current repository defaults are defined by `../fod_config.ini` and `../fod_config.example.ini`.
+The new-filesystem storage default is owned by `fod-rust-mkfs`; current runtime/FUSE defaults are defined by `../fod_config.ini` and `../fod_config.example.ini`.
 
 ## PostgreSQL deployment behavior
 

@@ -31,7 +31,7 @@ The authoritative project version is [`fod_version.txt`](fod_version.txt).
 | `rust_indexer` | source registration, scan/hash/import tooling |
 | PostgreSQL | durable metadata, payload, locks, sessions and replication |
 
-The production Docker reference deployment uses PostgreSQL 16 with a 32 KiB server block size. This is independent of the FOD storage block size and FUSE request sizes.
+The production Docker reference deployment uses PostgreSQL 16 with a 32 KiB server block size. This is independent of the per-filesystem FOD storage block size and FUSE request sizes.
 
 For the exact current defaults and lifecycle guarantees, see [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md).
 
@@ -142,13 +142,13 @@ Main examples:
 
 Important size layers are deliberately separate:
 
-- FOD storage block: 4 KiB,
+- FOD storage block: 32 KiB by default for newly initialized filesystems; existing filesystems keep the `block_size` persisted in `fod.config`,
 - FUSE max write request: 1 MiB by default,
 - FUSE max readahead: 512 KiB by default,
-- base persist chunk: 128 FOD blocks = 512 KiB,
+- base persist chunk: 128 FOD blocks = 4 MiB with the 32 KiB default, and scales with the persisted block size of the filesystem,
 - PostgreSQL block size in the production Docker image: 32 KiB.
 
-Changing a FUSE request size does not change the FOD on-database storage block format.
+Changing a FUSE request size does not change the FOD on-database storage block format. Storage block geometry is an init-time filesystem choice and remains the value persisted for that filesystem unless an explicit data-format migration/rewrite is performed.
 
 ## Main binaries
 

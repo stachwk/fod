@@ -17,6 +17,24 @@ write default. The current standard repository configuration uses `1MiB` for
 compact list of current defaults, see [`CURRENT_STATE.md`](CURRENT_STATE.md)
 and the current `../fod_config.ini` / `../fod_config.example.ini` files.
 
+## Storage block geometry
+
+The default storage block size for **newly initialized** FOD filesystems is
+32 KiB (`32768` bytes). `fod-rust-mkfs init --block-size` may explicitly select
+another supported size at initialization time.
+
+The selected size is persisted per filesystem in `fod.config` under the
+`block_size` key. Existing filesystems keep their recorded value, including
+historical 4 KiB filesystems; upgrading FOD does not rewrite that geometry.
+Changing an existing filesystem to another storage block size requires an
+explicit data-format migration/rewrite and must not be treated as a runtime
+configuration change.
+
+Any runtime setting expressed in FOD blocks therefore scales in bytes with the
+filesystem's persisted `block_size`. Documentation that gives a byte equivalent
+for a block-count setting uses the 32 KiB new-filesystem default unless it says
+otherwise.
+
 ## FUSE concurrency and logical admission
 
 ### `fuse_event_threads`
@@ -74,10 +92,11 @@ during the FUSE `init` handshake. The current standard repository default is
 `fuser` reports a smaller supported value, FOD retries with that value and
 continues mounting.
 
-This setting does not change the FOD storage block size. Storage blocks remain
-schema-defined (normally 4 KiB), so a 1 MiB FUSE write request may span 256
-normal FOD blocks. `512KiB` and `256KiB` remain supported as explicit INI or
-`FOD_FUSE_MAX_WRITE_BYTES` overrides.
+This setting does not change the FOD storage block size. A newly initialized
+filesystem defaults to 32 KiB storage blocks, so a 1 MiB FUSE write request may
+span 32 default FOD blocks. An existing 4 KiB filesystem would span 256 of its
+persisted blocks for the same request. `512KiB` and `256KiB` remain supported as
+explicit INI or `FOD_FUSE_MAX_WRITE_BYTES` overrides.
 
 ### `fuse_max_readahead_bytes`
 
@@ -90,17 +109,17 @@ that exposes no readahead capacity is logged with effective value `0`.
 
 This is separate from `read_ahead_blocks` and
 `sequential_read_ahead_blocks`. Those settings control FOD's internal block
-prefetch policy and remain `4` and `8` by default; FOD 3.2.85 does not enlarge
-random-read prefetch to 512 KiB.
+prefetch policy and remain `4` and `8` by default; with the 32 KiB
+new-filesystem default those correspond to 128 KiB and 256 KiB respectively,
+while existing filesystems scale them using their persisted `block_size`.
 
 `direct_io_read_prefetch_blocks` controls an additional internal prefetch
-window for sequential `fopen_direct_io` reads. The default is `512` blocks, so a
-4 KiB storage block maps to a 2 MiB range fetch after FOD has observed a
-sequential direct-I/O stream. This does not change the storage block format and
-does not change the kernel's callback size; it reduces repeated PostgreSQL range
-fetches behind 4 KiB direct-I/O callbacks. Set
-`FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=0` to reproduce the old no-prefetch
-diagnostic path.
+window for sequential `fopen_direct_io` reads. The default is `512` blocks,
+which is a 16 MiB range on a 32 KiB filesystem and a 2 MiB range on a historical
+4 KiB filesystem. This does not change the storage block format and does not
+change the kernel's callback size; it reduces repeated PostgreSQL range fetches
+behind direct-I/O callbacks. Set `FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=0` to
+reproduce the old no-prefetch diagnostic path.
 
 The startup log reports both requested and effective limits. With the current
 standard request sizes a representative line is:

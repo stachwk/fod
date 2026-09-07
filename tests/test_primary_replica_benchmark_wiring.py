@@ -88,6 +88,20 @@ class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
         self.assertIn("payload_mode=${PAYLOAD_MODE}", self.single)
         self.assertIn("PERF_RESULT block_size=", self.single)
 
+    def test_single_run_records_persisted_storage_geometry(self) -> None:
+        self.assertIn(
+            "SELECT value FROM fod.config WHERE key = 'block_size'",
+            self.single,
+        )
+        self.assertIn('STORAGE_BLOCK_SIZE_BYTES="$(', self.single)
+        self.assertIn("storage-geometry.txt", self.single)
+        self.assertIn("storage_block_size_bytes=%s", self.single)
+        self.assertIn(
+            "storage_block_size_bytes=${STORAGE_BLOCK_SIZE_BYTES}",
+            self.single,
+        )
+        self.assertIn('"storage_block_size_bytes"', self.single)
+
     def test_matrix_collects_primary_and_replica_results(self) -> None:
         self.assertIn('BLOCK_SIZES="${FIO_BLOCK_SIZES:-', self.matrix)
         self.assertIn('PAYLOAD_MODES="${FIO_PAYLOAD_MODES:-pattern}"', self.matrix)
@@ -95,6 +109,8 @@ class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
         self.assertIn("for payload_mode in ${PAYLOAD_MODES}; do", self.matrix)
         self.assertIn('FIO_PAYLOAD_MODE="${payload_mode}"', self.matrix)
         self.assertIn("payload_mode", self.matrix)
+        self.assertIn("storage_block_size_bytes", self.matrix)
+        self.assertIn('field "${result}" storage_block_size_bytes', self.matrix)
         self.assertIn("primary_write_mib_s", self.matrix)
         self.assertIn("primary_read_mib_s", self.matrix)
         self.assertIn("replica_read_mib_s", self.matrix)

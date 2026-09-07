@@ -31,7 +31,7 @@ Autorytatywna wersja projektu znajduje sie w [`fod_version.txt`](fod_version.txt
 | `rust_indexer` | rejestracja zrodel, scan/hash/import |
 | PostgreSQL | trwale metadane, payload, locki, sesje i replikacja |
 
-Referencyjny deployment Docker uzywa PostgreSQL 16 z serwerowym block size 32 KiB. Ten rozmiar strony PostgreSQL jest niezalezny od bloku storage FOD i od rozmiaru requestow FUSE.
+Referencyjny deployment Docker uzywa PostgreSQL 16 z serwerowym block size 32 KiB. Ten rozmiar strony PostgreSQL jest niezalezny od rozmiaru bloku storage utrwalonego osobno dla kazdego filesystemu FOD i od rozmiaru requestow FUSE.
 
 Aktualne defaulty i lifecycle sa opisane w [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md).
 
@@ -142,13 +142,13 @@ Glowne pliki:
 
 Warstwy rozmiarow sa niezalezne:
 
-- blok storage FOD: 4 KiB,
+- blok storage FOD: 32 KiB domyslnie dla nowo inicjalizowanych filesystemow; istniejacy filesystem zachowuje `block_size` utrwalony w `fod.config`,
 - domyslny maksymalny request zapisu FUSE: 1 MiB,
 - domyslny FUSE readahead: 512 KiB,
-- bazowy persist chunk: 128 blokow FOD = 512 KiB,
+- bazowy persist chunk: 128 blokow FOD = 4 MiB przy domyslnym bloku 32 KiB i skaluje sie z rozmiarem bloku utrwalonym dla danego filesystemu,
 - block size PostgreSQL w produkcyjnym obrazie Docker: 32 KiB.
 
-Zmiana rozmiaru requestu FUSE nie zmienia formatu blokow storage FOD w bazie.
+Zmiana rozmiaru requestu FUSE nie zmienia formatu blokow storage FOD w bazie. Geometria storage jest wyborem z momentu inicjalizacji filesystemu i pozostaje wartoscia utrwalona dla tego filesystemu, dopoki nie zostanie wykonana jawna migracja/rewrite formatu danych.
 
 ## Glowne programy
 
