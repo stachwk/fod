@@ -153,6 +153,7 @@ print_compact_phase() {
     printf ' write_transaction_backpressure_events=%s' "$(field_value "${lane_line}" write_transaction_backpressure_events)"
 
     printf ' profile_attribution_available=%s' "$([[ -n "${fetch_line}" ]] && echo 1 || echo 0)"
+    printf ' lane_observability_available=%s' "$([[ -n "${lane_line}" ]] && echo 1 || echo 0)"
     printf ' fetch_statement_name=%s' "${fetch_statement_name}"
     printf ' fuse_read_total_us=%s' "$(field_value "${fuse_read_line}" fuse_read_total_us)"
     printf ' read_block_map_us=%s' "$(field_value "${read_block_map_line}" read_block_map_us)"

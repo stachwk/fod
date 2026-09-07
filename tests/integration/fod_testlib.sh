@@ -250,6 +250,22 @@ fod_logical_task_metric() {
   ' "${log_file}"
 }
 
+fod_test_wait_for_graceful_exit() {
+  local pid="$1"
+  local attempt
+
+  # After FUSE unmount the bootstrap process normally exits only after the
+  # Rust FUSE child has returned and flushed its shutdown observability.
+  # Give that normal path a short bounded grace period before forcing TERM.
+  for ((attempt = 0; attempt < 500; attempt++)); do
+    if ! kill -0 "${pid}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.01
+  done
+  return 1
+}
+
 fod_test_cleanup() {
   local restore_errexit=0
   if [[ "$-" == *e* ]]; then
@@ -265,8 +281,16 @@ fod_test_cleanup() {
       umount "${MOUNTPOINT}"
     fi
   fi
-  if [[ -n "${FOD_PID}" ]] && kill -0 "${FOD_PID}" >/dev/null 2>&1; then
-    kill "${FOD_PID}" >/dev/null 2>&1 || true
+  if [[ -n "${FOD_PID}" ]]; then
+    if kill -0 "${FOD_PID}" >/dev/null 2>&1; then
+      if ! fod_test_wait_for_graceful_exit "${FOD_PID}"; then
+        echo "WARN: FOD process ${FOD_PID} did not exit within cleanup grace period; terminating" >&2
+        kill "${FOD_PID}" >/dev/null 2>&1 || true
+      fi
+    fi
+    # Reap the bootstrap process before inspecting/copying LOG_FILE. The
+    # bootstrap waits synchronously for the Rust FUSE frontend, so once this
+    # wait completes the final shutdown/post-mount observability is stable.
     wait "${FOD_PID}" >/dev/null 2>&1 || true
   fi
   if [[ "${FOD_PROFILE_IO:-0}" =~ ^(1|true|True|yes|on)$ && -f "${LOG_FILE:-}" ]]; then

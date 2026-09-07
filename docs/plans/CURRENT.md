@@ -1,6 +1,6 @@
 # FOD current implementation plan
 
-Status: 2026-09-07.
+Status: 2026-09-08.
 
 This file is the compact maintained implementation plan. It contains only work
 that is still current enough to direct the next change. Completed execution
@@ -51,50 +51,63 @@ The current `file_read_metadata_for_handle()` already keeps a per-handle
 metadata snapshot for read-only direct-I/O mounts, but writable primary mounts
 refetch metadata on every callback.
 
-### FOD 3.4.16 implementation and measurement
+### FOD 3.4.16 measured result
 
-FOD 3.4.16 extends read-metadata reuse to a deliberately narrow primary case:
+FOD 3.4.16 bounded primary direct-I/O read-metadata reuse by the existing
+metadata TTL for `O_RDONLY + noatime`, while preserving the existing replica
+handle-cache behavior.
 
-- FUSE direct I/O is enabled;
-- the file handle is `O_RDONLY`;
-- atime policy is `noatime`;
-- `metadata_cache_ttl_seconds` is greater than zero.
+The production-read-default matrix on `lt7300`, 128 MiB pattern payload,
+32 KiB persisted storage blocks, direct I/O, and
+`metadata_cache_ttl_seconds=1` measured:
 
-Primary reuse is bounded by the existing metadata cache TTL. The existing
-read-only/replica direct-I/O behavior is preserved. Local file mutations
-invalidate cached data blocks and per-handle read metadata through the same
-file-cache invalidation boundary.
+| fio request | primary read | replica read |
+| --- | ---: | ---: |
+| 4 KiB | 138.528 MiB/s | 149.184 MiB/s |
+| 64 KiB | 258.586 MiB/s | 291.572 MiB/s |
+| 512 KiB | 263.918 MiB/s | 288.939 MiB/s |
 
-The isolated benchmark now parameterizes and records
-`metadata_cache_ttl_seconds`. Compact profile output reports
-`file_read_metadata_calls`, `file_read_metadata_total_us`, and
-`file_read_metadata_us_per_callback`.
+For the valid 4 KiB primary profile:
 
-Verify with:
-
-```bash
-REPLICA_READ_PRIMARY_PORT=56441 \
-REPLICA_READ_REPLICA_PORT=56442 \
-REPLICA_READ_FIO_BLOCK_SIZES='4k' \
-REPLICA_READ_FIO_FILE_SIZE=128M \
-REPLICA_READ_POLICY_LABEL=production-read-defaults \
-FOD_READ_CACHE_BLOCKS=4096 \
-FOD_READ_AHEAD_BLOCKS=4 \
-FOD_SEQUENTIAL_READ_AHEAD_BLOCKS=8 \
-FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=512 \
-FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS=8 \
-FOD_METADATA_CACHE_TTL_SECONDS=1 \
-make test-fio-primary-write-replica-read-matrix
+```text
+fetch_block_range_calls=3
+fetch_block_range_result_bytes=134250496
+file_read_metadata_calls=1
+file_read_metadata_total_us=273
 ```
 
-Acceptance criteria:
+The former primary metadata bottleneck is therefore closed. Do not reopen the
+data-cache, metadata-cache or SQL-fetch design without a new measured
+regression.
 
-- primary `file_read_metadata_calls` falls from one per 4 KiB callback to a
-  small TTL-bounded number;
-- primary 4 KiB throughput materially improves from 27.682 MiB/s;
-- production range-fetch efficiency does not regress;
-- replica remains read-only with zero operation failures and rejected writes;
-- storage format, quota, write path and routing policy remain unchanged.
+### FOD 3.4.17 — deterministic final observability capture
+
+The 3.4.16 matrix exposed an integration-test artifact race, not a new
+read-path bottleneck. Primary archived logs were sometimes copied before the
+bootstrap/Rust FUSE process completed normal post-unmount shutdown logging:
+
+- the 64 KiB primary artifact contained startup output but no final logical,
+  boundary or PostgreSQL lane observability;
+- the 4 KiB and 512 KiB primary artifacts contained useful shutdown profile
+  data but no `stage=post-mount` PostgreSQL lane snapshot;
+- runtime code emits `stage=post-mount` only after the mount returns, so its
+  absence from these archives indicates incomplete log capture.
+
+FOD 3.4.17 changes only test/diagnostic behavior:
+
+- after unmount, `fod_test_cleanup` gives the bootstrap/FUSE process a bounded
+  grace period to exit naturally;
+- cleanup reaps the bootstrap before inspecting or archiving the log;
+- forced termination remains as the bounded fallback;
+- a regression test proves that final process output is present in the
+  archived log;
+- compact profile output exposes `lane_observability_available=0|1` instead of
+  silently making a missing final lane snapshot look like genuine zero
+  PostgreSQL operations.
+
+Acceptance test: rerun the production 4 KiB / 64 KiB / 512 KiB primary/replica
+matrix and require `lane_observability_available=1` for every primary and
+replica read phase, with no `no_final_observability=1`.
 
 ## P2 — remaining multi-endpoint hardening
 
