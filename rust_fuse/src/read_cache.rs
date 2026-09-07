@@ -440,6 +440,7 @@ impl FodFuse {
         if let Ok(mut guard) = result {
             guard.clear_file(file_id);
         }
+        self.invalidate_read_metadata_for_file(file_id);
         self.record_clear_read_cache_for_file_elapsed(started.elapsed());
     }
 

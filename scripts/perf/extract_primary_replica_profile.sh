@@ -94,9 +94,9 @@ print_compact_phase() {
     local phase_log="$2"
     local logical_line lane_line
     local fuse_read_line read_block_map_line repo_fetch_line assemble_line reply_data_line
-    local fetch_line decode_line fetch_statement_name
+    local fetch_line decode_line metadata_line fetch_statement_name
     local admitted_tasks operation_count fetch_count fetch_rows fetch_bytes fetch_total_us
-    local decode_total_us decode_rows decode_bytes
+    local decode_total_us decode_rows decode_bytes metadata_count metadata_total_us
 
     logical_line="$(grep 'FOD logical task observability: stage=shutdown' "${phase_log}" | tail -n 1 || true)"
     lane_line="$(grep 'FOD PostgreSQL lane observability: stage=post-mount lane=' "${phase_log}" | tail -n 1 || true)"
@@ -115,6 +115,8 @@ print_compact_phase() {
         fod_fetch_block_range_with_size fod_fetch_block_range)"
     decode_line="$(profile_named_line_any "${phase_log}" pg_result_decode \
         fod_fetch_block_range_with_size fod_fetch_block_range)"
+    metadata_line="$(profile_named_line "${phase_log}" pg_prepared_statement \
+        fod_file_read_metadata)"
 
     admitted_tasks="$(field_value "${logical_line}" admitted_tasks)"
     operation_count="$(field_value "${lane_line}" operation_count)"
@@ -126,6 +128,8 @@ print_compact_phase() {
     decode_total_us="$(field_value "${decode_line}" total_us)"
     decode_rows="$(field_value "${decode_line}" result_rows)"
     decode_bytes="$(field_value "${decode_line}" result_bytes)"
+    metadata_count="$(field_value "${metadata_line}" count)"
+    metadata_total_us="$(field_value "${metadata_line}" total_us)"
 
     printf 'phase=%s' "${phase}"
     printf ' completed_bytes_per_second=%s' "$(field_value "${logical_line}" completed_bytes_per_second)"
@@ -164,6 +168,8 @@ print_compact_phase() {
     printf ' fetch_block_range_decode_rows=%s' "${decode_rows}"
     printf ' fetch_block_range_decode_bytes=%s' "${decode_bytes}"
     printf ' fetch_block_range_decode_failures=%s' "$(field_value "${decode_line}" failures)"
+    printf ' file_read_metadata_calls=%s' "${metadata_count}"
+    printf ' file_read_metadata_total_us=%s' "${metadata_total_us}"
 
     printf ' pg_operations_per_callback=%s' "$(ratio "${operation_count}" "${admitted_tasks}")"
     printf ' fetch_calls_per_callback=%s' "$(ratio "${fetch_count}" "${admitted_tasks}")"
@@ -174,6 +180,7 @@ print_compact_phase() {
     printf ' repo_fetch_block_range_us_per_callback=%s' "$(ratio "$(field_value "${repo_fetch_line}" repo_fetch_block_range_us)" "${admitted_tasks}")"
     printf ' pg_fetch_us_per_callback=%s' "$(ratio "${fetch_total_us}" "${admitted_tasks}")"
     printf ' pg_decode_us_per_callback=%s' "$(ratio "${decode_total_us}" "${admitted_tasks}")"
+    printf ' file_read_metadata_us_per_callback=%s' "$(ratio "${metadata_total_us}" "${admitted_tasks}")"
     printf ' non_fetch_operation_count=%s' "$(nonnegative_difference "${operation_count}" "${fetch_count}")"
     printf '\n'
 }

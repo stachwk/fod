@@ -20,11 +20,11 @@ SINGLE="${ROOT}/tests/integration/test_fio_primary_write_replica_read_docker.sh"
 
 mkdir -p "${ARTIFACT_DIR}"
 SUMMARY="${ARTIFACT_DIR}/summary.tsv"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "block_size" "storage_block_size_bytes" "file_size" "payload_mode" \
     "read_policy_label" "read_cache_blocks" "read_ahead_blocks" \
     "sequential_read_ahead_blocks" "direct_io_read_prefetch_blocks" \
-    "small_file_read_threshold_blocks" \
+    "small_file_read_threshold_blocks" "metadata_cache_ttl_seconds" \
     "primary_write_mib_s" "primary_write_iops" \
     "primary_read_mib_s" "primary_read_iops" \
     "replica_read_mib_s" "replica_read_iops" \
@@ -73,7 +73,7 @@ for block_size in ${BLOCK_SIZES}; do
             exit 1
         fi
 
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$(field "${result}" block_size)" \
             "${storage_block_size_bytes}" \
             "$(field "${result}" file_size)" \
@@ -84,6 +84,7 @@ for block_size in ${BLOCK_SIZES}; do
             "$(field "${result}" sequential_read_ahead_blocks)" \
             "$(field "${result}" direct_io_read_prefetch_blocks)" \
             "$(field "${result}" small_file_read_threshold_blocks)" \
+            "$(field "${result}" metadata_cache_ttl_seconds)" \
             "$(field "${result}" primary_write_mib_s)" \
             "$(field "${result}" primary_write_iops)" \
             "$(field "${result}" primary_read_mib_s)" \

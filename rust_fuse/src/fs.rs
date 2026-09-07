@@ -244,6 +244,7 @@ struct FileHandleState {
     flags: i32,
     atime_touched: bool,
     read_metadata: Option<FileReadMetadata>,
+    read_metadata_loaded_at: Option<Instant>,
 }
 
 #[repr(C)]
@@ -2962,30 +2963,111 @@ impl FodFuse {
         self.file_id_for_handle(fh, ino)?.ok_or(ENOENT)
     }
 
+    fn should_cache_file_read_metadata(
+        read_only: bool,
+        fopen_direct_io: bool,
+        atime_policy: AtimePolicy,
+        handle_flags: i32,
+        metadata_cache_ttl: Duration,
+    ) -> bool {
+        if !fopen_direct_io {
+            return false;
+        }
+        if read_only {
+            // Preserve existing read-only/replica direct-I/O handle caching.
+            return true;
+        }
+        atime_policy == AtimePolicy::NoAtime
+            && (handle_flags & libc::O_ACCMODE) == libc::O_RDONLY
+            && !metadata_cache_ttl.is_zero()
+    }
+
+    pub(crate) fn invalidate_read_metadata_for_file(&self, file_id: u64) {
+        if let Ok(mut guard) = self.fh_table.lock() {
+            for state in guard.values_mut() {
+                if state.file_id == Some(file_id) {
+                    state.read_metadata = None;
+                    state.read_metadata_loaded_at = None;
+                }
+            }
+        }
+    }
+
     fn file_read_metadata_for_handle(
         &self,
         fh: u64,
         file_id: u64,
     ) -> Result<Option<FileReadMetadata>, String> {
-        if self.read_only && self.fopen_direct_io {
-            if let Some(metadata) = self
-                .fh_table
-                .lock()
-                .ok()
-                .and_then(|guard| guard.get(&fh).and_then(|state| state.read_metadata.clone()))
-            {
-                return Ok(Some(metadata));
-            }
+        // Replica/read-only direct-I/O keeps the pre-3.4.16 handle-cache
+        // behavior and does not need to consult reloadable TTL on every read.
+        let metadata_cache_ttl = if self.read_only {
+            Duration::ZERO
+        } else {
+            self.metadata_cache_ttl_live()
+        };
+
+        if let Some(metadata) = self.fh_table.lock().ok().and_then(|mut guard| {
+            guard.get_mut(&fh).and_then(|state| {
+                if state.file_id != Some(file_id) {
+                    return None;
+                }
+
+                if !Self::should_cache_file_read_metadata(
+                    self.read_only,
+                    self.fopen_direct_io,
+                    self.atime_policy,
+                    state.flags,
+                    metadata_cache_ttl,
+                ) {
+                    // Drop a previously cached snapshot before consulting the
+                    // repository so a failed refresh cannot resurrect it if
+                    // runtime policy later enables caching again.
+                    state.read_metadata = None;
+                    state.read_metadata_loaded_at = None;
+                    return None;
+                }
+
+                let fresh = self.read_only
+                    || state
+                        .read_metadata_loaded_at
+                        .is_some_and(|loaded_at| loaded_at.elapsed() < metadata_cache_ttl);
+
+                if !fresh {
+                    // An expired snapshot must not survive a failed refresh.
+                    state.read_metadata = None;
+                    state.read_metadata_loaded_at = None;
+                    return None;
+                }
+
+                state.read_metadata.clone()
+            })
+        }) {
+            return Ok(Some(metadata));
         }
 
         let metadata = self.repo.file_read_metadata(file_id)?;
-        if self.read_only && self.fopen_direct_io {
-            if let Some(metadata) = metadata.as_ref() {
-                if let Ok(mut guard) = self.fh_table.lock() {
-                    if let Some(state) = guard.get_mut(&fh) {
-                        if state.file_id == Some(file_id) {
+        if let Ok(mut guard) = self.fh_table.lock() {
+            if let Some(state) = guard.get_mut(&fh) {
+                if state.file_id == Some(file_id) {
+                    if Self::should_cache_file_read_metadata(
+                        self.read_only,
+                        self.fopen_direct_io,
+                        self.atime_policy,
+                        state.flags,
+                        metadata_cache_ttl,
+                    ) {
+                        if let Some(metadata) = metadata.as_ref() {
                             state.read_metadata = Some(metadata.clone());
+                            state.read_metadata_loaded_at = Some(Instant::now());
+                        } else {
+                            state.read_metadata = None;
+                            state.read_metadata_loaded_at = None;
                         }
+                    } else {
+                        // Do not leave a snapshot behind when runtime policy
+                        // disables primary handle-metadata caching.
+                        state.read_metadata = None;
+                        state.read_metadata_loaded_at = None;
                     }
                 }
             }
@@ -3908,6 +3990,7 @@ impl FodFuse {
                     flags,
                     atime_touched: false,
                     read_metadata: None,
+                    read_metadata_loaded_at: None,
                 },
             );
         }
@@ -7808,6 +7891,54 @@ mod tests {
             AtimePolicy::StrictAtime
         );
         assert!(AtimePolicy::parse("bad").is_err());
+    }
+
+    #[test]
+    fn file_read_metadata_cache_policy_preserves_replica_and_bounds_primary() {
+        let ttl = Duration::from_secs(1);
+
+        assert!(super::FodFuse::should_cache_file_read_metadata(
+            true,
+            true,
+            AtimePolicy::Default,
+            libc::O_RDONLY,
+            Duration::ZERO,
+        ));
+        assert!(super::FodFuse::should_cache_file_read_metadata(
+            false,
+            true,
+            AtimePolicy::NoAtime,
+            libc::O_RDONLY,
+            ttl,
+        ));
+        assert!(!super::FodFuse::should_cache_file_read_metadata(
+            false,
+            true,
+            AtimePolicy::NoAtime,
+            libc::O_RDONLY,
+            Duration::ZERO,
+        ));
+        assert!(!super::FodFuse::should_cache_file_read_metadata(
+            false,
+            true,
+            AtimePolicy::NoAtime,
+            libc::O_RDWR,
+            ttl,
+        ));
+        assert!(!super::FodFuse::should_cache_file_read_metadata(
+            false,
+            true,
+            AtimePolicy::Relatime,
+            libc::O_RDONLY,
+            ttl,
+        ));
+        assert!(!super::FodFuse::should_cache_file_read_metadata(
+            false,
+            false,
+            AtimePolicy::NoAtime,
+            libc::O_RDONLY,
+            ttl,
+        ));
     }
 
     #[test]

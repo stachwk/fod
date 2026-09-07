@@ -34,13 +34,15 @@ READ_AHEAD_BLOCKS="${FOD_READ_AHEAD_BLOCKS:-0}"
 SEQUENTIAL_READ_AHEAD_BLOCKS="${FOD_SEQUENTIAL_READ_AHEAD_BLOCKS:-0}"
 DIRECT_IO_READ_PREFETCH_BLOCKS="${FOD_DIRECT_IO_READ_PREFETCH_BLOCKS:-0}"
 SMALL_FILE_READ_THRESHOLD_BLOCKS="${FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS:-0}"
+METADATA_CACHE_TTL_SECONDS="${FOD_METADATA_CACHE_TTL_SECONDS:-0}"
 
 if [[ -n "${REPLICA_READ_POLICY_LABEL:-}" ]]; then
     READ_POLICY_LABEL="${REPLICA_READ_POLICY_LABEL}"
 elif [[ "${READ_CACHE_BLOCKS}" == 0 && "${READ_AHEAD_BLOCKS}" == 0 \
     && "${SEQUENTIAL_READ_AHEAD_BLOCKS}" == 0 \
     && "${DIRECT_IO_READ_PREFETCH_BLOCKS}" == 0 \
-    && "${SMALL_FILE_READ_THRESHOLD_BLOCKS}" == 0 ]]; then
+    && "${SMALL_FILE_READ_THRESHOLD_BLOCKS}" == 0 \
+    && "${METADATA_CACHE_TTL_SECONDS}" == 0 ]]; then
     READ_POLICY_LABEL="uncached"
 else
     READ_POLICY_LABEL="custom"
@@ -78,6 +80,10 @@ validate_nonnegative_integer FOD_READ_AHEAD_BLOCKS "${READ_AHEAD_BLOCKS}"
 validate_nonnegative_integer FOD_SEQUENTIAL_READ_AHEAD_BLOCKS "${SEQUENTIAL_READ_AHEAD_BLOCKS}"
 validate_nonnegative_integer FOD_DIRECT_IO_READ_PREFETCH_BLOCKS "${DIRECT_IO_READ_PREFETCH_BLOCKS}"
 validate_nonnegative_integer FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS "${SMALL_FILE_READ_THRESHOLD_BLOCKS}"
+if [[ ! "${METADATA_CACHE_TTL_SECONDS}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "FOD_METADATA_CACHE_TTL_SECONDS must be a non-negative number" >&2
+    exit 2
+fi
 if [[ ! "${READ_POLICY_LABEL}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     echo "REPLICA_READ_POLICY_LABEL must match [A-Za-z0-9_.-]+" >&2
     exit 2
@@ -101,6 +107,7 @@ read_ahead_blocks=${READ_AHEAD_BLOCKS}
 sequential_read_ahead_blocks=${SEQUENTIAL_READ_AHEAD_BLOCKS}
 direct_io_read_prefetch_blocks=${DIRECT_IO_READ_PREFETCH_BLOCKS}
 small_file_read_threshold_blocks=${SMALL_FILE_READ_THRESHOLD_BLOCKS}
+metadata_cache_ttl_seconds=${METADATA_CACHE_TTL_SECONDS}
 fopen_direct_io=1
 EOF
 
@@ -265,7 +272,7 @@ export FOD_READ_AHEAD_BLOCKS="${READ_AHEAD_BLOCKS}"
 export FOD_SEQUENTIAL_READ_AHEAD_BLOCKS="${SEQUENTIAL_READ_AHEAD_BLOCKS}"
 export FOD_DIRECT_IO_READ_PREFETCH_BLOCKS="${DIRECT_IO_READ_PREFETCH_BLOCKS}"
 export FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS="${SMALL_FILE_READ_THRESHOLD_BLOCKS}"
-export FOD_METADATA_CACHE_TTL_SECONDS=0
+export FOD_METADATA_CACHE_TTL_SECONDS="${METADATA_CACHE_TTL_SECONDS}"
 export FOD_STATFS_CACHE_TTL_SECONDS=0
 export FOD_FOPEN_DIRECT_IO=1
 export FOD_FUSE_WRITEBACK_CACHE=0
@@ -479,21 +486,21 @@ fi
 
 fod_test_write_power_metadata "${ARTIFACT_DIR}/power-after.txt" "after"
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "block_size" "storage_block_size_bytes" "file_size" "payload_mode" \
     "read_policy_label" "read_cache_blocks" "read_ahead_blocks" \
     "sequential_read_ahead_blocks" "direct_io_read_prefetch_blocks" \
-    "small_file_read_threshold_blocks" \
+    "small_file_read_threshold_blocks" "metadata_cache_ttl_seconds" \
     "primary_write_mib_s" "primary_write_iops" \
     "primary_read_mib_s" "primary_read_iops" \
     "replica_read_mib_s" "replica_read_iops" \
     "replica_operation_failures" "replica_write_guard" \
     >"${ARTIFACT_DIR}/result.tsv"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "${BLOCK_SIZE}" "${STORAGE_BLOCK_SIZE_BYTES}" "${FILE_SIZE}" "${PAYLOAD_MODE}" \
     "${READ_POLICY_LABEL}" "${READ_CACHE_BLOCKS}" "${READ_AHEAD_BLOCKS}" \
     "${SEQUENTIAL_READ_AHEAD_BLOCKS}" "${DIRECT_IO_READ_PREFETCH_BLOCKS}" \
-    "${SMALL_FILE_READ_THRESHOLD_BLOCKS}" \
+    "${SMALL_FILE_READ_THRESHOLD_BLOCKS}" "${METADATA_CACHE_TTL_SECONDS}" \
     "${WRITE_MIB}" "${WRITE_IOPS}" \
     "${PRIMARY_READ_MIB}" "${PRIMARY_READ_IOPS}" \
     "${REPLICA_READ_MIB}" "${REPLICA_READ_IOPS}" \
@@ -515,5 +522,5 @@ echo "FOD read policy label: ${READ_POLICY_LABEL}"
 echo "FOD FUSE direct_io enabled: yes"
 echo "host kernel page cache dropped: no"
 
-echo "PERF_RESULT block_size=${BLOCK_SIZE} storage_block_size_bytes=${STORAGE_BLOCK_SIZE_BYTES} file_size=${FILE_SIZE} payload_mode=${PAYLOAD_MODE} read_policy_label=${READ_POLICY_LABEL} read_cache_blocks=${READ_CACHE_BLOCKS} read_ahead_blocks=${READ_AHEAD_BLOCKS} sequential_read_ahead_blocks=${SEQUENTIAL_READ_AHEAD_BLOCKS} direct_io_read_prefetch_blocks=${DIRECT_IO_READ_PREFETCH_BLOCKS} small_file_read_threshold_blocks=${SMALL_FILE_READ_THRESHOLD_BLOCKS} primary_write_mib_s=${WRITE_MIB} primary_write_iops=${WRITE_IOPS} primary_read_mib_s=${PRIMARY_READ_MIB} primary_read_iops=${PRIMARY_READ_IOPS} replica_read_mib_s=${REPLICA_READ_MIB} replica_read_iops=${REPLICA_READ_IOPS} replica_operation_failures=${FINAL_OPERATION_FAILURES} replica_write_guard=read_only_rejected"
+echo "PERF_RESULT block_size=${BLOCK_SIZE} storage_block_size_bytes=${STORAGE_BLOCK_SIZE_BYTES} file_size=${FILE_SIZE} payload_mode=${PAYLOAD_MODE} read_policy_label=${READ_POLICY_LABEL} read_cache_blocks=${READ_CACHE_BLOCKS} read_ahead_blocks=${READ_AHEAD_BLOCKS} sequential_read_ahead_blocks=${SEQUENTIAL_READ_AHEAD_BLOCKS} direct_io_read_prefetch_blocks=${DIRECT_IO_READ_PREFETCH_BLOCKS} small_file_read_threshold_blocks=${SMALL_FILE_READ_THRESHOLD_BLOCKS} metadata_cache_ttl_seconds=${METADATA_CACHE_TTL_SECONDS} primary_write_mib_s=${WRITE_MIB} primary_write_iops=${WRITE_IOPS} primary_read_mib_s=${PRIMARY_READ_MIB} primary_read_iops=${PRIMARY_READ_IOPS} replica_read_mib_s=${REPLICA_READ_MIB} replica_read_iops=${REPLICA_READ_IOPS} replica_operation_failures=${FINAL_OPERATION_FAILURES} replica_write_guard=read_only_rejected"
 echo "OK: primary write/read -> WAL replay -> primary stopped -> replica read"

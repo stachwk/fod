@@ -118,6 +118,18 @@ class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
         self.assertIn("read_policy_label=${READ_POLICY_LABEL}", self.single)
         self.assertIn("read_cache_blocks=${READ_CACHE_BLOCKS}", self.single)
         self.assertIn("direct_io_read_prefetch_blocks=${DIRECT_IO_READ_PREFETCH_BLOCKS}", self.single)
+        self.assertIn(
+            'METADATA_CACHE_TTL_SECONDS="${FOD_METADATA_CACHE_TTL_SECONDS:-0}"',
+            self.single,
+        )
+        self.assertIn(
+            'export FOD_METADATA_CACHE_TTL_SECONDS="${METADATA_CACHE_TTL_SECONDS}"',
+            self.single,
+        )
+        self.assertIn(
+            "metadata_cache_ttl_seconds=${METADATA_CACHE_TTL_SECONDS}",
+            self.single,
+        )
 
     def test_matrix_collects_primary_and_replica_results(self) -> None:
         self.assertIn('BLOCK_SIZES="${FIO_BLOCK_SIZES:-', self.matrix)
@@ -135,6 +147,8 @@ class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
         self.assertIn("sequential_read_ahead_blocks", self.matrix)
         self.assertIn("direct_io_read_prefetch_blocks", self.matrix)
         self.assertIn("small_file_read_threshold_blocks", self.matrix)
+        self.assertIn("metadata_cache_ttl_seconds", self.matrix)
+        self.assertIn('field "${result}" metadata_cache_ttl_seconds', self.matrix)
         self.assertIn("primary_write_mib_s", self.matrix)
         self.assertIn("primary_read_mib_s", self.matrix)
         self.assertIn("replica_read_mib_s", self.matrix)
