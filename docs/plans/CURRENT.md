@@ -1,6 +1,6 @@
 # FOD current implementation plan
 
-Status: 2026-09-04.
+Status: 2026-09-07.
 
 This file is the compact maintained implementation plan. It contains only work
 that is still current enough to direct the next change. Completed execution
@@ -28,16 +28,46 @@ Current measurement boundary:
 - preserve primary-unreachable replica-read validation, zero PostgreSQL write
   attempts on the read-only path, role validation and WAL/replay-LSN safety.
 
+FOD 3.4.12 makes the existing profile data directly comparable per callback.
+`scripts/perf/extract_primary_replica_profile.sh` compact output now includes:
+
+- FUSE `read_block_map`, repository fetch, assembly and reply timing;
+- prepared `fod_fetch_block_range` calls, rows, payload bytes, failures and SQL
+  time;
+- matching PostgreSQL result-decode time/bytes;
+- PostgreSQL operations per admitted read callback;
+- fetch calls/bytes/time per callback and rows/bytes per range fetch;
+- the remaining operation count after subtracting range-fetch calls.
+
+The extractor uses existing `FOD_PROFILE_IO=1` boundary telemetry; 3.4.12 does
+not add runtime instrumentation or change the read path.
+
 Next measurement step:
 
-1. profile one representative 512 KiB callback through
-   `read_block_map -> repo_fetch_block_range`;
-2. attribute PostgreSQL operation count and time to map/metadata/payload work;
-3. identify one avoidable round trip or duplicate lookup;
-4. make one narrow change;
-5. rerun the comparable 4 KiB / 64 KiB / 512 KiB replica-read matrix and compare
-   throughput, callback count, PostgreSQL operation count/failures and replay
-   correctness.
+1. run the strict physical-replica matrix for 4 KiB, 64 KiB and 512 KiB reads;
+2. extract the matrix artifact with:
+
+   ```bash
+   scripts/perf/extract_primary_replica_profile.sh <matrix-artifact-dir>
+   ```
+
+3. compare the `replica-read` rows, especially `pg_operations_per_callback`,
+   `fetch_calls_per_callback`, `fetch_bytes_per_call`,
+   `read_block_map_us_per_callback`, `repo_fetch_block_range_us_per_callback`,
+   `pg_fetch_us_per_callback`, `pg_decode_us_per_callback` and
+   `non_fetch_operation_count`;
+4. identify one avoidable round trip, duplicate lookup or transport/query-shape
+   cost from that evidence;
+5. make one narrow runtime change;
+6. rerun the same matrix and preserve the strict read-only/WAL gates.
+
+A focused run is:
+
+```bash
+FIO_BLOCK_SIZES='4k 64k 512k' \
+FIO_FILE_SIZE=128M \
+make test-fio-primary-write-replica-read-matrix
+```
 
 Do not change the storage format, quota model, write request default or unrelated
 routing policy in the same optimization commit.
