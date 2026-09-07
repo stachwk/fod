@@ -102,6 +102,23 @@ class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
         )
         self.assertIn('"storage_block_size_bytes"', self.single)
 
+    def test_single_run_parameterizes_and_records_read_policy(self) -> None:
+        expected = {
+            "READ_CACHE_BLOCKS": "FOD_READ_CACHE_BLOCKS",
+            "READ_AHEAD_BLOCKS": "FOD_READ_AHEAD_BLOCKS",
+            "SEQUENTIAL_READ_AHEAD_BLOCKS": "FOD_SEQUENTIAL_READ_AHEAD_BLOCKS",
+            "DIRECT_IO_READ_PREFETCH_BLOCKS": "FOD_DIRECT_IO_READ_PREFETCH_BLOCKS",
+            "SMALL_FILE_READ_THRESHOLD_BLOCKS": "FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS",
+        }
+        for local_name, env_name in expected.items():
+            self.assertIn(f'{local_name}="${{{env_name}:-0}}"', self.single)
+            self.assertIn(f'export {env_name}="${{{local_name}}}"', self.single)
+        self.assertNotIn("export FOD_READ_CACHE_BLOCKS=0", self.single)
+        self.assertIn("read-policy.txt", self.single)
+        self.assertIn("read_policy_label=${READ_POLICY_LABEL}", self.single)
+        self.assertIn("read_cache_blocks=${READ_CACHE_BLOCKS}", self.single)
+        self.assertIn("direct_io_read_prefetch_blocks=${DIRECT_IO_READ_PREFETCH_BLOCKS}", self.single)
+
     def test_matrix_collects_primary_and_replica_results(self) -> None:
         self.assertIn('BLOCK_SIZES="${FIO_BLOCK_SIZES:-', self.matrix)
         self.assertIn('PAYLOAD_MODES="${FIO_PAYLOAD_MODES:-pattern}"', self.matrix)
@@ -111,6 +128,13 @@ class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
         self.assertIn("payload_mode", self.matrix)
         self.assertIn("storage_block_size_bytes", self.matrix)
         self.assertIn('field "${result}" storage_block_size_bytes', self.matrix)
+        self.assertIn("read_policy_label", self.matrix)
+        self.assertIn('field "${result}" read_policy_label', self.matrix)
+        self.assertIn("read_cache_blocks", self.matrix)
+        self.assertIn("read_ahead_blocks", self.matrix)
+        self.assertIn("sequential_read_ahead_blocks", self.matrix)
+        self.assertIn("direct_io_read_prefetch_blocks", self.matrix)
+        self.assertIn("small_file_read_threshold_blocks", self.matrix)
         self.assertIn("primary_write_mib_s", self.matrix)
         self.assertIn("primary_read_mib_s", self.matrix)
         self.assertIn("replica_read_mib_s", self.matrix)

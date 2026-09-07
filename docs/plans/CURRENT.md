@@ -14,87 +14,104 @@ whose wording predates later architectural decisions.
 
 ## P1 — replica read-path efficiency
 
-The next measured performance target is the PostgreSQL-backed replica read path.
-Preserve the strict read-only correctness boundary while reducing avoidable work
-behind one FUSE read callback.
+The next measured performance target is the PostgreSQL-backed read path. Preserve
+the strict read-only correctness boundary while reducing avoidable work behind
+small FUSE read callbacks.
 
 Current measurement boundary:
 
 - treat 512 KiB as the effective measured FUSE read-callback ceiling until a
   newer negotiation/profile proves otherwise;
-- keep the FOD logical storage block at 4 KiB;
+- newly initialized filesystems use the current 32 KiB storage-block default;
+  existing filesystems keep the `block_size` persisted in `fod.config`;
 - do not infer write sizing from read sizing — read and write tuning remain
   separate;
 - preserve primary-unreachable replica-read validation, zero PostgreSQL write
   attempts on the read-only path, role validation and WAL/replay-LSN safety.
 
-FOD 3.4.12 added a compact read-path attribution report assembled from existing
-`FOD_PROFILE_IO=1` telemetry. A real 3.4.12 matrix exposed that the live read
-path uses prepared statement `fod_fetch_block_range_with_size`, while the first
-extractor revision looked only for the older `fod_fetch_block_range` name.
-Therefore the raw 3.4.12 run was valid, but its compact attribution incorrectly
-reported `profile_attribution_available=0` and zero fetch calls.
+FOD 3.4.13 fixed attribution for the live prepared statement
+`fod_fetch_block_range_with_size`. FOD 3.4.14 made every replica benchmark
+artifact record `storage_block_size_bytes`.
 
-FOD 3.4.13 fixes the extractor to prefer
-`fod_fetch_block_range_with_size` while retaining compatibility with historical
-`fod_fetch_block_range` logs. Compact output also reports the selected
-`fetch_statement_name` explicitly.
+### Measured strict 3.4.14 matrix
 
-### Measured 3.4.12 strict matrix
+Host: `lt7300`; file size: 128 MiB; payload: pattern; persisted FOD storage block:
+32 KiB; read cache/read-ahead/direct prefetch disabled; FUSE direct I/O enabled;
+primary stopped before replica read. WAL and read-only guards passed for every
+row.
 
-Host: `lt7300`; file size: 128 MiB; payload: pattern; read cache/read-ahead/direct
-prefetch disabled; FUSE direct I/O enabled; primary stopped before replica read.
-The strict WAL and read-only guards passed for every row.
-
-| fio block size | primary read MiB/s | replica read MiB/s | FUSE read callbacks | live range-fetch calls from raw log |
+| fio block size | primary read MiB/s | replica read MiB/s | FUSE callbacks | range-fetch calls |
 | --- | ---: | ---: | ---: | ---: |
-| 4 KiB | 16.465 | 16.260 | 32768 | 32768 |
-| 64 KiB | 178.273 | 179.021 | 2048 | 2048 |
-| 512 KiB | 289.593 | 315.271 | 256 | 256 |
+| 4 KiB | 16.364 | 16.277 | 32768 | 32768 |
+| 64 KiB | 179.775 | 173.677 | 2048 | 2048 |
+| 512 KiB | 308.434 | 312.195 | 256 | 256 |
 
-The raw boundary profile already shows that `read_block_map` dominates the FUSE
-read time and that the live `fod_fetch_block_range_with_size` count is one per
-callback in all three rows. The corrected 3.4.13 extractor must now quantify
-SQL time, decode time, bytes/rows per fetch and fixed non-fetch operations from
-the same artifact before any Rust hot-path change is selected.
+There is exactly one `fod_fetch_block_range_with_size` per FUSE callback. The
+4 KiB row nevertheless fetches the containing 32 KiB storage block each time;
+over 128 MiB this produced about 1 GiB of fetched payload, roughly 8x logical
+byte amplification. Prepared-statement execution dominates `read_block_map`;
+result decoding is comparatively small. Primary and replica throughput are
+also close, so this is an overall read-path issue, not a replica-routing issue.
 
-### Next measurement step
+The strict matrix intentionally disables the mechanisms that can reuse or
+prefetch data across sequential callbacks. Measure the existing production read
+policy before changing SQL or adding another cache.
 
-Do **not** rerun the full matrix just to repair attribution. After updating to
-3.4.13, re-extract the existing successful matrix artifact:
+### FOD 3.4.15 measurement step
 
-```bash
-MATRIX_DIR=artifacts/perf/10b7acd/lt7300-docker-matrix-matrix-20260907T084527Z
+FOD 3.4.15 keeps zero as the isolated benchmark default but allows these five
+existing settings to be supplied externally and records them in `read-policy.txt`,
+`result.tsv`, `PERF_RESULT` and matrix `summary.tsv`:
 
-scripts/perf/extract_primary_replica_profile.sh "$MATRIX_DIR" \
-  | tee "$MATRIX_DIR/read-path-attribution-3.4.13.txt"
-```
+- `FOD_READ_CACHE_BLOCKS`;
+- `FOD_READ_AHEAD_BLOCKS`;
+- `FOD_SEQUENTIAL_READ_AHEAD_BLOCKS`;
+- `FOD_DIRECT_IO_READ_PREFETCH_BLOCKS`;
+- `FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS`.
 
-Compare the `replica-read` rows, especially:
+Run a focused 4 KiB A/B comparison with 128 MiB.
 
-- `fetch_statement_name` and `profile_attribution_available`;
-- `pg_operations_per_callback` and `fetch_calls_per_callback`;
-- `fetch_rows_per_call`, `fetch_bytes_per_call` and
-  `fetch_bytes_per_callback`;
-- `read_block_map_us_per_callback`, `pg_fetch_us_per_callback` and
-  `pg_decode_us_per_callback`;
-- `non_fetch_operation_count`.
-
-Only after that corrected attribution choose one narrow optimization. The first
-candidate must be supported by the measured split between prepared-statement
-execution, result decoding and fixed non-fetch operations; do not infer an
-extra round trip when the raw log already shows one range-fetch call per FUSE
-callback.
-
-For a future repeat of the focused matrix, the Make variables are:
+Uncached baseline:
 
 ```bash
 REPLICA_READ_PRIMARY_PORT=56441 \
 REPLICA_READ_REPLICA_PORT=56442 \
-REPLICA_READ_FIO_BLOCK_SIZES='4k 64k 512k' \
+REPLICA_READ_FIO_BLOCK_SIZES='4k' \
 REPLICA_READ_FIO_FILE_SIZE=128M \
+REPLICA_READ_POLICY_LABEL=uncached \
+FOD_READ_CACHE_BLOCKS=0 \
+FOD_READ_AHEAD_BLOCKS=0 \
+FOD_SEQUENTIAL_READ_AHEAD_BLOCKS=0 \
+FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=0 \
+FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS=0 \
 make test-fio-primary-write-replica-read-matrix
 ```
+
+Current production read defaults under the same direct-I/O benchmark boundary:
+
+```bash
+REPLICA_READ_PRIMARY_PORT=56441 \
+REPLICA_READ_REPLICA_PORT=56442 \
+REPLICA_READ_FIO_BLOCK_SIZES='4k' \
+REPLICA_READ_FIO_FILE_SIZE=128M \
+REPLICA_READ_POLICY_LABEL=production-read-defaults \
+FOD_READ_CACHE_BLOCKS=4096 \
+FOD_READ_AHEAD_BLOCKS=4 \
+FOD_SEQUENTIAL_READ_AHEAD_BLOCKS=8 \
+FOD_DIRECT_IO_READ_PREFETCH_BLOCKS=512 \
+FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS=8 \
+make test-fio-primary-write-replica-read-matrix
+```
+
+For both artifacts run `scripts/perf/extract_primary_replica_profile.sh` and
+compare replica throughput, `fetch_calls_per_callback`,
+`fetch_bytes_per_callback`, `read_block_map_us_per_callback`,
+`pg_fetch_us_per_callback` and `pg_decode_us_per_callback`.
+
+If the production read policy materially removes repeated 32 KiB fetches behind
+4 KiB callbacks, tune that existing mechanism rather than adding a parallel
+cache. If it remains near the uncached baseline, select one narrow runtime/SQL
+optimization supported by the A/B profile.
 
 Do not change the storage format, quota model, write request default or unrelated
 routing policy in the same optimization commit.
