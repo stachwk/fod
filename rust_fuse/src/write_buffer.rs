@@ -260,10 +260,7 @@ impl FodFuse {
         target_len: u64,
         block_size: u64,
     ) -> Result<(), libc::c_int> {
-        if previous_used_len == 0
-            || previous_used_len > target_len
-            || target_len > block_size
-        {
+        if previous_used_len == 0 || previous_used_len > target_len || target_len > block_size {
             return Ok(());
         }
         let Some(mut block) =

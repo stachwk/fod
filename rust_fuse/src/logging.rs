@@ -36,7 +36,11 @@ fn derived_log_filename(config_path: Option<&Path>) -> String {
             }
         })
         .collect();
-    let stem = if sanitized.is_empty() { "fod" } else { &sanitized };
+    let stem = if sanitized.is_empty() {
+        "fod"
+    } else {
+        &sanitized
+    };
     format!("{stem}.log")
 }
 
@@ -44,7 +48,10 @@ fn validate_absolute_path(path: &Path, name: &str) -> Result<(), String> {
     if path.is_absolute() {
         Ok(())
     } else {
-        Err(format!("{name} must be an absolute path: {}", path.display()))
+        Err(format!(
+            "{name} must be an absolute path: {}",
+            path.display()
+        ))
     }
 }
 
@@ -53,7 +60,10 @@ fn validate_filename(filename: &str) -> Result<(), String> {
     if filename.trim().is_empty()
         || path.is_absolute()
         || path.components().count() != 1
-        || matches!(path.components().next(), Some(Component::ParentDir | Component::CurDir))
+        || matches!(
+            path.components().next(),
+            Some(Component::ParentDir | Component::CurDir)
+        )
     {
         return Err(format!(
             "logging.filename must be a single file name, not a path: {filename}"
@@ -114,19 +124,13 @@ fn resolve_from_environment() -> Result<Option<PathBuf>, String> {
     let config_selector = configured_path("FOD_CONFIG");
     if let Some(config_path) = config_selector.as_deref() {
         match load_config_parser(Some(config_path)) {
-            Ok((config, resolved_path)) => resolve_log_file_path(
-                Some(&config),
-                Some(&resolved_path),
-                None,
-                explicit_dir,
-            ),
-            Err(err) if explicit_dir.is_some() => resolve_log_file_path(
-                None,
-                Some(config_path),
-                None,
-                explicit_dir,
-            )
-            .map_err(|path_err| format!("{err}; {path_err}")),
+            Ok((config, resolved_path)) => {
+                resolve_log_file_path(Some(&config), Some(&resolved_path), None, explicit_dir)
+            }
+            Err(err) if explicit_dir.is_some() => {
+                resolve_log_file_path(None, Some(config_path), None, explicit_dir)
+                    .map_err(|path_err| format!("{err}; {path_err}"))
+            }
             Err(err) => Err(err),
         }
     } else {
@@ -135,7 +139,10 @@ fn resolve_from_environment() -> Result<Option<PathBuf>, String> {
 }
 
 fn open_log_file(path: &Path) -> io::Result<File> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)?;
     }
     let mut options = OpenOptions::new();
