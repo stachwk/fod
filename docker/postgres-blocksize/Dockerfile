@@ -60,10 +60,10 @@ RUN set -eux; \
     make -C contrib -j"${jobs}"; \
     make -C contrib install; \
     install -d -o postgres -g postgres /tmp/pg-blocksize-verify; \
-    su-exec postgres /opt/postgresql-custom/bin/initdb \
+    gosu postgres /opt/postgresql-custom/bin/initdb \
         --no-sync --auth-local=trust --auth-host=trust \
         -D /tmp/pg-blocksize-verify >/dev/null; \
-    actual="$(su-exec postgres /opt/postgresql-custom/bin/postgres \
+    actual="$(gosu postgres /opt/postgresql-custom/bin/postgres \
         -D /tmp/pg-blocksize-verify -C block_size)"; \
     expected="$((POSTGRES_BLOCK_SIZE_KB * 1024))"; \
     echo "PostgreSQL compile-time block_size=${actual} expected=${expected}"; \
@@ -144,10 +144,11 @@ RUN set -eux; \
     rm -rf /tmp/pg_stat_kcache /tmp/pg_stat_kcache.tar.gz
 
 ARG PG_HINT_PLAN_VERSION=1.6.2
+ARG PG_HINT_PLAN_TAG=REL16_1_6_2
 RUN set -eux; \
     mkdir -p /tmp/pg_hint_plan; \
     wget -qO /tmp/pg_hint_plan.tar.gz \
-        "https://github.com/ossc-db/pg_hint_plan/archive/refs/tags/REL16_1_6_2.tar.gz"; \
+        "https://github.com/ossc-db/pg_hint_plan/archive/refs/tags/${PG_HINT_PLAN_TAG}.tar.gz"; \
     tar -xzf /tmp/pg_hint_plan.tar.gz --strip-components=1 -C /tmp/pg_hint_plan; \
     make -C /tmp/pg_hint_plan -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" PG_CONFIG=/opt/postgresql-custom/bin/pg_config; \
     make -C /tmp/pg_hint_plan PG_CONFIG=/opt/postgresql-custom/bin/pg_config install; \
@@ -178,6 +179,7 @@ ARG PG_REPACK_VERSION=1.5.3
 ARG HYPOPG_VERSION=1.4.3
 ARG PG_STAT_KCACHE_VERSION=2.3.2
 ARG PG_HINT_PLAN_VERSION=1.6.2
+ARG PG_HINT_PLAN_TAG=REL16_1_6_2
 
 COPY --from=builder /opt/postgresql-custom /opt/postgresql-custom
 
@@ -213,7 +215,7 @@ RUN apk add --no-cache \
     && test "$(locale charmap)" = "UTF-8" \
     && icu_dir="$(mktemp -d)" \
     && chown postgres:postgres "${icu_dir}" \
-    && su-exec postgres initdb --no-sync --auth-local=trust --auth-host=trust --locale-provider=icu --icu-locale=pl-PL -D "${icu_dir}" >/dev/null \
+    && gosu postgres initdb --no-sync --auth-local=trust --auth-host=trust --locale-provider=icu --icu-locale=pl-PL -D "${icu_dir}" >/dev/null \
     && rm -rf "${icu_dir}" /tmp/fod-locales.txt \
     && postgres --version \
     && pg_config --configure | grep -F -- "--with-blocksize=${POSTGRES_BLOCK_SIZE_KB}" >/dev/null \
@@ -242,3 +244,4 @@ LABEL org.fod.extensions.pg-repack="${PG_REPACK_VERSION}"
 LABEL org.fod.extensions.hypopg="${HYPOPG_VERSION}"
 LABEL org.fod.extensions.pg-stat-kcache="${PG_STAT_KCACHE_VERSION}"
 LABEL org.fod.extensions.pg-hint-plan="${PG_HINT_PLAN_VERSION}"
+LABEL org.fod.extensions.pg-hint-plan-tag="${PG_HINT_PLAN_TAG}"

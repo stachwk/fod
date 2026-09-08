@@ -8,11 +8,21 @@ Date: 2026-08-31
 
 For FOD deployments, PostgreSQL compiled with `BLCKSZ=32K` is the default and target PostgreSQL variant.
 
-The canonical PostgreSQL 16 image is:
+The canonical default PostgreSQL 16 image is:
 
 ```text
 ghcr.io/stachwk/postgres-16-fod-32k:16
 ```
+
+The same 32K image build is supported for newer PostgreSQL majors:
+
+```text
+ghcr.io/stachwk/postgres-17-fod-32k:17
+ghcr.io/stachwk/postgres-18-fod-32k:18
+```
+
+PG16 remains the default reference deployment until a separate
+default-major decision is made.
 
 The standard PostgreSQL `BLCKSZ=8K` variant remains supported only as a compatibility/reference and regression-comparison variant. It is no longer the FOD default.
 

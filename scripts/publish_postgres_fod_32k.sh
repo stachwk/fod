@@ -8,10 +8,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
 POSTGRES_VERSION="${FOD_POSTGRES_IMAGE_VERSION:-16.15}"
+POSTGRES_MAJOR="${POSTGRES_VERSION%%.*}"
 BLOCK_SIZE_KB="${FOD_POSTGRES_BLOCK_SIZE_KB:-32}"
 REGISTRY="${FOD_CONTAINER_REGISTRY:-ghcr.io}"
 NAMESPACE="${FOD_CONTAINER_NAMESPACE:-stachwk}"
-REPOSITORY="${FOD_CONTAINER_REPOSITORY:-postgres-16-fod-${BLOCK_SIZE_KB}k}"
+REPOSITORY="${FOD_CONTAINER_REPOSITORY:-postgres-${POSTGRES_MAJOR}-fod-${BLOCK_SIZE_KB}k}"
 PUSH="${FOD_CONTAINER_PUSH:-0}"
 TAG_MAJOR="${FOD_CONTAINER_TAG_MAJOR:-1}"
 TAG_LATEST="${FOD_CONTAINER_TAG_LATEST:-0}"
@@ -77,6 +78,40 @@ REQUIRED_ICU_LOCALES=(
     ar-SA
 )
 
+case "${POSTGRES_VERSION}" in
+    16.*|17.*|18.*) ;;
+    *)
+        echo "FOD_POSTGRES_IMAGE_VERSION must be an exact PostgreSQL 16.x, 17.x or 18.x release" >&2
+        exit 2
+        ;;
+esac
+
+case "${POSTGRES_MAJOR}" in
+    16)
+        DEFAULT_PGAUDIT_VERSION="16.1"
+        DEFAULT_PG_HINT_PLAN_VERSION="1.6.2"
+        DEFAULT_PG_HINT_PLAN_TAG="REL16_1_6_2"
+        ;;
+    17)
+        DEFAULT_PGAUDIT_VERSION="17.1"
+        DEFAULT_PG_HINT_PLAN_VERSION="1.7.1"
+        DEFAULT_PG_HINT_PLAN_TAG="REL17_1_7_1"
+        ;;
+    18)
+        DEFAULT_PGAUDIT_VERSION="18.0"
+        DEFAULT_PG_HINT_PLAN_VERSION="1.8.0"
+        DEFAULT_PG_HINT_PLAN_TAG="REL18_1_8_0"
+        ;;
+    *)
+        echo "Unsupported PostgreSQL major: ${POSTGRES_MAJOR}" >&2
+        exit 2
+        ;;
+esac
+
+PGAUDIT_VERSION="${FOD_PGAUDIT_VERSION:-${DEFAULT_PGAUDIT_VERSION}}"
+PG_HINT_PLAN_VERSION="${FOD_PG_HINT_PLAN_VERSION:-${DEFAULT_PG_HINT_PLAN_VERSION}}"
+PG_HINT_PLAN_TAG="${FOD_PG_HINT_PLAN_TAG:-${DEFAULT_PG_HINT_PLAN_TAG}}"
+
 case "${BLOCK_SIZE_KB}" in
     8|32) ;;
     *) echo "FOD_POSTGRES_BLOCK_SIZE_KB must be 8 or 32" >&2; exit 2 ;;
@@ -91,7 +126,7 @@ esac
 EXPECTED_BLOCK_SIZE="$((BLOCK_SIZE_KB * 1024))"
 IMAGE_BASE="${REGISTRY}/${NAMESPACE}/${REPOSITORY}"
 VERSION_TAG="${IMAGE_BASE}:${POSTGRES_VERSION}"
-MAJOR_TAG="${IMAGE_BASE}:16"
+MAJOR_TAG="${IMAGE_BASE}:${POSTGRES_MAJOR}"
 LATEST_TAG="${IMAGE_BASE}:latest"
 
 for cmd in docker git awk grep tail tr wc sort paste; do
@@ -109,6 +144,9 @@ docker build \
     --build-arg "FOD_IMAGE_SOURCE=${SOURCE}" \
     --build-arg "FOD_IMAGE_REVISION=${REVISION}" \
     --build-arg "FOD_IMAGE_VERSION=${POSTGRES_VERSION}" \
+    --build-arg "PGAUDIT_VERSION=${PGAUDIT_VERSION}" \
+    --build-arg "PG_HINT_PLAN_VERSION=${PG_HINT_PLAN_VERSION}" \
+    --build-arg "PG_HINT_PLAN_TAG=${PG_HINT_PLAN_TAG}" \
     -t "${VERSION_TAG}" \
     .
 
@@ -121,8 +159,8 @@ fi
 actual_block_size="$(docker run --rm --entrypoint /bin/sh "${VERSION_TAG}" -ceu '
     dir="$(mktemp -d)"
     chown postgres:postgres "${dir}"
-    su-exec postgres initdb --no-sync --auth-local=trust --auth-host=trust -D "${dir}" >/dev/null
-    su-exec postgres postgres -D "${dir}" -C block_size
+    gosu postgres initdb --no-sync --auth-local=trust --auth-host=trust -D "${dir}" >/dev/null
+    gosu postgres postgres -D "${dir}" -C block_size
 ' | tail -n 1 | tr -d '[:space:]')"
 if [[ "${actual_block_size}" != "${EXPECTED_BLOCK_SIZE}" ]]; then
     echo "PostgreSQL block_size verification failed expected=${EXPECTED_BLOCK_SIZE} actual=${actual_block_size}" >&2
@@ -165,7 +203,7 @@ docker run --rm --entrypoint /bin/sh "${VERSION_TAG}" -ceu '
     for locale_name in $1; do
         dir="$(mktemp -d)"
         chown postgres:postgres "${dir}"
-        su-exec postgres initdb --no-sync --auth-local=trust --auth-host=trust --locale-provider=icu --icu-locale="${locale_name}" -D "${dir}" >/dev/null
+        gosu postgres initdb --no-sync --auth-local=trust --auth-host=trust --locale-provider=icu --icu-locale="${locale_name}" -D "${dir}" >/dev/null
         rm -rf "${dir}"
     done
     IFS="$old_ifs"

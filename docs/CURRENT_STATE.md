@@ -29,11 +29,20 @@ SLAVES=0..32
 
 `MASTERS>1` is rejected.
 
-Current production PostgreSQL image:
+Default production PostgreSQL image:
 
 ```text
 ghcr.io/stachwk/postgres-16-fod-32k:16.15
 ```
+
+Additional supported 32K image families:
+
+```text
+ghcr.io/stachwk/postgres-17-fod-32k:17.11
+ghcr.io/stachwk/postgres-18-fod-32k:18.6
+```
+
+PG16 remains the reference deployment default.
 
 By default the FOD client uses the exact release from `fod_version.txt`. `FOD_CLIENT_VERSION=X.Y.Z` may select another already-published client build without changing the repository/source version. A fully-qualified `FOD_DOCKER_DEPLOY_CLIENT_IMAGE=registry/path:tag` override has the highest deployment priority. The mutable `:3.4` tag remains only a convenience alias.
 

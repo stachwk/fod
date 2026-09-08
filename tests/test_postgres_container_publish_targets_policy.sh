@@ -44,9 +44,16 @@ done
 grep -F 'FOD_POSTGRES_BLOCK_SIZE_KB=8' "${PUBLISH_8}" >/dev/null
 grep -F 'postgres-16-fod-8k' "${PUBLISH_8}" >/dev/null
 grep -F 'FOD_POSTGRES_BLOCK_SIZE_KB:-32' "${PUBLISH}" >/dev/null
-grep -F 'postgres-16-fod-${BLOCK_SIZE_KB}k' "${PUBLISH}" >/dev/null
+grep -F 'POSTGRES_MAJOR="${POSTGRES_VERSION%%.*}"' "${PUBLISH}" >/dev/null
+grep -F 'postgres-${POSTGRES_MAJOR}-fod-${BLOCK_SIZE_KB}k' "${PUBLISH}" >/dev/null
+grep -F 'DEFAULT_PGAUDIT_VERSION="17.1"' "${PUBLISH}" >/dev/null
+grep -F 'DEFAULT_PGAUDIT_VERSION="18.0"' "${PUBLISH}" >/dev/null
+grep -F 'DEFAULT_PG_HINT_PLAN_TAG="REL17_1_7_1"' "${PUBLISH}" >/dev/null
+grep -F 'DEFAULT_PG_HINT_PLAN_TAG="REL18_1_8_0"' "${PUBLISH}" >/dev/null
 grep -F 'FOD_CONTAINER_TAG_LATEST:-0' "${PUBLISH}" >/dev/null
-grep -F 'MAJOR_TAG="${IMAGE_BASE}:16"' "${PUBLISH}" >/dev/null
+grep -F 'MAJOR_TAG="${IMAGE_BASE}:${POSTGRES_MAJOR}"' "${PUBLISH}" >/dev/null
+grep -F 'ARG PG_HINT_PLAN_TAG=REL16_1_6_2' "${DOCKERFILE}" >/dev/null
+grep -F 'refs/tags/${PG_HINT_PLAN_TAG}.tar.gz' "${DOCKERFILE}" >/dev/null
 
 for compose in "${COMPOSE_DISK}" "${COMPOSE_TMPFS}"; do
     grep -F 'POSTGRES_INITDB_ARGS: "--auth-local=trust --auth-host=scram-sha-256"' "${compose}" >/dev/null
@@ -58,6 +65,12 @@ done
 
 grep -F -- '--no-sync --auth-local=trust --auth-host=trust' "${DOCKERFILE}" >/dev/null
 grep -F 'initdb --no-sync --auth-local=trust --auth-host=trust' "${PUBLISH}" >/dev/null
+grep -F 'gosu postgres' "${DOCKERFILE}" >/dev/null
+grep -F 'gosu postgres' "${PUBLISH}" >/dev/null
+if grep -Fq 'su-exec postgres' "${DOCKERFILE}" "${PUBLISH}"; then
+    echo 'PostgreSQL Alpine images must use gosu, not su-exec' >&2
+    exit 1
+fi
 
 if grep -Eq 'docker[[:space:]]+(system[[:space:]]+)?prune|docker[[:space:]]+volume[[:space:]]+prune' "${PUBLISH_8}" "${PUBLISH}"; then
     echo 'PostgreSQL publishers must not perform global Docker pruning' >&2
