@@ -45,7 +45,7 @@ pub use fod_rust_runtime::{AtimePolicy, LockBackend};
 
 use crate::compatibility::FuseCompatibilitySnapshot;
 use crate::copy_plan::{copy_range_bounds, pack_copy_skip_unchanged_runs, CopyRangeBounds};
-use crate::read_cache::{ReadBlockCache, ReadSequenceState};
+use crate::read_cache::{ReadBlockCache, ReadFillCoordinator, ReadSequenceState};
 use crate::startup::FodFuseSettings;
 pub(crate) use crate::write_buffer::{ReadCopyDestinationSlice, WriteState};
 
@@ -930,6 +930,8 @@ pub(crate) struct FodFuseProfileCounters {
     fuse_read_total_us: AtomicU64,
     fuse_write_total_us: AtomicU64,
     read_block_map_us: AtomicU64,
+    read_fill_wait_count: AtomicU64,
+    read_fill_wait_us: AtomicU64,
     fetch_block_range_chunk_us: AtomicU64,
     fetch_block_range_parallel_us: AtomicU64,
     assemble_read_slice_us: AtomicU64,
@@ -1020,6 +1022,11 @@ impl FodFuseProfileCounters {
 
     pub(crate) fn record_read_block_map_elapsed(&self, elapsed: Duration) {
         Self::add(&self.read_block_map_us, elapsed);
+    }
+
+    pub(crate) fn record_read_fill_wait_elapsed(&self, elapsed: Duration) {
+        self.read_fill_wait_count.fetch_add(1, Ordering::Relaxed);
+        Self::add(&self.read_fill_wait_us, elapsed);
     }
 
     pub(crate) fn record_fetch_block_range_chunk_elapsed(&self, elapsed: Duration) {
@@ -1167,6 +1174,8 @@ impl FodFuseProfileCounters {
         self.fuse_read_total_us.load(Ordering::Relaxed) > 0
             || self.fuse_write_total_us.load(Ordering::Relaxed) > 0
             || self.read_block_map_us.load(Ordering::Relaxed) > 0
+            || self.read_fill_wait_count.load(Ordering::Relaxed) > 0
+            || self.read_fill_wait_us.load(Ordering::Relaxed) > 0
             || self.fetch_block_range_chunk_us.load(Ordering::Relaxed) > 0
             || self.fetch_block_range_parallel_us.load(Ordering::Relaxed) > 0
             || self.assemble_read_slice_us.load(Ordering::Relaxed) > 0
@@ -1220,6 +1229,14 @@ impl FodFuseProfileCounters {
             format!(
                 "read_block_map_us={}",
                 self.read_block_map_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "read_fill_wait_count={}",
+                self.read_fill_wait_count.load(Ordering::Relaxed)
+            ),
+            format!(
+                "read_fill_wait_us={}",
+                self.read_fill_wait_us.load(Ordering::Relaxed)
             ),
             format!(
                 "fetch_block_range_chunk_us={}",
@@ -1392,6 +1409,7 @@ pub struct FodFuse {
     fh_table: Mutex<HashMap<u64, FileHandleState>>,
     pub(crate) write_states: Mutex<HashMap<u64, WriteState>>,
     pub(crate) read_block_cache: Mutex<ReadBlockCache>,
+    pub(crate) read_fill_coordinator: ReadFillCoordinator,
     pub(crate) recent_write_blocks: Mutex<HashMap<RecentWriteBlockKey, Arc<[u8]>>>,
     pub(crate) recent_write_blocks_len: AtomicU64,
     pub(crate) read_sequence_state: Mutex<HashMap<u64, ReadSequenceState>>,
@@ -1498,6 +1516,7 @@ impl FodFuse {
             read_block_cache: Mutex::new(ReadBlockCache::new(
                 cache.read_cache_eviction_policy.as_str(),
             )),
+            read_fill_coordinator: ReadFillCoordinator::default(),
             recent_write_blocks: Mutex::new(HashMap::new()),
             recent_write_blocks_len: AtomicU64::new(0),
             read_sequence_state: Mutex::new(HashMap::new()),
@@ -1691,6 +1710,10 @@ impl FodFuse {
 
     pub(crate) fn record_read_block_map_elapsed(&self, elapsed: Duration) {
         self.profile.record_read_block_map_elapsed(elapsed);
+    }
+
+    pub(crate) fn record_read_fill_wait_elapsed(&self, elapsed: Duration) {
+        self.profile.record_read_fill_wait_elapsed(elapsed);
     }
 
     pub(crate) fn record_assemble_read_slice_elapsed(&self, elapsed: Duration) {

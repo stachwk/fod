@@ -11,6 +11,14 @@ Reading guide:
 
 ## Current Follow-ups
 
+- [ ] Protect one destination path against concurrent copies from independent FOD mounts or machines.
+  - Reproduce two independent FOD clients copying a file with the same destination pathname into the same FOD directory at the same time. Test both identical source content and different source content using the same destination filename.
+  - Coordination must be authoritative in PostgreSQL and work across processes and machines; a process-local mutex is not sufficient.
+  - Define deterministic POSIX-compatible conflict semantics for create/open/truncate/replace operations: concurrent writers must never interleave into one logical file. Either serialize ownership of the destination or reject the losing operation with the appropriate error according to the operation semantics.
+  - Protect temporary-file plus rename workflows as well as direct `O_CREAT` / `O_TRUNC` writes, so a later rename cannot bypass the destination ownership rule.
+  - A crashed/disconnected writer must not leave a permanent lock, partial destination, orphan payload rows, leaked capacity reservations, or inconsistent metadata.
+  - Add a two-mount regression that races copies to the same pathname and verifies one internally consistent final file, deterministic conflict handling, correct size/content/hash, no mixed blocks, no orphan payload, and correct behavior after remount.
+
 - [x] Reconcile the QNAP FOD test database schema-admin secret or deliberately reset that dedicated QNAP database before running mounted FUSE/ACL tests there.
   - 2026-08-22, commit `43724e8`: QNAP PostgreSQL smoke and PostgreSQL-only checks passed, but the FOD schema on QNAP was version `16` with pending migrations `0017..0022`; the guarded upgrade correctly rejected the unrelated local schema-admin secret.
   - 2026-08-23: the dedicated QNAP test volume was deliberately recreated by the destructive test reset and current-schema initialization completed successfully. FOD 3.3.10 makes that operation an explicit opt-in with `QNAP_ALLOW_DESTRUCTIVE_RESET=1` instead of allowing `QNAP=1 reset` to remove the remote volume implicitly.

@@ -117,36 +117,114 @@ replica:
 The remaining 4 KiB throughput gap is therefore not evidence for another
 PostgreSQL metadata or range-fetch optimization.
 
-### FOD 3.4.18 — benchmark production buffered-I/O behavior
+### FOD 3.4.18 measured direct-I/O vs buffered-I/O result
 
-The isolated benchmark still forces `FOD_FOPEN_DIRECT_IO=1`, while the standard
-FOD configuration uses `fopen_direct_io=false`. That means the current matrix
-measures every application read reaching FUSE directly and does not show how
-the normal kernel page cache/readahead path changes callback count or
-throughput.
+FOD 3.4.18 parameterized the benchmark's FUSE `fopen_direct_io` policy without
+changing the production default. The same `lt7300`, 128 MiB pattern payload,
+32 KiB persisted storage-block matrix measured:
 
-FOD 3.4.18 is measurement-only:
+| fio request | operation | direct I/O | buffered I/O |
+| --- | --- | ---: | ---: |
+| 4 KiB | primary write | 73.437 MiB/s | 5.067 MiB/s |
+| 4 KiB | primary read | 166.884 MiB/s | 278.261 MiB/s |
+| 4 KiB | replica read | 185.239 MiB/s | 252.465 MiB/s |
+| 64 KiB | primary write | 98.462 MiB/s | 50.533 MiB/s |
+| 64 KiB | primary read | 278.261 MiB/s | 296.984 MiB/s |
+| 64 KiB | replica read | 315.271 MiB/s | 286.353 MiB/s |
+| 512 KiB | primary write | 100.550 MiB/s | 88.398 MiB/s |
+| 512 KiB | primary read | 300.469 MiB/s | 290.249 MiB/s |
+| 512 KiB | replica read | 339.523 MiB/s | 131.282 MiB/s |
 
-- parameterize `FOD_FOPEN_DIRECT_IO` in the isolated benchmark, keeping `1` as
-  the benchmark default so existing invocations retain their behavior;
-- validate the benchmark value as exactly `0` or `1`;
-- record `fopen_direct_io` in `read-policy.txt`, `result.tsv`, `PERF_RESULT`
-  and matrix `summary.tsv`;
-- only auto-label a zero-cache run as `uncached` when FUSE direct I/O is also
-  enabled, because buffered kernel caching makes that label misleading;
-- do not change Rust read-path, PostgreSQL SQL, storage geometry, or production
-  configuration defaults.
-
-After delivery, run the same 4 KiB / 64 KiB / 512 KiB matrix twice:
+Buffered I/O reduced sequential read callbacks to about 512 independently of
+the fio request size:
 
 ```text
-A: FOD_FOPEN_DIRECT_IO=1   # current diagnostic baseline
-B: FOD_FOPEN_DIRECT_IO=0   # standard production FOD default
+4 KiB:   516 callbacks
+64 KiB:  513 callbacks
+512 KiB: 512 callbacks
 ```
 
-Use explicit policy labels for the A/B runs. Compare throughput,
-`admitted_tasks`, range-fetch counts, metadata calls and per-callback profile
-cost before selecting any runtime optimization.
+This closes the earlier concern that production 4 KiB application reads must
+always pay 32768 FUSE callbacks. Do not optimize that direct-I/O callback count
+as a production requirement.
+
+The buffered profiles also exposed concurrent read-cache fill amplification.
+For a logical 128 MiB read, PostgreSQL returned substantially more than one
+file's 4096 storage blocks:
+
+```text
+4 KiB primary:    calls=23  rows=7991 bytes=261913016
+4 KiB replica:    calls=20  rows=7997 bytes=262109672
+64 KiB primary:   calls=28  rows=7880 bytes=258274880
+64 KiB replica:   calls=45  rows=7680 bytes=251719680
+512 KiB primary:  calls=24  rows=7936 bytes=260110336
+512 KiB replica:  calls=132 rows=6900 bytes=226154400
+```
+
+The current cache path checks missing blocks under the cache mutex, releases
+that mutex before PostgreSQL fetch, and stores the returned blocks afterward.
+Concurrent callbacks can therefore observe the same miss and issue duplicate
+range fetches before the first callback fills the cache.
+
+The buffered-write regression is tracked separately: 4 KiB write fell to
+5.067 MiB/s and showed about three PostgreSQL operations per write callback,
+including repeated path/directory lookup work. Do not mix that independent
+write-path problem into the read-fill change.
+
+### FOD 3.4.19 — coalesce concurrent buffered read-cache fills
+
+Implement overlap-aware per-file coordination around buffered read-cache miss
+fills:
+
+- direct-I/O retains its existing cache/fetch path;
+- the first buffered callback owns its currently missing block ranges;
+- another callback waits only when its missing ranges overlap an active fill
+  for the same `file_id`;
+- non-overlapping miss ranges for the same file and ranges for different files
+  remain independently fillable in parallel;
+- waiters never hold the read-block-cache mutex while blocked;
+- after an overlapping owner stores fetched blocks, waiters recheck the cache
+  rather than executing a stale duplicate fetch;
+- existing `workers_read` parallelism inside the owning fill remains intact;
+- owner release wakes waiters even when the fetch returns an error;
+- expose `read_fill_wait_count` and `read_fill_wait_us` in the boundary profile
+  and compact primary/replica extractor.
+
+Acceptance for the same buffered 128 MiB matrix:
+
+```text
+fetch_block_range_result_rows  -> close to 4096
+fetch_block_range_result_bytes -> close to 134250496
+```
+
+with elimination of duplicate PostgreSQL result rows/bytes and a material
+reduction of the worst observed range-fetch case, especially the previous
+512 KiB replica run with 132 calls. Read correctness, replica read-only
+enforcement and direct-I/O behavior must not regress.
+
+Measured validation on `lt7300` with the 128 MiB pattern payload and
+`fopen_direct_io=false`:
+
+| fio request | primary read | replica read | primary fetches | replica fetches |
+| --- | ---: | ---: | ---: | ---: |
+| 4 KiB | 281.938 MiB/s | 285.078 MiB/s | 49 | 34 |
+| 64 KiB | 283.186 MiB/s | 286.353 MiB/s | 53 | 56 |
+| 512 KiB | 300.469 MiB/s | 278.261 MiB/s | 56 | 66 |
+
+All six measured read phases returned exactly 4096 storage blocks and
+134250496 PostgreSQL result bytes for the logical 128 MiB file, with zero
+operation failures. The previous concurrent buffered-read amplification is
+therefore closed. Final observability was complete and the replica write guard
+remained `read_only_rejected`.
+
+Three additional 512 KiB range-aware repetitions produced primary-read
+throughput of 290.909, 324.051 and 285.078 MiB/s and replica-read throughput of
+288.939, 286.353 and 284.444 MiB/s. The median remained within 5% of the
+simpler per-file single-flight prototype while preserving exact one-file
+PostgreSQL payload retrieval in every run.
+
+The remaining buffered-write regression is independent and stays as a
+follow-up rather than being mixed into the read-cache coordination change.
 
 ## P2 — remaining multi-endpoint hardening
 

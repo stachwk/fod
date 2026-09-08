@@ -9,12 +9,168 @@ use rust_hotpath::pg::DbRepo;
 use rust_hotpath::read_missing_range_worker_count;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
 
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type MissingBlockIndices = Vec<u64>;
+
+type ReadFillRange = (u64, u64);
+
+fn read_fill_ranges(blocks: &[u64]) -> Vec<ReadFillRange> {
+    let Some((&first, rest)) = blocks.split_first() else {
+        return Vec::new();
+    };
+    let mut ranges = Vec::new();
+    let mut start = first;
+    let mut end = first;
+    for &block in rest {
+        if block == end.saturating_add(1) {
+            end = block;
+        } else {
+            ranges.push((start, end));
+            start = block;
+            end = block;
+        }
+    }
+    ranges.push((start, end));
+    ranges
+}
+
+fn read_fill_ranges_overlap(left: &[ReadFillRange], right: &[ReadFillRange]) -> bool {
+    left.iter().any(|&(left_first, left_last)| {
+        right
+            .iter()
+            .any(|&(right_first, right_last)| left_first <= right_last && right_first <= left_last)
+    })
+}
+
+#[derive(Debug)]
+struct ReadFillFlight {
+    ranges: Vec<ReadFillRange>,
+    done: Mutex<bool>,
+    ready: Condvar,
+}
+
+impl ReadFillFlight {
+    fn new(ranges: Vec<ReadFillRange>) -> Self {
+        Self {
+            ranges,
+            done: Mutex::new(false),
+            ready: Condvar::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ReadFillCoordinator {
+    flights: Mutex<HashMap<u64, Vec<Arc<ReadFillFlight>>>>,
+}
+
+pub(crate) struct ReadFillLease<'a> {
+    coordinator: &'a ReadFillCoordinator,
+    file_id: u64,
+    flight: Arc<ReadFillFlight>,
+    owner: bool,
+}
+
+impl ReadFillCoordinator {
+    pub(crate) fn acquire(&self, file_id: u64, missing: &[u64]) -> ReadFillLease<'_> {
+        let requested_ranges = read_fill_ranges(missing);
+        debug_assert!(!requested_ranges.is_empty());
+
+        let mut flights = self
+            .flights
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let file_flights = flights.entry(file_id).or_default();
+
+        if let Some(flight) = file_flights
+            .iter()
+            .find(|flight| read_fill_ranges_overlap(&requested_ranges, &flight.ranges))
+        {
+            return ReadFillLease {
+                coordinator: self,
+                file_id,
+                flight: Arc::clone(flight),
+                owner: false,
+            };
+        }
+
+        let flight = Arc::new(ReadFillFlight::new(requested_ranges));
+        file_flights.push(Arc::clone(&flight));
+        ReadFillLease {
+            coordinator: self,
+            file_id,
+            flight,
+            owner: true,
+        }
+    }
+
+    fn finish(&self, file_id: u64, flight: &Arc<ReadFillFlight>) {
+        {
+            let mut done = flight
+                .done
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *done = true;
+        }
+
+        {
+            let mut flights = self
+                .flights
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let remove_file = if let Some(file_flights) = flights.get_mut(&file_id) {
+                file_flights.retain(|current| !Arc::ptr_eq(current, flight));
+                file_flights.is_empty()
+            } else {
+                false
+            };
+            if remove_file {
+                flights.remove(&file_id);
+            }
+        }
+
+        flight.ready.notify_all();
+    }
+}
+
+impl ReadFillLease<'_> {
+    pub(crate) fn is_owner(&self) -> bool {
+        self.owner
+    }
+
+    pub(crate) fn wait(&self) -> std::time::Duration {
+        if self.owner {
+            return std::time::Duration::ZERO;
+        }
+
+        let started = Instant::now();
+        let mut done = self
+            .flight
+            .done
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !*done {
+            done = self
+                .flight
+                .ready
+                .wait(done)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        started.elapsed()
+    }
+}
+
+impl Drop for ReadFillLease<'_> {
+    fn drop(&mut self) {
+        if self.owner {
+            self.coordinator.finish(self.file_id, &self.flight);
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ReadSequenceState {
@@ -623,6 +779,41 @@ impl FodFuse {
         }
     }
 
+    fn buffered_read_block_map_coalesced(
+        &self,
+        file_id: u64,
+        fetch_first: u64,
+        fetch_last: u64,
+    ) -> Result<SharedBlockRows, libc::c_int> {
+        loop {
+            let (cached, missing) =
+                self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
+            if missing.is_empty() {
+                return Ok(cached);
+            }
+
+            let fill = self.read_fill_coordinator.acquire(file_id, &missing);
+            if !fill.is_owner() {
+                let waited = fill.wait();
+                self.record_read_fill_wait_elapsed(waited);
+                continue;
+            }
+
+            // A previous owner may have completed between the initial cache
+            // check and acquisition of ownership. Recheck before issuing SQL.
+            let (mut cached, missing) =
+                self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
+            if missing.is_empty() {
+                return Ok(cached);
+            }
+
+            let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
+            self.store_read_blocks(file_id, &fetched);
+            cached = Self::merge_sorted_blocks(cached, fetched);
+            return Ok(cached);
+        }
+    }
+
     pub(crate) fn read_block_map_target_block(
         &self,
         file_id: u64,
@@ -634,6 +825,16 @@ impl FodFuse {
         if fetch_last < fetch_first || target_block < fetch_first || target_block > fetch_last {
             self.record_read_block_map_elapsed(started.elapsed());
             return Ok(None);
+        }
+        if !self.fopen_direct_io {
+            let blocks =
+                self.buffered_read_block_map_coalesced(file_id, fetch_first, fetch_last)?;
+            let target = blocks
+                .into_iter()
+                .find(|(block_index, _)| *block_index == target_block)
+                .map(|(_, block)| block);
+            self.record_read_block_map_elapsed(started.elapsed());
+            return Ok(target);
         }
         if let Some(block) = self.cached_read_block(file_id, target_block) {
             self.record_read_block_map_elapsed(started.elapsed());
@@ -673,6 +874,12 @@ impl FodFuse {
             self.record_read_block_map_elapsed(started.elapsed());
             return Ok(Vec::new());
         }
+        if !self.fopen_direct_io {
+            let blocks =
+                self.buffered_read_block_map_coalesced(file_id, fetch_first, fetch_last)?;
+            self.record_read_block_map_elapsed(started.elapsed());
+            return Ok(blocks);
+        }
         let (mut cached, missing) =
             self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
         if missing.is_empty() {
@@ -689,8 +896,10 @@ impl FodFuse {
 
 #[cfg(test)]
 mod tests {
-    use super::ReadBlockCache;
-    use std::sync::Arc;
+    use super::{ReadBlockCache, ReadFillCoordinator};
+    use std::sync::{mpsc, Arc};
+    use std::thread;
+    use std::time::Duration;
 
     fn block(value: u8) -> Arc<[u8]> {
         Arc::from(vec![value])
@@ -718,5 +927,52 @@ mod tests {
         assert!(cache.get(1, 1).is_some());
         assert!(cache.get(1, 2).is_none());
         assert!(cache.get(1, 3).is_some());
+    }
+
+    #[test]
+    fn read_fill_coordinator_coalesces_overlapping_ranges_and_releases_waiters() {
+        let coordinator = Arc::new(ReadFillCoordinator::default());
+        let owner = coordinator.acquire(7, &[0, 1, 2, 3]);
+        assert!(owner.is_owner());
+
+        let waiter_coordinator = Arc::clone(&coordinator);
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let lease = waiter_coordinator.acquire(7, &[2, 3, 4, 5]);
+            acquired_tx.send(lease.is_owner()).unwrap();
+            let waited = lease.wait();
+            done_tx.send(waited).unwrap();
+        });
+
+        assert!(!acquired_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        assert!(done_rx.try_recv().is_err());
+
+        drop(owner);
+        let _waited = done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        waiter.join().unwrap();
+
+        let next_owner = coordinator.acquire(7, &[2, 3, 4, 5]);
+        assert!(next_owner.is_owner());
+    }
+
+    #[test]
+    fn read_fill_coordinator_allows_disjoint_ranges_for_same_file() {
+        let coordinator = ReadFillCoordinator::default();
+        let first = coordinator.acquire(7, &[0, 1, 2, 3]);
+        let second = coordinator.acquire(7, &[4, 5, 6, 7]);
+
+        assert!(first.is_owner());
+        assert!(second.is_owner());
+    }
+
+    #[test]
+    fn read_fill_coordinator_keeps_different_files_independent() {
+        let coordinator = ReadFillCoordinator::default();
+        let first = coordinator.acquire(1, &[0, 1]);
+        let second = coordinator.acquire(2, &[0, 1]);
+
+        assert!(first.is_owner());
+        assert!(second.is_owner());
     }
 }

@@ -26,6 +26,8 @@ cat >"${CASE}/primary-read-mount.log" <<'EOF'
 2026-01-01T00:00:03Z - INFO - FOD boundary profile:
 2026-01-01T00:00:03Z - INFO -   fuse_read_total_us=420000
 2026-01-01T00:00:03Z - INFO -   read_block_map_us=360000
+2026-01-01T00:00:03Z - INFO -   read_fill_wait_count=3
+2026-01-01T00:00:03Z - INFO -   read_fill_wait_us=120000
 2026-01-01T00:00:03Z - INFO -   repo_fetch_block_range_us=280000
 2026-01-01T00:00:03Z - INFO -   assemble_read_slice_us=10000
 2026-01-01T00:00:03Z - INFO -   reply_data_us=50000
@@ -40,6 +42,8 @@ cat >"${CASE}/replica-read-mount.log" <<'EOF'
 2026-01-01T00:00:04Z - INFO - FOD boundary profile:
 2026-01-01T00:00:04Z - INFO -   fuse_read_total_us=440000
 2026-01-01T00:00:04Z - INFO -   read_block_map_us=400000
+2026-01-01T00:00:04Z - INFO -   read_fill_wait_count=5
+2026-01-01T00:00:04Z - INFO -   read_fill_wait_us=150000
 2026-01-01T00:00:04Z - INFO -   repo_fetch_block_range_us=300000
 2026-01-01T00:00:04Z - INFO -   assemble_read_slice_us=12000
 2026-01-01T00:00:04Z - INFO -   reply_data_us=48000
@@ -69,6 +73,8 @@ grep -Fq 'fetch_rows_per_call=128.000000' <<<"${primary_line}"
 grep -Fq 'fetch_bytes_per_call=524288.000000' <<<"${primary_line}"
 grep -Fq 'fetch_bytes_per_callback=262144.000000' <<<"${primary_line}"
 grep -Fq 'read_block_map_us_per_callback=45000.000000' <<<"${primary_line}"
+grep -Fq 'read_fill_wait_count=3' <<<"${primary_line}"
+grep -Fq 'read_fill_wait_us=120000' <<<"${primary_line}"
 grep -Fq 'repo_fetch_block_range_us_per_callback=35000.000000' <<<"${primary_line}"
 grep -Fq 'pg_fetch_us_per_callback=25000.000000' <<<"${primary_line}"
 grep -Fq 'pg_decode_us_per_callback=3750.000000' <<<"${primary_line}"
@@ -80,6 +86,8 @@ grep -Fq 'phase=replica-read completed_bytes_per_second=500000000' <<<"${OUT}"
 grep -Fq 'profile_attribution_available=1' <<<"${replica_line}"
 grep -Fq 'lane_observability_available=1' <<<"${replica_line}"
 grep -Fq 'fetch_statement_name=fod_fetch_block_range' <<<"${replica_line}"
+grep -Fq 'read_fill_wait_count=5' <<<"${replica_line}"
+grep -Fq 'read_fill_wait_us=150000' <<<"${replica_line}"
 grep -Fq 'file_read_metadata_calls=0' <<<"${replica_line}"
 grep -Fq 'file_read_metadata_us_per_callback=0.000000' <<<"${replica_line}"
 if grep -Fq 'stage=periodic' <<<"${OUT}"; then
