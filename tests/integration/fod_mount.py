@@ -80,6 +80,8 @@ class FODMount:
         env["POSTGRES_DB"] = self.postgres_db
         env["POSTGRES_USER"] = self.postgres_user
         env["POSTGRES_PASSWORD"] = self.postgres_password
+        # Test harness musi uzywac tego samego configu dla mkfs i mountu.
+        env["FOD_CONFIG"] = str(self._config_path())
         return env
 
     def _resolve_binary(self, env_var: str, candidates: list[Path], missing_error: str) -> Path:
