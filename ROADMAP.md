@@ -47,9 +47,10 @@
 
 ## Near Term
 
-- make PostgreSQL-authoritative destination-path serialization across
-  independent mounts the next correctness priority; concurrent writers must
-  never interleave one logical destination
+- make PostgreSQL-authoritative destination-path ownership across independent
+  mounts the next correctness priority; use first-writer-wins non-blocking
+  acquisition so the winner continues, later concurrent writers fail promptly
+  without waiting, and writers never interleave one logical destination
 - treat the FOD 3.4.16-3.4.20 read-path optimization sequence as closed; do not
   reopen metadata/range-cache tuning without a new measured regression
 - keep the repository QNAP PostgreSQL preset stable for the current

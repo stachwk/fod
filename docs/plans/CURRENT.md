@@ -20,13 +20,26 @@ independent FOD mounts, processes or machines.
 Required boundary:
 
 - coordination is authoritative in PostgreSQL rather than process-local;
+- destination ownership is first-writer-wins: the first writer atomically
+  acquires ownership and continues, while every later concurrent writer uses
+  non-blocking try-acquire and fails immediately rather than waiting;
+- the losing writer must not truncate, write or otherwise mutate destination
+  payload or metadata before ownership is granted;
 - concurrent writers never interleave into one logical destination file;
+- operations that need multiple namespace resources, especially rename/replace,
+  acquire them in one deterministic global order or fail without waiting, so
+  destination ownership cannot introduce a wait cycle or deadlock;
 - direct create/truncate paths and temporary-file-plus-rename workflows obey
-  one deterministic ownership/conflict contract;
-- crash/disconnect cannot leave a permanent lock, partial destination,
-  orphan payload, leaked quota reservation or inconsistent metadata;
-- add a two-mount regression covering identical and different source content,
-  final size/content/hash, remount stability and cleanup.
+  the same destination ownership contract;
+- crash/disconnect cannot leave a permanent lock, orphan payload, leaked quota
+  reservation or inconsistent metadata; stale writers are fenced after lease
+  expiry/recovery;
+- a crashed direct POSIX writer may leave a valid prefix from that one writer,
+  but never mixed blocks from multiple writers; temp-file-plus-rename keeps
+  atomic replacement semantics;
+- add a two-mount/two-host regression covering identical and different source
+  content, prompt loser failure, zero loser writes, final size/content/hash,
+  no deadlock, stale-writer fencing, remount stability and cleanup.
 
 This is the highest-priority correctness follow-up.
 
@@ -63,7 +76,7 @@ Required boundary:
 
 - confirm that `fusermount3 -u` leaves no mount behind;
 - determine whether session drop still reports the benign `EINVAL`;
-- distinguish current library behavior from the historical `fuser 0.17` result;
+- compare current behavior with the verified 2026-07-12 migration-gate result;
 - do not fork `fuser`, suppress unrelated warnings or weaken cleanup semantics
   merely to hide the message.
 
