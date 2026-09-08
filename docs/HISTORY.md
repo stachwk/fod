@@ -97,6 +97,9 @@ implementation, design or measurement work:
 - [`FOD_CURRENT_ACTION_PLAN_2026-08-26.md`](history/FOD_CURRENT_ACTION_PLAN_2026-08-26.md)
   - former ordered implementation plan; its completed sequence is preserved
   without making it the current backlog,
+- [`FOD_CURRENT_PLAN_2026-09-08_READ_WRITE_TUNING.md`](history/FOD_CURRENT_PLAN_2026-09-08_READ_WRITE_TUNING.md)
+  - former maintained FOD 3.4.16-3.4.20 read/write tuning plan and measured
+  closure evidence; archived when the active plan was reduced to current work,
 - [`block-only-performance-plan.md`](history/block-only-performance-plan.md) -
   completed block-only write/performance execution record,
 - [`mounted-fuse-write-profile-plan.md`](history/mounted-fuse-write-profile-plan.md)

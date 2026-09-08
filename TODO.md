@@ -2,7 +2,7 @@
 
 This document records the small set of open follow-ups plus completed work, closed decisions, and regression notes for FOD. It is not an active implementation backlog.
 
-Active implementation sequence: [`docs/FOD_CURRENT_ACTION_PLAN.md`](docs/FOD_CURRENT_ACTION_PLAN.md).
+Active implementation sequence: [`docs/plans/CURRENT.md`](docs/plans/CURRENT.md). `docs/FOD_CURRENT_ACTION_PLAN.md` remains only a compatibility pointer for older references.
 
 Reading guide:
 - `Historical note:` means closed-item context, benchmark results, or archived implementation detail.
@@ -23,7 +23,8 @@ Reading guide:
   - 2026-08-22, commit `43724e8`: QNAP PostgreSQL smoke and PostgreSQL-only checks passed, but the FOD schema on QNAP was version `16` with pending migrations `0017..0022`; the guarded upgrade correctly rejected the unrelated local schema-admin secret.
   - 2026-08-23: the dedicated QNAP test volume was deliberately recreated by the destructive test reset and current-schema initialization completed successfully. FOD 3.3.10 makes that operation an explicit opt-in with `QNAP_ALLOW_DESTRUCTIVE_RESET=1` instead of allowing `QNAP=1 reset` to remove the remote volume implicitly.
 
-- [ ] Optimize the PostgreSQL-backed replica read path after closing the FOD 3.2.84 strict read-only correctness fix.
+- [x] Optimize the PostgreSQL-backed replica read path after closing the FOD 3.2.84 strict read-only correctness fix.
+  - Closure note (2026-09-08): FOD 3.4.16 through 3.4.20 removed the measured metadata, duplicate range-fetch and repeated xattr/path bottlenecks. The final read matrices no longer justify reopening this broad task. Reopen only for a new measured regression.
   - Baseline evidence (2026-08-19, Docker physical replica, 256 MiB, caches/read-ahead disabled, primary stopped before read): 4 KiB = ~8.4 MiB/s with 65,536 FOD read callbacks and 131,226 PostgreSQL operations; 64 KiB = 29.1 MiB/s with 4,096 callbacks and 8,332 operations; 512 KiB = 38.5 MiB/s with 512 callbacks and 1,162 operations; fio 1 MiB = 41.9 MiB/s but still 512 FOD callbacks and 905 PostgreSQL operations.
   - Decision: treat 512 KiB as the current effective FUSE read-callback ceiling. fio 1 MiB issues 256 userspace requests but FOD still receives 512 callbacks, so increasing the fio block above 512 KiB does not currently produce larger FUSE reads.
   - Decision: do not use one universal I/O size for read and write tuning. The same 256 MiB matrix measured writes at 36.7 MiB/s (4 KiB), 51.4 MiB/s (64 KiB), 54.3 MiB/s (512 KiB), and 18.2 MiB/s (1 MiB). 512 KiB is the best measured common point, while 1 MiB materially regresses write throughput.
@@ -50,7 +51,8 @@ Reading guide:
   - Implementation note (2026-07-18): persistence now revalidates and renews its reservation under the quota advisory lock. A copy running longer than the original one-hour lease can continue if capacity remains available, while an expired reservation cannot reclaim capacity already granted to another operation.
   - Implementation note (2026-07-18): forced-expiry PostgreSQL regressions now verify both successful renewal with available capacity and `ENOSPC` without payload mutation after another operation commits into the released capacity.
   - Implementation note (2026-07-18): `test-two-mount-quota` starts two independent FUSE daemons, queues both payload transactions behind the shared PostgreSQL advisory lock, and verifies one committed block, one `ENOSPC`, zero payload rows for the rejected file, and an exact one-block payload delta.
-- [ ] Design and implement role-aware multi-endpoint PostgreSQL routing for one FOD cluster, with several writable entrypoints and several read-only replicas, without encoding endpoint roles through list order.
+- [x] Design and implement role-aware multi-endpoint PostgreSQL routing for one FOD cluster, with several writable entrypoints and several read-only replicas, without encoding endpoint roles through list order.
+  - Closure note (2026-09-08): startup role selection, runtime primary failover, WAL-gated replica reads, adaptive replica scoring and fail-closed promotion validation are delivered. Future work must be a concrete hardening gap rather than reopening this broad project.
   - Implementation note (2026-07-23): phase 4 stage 1 is complete. The opt-in four-lane mount passes create, write, sync, read, rename, stat, remove, and cleanup while all lanes still use the legacy DSN and automatic routing remains disabled. Startup now rejects initialized schemas with missing or invalid `config.block_size`, missing or invalid `config.max_fs_size_bytes`, or a missing schema-version row instead of failing on the first write.
   - Implementation note (2026-07-23): phase 4 stage 2 observability is complete for the current non-queued architecture. Shared `DbRepo` state records connection-pool pressure, operation and exact transaction timing/errors, bounded replay, payload flow, and heartbeat scheduling/execution delay. The opt-in lane mount samples current/peak process RSS and portable PostgreSQL activity, temporary-file, deadlock, memory-setting, and current diagnostics-backend memory indicators. Logical queue classification plus physical batch and completed-file throughput move to stage 3 because they require the queue/task boundary; automatic routing and concurrency tuning remain disabled.
   - Implementation note (2026-07-28): the first `fod-rust-monitor` crate now owns the PostgreSQL lane observability sampler, process RSS reading, PostgreSQL pressure logging, lane/payload metrics logging, and global payload metrics logging. `pg_lanes.rs` keeps pool orchestration and mount startup decisions; Stage 3 still needs the logical task queue, task classification, active-transaction limits, and completed-file throughput counters.
@@ -116,12 +118,12 @@ Reading guide:
   - Historical note: the 2026-07-09 local repeat sample on commit `bad53cc` stayed mixed (`14.55/18.17`, `18.43/17.48`, `17.42/17.76` MiB/s for `default` vs `4194304`). The QNAP repetition still needs a clean run; in this session `192.168.1.11:5432` returned `No route to host`.
 - [x] Isolate the Cargo target directory used by `make test-locking` under `sudo`, then recheck the privileged test workflow.
   - Implementation note (2026-07-18): Cargo now compiles `lock_backend_smoke` as the invoking user in `target/test-locking`, records the exact executable from Cargo JSON output, and only runs that finished test binary through `sudo`. The privileged process no longer builds or writes Cargo artifacts.
-- [ ] Revisit the upstream `fuser 0.17` double-unmount warning when its public session API can distinguish an already externally unmounted libfuse3 mount. The 2026-07-12 migration gate verified that `fusermount3 -u` succeeds and no mount remains, but session drop subsequently logs benign `EINVAL`; do not fork `fuser` or hide unrelated warnings only to remove this message.
+- [ ] Re-check the external-unmount/session-teardown warning on the current `fuser 0.18` / libfuse3 stack when its public session API can distinguish an already externally unmounted libfuse3 mount. The 2026-07-12 migration gate verified that `fusermount3 -u` succeeds and no mount remains, but session drop subsequently logs benign `EINVAL`; do not fork `fuser` or hide unrelated warnings only to remove this message.
 - [x] Implement and verify an explicit fuser `fsync` callback for per-file durability.
   - Implementation note (2026-07-28): `fsync` now reuses the existing write-state persistence path, treats `datasync` as the same PostgreSQL durability boundary because file data and metadata are committed together, and returns PostgreSQL persistence errors instead of relying on fuser's default `ENOSYS` path. `release` also stops hiding final flush failures in its FUSE reply, although close-time propagation still depends on kernel/FUSE behavior.
 - [x] Remove the stale per-crate `rust_*/Cargo.lock` files after confirming that every crate resolves the repository workspace root and all supported `--manifest-path` builds use the root `Cargo.lock`.
   - Historical note: the removed lockfiles described FOD 3.0.4 and, for `rust_fuse`, fuser 0.14.0. The retained workspace lockfile is `./Cargo.lock`; `rust_indexer` already had no nested lockfile.
-- [ ] Deliver the remaining Compatibility and FUSE Modernization follow-ups without reopening the completed Storage Engine v2 implementation.
+- [ ] Aggregate the remaining compatibility diagnostics after the individual FUSE, PostgreSQL, libpq, runtime and storage-format boundaries expose trustworthy machine-readable data.
   - [x] Inventory current FUSE behavior, the Rust/C boundary, actual FFI consumers, direct `libpq` symbols, and the PostgreSQL storage contract in `docs/compatibility-contracts.md`; the refreshed contract now points at schema version 19, while the original migration evidence remains historical.
   - [x] Define and enforce Rust 1.85 as the verified minimum toolchain while retaining Edition 2021; workspace packages inherit the minimum, the SELinux/ACL image is pinned to `rust:1.85-bookworm`, and the stored CI definition selects the same version.
   - [x] Remove the intentionally inactive `.github/workflows/ci.yml_`; automated GitHub Actions coverage is not claimed until a new workflow is designed and enabled explicitly.
@@ -145,7 +147,8 @@ Reading guide:
   - [x] Add `libpq` client/server runtime version diagnostics without replacing the current PostgreSQL architecture.
     - Historical note: both manual `libpq` bindings now declare `PQlibVersion()` and `PQserverVersion()`. `mkfs.fod status` reports the runtime client and server numbers plus the server's `SHOW server_version` string; `fod-rust-fuse` records the same data once during startup through the existing pooled repository connection. Major-version relation is informational only, and compatibility is reported as `connected`; no new version gate or support-range claim is introduced.
   - [x] Write the storage-format versioning ADR before adding any new format marker or schema column. Accepted in `docs/adr/storage-format-versioning.md`; schema version remains the only persisted compatibility marker until an incompatible payload interpretation requires a distinct format marker.
-  - [ ] Aggregate existing compatibility diagnostics only after the individual boundaries expose trustworthy data.
+  - [x] Inventory the existing compatibility diagnostics and keep their individual trust boundaries explicit before aggregation.
+    - Tracking note (2026-09-08): the remaining aggregation work is represented by the parent task above; this nested duplicate is closed.
   - [x] Revisit `fuser 0.18.0` compatibility as a separate capability-maintenance pass.
     - Implementation note (2026-07-28): FOD now depends on `fuser 0.18.0` with explicit `libfuse3`. The `0.18.0` crate no longer exposes the old `abi-7-*` Cargo feature switches, so protocol support is treated as a runtime negotiation fact rather than a compile-time feature flag.
 - [x] Deliver the `Storage Engine v2` project described in `docs/storage-engine-v2-plan.md`, preserving 4 KiB logical blocks and the default block path while making large sequential physical persistence bounded and opt-in.
@@ -218,6 +221,16 @@ Reading guide:
 - [x] Zaprojektować pełną politykę mount-label SELinux. Celowo zamknięte jako non-goal: FOD używa hostowego modelu SELinux; na Rocky Linux 10.2 wspierany kontrakt to `fusefs_t` plus polityka domen, a nie per-inode `security.selinux` relabeling na zwykłym FUSE.
 
 ### PostgreSQL tuning and ingest hardening
+
+- [x] Persist the reference QNAP PostgreSQL server profile in the repository.
+  - Implementation note (2026-09-08, commit `f2b3d7d`): `QNAP=1` now selects
+    the 8 GB RAM / 2 CPU / HDD profile through Make/Compose. All 15 tuned
+    PostgreSQL parameters were live-validated with `source = command line`;
+    the earlier `ALTER SYSTEM` duplicates were removed and
+    `postgresql.auto.conf` contained no remaining profile entries.
+  - Decision: the QNAP preset is a deployment profile, not a universal
+    PostgreSQL requirement for FOD. Explicit command-line benchmark overrides
+    remain supported, while the local `QNAP=0` path retains PostgreSQL defaults.
 
 - [x] Expose server-side WAL/checkpoint/planner/autovacuum knobs in the Docker Compose and Makefile presets so local and QNAP benchmark runs can A/B the same config without editing container images.
   - Historical note: the compose stack now accepts optional `POSTGRES_*` tuning env vars and `make qnap-config-show` / `make postgres-config-show` print the resolved preset; `make postgres-benchmarks-wal-preset` and `make postgres-benchmarks-planner-preset` now apply the shared tuning profiles to both local Docker and QNAP without editing container images, and the benchmark A/B baseline is recorded in `BENCHMARKS.md`.
@@ -794,8 +807,13 @@ Notes:
   fail validation instead of being warning-only.
 - [x] FOD 3.2.63 — add PostgreSQL transaction-boundary admission limits.
 - [x] FOD 3.2.64 — add payload-byte budgets and byte-aware backpressure.
-- [ ] FOD 3.2.65+ — continue role-aware multi-endpoint routing, consistency,
+- [x] FOD 3.2.65+ — continue role-aware multi-endpoint routing, consistency,
   endpoint health/load scoring, failover and cross-process fairness work.
+  - Closure note (2026-09-08): startup routing, runtime primary failover,
+    WAL-gated replica reads, adaptive scoring, promotion validation and
+    process-local primary-generation fencing were delivered in later
+    3.2.x releases. External/cross-process fencing remains a separate
+    future hardening topic only when a concrete failure model requires it.
 - [x] FOD 3.2.82 — add a process-local in-flight primary generation fence: operations using the guarded writable-primary target register against the current generation, primary generation transitions wait for the old generation to drain, and stale post-acquisition connections are not allowed to start a new operation. External cross-process fencing remains separate.
 
 Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
@@ -815,5 +833,7 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
 - [x] Re-run mounted two-FUSE-instance quota and fio/strace profiles using the temporary privileged Docker/chroot path that permits `fusermount3`, working `sudo`, strace and perf. Native Codex execution still has `NoNewPrivs: 1`, so future mounted profiles should use that same path or run outside this restricted process.
 - [x] FOD 3.2.77: add mounted-FUSE write-stage instrumentation and decompose the 128 MiB direct-I/O write into admission, preflight, write-state, flush, persist and post-persist stages.
 - [x] FOD 3.2.78: reduce mounted block persist overhead by avoiding per-block normalization allocation for full COPY BINARY blocks and by using append-only staging merge SQL when the target data object has no payload rows.
-- [ ] Revisit the remaining read metadata round trip only with a correctness-preserving design. The FOD 3.2.74 fix intentionally does not cache file size in `fh` without cross-mount/truncate invalidation; if this becomes material, fold size metadata into the block-read query or add a cache with a proven invalidation contract.
-- [ ] Continue the remaining measured 128 MiB block-only persist bottleneck after FOD 3.2.78: the final profile still has two COPY calls totaling about `1020 ms`, one append-only `data_blocks` merge at about `142 ms`, and one remaining `ON CONFLICT` merge at about `355 ms`; next analyze whether the second 64 MiB flush can be proven append-only/disjoint before changing the merge shape.
+- [x] Revisit the remaining read metadata round trip only with a correctness-preserving design. The FOD 3.2.74 fix intentionally does not cache file size in `fh` without cross-mount/truncate invalidation; if this becomes material, fold size metadata into the block-read query or add a cache with a proven invalidation contract.
+  - Closure note (2026-09-08): FOD 3.4.16 later reduced the measured 4 KiB read profile to one file-read metadata call while preserving the correctness boundary. Reopen only for a new measured regression.
+- [x] Continue the remaining measured 128 MiB block-only persist bottleneck after FOD 3.2.78: the final profile still has two COPY calls totaling about `1020 ms`, one append-only `data_blocks` merge at about `142 ms`, and one remaining `ON CONFLICT` merge at about `355 ms`; next analyze whether the second 64 MiB flush can be proven append-only/disjoint before changing the merge shape.
+  - Closure note (2026-09-08): this 3.2.78 profile is historical and was superseded by later block-only, 32 KiB storage-block and FOD 3.4.x read/write measurements. Any new persist optimization must start from a fresh current baseline rather than continue this old timing breakdown.

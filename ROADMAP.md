@@ -5,9 +5,9 @@
 - The current FOD release is sourced from `fod_version.txt`; this roadmap
   intentionally avoids duplicating the latest patch number as an authoritative
   version source.
-- FOD has a working PostgreSQL-backed FUSE core, schema version `22`,
-  documented runtime profiles, a shared Rust indexing core, and a broad local
-  integration suite.
+- FOD has a working PostgreSQL-backed FUSE core, a versioned PostgreSQL schema
+  managed by the Rust mkfs migration manifest, documented runtime profiles,
+  a shared Rust indexing core, and a broad local integration suite.
 - The repository currently has no active GitHub Actions workflow. `make test-all` is the main local regression gate, while `make test-all-full` adds wider mounted and indexer coverage.
 - Benchmark baselines are tracked in [`BENCHMARKS.md`](BENCHMARKS.md), while [`TODO.md`](TODO.md) records open follow-ups, accepted decisions, completed work, and regression notes.
 - The maintained next implementation sequence is tracked in [`docs/plans/CURRENT.md`](docs/plans/CURRENT.md).
@@ -47,27 +47,32 @@
 
 ## Near Term
 
-- preserve the FOD 3.2.84 strict read-only replica correctness gate during further read-path tuning: read-only mounts must remain observation-only, Docker replica reads must report zero PostgreSQL operation failures, and PostgreSQL must observe no write attempt from the measured read path
-- optimize replica reads from measured `read_block_map -> repo_fetch_block_range` evidence: profile the SQL/repository operations behind one 512 KiB callback, remove avoidable per-callback round trips, and re-run the 4 KiB / 64 KiB / 512 KiB physical-replica matrix after each change
-- treat 512 KiB as the current effective FUSE callback ceiling until negotiation is changed and re-measured; a fio 1 MiB read is currently split into two ~512 KiB callbacks
-- tune read and write sizes independently: the 2026-08-19 Docker matrix shows read throughput increasing through large callbacks while 1 MiB writes regress sharply; 512 KiB is the best measured common point, not a universal final setting
-- keep `make test-all`, `make test-all-full`, `cargo fmt --all -- --check`, `cargo check --workspace --locked`, and `make test-version` as the documented local quality gates
-- keep planning documentation synchronized with `fod_version.txt`, the Cargo
-  workspace version, and the Rust schema manifest before closing further TODO
-  items
-- keep validation local and do not create or modify GitHub Actions workflows; use the documented local Rust 1.85 and locked-dependency quality gates instead
-- aggregate the existing FUSE callback, PostgreSQL, libpq, runtime, and
-  storage-format diagnostics only after the individual boundaries expose
-  trustworthy machine-readable data
-- keep the explicit `fsync` durability contract covered by mounted regression
-  tests and extend it only with measured failure-injection cases
-- instrument inode/path cache lifetime and implement `forget` plus `batch_forget` if large-tree measurements confirm retained entries
-- connect the existing resize and sparse-storage machinery to explicitly supported `fallocate` modes; reject unsupported mode combinations with `EOPNOTSUPP`
-- benchmark `readdirplus` against `readdir` for large directories and keep it only when it measurably reduces callbacks or PostgreSQL work
-- implement sparse-aware `lseek(SEEK_DATA/SEEK_HOLE)` over block maps after edge-case tests define the contract
-- keep post-ABI-7.31 features disabled until both the public `fuser` API and truthful FOD semantics exist; protocol negotiation alone is not an enablement decision
-- validate supported `libfuse3` versions, especially external unmount/session teardown and `copy_file_range`, without assuming a libfuse upgrade adds missing high-level `fuser` callbacks
-- keep benchmark baselines, decision notes, schema status, compatibility contracts, and runtime profiles synchronized with code changes
+- make PostgreSQL-authoritative destination-path serialization across
+  independent mounts the next correctness priority; concurrent writers must
+  never interleave one logical destination
+- treat the FOD 3.4.16-3.4.20 read-path optimization sequence as closed; do not
+  reopen metadata/range-cache tuning without a new measured regression
+- keep the repository QNAP PostgreSQL preset stable for the current
+  8 GB / 2 CPU / HDD reference host; repeat the COPY send-buffer matrix only
+  before considering a default change
+- keep multi-endpoint work limited to explicit hardening gaps; startup routing,
+  primary failover, WAL-gated replica reads, scoring and promotion validation
+  are already delivered
+- aggregate compatibility diagnostics only when the underlying FUSE,
+  PostgreSQL, libpq, runtime and storage-format signals remain trustworthy
+- reproduce the external-unmount/session-teardown warning on the current
+  `fuser 0.18` / libfuse3 stack before changing teardown behavior
+- instrument inode/path cache lifetime and implement `forget` plus
+  `batch_forget` only if large-tree measurements justify it
+- connect the existing resize and sparse-storage machinery to explicitly
+  supported `fallocate` modes and reject unsupported combinations with
+  `EOPNOTSUPP`
+- benchmark `readdirplus` against `readdir` for large directories and keep it
+  only when it measurably reduces callbacks or PostgreSQL work
+- implement sparse-aware `lseek(SEEK_DATA/SEEK_HOLE)` only after edge-case tests
+  define the contract
+- keep local quality gates, benchmark baselines, current documentation and
+  authoritative version/schema metadata synchronized with code changes
 
 ## Medium Term
 

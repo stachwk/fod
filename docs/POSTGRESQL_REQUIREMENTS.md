@@ -248,6 +248,53 @@ WAL/checkpointow, autovacuum albo page cache OS. Klase zmiany parametru
 (sesja/reload/restart) nalezy odczytywac z `pg_settings.context` na
 docelowej wersji PostgreSQL, zamiast utrzymywac stale zalozenie w FOD.
 
+### 7.1. Referencyjny profil QNAP
+
+Repozytorium zawiera profil wdrozeniowy dla aktualnego hosta QNAP
+`8 GB RAM / 2 CPU / HDD / PostgreSQL 16.15 / BLCKSZ=32K`.
+
+Nie jest to wymaganie protokolu FOD i nie nalezy automatycznie kopiowac tych
+wartosci na serwery o innej pamieci, CPU, macierzy dyskowej lub charakterze
+obciazenia.
+
+Profil:
+
+```text
+shared_buffers                  = 1GB
+effective_cache_size            = 4GB
+work_mem                        = 4MB
+maintenance_work_mem            = 256MB
+max_connections                 = 64
+random_page_cost                = 4
+effective_io_concurrency        = 1
+max_wal_size                    = 2GB
+checkpoint_timeout              = 15min
+checkpoint_completion_target    = 0.9
+wal_compression                 = off
+autovacuum_max_workers          = 2
+autovacuum_work_mem             = 128MB
+max_parallel_workers            = 2
+max_parallel_workers_per_gather = 1
+```
+
+Kontrola wartosci rozwiazanych przez Makefile:
+
+```bash
+QNAP=1 make postgres-qnap-config-show
+```
+
+Kontrola zrodla aktywnych ustawien na serwerze:
+
+```sql
+SELECT name, setting, source
+FROM pg_settings
+WHERE source = 'command line'
+ORDER BY name;
+```
+
+Dla tego profilu wartosci sa przekazywane przez Make/Compose jako parametry
+startowe PostgreSQL, a nie przez `ALTER SYSTEM`.
+
 ## 8. Autovacuum i ochrona przed wraparound
 
 FOD intensywnie aktualizuje tabele PostgreSQL, dlatego autovacuum musi

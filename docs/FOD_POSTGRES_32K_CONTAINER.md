@@ -229,6 +229,27 @@ bash scripts/publish_postgres_fod_32k.sh
 
 The build uses `postgres:<version>-alpine` as the reference runtime and rebuilds the matching PostgreSQL source with `--with-blocksize=32`.
 
+## QNAP reference deployment preset
+
+The image itself remains deployment-neutral. Repository startup logic may apply
+a host-specific PostgreSQL profile without rebuilding the image.
+
+For the current 8 GB / 2 CPU / HDD QNAP reference host:
+
+```bash
+QNAP=1 make postgres-qnap-config-show
+QNAP=1 make postgres-restart
+QNAP=1 make postgres-smoke
+```
+
+The detailed parameter set and its non-normative status are documented in
+[`CURRENT_STATE.md`](CURRENT_STATE.md) and
+[`POSTGRESQL_REQUIREMENTS.md`](POSTGRESQL_REQUIREMENTS.md).
+
+The preset is supplied through PostgreSQL command-line `-c` parameters. It is
+therefore reproducible after container or volume recreation and does not depend
+on `postgresql.auto.conf`.
+
 ## Important compatibility note
 
 A PostgreSQL cluster initialized with 32 KiB pages is not data-directory-compatible with a standard PostgreSQL build using 8 KiB pages. Always use a fresh `initdb`, separate volumes, or logical migration/dump-and-restore when moving between builds with different `BLCKSZ` values.

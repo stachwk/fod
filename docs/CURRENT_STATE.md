@@ -74,6 +74,60 @@ The reference Docker deployment uses one writable primary and zero or more strea
 - every requested replica in recovery,
 - at least the requested number of streaming replication connections.
 
+### Repository QNAP PostgreSQL preset
+
+`QNAP=1` selects a persistent server-tuning profile intended for the current
+reference QNAP host:
+
+```text
+8 GB RAM
+2 CPU
+HDD
+PostgreSQL 16.15
+server BLCKSZ = 32 KiB
+```
+
+The repository preset is:
+
+```text
+shared_buffers                  = 1GB
+effective_cache_size            = 4GB
+work_mem                        = 4MB
+maintenance_work_mem            = 256MB
+max_connections                 = 64
+random_page_cost                = 4
+effective_io_concurrency        = 1
+max_wal_size                    = 2GB
+checkpoint_timeout              = 15min
+checkpoint_completion_target    = 0.9
+wal_compression                 = off
+autovacuum_max_workers          = 2
+autovacuum_work_mem             = 128MB
+max_parallel_workers            = 2
+max_parallel_workers_per_gather = 1
+```
+
+`pg_stat_statements` remains the default shared preload library.
+
+The resolved preset can be inspected without changing the server:
+
+```bash
+QNAP=1 make postgres-qnap-config-show
+```
+
+The QNAP profile is supplied to PostgreSQL through the container command line,
+so it survives recreation of the PostgreSQL volume. Explicit `POSTGRES_*=...`
+values supplied on the `make` command line may override the preset for
+controlled tests/benchmarks. Ambient shell `POSTGRES_*` values are not treated
+as QNAP defaults.
+
+`QNAP=0` keeps the normal local PostgreSQL defaults unless tuning is supplied
+explicitly.
+
+The 2026-09-08 live validation confirmed all 15 profile parameters with
+`source = command line`; the earlier `ALTER SYSTEM` copies were removed and
+`postgresql.auto.conf` contained no remaining profile entries.
+
 ## FOD/FUSE deployment behavior
 
 The FOD client container requires `/dev/fuse`, `CAP_SYS_ADMIN`, `rshared` bind propagation and compatible host AppArmor policy.
