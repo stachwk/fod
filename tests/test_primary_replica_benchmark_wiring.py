@@ -130,6 +130,17 @@ class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
             "metadata_cache_ttl_seconds=${METADATA_CACHE_TTL_SECONDS}",
             self.single,
         )
+        self.assertIn(
+            'FOPEN_DIRECT_IO="${FOD_FOPEN_DIRECT_IO:-1}"',
+            self.single,
+        )
+        self.assertIn(
+            'export FOD_FOPEN_DIRECT_IO="${FOPEN_DIRECT_IO}"',
+            self.single,
+        )
+        self.assertIn("fopen_direct_io=${FOPEN_DIRECT_IO}", self.single)
+        self.assertIn("FOD_FOPEN_DIRECT_IO must be 0 or 1", self.single)
+        self.assertIn('"${FOPEN_DIRECT_IO}" == 1', self.single)
 
     def test_matrix_collects_primary_and_replica_results(self) -> None:
         self.assertIn('BLOCK_SIZES="${FIO_BLOCK_SIZES:-', self.matrix)
@@ -149,6 +160,8 @@ class PrimaryReplicaBenchmarkWiringTests(unittest.TestCase):
         self.assertIn("small_file_read_threshold_blocks", self.matrix)
         self.assertIn("metadata_cache_ttl_seconds", self.matrix)
         self.assertIn('field "${result}" metadata_cache_ttl_seconds', self.matrix)
+        self.assertIn("fopen_direct_io", self.matrix)
+        self.assertIn('field "${result}" fopen_direct_io', self.matrix)
         self.assertIn("primary_write_mib_s", self.matrix)
         self.assertIn("primary_read_mib_s", self.matrix)
         self.assertIn("replica_read_mib_s", self.matrix)

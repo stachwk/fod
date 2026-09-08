@@ -80,34 +80,73 @@ The former primary metadata bottleneck is therefore closed. Do not reopen the
 data-cache, metadata-cache or SQL-fetch design without a new measured
 regression.
 
-### FOD 3.4.17 — deterministic final observability capture
+### FOD 3.4.17 measured result
 
-The 3.4.16 matrix exposed an integration-test artifact race, not a new
-read-path bottleneck. Primary archived logs were sometimes copied before the
-bootstrap/Rust FUSE process completed normal post-unmount shutdown logging:
+FOD 3.4.17 fixed the integration-test log capture race and made missing final
+PostgreSQL lane observability explicit. The full production-read-default matrix
+on `lt7300`, 128 MiB pattern payload, 32 KiB persisted storage blocks,
+`metadata_cache_ttl_seconds=1`, and forced FUSE direct I/O measured:
 
-- the 64 KiB primary artifact contained startup output but no final logical,
-  boundary or PostgreSQL lane observability;
-- the 4 KiB and 512 KiB primary artifacts contained useful shutdown profile
-  data but no `stage=post-mount` PostgreSQL lane snapshot;
-- runtime code emits `stage=post-mount` only after the mount returns, so its
-  absence from these archives indicates incomplete log capture.
+| fio request | primary read | replica read |
+| --- | ---: | ---: |
+| 4 KiB | 162.437 MiB/s | 181.047 MiB/s |
+| 64 KiB | 303.318 MiB/s | 292.237 MiB/s |
+| 512 KiB | 323.232 MiB/s | 314.496 MiB/s |
 
-FOD 3.4.17 changes only test/diagnostic behavior:
+All six primary/replica read phases reported
+`lane_observability_available=1`, one logical `stage=shutdown` snapshot and one
+PostgreSQL `stage=post-mount` snapshot. No `no_final_observability=1` or cleanup
+grace-period warning was present.
 
-- after unmount, `fod_test_cleanup` gives the bootstrap/FUSE process a bounded
-  grace period to exit naturally;
-- cleanup reaps the bootstrap before inspecting or archiving the log;
-- forced termination remains as the bounded fallback;
-- a regression test proves that final process output is present in the
-  archived log;
-- compact profile output exposes `lane_observability_available=0|1` instead of
-  silently making a missing final lane snapshot look like genuine zero
-  PostgreSQL operations.
+The 4 KiB profile remained efficient at the PostgreSQL/data-cache boundary:
 
-Acceptance test: rerun the production 4 KiB / 64 KiB / 512 KiB primary/replica
-matrix and require `lane_observability_available=1` for every primary and
-replica read phase, with no `no_final_observability=1`.
+```text
+primary:
+  admitted_tasks=32768
+  fetch_block_range_calls=3
+  file_read_metadata_calls=1
+  pg_fetch_us_per_callback=9.943359
+
+replica:
+  admitted_tasks=32768
+  fetch_block_range_calls=3
+  file_read_metadata_calls=1
+  pg_fetch_us_per_callback=9.625824
+```
+
+The remaining 4 KiB throughput gap is therefore not evidence for another
+PostgreSQL metadata or range-fetch optimization.
+
+### FOD 3.4.18 — benchmark production buffered-I/O behavior
+
+The isolated benchmark still forces `FOD_FOPEN_DIRECT_IO=1`, while the standard
+FOD configuration uses `fopen_direct_io=false`. That means the current matrix
+measures every application read reaching FUSE directly and does not show how
+the normal kernel page cache/readahead path changes callback count or
+throughput.
+
+FOD 3.4.18 is measurement-only:
+
+- parameterize `FOD_FOPEN_DIRECT_IO` in the isolated benchmark, keeping `1` as
+  the benchmark default so existing invocations retain their behavior;
+- validate the benchmark value as exactly `0` or `1`;
+- record `fopen_direct_io` in `read-policy.txt`, `result.tsv`, `PERF_RESULT`
+  and matrix `summary.tsv`;
+- only auto-label a zero-cache run as `uncached` when FUSE direct I/O is also
+  enabled, because buffered kernel caching makes that label misleading;
+- do not change Rust read-path, PostgreSQL SQL, storage geometry, or production
+  configuration defaults.
+
+After delivery, run the same 4 KiB / 64 KiB / 512 KiB matrix twice:
+
+```text
+A: FOD_FOPEN_DIRECT_IO=1   # current diagnostic baseline
+B: FOD_FOPEN_DIRECT_IO=0   # standard production FOD default
+```
+
+Use explicit policy labels for the A/B runs. Compare throughput,
+`admitted_tasks`, range-fetch counts, metadata calls and per-callback profile
+cost before selecting any runtime optimization.
 
 ## P2 — remaining multi-endpoint hardening
 
