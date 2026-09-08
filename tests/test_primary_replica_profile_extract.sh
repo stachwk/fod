@@ -17,6 +17,10 @@ artifact_dir=${CASE}
 EOF
 
 cat >"${CASE}/primary-write-mount.log" <<'EOF'
+2026-01-01T00:00:01Z - INFO - FOD boundary profile:
+2026-01-01T00:00:01Z - INFO -   getxattr_count=2049
+2026-01-01T00:00:01Z - INFO -   getxattr_open_file_owner_fast_path_count=2048
+2026-01-01T00:00:01Z - INFO -   getxattr_path_resolution_fallback_count=1
 2026-01-01T00:00:01Z - INFO - FOD PostgreSQL lane observability: stage=periodic lane=shared operation_count=10 operation_failures=0 operation_micros_total=100 persist_operation_count=1 persist_micros_total=90
 2026-01-01T00:00:02Z - INFO - FOD logical task observability: stage=shutdown lane=write operation=file-write admitted_tasks=2048 completed_bytes_per_second=70000000 elapsed_micros=15000000
 2026-01-01T00:00:02Z - INFO - FOD PostgreSQL lane observability: stage=post-mount lane=shared operation_count=296 operation_failures=0 operation_micros_total=15000000 operation_micros_max=1000000 acquisition_wait_micros_total=3 acquisition_wait_micros_max=2 persist_operation_count=16 persist_input_bytes_total=1073741824 persist_input_bytes_max=67108864 persist_micros_total=14500000 persist_micros_max=1000000 persist_transaction_micros_total=14499900 persist_copy_stage_micros_total=5700000 persist_data_blocks_merge_micros_total=8600000 payload_peak_in_flight_bytes=67108864 write_transaction_backpressure_events=0
@@ -55,12 +59,17 @@ EOF
 
 OUT="$("${ROOT}/scripts/perf/extract_primary_replica_profile.sh" "${MATRIX}")"
 
+primary_write_line="$(grep '^phase=primary-write ' <<<"${OUT}")"
 primary_line="$(grep '^phase=primary-read ' <<<"${OUT}")"
 replica_line="$(grep '^phase=replica-read ' <<<"${OUT}")"
 
 grep -Fq 'extract_mode=compact' <<<"${OUT}"
 grep -Fq 'phase=primary-write completed_bytes_per_second=70000000' <<<"${OUT}"
 grep -Fq 'persist_operation_count=16' <<<"${OUT}"
+grep -Fq 'getxattr_count=2049' <<<"${primary_write_line}"
+grep -Fq 'getxattr_open_file_owner_fast_path_count=2048' <<<"${primary_write_line}"
+grep -Fq 'getxattr_path_resolution_fallback_count=1' <<<"${primary_write_line}"
+grep -Fq 'getxattr_fast_path_ratio=0.999512' <<<"${primary_write_line}"
 grep -Fq 'phase=primary-read completed_bytes_per_second=480000000' <<<"${OUT}"
 grep -Fq 'profile_attribution_available=1' <<<"${primary_line}"
 grep -Fq 'lane_observability_available=1' <<<"${primary_line}"

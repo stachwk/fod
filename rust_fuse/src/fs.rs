@@ -932,6 +932,9 @@ pub(crate) struct FodFuseProfileCounters {
     read_block_map_us: AtomicU64,
     read_fill_wait_count: AtomicU64,
     read_fill_wait_us: AtomicU64,
+    getxattr_count: AtomicU64,
+    getxattr_open_file_owner_fast_path_count: AtomicU64,
+    getxattr_path_resolution_fallback_count: AtomicU64,
     fetch_block_range_chunk_us: AtomicU64,
     fetch_block_range_parallel_us: AtomicU64,
     assemble_read_slice_us: AtomicU64,
@@ -1027,6 +1030,20 @@ impl FodFuseProfileCounters {
     pub(crate) fn record_read_fill_wait_elapsed(&self, elapsed: Duration) {
         self.read_fill_wait_count.fetch_add(1, Ordering::Relaxed);
         Self::add(&self.read_fill_wait_us, elapsed);
+    }
+
+    fn record_getxattr(&self) {
+        self.getxattr_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_getxattr_open_file_owner_fast_path(&self) {
+        self.getxattr_open_file_owner_fast_path_count
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_getxattr_path_resolution_fallback(&self) {
+        self.getxattr_path_resolution_fallback_count
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn record_fetch_block_range_chunk_elapsed(&self, elapsed: Duration) {
@@ -1176,6 +1193,15 @@ impl FodFuseProfileCounters {
             || self.read_block_map_us.load(Ordering::Relaxed) > 0
             || self.read_fill_wait_count.load(Ordering::Relaxed) > 0
             || self.read_fill_wait_us.load(Ordering::Relaxed) > 0
+            || self.getxattr_count.load(Ordering::Relaxed) > 0
+            || self
+                .getxattr_open_file_owner_fast_path_count
+                .load(Ordering::Relaxed)
+                > 0
+            || self
+                .getxattr_path_resolution_fallback_count
+                .load(Ordering::Relaxed)
+                > 0
             || self.fetch_block_range_chunk_us.load(Ordering::Relaxed) > 0
             || self.fetch_block_range_parallel_us.load(Ordering::Relaxed) > 0
             || self.assemble_read_slice_us.load(Ordering::Relaxed) > 0
@@ -1237,6 +1263,20 @@ impl FodFuseProfileCounters {
             format!(
                 "read_fill_wait_us={}",
                 self.read_fill_wait_us.load(Ordering::Relaxed)
+            ),
+            format!(
+                "getxattr_count={}",
+                self.getxattr_count.load(Ordering::Relaxed)
+            ),
+            format!(
+                "getxattr_open_file_owner_fast_path_count={}",
+                self.getxattr_open_file_owner_fast_path_count
+                    .load(Ordering::Relaxed)
+            ),
+            format!(
+                "getxattr_path_resolution_fallback_count={}",
+                self.getxattr_path_resolution_fallback_count
+                    .load(Ordering::Relaxed)
             ),
             format!(
                 "fetch_block_range_chunk_us={}",
@@ -4020,6 +4060,14 @@ impl FodFuse {
         fh
     }
 
+    fn open_file_id_for_path(&self, path: &str) -> Option<u64> {
+        self.fh_table.lock().ok().and_then(|guard| {
+            guard
+                .values()
+                .find_map(|state| (state.path == path).then_some(state.file_id).flatten())
+        })
+    }
+
     fn open_handle_count_for_file(&self, file_id: u64) -> usize {
         self.fh_table
             .lock()
@@ -4623,6 +4671,7 @@ impl Filesystem for FodFuse {
     fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
         let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
+        self.profile.record_getxattr();
         let path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
@@ -4632,7 +4681,22 @@ impl Filesystem for FodFuse {
         };
         let name = name.to_string_lossy().to_string();
         debug!("FOD getxattr path={} name={} size={}", path, name, size);
-        match self.repo.fetch_xattr_value(&path, &name) {
+
+        // Linux probes security.capability repeatedly while writing. For an
+        // already-open regular file/hardlink the handle table already contains
+        // the authoritative underlying file_id, so resolving the same pathname
+        // again would add get_dir_id + resolve_path SQL before every xattr read.
+        // The xattr value itself is still read from PostgreSQL on every request.
+        let result = if let Some(file_id) = self.open_file_id_for_path(&path) {
+            self.profile.record_getxattr_open_file_owner_fast_path();
+            self.repo
+                .fetch_xattr_value_for_owner("file", file_id, &name)
+        } else {
+            self.profile.record_getxattr_path_resolution_fallback();
+            self.repo.fetch_xattr_value(&path, &name)
+        };
+
+        match result {
             Ok(Some(value)) => {
                 if size == 0 {
                     reply.size(value.len() as u32);

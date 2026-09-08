@@ -12833,22 +12833,31 @@ impl DbRepo {
             Some("hardlink") => {
                 let file_id = self.get_file_id(path)?;
                 match file_id {
-                    Some(file_id) => ("file".to_string(), file_id),
+                    Some(file_id) => ("file", file_id),
                     None => return Ok(None),
                 }
             }
             Some("file") => match resolved.entry_id {
-                Some(entry_id) => ("file".to_string(), entry_id),
+                Some(entry_id) => ("file", entry_id),
                 None => return Ok(None),
             },
-            Some("dir") => ("dir".to_string(), resolved.entry_id.unwrap_or(0)),
+            Some("dir") => ("dir", resolved.entry_id.unwrap_or(0)),
             Some("symlink") => match resolved.entry_id {
-                Some(entry_id) => ("symlink".to_string(), entry_id),
+                Some(entry_id) => ("symlink", entry_id),
                 None => return Ok(None),
             },
             _ => return Ok(None),
         };
 
+        self.fetch_xattr_value_for_owner(owner_kind, owner_id, name)
+    }
+
+    pub fn fetch_xattr_value_for_owner(
+        &self,
+        owner_kind: &str,
+        owner_id: u64,
+        name: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
         let sql = CString::new(
             "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind = $1 AND owner_id = $2 AND name = $3",
         )

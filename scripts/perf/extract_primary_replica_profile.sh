@@ -94,6 +94,7 @@ print_compact_phase() {
     local phase_log="$2"
     local logical_line lane_line
     local fuse_read_line read_block_map_line read_fill_wait_count_line read_fill_wait_us_line
+    local getxattr_count_line getxattr_fast_path_line getxattr_fallback_line
     local repo_fetch_line assemble_line reply_data_line
     local fetch_line decode_line metadata_line fetch_statement_name
     local admitted_tasks operation_count fetch_count fetch_rows fetch_bytes fetch_total_us
@@ -111,6 +112,9 @@ print_compact_phase() {
     read_block_map_line="$(profile_field_line "${phase_log}" read_block_map_us)"
     read_fill_wait_count_line="$(profile_field_line "${phase_log}" read_fill_wait_count)"
     read_fill_wait_us_line="$(profile_field_line "${phase_log}" read_fill_wait_us)"
+    getxattr_count_line="$(profile_field_line "${phase_log}" getxattr_count)"
+    getxattr_fast_path_line="$(profile_field_line "${phase_log}" getxattr_open_file_owner_fast_path_count)"
+    getxattr_fallback_line="$(profile_field_line "${phase_log}" getxattr_path_resolution_fallback_count)"
     repo_fetch_line="$(profile_field_line "${phase_log}" repo_fetch_block_range_us)"
     assemble_line="$(profile_field_line "${phase_log}" assemble_read_slice_us)"
     reply_data_line="$(profile_field_line "${phase_log}" reply_data_us)"
@@ -162,6 +166,10 @@ print_compact_phase() {
     printf ' read_block_map_us=%s' "$(field_value "${read_block_map_line}" read_block_map_us)"
     printf ' read_fill_wait_count=%s' "$(field_value "${read_fill_wait_count_line}" read_fill_wait_count)"
     printf ' read_fill_wait_us=%s' "$(field_value "${read_fill_wait_us_line}" read_fill_wait_us)"
+    printf ' getxattr_count=%s' "$(field_value "${getxattr_count_line}" getxattr_count)"
+    printf ' getxattr_open_file_owner_fast_path_count=%s' "$(field_value "${getxattr_fast_path_line}" getxattr_open_file_owner_fast_path_count)"
+    printf ' getxattr_path_resolution_fallback_count=%s' "$(field_value "${getxattr_fallback_line}" getxattr_path_resolution_fallback_count)"
+    printf ' getxattr_fast_path_ratio=%s' "$(ratio "$(field_value "${getxattr_fast_path_line}" getxattr_open_file_owner_fast_path_count)" "$(field_value "${getxattr_count_line}" getxattr_count)")"
     printf ' repo_fetch_block_range_us=%s' "$(field_value "${repo_fetch_line}" repo_fetch_block_range_us)"
     printf ' assemble_read_slice_us=%s' "$(field_value "${assemble_line}" assemble_read_slice_us)"
     printf ' reply_data_us=%s' "$(field_value "${reply_data_line}" reply_data_us)"

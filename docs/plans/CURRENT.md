@@ -226,6 +226,59 @@ PostgreSQL payload retrieval in every run.
 The remaining buffered-write regression is independent and stays as a
 follow-up rather than being mixed into the read-cache coordination change.
 
+### FOD 3.4.20 — avoid repeated xattr pathname resolution during writes
+
+A debug 4 MiB / 4 KiB buffered-write run isolated the remaining hot path:
+1024 actual FUSE write callbacks were accompanied by 1025
+`getxattr security.capability` probes for the same open file. Those probes
+caused `fod_get_dir_id` and `fod_resolve_path_root` to execute approximately
+once per write callback because the path-based xattr reader resolved the
+pathname before every xattr lookup.
+
+FOD 3.4.20 removes only that redundant owner-resolution work:
+
+- `DbRepo::fetch_xattr_value_for_owner(owner_kind, owner_id, name)` performs
+  the actual xattr lookup when the owner is already known;
+- `getxattr` reuses the underlying `file_id` already stored in the open FUSE
+  handle table for regular files and hardlinks;
+- unopened files, directories, symlinks and cases without a usable open-file
+  identity retain the existing path-resolution fallback;
+- positive and negative xattr values are not cached, so cross-mount xattr
+  changes remain visible on the next request;
+- boundary/profile extraction reports the getxattr fast-path and fallback
+  counters.
+
+The final 128 MiB buffered matrix used the production read policy with
+`fopen_direct_io=0`:
+
+| fio request | primary write | primary read | replica read | write callbacks | PG operations | PG ops/callback |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 KiB | 14.339 MiB/s | 291.572 MiB/s | 276.458 MiB/s | 32768 | 32865 | 1.002960 |
+| 64 KiB | 75.784 MiB/s | 292.237 MiB/s | 286.996 MiB/s | 2048 | 2131 | 1.040527 |
+| 512 KiB | 97.859 MiB/s | 324.051 MiB/s | 285.078 MiB/s | 256 | 339 | 1.324219 |
+
+Compared with the final FOD 3.4.19 buffered matrix, write throughput improved
+from 6.157 to 14.339 MiB/s at 4 KiB (+132.9%), from 51.885 to
+75.784 MiB/s at 64 KiB (+46.1%), and from 86.312 to 97.859 MiB/s at
+512 KiB (+13.4%).
+
+The write-side PostgreSQL operation count fell from 98420 to 32865 at 4 KiB,
+from 6229 to 2131 at 64 KiB, and from 853 to 339 at 512 KiB. All three final
+runs reported a `getxattr_fast_path_ratio` of 1.0 with zero path-resolution
+fallbacks.
+
+Persistence semantics did not change: every 128 MiB run persisted exactly
+134217728 bytes in two persist operations. All primary and replica reads
+decoded exactly 4096 storage blocks / 134217728 payload bytes, with
+134250496 PostgreSQL result bytes, zero operation failures and replica
+write protection still reported as `read_only_rejected`.
+
+The remaining approximately one PostgreSQL operation per small write is the
+actual xattr lookup triggered by Linux `security.capability` probing. A later
+optimization may evaluate `FUSE_HANDLE_KILLPRIV_V2`, but only together with
+complete and tested setuid/setgid/file-capability clearing semantics.
+FOD 3.4.20 deliberately does not cache xattr values or weaken those semantics.
+
 ## P2 — remaining multi-endpoint hardening
 
 The base role-aware routing design is already implemented: startup endpoint role
