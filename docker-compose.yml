@@ -8,6 +8,7 @@ services:
       - |
         set -- /usr/local/bin/docker-entrypoint.sh postgres -c "shared_preload_libraries=${POSTGRES_SHARED_PRELOAD_LIBRARIES:-pg_stat_statements}"
         [ -n "${POSTGRES_SHARED_BUFFERS:-}" ] && set -- "$@" -c "shared_buffers=${POSTGRES_SHARED_BUFFERS}"
+        [ -n "${POSTGRES_WORK_MEM:-}" ] && set -- "$@" -c "work_mem=${POSTGRES_WORK_MEM}"
         [ -n "${POSTGRES_MAX_CONNECTIONS:-}" ] && set -- "$@" -c "max_connections=${POSTGRES_MAX_CONNECTIONS}"
         [ -n "${POSTGRES_MAX_WAL_SIZE:-}" ] && set -- "$@" -c "max_wal_size=${POSTGRES_MAX_WAL_SIZE}"
         [ -n "${POSTGRES_CHECKPOINT_TIMEOUT:-}" ] && set -- "$@" -c "checkpoint_timeout=${POSTGRES_CHECKPOINT_TIMEOUT}"
@@ -15,9 +16,12 @@ services:
         [ -n "${POSTGRES_WAL_COMPRESSION:-}" ] && set -- "$@" -c "wal_compression=${POSTGRES_WAL_COMPRESSION}"
         [ -n "${POSTGRES_RANDOM_PAGE_COST:-}" ] && set -- "$@" -c "random_page_cost=${POSTGRES_RANDOM_PAGE_COST}"
         [ -n "${POSTGRES_EFFECTIVE_CACHE_SIZE:-}" ] && set -- "$@" -c "effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE}"
+        [ -n "${POSTGRES_EFFECTIVE_IO_CONCURRENCY:-}" ] && set -- "$@" -c "effective_io_concurrency=${POSTGRES_EFFECTIVE_IO_CONCURRENCY}"
         [ -n "${POSTGRES_MAINTENANCE_WORK_MEM:-}" ] && set -- "$@" -c "maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM}"
         [ -n "${POSTGRES_AUTOVACUUM_MAX_WORKERS:-}" ] && set -- "$@" -c "autovacuum_max_workers=${POSTGRES_AUTOVACUUM_MAX_WORKERS}"
         [ -n "${POSTGRES_AUTOVACUUM_WORK_MEM:-}" ] && set -- "$@" -c "autovacuum_work_mem=${POSTGRES_AUTOVACUUM_WORK_MEM}"
+        [ -n "${POSTGRES_MAX_PARALLEL_WORKERS:-}" ] && set -- "$@" -c "max_parallel_workers=${POSTGRES_MAX_PARALLEL_WORKERS}"
+        [ -n "${POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER:-}" ] && set -- "$@" -c "max_parallel_workers_per_gather=${POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER}"
         exec "$@"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-foddbname}

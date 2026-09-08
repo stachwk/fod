@@ -8,9 +8,10 @@ TMPFS_COMPOSE="${ROOT}/docker-compose.postgres-blocksize-tmpfs.yml"
 DOCKERFILE="${ROOT}/docker/postgres-blocksize/Dockerfile"
 STANDALONE_INIT="${ROOT}/docker/postgres-blocksize/standalone-init.sh"
 MAKEFILE="${ROOT}/Makefile"
+INTERNAL_MAKE="${ROOT}/make/fod-internal.mk"
 DECISION="${ROOT}/docs/FOD_POSTGRES_BLCKSZ_32K_DEFAULT_DECISION.md"
 
-for file in "${MAIN_COMPOSE}" "${BENCH_COMPOSE}" "${TMPFS_COMPOSE}" "${DOCKERFILE}" "${STANDALONE_INIT}" "${MAKEFILE}" "${DECISION}"; do
+for file in "${MAIN_COMPOSE}" "${BENCH_COMPOSE}" "${TMPFS_COMPOSE}" "${DOCKERFILE}" "${STANDALONE_INIT}" "${MAKEFILE}" "${INTERNAL_MAKE}" "${DECISION}"; do
     [[ -r "${file}" ]] || { echo "Missing ${file}" >&2; exit 1; }
 done
 
@@ -51,6 +52,77 @@ done
 grep -F 'FOD_FORWARD_TARGET,docker-postgres-32k-build,docker-postgres-32k-build' "${MAKEFILE}" >/dev/null
 grep -F 'FOD_FORWARD_TARGET,docker-postgres-32k-publish,docker-postgres-32k-publish' "${MAKEFILE}" >/dev/null
 grep -F 'test-docker-postgres-policy:' "${MAKEFILE}" >/dev/null
+
+# QNAP PostgreSQL profile must stay explicit and reproducible after a full
+# container/volume rebuild. The profile targets the current 8 GB / 2 CPU / HDD
+# QNAP host while the local PostgreSQL path keeps its normal defaults.
+for pattern in \
+    'QNAP_POSTGRES_SHARED_BUFFERS ?= 1GB' \
+    'QNAP_POSTGRES_WORK_MEM ?= 4MB' \
+    'QNAP_POSTGRES_MAX_CONNECTIONS ?= 64' \
+    'QNAP_POSTGRES_MAX_WAL_SIZE ?= 2GB' \
+    'QNAP_POSTGRES_CHECKPOINT_TIMEOUT ?= 15min' \
+    'QNAP_POSTGRES_CHECKPOINT_COMPLETION_TARGET ?= 0.9' \
+    'QNAP_POSTGRES_WAL_COMPRESSION ?= off' \
+    'QNAP_POSTGRES_RANDOM_PAGE_COST ?= 4' \
+    'QNAP_POSTGRES_EFFECTIVE_CACHE_SIZE ?= 4GB' \
+    'QNAP_POSTGRES_EFFECTIVE_IO_CONCURRENCY ?= 1' \
+    'QNAP_POSTGRES_MAINTENANCE_WORK_MEM ?= 256MB' \
+    'QNAP_POSTGRES_AUTOVACUUM_MAX_WORKERS ?= 2' \
+    'QNAP_POSTGRES_AUTOVACUUM_WORK_MEM ?= 128MB' \
+    'QNAP_POSTGRES_MAX_PARALLEL_WORKERS ?= 2' \
+    'QNAP_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER ?= 1'; do
+    grep -F "${pattern}" "${INTERNAL_MAKE}" >/dev/null
+done
+
+for pattern in \
+    'work_mem=${POSTGRES_WORK_MEM}' \
+    'effective_io_concurrency=${POSTGRES_EFFECTIVE_IO_CONCURRENCY}' \
+    'max_parallel_workers=${POSTGRES_MAX_PARALLEL_WORKERS}' \
+    'max_parallel_workers_per_gather=${POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER}'; do
+    grep -F "${pattern}" "${MAIN_COMPOSE}" >/dev/null
+done
+
+# Remove ambient tuning variables from this policy check. QNAP must resolve its
+# own profile while the local backend must stay on defaults.
+CLEAN_ENV=(
+    env
+    -u POSTGRES_SHARED_BUFFERS
+    -u POSTGRES_WORK_MEM
+    -u POSTGRES_MAX_CONNECTIONS
+    -u POSTGRES_MAX_WAL_SIZE
+    -u POSTGRES_CHECKPOINT_TIMEOUT
+    -u POSTGRES_CHECKPOINT_COMPLETION_TARGET
+    -u POSTGRES_WAL_COMPRESSION
+    -u POSTGRES_RANDOM_PAGE_COST
+    -u POSTGRES_EFFECTIVE_CACHE_SIZE
+    -u POSTGRES_EFFECTIVE_IO_CONCURRENCY
+    -u POSTGRES_MAINTENANCE_WORK_MEM
+    -u POSTGRES_AUTOVACUUM_MAX_WORKERS
+    -u POSTGRES_AUTOVACUUM_WORK_MEM
+    -u POSTGRES_MAX_PARALLEL_WORKERS
+    -u POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER
+)
+
+qnap_config="$("${CLEAN_ENV[@]}" make --no-print-directory -s -C "${ROOT}" QNAP=1 postgres-qnap-config-show)"
+local_config="$("${CLEAN_ENV[@]}" make --no-print-directory -s -C "${ROOT}" QNAP=0 postgres-config-show)"
+
+grep -F 'POSTGRES_SHARED_BUFFERS=1GB' <<<"${qnap_config}" >/dev/null
+grep -F 'POSTGRES_WORK_MEM=4MB' <<<"${qnap_config}" >/dev/null
+grep -F 'POSTGRES_RANDOM_PAGE_COST=4' <<<"${qnap_config}" >/dev/null
+grep -F 'POSTGRES_EFFECTIVE_IO_CONCURRENCY=1' <<<"${qnap_config}" >/dev/null
+grep -F 'POSTGRES_MAX_PARALLEL_WORKERS=2' <<<"${qnap_config}" >/dev/null
+grep -F 'POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=1' <<<"${qnap_config}" >/dev/null
+
+grep -F 'POSTGRES_SHARED_BUFFERS=<default>' <<<"${local_config}" >/dev/null
+grep -F 'POSTGRES_WORK_MEM=<default>' <<<"${local_config}" >/dev/null
+grep -F 'POSTGRES_EFFECTIVE_IO_CONCURRENCY=<default>' <<<"${local_config}" >/dev/null
+grep -F 'POSTGRES_MAX_PARALLEL_WORKERS=<default>' <<<"${local_config}" >/dev/null
+
+# Explicit command-line tuning must still override the fixed QNAP default.
+qnap_override="$("${CLEAN_ENV[@]}" make --no-print-directory -s -C "${ROOT}" \
+    QNAP=1 POSTGRES_SHARED_BUFFERS=2GB postgres-qnap-config-show)"
+grep -F 'POSTGRES_SHARED_BUFFERS=2GB' <<<"${qnap_override}" >/dev/null
 
 grep -F 'PostgreSQL compiled with `BLCKSZ=32K` is the default and target PostgreSQL variant.' "${DECISION}" >/dev/null
 grep -F 'It is not the default or target configuration for new FOD deployments.' "${DECISION}" >/dev/null
