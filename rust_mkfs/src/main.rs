@@ -24,8 +24,8 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 23;
-const MIGRATION_FILES: [&str; 23] = [
+const SCHEMA_VERSION: u64 = 24;
+const MIGRATION_FILES: [&str; 24] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -49,9 +49,10 @@ const MIGRATION_FILES: [&str; 23] = [
     "0021_storage_layout_finalize.sql",
     "0022_monitor_session_stats.sql",
     "0023_drop_redundant_data_blocks_index.sql",
+    "0024_write_ownership_leases.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 23] = [
+const MIGRATION_DESCRIPTIONS: [&str; 24] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -75,6 +76,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 23] = [
     "Finalize canonical block storage layout",
     "Add shared monitor session statistics",
     "Drop redundant data_blocks prefix index and refresh planner statistics",
+    "Add PostgreSQL-authoritative destination and file write ownership leases",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -236,6 +238,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0023_drop_redundant_data_blocks_index.sql"
         )),
+        24 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0024_write_ownership_leases.sql"
+        )),
         _ => "",
     }
 }
@@ -265,6 +271,7 @@ fn migration_description(version: u64) -> &'static str {
         21 => MIGRATION_DESCRIPTIONS[20],
         22 => MIGRATION_DESCRIPTIONS[21],
         23 => MIGRATION_DESCRIPTIONS[22],
+        24 => MIGRATION_DESCRIPTIONS[23],
         _ => "Migration",
     }
 }
@@ -294,6 +301,7 @@ fn migration_filename(version: u64) -> &'static str {
         21 => MIGRATION_FILES[20],
         22 => MIGRATION_FILES[21],
         23 => MIGRATION_FILES[22],
+        24 => MIGRATION_FILES[23],
         _ => "unknown.sql",
     }
 }
@@ -411,6 +419,8 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                     ('index_catalog_snapshot_files'),
                     ('client_sessions'),
                     ('client_session_owner_keys'),
+                    ('destination_write_leases'),
+                    ('file_write_leases'),
                     ('monitor_session_stats')
                 ) AS required_relations(name)
                 WHERE to_regclass(format('fod.%I', name)) IS NULL
@@ -436,6 +446,18 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                 FROM pg_indexes
                 WHERE schemaname = 'fod'
                   AND indexname = 'idx_monitor_session_stats_sampled'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'fod'
+                  AND indexname = 'idx_destination_write_leases_resource'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'fod'
+                  AND indexname = 'idx_file_write_leases_resource'
             )
             AND EXISTS (
                 SELECT 1

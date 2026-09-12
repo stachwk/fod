@@ -17,11 +17,17 @@ use fod_rust_runtime::{
 };
 use pg_config::{make_conninfo, resolve_pg_connection_params};
 use std::env;
+use std::ffi::CString;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Parser)]
 #[command(name = "fod-bootstrap", version = version::FOD_VERSION_LABEL, about = "Mount FOD through the Rust FUSE frontend.")]
@@ -184,6 +190,273 @@ fn rust_fuse_binary() -> Option<PathBuf> {
     None
 }
 
+const FUSE_HANG_GUARD_DEFAULT_TIMEOUT_SECONDS: u64 = 15;
+const FUSE_HANG_GUARD_DEFAULT_INTERVAL_SECONDS: u64 = 5;
+const FUSE_HANG_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const FUSE_CONTROL_ROOT: &str = "/sys/fs/fuse/connections";
+
+fn fuse_hang_guard_config() -> Option<(Duration, Duration)> {
+    let timeout_seconds = env::var("FOD_FUSE_HANG_GUARD_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(FUSE_HANG_GUARD_DEFAULT_TIMEOUT_SECONDS);
+    if timeout_seconds == 0 {
+        return None;
+    }
+
+    let interval_seconds = env::var("FOD_FUSE_HANG_GUARD_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(FUSE_HANG_GUARD_DEFAULT_INTERVAL_SECONDS)
+        .max(1)
+        .min(timeout_seconds.max(1));
+
+    Some((
+        Duration::from_secs(timeout_seconds),
+        Duration::from_secs(interval_seconds),
+    ))
+}
+
+fn decode_mountinfo_path(value: &str) -> String {
+    value
+        .replace(r"\040", " ")
+        .replace(r"\011", "\t")
+        .replace(r"\012", "\n")
+        .replace(r"\134", "\\")
+}
+
+fn encoded_dev_from_mountinfo(contents: &str, mountpoint: &Path) -> Option<u64> {
+    let wanted = mountpoint.to_string_lossy();
+    for line in contents.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 7 {
+            continue;
+        }
+        let Some(separator) = fields.iter().position(|field| *field == "-") else {
+            continue;
+        };
+        if separator + 1 >= fields.len() {
+            continue;
+        }
+        if !fields[separator + 1].starts_with("fuse") {
+            continue;
+        }
+        if decode_mountinfo_path(fields[4]) != wanted {
+            continue;
+        }
+
+        let (major_text, minor_text) = fields[2].split_once(':')?;
+        let major = major_text.parse::<u32>().ok()?;
+        let minor = minor_text.parse::<u32>().ok()?;
+        let dev = libc::makedev(major, minor);
+        return Some(dev as u64);
+    }
+    None
+}
+
+fn fuse_connection_id_for_mountpoint(mountpoint: &Path) -> Option<u64> {
+    let contents = fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let connection_id = encoded_dev_from_mountinfo(&contents, mountpoint)?;
+    let control_dir = Path::new(FUSE_CONTROL_ROOT).join(connection_id.to_string());
+    control_dir.is_dir().then_some(connection_id)
+}
+
+fn fuse_connection_waiting(connection_id: u64) -> Option<u64> {
+    fs::read_to_string(
+        Path::new(FUSE_CONTROL_ROOT)
+            .join(connection_id.to_string())
+            .join("waiting"),
+    )
+    .ok()?
+    .trim()
+    .parse::<u64>()
+    .ok()
+}
+
+fn abort_fuse_connection(connection_id: u64) -> Result<(), String> {
+    let abort_path = Path::new(FUSE_CONTROL_ROOT)
+        .join(connection_id.to_string())
+        .join("abort");
+    fs::write(&abort_path, b"1\n").map_err(|err| {
+        format!(
+            "Cannot abort FUSE connection {} through {}: {}",
+            connection_id,
+            abort_path.display(),
+            err
+        )
+    })
+}
+
+fn detach_aborted_fuse_mount(mountpoint: &Path) -> Result<(), String> {
+    let mut attempts = Vec::new();
+
+    for (binary, args) in [
+        ("fusermount3", vec!["-uz"]),
+        ("fusermount", vec!["-uz"]),
+        ("umount", vec!["-l"]),
+    ] {
+        let Some(path) = find_in_path(binary) else {
+            attempts.push(format!("{binary}:not-found"));
+            continue;
+        };
+
+        match Command::new(&path).args(&args).arg(mountpoint).status() {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => attempts.push(format!(
+                "{}:{}",
+                path.display(),
+                status.code().unwrap_or(-1)
+            )),
+            Err(err) => attempts.push(format!("{}:{err}", path.display())),
+        }
+    }
+
+    Err(format!(
+        "Cannot detach aborted FUSE mount {} ({})",
+        mountpoint.display(),
+        attempts.join(", ")
+    ))
+}
+
+#[cfg(unix)]
+fn spawn_statfs_probe(mountpoint: PathBuf) -> Receiver<Result<(), String>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            let path = CString::new(mountpoint.as_os_str().as_bytes()).map_err(|_| {
+                format!(
+                    "Mountpoint contains an embedded NUL byte: {}",
+                    mountpoint.display()
+                )
+            })?;
+            let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+            let rc = unsafe { libc::statvfs(path.as_ptr(), &mut stat) };
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "statvfs({}) failed: {}",
+                    mountpoint.display(),
+                    std::io::Error::last_os_error()
+                ))
+            }
+        })();
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
+#[cfg(not(unix))]
+fn spawn_statfs_probe(_mountpoint: PathBuf) -> Receiver<Result<(), String>> {
+    let (sender, receiver) = mpsc::channel();
+    let _ = sender.send(Ok(()));
+    receiver
+}
+
+fn run_fuse_with_hang_guard(
+    command: &mut Command,
+    mountpoint: &Path,
+) -> Result<ExitStatus, String> {
+    let mut child = command
+        .spawn()
+        .map_err(|err| format!("Failed to launch Rust FUSE frontend: {err}"))?;
+
+    let Some((probe_timeout, probe_interval)) = fuse_hang_guard_config() else {
+        return child
+            .wait()
+            .map_err(|err| format!("Failed waiting for Rust FUSE frontend: {err}"));
+    };
+
+    let mountpoint = fs::canonicalize(mountpoint).unwrap_or_else(|_| mountpoint.to_path_buf());
+    let discovery_started = Instant::now();
+    let mut connection_id: Option<u64> = None;
+    let mut discovery_warning_emitted = false;
+    let mut next_probe_at = Instant::now();
+    let mut active_probe: Option<(Receiver<Result<(), String>>, Instant)> = None;
+
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|err| format!("Failed checking Rust FUSE frontend status: {err}"))?
+        {
+            return Ok(status);
+        }
+
+        if connection_id.is_none() {
+            connection_id = fuse_connection_id_for_mountpoint(&mountpoint);
+            if connection_id.is_none()
+                && !discovery_warning_emitted
+                && discovery_started.elapsed() >= Duration::from_secs(10)
+            {
+                eprintln!(
+                    "WARNING: FOD FUSE hang guard cannot resolve fusectl connection for {}; \
+                     df/statfs hang protection is unavailable for this mount",
+                    mountpoint.display()
+                );
+                discovery_warning_emitted = true;
+            }
+        }
+
+        if let Some((receiver, probe_started)) = active_probe.as_ref() {
+            match receiver.try_recv() {
+                Ok(Ok(())) => {
+                    active_probe = None;
+                    next_probe_at = Instant::now() + probe_interval;
+                }
+                Ok(Err(err)) => {
+                    eprintln!("WARNING: FOD FUSE hang guard statfs probe returned: {err}");
+                    active_probe = None;
+                    next_probe_at = Instant::now() + probe_interval;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    active_probe = None;
+                    next_probe_at = Instant::now() + probe_interval;
+                }
+                Err(TryRecvError::Empty) if probe_started.elapsed() >= probe_timeout => {
+                    let waiting = connection_id.and_then(fuse_connection_waiting);
+                    eprintln!(
+                        "ERROR: FOD FUSE hang guard timeout for {} after {:.3}s; \
+                         connection={:?} waiting={:?}; aborting mount",
+                        mountpoint.display(),
+                        probe_started.elapsed().as_secs_f64(),
+                        connection_id,
+                        waiting
+                    );
+
+                    if let Some(connection_id) = connection_id {
+                        if let Err(err) = abort_fuse_connection(connection_id) {
+                            eprintln!("WARNING: {err}");
+                        }
+                    } else {
+                        eprintln!(
+                            "WARNING: fusectl connection is unknown; falling back to killing FUSE frontend"
+                        );
+                    }
+
+                    if let Err(err) = child.kill() {
+                        eprintln!("WARNING: failed to kill hung Rust FUSE frontend: {err}");
+                    }
+
+                    let status = child.wait().map_err(|err| {
+                        format!("Failed waiting for aborted Rust FUSE frontend: {err}")
+                    })?;
+
+                    if let Err(err) = detach_aborted_fuse_mount(&mountpoint) {
+                        eprintln!("WARNING: {err}");
+                    }
+
+                    return Ok(status);
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        } else if connection_id.is_some() && Instant::now() >= next_probe_at {
+            active_probe = Some((spawn_statfs_probe(mountpoint.clone()), Instant::now()));
+        }
+
+        thread::sleep(FUSE_HANG_GUARD_POLL_INTERVAL);
+    }
+}
+
 const PG_ENDPOINT_ENV_KEYS: &[(&str, &str)] = &[
     ("primary_hosts", "FOD_PG_PRIMARY_HOSTS"),
     ("replica_hosts", "FOD_PG_REPLICA_HOSTS"),
@@ -317,12 +590,12 @@ fn main() {
     if readonly {
         command.arg("--readonly");
     }
-    let status = command.status();
+    let status = run_fuse_with_hang_guard(&mut command, &mountpoint);
     match status {
         Ok(status) if status.success() => std::process::exit(0),
         Ok(status) => std::process::exit(status.code().unwrap_or(1)),
         Err(err) => {
-            eprintln!("Failed to launch Rust FUSE frontend: {}", err);
+            eprintln!("{}", err);
             std::process::exit(1);
         }
     }
@@ -333,6 +606,26 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn decodes_mountinfo_escaped_mountpoint() {
+        assert_eq!(
+            decode_mountinfo_path(r"/tmp/fod\040with\040space"),
+            "/tmp/fod with space"
+        );
+        assert_eq!(decode_mountinfo_path(r"/tmp/fod\134name"), r"/tmp/fod\name");
+    }
+
+    #[test]
+    fn maps_fuse_mountinfo_device_to_fusectl_id() {
+        let mountpoint = Path::new("/tmp/fod-test");
+        let contents =
+            "101 42 0:168 / /tmp/fod-test rw,nosuid,nodev - fuse.fod fod rw,user_id=1000\n";
+        assert_eq!(
+            encoded_dev_from_mountinfo(contents, mountpoint),
+            Some(libc::makedev(0, 168) as u64)
+        );
+    }
 
     #[test]
     fn extracts_endpoint_lists_for_fuse_environment() {

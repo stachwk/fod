@@ -143,6 +143,39 @@ The FOD client container requires `/dev/fuse`, `CAP_SYS_ADMIN`, `rshared` bind p
 
 A host can legitimately show more than one propagated FUSE row for the same mount. Health is determined by one unique FUSE `MAJ:MIN` identity shared by the host and the FOD container, not by requiring exactly one `findmnt` row.
 
+## Cross-mount write ownership and FUSE hang safety
+
+Writable FOD mounts use PostgreSQL-authoritative write ownership introduced with
+schema version 24. The schema contains `fod.destination_write_leases` and
+`fod.file_write_leases`.
+
+The runtime contract is:
+
+- destination/file ownership is first-writer-wins and acquired with
+  non-blocking PostgreSQL try-lock coordination;
+- a competing writer fails promptly with `EBUSY` instead of waiting;
+- active ownership is renewed together with client-session heartbeat activity;
+- lease expiry and heartbeat decisions use PostgreSQL `clock_timestamp()` as the
+  authoritative clock;
+- monotonic fencing tokens protect persistence after lease loss or takeover;
+- stale writers are rejected before PostgreSQL payload persistence;
+- writable `open`, `O_TRUNC`, `create` and path-based `truncate`/`setattr`
+  participate in the same ownership/fencing contract;
+- writable mounts require `FUSE_ATOMIC_O_TRUNC`; a kernel that cannot negotiate
+  it is rejected rather than exposing an unsafe truncate race.
+
+All FOD hosts and PostgreSQL nodes should keep system time synchronized with
+`chrony` or an equivalent NTP implementation. Correct lease ordering does not
+depend on client wall-clock timestamps because PostgreSQL server time is
+authoritative.
+
+`fod-bootstrap` also protects mounted FUSE instances from a stuck `statfs`
+request. By default it probes every 5 seconds and treats a probe lasting 15
+seconds as a hung frontend. When possible it aborts the matching fusectl
+connection, terminates the frontend and lazily detaches the aborted mount.
+`FOD_FUSE_HANG_GUARD_SECONDS=0` disables this guard; the interval can be
+overridden with `FOD_FUSE_HANG_GUARD_INTERVAL_SECONDS`.
+
 ## systemd lifecycle
 
 ### First start / inactive service

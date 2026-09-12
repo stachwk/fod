@@ -14,8 +14,9 @@ pub(crate) const DEFAULT_FUSE_MAX_READAHEAD_BYTES: u32 = 512 * 1024;
 const FUSE_MAX_WRITE_ENV: &str = "FOD_FUSE_MAX_WRITE_BYTES";
 const FUSE_MAX_PAGES_LIMIT_PATH: &str = "/proc/sys/fs/fuse/max_pages_limit";
 const FUSE_MAX_READAHEAD_ENV: &str = "FOD_FUSE_MAX_READAHEAD_BYTES";
-const FOD_BASE_REQUESTED_CAPABILITIES: InitFlags =
-    InitFlags::FUSE_POSIX_LOCKS.union(InitFlags::FUSE_FLOCK_LOCKS);
+const FOD_BASE_REQUESTED_CAPABILITIES: InitFlags = InitFlags::FUSE_POSIX_LOCKS
+    .union(InitFlags::FUSE_FLOCK_LOCKS)
+    .union(InitFlags::FUSE_ATOMIC_O_TRUNC);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FuseCompatibilitySnapshot {
@@ -300,7 +301,7 @@ mod tests {
         assert_eq!(snapshot.enabled_capabilities, InitFlags::FUSE_POSIX_LOCKS);
         assert_eq!(
             snapshot.unsupported_capabilities,
-            InitFlags::FUSE_FLOCK_LOCKS
+            InitFlags::FUSE_FLOCK_LOCKS | InitFlags::FUSE_ATOMIC_O_TRUNC
         );
         assert_eq!(snapshot.requested_max_write, 512 * 1024);
         assert_eq!(snapshot.effective_max_write, 512 * 1024);
@@ -335,6 +336,9 @@ mod tests {
             true,
         );
 
+        assert!(disabled
+            .requested_capabilities
+            .contains(InitFlags::FUSE_ATOMIC_O_TRUNC));
         assert!(!disabled
             .requested_capabilities
             .contains(InitFlags::FUSE_POSIX_ACL));

@@ -1,6 +1,6 @@
 # FOD current implementation plan
 
-Status: 2026-09-08.
+Status: 2026-09-12.
 
 This file contains only work that is current enough to direct the next change.
 
@@ -12,36 +12,11 @@ queue.
 The completed FOD 3.4.16-3.4.20 read/write optimization sequence is archived in
 [`../history/FOD_CURRENT_PLAN_2026-09-08_READ_WRITE_TUNING.md`](../history/FOD_CURRENT_PLAN_2026-09-08_READ_WRITE_TUNING.md).
 
-## P1 — Cross-mount destination write serialization
+The completed FOD 3.4.23 cross-mount write ownership, stale-writer fencing and
+FUSE hang-guard sequence is archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-12_WRITE_OWNERSHIP.md`](../history/FOD_CURRENT_PLAN_2026-09-12_WRITE_OWNERSHIP.md).
 
-Protect one destination pathname against concurrent write/copy activity from
-independent FOD mounts, processes or machines.
-
-Required boundary:
-
-- coordination is authoritative in PostgreSQL rather than process-local;
-- destination ownership is first-writer-wins: the first writer atomically
-  acquires ownership and continues, while every later concurrent writer uses
-  non-blocking try-acquire and fails immediately rather than waiting;
-- the losing writer must not truncate, write or otherwise mutate destination
-  payload or metadata before ownership is granted;
-- concurrent writers never interleave into one logical destination file;
-- operations that need multiple namespace resources, especially rename/replace,
-  acquire them in one deterministic global order or fail without waiting, so
-  destination ownership cannot introduce a wait cycle or deadlock;
-- direct create/truncate paths and temporary-file-plus-rename workflows obey
-  the same destination ownership contract;
-- crash/disconnect cannot leave a permanent lock, orphan payload, leaked quota
-  reservation or inconsistent metadata; stale writers are fenced after lease
-  expiry/recovery;
-- a crashed direct POSIX writer may leave a valid prefix from that one writer,
-  but never mixed blocks from multiple writers; temp-file-plus-rename keeps
-  atomic replacement semantics;
-- add a two-mount/two-host regression covering identical and different source
-  content, prompt loser failure, zero loser writes, final size/content/hash,
-  no deadlock, stale-writer fencing, remount stability and cleanup.
-
-This is the highest-priority correctness follow-up.
+The next active priority is P2.
 
 ## P2 — QNAP PostgreSQL baseline follow-up
 

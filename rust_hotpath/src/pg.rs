@@ -5113,6 +5113,21 @@ struct ReplicaReplayStatus {
     lag_bytes: u64,
 }
 
+pub const WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX: &str = "__FOD_WRITE_OWNERSHIP_FENCE_REJECTED__:";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteOwnershipLease {
+    pub destination_fencing_token: u64,
+    pub file_fencing_token: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WritePersistenceFence {
+    pub session_id: u64,
+    pub owner_key: u64,
+    pub file_fencing_token: u64,
+}
+
 impl DbRepo {
     pub fn new(conninfo: &str) -> Result<Self, String> {
         let runtime = RuntimeConfig::from_env()?;
@@ -9066,9 +9081,525 @@ impl DbRepo {
         ))
     }
 
+    unsafe fn try_advisory_xact_lock_text_on_conn(
+        conn: *mut PGconn,
+        resource_key: &CString,
+    ) -> Result<bool, String> {
+        let sql = CString::new("SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let params = [resource_key];
+        let res = exec_params(conn, &sql, &params)?;
+        let value = fetch_single_text(res)?;
+        Ok(matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "t" | "true" | "1" | "on"
+        ))
+    }
+
     pub fn try_advisory_xact_lock(&self, resource_lock_id: i64) -> Result<bool, String> {
         self.with_control_connection(|conn| unsafe {
             Self::try_advisory_xact_lock_on_conn(conn, resource_lock_id)
+        })
+    }
+
+    pub fn acquire_write_ownership(
+        &self,
+        parent_id: Option<u64>,
+        name: &str,
+        file_id: Option<u64>,
+        owner_key: u64,
+        lease_ttl_seconds: u64,
+    ) -> Result<Option<WriteOwnershipLease>, String> {
+        if name.is_empty() {
+            return Err("write ownership destination name is empty".to_string());
+        }
+        if matches!(parent_id, Some(0)) {
+            return Err(
+                "write ownership parent id 0 is reserved for the root namespace".to_string(),
+            );
+        }
+        if lease_ttl_seconds == 0 {
+            return Err("write ownership lease ttl must be greater than zero".to_string());
+        }
+
+        let session_id_value = self.current_lock_session_id()?;
+        if session_id_value <= 0 {
+            return Err("write ownership requires an active registered client session".to_string());
+        }
+
+        let parent_key_value = parent_id.unwrap_or(0);
+        let parent_key = CString::new(parent_key_value.to_string())
+            .map_err(|_| "write ownership parent key contains NUL byte".to_string())?;
+        let name_param = CString::new(name)
+            .map_err(|_| "write ownership destination name contains NUL byte".to_string())?;
+        let session_id = CString::new(session_id_value.to_string())
+            .map_err(|_| "write ownership session id contains NUL byte".to_string())?;
+        let owner_key_param = CString::new(owner_key.to_string())
+            .map_err(|_| "write ownership owner key contains NUL byte".to_string())?;
+        let lease_ttl = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "write ownership lease ttl contains NUL byte".to_string())?;
+        let file_id_param = file_id
+            .map(|value| {
+                CString::new(value.to_string())
+                    .map_err(|_| "write ownership file id contains NUL byte".to_string())
+            })
+            .transpose()?;
+
+        let mut resource_keys = vec![format!(
+            "fod:write:destination:{parent_key_value}:{}:{name}",
+            name.len()
+        )];
+        if let Some(file_id) = file_id {
+            resource_keys.push(format!("fod:write:file:{file_id}"));
+        }
+        resource_keys.sort_unstable();
+        resource_keys.dedup();
+        let resource_keys = resource_keys
+            .into_iter()
+            .map(|value| {
+                CString::new(value)
+                    .map_err(|_| "write ownership advisory key contains NUL byte".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let session_active_sql = CString::new(
+            "
+            SELECT EXISTS (
+                SELECT 1
+                FROM client_sessions
+                WHERE session_id = $1
+                  AND lease_expires_at > clock_timestamp()
+            )::text
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        let prune_destination_sql = CString::new(
+            "
+            DELETE FROM destination_write_leases
+            WHERE parent_key = $1
+              AND name = $2
+              AND lease_expires_at <= clock_timestamp()
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let destination_conflict_sql = CString::new(
+            "
+            SELECT EXISTS (
+                SELECT 1
+                FROM destination_write_leases
+                WHERE parent_key = $1
+                  AND name = $2
+                  AND lease_expires_at > clock_timestamp()
+                  AND NOT (session_id = $3 AND owner_key = $4)
+            )::text
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let upsert_destination_sql = CString::new(
+            "
+            INSERT INTO destination_write_leases (
+                parent_key,
+                name,
+                session_id,
+                owner_key,
+                lease_expires_at,
+                heartbeat_at,
+                created_at,
+                updated_at
+            ) VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                clock_timestamp() + ($5 || ' seconds')::interval,
+                clock_timestamp(),
+                clock_timestamp(),
+                clock_timestamp()
+            )
+            ON CONFLICT (parent_key, name)
+            DO UPDATE SET
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                heartbeat_at = EXCLUDED.heartbeat_at,
+                updated_at = clock_timestamp()
+            WHERE destination_write_leases.session_id = EXCLUDED.session_id
+              AND destination_write_leases.owner_key = EXCLUDED.owner_key
+            RETURNING fencing_token
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        let prune_file_sql = CString::new(
+            "
+            DELETE FROM file_write_leases
+            WHERE file_id = $1
+              AND lease_expires_at <= clock_timestamp()
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let file_conflict_sql = CString::new(
+            "
+            SELECT EXISTS (
+                SELECT 1
+                FROM file_write_leases
+                WHERE file_id = $1
+                  AND lease_expires_at > clock_timestamp()
+                  AND NOT (session_id = $2 AND owner_key = $3)
+            )::text
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let upsert_file_sql = CString::new(
+            "
+            INSERT INTO file_write_leases (
+                file_id,
+                session_id,
+                owner_key,
+                lease_expires_at,
+                heartbeat_at,
+                created_at,
+                updated_at
+            ) VALUES (
+                $1,
+                $2,
+                $3,
+                clock_timestamp() + ($4 || ' seconds')::interval,
+                clock_timestamp(),
+                clock_timestamp(),
+                clock_timestamp()
+            )
+            ON CONFLICT (file_id)
+            DO UPDATE SET
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                heartbeat_at = EXCLUDED.heartbeat_at,
+                updated_at = clock_timestamp()
+            WHERE file_write_leases.session_id = EXCLUDED.session_id
+              AND file_write_leases.owner_key = EXCLUDED.owner_key
+            RETURNING fencing_token
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let touch_session_sql = CString::new(
+            "
+            UPDATE client_sessions
+            SET last_write_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE session_id = $1
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                // Try-lock bez czekania; sortowanie daje deterministyczny
+                // porzadek dla operacji wielozasobowych.
+                for resource_key in &resource_keys {
+                    if !Self::try_advisory_xact_lock_text_on_conn(conn, resource_key)? {
+                        return Ok(None);
+                    }
+                }
+
+                let session_params = [&session_id];
+                let session_res = exec_params(conn, &session_active_sql, &session_params)?;
+                let session_active = fetch_single_text(session_res)?;
+                if !matches!(
+                    session_active.trim().to_ascii_lowercase().as_str(),
+                    "t" | "true" | "1" | "on"
+                ) {
+                    return Err("write ownership client session is missing or expired".to_string());
+                }
+
+                let destination_params = [&parent_key, &name_param];
+                exec_command_params(conn, &prune_destination_sql, &destination_params)?;
+
+                let destination_conflict_params =
+                    [&parent_key, &name_param, &session_id, &owner_key_param];
+                let destination_conflict_res = exec_params(
+                    conn,
+                    &destination_conflict_sql,
+                    &destination_conflict_params,
+                )?;
+                let destination_conflict = fetch_single_text(destination_conflict_res)?;
+                if matches!(
+                    destination_conflict.trim().to_ascii_lowercase().as_str(),
+                    "t" | "true" | "1" | "on"
+                ) {
+                    return Ok(None);
+                }
+
+                if let Some(file_id_param) = file_id_param.as_ref() {
+                    let file_params = [file_id_param];
+                    exec_command_params(conn, &prune_file_sql, &file_params)?;
+
+                    let file_conflict_params = [file_id_param, &session_id, &owner_key_param];
+                    let file_conflict_res =
+                        exec_params(conn, &file_conflict_sql, &file_conflict_params)?;
+                    let file_conflict = fetch_single_text(file_conflict_res)?;
+                    if matches!(
+                        file_conflict.trim().to_ascii_lowercase().as_str(),
+                        "t" | "true" | "1" | "on"
+                    ) {
+                        return Ok(None);
+                    }
+                }
+
+                let upsert_destination_params = [
+                    &parent_key,
+                    &name_param,
+                    &session_id,
+                    &owner_key_param,
+                    &lease_ttl,
+                ];
+                let destination_res =
+                    exec_params(conn, &upsert_destination_sql, &upsert_destination_params)?;
+                let destination_token =
+                    fetch_single_text(destination_res)?
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|err| format!("invalid destination write fencing token: {err}"))?;
+
+                let file_fencing_token = if let Some(file_id_param) = file_id_param.as_ref() {
+                    let upsert_file_params =
+                        [file_id_param, &session_id, &owner_key_param, &lease_ttl];
+                    let file_res = exec_params(conn, &upsert_file_sql, &upsert_file_params)?;
+                    Some(
+                        fetch_single_text(file_res)?
+                            .trim()
+                            .parse::<u64>()
+                            .map_err(|err| format!("invalid file write fencing token: {err}"))?,
+                    )
+                } else {
+                    None
+                };
+
+                exec_command_params(conn, &touch_session_sql, &session_params)?;
+
+                Ok(Some(WriteOwnershipLease {
+                    destination_fencing_token: destination_token,
+                    file_fencing_token,
+                }))
+            })
+        })
+    }
+
+    pub fn heartbeat_write_ownership(
+        &self,
+        parent_id: Option<u64>,
+        name: &str,
+        file_id: Option<u64>,
+        owner_key: u64,
+        lease: WriteOwnershipLease,
+        lease_ttl_seconds: u64,
+    ) -> Result<bool, String> {
+        if name.is_empty() {
+            return Err("write ownership destination name is empty".to_string());
+        }
+        if matches!(parent_id, Some(0)) {
+            return Err(
+                "write ownership parent id 0 is reserved for the root namespace".to_string(),
+            );
+        }
+        if lease_ttl_seconds == 0 {
+            return Err("write ownership lease ttl must be greater than zero".to_string());
+        }
+        if file_id.is_some() != lease.file_fencing_token.is_some() {
+            return Err("write ownership file id/token presence mismatch".to_string());
+        }
+
+        let session_id_value = self.current_lock_session_id()?;
+        if session_id_value <= 0 {
+            return Ok(false);
+        }
+
+        let parent_key_value = parent_id.unwrap_or(0);
+        let parent_key = CString::new(parent_key_value.to_string())
+            .map_err(|_| "write ownership parent key contains NUL byte".to_string())?;
+        let name_param = CString::new(name)
+            .map_err(|_| "write ownership destination name contains NUL byte".to_string())?;
+        let session_id = CString::new(session_id_value.to_string())
+            .map_err(|_| "write ownership session id contains NUL byte".to_string())?;
+        let owner_key_param = CString::new(owner_key.to_string())
+            .map_err(|_| "write ownership owner key contains NUL byte".to_string())?;
+        let lease_ttl = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "write ownership lease ttl contains NUL byte".to_string())?;
+        let destination_token = CString::new(lease.destination_fencing_token.to_string())
+            .map_err(|_| "destination write fencing token contains NUL byte".to_string())?;
+
+        let file_id_param = file_id
+            .map(|value| {
+                CString::new(value.to_string())
+                    .map_err(|_| "write ownership file id contains NUL byte".to_string())
+            })
+            .transpose()?;
+        let file_token_param = lease
+            .file_fencing_token
+            .map(|value| {
+                CString::new(value.to_string())
+                    .map_err(|_| "file write fencing token contains NUL byte".to_string())
+            })
+            .transpose()?;
+
+        let mut resource_keys = vec![format!(
+            "fod:write:destination:{parent_key_value}:{}:{name}",
+            name.len()
+        )];
+        if let Some(file_id) = file_id {
+            resource_keys.push(format!("fod:write:file:{file_id}"));
+        }
+        resource_keys.sort_unstable();
+        resource_keys.dedup();
+
+        let resource_keys = resource_keys
+            .into_iter()
+            .map(|value| {
+                CString::new(value)
+                    .map_err(|_| "write ownership advisory key contains NUL byte".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let heartbeat_destination_sql = CString::new(
+            "
+            WITH server_time AS (
+                SELECT clock_timestamp() AS now
+            )
+            UPDATE destination_write_leases
+            SET lease_expires_at =
+                    server_time.now + ($6 || ' seconds')::interval,
+                heartbeat_at = server_time.now,
+                updated_at = server_time.now
+            FROM server_time
+            WHERE fencing_token = $1
+              AND parent_key = $2
+              AND name = $3
+              AND session_id = $4
+              AND owner_key = $5
+              AND lease_expires_at > server_time.now
+            RETURNING fencing_token
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        let heartbeat_file_sql = CString::new(
+            "
+            WITH server_time AS (
+                SELECT clock_timestamp() AS now
+            )
+            UPDATE file_write_leases
+            SET lease_expires_at =
+                    server_time.now + ($5 || ' seconds')::interval,
+                heartbeat_at = server_time.now,
+                updated_at = server_time.now
+            FROM server_time
+            WHERE fencing_token = $1
+              AND file_id = $2
+              AND session_id = $3
+              AND owner_key = $4
+              AND lease_expires_at > server_time.now
+            RETURNING fencing_token
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                for resource_key in &resource_keys {
+                    if !Self::try_advisory_xact_lock_text_on_conn(conn, resource_key)? {
+                        return Ok(false);
+                    }
+                }
+
+                let destination_params = [
+                    &destination_token,
+                    &parent_key,
+                    &name_param,
+                    &session_id,
+                    &owner_key_param,
+                    &lease_ttl,
+                ];
+                let destination_res =
+                    exec_params(conn, &heartbeat_destination_sql, &destination_params)?;
+                let destination_value = fetch_single_text(destination_res)?;
+                if destination_value.trim().is_empty() {
+                    return Ok(false);
+                }
+
+                if let (Some(file_id_param), Some(file_token_param)) =
+                    (file_id_param.as_ref(), file_token_param.as_ref())
+                {
+                    let file_params = [
+                        file_token_param,
+                        file_id_param,
+                        &session_id,
+                        &owner_key_param,
+                        &lease_ttl,
+                    ];
+                    let file_res = exec_params(conn, &heartbeat_file_sql, &file_params)?;
+                    let file_value = fetch_single_text(file_res)?;
+                    if file_value.trim().is_empty() {
+                        return Err(
+                            "write ownership file lease disappeared during heartbeat".to_string()
+                        );
+                    }
+                }
+
+                Ok(true)
+            })
+        })
+    }
+
+    pub fn release_write_ownership(
+        &self,
+        owner_key: u64,
+        lease: WriteOwnershipLease,
+    ) -> Result<(), String> {
+        let session_id_value = self.current_lock_session_id()?;
+        if session_id_value <= 0 {
+            return Ok(());
+        }
+
+        let session_id = CString::new(session_id_value.to_string())
+            .map_err(|_| "write ownership session id contains NUL byte".to_string())?;
+        let owner_key_param = CString::new(owner_key.to_string())
+            .map_err(|_| "write ownership owner key contains NUL byte".to_string())?;
+        let destination_token = CString::new(lease.destination_fencing_token.to_string())
+            .map_err(|_| "destination write fencing token contains NUL byte".to_string())?;
+        let file_token = lease
+            .file_fencing_token
+            .map(|value| {
+                CString::new(value.to_string())
+                    .map_err(|_| "file write fencing token contains NUL byte".to_string())
+            })
+            .transpose()?;
+
+        let delete_destination_sql = CString::new(
+            "
+            DELETE FROM destination_write_leases
+            WHERE fencing_token = $1
+              AND session_id = $2
+              AND owner_key = $3
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let delete_file_sql = CString::new(
+            "
+            DELETE FROM file_write_leases
+            WHERE fencing_token = $1
+              AND session_id = $2
+              AND owner_key = $3
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                if let Some(file_token) = file_token.as_ref() {
+                    let file_params = [file_token, &session_id, &owner_key_param];
+                    exec_command_params(conn, &delete_file_sql, &file_params)?;
+                }
+                let destination_params = [&destination_token, &session_id, &owner_key_param];
+                exec_command_params(conn, &delete_destination_sql, &destination_params)?;
+                Ok(())
+            })
         })
     }
 
@@ -11806,11 +12337,96 @@ impl DbRepo {
         maintain_copy_crc_table: bool,
         capacity_reservation_token: Option<&str>,
     ) -> Result<(), String> {
+        self.persist_file_blocks_with_crc_flag_reservation_and_fence(
+            file_id,
+            file_size,
+            block_size,
+            total_blocks,
+            truncate_pending,
+            blocks,
+            maintain_copy_crc_table,
+            capacity_reservation_token,
+            None,
+        )
+    }
+
+    unsafe fn validate_write_persistence_fence_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+        fence: WritePersistenceFence,
+    ) -> Result<(), String> {
+        let resource_key = CString::new(format!("fod:write:file:{file_id}"))
+            .map_err(|_| "write fence advisory resource contains NUL byte".to_string())?;
+        if !Self::try_advisory_xact_lock_text_on_conn(conn, &resource_key)? {
+            return Err(format!(
+                "{} file_id={} session_id={} owner_key={} token={} advisory_busy",
+                WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+                file_id,
+                fence.session_id,
+                fence.owner_key,
+                fence.file_fencing_token
+            ));
+        }
+
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "write fence file id contains NUL byte".to_string())?;
+        let session_id_text = CString::new(fence.session_id.to_string())
+            .map_err(|_| "write fence session id contains NUL byte".to_string())?;
+        let owner_key_text = CString::new(fence.owner_key.to_string())
+            .map_err(|_| "write fence owner key contains NUL byte".to_string())?;
+        let fencing_token_text = CString::new(fence.file_fencing_token.to_string())
+            .map_err(|_| "write fence token contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "WITH server_time AS (SELECT clock_timestamp() AS now)              SELECT CASE WHEN EXISTS (                  SELECT 1                  FROM file_write_leases fwl                  JOIN client_sessions cs ON cs.session_id = fwl.session_id                  CROSS JOIN server_time st                  WHERE fwl.file_id = $1                    AND fwl.session_id = $2                    AND fwl.owner_key = $3::numeric                    AND fwl.fencing_token = $4                    AND fwl.lease_expires_at > st.now                    AND cs.lease_expires_at > st.now              ) THEN '1' ELSE '0' END",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let res = exec_params(
+            conn,
+            &sql,
+            &[
+                &file_id_text,
+                &session_id_text,
+                &owner_key_text,
+                &fencing_token_text,
+            ],
+        )?;
+        let valid = fetch_single_text(res)?;
+        if valid.trim() == "1" {
+            return Ok(());
+        }
+
+        Err(format!(
+            "{} file_id={} session_id={} owner_key={} token={} stale_or_expired",
+            WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+            file_id,
+            fence.session_id,
+            fence.owner_key,
+            fence.file_fencing_token
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn persist_file_blocks_with_crc_flag_reservation_and_fence(
+        &self,
+        file_id: u64,
+        file_size: u64,
+        block_size: u64,
+        total_blocks: u64,
+        truncate_pending: bool,
+        blocks: &[PersistBlockRow],
+        maintain_copy_crc_table: bool,
+        capacity_reservation_token: Option<&str>,
+        write_fence: Option<WritePersistenceFence>,
+    ) -> Result<(), String> {
         let mut payload_guard =
             self.payload_persist_guard(persist_block_input_bytes(blocks), blocks.len() as u64);
         let result = self.with_cached_connection(|conn| unsafe {
             let transaction_started = Instant::now();
             let result = transactional_replayable(conn, |conn| {
+                if let Some(write_fence) = write_fence {
+                    self.validate_write_persistence_fence_on_conn(conn, file_id, write_fence)?;
+                }
                 if capacity_reservation_token.is_some() {
                     let quota_lock = self.lock_payload_quota_on_conn(conn)?;
                     self.refresh_payload_reservation_on_conn(

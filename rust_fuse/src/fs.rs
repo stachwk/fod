@@ -10,9 +10,9 @@ use fod_rust_monitor::{
 };
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
-    Filesystem, FopenFlags, Generation, INodeNo, IoctlFlags, KernelConfig, LockOwner, OpenFlags,
-    PollEvents, PollFlags, PollNotifier, RenameFlags, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyOpen, ReplyPoll,
+    Filesystem, FopenFlags, Generation, INodeNo, InitFlags, IoctlFlags, KernelConfig, LockOwner,
+    OpenFlags, PollEvents, PollFlags, PollNotifier, RenameFlags, ReplyAttr, ReplyBmap, ReplyCreate,
+    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyOpen, ReplyPoll,
     ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use libc::{EIO, ENOENT, ENOSPC, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
@@ -20,7 +20,8 @@ use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
-    PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    PersistBlockRow, WriteOwnershipLease, WritePersistenceFence, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
@@ -74,6 +75,7 @@ pub(crate) struct PersistFileBlocksProfileInput<'rows, 'data> {
     pub(crate) blocks: &'rows [PersistBlockRow<'data>],
     pub(crate) maintain_copy_crc_table: bool,
     pub(crate) capacity_reservation_token: Option<&'rows str>,
+    pub(crate) write_fence: Option<WritePersistenceFence>,
 }
 
 struct CopyRangeFromStatesInput {
@@ -98,6 +100,8 @@ fn fod_fuse_profile_io_enabled() -> bool {
 pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
         ENOSPC
+    } else if error.starts_with(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) {
+        libc::EBUSY
     } else {
         EIO
     }
@@ -238,6 +242,15 @@ struct CachedPidGroups {
 }
 
 #[derive(Debug, Clone)]
+struct FileWriteOwnership {
+    parent_id: Option<u64>,
+    name: String,
+    file_id: u64,
+    owner_key: u64,
+    lease: WriteOwnershipLease,
+}
+
+#[derive(Debug, Clone)]
 struct FileHandleState {
     path: String,
     file_id: Option<u64>,
@@ -245,6 +258,7 @@ struct FileHandleState {
     atime_touched: bool,
     read_metadata: Option<FileReadMetadata>,
     read_metadata_loaded_at: Option<Instant>,
+    write_ownership: Option<FileWriteOwnership>,
 }
 
 #[repr(C)]
@@ -264,6 +278,71 @@ struct LockHeartbeatHandle {
 struct ClientSessionHeartbeatHandle {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+}
+
+fn heartbeat_active_write_ownerships(
+    repo: &DbRepo,
+    fh_table: &Arc<Mutex<HashMap<u64, FileHandleState>>>,
+    lease_ttl_seconds: u64,
+) -> bool {
+    let ownerships = match fh_table.lock() {
+        Ok(guard) => {
+            let mut seen = HashSet::new();
+            guard
+                .values()
+                .filter_map(|state| state.write_ownership.clone())
+                .filter(|ownership| seen.insert(ownership.owner_key))
+                .collect::<Vec<_>>()
+        }
+        Err(_) => {
+            warn!("FOD write ownership heartbeat failed to lock fh_table");
+            return true;
+        }
+    };
+
+    let mut failed = false;
+    for ownership in ownerships {
+        match repo.heartbeat_write_ownership(
+            ownership.parent_id,
+            &ownership.name,
+            Some(ownership.file_id),
+            ownership.owner_key,
+            ownership.lease,
+            lease_ttl_seconds,
+        ) {
+            Ok(true) => {
+                debug!(
+                    "FOD write ownership heartbeat renewed file_id={} owner_key={} destination_token={} file_token={:?}",
+                    ownership.file_id,
+                    ownership.owner_key,
+                    ownership.lease.destination_fencing_token,
+                    ownership.lease.file_fencing_token
+                );
+            }
+            Ok(false) => {
+                failed = true;
+                warn!(
+                    "FOD write ownership heartbeat not renewed file_id={} owner_key={} destination_token={} file_token={:?}",
+                    ownership.file_id,
+                    ownership.owner_key,
+                    ownership.lease.destination_fencing_token,
+                    ownership.lease.file_fencing_token
+                );
+            }
+            Err(err) => {
+                failed = true;
+                warn!(
+                    "FOD write ownership heartbeat failed file_id={} owner_key={} destination_token={} file_token={:?} err={}",
+                    ownership.file_id,
+                    ownership.owner_key,
+                    ownership.lease.destination_fencing_token,
+                    ownership.lease.file_fencing_token,
+                    err
+                );
+            }
+        }
+    }
+    failed
 }
 
 struct ClientSessionMaintenanceHandle {
@@ -405,6 +484,7 @@ impl ClientSessionHeartbeatHandle {
     fn spawn(
         repo: DbRepo,
         session_id: u64,
+        fh_table: Arc<Mutex<HashMap<u64, FileHandleState>>>,
         interval: Duration,
         lease_ttl_seconds: u64,
     ) -> Result<Self, String> {
@@ -420,10 +500,26 @@ impl ClientSessionHeartbeatHandle {
             .name("fod-session-heartbeat".to_string())
             .spawn(move || {
                 while !stop_thread.load(Ordering::Relaxed) {
-                    if let Err(err) = repo.heartbeat_client_session(session_id, lease_ttl_seconds) {
-                        warn!(
-                            "FOD session heartbeat failed session_id={} err={}",
-                            session_id, err
+                    let session_failed =
+                        if let Err(err) = repo.heartbeat_client_session(session_id, lease_ttl_seconds)
+                        {
+                            warn!(
+                                "FOD session heartbeat failed session_id={} err={}",
+                                session_id, err
+                            );
+                            true
+                        } else {
+                            false
+                        };
+                    let ownership_failed = heartbeat_active_write_ownerships(
+                        &repo,
+                        &fh_table,
+                        lease_ttl_seconds,
+                    );
+                    if session_failed || ownership_failed {
+                        debug!(
+                            "FOD client heartbeat cycle completed with failures session_id={} session_failed={} ownership_failed={}",
+                            session_id, session_failed, ownership_failed
                         );
                     }
                     if stop_thread.load(Ordering::Relaxed) {
@@ -1446,7 +1542,8 @@ pub struct FodFuse {
     pub acl_enabled: bool,
     inode_to_path: RwLock<HashMap<u64, String>>,
     path_to_inode: RwLock<HashMap<String, u64>>,
-    fh_table: Mutex<HashMap<u64, FileHandleState>>,
+    fh_table: Arc<Mutex<HashMap<u64, FileHandleState>>>,
+    write_ownership_gate: Mutex<()>,
     pub(crate) write_states: Mutex<HashMap<u64, WriteState>>,
     pub(crate) read_block_cache: Mutex<ReadBlockCache>,
     pub(crate) read_fill_coordinator: ReadFillCoordinator,
@@ -1551,7 +1648,8 @@ impl FodFuse {
             acl_enabled: security.acl_enabled,
             inode_to_path: RwLock::new(inode_to_path),
             path_to_inode: RwLock::new(path_to_inode),
-            fh_table: Mutex::new(HashMap::new()),
+            fh_table: Arc::new(Mutex::new(HashMap::new())),
+            write_ownership_gate: Mutex::new(()),
             write_states: Mutex::new(HashMap::new()),
             read_block_cache: Mutex::new(ReadBlockCache::new(
                 cache.read_cache_eviction_policy.as_str(),
@@ -1861,18 +1959,22 @@ impl FodFuse {
             blocks,
             maintain_copy_crc_table,
             capacity_reservation_token,
+            write_fence,
         } = input;
         let started = Instant::now();
-        let result = self.repo.persist_file_blocks_with_crc_flag_and_reservation(
-            file_id,
-            file_size,
-            block_size,
-            total_blocks,
-            truncate_pending,
-            blocks,
-            maintain_copy_crc_table,
-            capacity_reservation_token,
-        );
+        let result = self
+            .repo
+            .persist_file_blocks_with_crc_flag_reservation_and_fence(
+                file_id,
+                file_size,
+                block_size,
+                total_blocks,
+                truncate_pending,
+                blocks,
+                maintain_copy_crc_table,
+                capacity_reservation_token,
+                write_fence,
+            );
         self.record_repo_persist_blocks_elapsed(started.elapsed());
         result
     }
@@ -4042,8 +4144,14 @@ impl FodFuse {
         }
     }
 
-    fn create_handle_for_file(&self, path: String, file_id: Option<u64>, flags: i32) -> u64 {
-        let fh = self.next_handle();
+    fn insert_handle_for_file(
+        &self,
+        fh: u64,
+        path: String,
+        file_id: Option<u64>,
+        flags: i32,
+        write_ownership: Option<FileWriteOwnership>,
+    ) {
         if let Ok(mut guard) = self.fh_table.lock() {
             guard.insert(
                 fh,
@@ -4054,10 +4162,214 @@ impl FodFuse {
                     atime_touched: false,
                     read_metadata: None,
                     read_metadata_loaded_at: None,
+                    write_ownership,
                 },
             );
         }
+    }
+
+    fn create_handle_for_file(&self, path: String, file_id: Option<u64>, flags: i32) -> u64 {
+        let fh = self.next_handle();
+        self.insert_handle_for_file(fh, path, file_id, flags, None);
         fh
+    }
+
+    fn write_ownership_resource_for_path(
+        &self,
+        path: &str,
+    ) -> Result<(Option<u64>, String), libc::c_int> {
+        let normalized = Self::normalize_path(path);
+        let path = Path::new(&normalized);
+        let name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or(EIO)?;
+        let parent = path.parent().unwrap_or_else(|| Path::new("/"));
+        let parent_text = parent.to_string_lossy();
+        let parent_id = if parent_text.is_empty() || parent_text == "/" {
+            None
+        } else {
+            let resolved = self
+                .repo
+                .resolve_path(parent_text.as_ref())
+                .map_err(|err| {
+                    warn!(
+                        "FOD write ownership parent resolution failed path={} parent={} err={}",
+                        normalized, parent_text, err
+                    );
+                    EIO
+                })?;
+            if resolved.kind.as_deref() != Some("dir") {
+                return Err(ENOENT);
+            }
+            Some(resolved.entry_id.ok_or(EIO)?)
+        };
+        Ok((parent_id, name))
+    }
+
+    fn local_write_ownership_for_file(&self, file_id: u64) -> Option<FileWriteOwnership> {
+        self.fh_table.lock().ok().and_then(|guard| {
+            guard.values().find_map(|state| {
+                (state.file_id == Some(file_id))
+                    .then(|| state.write_ownership.clone())
+                    .flatten()
+            })
+        })
+    }
+
+    fn write_persistence_fence_for_handle(&self, fh: u64) -> Option<(u64, WritePersistenceFence)> {
+        let session_id = self.session_id?;
+        self.fh_table.lock().ok().and_then(|guard| {
+            let state = guard.get(&fh)?;
+            let ownership = state.write_ownership.as_ref()?;
+            let file_fencing_token = ownership.lease.file_fencing_token?;
+            Some((
+                ownership.file_id,
+                WritePersistenceFence {
+                    session_id,
+                    owner_key: ownership.owner_key,
+                    file_fencing_token,
+                },
+            ))
+        })
+    }
+
+    fn attach_write_persistence_fence_for_handle(
+        &self,
+        fh: u64,
+        state: &mut WriteState,
+    ) -> Result<(), libc::c_int> {
+        if state.persistence_fence.is_some() {
+            return Ok(());
+        }
+        let Some((ownership_file_id, fence)) = self.write_persistence_fence_for_handle(fh) else {
+            // P1 jest fail-closed: stan zapisu bez aktywnego ownership/fence
+            // nie moze zostac utrwalony w PostgreSQL.
+            warn!(
+                "FOD write persistence fence missing fh={} state_file_id={}",
+                fh, state.file_id
+            );
+            return Err(EIO);
+        };
+        if ownership_file_id != state.file_id {
+            warn!(
+                "FOD write persistence fence file mismatch fh={} state_file_id={} ownership_file_id={}",
+                fh, state.file_id, ownership_file_id
+            );
+            return Err(EIO);
+        }
+        state.persistence_fence = Some(fence);
+        Ok(())
+    }
+
+    fn create_writable_handle_with_ownership(
+        &self,
+        path: String,
+        file_id: u64,
+        flags: i32,
+    ) -> Result<u64, libc::c_int> {
+        let _gate = self.write_ownership_gate.lock().map_err(|_| EIO)?;
+        let fh = self.next_handle();
+
+        if let Some(ownership) = self.local_write_ownership_for_file(file_id) {
+            self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
+            return Ok(fh);
+        }
+
+        if self.session_id.is_none() {
+            warn!(
+                "FOD write ownership unavailable path={} file_id={} reason=no_client_session",
+                path, file_id
+            );
+            return Err(EIO);
+        }
+        let (parent_id, name) = self.write_ownership_resource_for_path(&path)?;
+        let ownership_repo = self.client_session_repo().ok_or(EIO)?;
+        let owner_key = fh;
+        let lease = match ownership_repo.acquire_write_ownership(
+            parent_id,
+            &name,
+            Some(file_id),
+            owner_key,
+            self.client_session_lease_ttl_seconds,
+        ) {
+            Ok(Some(lease)) => lease,
+            Ok(None) => {
+                debug!(
+                    "FOD write ownership busy path={} file_id={} owner_key={}",
+                    path, file_id, owner_key
+                );
+                return Err(libc::EBUSY);
+            }
+            Err(err) => {
+                warn!(
+                    "FOD write ownership acquire failed path={} file_id={} owner_key={} err={}",
+                    path, file_id, owner_key, err
+                );
+                return Err(EIO);
+            }
+        };
+        let ownership = FileWriteOwnership {
+            parent_id,
+            name,
+            file_id,
+            owner_key,
+            lease,
+        };
+        self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
+        Ok(fh)
+    }
+
+    fn release_write_ownership_for_handle(&self, fh: u64) -> Result<(), libc::c_int> {
+        let _gate = self.write_ownership_gate.lock().map_err(|_| EIO)?;
+        let ownership = self.fh_table.lock().ok().and_then(|guard| {
+            guard
+                .get(&fh)
+                .and_then(|state| state.write_ownership.clone())
+        });
+        let Some(ownership) = ownership else {
+            return Ok(());
+        };
+
+        let shared_locally = self
+            .fh_table
+            .lock()
+            .map(|guard| {
+                guard.iter().any(|(other_fh, state)| {
+                    *other_fh != fh
+                        && state
+                            .write_ownership
+                            .as_ref()
+                            .map(|other| other.owner_key == ownership.owner_key)
+                            .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if shared_locally {
+            return Ok(());
+        }
+
+        let ownership_repo = self.client_session_repo().ok_or(EIO)?;
+        ownership_repo
+            .release_write_ownership(ownership.owner_key, ownership.lease)
+            .map_err(|err| {
+                warn!(
+                    "FOD write ownership release failed fh={} file_id={} owner_key={} err={}",
+                    fh, ownership.file_id, ownership.owner_key, err
+                );
+                EIO
+            })
+    }
+
+    fn rollback_open_handle(&self, fh: u64) {
+        if let Err(errno) = self.release_write_ownership_for_handle(fh) {
+            warn!(
+                "FOD write ownership rollback release failed fh={} errno={}",
+                fh, errno
+            );
+        }
+        self.remove_handle_state(fh);
     }
 
     fn open_file_id_for_path(&self, path: &str) -> Option<u64> {
@@ -4096,6 +4408,7 @@ impl FodFuse {
         if !Self::write_state_has_pending_changes(&state) {
             return Ok(false);
         }
+        self.attach_write_persistence_fence_for_handle(fh, &mut state)?;
         self.flush_write_state(&mut state)?;
         if Self::write_state_has_pending_changes(&state) {
             self.update_write_state(fh, state);
@@ -4164,6 +4477,7 @@ impl FodFuse {
         let handle = ClientSessionHeartbeatHandle::spawn(
             repo.clone(),
             session_id,
+            Arc::clone(&self.fh_table),
             self.client_session_heartbeat_interval,
             self.client_session_lease_ttl_seconds,
         )?;
@@ -4284,7 +4598,17 @@ impl Drop for FodFuse {
 
 impl Filesystem for FodFuse {
     fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> std::io::Result<()> {
-        FuseCompatibilitySnapshot::configure(config, self.acl_enabled)?.log();
+        let snapshot = FuseCompatibilitySnapshot::configure(config, self.acl_enabled)?;
+        snapshot.log();
+        if !self.read_only
+            && snapshot
+                .unsupported_capabilities
+                .contains(InitFlags::FUSE_ATOMIC_O_TRUNC)
+        {
+            return Err(std::io::Error::other(
+                "writable FOD mount requires FUSE_ATOMIC_O_TRUNC for write ownership safety",
+            ));
+        }
         Ok(())
     }
 
@@ -5261,12 +5585,42 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
+        let writable = (flags & libc::O_ACCMODE) != libc::O_RDONLY;
+        let fh = if writable {
+            match self.create_writable_handle_with_ownership(path.clone(), file_id, flags) {
+                Ok(fh) => fh,
+                Err(errno) => {
+                    self.log_request_error(
+                        req_id,
+                        "open",
+                        errno,
+                        format!(
+                            "path={} file_id={} write ownership flags={:#x}",
+                            path, file_id, flags
+                        ),
+                    );
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
+        } else {
+            0
+        };
+
         // Przy drugim lub kolejnym fh pending state starszego uchwytu musi
-        // byc widoczny juz dla fstat/stat/SEEK_END nowego uchwytu. Publikujemy
-        // go przed utworzeniem kolejnego handle. Pierwszy fh pozostaje w pelni
-        // buforowany, wiec split 512 KiB nadal nie powoduje flush per callback.
-        if !self.read_only && self.open_handle_count_for_file(file_id) > 0 {
+        // byc widoczny juz dla fstat/stat/SEEK_END nowego uchwytu. Dla writable
+        // handle ownership jest juz zdobyty przed jakimkolwiek flush/truncate.
+        let existing_handle_count = self.open_handle_count_for_file(file_id);
+        let publish_pending = if writable {
+            existing_handle_count > 1
+        } else {
+            existing_handle_count > 0
+        };
+        if !self.read_only && publish_pending {
             if let Err(errno) = self.flush_pending_write_states_for_file_except(file_id, u64::MAX) {
+                if writable {
+                    self.rollback_open_handle(fh);
+                }
                 self.log_request_error(
                     req_id,
                     "open",
@@ -5285,8 +5639,43 @@ impl Filesystem for FodFuse {
             );
         }
 
-        let writable = (flags & libc::O_ACCMODE) != libc::O_RDONLY;
-        let fh = self.create_handle_for_file(path, Some(file_id), flags);
+        let fh = if writable {
+            fh
+        } else {
+            self.create_handle_for_file(path.clone(), Some(file_id), flags)
+        };
+
+        if writable && (flags & libc::O_TRUNC) != 0 {
+            let mut state = Self::new_write_state(file_id, 0, true);
+            if let Err(errno) = self.attach_write_persistence_fence_for_handle(fh, &mut state) {
+                self.rollback_open_handle(fh);
+                self.log_request_error(
+                    req_id,
+                    "open",
+                    errno,
+                    format!("path={} file_id={} O_TRUNC fence", path, file_id),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+            if let Err(errno) = self.flush_write_state(&mut state) {
+                self.rollback_open_handle(fh);
+                self.log_request_error(
+                    req_id,
+                    "open",
+                    errno,
+                    format!("path={} file_id={} O_TRUNC flush", path, file_id),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+            self.remove_write_state(fh);
+            debug!(
+                "FOD req={} op=open atomic_truncate path={} file_id={} fh={}",
+                req_id, path, file_id, fh
+            );
+        }
+
         debug!("FOD open granted fh={} writable={}", fh, writable);
         reply.opened(FileHandle(fh), self.fopen_flags());
     }
@@ -5940,12 +6329,18 @@ impl Filesystem for FodFuse {
             if let Some(owner) = lock_owner {
                 self.clear_locks_for_owner_and_sync(owner, "release", fh);
             }
+            // Nie zwalniaj ownership po nieudanym finalnym flushu.
             self.remove_handle_state(fh);
             fuse_reply_error!(reply, errno);
             return;
         }
         if let Some(owner) = lock_owner {
             self.clear_locks_for_owner_and_sync(owner, "release", fh);
+        }
+        if let Err(errno) = self.release_write_ownership_for_handle(fh) {
+            self.remove_handle_state(fh);
+            fuse_reply_error!(reply, errno);
+            return;
         }
         self.remove_handle_state(fh);
         debug!("FOD release completed fh={}", fh);
@@ -6033,6 +6428,10 @@ impl Filesystem for FodFuse {
                 state.file_id = file_id;
                 state.file_size = new_size;
                 state.truncate_pending = true;
+                if let Err(errno) = self.attach_write_persistence_fence_for_handle(fh, &mut state) {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
                 if let Err(errno) = self.flush_write_state(&mut state) {
                     fuse_reply_error!(reply, errno);
                     return;
@@ -6043,8 +6442,53 @@ impl Filesystem for FodFuse {
                     self.remove_write_state(fh);
                 }
             } else {
+                // Path-based truncate (setattr size bez fh) musi wejsc w ten sam
+                // first-writer-wins co zapis przez otwarty uchwyt. Wczesniej
+                // flush_write_state() byl wywolywany bez write ownership i bez
+                // persistence fence, przez co drugi mount mogl zmienic rozmiar
+                // pliku nalezacego do aktywnego writera.
+                let ownership_fh = match self.create_writable_handle_with_ownership(
+                    path.clone(),
+                    file_id,
+                    libc::O_WRONLY,
+                ) {
+                    Ok(fh) => fh,
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                };
+
                 let mut state = Self::new_write_state(file_id, new_size, true);
-                if let Err(errno) = self.flush_write_state(&mut state) {
+
+                // Tymczasowy writable handle przenosi fencing token do WriteState.
+                // Bez tego sam lease blokowalby konkurenta przy acquire, ale stale
+                // writer nadal nie bylby chroniony podczas persist/flush.
+                let persist_result = self
+                    .attach_write_persistence_fence_for_handle(ownership_fh, &mut state)
+                    .and_then(|_| self.flush_write_state(&mut state));
+
+                // Ten fh istnieje tylko na czas path-based truncate. Musimy go
+                // zawsze posprzatac, rowniez po bledzie persist.
+                let release_result = self.release_write_ownership_for_handle(ownership_fh);
+                self.remove_handle_state(ownership_fh);
+
+                if let Err(errno) = persist_result {
+                    if let Err(release_errno) = release_result {
+                        warn!(
+                            "FOD path truncate ownership release failed path={} file_id={} fh={} persist_errno={} release_errno={}",
+                            path, file_id, ownership_fh, errno, release_errno
+                        );
+                    }
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+
+                if let Err(errno) = release_result {
+                    warn!(
+                        "FOD path truncate ownership release failed path={} file_id={} fh={} errno={}",
+                        path, file_id, ownership_fh, errno
+                    );
                     fuse_reply_error!(reply, errno);
                     return;
                 }
@@ -6947,8 +7391,44 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        // O_CREAT z uchwytem do zapisu musi wejsc w ten sam mechanizm
+        // first-writer-wins co zwykle open(O_WRONLY/O_RDWR). Samo create_file()
+        // tworzy obiekt w bazie, ale bez ownership drugi mount mogl otworzyc
+        // ten sam plik do zapisu zanim pierwszy uchwyt zostal zamkniety.
+        let writable = matches!(flags & libc::O_ACCMODE, libc::O_WRONLY | libc::O_RDWR);
+
+        let fh = if writable {
+            match self.create_writable_handle_with_ownership(child_path.clone(), file_id, flags) {
+                Ok(fh) => fh,
+                Err(errno) => {
+                    // create_file() wykonalo juz mutacje. Jezeli nie mozemy
+                    // zdobyc ownership, cofamy swiezo utworzony plik, aby
+                    // create() nie zwrocil bledu pozostawiajac wpis w FOD.
+                    if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
+                        warn!(
+                            "FOD create ownership rollback failed path={} file_id={} errno={} err={}",
+                            child_path, file_id, errno, err
+                        );
+                        self.remove_cached_path(&child_path);
+                        self.invalidate_statfs_cache();
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+
+                    self.remove_cached_path(&child_path);
+                    self.invalidate_statfs_cache();
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
+        } else {
+            self.create_handle_for_file(child_path.clone(), Some(file_id), flags)
+        };
+
+        // ACL kopiujemy dopiero po uzyskaniu ownership dla uchwytu zapisywalnego.
+        // Ogranicza to skutki uboczne w sciezce rollbacku po EBUSY/EIO.
         let _ = self.copy_default_acl_to_child(&parent_path, "file", file_id, false);
-        let fh = self.create_handle_for_file(child_path.clone(), Some(file_id), flags);
+
         match self.lookup_path(&child_path) {
             Ok(Some(attrs)) => {
                 self.register_path(&child_path, attrs.file_attr.ino.0);
@@ -6972,8 +7452,58 @@ impl Filesystem for FodFuse {
                     self.fopen_flags(),
                 );
             }
-            Ok(None) => fuse_reply_error!(reply, EIO),
-            Err(errno) => fuse_reply_error!(reply, errno),
+            Ok(None) => {
+                // Kernel nie dostanie fh po bledzie create(), wiec musimy sami
+                // zwolnic ownership i usunac lokalny stan uchwytu.
+                if writable {
+                    if let Err(release_errno) = self.release_write_ownership_for_handle(fh) {
+                        warn!(
+                            "FOD create cleanup ownership release failed path={} file_id={} fh={} errno={}",
+                            child_path, file_id, fh, release_errno
+                        );
+                    }
+                }
+                self.remove_handle_state(fh);
+
+                if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
+                    warn!(
+                        "FOD create rollback after lookup miss failed path={} file_id={} err={}",
+                        child_path, file_id, err
+                    );
+                }
+                self.remove_cached_path(&child_path);
+                self.invalidate_statfs_cache();
+                fuse_reply_error!(reply, EIO);
+            }
+            Err(errno) => {
+                // Jak wyzej: create() zwraca blad, wiec nie mozemy pozostawic
+                // niewidocznego dla kernela fh z aktywnym write ownership.
+                if writable {
+                    if let Err(release_errno) = self.release_write_ownership_for_handle(fh) {
+                        warn!(
+                            "FOD create cleanup ownership release failed path={} file_id={} fh={} errno={}",
+                            child_path, file_id, fh, release_errno
+                        );
+                    }
+                }
+                self.remove_handle_state(fh);
+
+                let rollback_failed = self
+                    .remove_primary_file_or_promote_hardlink(file_id)
+                    .is_err();
+                self.remove_cached_path(&child_path);
+                self.invalidate_statfs_cache();
+
+                if rollback_failed {
+                    warn!(
+                        "FOD create rollback after lookup error failed path={} file_id={} errno={}",
+                        child_path, file_id, errno
+                    );
+                    fuse_reply_error!(reply, EIO);
+                } else {
+                    fuse_reply_error!(reply, errno);
+                }
+            }
         }
     }
 
@@ -7138,6 +7668,15 @@ impl Filesystem for FodFuse {
         let mut state =
             existing_state.unwrap_or_else(|| Self::new_write_state(file_id, existing_size, false));
         state.file_id = file_id;
+        if let Err(errno) = self.attach_write_persistence_fence_for_handle(fh, &mut state) {
+            self.update_write_state(fh, state);
+            for (sibling_fh, sibling_state) in sibling_states {
+                self.update_write_state(sibling_fh, sibling_state);
+            }
+            self.log_request_error(req_id, "write", errno, format!("fh={} fence", fh));
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         let merge_started = Instant::now();
         for (_sibling_fh, sibling_state) in sibling_states.iter() {
             let sibling_state = self.clone_write_state_profiled(sibling_state);
@@ -8102,6 +8641,7 @@ mod tests {
             buffered_bytes: 0,
             load_error: false,
             payload: WritePayloadState::default(),
+            persistence_fence: None,
         };
         let buffered = WriteState {
             buffered_bytes: 16,
