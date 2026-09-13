@@ -16,31 +16,12 @@ The completed FOD 3.4.23 cross-mount write ownership, stale-writer fencing and
 FUSE hang-guard sequence is archived in
 [`../history/FOD_CURRENT_PLAN_2026-09-12_WRITE_OWNERSHIP.md`](../history/FOD_CURRENT_PLAN_2026-09-12_WRITE_OWNERSHIP.md).
 
-The next active priority is P2.
+The completed P2 QNAP COPY-buffer repeatability follow-up is archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-12_QNAP_COPY_BUFFER.md`](../history/FOD_CURRENT_PLAN_2026-09-12_QNAP_COPY_BUFFER.md).
+It produced no runtime tuning change: the current
+`FOD_PERSIST_COPY_SEND_BUFFER_BYTES` default remains unchanged.
 
-## P2 — QNAP PostgreSQL baseline follow-up
-
-The stable QNAP server preset is already implemented and validated for the
-current reference host:
-
-```text
-8 GB RAM
-2 CPU
-HDD
-PostgreSQL 16.15
-BLCKSZ = 32 KiB
-```
-
-`QNAP=1` owns that profile through Make/Compose. Do not retune it merely because
-a generic PostgreSQL recommendation differs.
-
-The remaining performance follow-up is conditional:
-
-- repeat the QNAP `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` matrix before changing
-  its default;
-- require repeated evidence that `4194304` is a stable improvement rather than
-  network, Docker or HDD noise;
-- leave the current default unchanged without that repeated evidence.
+The next active priority is P3.
 
 ## P3 — External unmount/session teardown
 

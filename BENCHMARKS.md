@@ -25,9 +25,84 @@ Current runtime note: FOD (Filesystem On DataBaseEngine) is Rust-backed end to e
 - `persist_block_transport` is now a separate runtime knob for write-path transport comparison; use it to compare `copy_binary_staging`, `binary_bytea`, and `legacy_hex` on the same workload.
 - `synchronous_commit` is now a separate runtime knob; the latest local comparison was mixed across block sizes, so it is exposed for tuning rather than forced as the default.
 - PostgreSQL session normalization to UTC is now initialized once per physical pooled connection; the measured steady-state overhead is effectively the pool acquire/release plus a cheap `rollback()`.
+- The latest QNAP COPY-buffer repeatability matrix was collected on 2026-09-12 from FOD 3.4.23 commit `0280127`; five repetitions per candidate rejected `4194304` as a default change and retained the current `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` default.
 - The latest PostgreSQL optimization comparison in this file was collected on 2026-07-05 from commit `a3076e1` and adds a fresh local/QNAP COPY-buffer matrix with DML, WAL, top statement IO/WAL, and bloat artifacts.
 - The current FUSE migration comparison was collected locally on 2026-07-12 from commit `522b1b5` with `fuser 0.17.0`, negotiated protocol 7.40, schema v17, and three samples per block/1 MiB extent mode; the frozen pre-migration reference remains commit `7d9ed83`.
 - Sequential read regression tracking must use the production block path explicitly: the block-only `tests/integration/test_fio_sequential_io.sh` and separate measurements for `FOD_FOPEN_DIRECT_IO=0` and `1`. The standard matrix uses `4M` and `128M` files, `4k` fio blocks, and at least five repetitions per cell. Different storage paths or direct-I/O modes are separate baselines.
+
+## 2026-09-12 FOD 3.4.23 QNAP COPY-buffer repeatability matrix
+
+Purpose: close P2 by checking whether the earlier single-run QNAP advantage
+observed for `FOD_PERSIST_COPY_SEND_BUFFER_BYTES=4194304` is repeatable enough
+to justify changing the runtime default.
+
+Measured commit: `0280127` (`FOD 3.4.23: complete cross-mount write ownership
+and fencing`). Client host: `lt7300`. Backend: QNAP reference host, 8 GB RAM,
+2 CPU, HDD, PostgreSQL 16.15, `BLCKSZ=32 KiB`. The QNAP FOD schema was upgraded
+to schema version 24 before the benchmark.
+
+Method:
+
+- real `test-large-copy-benchmark`;
+- payload: `64 MiB` (`4M * 16`);
+- candidates: `default`, `262144`, `1048576`, `4194304`;
+- one warm-up run excluded from the comparison;
+- five measured repetitions per candidate;
+- candidate order rotated between repetitions to reduce ordering/cache bias;
+- all 20 measured benchmark invocations passed;
+- no runtime/configuration default was changed while collecting the matrix.
+
+Run base:
+
+```text
+p2-qnap-copy-buffer-20260912T164006Z
+```
+
+Artifact prefix:
+
+```text
+artifacts/perf/0280127/lt7300-p2-qnap-copy-buffer-20260912T164006Z-
+```
+
+Per-run throughput:
+
+| buffer bytes | run 1 MiB/s | run 2 MiB/s | run 3 MiB/s | run 4 MiB/s | run 5 MiB/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `default` | `10.48` | `10.46` | `9.85` | `11.37` | `11.07` |
+| `262144` | `10.35` | `9.86` | `11.66` | `8.09` | `10.95` |
+| `1048576` | `9.61` | `7.51` | `9.44` | `10.52` | `8.59` |
+| `4194304` | `6.70` | `7.29` | `10.64` | `9.77` | `9.86` |
+
+Summary statistics:
+
+| buffer bytes | mean MiB/s | median MiB/s | sample stdev | CV | median vs default | paired wins vs default |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `default` | `10.646` | `10.48` | `0.592` | `5.6%` | baseline | baseline |
+| `262144` | `10.182` | `10.35` | `1.349` | `13.3%` | `-1.24%` | `1/5` |
+| `1048576` | `9.134` | `9.44` | `1.137` | `12.5%` | `-9.92%` | `0/5` |
+| `4194304` | `8.852` | `9.77` | `1.741` | `19.7%` | `-6.77%` | `1/5` |
+
+Mean throughput deltas versus `default`:
+
+- `262144`: `-4.36%`;
+- `1048576`: `-14.20%`;
+- `4194304`: `-16.85%`.
+
+Decision:
+
+- keep the current `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` default unchanged;
+- do not promote `4194304` to the runtime default;
+- the earlier one-run QNAP result favoring `4194304` was not repeatable in the
+  controlled five-repeat matrix;
+- `4194304` won only `1/5` paired repetitions, had a `6.77%` lower median and a
+  `16.85%` lower mean than `default`, and showed the highest variability
+  (`CV=19.7%`);
+- `262144` remained closest to `default`, but its median and mean were still
+  lower and its variability was materially higher, so it also does not justify
+  a default change.
+
+P2 is therefore closed as a negative tuning result: the QNAP baseline is
+retained and there is no FOD runtime/version change from this benchmark.
 
 ## 2026-08-18 FOD 3.2.82 block read direct-I/O matrix
 
