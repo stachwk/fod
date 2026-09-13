@@ -10,6 +10,7 @@ mod tls;
 mod version;
 
 use clap::{Parser, ValueEnum};
+use serde_json::json;
 use std::env;
 use std::path::Path;
 
@@ -25,6 +26,7 @@ use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
 const SCHEMA_VERSION: u64 = 24;
+const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
 const MIGRATION_FILES: [&str; 24] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
@@ -114,6 +116,8 @@ struct Cli {
     tls_common_name: String,
     #[arg(long, default_value_t = 365)]
     tls_cert_days: i64,
+    #[arg(long, default_value_t = false)]
+    json: bool,
 }
 
 fn parse_truthy_arg(value: &str) -> Result<bool, String> {
@@ -566,6 +570,21 @@ fn schema_version_label(version: Option<u64>) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
+fn read_storage_config_value(conn: &DbConn, key: &str) -> Result<Option<u64>, String> {
+    if !conn.query_exists(&format!(
+        "SELECT to_regclass({}) IS NOT NULL",
+        quote_schema_regclass(FOD_SCHEMA_NAME, "config")
+    ))? {
+        return Ok(None);
+    }
+
+    conn.query_scalar_u64(&format!(
+        "SELECT value FROM {} WHERE key = {}",
+        quote_schema_qualified_ident(FOD_SCHEMA_NAME, "config"),
+        DbConn::quote_literal(key)
+    ))
+}
+
 fn ensure_fod_privileges(conn: &DbConn, db_user: &str) -> Result<(), String> {
     run_sql_commands_user(
         conn,
@@ -595,6 +614,10 @@ fn set_search_path(conn: &DbConn, search_path: &str) -> Result<(), String> {
 
 fn main() {
     let cli = Cli::parse();
+    if cli.json && cli.action != Action::Status {
+        eprintln!("--json is only supported with the status action");
+        std::process::exit(2);
+    }
     if cli.block_size % 1024 != 0 {
         eprintln!("block_size must be a multiple of 1024");
         std::process::exit(1);
@@ -645,16 +668,16 @@ fn main() {
                 std::process::exit(1);
             }
         };
-    match postgres_requirements.server_configuration_warnings() {
-        Ok(warnings) => {
-            for warning in warnings {
-                eprintln!("FOD PostgreSQL instance configuration requires attention: {warning}");
+    let postgres_configuration_warnings =
+        match postgres_requirements.server_configuration_warnings() {
+            Ok(warnings) => warnings,
+            Err(err) => {
+                eprintln!("PostgreSQL runtime requirements validation failed: {err}");
+                std::process::exit(1);
             }
-        }
-        Err(err) => {
-            eprintln!("PostgreSQL runtime requirements validation failed: {err}");
-            std::process::exit(1);
-        }
+        };
+    for warning in &postgres_configuration_warnings {
+        eprintln!("FOD PostgreSQL instance configuration requires attention: {warning}");
     }
 
     let (schema_admin_password, schema_admin_source) = load_schema_admin_password(&cli);
@@ -928,54 +951,159 @@ fn main() {
                 && current_version == Some(latest_version)
                 && secret_present
                 && latest_shape;
-            println!("FOD version: {}", FOD_VERSION_LABEL);
-            println!(
-                "PostgreSQL libpq runtime: {} ({})",
-                postgres_versions.libpq_version, postgres_versions.libpq_version_num
-            );
-            println!(
-                "PostgreSQL server runtime: {} ({})",
-                postgres_versions.server_version, postgres_versions.server_version_num
-            );
-            println!(
-                "PostgreSQL client/server major relation: {}",
-                postgres_versions.major_relation
-            );
-            println!(
-                "PostgreSQL client/server compatibility: {}",
-                postgres_versions.compatibility_label()
-            );
-            println!("FOD schema name: {}", FOD_SCHEMA_NAME);
-            println!(
-                "FOD schema version: {}",
-                schema_version_label(current_version)
-            );
-            println!("Canonical FOD storage schema: {}", FOD_SCHEMA_NAME);
-            println!("Active schema: {}", if fod_exists { "fod" } else { "none" });
-            println!("fod objects: {}", if fod_exists { "yes" } else { "no" });
-            println!("Latest migration version: {}", latest_version);
-            println!(
-                "Latest schema shape: {}",
-                if latest_shape { "yes" } else { "no" }
-            );
-            println!(
-                "Schema admin secret: {}",
-                if secret_present { "present" } else { "missing" }
-            );
-            println!("FOD ready: {}", if ready { "yes" } else { "no" });
-            if pending_versions.is_empty() {
-                println!("Pending migrations: none");
-            } else {
-                let joined = pending_versions
+            let block_size_bytes = match read_storage_config_value(&conn, "block_size") {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("FOD storage block-size diagnostics unavailable: {}", err);
+                    std::process::exit(1);
+                }
+            };
+            let max_fs_size_bytes = match read_storage_config_value(&conn, "max_fs_size_bytes") {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("FOD storage max-size diagnostics unavailable: {}", err);
+                    std::process::exit(1);
+                }
+            };
+
+            if cli.json {
+                let migration_path = manifest
                     .iter()
-                    .map(|version| format!("{:04}", version))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                println!("Pending migrations: {}", joined);
-            }
-            println!("Migration path:");
-            for (version, filename, description) in manifest {
-                println!("  - {:04}: {} :: {}", version, filename, description);
+                    .map(|(version, filename, description)| {
+                        json!({
+                            "version": version,
+                            "filename": filename,
+                            "description": description,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let postgres_settings = postgres_requirements
+                    .settings
+                    .values()
+                    .map(|setting| {
+                        json!({
+                            "name": setting.name,
+                            "setting": setting.setting,
+                            "unit": setting.unit,
+                            "context": setting.context,
+                            "pending_restart": setting.pending_restart,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let session_configuration_errors =
+                    postgres_requirements.session_configuration_errors();
+
+                let payload = json!({
+                    "schema_version": STATUS_JSON_SCHEMA_VERSION,
+                    "fod_version": env!("CARGO_PKG_VERSION"),
+                    "postgresql": {
+                        "libpq_runtime": {
+                            "version": postgres_versions.libpq_version,
+                            "version_num": postgres_versions.libpq_version_num,
+                        },
+                        "server_runtime": {
+                            "version": postgres_versions.server_version,
+                            "version_num": postgres_versions.server_version_num,
+                        },
+                        "client_server_major_relation": postgres_versions.major_relation,
+                        "compatibility": postgres_versions.compatibility_label(),
+                        "requirements": {
+                            "minimum_server_version_num": postgres_requirements.minimum_server_version_num,
+                            "pool_max_connections": postgres_requirements.pool_max_connections,
+                            "required_max_connections": postgres_requirements.required_max_connections,
+                            "server_configuration_warnings": postgres_configuration_warnings,
+                            "session_configuration_errors": session_configuration_errors,
+                            "settings": postgres_settings,
+                        },
+                    },
+                    "schema": {
+                        "name": FOD_SCHEMA_NAME,
+                        "version": current_version,
+                        "latest_migration_version": latest_version,
+                        "objects_present": fod_exists,
+                        "latest_shape": latest_shape,
+                        "admin_secret_present": secret_present,
+                        "ready": ready,
+                        "pending_migrations": pending_versions,
+                        "migration_path": migration_path,
+                    },
+                    "storage_format": {
+                        "canonical_schema": FOD_SCHEMA_NAME,
+                        "active_schema": if fod_exists { FOD_SCHEMA_NAME } else { "none" },
+                        "block_size_bytes": block_size_bytes,
+                        "max_fs_size_bytes": max_fs_size_bytes,
+                    },
+                });
+
+                match serde_json::to_string_pretty(&payload) {
+                    Ok(payload) => println!("{}", payload),
+                    Err(err) => {
+                        eprintln!("unable to serialize FOD status JSON: {}", err);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                println!("FOD version: {}", FOD_VERSION_LABEL);
+                println!(
+                    "PostgreSQL libpq runtime: {} ({})",
+                    postgres_versions.libpq_version, postgres_versions.libpq_version_num
+                );
+                println!(
+                    "PostgreSQL server runtime: {} ({})",
+                    postgres_versions.server_version, postgres_versions.server_version_num
+                );
+                println!(
+                    "PostgreSQL client/server major relation: {}",
+                    postgres_versions.major_relation
+                );
+                println!(
+                    "PostgreSQL client/server compatibility: {}",
+                    postgres_versions.compatibility_label()
+                );
+                println!("FOD schema name: {}", FOD_SCHEMA_NAME);
+                println!(
+                    "FOD schema version: {}",
+                    schema_version_label(current_version)
+                );
+                println!("Canonical FOD storage schema: {}", FOD_SCHEMA_NAME);
+                println!("Active schema: {}", if fod_exists { "fod" } else { "none" });
+                println!(
+                    "FOD storage block size: {}",
+                    block_size_bytes
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unavailable".to_string())
+                );
+                println!(
+                    "FOD max filesystem size: {}",
+                    max_fs_size_bytes
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unavailable".to_string())
+                );
+                println!("fod objects: {}", if fod_exists { "yes" } else { "no" });
+                println!("Latest migration version: {}", latest_version);
+                println!(
+                    "Latest schema shape: {}",
+                    if latest_shape { "yes" } else { "no" }
+                );
+                println!(
+                    "Schema admin secret: {}",
+                    if secret_present { "present" } else { "missing" }
+                );
+                println!("FOD ready: {}", if ready { "yes" } else { "no" });
+                if pending_versions.is_empty() {
+                    println!("Pending migrations: none");
+                } else {
+                    let joined = pending_versions
+                        .iter()
+                        .map(|version| format!("{:04}", version))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    println!("Pending migrations: {}", joined);
+                }
+                println!("Migration path:");
+                for (version, filename, description) in manifest {
+                    println!("  - {:04}: {} :: {}", version, filename, description);
+                }
             }
         }
     }
@@ -985,10 +1113,15 @@ fn main() {
 mod tests {
     use super::{
         base_schema_sql, migration_manifest, quote_schema_regclass, quote_schema_regprocedure,
-        SCHEMA_VERSION,
+        SCHEMA_VERSION, STATUS_JSON_SCHEMA_VERSION,
     };
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn status_json_schema_version_is_stable() {
+        assert_eq!(STATUS_JSON_SCHEMA_VERSION, 1);
+    }
 
     #[test]
     fn base_schema_sql_excludes_legacy_upgrade_migrations() {

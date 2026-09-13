@@ -74,6 +74,17 @@ Increasing a FUSE request size does **not** change the on-database FOD storage f
 
 The new-filesystem storage default is owned by `fod-rust-mkfs`; current runtime/FUSE defaults are defined by `../fod_config.ini` and `../fod_config.example.ini`.
 
+## Machine-readable compatibility/status diagnostics
+
+`fod-rust-mkfs status --json` is the versioned machine-readable source for
+PostgreSQL/libpq runtime compatibility, PostgreSQL runtime requirements, FOD
+schema readiness and persisted storage-format settings. Its top-level
+`schema_version` is independent from the FOD database schema version.
+
+The JSON source intentionally does not infer negotiated FUSE state. FUSE
+capabilities and effective request limits exist only after a mount negotiates
+with the kernel and are handled separately through mounted runtime telemetry.
+
 ## PostgreSQL deployment behavior
 
 The reference Docker deployment uses one writable primary and zero or more streaming replicas. Smoke validation requires:
