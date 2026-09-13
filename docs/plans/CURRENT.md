@@ -1,6 +1,6 @@
 # FOD current implementation plan
 
-Status: 2026-09-12.
+Status: 2026-09-13.
 
 This file contains only work that is current enough to direct the next change.
 
@@ -21,23 +21,12 @@ The completed P2 QNAP COPY-buffer repeatability follow-up is archived in
 It produced no runtime tuning change: the current
 `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` default remains unchanged.
 
-The next active priority is P3.
+The completed P3 external-unmount/session-teardown validation is archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-13_EXTERNAL_UNMOUNT.md`](../history/FOD_CURRENT_PLAN_2026-09-13_EXTERNAL_UNMOUNT.md).
+On the current `fuser 0.18.0` / libfuse3 stack the historical benign teardown
+`EINVAL` was not reproduced, so no runtime teardown change was made.
 
-## P3 — External unmount/session teardown
-
-Reproduce the remaining external-unmount/session-teardown warning on the current
-`fuser 0.18` / libfuse3 stack.
-
-Required boundary:
-
-- confirm that `fusermount3 -u` leaves no mount behind;
-- determine whether session drop still reports the benign `EINVAL`;
-- compare current behavior with the verified 2026-07-12 migration-gate result;
-- do not fork `fuser`, suppress unrelated warnings or weaken cleanup semantics
-  merely to hide the message.
-
-Change teardown behavior only if the warning is reproduced on the current stack
-and the public session API provides a correctness-preserving solution.
+The next active priority is P4.
 
 ## P4 — Compatibility diagnostics aggregation
 

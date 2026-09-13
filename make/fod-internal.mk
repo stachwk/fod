@@ -2770,3 +2770,20 @@ profile-read-regression-matrix:
 
 profile-read-regression-matrix-record:
 	$(PYTHON) scripts/perf/read_regression_matrix.py 		--repeat $(READ_REGRESSION_REPEAT) 		--sizes $(READ_REGRESSION_SIZES) 		--block-size $(READ_REGRESSION_BLOCK_SIZE) 		--record BENCHMARKS.md 		--verbose $(READ_REGRESSION_VERBOSE)
+
+
+.PHONY: test-external-unmount-teardown
+test-external-unmount-teardown: venv build-runtime init
+	@FOD_CONFIG="$(abspath $(FOD_CONFIG_SOURCE))" \
+	FOD_RUNTIME_PROFILE="$(FOD_RUNTIME_PROFILE)" \
+	FOD_PG_HOST="$(FOD_PG_HOST)" \
+	FOD_PG_PORT="$(FOD_PG_PORT)" \
+	FOD_PG_DBNAME="$(FOD_PG_DBNAME)" \
+	FOD_PG_USER="$(FOD_PG_USER)" \
+	FOD_PG_PASSWORD="$(FOD_PG_PASSWORD)" \
+	POSTGRES_HOST="$(POSTGRES_HOST)" \
+	POSTGRES_PORT="$(POSTGRES_PORT)" \
+	POSTGRES_DB="$(POSTGRES_DB)" \
+	POSTGRES_USER="$(POSTGRES_USER)" \
+	POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	$(VENV_PYTHON) tests/integration/test_external_unmount_teardown.py

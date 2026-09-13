@@ -143,6 +143,20 @@ The FOD client container requires `/dev/fuse`, `CAP_SYS_ADMIN`, `rshared` bind p
 
 A host can legitimately show more than one propagated FUSE row for the same mount. Health is determined by one unique FUSE `MAJ:MIN` identity shared by the host and the FOD container, not by requiring exactly one `findmnt` row.
 
+### External unmount/session teardown
+
+On the current `fuser 0.18.0` / libfuse3 stack an external
+`fusermount3 -u` cleanly removes the mount and lets the FOD process exit with
+status 0. The historical `fuser 0.17` post-unmount
+`Failed to umount filesystem: Invalid argument` warning is not reproduced by
+the current validation.
+
+PostgreSQL client-session rows remain lease based. A process exit does not
+require immediate deletion of its `fod.client_sessions` row; after heartbeat
+stops, `lease_expires_at` makes the row stale and normal active-session
+maintenance prunes expired rows. This preserves crash/failure semantics and is
+separate from the FUSE unmount lifecycle.
+
 ## Cross-mount write ownership and FUSE hang safety
 
 Writable FOD mounts use PostgreSQL-authoritative write ownership introduced with
