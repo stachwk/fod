@@ -95,6 +95,20 @@ enabled and unsupported capabilities, effective I/O request limits and the
 kernel-derived request ceiling. Older schema-version-1 payloads remain readable
 with the field absent/defaulted.
 
+`fod-monitor report --json` schema version 2 aggregates these two versioned
+sources without inventing a third compatibility model:
+
+- `mkfs_status` contains the raw machine-readable `fod-rust-mkfs status --json`
+  payload;
+- `cluster.sessions[].stats` retains the shared monitor payload, including
+  optional negotiated FUSE compatibility;
+- `mkfs_status_error` and `cluster_error` are independent source errors.
+
+If the mkfs/status source is unavailable, `mkfs_status` is `null` and
+`mkfs_status_error` contains the failure. The report itself remains usable and
+continues to expose any available cluster/local diagnostics. `cluster --json`
+retains its existing schema version 1 because its JSON shape did not change.
+
 ## PostgreSQL deployment behavior
 
 The reference Docker deployment uses one writable primary and zero or more streaming replicas. Smoke validation requires:

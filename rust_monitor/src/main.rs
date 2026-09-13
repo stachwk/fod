@@ -5,6 +5,8 @@ mod cluster;
 
 use std::env;
 use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,7 +22,9 @@ const FOD_PROCESS_NAMES: &[&str] = &[
 ];
 const DEFAULT_TOP_INTERVAL_SECONDS: u64 = 2;
 const MAX_CMDLINE_CHARS: usize = 120;
-const MONITOR_JSON_SCHEMA_VERSION: u32 = 1;
+const CLUSTER_JSON_SCHEMA_VERSION: u32 = 1;
+const REPORT_JSON_SCHEMA_VERSION: u32 = 2;
+const MKFS_BIN_ENV: &str = "FOD_MKFS_BIN";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct SystemSnapshot {
@@ -63,6 +67,8 @@ struct ReportCommandJson<'a> {
     schema_version: u32,
     fod_version: &'a str,
     generated_unix_seconds: u64,
+    mkfs_status: Option<serde_json::Value>,
+    mkfs_status_error: Option<String>,
     cluster: Option<cluster::ClusterJsonSnapshot<'a>>,
     cluster_error: Option<String>,
     local: &'a MonitorSnapshot,
@@ -101,7 +107,7 @@ fn run() -> Result<(), String> {
             let generated_unix_seconds = unix_seconds_now();
             if json {
                 print_json(&ClusterCommandJson {
-                    schema_version: MONITOR_JSON_SCHEMA_VERSION,
+                    schema_version: CLUSTER_JSON_SCHEMA_VERSION,
                     fod_version: FOD_VERSION,
                     generated_unix_seconds,
                     cluster: cluster::cluster_json_snapshot(&snapshot),
@@ -123,7 +129,8 @@ fn run() -> Result<(), String> {
             let cluster_snapshot = cluster::load_cluster_snapshot();
             let snapshot = monitor_snapshot()?;
             if json {
-                print_report_json(&snapshot, cluster_snapshot)?;
+                let mkfs_status = load_mkfs_status_json();
+                print_report_json(&snapshot, cluster_snapshot, mkfs_status)?;
             } else {
                 print_report(&snapshot, cluster_snapshot.as_ref().ok());
                 if let Err(err) = cluster_snapshot {
@@ -333,26 +340,97 @@ fn print_report(snapshot: &MonitorSnapshot, cluster_snapshot: Option<&cluster::C
 fn print_report_json(
     snapshot: &MonitorSnapshot,
     cluster_snapshot: Result<cluster::ClusterSnapshot, String>,
+    mkfs_status: Result<serde_json::Value, String>,
 ) -> Result<(), String> {
     let generated_unix_seconds = unix_seconds_now();
-    match cluster_snapshot {
-        Ok(cluster_snapshot) => print_json(&ReportCommandJson {
-            schema_version: MONITOR_JSON_SCHEMA_VERSION,
-            fod_version: FOD_VERSION,
-            generated_unix_seconds,
-            cluster: Some(cluster::cluster_json_snapshot(&cluster_snapshot)),
-            cluster_error: None,
-            local: snapshot,
-        }),
-        Err(err) => print_json(&ReportCommandJson {
-            schema_version: MONITOR_JSON_SCHEMA_VERSION,
-            fod_version: FOD_VERSION,
-            generated_unix_seconds,
-            cluster: None,
-            cluster_error: Some(err),
-            local: snapshot,
-        }),
+
+    let cluster_error = cluster_snapshot.as_ref().err().cloned();
+    let cluster = cluster_snapshot
+        .as_ref()
+        .ok()
+        .map(cluster::cluster_json_snapshot);
+
+    let (mkfs_status, mkfs_status_error) = match mkfs_status {
+        Ok(status) => (Some(status), None),
+        Err(err) => (None, Some(err)),
+    };
+
+    print_json(&ReportCommandJson {
+        schema_version: REPORT_JSON_SCHEMA_VERSION,
+        fod_version: FOD_VERSION,
+        generated_unix_seconds,
+        mkfs_status,
+        mkfs_status_error,
+        cluster,
+        cluster_error,
+        local: snapshot,
+    })
+}
+
+fn mkfs_status_binary() -> Result<PathBuf, String> {
+    if let Some(configured) = env::var_os(MKFS_BIN_ENV) {
+        if !configured.is_empty() {
+            return Ok(PathBuf::from(configured));
+        }
     }
+
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let sibling = parent.join("fod-rust-mkfs");
+            if sibling.is_file() {
+                return Ok(sibling);
+            }
+        }
+    }
+
+    Ok(PathBuf::from("fod-rust-mkfs"))
+}
+
+fn load_mkfs_status_json() -> Result<serde_json::Value, String> {
+    let binary = mkfs_status_binary()?;
+    let output = Command::new(&binary)
+        .args(["status", "--json"])
+        .output()
+        .map_err(|err| {
+            format!(
+                "unable to execute {} status --json: {err}",
+                binary.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "{} status --json failed status={} stderr={}",
+            binary.display(),
+            output.status,
+            if stderr.is_empty() {
+                "<empty>"
+            } else {
+                &stderr
+            }
+        ));
+    }
+
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|err| {
+        format!(
+            "{} status --json returned invalid JSON: {err}",
+            binary.display()
+        )
+    })?;
+
+    if payload
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+    {
+        return Err(format!(
+            "{} status --json returned an unversioned payload",
+            binary.display()
+        ));
+    }
+
+    Ok(payload)
 }
 
 fn print_json<T: Serialize>(value: &T) -> Result<(), String> {

@@ -43,12 +43,15 @@ Current execution sequence:
    machine-readable through versioned `fod-rust-mkfs status --json`;
 2. P4.2 completed in FOD 3.4.25: negotiated FUSE/runtime compatibility is
    published through versioned shared monitor telemetry without parsing logs;
-3. aggregate only those versioned sources in `fod-monitor report --json`;
+3. P4.3 completed in FOD 3.4.26: `fod-monitor report --json` aggregates the
+   versioned mkfs/status source with the existing versioned cluster/session
+   telemetry and preserves source failures as explicit `null` plus error text;
 4. add a compatibility summary only after source-level tests prove that missing
    data stays explicit rather than being guessed.
 
-P4.3 is the active slice: aggregate the two versioned diagnostic sources in
-`fod-monitor report --json` while preserving explicit unavailable/null state.
+P4.4 is the active slice: derive a concise compatibility summary from the
+already aggregated, versioned sources without turning unavailable data into
+guessed pass/fail state.
 
 The teardown warning was closed separately as P3 and must not be hidden inside
 the diagnostics-aggregation task.
