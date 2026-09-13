@@ -3,6 +3,7 @@
 
 mod cluster;
 
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -23,7 +24,7 @@ const FOD_PROCESS_NAMES: &[&str] = &[
 const DEFAULT_TOP_INTERVAL_SECONDS: u64 = 2;
 const MAX_CMDLINE_CHARS: usize = 120;
 const CLUSTER_JSON_SCHEMA_VERSION: u32 = 1;
-const REPORT_JSON_SCHEMA_VERSION: u32 = 2;
+const REPORT_JSON_SCHEMA_VERSION: u32 = 3;
 const MKFS_BIN_ENV: &str = "FOD_MKFS_BIN";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -67,11 +68,49 @@ struct ReportCommandJson<'a> {
     schema_version: u32,
     fod_version: &'a str,
     generated_unix_seconds: u64,
+    compatibility_summary: CompatibilitySummary,
     mkfs_status: Option<serde_json::Value>,
     mkfs_status_error: Option<String>,
     cluster: Option<cluster::ClusterJsonSnapshot<'a>>,
     cluster_error: Option<String>,
     local: &'a MonitorSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CompatibilitySummary {
+    coverage: String,
+    postgresql: CompatibilityPostgresqlSummary,
+    fuse: CompatibilityFuseSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CompatibilityPostgresqlSummary {
+    source_status: String,
+    compatibility: Option<String>,
+    libpq_version_num: Option<u64>,
+    server_version_num: Option<u64>,
+    minimum_server_version_num: Option<u64>,
+    server_configuration_warning_count: Option<u64>,
+    session_configuration_error_count: Option<u64>,
+    schema_ready: Option<bool>,
+    schema_version: Option<u64>,
+    latest_migration_version: Option<u64>,
+    pending_migration_count: Option<u64>,
+    storage_block_size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CompatibilityFuseSummary {
+    source_status: String,
+    active_sessions: u64,
+    telemetry_sessions: u64,
+    negotiated_sessions: u64,
+    missing_negotiation_sessions: u64,
+    shared_monitor_schema_versions: Vec<u32>,
+    fuser_versions: Vec<String>,
+    kernel_protocols: Vec<String>,
+    negotiated_protocols: Vec<String>,
+    unsupported_requested_capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -345,26 +384,248 @@ fn print_report_json(
     let generated_unix_seconds = unix_seconds_now();
 
     let cluster_error = cluster_snapshot.as_ref().err().cloned();
-    let cluster = cluster_snapshot
-        .as_ref()
-        .ok()
-        .map(cluster::cluster_json_snapshot);
+    let cluster_ref = cluster_snapshot.as_ref().ok();
+    let cluster = cluster_ref.map(cluster::cluster_json_snapshot);
 
     let (mkfs_status, mkfs_status_error) = match mkfs_status {
         Ok(status) => (Some(status), None),
         Err(err) => (None, Some(err)),
     };
 
+    let compatibility_summary = compatibility_summary(mkfs_status.as_ref(), cluster_ref);
+
     print_json(&ReportCommandJson {
         schema_version: REPORT_JSON_SCHEMA_VERSION,
         fod_version: FOD_VERSION,
         generated_unix_seconds,
+        compatibility_summary,
         mkfs_status,
         mkfs_status_error,
         cluster,
         cluster_error,
         local: snapshot,
     })
+}
+
+fn json_path<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a serde_json::Value> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    Some(current)
+}
+
+fn json_string_path(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    json_path(value, path)?.as_str().map(ToString::to_string)
+}
+
+fn json_u64_path(value: &serde_json::Value, path: &[&str]) -> Option<u64> {
+    json_path(value, path)?.as_u64()
+}
+
+fn json_bool_path(value: &serde_json::Value, path: &[&str]) -> Option<bool> {
+    json_path(value, path)?.as_bool()
+}
+
+fn json_array_len_path(value: &serde_json::Value, path: &[&str]) -> Option<u64> {
+    let len = json_path(value, path)?.as_array()?.len();
+    u64::try_from(len).ok()
+}
+
+fn compatibility_postgresql_summary(
+    mkfs_status: Option<&serde_json::Value>,
+) -> CompatibilityPostgresqlSummary {
+    let Some(status) = mkfs_status else {
+        return CompatibilityPostgresqlSummary {
+            source_status: "unavailable".to_string(),
+            compatibility: None,
+            libpq_version_num: None,
+            server_version_num: None,
+            minimum_server_version_num: None,
+            server_configuration_warning_count: None,
+            session_configuration_error_count: None,
+            schema_ready: None,
+            schema_version: None,
+            latest_migration_version: None,
+            pending_migration_count: None,
+            storage_block_size_bytes: None,
+        };
+    };
+
+    let compatibility = json_string_path(status, &["postgresql", "compatibility"]);
+    let libpq_version_num = json_u64_path(status, &["postgresql", "libpq_runtime", "version_num"]);
+    let server_version_num =
+        json_u64_path(status, &["postgresql", "server_runtime", "version_num"]);
+    let minimum_server_version_num = json_u64_path(
+        status,
+        &["postgresql", "requirements", "minimum_server_version_num"],
+    );
+    let server_configuration_warning_count = json_array_len_path(
+        status,
+        &[
+            "postgresql",
+            "requirements",
+            "server_configuration_warnings",
+        ],
+    );
+    let session_configuration_error_count = json_array_len_path(
+        status,
+        &["postgresql", "requirements", "session_configuration_errors"],
+    );
+    let schema_ready = json_bool_path(status, &["schema", "ready"]);
+    let schema_version = json_u64_path(status, &["schema", "version"]);
+    let latest_migration_version = json_u64_path(status, &["schema", "latest_migration_version"]);
+    let pending_migration_count = json_array_len_path(status, &["schema", "pending_migrations"]);
+    let storage_block_size_bytes = json_u64_path(status, &["storage_format", "block_size_bytes"]);
+
+    let complete = compatibility.is_some()
+        && libpq_version_num.is_some()
+        && server_version_num.is_some()
+        && minimum_server_version_num.is_some()
+        && server_configuration_warning_count.is_some()
+        && session_configuration_error_count.is_some()
+        && schema_ready.is_some()
+        && schema_version.is_some()
+        && latest_migration_version.is_some()
+        && pending_migration_count.is_some()
+        && storage_block_size_bytes.is_some();
+
+    CompatibilityPostgresqlSummary {
+        source_status: if complete {
+            "available".to_string()
+        } else {
+            "partial".to_string()
+        },
+        compatibility,
+        libpq_version_num,
+        server_version_num,
+        minimum_server_version_num,
+        server_configuration_warning_count,
+        session_configuration_error_count,
+        schema_ready,
+        schema_version,
+        latest_migration_version,
+        pending_migration_count,
+        storage_block_size_bytes,
+    }
+}
+
+fn compatibility_fuse_summary(
+    cluster_snapshot: Option<&cluster::ClusterSnapshot>,
+) -> CompatibilityFuseSummary {
+    let Some(cluster_snapshot) = cluster_snapshot else {
+        return CompatibilityFuseSummary {
+            source_status: "unavailable".to_string(),
+            active_sessions: 0,
+            telemetry_sessions: 0,
+            negotiated_sessions: 0,
+            missing_negotiation_sessions: 0,
+            shared_monitor_schema_versions: Vec::new(),
+            fuser_versions: Vec::new(),
+            kernel_protocols: Vec::new(),
+            negotiated_protocols: Vec::new(),
+            unsupported_requested_capabilities: Vec::new(),
+        };
+    };
+
+    let active_sessions = cluster_snapshot.sessions.len() as u64;
+    let telemetry_sessions = cluster_snapshot
+        .sessions
+        .iter()
+        .filter(|session| session.stats.is_some())
+        .count() as u64;
+    let negotiated_sessions = cluster_snapshot
+        .sessions
+        .iter()
+        .filter(|session| {
+            session
+                .stats
+                .as_ref()
+                .and_then(|stats| stats.fuse_compatibility.as_ref())
+                .is_some()
+        })
+        .count() as u64;
+
+    let mut shared_monitor_schema_versions = BTreeSet::new();
+    let mut fuser_versions = BTreeSet::new();
+    let mut kernel_protocols = BTreeSet::new();
+    let mut negotiated_protocols = BTreeSet::new();
+    let mut unsupported_requested_capabilities = BTreeSet::new();
+
+    for session in &cluster_snapshot.sessions {
+        let Some(stats) = session.stats.as_ref() else {
+            continue;
+        };
+        shared_monitor_schema_versions.insert(stats.schema_version);
+        let Some(fuse) = stats.fuse_compatibility.as_ref() else {
+            continue;
+        };
+        if !fuse.fuser_version.is_empty() {
+            fuser_versions.insert(fuse.fuser_version.clone());
+        }
+        if !fuse.kernel_protocol.is_empty() {
+            kernel_protocols.insert(fuse.kernel_protocol.clone());
+        }
+        if !fuse.negotiated_protocol.is_empty() {
+            negotiated_protocols.insert(fuse.negotiated_protocol.clone());
+        }
+        unsupported_requested_capabilities.extend(fuse.unsupported_capabilities.iter().cloned());
+    }
+
+    let source_status = if active_sessions == 0 {
+        "no_active_sessions"
+    } else if negotiated_sessions == active_sessions {
+        "available"
+    } else if negotiated_sessions > 0 {
+        "partial"
+    } else {
+        "unavailable"
+    };
+
+    CompatibilityFuseSummary {
+        source_status: source_status.to_string(),
+        active_sessions,
+        telemetry_sessions,
+        negotiated_sessions,
+        missing_negotiation_sessions: active_sessions.saturating_sub(negotiated_sessions),
+        shared_monitor_schema_versions: shared_monitor_schema_versions.into_iter().collect(),
+        fuser_versions: fuser_versions.into_iter().collect(),
+        kernel_protocols: kernel_protocols.into_iter().collect(),
+        negotiated_protocols: negotiated_protocols.into_iter().collect(),
+        unsupported_requested_capabilities: unsupported_requested_capabilities
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn compatibility_summary(
+    mkfs_status: Option<&serde_json::Value>,
+    cluster_snapshot: Option<&cluster::ClusterSnapshot>,
+) -> CompatibilitySummary {
+    let postgresql = compatibility_postgresql_summary(mkfs_status);
+    let fuse = compatibility_fuse_summary(cluster_snapshot);
+
+    let postgresql_complete = postgresql.source_status == "available";
+    let fuse_complete = matches!(
+        fuse.source_status.as_str(),
+        "available" | "no_active_sessions"
+    );
+    let any_source_available =
+        postgresql.source_status != "unavailable" || cluster_snapshot.is_some();
+
+    let coverage = if postgresql_complete && fuse_complete {
+        "complete"
+    } else if any_source_available {
+        "partial"
+    } else {
+        "unavailable"
+    };
+
+    CompatibilitySummary {
+        coverage: coverage.to_string(),
+        postgresql,
+        fuse,
+    }
 }
 
 fn mkfs_status_binary() -> Result<PathBuf, String> {

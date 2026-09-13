@@ -139,14 +139,35 @@ def main() -> int:
             timeout_seconds=8.0,
         )
 
-        assert payload["schema_version"] == 2
-        assert payload["fod_version"] == "3.4.26"
+        assert payload["schema_version"] == 3
+        assert payload["fod_version"] == "3.4.27"
         assert payload["mkfs_status_error"] is None
         assert payload["cluster_error"] is None
 
+        summary = payload["compatibility_summary"]
+        assert summary["coverage"] in {"complete", "partial"}
+
+        postgresql_summary = summary["postgresql"]
+        assert postgresql_summary["source_status"] == "available"
+        assert postgresql_summary["compatibility"] == "connected"
+        assert postgresql_summary["server_version_num"] >= 90_500
+        assert postgresql_summary["minimum_server_version_num"] == 90_500
+        assert postgresql_summary["schema_ready"] is True
+        assert postgresql_summary["pending_migration_count"] == 0
+        assert postgresql_summary["storage_block_size_bytes"] > 0
+
+        fuse_summary = summary["fuse"]
+        assert fuse_summary["source_status"] in {"available", "partial"}
+        assert fuse_summary["active_sessions"] >= 1
+        assert fuse_summary["telemetry_sessions"] >= 1
+        assert fuse_summary["negotiated_sessions"] >= 1
+        assert 2 in fuse_summary["shared_monitor_schema_versions"]
+        assert "0.18.0" in fuse_summary["fuser_versions"]
+        assert "7.40" in fuse_summary["negotiated_protocols"]
+
         mkfs_status = payload["mkfs_status"]
         assert mkfs_status["schema_version"] == 1
-        assert mkfs_status["fod_version"] == "3.4.26"
+        assert mkfs_status["fod_version"] == "3.4.27"
         assert mkfs_status["postgresql"]["compatibility"] == "connected"
         assert mkfs_status["schema"]["ready"] is True
         assert mkfs_status["storage_format"]["block_size_bytes"] > 0
@@ -165,11 +186,53 @@ def main() -> int:
         missing_env["FOD_MKFS_BIN"] = "/nonexistent/fod-rust-mkfs-p4-3"
         missing_payload = report_json(root, missing_env)
 
-        assert missing_payload["schema_version"] == 2
+        assert missing_payload["schema_version"] == 3
         assert missing_payload["mkfs_status"] is None
         assert isinstance(missing_payload["mkfs_status_error"], str)
         assert missing_payload["mkfs_status_error"]
         assert matching_session(missing_payload, mountpoint) is not None
+
+        missing_summary = missing_payload["compatibility_summary"]
+        assert missing_summary["coverage"] == "partial"
+        assert missing_summary["postgresql"]["source_status"] == "unavailable"
+        assert missing_summary["postgresql"]["compatibility"] is None
+        assert missing_summary["postgresql"]["schema_ready"] is None
+        assert missing_summary["fuse"]["negotiated_sessions"] >= 1
+
+        missing_cluster_env = runtime_env.copy()
+        missing_cluster_env["FOD_MONITOR_DSN"] = (
+            "host=127.0.0.1 port=1 dbname=foddbname "
+            "user=foduser password=invalid connect_timeout=1"
+        )
+        missing_cluster_payload = report_json(root, missing_cluster_env)
+
+        assert missing_cluster_payload["schema_version"] == 3
+        assert isinstance(missing_cluster_payload["mkfs_status"], dict)
+        assert missing_cluster_payload["mkfs_status_error"] is None
+        assert missing_cluster_payload["cluster"] is None
+        assert isinstance(missing_cluster_payload["cluster_error"], str)
+
+        missing_cluster_summary = missing_cluster_payload["compatibility_summary"]
+        assert missing_cluster_summary["coverage"] == "partial"
+        assert missing_cluster_summary["postgresql"]["source_status"] == "available"
+        assert missing_cluster_summary["fuse"]["source_status"] == "unavailable"
+        assert missing_cluster_summary["fuse"]["active_sessions"] == 0
+        assert missing_cluster_summary["fuse"]["negotiated_sessions"] == 0
+
+        missing_both_env = missing_cluster_env.copy()
+        missing_both_env["FOD_MKFS_BIN"] = "/nonexistent/fod-rust-mkfs-p4-4"
+        missing_both_payload = report_json(root, missing_both_env)
+
+        assert missing_both_payload["schema_version"] == 3
+        assert missing_both_payload["mkfs_status"] is None
+        assert isinstance(missing_both_payload["mkfs_status_error"], str)
+        assert missing_both_payload["cluster"] is None
+        assert isinstance(missing_both_payload["cluster_error"], str)
+
+        missing_both_summary = missing_both_payload["compatibility_summary"]
+        assert missing_both_summary["coverage"] == "unavailable"
+        assert missing_both_summary["postgresql"]["source_status"] == "unavailable"
+        assert missing_both_summary["fuse"]["source_status"] == "unavailable"
 
         print(
             "OK monitor-report-compatibility-sources "
@@ -179,7 +242,10 @@ def main() -> int:
             f"fuser={compatibility['fuser_version']} "
             f"kernel_protocol={compatibility['kernel_protocol']} "
             f"negotiated_protocol={compatibility['negotiated_protocol']} "
-            "missing_mkfs_explicit=1"
+            f"coverage={summary['coverage']} "
+            "missing_mkfs_explicit=1 "
+            "missing_cluster_explicit=1 "
+            "missing_both_unavailable=1"
         )
         return 0
     finally:

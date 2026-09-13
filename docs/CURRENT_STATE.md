@@ -95,19 +95,32 @@ enabled and unsupported capabilities, effective I/O request limits and the
 kernel-derived request ceiling. Older schema-version-1 payloads remain readable
 with the field absent/defaulted.
 
-`fod-monitor report --json` schema version 2 aggregates these two versioned
-sources without inventing a third compatibility model:
+`fod-monitor report --json` schema version 3 aggregates these two versioned
+sources and adds a concise `compatibility_summary` without replacing the raw
+source data:
 
 - `mkfs_status` contains the raw machine-readable `fod-rust-mkfs status --json`
   payload;
 - `cluster.sessions[].stats` retains the shared monitor payload, including
   optional negotiated FUSE compatibility;
-- `mkfs_status_error` and `cluster_error` are independent source errors.
+- `compatibility_summary.postgresql` exposes only directly observed PostgreSQL,
+  schema and persisted-block-size facts;
+- `compatibility_summary.fuse` reports active/telemetry/negotiated session
+  counts plus observed shared-monitor schema versions, fuser versions,
+  kernel/negotiated protocols and the union of unsupported requested
+  capabilities;
+- `compatibility_summary.coverage` is `complete`, `partial` or `unavailable`
+  and describes only diagnostic-data coverage, not a compatibility pass/fail
+  verdict;
+- `mkfs_status_error` and `cluster_error` remain independent source errors.
 
-If the mkfs/status source is unavailable, `mkfs_status` is `null` and
-`mkfs_status_error` contains the failure. The report itself remains usable and
-continues to expose any available cluster/local diagnostics. `cluster --json`
-retains its existing schema version 1 because its JSON shape did not change.
+Missing source data is never synthesized. If the mkfs/status source is
+unavailable its summary fields remain `null`; if cluster telemetry is
+unavailable the FUSE source status is `unavailable` with no fabricated
+protocol/capability values. The raw report remains usable when one source
+fails. `cluster --json` retains schema version 1, shared monitor telemetry
+retains schema version 2, and `fod-rust-mkfs status --json` retains schema
+version 1.
 
 ## PostgreSQL deployment behavior
 

@@ -26,35 +26,17 @@ The completed P3 external-unmount/session-teardown validation is archived in
 On the current `fuser 0.18.0` / libfuse3 stack the historical benign teardown
 `EINVAL` was not reproduced, so no runtime teardown change was made.
 
-The next active priority is P4.
+The completed P4 compatibility-diagnostics aggregation sequence is archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-13_COMPATIBILITY_DIAGNOSTICS.md`](../history/FOD_CURRENT_PLAN_2026-09-13_COMPATIBILITY_DIAGNOSTICS.md).
 
-## P4 — Compatibility diagnostics aggregation
+It completed in FOD 3.4.27 with versioned PostgreSQL/libpq/schema/storage
+status, versioned negotiated FUSE telemetry, aggregated `fod-monitor report
+--json` sources and an explicit coverage-only compatibility summary.
 
-The individual FUSE, PostgreSQL, libpq, runtime and storage-format boundaries
-already expose substantial diagnostics.
-
-Aggregate them only after each source remains trustworthy and machine-readable.
-Do not introduce another compatibility abstraction merely to combine incomplete
-or ambiguous signals.
-
-Current execution sequence:
-
-1. P4.1 completed in FOD 3.4.24: PostgreSQL/libpq/schema/storage diagnostics are
-   machine-readable through versioned `fod-rust-mkfs status --json`;
-2. P4.2 completed in FOD 3.4.25: negotiated FUSE/runtime compatibility is
-   published through versioned shared monitor telemetry without parsing logs;
-3. P4.3 completed in FOD 3.4.26: `fod-monitor report --json` aggregates the
-   versioned mkfs/status source with the existing versioned cluster/session
-   telemetry and preserves source failures as explicit `null` plus error text;
-4. add a compatibility summary only after source-level tests prove that missing
-   data stays explicit rather than being guessed.
-
-P4.4 is the active slice: derive a concise compatibility summary from the
-already aggregated, versioned sources without turning unavailable data into
-guessed pass/fail state.
-
-The teardown warning was closed separately as P3 and must not be hidden inside
-the diagnostics-aggregation task.
+No new implementation priority is selected in this file yet. The next change
+must come from a concrete measured correctness/performance gap or an explicit
+ROADMAP review; do not invent a generic P5 abstraction merely to keep the
+sequence moving.
 
 ## Architecture guardrails
 
