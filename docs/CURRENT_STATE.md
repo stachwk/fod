@@ -83,7 +83,17 @@ schema readiness and persisted storage-format settings. Its top-level
 
 The JSON source intentionally does not infer negotiated FUSE state. FUSE
 capabilities and effective request limits exist only after a mount negotiates
-with the kernel and are handled separately through mounted runtime telemetry.
+with the kernel.
+
+Mounted clients publish that negotiated state through
+`SharedMonitorSessionStats` schema version 2 in the optional
+`fuse_compatibility` object. The shared publisher starts before FUSE
+negotiation, so an early sample may correctly contain
+`"fuse_compatibility": null`; after `Filesystem::init` succeeds, subsequent
+samples expose the negotiated kernel/userspace protocol versions, requested,
+enabled and unsupported capabilities, effective I/O request limits and the
+kernel-derived request ceiling. Older schema-version-1 payloads remain readable
+with the field absent/defaulted.
 
 ## PostgreSQL deployment behavior
 

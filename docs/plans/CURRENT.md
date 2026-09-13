@@ -39,15 +39,16 @@ or ambiguous signals.
 
 Current execution sequence:
 
-1. make the PostgreSQL/libpq/schema/storage source machine-readable through
-   versioned `fod-rust-mkfs status --json`;
-2. expose negotiated FUSE/runtime compatibility through the existing shared
-   monitor telemetry rather than parsing FUSE log text;
+1. P4.1 completed in FOD 3.4.24: PostgreSQL/libpq/schema/storage diagnostics are
+   machine-readable through versioned `fod-rust-mkfs status --json`;
+2. P4.2 completed in FOD 3.4.25: negotiated FUSE/runtime compatibility is
+   published through versioned shared monitor telemetry without parsing logs;
 3. aggregate only those versioned sources in `fod-monitor report --json`;
 4. add a compatibility summary only after source-level tests prove that missing
    data stays explicit rather than being guessed.
 
-P4.1 is the active slice: `fod-rust-mkfs status --json`.
+P4.3 is the active slice: aggregate the two versioned diagnostic sources in
+`fod-monitor report --json` while preserving explicit unavailable/null state.
 
 The teardown warning was closed separately as P3 and must not be hidden inside
 the diagnostics-aggregation task.

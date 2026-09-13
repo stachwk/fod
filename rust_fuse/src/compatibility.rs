@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
+use fod_rust_monitor::SharedMonitorFuseCompatibilityStats;
 use fod_rust_runtime::{env_var_with_legacy_alias, parse_size_bytes};
 use fuser::{InitFlags, KernelConfig, Version};
 use log::{info, warn};
@@ -98,18 +99,7 @@ impl FuseCompatibilitySnapshot {
         Ok(snapshot)
     }
 
-    pub(crate) fn log(&self) {
-        info!(
-            "FOD FUSE compatibility: fuser={} userspace_protocol_max={} kernel_protocol={} negotiated_protocol={} available_capabilities={} fod_requested_capabilities={} fod_enabled_capabilities={} fod_unsupported_capabilities={}",
-            FUSER_VERSION,
-            USERSPACE_PROTOCOL_MAX,
-            self.kernel_protocol,
-            self.negotiated_protocol,
-            format_init_flags(self.available_capabilities),
-            format_init_flags(self.requested_capabilities),
-            format_init_flags(self.enabled_capabilities),
-            format_init_flags(self.unsupported_capabilities),
-        );
+    pub(crate) fn shared_monitor_stats(&self) -> SharedMonitorFuseCompatibilityStats {
         let kernel_page_size_bytes = system_page_size_bytes();
         let kernel_max_pages_limit = kernel_fuse_max_pages_limit();
         let kernel_max_request_bytes = if self
@@ -120,25 +110,60 @@ impl FuseCompatibilitySnapshot {
         } else {
             None
         };
-        let estimated_request_ceiling_bytes = estimated_request_ceiling_bytes(
-            self.effective_max_write,
-            self.effective_max_readahead,
+        SharedMonitorFuseCompatibilityStats {
+            fuser_version: FUSER_VERSION.to_string(),
+            userspace_protocol_max: USERSPACE_PROTOCOL_MAX.to_string(),
+            kernel_protocol: self.kernel_protocol.to_string(),
+            negotiated_protocol: self.negotiated_protocol.to_string(),
+            available_capabilities: init_flag_names(self.available_capabilities),
+            requested_capabilities: init_flag_names(self.requested_capabilities),
+            enabled_capabilities: init_flag_names(self.enabled_capabilities),
+            unsupported_capabilities: init_flag_names(self.unsupported_capabilities),
+            requested_max_write_bytes: u64::from(self.requested_max_write),
+            effective_max_write_bytes: u64::from(self.effective_max_write),
+            requested_max_readahead_bytes: u64::from(self.requested_max_readahead),
+            effective_max_readahead_bytes: u64::from(self.effective_max_readahead),
+            kernel_page_size_bytes,
+            kernel_max_pages_limit,
             kernel_max_request_bytes,
+            estimated_request_ceiling_bytes: estimated_request_ceiling_bytes(
+                self.effective_max_write,
+                self.effective_max_readahead,
+                kernel_max_request_bytes,
+            ),
+            max_background: None,
+            congestion_threshold: None,
+        }
+    }
+
+    pub(crate) fn log(&self) {
+        let stats = self.shared_monitor_stats();
+        info!(
+            "FOD FUSE compatibility: fuser={} userspace_protocol_max={} kernel_protocol={} negotiated_protocol={} available_capabilities={} fod_requested_capabilities={} fod_enabled_capabilities={} fod_unsupported_capabilities={}",
+            stats.fuser_version,
+            stats.userspace_protocol_max,
+            stats.kernel_protocol,
+            stats.negotiated_protocol,
+            format_capability_names(&stats.available_capabilities),
+            format_capability_names(&stats.requested_capabilities),
+            format_capability_names(&stats.enabled_capabilities),
+            format_capability_names(&stats.unsupported_capabilities),
         );
         info!(
             "FOD FUSE negotiated: requested_max_write={} effective_max_write={} requested_max_readahead={} effective_max_readahead={} kernel_page_size_bytes={} kernel_max_pages_limit={} kernel_max_request_bytes={} estimated_request_ceiling_bytes={} max_background=unavailable congestion_threshold=unavailable",
-            self.requested_max_write,
-            self.effective_max_write,
-            self.requested_max_readahead,
-            self.effective_max_readahead,
-            format_optional_u64(kernel_page_size_bytes),
-            format_optional_u64(kernel_max_pages_limit),
-            format_optional_u64(kernel_max_request_bytes),
-            estimated_request_ceiling_bytes,
+            stats.requested_max_write_bytes,
+            stats.effective_max_write_bytes,
+            stats.requested_max_readahead_bytes,
+            stats.effective_max_readahead_bytes,
+            format_optional_u64(stats.kernel_page_size_bytes),
+            format_optional_u64(stats.kernel_max_pages_limit),
+            format_optional_u64(stats.kernel_max_request_bytes),
+            stats.estimated_request_ceiling_bytes,
         );
-        if let Some(kernel_max_request_bytes) = kernel_max_request_bytes {
-            let configured_request_bytes =
-                u64::from(self.effective_max_write.max(self.effective_max_readahead));
+        if let Some(kernel_max_request_bytes) = stats.kernel_max_request_bytes {
+            let configured_request_bytes = stats
+                .effective_max_write_bytes
+                .max(stats.effective_max_readahead_bytes);
             if configured_request_bytes > kernel_max_request_bytes {
                 warn!(
                     "FOD FUSE request ceiling is kernel-capped: configured_bytes={} kernel_max_request_bytes={} path={}",
@@ -263,11 +288,7 @@ where
     }
 }
 
-fn format_init_flags(flags: InitFlags) -> String {
-    if flags.is_empty() {
-        return "none".to_string();
-    }
-
+fn init_flag_names(flags: InitFlags) -> Vec<String> {
     let mut names = flags
         .iter_names()
         .map(|(name, _)| name.strip_prefix("FUSE_").unwrap_or(name).to_string())
@@ -276,7 +297,19 @@ fn format_init_flags(flags: InitFlags) -> String {
     if unknown_bits != 0 {
         names.push(format!("UNKNOWN_0x{unknown_bits:016x}"));
     }
-    format!("[{}]", names.join(","))
+    names
+}
+
+fn format_capability_names(names: &[String]) -> String {
+    if names.is_empty() {
+        "none".to_string()
+    } else {
+        format!("[{}]", names.join(","))
+    }
+}
+
+fn format_init_flags(flags: InitFlags) -> String {
+    format_capability_names(&init_flag_names(flags))
 }
 
 #[cfg(test)]
@@ -311,6 +344,25 @@ mod tests {
             format_init_flags(snapshot.available_capabilities),
             "[POSIX_LOCKS,MAX_PAGES]"
         );
+        let telemetry = snapshot.shared_monitor_stats();
+        assert_eq!(telemetry.fuser_version, FUSER_VERSION);
+        assert_eq!(
+            telemetry.userspace_protocol_max,
+            USERSPACE_PROTOCOL_MAX.to_string()
+        );
+        assert_eq!(telemetry.kernel_protocol, "7.38");
+        assert_eq!(telemetry.negotiated_protocol, "7.38");
+        assert_eq!(
+            telemetry.available_capabilities,
+            vec!["POSIX_LOCKS".to_string(), "MAX_PAGES".to_string()]
+        );
+        assert!(telemetry
+            .requested_capabilities
+            .contains(&"ATOMIC_O_TRUNC".to_string()));
+        assert_eq!(telemetry.requested_max_write_bytes, 512 * 1024);
+        assert_eq!(telemetry.effective_max_readahead_bytes, 256 * 1024);
+        assert_eq!(telemetry.max_background, None);
+        assert_eq!(telemetry.congestion_threshold, None);
     }
 
     #[test]

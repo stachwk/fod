@@ -1266,7 +1266,7 @@ impl Drop for DbRepoPayloadBudgetPermit {
     }
 }
 
-pub const SHARED_MONITOR_STATS_SCHEMA_VERSION: u32 = 1;
+pub const SHARED_MONITOR_STATS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -1512,11 +1512,35 @@ pub struct SharedMonitorSourceStats {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct SharedMonitorFuseCompatibilityStats {
+    pub fuser_version: String,
+    pub userspace_protocol_max: String,
+    pub kernel_protocol: String,
+    pub negotiated_protocol: String,
+    pub available_capabilities: Vec<String>,
+    pub requested_capabilities: Vec<String>,
+    pub enabled_capabilities: Vec<String>,
+    pub unsupported_capabilities: Vec<String>,
+    pub requested_max_write_bytes: u64,
+    pub effective_max_write_bytes: u64,
+    pub requested_max_readahead_bytes: u64,
+    pub effective_max_readahead_bytes: u64,
+    pub kernel_page_size_bytes: Option<u64>,
+    pub kernel_max_pages_limit: Option<u64>,
+    pub kernel_max_request_bytes: Option<u64>,
+    pub estimated_request_ceiling_bytes: u64,
+    pub max_background: Option<u64>,
+    pub congestion_threshold: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SharedMonitorSessionStats {
     pub schema_version: u32,
     pub sample_seq: u64,
     pub publish_interval_millis: u64,
     pub source: SharedMonitorSourceStats,
+    pub fuse_compatibility: Option<SharedMonitorFuseCompatibilityStats>,
     pub read: SharedMonitorTaskStats,
     pub write: SharedMonitorTaskStats,
     pub copy: SharedMonitorTaskStats,
@@ -1533,6 +1557,7 @@ pub struct SharedMonitorSessionStatsInput<'a> {
     pub copy: &'a LogicalTaskObservabilitySnapshot,
     pub database: &'a DbRepoObservabilitySnapshot,
     pub source: SharedMonitorSourceStats,
+    pub fuse_compatibility: Option<SharedMonitorFuseCompatibilityStats>,
     pub timings: SharedMonitorTimingStats,
 }
 
@@ -1543,6 +1568,7 @@ impl SharedMonitorSessionStats {
             sample_seq: input.sample_seq,
             publish_interval_millis: input.publish_interval_millis,
             source: input.source,
+            fuse_compatibility: input.fuse_compatibility,
             read: SharedMonitorTaskStats::from_snapshot(input.read),
             write: SharedMonitorTaskStats::from_snapshot(input.write),
             copy: SharedMonitorTaskStats::from_snapshot(input.copy),
@@ -1565,7 +1591,10 @@ impl SharedMonitorSessionStats {
 
 #[cfg(test)]
 mod shared_monitor_tests {
-    use super::{SharedMonitorSessionStats, SHARED_MONITOR_STATS_SCHEMA_VERSION};
+    use super::{
+        SharedMonitorFuseCompatibilityStats, SharedMonitorSessionStats,
+        SHARED_MONITOR_STATS_SCHEMA_VERSION,
+    };
 
     #[test]
     fn shared_monitor_json_roundtrip_preserves_counters() {
@@ -1582,6 +1611,17 @@ mod shared_monitor_tests {
         stats.database.operation_count = 31;
         stats.persistence.persist_operation_count = 3;
         stats.timings.repo_persist_blocks_us = 1234;
+        stats.fuse_compatibility = Some(SharedMonitorFuseCompatibilityStats {
+            fuser_version: "0.18.0".to_string(),
+            userspace_protocol_max: "7.40".to_string(),
+            kernel_protocol: "7.44".to_string(),
+            negotiated_protocol: "7.40".to_string(),
+            requested_capabilities: vec!["ATOMIC_O_TRUNC".to_string()],
+            enabled_capabilities: vec!["ATOMIC_O_TRUNC".to_string()],
+            requested_max_write_bytes: 1_048_576,
+            effective_max_write_bytes: 1_048_576,
+            ..SharedMonitorFuseCompatibilityStats::default()
+        });
         let encoded = stats.to_json().unwrap();
         let decoded = SharedMonitorSessionStats::from_json(&encoded).unwrap();
         assert_eq!(decoded, stats);
@@ -1597,6 +1637,7 @@ mod shared_monitor_tests {
         assert_eq!(decoded.publish_interval_millis, 0);
         assert_eq!(decoded.read.completed_bytes, 55);
         assert_eq!(decoded.write.completed_bytes, 0);
+        assert_eq!(decoded.fuse_compatibility, None);
     }
 }
 

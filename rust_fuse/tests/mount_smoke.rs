@@ -60,7 +60,7 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
         "kernel_protocol=",
         "negotiated_protocol=",
         "available_capabilities=",
-        "fod_requested_capabilities=[POSIX_LOCKS,FLOCK_LOCKS]",
+        "fod_requested_capabilities=[POSIX_LOCKS,ATOMIC_O_TRUNC,FLOCK_LOCKS]",
         "fod_enabled_capabilities=",
     ] {
         if !compatibility_line.contains(field) {

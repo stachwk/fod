@@ -5,8 +5,8 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use fod_rust_monitor::{
     log_logical_task_observability as log_logical_task_snapshots, LogicalTaskAdmissionGate,
     LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
-    LogicalTaskQueueObservability, SharedMonitorSessionStats, SharedMonitorSessionStatsInput,
-    SharedMonitorSourceStats, SharedMonitorTimingStats,
+    LogicalTaskQueueObservability, SharedMonitorFuseCompatibilityStats, SharedMonitorSessionStats,
+    SharedMonitorSessionStatsInput, SharedMonitorSourceStats, SharedMonitorTimingStats,
 };
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
@@ -645,6 +645,7 @@ struct SharedMonitorPublishInput<'a> {
     write: &'a LogicalTaskQueueObservability,
     copy: &'a LogicalTaskQueueObservability,
     profile: &'a FodFuseProfileCounters,
+    fuse_compatibility: &'a RwLock<Option<SharedMonitorFuseCompatibilityStats>>,
 }
 
 fn publish_shared_monitor_sample(input: SharedMonitorPublishInput<'_>) -> Result<(), String> {
@@ -653,6 +654,11 @@ fn publish_shared_monitor_sample(input: SharedMonitorPublishInput<'_>) -> Result
     let copy_snapshot = input.copy.snapshot()?;
     let database_snapshot = input.observability_repo.observability_snapshot()?;
     let source_snapshot = input.observability_repo.source_snapshot()?;
+    let fuse_compatibility = input
+        .fuse_compatibility
+        .read()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|err| err.into_inner().clone());
     let stats = SharedMonitorSessionStats::from_snapshots(SharedMonitorSessionStatsInput {
         sample_seq: input.sample_seq,
         publish_interval_millis: input.publish_interval_millis,
@@ -661,6 +667,7 @@ fn publish_shared_monitor_sample(input: SharedMonitorPublishInput<'_>) -> Result
         copy: &copy_snapshot,
         database: &database_snapshot,
         source: shared_monitor_source_stats(source_snapshot),
+        fuse_compatibility,
         timings: input.profile.shared_monitor_timing_stats(),
     });
     input.publish_repo.publish_monitor_session_stats(
@@ -690,6 +697,7 @@ impl SharedMonitorPublisherHandle {
             write,
             copy,
             profile,
+            fuse_compatibility,
         } = input;
         let publish_interval_millis = interval.as_millis().min(u128::from(u64::MAX)) as u64;
         let stop = Arc::new(AtomicBool::new(false));
@@ -709,6 +717,7 @@ impl SharedMonitorPublisherHandle {
                         write: write.as_ref(),
                         copy: copy.as_ref(),
                         profile: profile.as_ref(),
+                        fuse_compatibility: fuse_compatibility.as_ref(),
                     }) {
                     warn!("FOD shared monitor publish failed session_id={} sample_seq={} err={}", session_id, sample_seq, err);
                 }
@@ -726,6 +735,7 @@ impl SharedMonitorPublisherHandle {
                         write: write.as_ref(),
                         copy: copy.as_ref(),
                         profile: profile.as_ref(),
+                        fuse_compatibility: fuse_compatibility.as_ref(),
                     }) {
                         warn!("FOD shared monitor final publish failed session_id={} sample_seq={} err={}", session_id, sample_seq, err);
                     }
@@ -757,6 +767,7 @@ struct SharedMonitorPublisherInput {
     write: Arc<LogicalTaskQueueObservability>,
     copy: Arc<LogicalTaskQueueObservability>,
     profile: Arc<FodFuseProfileCounters>,
+    fuse_compatibility: Arc<RwLock<Option<SharedMonitorFuseCompatibilityStats>>>,
 }
 
 impl Drop for SharedMonitorPublisherHandle {
@@ -1556,6 +1567,7 @@ pub struct FodFuse {
     statfs_cache: Mutex<Option<StatfsSnapshot>>,
     last_write_session_touch: Mutex<Option<Instant>>,
     profile: Arc<FodFuseProfileCounters>,
+    fuse_compatibility: Arc<RwLock<Option<SharedMonitorFuseCompatibilityStats>>>,
     logical_read_tasks: Arc<LogicalTaskQueueObservability>,
     logical_write_tasks: Arc<LogicalTaskQueueObservability>,
     logical_copy_tasks: Arc<LogicalTaskQueueObservability>,
@@ -1664,6 +1676,7 @@ impl FodFuse {
             statfs_cache: Mutex::new(None),
             last_write_session_touch: Mutex::new(None),
             profile: Arc::new(FodFuseProfileCounters::default()),
+            fuse_compatibility: Arc::new(RwLock::new(None)),
             logical_read_tasks,
             logical_write_tasks,
             logical_copy_tasks,
@@ -4541,6 +4554,7 @@ impl FodFuse {
             write: Arc::clone(&self.logical_write_tasks),
             copy: Arc::clone(&self.logical_copy_tasks),
             profile: Arc::clone(&self.profile),
+            fuse_compatibility: Arc::clone(&self.fuse_compatibility),
         })?;
         self.shared_monitor_publisher = Some(publisher);
         Ok(())
@@ -4609,6 +4623,11 @@ impl Filesystem for FodFuse {
                 "writable FOD mount requires FUSE_ATOMIC_O_TRUNC for write ownership safety",
             ));
         }
+        let mut compatibility = self
+            .fuse_compatibility
+            .write()
+            .unwrap_or_else(|err| err.into_inner());
+        *compatibility = Some(snapshot.shared_monitor_stats());
         Ok(())
     }
 
