@@ -37,60 +37,123 @@ than inventing a generic P5 sequence.
 
 ## F1 — Mounted `fallocate` contract audit
 
-The current Rust FUSE frontend does not expose a repository-visible
-`fallocate` callback, while older TODO/archive text still contains legacy
-"already in place" wording from previous runtime stages. That historical text
-must not be used as evidence of current mounted Rust behavior.
+The current Rust FUSE frontend does not override the public
+`fuser::Filesystem::fallocate` callback. Older TODO/archive text containing
+legacy "already in place" wording must not be used as evidence of current
+mounted Rust behavior.
 
-### F1.1 — Baseline and semantic contract — active slice
+### F1.1 — Baseline and semantic contract — completed
 
-Before changing runtime behavior:
+The mounted diagnostic baseline was captured on FOD 3.4.27 with:
 
-1. record the current kernel FUSE protocol, negotiated protocol, `fuser` and
-   libfuse3 versions used by the mounted test;
-2. verify the public `fuser 0.18.0` callback/API surface available to FOD;
-3. run a mounted syscall matrix for at least normal allocation/extension,
-   `KEEP_SIZE`, `PUNCH_HOLE|KEEP_SIZE`, and unsupported flag combinations;
-4. probe additional modes such as `ZERO_RANGE` only where the host/kernel and
-   public API expose them meaningfully;
-5. capture return codes/errno, file size, byte contents, `st_blocks`, `statfs`,
-   `mtime`/`ctime`, payload-row/storage effects and state after unmount/remount;
-6. keep this slice diagnostic-only: no runtime semantics, database schema or
-   storage-format change.
+```text
+kernel                    6.17.0-41-generic
+libfuse3 / fusermount3    3.17.4
+fuser                     0.18.0
+kernel FUSE protocol      7.44
+userspace protocol max    7.40
+negotiated protocol       7.40
+requested/enabled caps    POSIX_LOCKS, ATOMIC_O_TRUNC, FLOCK_LOCKS
+unsupported requested     none
+```
 
-The baseline must distinguish kernel/libfuse fallback behavior from an actual
-FOD callback. A syscall returning success or a particular errno is not evidence
-that FOD implements the operation unless the request reaches the Rust frontend
-and the resulting storage semantics are verified.
+The raw `libc.fallocate()` matrix used a fresh mount per mode so kernel caching
+of unsupported operations could not hide callback behavior. Results:
 
-### F1.2 — Implementation gate
+- `mode=0` -> `ENOTSUP`, with the default fuser `fallocate` callback logged;
+- `KEEP_SIZE` -> `ENOTSUP`, with the default callback logged;
+- `PUNCH_HOLE|KEEP_SIZE` -> `ENOTSUP`, with the default callback logged;
+- `ZERO_RANGE` -> `ENOTSUP`, with the default callback logged;
+- `PUNCH_HOLE` without `KEEP_SIZE` -> `ENOTSUP` before the default callback;
+- failed raw calls did not mutate file contents, logical size, `st_blocks`,
+  `fod.data_blocks` or persisted payload bytes;
+- state was verified again after unmount/remount.
 
-Implement `fallocate` only after F1.1 defines an explicit FOD contract and only
-for modes the current `fuser` surface can represent safely.
+The legacy `os.posix_fallocate()` control is not evidence of FOD preallocation.
+It returned success only through fallback behavior: a 64 KiB file grew
+logically to 128 KiB while `st_blocks` stayed at 128 512-byte units,
+`fod.data_blocks` stayed at two rows and PostgreSQL payload stayed at 64 KiB.
+The newly exposed range therefore read as zeroes but no durable payload/capacity
+was allocated for it.
 
-Any implementation must preserve:
+The source audit explains that result and fixes the semantic boundary for F1.2:
 
-- read-only mounts returning `EROFS` for mutation;
-- unsupported flags/combinations returning `EOPNOTSUPP` rather than being
-  silently approximated;
-- PostgreSQL-authoritative cross-mount write ownership and fencing;
-- stale-writer rejection and `FUSE_ATOMIC_O_TRUNC` safety assumptions;
-- transactional payload quota and capacity-reservation accounting;
-- canonical block-only storage, sparse-range semantics and `st_blocks`/`statfs`
-  accounting;
-- hardlink/data-object ownership and copy-on-write behavior;
-- read/recent-write/metadata/statfs cache invalidation;
-- `mtime`/`ctime` semantics, replay safety, persistence errors and remount
-  durability.
+- `assemble_read_slice()` initializes the requested output with zeroes, so a
+  missing canonical block is already a logical sparse zero range;
+- PostgreSQL persistence intentionally keeps fully zero blocks sparse;
+- `st_blocks` is derived from actually allocated payload bytes, not logical
+  file size;
+- existing truncate persistence can delete tail blocks and the direct block
+  path can delete individual block rows, but there is no current mounted
+  fallocate range contract;
+- canonical block-only storage has no durable state that distinguishes an
+  allocated all-zero block from a sparse/missing block.
 
-No database schema migration is justified merely to add the callback. Add one
-only if the selected semantic contract proves that current canonical storage
-cannot represent the required state safely.
+Consequences:
+
+- true `mode=0` preallocation cannot be represented faithfully by merely
+  extending `file_size` or materializing zeroes;
+- `KEEP_SIZE` preallocation has the same representation gap;
+- `ZERO_RANGE` would lose Linux allocated-zero/unwritten-range semantics if it
+  were approximated as ordinary sparse zeroes;
+- `PUNCH_HOLE|KEEP_SIZE` is the only currently selected implementation
+  candidate because deallocated full blocks map naturally to missing
+  `data_blocks` and partial boundary blocks can retain non-hole bytes while the
+  punched bytes become zero.
+
+No database schema, storage format or runtime version changed during F1.1.
+
+### F1.2 — `PUNCH_HOLE|KEEP_SIZE` implementation — active slice
+
+Add an explicit mounted `fallocate` callback only for the exact
+`PUNCH_HOLE|KEEP_SIZE` mode. Keep `mode=0`, `KEEP_SIZE`, `ZERO_RANGE` and every
+other unsupported flag combination on an explicit `EOPNOTSUPP` path until FOD
+has a durable representation for allocation state distinct from payload data.
+
+The implementation must reuse the current write-safety model rather than add a
+parallel mutation path:
+
+1. return `EROFS` before mutation on read-only mounts;
+2. validate the file handle/file identity and range arithmetic without silent
+   saturation of invalid user ranges;
+3. preserve file size for every successful punch;
+4. serialize with pending writes for the same file and carry the existing
+   PostgreSQL-authoritative write ownership/fencing token through persistence;
+5. zero only the requested bytes of partial first/last blocks and remove fully
+   punched all-zero blocks from canonical storage;
+6. preserve hardlink/data-object copy-on-write isolation;
+7. keep payload-quota/statfs accounting based on real persisted blocks and
+   release capacity when complete blocks disappear;
+8. invalidate read/recent-write/metadata/statfs state so cross-handle and
+   cross-mount reads cannot expose stale payload;
+9. define and test `mtime`/`ctime` behavior as part of the mounted contract
+   rather than inheriting accidental timestamp side effects;
+10. preserve replay safety, persistence error mapping, stale-writer rejection
+    and remount durability.
+
+The first implementation tests must include:
+
+- a full-block aligned punch across one and multiple blocks;
+- unaligned start/end boundaries with surrounding bytes preserved;
+- a range extending beyond EOF while file size remains unchanged;
+- an entirely beyond-EOF no-op range;
+- already sparse/missing blocks;
+- hardlinks sharing the same data object before mutation;
+- another writable mount holding ownership (`EBUSY`/fencing behavior);
+- read-only mount (`EROFS`);
+- unsupported mode/flag combinations (`EOPNOTSUPP`);
+- `st_blocks`, `statfs`, PostgreSQL block rows/payload bytes and remount state.
+
+Do not add allocation metadata merely to make `mode=0` appear supported in this
+slice. A future preallocation design, if justified by a concrete workload,
+requires a separate storage-format decision and migration/compatibility plan.
 
 ### F1 acceptance
 
 - mounted integration coverage exists for every supported mode and for rejected
   combinations;
+- `PUNCH_HOLE|KEEP_SIZE` changes only the requested byte range and never
+  changes logical file size;
 - block-only canonical storage remains the tested production path;
 - old Python/extent-era TODO statements are treated as historical evidence, not
   as the runtime contract;
