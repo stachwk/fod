@@ -223,6 +223,25 @@ all-zero blocks sparse, so it has no durable state distinguishing an allocated
 zero/unwritten range from a hole. A libc `posix_fallocate()` fallback success is
 therefore not a FOD preallocation guarantee.
 
+## Mounted sparse seek status
+
+FOD 3.4.28 does not yet implement an explicit sparse-aware
+`lseek(SEEK_DATA/SEEK_HOLE)` callback.
+
+The mounted S1.1 baseline confirmed that fuser's default callback returns
+`ENOSYS`, after which Linux uses a generic fallback for the mount. Under that
+fallback all offsets below EOF are effectively treated as data and the only
+reported hole is the implicit one at EOF. Consequently canonical missing
+`fod.data_blocks` created by sparse writes or `PUNCH_HOLE|KEEP_SIZE` are not
+currently discoverable through `SEEK_DATA`/`SEEK_HOLE`.
+
+Offsets at or beyond EOF return `ENXIO`, including empty-file offset 0. The
+baseline probes are non-mutating.
+
+The selected S1.2 contract will remain block-granular: a missing canonical
+storage block is a hole and a present canonical block is data. Zero bytes
+inside a present partial block are not a hole.
+
 ## Cross-mount write ownership and FUSE hang safety
 
 Writable FOD mounts use PostgreSQL-authoritative write ownership introduced with

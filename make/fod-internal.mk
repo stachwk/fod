@@ -2862,3 +2862,7 @@ test-release-quality-gate: test-release-elf-reproducibility test-package-payload
 
 test-fallocate-timestamps: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate_timestamps.py
+
+.PHONY: test-lseek-sparse-contract
+test-lseek-sparse-contract: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_lseek_sparse_contract.py

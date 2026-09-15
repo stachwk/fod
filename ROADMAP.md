@@ -44,8 +44,8 @@
 
 ## Near Term
 
-- Audit the mounted Rust `fallocate` contract before adding behavior. The current Rust FUSE frontend does not expose a repository-visible `fallocate` implementation, while older TODO/archive text still contains legacy claims from earlier runtime stages. First establish the actual kernel/fuser/runtime syscall behavior and define exactly which modes FOD can support safely.
-- If the `fuser 0.18.0` callback surface supports the required operation, implement only explicitly defined `fallocate` modes. Preserve write ownership/fencing, payload quota, sparse accounting, cache/statfs invalidation, timestamps, hardlink/data-object semantics, and remount durability; reject unsupported mode combinations with `EOPNOTSUPP`.
+- Treat the mounted `fallocate` audit/implementation as complete in FOD 3.4.28. The supported mutation contract is exact `PUNCH_HOLE|KEEP_SIZE`; preallocation and `ZERO_RANGE` remain intentionally unsupported without durable allocated-zero metadata.
+- S1.1 mounted sparse `lseek(SEEK_DATA/SEEK_HOLE)` baseline is complete: the current fuser `ENOSYS` path falls back to kernel all-data/EOF-hole semantics and does not expose canonical missing FOD blocks. Implement S1.2 only from the existing block-only representation, with block-granular data/hole semantics and explicit EOF/`ENXIO` coverage.
 - Keep the repository QNAP PostgreSQL preset stable for the current 8 GB / 2 CPU / HDD reference host. P2 did not justify changing the current `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` default; repeat the matrix only after a new measured regression or materially changed environment.
 - Treat the FOD 3.4.16-3.4.20 read-path optimization sequence as closed. Reopen metadata/range-cache tuning only for a new measured regression.
 - Treat external-unmount/session teardown as closed on the validated current stack. Reopen only if a future fuser/libfuse3 version reproduces a correctness or warning regression.

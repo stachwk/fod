@@ -1,6 +1,6 @@
 # FOD current implementation plan
 
-Status: 2026-09-13.
+Status: 2026-09-15.
 
 This file contains only work that is current enough to direct the next change.
 
@@ -188,6 +188,70 @@ reproducibility from package-container metadata:
 - no unrelated FUSE capability is enabled in the same implementation change;
 - benchmark only after correctness tests pass, and keep the feature unchanged
   if measurements do not justify additional optimization.
+
+## S1 — Mounted sparse `lseek` contract audit
+
+F1 is complete in FOD 3.4.28. The next selected correctness task is sparse-aware
+mounted `lseek(SEEK_DATA/SEEK_HOLE)` behavior.
+
+`fuser 0.18.0` exposes a public `Filesystem::lseek` callback, but FOD currently
+has no repository-visible override. The fuser default returns `ENOSYS`; generic
+`SEEK_SET`/`SEEK_CUR`/`SEEK_END` behavior must not be mistaken for implemented
+sparse-range discovery.
+
+### S1.1 — Baseline and semantic contract — completed
+
+Establish the actual mounted behavior before adding runtime code.
+
+The baseline uses fresh mounts for five layouts so kernel caching of an
+unsupported FUSE opcode cannot hide callback behavior:
+
+- fully dense file;
+- an aligned middle hole created through the supported
+  `PUNCH_HOLE|KEEP_SIZE` contract;
+- a file with an unwritten middle gap and data at both ends;
+- a file with a trailing sparse range up to EOF;
+- an empty file.
+
+For each layout record raw Linux `SEEK_DATA`/`SEEK_HOLE` results and errno,
+whether the default fuser callback was reached, visible `st_blocks`/content
+state and PostgreSQL block/payload state. The audit must prove that seek probes
+do not mutate file or database state.
+
+The semantic decision for S1.2 must be made only after this baseline. In
+particular, define exact handling for:
+
+- offsets in data, holes, at EOF and beyond EOF;
+- an empty file;
+- partial-block zero regions versus canonical missing blocks;
+- trailing holes and the implicit hole at EOF;
+- files whose all-zero canonical blocks are intentionally stored as holes;
+- pending same-mount writes and read-after-write visibility;
+- hardlinks/shared data objects;
+- invalid `whence` and negative offsets.
+
+Do not add storage metadata for this feature. If implemented, sparse discovery
+must derive from the existing block-only canonical representation and file size.
+
+The mounted FOD 3.4.28 baseline completed with storage block size 32 KiB and
+five fresh-mount layouts. The fuser default `lseek` callback was reached once
+per mount, but Linux cached `ENOSYS` and then supplied its generic fallback:
+
+- dense data behaved as data with the implicit hole at EOF;
+- an aligned block removed by `PUNCH_HOLE|KEEP_SIZE` was still reported as
+  data by `SEEK_DATA`, while `SEEK_HOLE` returned EOF;
+- an unwritten two-block middle gap was likewise reported as data;
+- a trailing three-block sparse range was likewise reported as data;
+- empty-file offset 0 and offsets at/beyond EOF returned `ENXIO`;
+- 26 probes succeeded and 8 returned `ENXIO`;
+- all probes left visible file state and PostgreSQL block/payload state
+  unchanged.
+
+Therefore the current mounted behavior is standards-permitted generic fallback,
+not sparse-aware FOD behavior. S1.2 is selected to implement an explicit
+block-granular contract from canonical `data_blocks` presence. A missing
+canonical block is a hole; any present block is data even when a partial
+`PUNCH_HOLE` has zeroed bytes inside that allocated block.
 
 ## Deferred measured follow-ups
 
