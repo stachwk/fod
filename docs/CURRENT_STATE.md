@@ -238,9 +238,20 @@ currently discoverable through `SEEK_DATA`/`SEEK_HOLE`.
 Offsets at or beyond EOF return `ENXIO`, including empty-file offset 0. The
 baseline probes are non-mutating.
 
-The selected S1.2 contract will remain block-granular: a missing canonical
-storage block is a hole and a present canonical block is data. Zero bytes
-inside a present partial block are not a hole.
+FOD 3.4.29 implements the selected S1.2 contract explicitly. Sparse seek is
+block-granular: a missing canonical storage block is a hole and a present
+canonical block is data. Zero bytes inside a present partial block are not a
+hole. The callback flushes pending same-mount writes before consulting
+PostgreSQL and uses indexed block-order lookups without reading payload bytes.
+Offsets at or beyond EOF return `ENXIO`.
+
+The FOD 3.4.29 implementation is validated across dense and sparse layouts,
+partial-block punching, multi-digit block orders, pending writes, remount, and
+F1.2 punch-hole regression. PostgreSQL plans use
+`idx_data_blocks_object_order` for both sparse-seek queries without a text
+sort. Release-lto ASM review confirmed the numeric SQL literals and absence of
+`_order::text`; release reproducibility and package payload integrity gates
+also pass.
 
 ## Cross-mount write ownership and FUSE hang safety
 

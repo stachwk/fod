@@ -253,6 +253,49 @@ block-granular contract from canonical `data_blocks` presence. A missing
 canonical block is a hole; any present block is data even when a partial
 `PUNCH_HOLE` has zeroed bytes inside that allocated block.
 
+### S1.2 — Explicit block-granular `SEEK_DATA`/`SEEK_HOLE` — completed
+
+FOD 3.4.29 adds an explicit mounted `lseek` callback for `SEEK_DATA` and
+`SEEK_HOLE`.
+
+The contract deliberately follows canonical block allocation rather than byte
+content:
+
+- a present `fod.data_blocks` row means data for that complete FOD storage
+  block;
+- a missing canonical block means a hole;
+- zero bytes inside a present partial block are still data;
+- `SEEK_DATA` returns the current offset when its block exists, otherwise the
+  start of the next present block, or `ENXIO` if no data exists before EOF;
+- `SEEK_HOLE` returns the current offset when its block is absent, otherwise the
+  first missing block boundary after the current contiguous data run, capped at
+  EOF;
+- offset at or beyond EOF returns `ENXIO`, including an empty file;
+- negative offsets and unsupported `whence` values return `EINVAL`.
+
+Before querying canonical block presence, the callback flushes pending
+same-mount write states for the file so sparse discovery is consistent with
+read-after-write behavior.
+
+The repository lookup uses indexed `_order` queries and never reads block
+payload bytes. It does not scan a missing range block by block. No database
+schema or storage-format change is required.
+
+Validation completed successfully:
+
+- dense, aligned-punched, middle-gap, trailing-hole and empty layouts;
+- partial-block punch remains data at block granularity;
+- multi-digit block ordering regression proves numeric order (`2` before `10`);
+- pending same-mount writes are visible to sparse seek;
+- remount preserves sparse seek semantics from durable `data_blocks`;
+- fuser's default `lseek` callback is not reached;
+- F1.2 `PUNCH_HOLE|KEEP_SIZE` regression remains green;
+- SQL plans use `idx_data_blocks_object_order` without an extra text sort;
+- release-lto ASM contains the numeric sparse-seek SQL and no `_order::text`;
+- release ELF reproducibility and package payload integrity gates are green.
+
+S1.2 is complete in FOD 3.4.29. No schema or storage-format change was needed.
+
 ## Deferred measured follow-ups
 
 These remain candidates, not parallel active implementation projects:

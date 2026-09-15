@@ -2866,3 +2866,7 @@ test-fallocate-timestamps: init
 .PHONY: test-lseek-sparse-contract
 test-lseek-sparse-contract: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_lseek_sparse_contract.py
+
+.PHONY: test-lseek-sparse-runtime
+test-lseek-sparse-runtime: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_lseek_sparse_runtime.py

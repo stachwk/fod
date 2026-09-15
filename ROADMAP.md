@@ -45,7 +45,7 @@
 ## Near Term
 
 - Treat the mounted `fallocate` audit/implementation as complete in FOD 3.4.28. The supported mutation contract is exact `PUNCH_HOLE|KEEP_SIZE`; preallocation and `ZERO_RANGE` remain intentionally unsupported without durable allocated-zero metadata.
-- S1.1 mounted sparse `lseek(SEEK_DATA/SEEK_HOLE)` baseline is complete: the current fuser `ENOSYS` path falls back to kernel all-data/EOF-hole semantics and does not expose canonical missing FOD blocks. Implement S1.2 only from the existing block-only representation, with block-granular data/hole semantics and explicit EOF/`ENXIO` coverage.
+- Sparse `lseek(SEEK_DATA/SEEK_HOLE)` is complete in FOD 3.4.29: block-granular canonical allocation semantics, pending-write visibility, numeric block ordering, remount persistence, EOF/`ENXIO`, SQL/index-plan review, release-lto ASM review and release-quality gates are validated.
 - Keep the repository QNAP PostgreSQL preset stable for the current 8 GB / 2 CPU / HDD reference host. P2 did not justify changing the current `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` default; repeat the matrix only after a new measured regression or materially changed environment.
 - Treat the FOD 3.4.16-3.4.20 read-path optimization sequence as closed. Reopen metadata/range-cache tuning only for a new measured regression.
 - Treat external-unmount/session teardown as closed on the validated current stack. Reopen only if a future fuser/libfuse3 version reproduces a correctness or warning regression.

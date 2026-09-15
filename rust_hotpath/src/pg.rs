@@ -6588,6 +6588,100 @@ impl DbRepo {
         self.with_read_connection(|conn| self.file_data_object_id_on_conn(conn, file_id))
     }
 
+    pub fn sparse_seek_blockwise(
+        &self,
+        file_id: u64,
+        file_size: u64,
+        offset: u64,
+        block_size: u64,
+        seek_data: bool,
+    ) -> Result<Option<u64>, String> {
+        if block_size == 0 {
+            return Err("sparse seek block_size must be positive".to_string());
+        }
+        if offset >= file_size {
+            return Ok(None);
+        }
+
+        let Some(data_object_id) = self.file_data_object_id(file_id)? else {
+            return if seek_data {
+                Ok(None)
+            } else {
+                Ok(Some(offset))
+            };
+        };
+
+        let current_block = offset / block_size;
+        let data_object_id_text = CString::new(data_object_id.to_string())
+            .map_err(|_| "data object id contains NUL byte".to_string())?;
+        let current_block_text = CString::new(current_block.to_string())
+            .map_err(|_| "block index contains NUL byte".to_string())?;
+
+        self.with_read_connection(|conn| unsafe {
+            let next_sql = CString::new(
+                "SELECT _order                  FROM data_blocks                  WHERE data_object_id = $1 AND _order >= $2                  ORDER BY _order                  LIMIT 1",
+            )
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+            let params = [&data_object_id_text, &current_block_text];
+            let next_res = exec_params(conn, &next_sql, &params)?;
+            let next_order = fetch_single_text_option(next_res)?
+                .map(|value| {
+                    value
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|_| "invalid data block order".to_string())
+                })
+                .transpose()?;
+
+            if seek_data {
+                let Some(order) = next_order else {
+                    return Ok(None);
+                };
+                if order == current_block {
+                    return Ok(Some(offset));
+                }
+                let candidate = order
+                    .checked_mul(block_size)
+                    .ok_or_else(|| "sparse seek data offset overflow".to_string())?;
+                return if candidate < file_size {
+                    Ok(Some(candidate))
+                } else {
+                    Ok(None)
+                };
+            }
+
+            if next_order != Some(current_block) {
+                return Ok(Some(offset));
+            }
+
+            let hole_sql = CString::new(
+                "SELECT db._order                  FROM data_blocks db                  WHERE db.data_object_id = $1                    AND db._order >= $2                    AND NOT EXISTS (                        SELECT 1                        FROM data_blocks next                        WHERE next.data_object_id = db.data_object_id                          AND next._order = db._order + 1                    )                  ORDER BY db._order                  LIMIT 1",
+            )
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+            let hole_res = exec_params(conn, &hole_sql, &params)?;
+            let last_data_order = fetch_single_text_option(hole_res)?
+                .map(|value| {
+                    value
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|_| "invalid data block order".to_string())
+                })
+                .transpose()?;
+
+            let Some(last_data_order) = last_data_order else {
+                return Ok(Some(file_size));
+            };
+            let next_block = last_data_order
+                .checked_add(1)
+                .ok_or_else(|| "sparse seek hole block overflow".to_string())?;
+            let candidate = next_block
+                .checked_mul(block_size)
+                .ok_or_else(|| "sparse seek hole offset overflow".to_string())?;
+
+            Ok(Some(candidate.min(file_size)))
+        })
+    }
+
     pub fn file_size(&self, file_id: u64) -> Result<Option<u64>, String> {
         let sql = CString::new("SELECT size FROM files WHERE id_file = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;

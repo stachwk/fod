@@ -12,8 +12,8 @@ use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
     Filesystem, FopenFlags, Generation, INodeNo, InitFlags, IoctlFlags, KernelConfig, LockOwner,
     OpenFlags, PollEvents, PollFlags, PollNotifier, RenameFlags, ReplyAttr, ReplyBmap, ReplyCreate,
-    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyOpen, ReplyPoll,
-    ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
+    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyLseek,
+    ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use libc::{EIO, ENOENT, ENOSPC, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
@@ -7789,6 +7789,118 @@ impl Filesystem for FodFuse {
         write_task.complete(0, data.len() as u64);
         self.record_write_task_complete_elapsed(complete_started.elapsed());
         self.reply_written_profiled(reply, data.len() as u32);
+    }
+
+    fn lseek(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: i64,
+        whence: i32,
+        reply: ReplyLseek,
+    ) {
+        let req_id = self.next_request_id();
+
+        if offset < 0 {
+            self.log_request_error(
+                req_id,
+                "lseek",
+                libc::EINVAL,
+                format!("ino={} fh={} offset={} whence={}", ino, fh, offset, whence),
+            );
+            fuse_reply_error!(reply, libc::EINVAL);
+            return;
+        }
+
+        let seek_data = if whence == libc::SEEK_DATA {
+            true
+        } else if whence == libc::SEEK_HOLE {
+            false
+        } else {
+            self.log_request_error(
+                req_id,
+                "lseek",
+                libc::EINVAL,
+                format!(
+                    "ino={} fh={} offset={} unsupported whence={}",
+                    ino, fh, offset, whence
+                ),
+            );
+            fuse_reply_error!(reply, libc::EINVAL);
+            return;
+        };
+
+        let file_id = match self.file_id_for_handle_or_errno(fh.into(), ino.into()) {
+            Ok(value) => value,
+            Err(errno) => {
+                self.log_request_error(
+                    req_id,
+                    "lseek",
+                    errno,
+                    format!("ino={} fh={} handle lookup", ino, fh),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
+
+        if let Err(errno) = self.flush_pending_write_states_for_file_except(file_id, u64::MAX) {
+            self.log_request_error(
+                req_id,
+                "lseek",
+                errno,
+                format!("file_id={} flush pending write states", file_id),
+            );
+            fuse_reply_error!(reply, errno);
+            return;
+        }
+
+        let file_size = match self.file_size_for_file_id_or_errno(file_id) {
+            Ok(value) => value,
+            Err(errno) => {
+                self.log_request_error(
+                    req_id,
+                    "lseek",
+                    errno,
+                    format!("file_id={} load file size", file_id),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
+
+        let offset_u64 = offset as u64;
+        if offset_u64 >= file_size {
+            fuse_reply_error!(reply, libc::ENXIO);
+            return;
+        }
+
+        match self.repo.sparse_seek_blockwise(
+            file_id,
+            file_size,
+            offset_u64,
+            self.block_size,
+            seek_data,
+        ) {
+            Ok(Some(result)) => match i64::try_from(result) {
+                Ok(result) => reply.offset(result),
+                Err(_) => fuse_reply_error!(reply, libc::EOVERFLOW),
+            },
+            Ok(None) => fuse_reply_error!(reply, libc::ENXIO),
+            Err(err) => {
+                self.log_request_error(
+                    req_id,
+                    "lseek",
+                    libc::EIO,
+                    format!(
+                        "file_id={} offset={} whence={} err={}",
+                        file_id, offset, whence, err
+                    ),
+                );
+                fuse_reply_error!(reply, libc::EIO);
+            }
+        }
     }
 
     fn fallocate(
