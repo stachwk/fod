@@ -103,7 +103,12 @@ Consequences:
 
 No database schema, storage format or runtime version changed during F1.1.
 
-### F1.2 — `PUNCH_HOLE|KEEP_SIZE` implementation — active slice
+### F1.2 — `PUNCH_HOLE|KEEP_SIZE` implementation — complete
+
+> F1.2 fencing requirement: every supported `fallocate` request must validate
+> current write ownership/fencing before both mutating and logical no-op paths.
+> A stale writer cannot report a successful beyond-EOF punch after ownership
+> moves to another mount.
 
 Add an explicit mounted `fallocate` callback only for the exact
 `PUNCH_HOLE|KEEP_SIZE` mode. Keep `mode=0`, `KEEP_SIZE`, `ZERO_RANGE` and every
@@ -148,7 +153,30 @@ Do not add allocation metadata merely to make `mode=0` appear supported in this
 slice. A future preallocation design, if justified by a concrete workload,
 requires a separate storage-format decision and migration/compatibility plan.
 
+The FOD 3.4.28 candidate now uses an explicit FUSE callback and a transactional
+PostgreSQL range mutation. Full interior blocks are removed without
+materializing logical zero buffers; only partial boundary blocks are zeroed.
+The mutation reuses data-object COW, write fencing, quota serialization and
+cache invalidation. F1.2 validation is complete: the mounted contract,
+aligned/partial/sparse/remount/hardlink coverage, timestamp semantics,
+cross-mount stale-writer fencing, legacy stale-writer regression, deterministic
+`release-lto` ELF gate and package-payload integrity gate are green locally.
+
 ### F1 acceptance
+
+
+Release validation for the 3.4.28 candidate separates compiled binary
+reproducibility from package-container metadata:
+
+- `test-release-elf-reproducibility` is blocking and uses two independent
+  `CARGO_TARGET_DIR` trees;
+- `test-package-payload-integrity` is blocking and requires packaged ELF/SO
+  bytes to match the gated `release-lto` artifacts exactly;
+- `test-fallocate-timestamps` requires in-range hole punching to advance
+  `mtime`/`ctime` while beyond-EOF no-op punching leaves them unchanged;
+- full DEB/RPM container reproducibility remains strict/manual until package
+  timestamp and host/tool metadata are normalized.
+
 
 - mounted integration coverage exists for every supported mode and for rejected
   combinations;

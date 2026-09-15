@@ -543,6 +543,40 @@ def main() -> int:
         results.append(result)
         references.append(reference)
 
+    by_case = {result["case"]: result for result in results}
+    unsupported = {
+        "mode0_extend",
+        "keep_size",
+        "zero_range",
+        "invalid_punch_without_keep_size",
+    }
+    for name in unsupported:
+        result = by_case[name]
+        if result["call"]["rc"] == 0:
+            raise AssertionError(f"{name}: unsupported raw fallocate unexpectedly succeeded")
+        if result["call"]["errno"] not in {errno.ENOTSUP, errno.EOPNOTSUPP}:
+            raise AssertionError(
+                f"{name}: expected ENOTSUP/EOPNOTSUPP, got {result['call']}"
+            )
+
+    punch = by_case["punch_hole_keep_size"]
+    if punch["call"]["rc"] != 0:
+        raise AssertionError(
+            f"PUNCH_HOLE|KEEP_SIZE must succeed, got {punch['call']}"
+        )
+    if punch["fuser_default_fallocate_logged"]:
+        raise AssertionError("PUNCH_HOLE|KEEP_SIZE reached default fuser callback")
+    if punch["after_file"]["size"] != punch["before_file"]["size"]:
+        raise AssertionError("PUNCH_HOLE|KEEP_SIZE changed logical file size")
+    if punch["after_db"]["payload_bytes"] >= punch["before_db"]["payload_bytes"]:
+        raise AssertionError("aligned PUNCH_HOLE did not release persisted payload")
+    if punch["after_file"]["blocks_512"] >= punch["before_file"]["blocks_512"]:
+        raise AssertionError("aligned PUNCH_HOLE did not reduce st_blocks")
+
+    legacy = by_case["legacy_posix_fallocate"]
+    if legacy["call"]["rc"] != 0:
+        raise AssertionError(f"legacy posix_fallocate control failed: {legacy['call']}")
+
     verify_after_remount(template, references)
 
     environment = {
@@ -552,7 +586,7 @@ def main() -> int:
         "fusermount3": command_output(["fusermount3", "--version"]),
     }
 
-    print("=== F1.1 FALLOCATE ENVIRONMENT ===")
+    print("=== F1.2 FALLOCATE CONTRACT ===")
     print(json.dumps(environment, sort_keys=True))
 
     for result in results:
@@ -598,9 +632,9 @@ def main() -> int:
     print(f"F1_COMPATIBILITY {compatibility}")
     print(f"F1_NEGOTIATED {negotiated}")
     print(
-        "OK fallocate-contract-baseline "
+        "OK fallocate-contract-f1-2 "
         f"cases={len(results)} remount_verified=1 "
-        "runtime_unchanged=1"
+        "punch_hole_keep_size=1 unsupported_explicit=1 remount_verified=1"
     )
     return 0
 

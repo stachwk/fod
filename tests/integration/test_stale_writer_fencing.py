@@ -156,6 +156,15 @@ def main() -> None:
 
         launcher_a = FODMount(str(root))
         launcher_b = FODMount(str(root))
+
+        # psql_scalar() musi pytac te sama baze i tymi samymi danymi
+        # uwierzytelniajacymi, ktorych uzywa FODMount. Bez tego
+        # bezposrednie uruchomienie testu domyslnie laczylo psql z
+        # foddbname_test, podczas gdy FODMount uzywal foddbname.
+        os.environ["POSTGRES_DB"] = launcher_a.postgres_db
+        os.environ["POSTGRES_USER"] = launcher_a.postgres_user
+        os.environ["POSTGRES_PASSWORD"] = launcher_a.postgres_password
+
         launcher_a.init_schema()
 
         fd_a: int | None = None

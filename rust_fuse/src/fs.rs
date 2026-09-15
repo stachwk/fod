@@ -7791,6 +7791,149 @@ impl Filesystem for FodFuse {
         self.reply_written_profiled(reply, data.len() as u32);
     }
 
+    fn fallocate(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
+        length: u64,
+        mode: i32,
+        reply: ReplyEmpty,
+    ) {
+        let ino = ino.0;
+        let fh = fh.0;
+        let req_id = self.next_request_id();
+        let _write_profile = self.start_fuse_write_profile();
+        let supported_mode = libc::FALLOC_FL_PUNCH_HOLE | libc::FALLOC_FL_KEEP_SIZE;
+
+        if self.read_only {
+            fuse_reply_error!(reply, libc::EROFS);
+            return;
+        }
+        if mode != supported_mode {
+            self.log_request_error(
+                req_id,
+                "fallocate",
+                libc::EOPNOTSUPP,
+                format!(
+                    "ino={} fh={} offset={} length={} mode={:#x} supported_mode={:#x}",
+                    ino, fh, offset, length, mode, supported_mode
+                ),
+            );
+            fuse_reply_error!(reply, libc::EOPNOTSUPP);
+            return;
+        }
+        if length == 0 {
+            fuse_reply_error!(reply, libc::EINVAL);
+            return;
+        }
+        if offset.checked_add(length).is_none() {
+            fuse_reply_error!(reply, libc::EFBIG);
+            return;
+        }
+
+        let handle = match self.file_handle_state_for_handle(fh) {
+            Some(handle) => handle,
+            None => {
+                fuse_reply_error!(reply, libc::EBADF);
+                return;
+            }
+        };
+        if (handle.flags & libc::O_ACCMODE) == libc::O_RDONLY {
+            fuse_reply_error!(reply, libc::EBADF);
+            return;
+        }
+
+        let file_id = match self.file_id_for_handle_or_errno(fh, ino) {
+            Ok(file_id) => file_id,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
+        self.log_request_start(
+            req_id,
+            "fallocate",
+            format!(
+                "ino={} fh={} file_id={} offset={} length={} mode={:#x}",
+                ino, fh, file_id, offset, length, mode
+            ),
+        );
+
+        if let Err(errno) = self.flush_pending_write_states_for_file_except(file_id, u64::MAX) {
+            self.log_request_error(
+                req_id,
+                "fallocate",
+                errno,
+                format!("file_id={} flush pending write states", file_id),
+            );
+            fuse_reply_error!(reply, errno);
+            return;
+        }
+
+        let Some((ownership_file_id, write_fence)) = self.write_persistence_fence_for_handle(fh)
+        else {
+            self.log_request_error(
+                req_id,
+                "fallocate",
+                EIO,
+                format!("file_id={} missing write persistence fence", file_id),
+            );
+            fuse_reply_error!(reply, EIO);
+            return;
+        };
+        if ownership_file_id != file_id {
+            self.log_request_error(
+                req_id,
+                "fallocate",
+                EIO,
+                format!(
+                    "file_id={} ownership_file_id={} fence mismatch",
+                    file_id, ownership_file_id
+                ),
+            );
+            fuse_reply_error!(reply, EIO);
+            return;
+        }
+
+        let live = self.reloadable_runtime();
+        match self.repo.punch_hole_keep_size_with_fence(
+            file_id,
+            self.block_size,
+            offset,
+            length,
+            live.copy_dedupe_crc_table,
+            write_fence,
+        ) {
+            Ok(()) => {
+                self.clear_read_cache_for_file(file_id);
+                self.clear_recent_write_blocks_for_file(file_id);
+                self.invalidate_read_metadata_for_file(file_id);
+                self.invalidate_statfs_cache();
+                self.maybe_touch_client_session_write();
+                debug!(
+                    "FOD req={} op=fallocate punch_hole_keep_size completed file_id={} offset={} length={}",
+                    req_id, file_id, offset, length
+                );
+                reply.ok();
+            }
+            Err(err) => {
+                let errno = persist_error_errno(&err);
+                self.log_request_error(
+                    req_id,
+                    "fallocate",
+                    errno,
+                    format!(
+                        "file_id={} offset={} length={} err={}",
+                        file_id, offset, length, err
+                    ),
+                );
+                fuse_reply_error!(reply, errno);
+            }
+        }
+    }
+
     fn copy_file_range(
         &self,
         _req: &Request,

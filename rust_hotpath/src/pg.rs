@@ -12282,6 +12282,196 @@ impl DbRepo {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn punch_hole_keep_size_with_fence(
+        &self,
+        file_id: u64,
+        block_size: u64,
+        offset: u64,
+        length: u64,
+        maintain_copy_crc_table: bool,
+        write_fence: WritePersistenceFence,
+    ) -> Result<(), String> {
+        if block_size == 0 {
+            return Err("punch hole block size must be positive".to_string());
+        }
+        if length == 0 {
+            return Err("punch hole length must be positive".to_string());
+        }
+        let requested_end = offset
+            .checked_add(length)
+            .ok_or_else(|| "punch hole range overflow".to_string())?;
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let sql_lock_file = CString::new("SELECT size FROM files WHERE id_file = $1 FOR UPDATE")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_cached_connection(|conn| unsafe {
+            let transaction_started = Instant::now();
+            let result = transactional_replayable(conn, |conn| {
+                self.validate_write_persistence_fence_on_conn(conn, file_id, write_fence)?;
+
+                let res = exec_params(conn, &sql_lock_file, &[&file_id_text])?;
+                let file_size = fetch_single_text_option(res)?
+                    .ok_or_else(|| format!("file not found for punch hole file_id={file_id}"))?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| format!("invalid file size for punch hole file_id={file_id}"))?;
+
+                if offset >= file_size {
+                    return Ok(());
+                }
+                let punch_end = requested_end.min(file_size);
+                if punch_end <= offset {
+                    return Ok(());
+                }
+
+                let target = self
+                    .data_object_write_target_on_conn(
+                        conn,
+                        file_id,
+                        file_size,
+                        false,
+                        maintain_copy_crc_table,
+                    )?
+                    .ok_or_else(|| {
+                        format!("missing data object for punch hole file_id={file_id}")
+                    })?;
+                let data_object_id = target.data_object_id;
+                let first_block = offset / block_size;
+                let last_block = punch_end.saturating_sub(1) / block_size;
+                let start_in_first = offset % block_size;
+                let end_in_last = punch_end % block_size;
+
+                let delete_crc_block =
+                    |conn: *mut PGconn, block_index: u64| -> Result<(), String> {
+                        if !maintain_copy_crc_table {
+                            return Ok(());
+                        }
+                        let sql = CString::new(format!(
+                            "DELETE FROM copy_block_crc WHERE data_object_id = {data_object_id} AND _order = {block_index}"
+                        ))
+                        .map_err(|_| "SQL contains NUL byte".to_string())?;
+                        exec_command(conn, &sql)
+                    };
+
+                let zero_partial_block =
+                    |conn: *mut PGconn,
+                     block_index: u64,
+                     slice_start: u64,
+                     slice_end: u64|
+                     -> Result<(), String> {
+                        if slice_end <= slice_start {
+                            return Ok(());
+                        }
+                        let sql_update = CString::new(format!(
+                            "UPDATE data_blocks \
+                             SET data = overlay( \
+                                 data \
+                                 PLACING decode( \
+                                     repeat('00', GREATEST(LEAST({slice_end}, octet_length(data)) - {slice_start}, 0)), \
+                                     'hex' \
+                                 ) \
+                                 FROM {} \
+                                 FOR GREATEST(LEAST({slice_end}, octet_length(data)) - {slice_start}, 0) \
+                             ) \
+                             WHERE data_object_id = {data_object_id} \
+                               AND _order = {block_index} \
+                               AND octet_length(data) > {slice_start}",
+                            slice_start.saturating_add(1),
+                        ))
+                        .map_err(|_| "SQL contains NUL byte".to_string())?;
+                        exec_command(conn, &sql_update)?;
+
+                        let sql_delete_zero = CString::new(format!(
+                            "DELETE FROM data_blocks \
+                             WHERE data_object_id = {data_object_id} \
+                               AND _order = {block_index} \
+                               AND data = decode(repeat('00', octet_length(data)), 'hex')"
+                        ))
+                        .map_err(|_| "SQL contains NUL byte".to_string())?;
+                        exec_command(conn, &sql_delete_zero)?;
+                        delete_crc_block(conn, block_index)
+                    };
+
+                if first_block == last_block {
+                    let slice_end = if end_in_last == 0 {
+                        block_size
+                    } else {
+                        end_in_last
+                    };
+                    if start_in_first == 0 && slice_end == block_size {
+                        let sql_delete = CString::new(format!(
+                            "DELETE FROM data_blocks WHERE data_object_id = {data_object_id} AND _order = {first_block}"
+                        ))
+                        .map_err(|_| "SQL contains NUL byte".to_string())?;
+                        exec_command(conn, &sql_delete)?;
+                        delete_crc_block(conn, first_block)?;
+                    } else {
+                        zero_partial_block(conn, first_block, start_in_first, slice_end)?;
+                    }
+                } else {
+                    let full_start = if start_in_first == 0 {
+                        first_block
+                    } else {
+                        first_block.saturating_add(1)
+                    };
+                    let full_end_exclusive = if end_in_last == 0 {
+                        last_block.saturating_add(1)
+                    } else {
+                        last_block
+                    };
+
+                    if full_start < full_end_exclusive {
+                        let sql_delete = CString::new(format!(
+                            "DELETE FROM data_blocks \
+                             WHERE data_object_id = {data_object_id} \
+                               AND _order >= {full_start} \
+                               AND _order < {full_end_exclusive}"
+                        ))
+                        .map_err(|_| "SQL contains NUL byte".to_string())?;
+                        exec_command(conn, &sql_delete)?;
+                        if maintain_copy_crc_table {
+                            let sql_delete_crc = CString::new(format!(
+                                "DELETE FROM copy_block_crc \
+                                 WHERE data_object_id = {data_object_id} \
+                                   AND _order >= {full_start} \
+                                   AND _order < {full_end_exclusive}"
+                            ))
+                            .map_err(|_| "SQL contains NUL byte".to_string())?;
+                            exec_command(conn, &sql_delete_crc)?;
+                        }
+                    }
+
+                    if start_in_first != 0 {
+                        zero_partial_block(conn, first_block, start_in_first, block_size)?;
+                    }
+                    if end_in_last != 0 {
+                        zero_partial_block(conn, last_block, 0, end_in_last)?;
+                    }
+                }
+
+                let sql_clear_hash = CString::new(format!(
+                    "UPDATE data_objects SET content_hash = NULL, modification_date = NOW() WHERE id_data_object = {data_object_id}"
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                exec_command(conn, &sql_clear_hash)?;
+
+                self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
+
+                // Hole punching frees payload, but keep accounting serialized
+                // with the same quota lock used by ordinary writes.
+                let quota_lock = self.lock_payload_quota_on_conn(conn)?;
+                self.enforce_payload_quota_on_conn(conn, &quota_lock, None)
+            });
+            self.record_persist_transaction_elapsed(
+                transaction_started.elapsed(),
+                result.is_err(),
+            );
+            result
+        })
+    }
+
     pub fn persist_file_blocks(
         &self,
         file_id: u64,

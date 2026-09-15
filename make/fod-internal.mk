@@ -1461,6 +1461,15 @@ test-hardlink: init
 test-fallocate: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate.py
 
+test-fallocate-contract: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate_contract.py
+
+test-fallocate-punch-hole: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate_punch_hole.py
+
+test-fallocate-stale-writer-fencing: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate_stale_writer_fencing.py
+
 test-copy-file-range: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range.py
 
@@ -2838,3 +2847,18 @@ test-monitor-report-compatibility-sources: venv build-runtime init
 	POSTGRES_USER="$(POSTGRES_USER)" \
 	POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
 	$(VENV_PYTHON) tests/integration/test_monitor_report_compatibility_sources.py
+
+# Expensive release gates stay outside the normal test-all developer loop.
+.PHONY: test-release-elf-reproducibility test-package-payload-integrity test-release-quality-gate test-fallocate-timestamps
+
+test-release-elf-reproducibility:
+	@bash tests/test_release_elf_reproducibility.sh
+
+test-package-payload-integrity:
+	@bash tests/test_package_payload_integrity.sh
+
+test-release-quality-gate: test-release-elf-reproducibility test-package-payload-integrity
+	@printf '%s\n' 'OK release-quality-gate'
+
+test-fallocate-timestamps: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_fallocate_timestamps.py

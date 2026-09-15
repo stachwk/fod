@@ -205,6 +205,24 @@ stops, `lease_expires_at` makes the row stale and normal active-session
 maintenance prunes expired rows. This preserves crash/failure semantics and is
 separate from the FUSE unmount lifecycle.
 
+## Mounted fallocate semantics
+
+FOD 3.4.28 implements one explicit Linux `fallocate` mutation contract:
+`FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE`.
+
+The operation preserves logical file size, maps fully punched canonical blocks
+to sparse/missing `fod.data_blocks`, zeroes only the punched bytes in partial
+boundary blocks, keeps hardlink/data-object semantics, and runs under the same
+PostgreSQL write-ownership/fencing and quota/accounting boundaries as ordinary
+persisted writes. Read/recent-write/metadata/statfs caches are invalidated after
+success.
+
+Plain `mode=0`, `FALLOC_FL_KEEP_SIZE`, `FALLOC_FL_ZERO_RANGE` and unsupported
+flag combinations remain intentionally unsupported. The block-only format keeps
+all-zero blocks sparse, so it has no durable state distinguishing an allocated
+zero/unwritten range from a hole. A libc `posix_fallocate()` fallback success is
+therefore not a FOD preallocation guarantee.
+
 ## Cross-mount write ownership and FUSE hang safety
 
 Writable FOD mounts use PostgreSQL-authoritative write ownership introduced with
