@@ -117,10 +117,10 @@ def _docker_container_image(container_name: str = "fod-postgres") -> str:
         ):
             logs = _docker(["logs", container_name], check=False)
             raise AssertionError(
-                "recovery standby exited before becoming ready:\n"
-                f"state={state_text}\n"
-                f"stdout:\n{logs.stdout}\n"
-                f"stderr:\n{logs.stderr}"
+                "recovery standby exited before becoming ready:\\n"
+                f"state={state_text}\\n"
+                f"stdout:\\n{logs.stdout}\\n"
+                f"stderr:\\n{logs.stderr}"
             )
 
         try:
