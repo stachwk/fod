@@ -7770,131 +7770,27 @@ impl Filesystem for FodFuse {
                 }
             }
 
-            if let Some(existing_kind) = existing.0.as_deref() {
-                let removal_result = match existing_kind {
-                    "file" => match self.file_id_for_path(&new_path) {
-                        Ok(Some(file_id)) => self.remove_primary_file_or_promote_hardlink(file_id),
-                        Ok(None) => Err("missing file id".to_string()),
-                        Err(errno) => return fuse_reply_error!(reply, errno),
-                    },
-                    "hardlink" => match existing.1 {
-                        Some(hardlink_id) => self.repo.delete_hardlink_entry(hardlink_id),
-                        None => Err("missing hardlink id".to_string()),
-                    },
-                    "symlink" => match existing.1 {
-                        Some(symlink_id) => self.repo.delete_symlink_entry(symlink_id),
-                        None => Err("missing symlink id".to_string()),
-                    },
-                    "dir" => match (kind.as_deref(), existing.1) {
-                        (Some("dir"), Some(directory_id)) => {
-                            match self.repo.count_directory_children(directory_id) {
-                                Ok(0) => self.repo.delete_directory_entry(directory_id),
-                                Ok(_) => Err("target directory not empty".to_string()),
-                                Err(_) => Err("failed to inspect target directory".to_string()),
-                            }
-                        }
-                        (Some("dir"), None) => Err("missing directory id".to_string()),
-                        _ => {
-                            self.log_request_error(
-                                req_id,
-                                "rename",
-                                libc::EISDIR,
-                                format!("new_path={} existing dir", new_path),
-                            );
-                            fuse_reply_error!(reply, libc::EISDIR);
-                            return;
-                        }
-                    },
-                    _ => Ok(()),
-                };
-                if removal_result.is_err() {
-                    if matches!(existing_kind, "dir") && matches!(kind.as_deref(), Some("dir")) {
-                        if let Some(directory_id) = existing.1 {
-                            if let Ok(count) = self.repo.count_directory_children(directory_id) {
-                                fuse_reply_error!(reply, if count == 0 { EIO } else { ENOTEMPTY });
-                                return;
-                            }
-                        }
-                    }
-                    self.log_request_error(
-                        req_id,
-                        "rename",
-                        EIO,
-                        format!("new_path={} removal failed", new_path),
-                    );
-                    fuse_reply_error!(reply, EIO);
-                    return;
-                }
-                self.remove_cached_path(&new_path);
-                self.remove_cached_handle_paths(&new_path);
-            }
+            self.log_request_error(
+                req_id,
+                "rename",
+                EIO,
+                format!(
+                    "old_path={} new_path={} unsupported namespace combination source_kind={:?} target_kind={:?}",
+                    old_path,
+                    new_path,
+                    kind.as_deref(),
+                    existing.0.as_deref()
+                ),
+            );
+            fuse_reply_error!(reply, EIO);
+            return;
         }
-        let result = match kind.as_deref() {
-            Some("file") => match self.file_id_for_path(&old_path) {
-                Ok(Some(file_id)) => self
-                    .repo
-                    .rename_file_entry(file_id, new_parent_id, &new_name),
-                Ok(None) => Err("missing file id".to_string()),
-                Err(errno) => {
-                    self.log_request_error(
-                        req_id,
-                        "rename",
-                        errno,
-                        format!("old_path={} file id", old_path),
-                    );
-                    return fuse_reply_error!(reply, errno);
-                }
-            },
-            Some("hardlink") => match entry_id {
-                Some(hardlink_id) => {
-                    self.repo
-                        .rename_hardlink_entry(hardlink_id, new_parent_id, &new_name)
-                }
-                None => Err("missing hardlink id".to_string()),
-            },
-            Some("symlink") => match entry_id {
-                Some(symlink_id) => {
-                    self.repo
-                        .rename_symlink_entry(symlink_id, new_parent_id, &new_name)
-                }
-                None => Err("missing symlink id".to_string()),
-            },
-            Some("dir") => match entry_id {
-                Some(directory_id) => {
-                    self.repo
-                        .rename_directory_entry(directory_id, new_parent_id, &new_name)
-                }
-                None => Err("missing directory id".to_string()),
-            },
-            _ => Err("unsupported rename kind".to_string()),
-        };
-        match result {
-            Ok(_) => {
-                let _ = self.append_journal_event(
-                    subject.uid,
-                    "rename",
-                    &format!("{old_path}->{new_path}"),
-                    None,
-                    None,
-                );
-                self.move_cached_path(&old_path, &new_path, old_ino);
-                self.invalidate_statfs_cache();
-                debug!(
-                    "FOD req={} op=rename completed old_path={} new_path={}",
-                    req_id, old_path, new_path
-                );
-                reply.ok();
-            }
-            Err(_) => {
-                self.log_request_error(
-                    req_id,
-                    "rename",
-                    EIO,
-                    format!("old_path={} new_path={}", old_path, new_path),
-                );
-                fuse_reply_error!(reply, EIO)
-            }
-        }
+
+        debug!(
+            "FOD req={} op=rename completed no-op same path old_path={} new_path={}",
+            req_id, old_path, new_path
+        );
+        reply.ok();
     }
 
     fn create(
