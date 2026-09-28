@@ -11310,27 +11310,25 @@ impl DbRepo {
                 let file_id = row[2].trim().parse::<u64>().ok();
                 Ok(Some((row[0].clone(), entry_id, file_id)))
             };
-        let matches_source =
-            |resolved: Option<&(String, u64, Option<u64>)>| match resolved {
+        let matches_source = |resolved: Option<&(String, u64, Option<u64>)>| match resolved {
+            Some((kind, entry_id, Some(file_id))) => {
+                kind == source.entry_kind()
+                    && *entry_id == source.entry_id()
+                    && *file_id == source.file_id()
+            }
+            _ => false,
+        };
+        let matches_target = |resolved: Option<&(String, u64, Option<u64>)>| match expected_target {
+            None => resolved.is_none(),
+            Some(target) => match resolved {
                 Some((kind, entry_id, Some(file_id))) => {
-                    kind == source.entry_kind()
-                        && *entry_id == source.entry_id()
-                        && *file_id == source.file_id()
+                    kind == target.entry_kind()
+                        && *entry_id == target.entry_id()
+                        && *file_id == target.file_id()
                 }
                 _ => false,
-            };
-        let matches_target =
-            |resolved: Option<&(String, u64, Option<u64>)>| match expected_target {
-                None => resolved.is_none(),
-                Some(target) => match resolved {
-                    Some((kind, entry_id, Some(file_id))) => {
-                        kind == target.entry_kind()
-                            && *entry_id == target.entry_id()
-                            && *file_id == target.file_id()
-                    }
-                    _ => false,
-                },
-            };
+            },
+        };
 
         self.with_cached_connection(|conn| unsafe {
             transactional_replay_confirmed(
@@ -11443,8 +11441,8 @@ impl DbRepo {
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
-                                        "new parent id contains NUL byte".to_string()
-                                    })?;
+                                    "new parent id contains NUL byte".to_string()
+                                })?;
                                 let params =
                                     [&new_name_param, &new_parent_id_param, &file_id_param];
                                 exec_command_params(conn, &sql_rename_file_nested, &params)?;
@@ -11459,8 +11457,8 @@ impl DbRepo {
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
-                                        "new parent id contains NUL byte".to_string()
-                                    })?;
+                                    "new parent id contains NUL byte".to_string()
+                                })?;
                                 let params =
                                     [&new_name_param, &new_parent_id_param, &hardlink_id_param];
                                 exec_command_params(conn, &sql_rename_hardlink_nested, &params)?;

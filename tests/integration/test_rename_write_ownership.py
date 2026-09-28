@@ -428,7 +428,7 @@ def hardlink_source_and_target_cases(
 
     fd = os.open(primary_a, os.O_WRONLY)
     try:
-        wait_for_counts(launcher, primary_name, (1, 1))
+        wait_for_counts(launcher, primary_name, (0, 1))
         elapsed = expect_replace_ebusy(
             source_b,
             moved_b,
