@@ -353,7 +353,20 @@ pre-C2 behavior before runtime changes. It is intentionally not part of
 `test-integration`; once C2 is implemented its assertions will be inverted
 into blocking regressions.
 
-Capture the current two-mount behavior before changing runtime code:
+The baseline was reproduced on 2026-09-28 against FOD 3.4.30:
+
+```text
+BASELINE_UNSAFE rename-active-destination-writer replace_result=SUCCESS elapsed_ms=11.133 lease_before=1|1 lease_after=1|0 final_payload=replacement-from-mount-b
+BASELINE_UNSAFE rename-active-source-writer rename_result=SUCCESS elapsed_ms=8.119 old_name_lease=1|0 new_name_lease=0|1
+OK rename-write-ownership-baseline known_gap_reproduced=2
+```
+
+This proves both bypasses. It also shows why C2 must not rename a live source
+lease in place: after namespace mutation, the destination lease remains keyed
+to the old pathname while the file lease follows the file identity under the
+new pathname.
+
+Capture/retain the following two-mount cases while changing runtime code:
 
 - mount A holds an active writer on the destination while mount B closes a
   temporary source and renames it over that destination;
