@@ -347,11 +347,10 @@ is closed before the final rename.
 
 ### C2.1 — Baseline and contract
 
-A dedicated non-gating diagnostic target,
-`make test-rename-write-ownership-baseline`, captures the known unsafe
-pre-C2 behavior before runtime changes. It is intentionally not part of
-`test-integration`; once C2 is implemented its assertions will be inverted
-into blocking regressions.
+The pre-C2 diagnostic `test_rename_write_ownership_baseline.py` captured the
+known unsafe behavior before runtime changes. Its expectations were then
+inverted into the blocking `make test-rename-write-ownership` gate once the
+regular-file C2 slice landed.
 
 The baseline was reproduced on 2026-09-28 against FOD 3.4.30:
 
@@ -393,6 +392,18 @@ FOD 3.4.31 starts with the regular-file slice: file sources whose destination
 is absent or another primary file use one guarded PostgreSQL transaction.
 Hardlink/symlink/directory rename paths remain on the legacy path until the
 later C2 slices close them.
+
+The first 3.4.31 mounted gate passed on 2026-09-28:
+
+```text
+OK rename-active-destination-writer errno=16 elapsed_ms=12.793 destination_unchanged=1 source_preserved=1
+OK rename-active-source-writer errno=16 elapsed_ms=3.170 source_preserved=1 destination_absent=1
+OK rename-write-ownership protected_cases=2
+```
+
+The corresponding format, workspace check and rename/root-conflict regression
+were also green. C2.4 now extends this gate with deterministic same-destination
+races and hardlink-alias target fencing.
 
 Add one PostgreSQL-authoritative rename/replace primitive rather than chaining
 the existing single-resource ownership calls.

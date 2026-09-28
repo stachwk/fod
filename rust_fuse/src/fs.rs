@@ -4331,6 +4331,60 @@ impl FodFuse {
         Ok(())
     }
 
+    // Integration-test-only deterministic rename race hook.
+    // This code is absent from normal production builds.
+    #[cfg(feature = "integration-test-hooks")]
+    fn test_rename_before_ownership_barrier(path: &str) -> Result<(), libc::c_int> {
+        let Ok(barrier_dir) = std::env::var("FOD_TEST_RENAME_BEFORE_OWNERSHIP_BARRIER_DIR") else {
+            return Ok(());
+        };
+
+        if barrier_dir.trim().is_empty() {
+            return Ok(());
+        }
+
+        let barrier_dir = PathBuf::from(barrier_dir);
+        let target_path = barrier_dir.join("target");
+
+        let target = match fs::read_to_string(&target_path) {
+            Ok(value) => value,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                warn!(
+                    "FOD test rename barrier target read failed path={} err={}",
+                    path, err
+                );
+                return Err(EIO);
+            }
+        };
+
+        if target.trim() != path {
+            return Ok(());
+        }
+
+        let ready_path = barrier_dir.join(format!("ready.{}", std::process::id()));
+        if let Err(err) = fs::write(&ready_path, path.as_bytes()) {
+            warn!(
+                "FOD test rename barrier ready write failed path={} err={}",
+                path, err
+            );
+            return Err(EIO);
+        }
+
+        let release_path = barrier_dir.join("release");
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        while !release_path.exists() {
+            if Instant::now() >= deadline {
+                warn!("FOD test rename barrier timeout path={}", path);
+                return Err(EIO);
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn create_writable_file_with_destination_ownership(
         &self,
@@ -7488,6 +7542,18 @@ impl Filesystem for FodFuse {
                     }
                 };
                 let expected_target_file_id = existing.1;
+
+                #[cfg(feature = "integration-test-hooks")]
+                if let Err(errno) = Self::test_rename_before_ownership_barrier(&new_path) {
+                    self.log_request_error(
+                        req_id,
+                        "rename",
+                        errno,
+                        format!("new_path={} test barrier", new_path),
+                    );
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
 
                 match self.repo.rename_file_replace_with_ownership_guard(
                     source_file_id,
