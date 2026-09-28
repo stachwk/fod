@@ -436,9 +436,20 @@ OK rename-write-ownership protected_cases=7
 ```
 
 Format, workspace check and diff check were also green. This closes the
-`file/hardlink -> absent/file/hardlink` C2 slice. The next selected extension
-is symlink source/target support in the same transactional namespace primitive;
-directory rename/replace remains on the legacy path after that slice.
+`file/hardlink -> absent/file/hardlink` C2 slice.
+
+The symlink extension then passed on 2026-09-28:
+
+```text
+OK rename-symlink-target-writer errno=16 target_unchanged=1 source_preserved=1
+OK rename-symlink-namespace source_move=1 file_over_symlink=1 symlink_over_file=1 symlink_over_symlink=1
+OK rename-symlink-transactional protected_cases=4
+```
+
+The existing file/hardlink ownership gate, symlink/readlink smoke and
+rename/root-conflict regression were also green. This closes the
+`file/hardlink/symlink -> absent/file/hardlink/symlink` C2 namespace slice.
+Directory rename/replace is the remaining legacy rename path.
 
 Add one PostgreSQL-authoritative rename/replace primitive rather than chaining
 the existing single-resource ownership calls.
