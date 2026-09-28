@@ -424,10 +424,21 @@ OK rename-write-ownership protected_cases=6
 ```
 
 Together with green format/workspace/diff checks, this closes the regular
-`file -> absent/file` C2 slice. The next selected extension is file-like
-hardlink coverage: hardlink sources, hardlink destinations and same-backing-file
-no-op semantics. Symlink and directory rename/replace remain on the legacy path
-after this slice.
+`file -> absent/file` C2 slice.
+
+The hardlink extension then passed on 2026-09-28:
+
+```text
+OK rename-hardlink-target-writer errno=16 target_unchanged=1 source_preserved=1
+OK rename-hardlink-source-writer errno=16 source_preserved=1 destination_absent=1
+OK rename-hardlink-file-like hardlink_source_move=1 hardlink_target_replace=1 same_file_noop=1
+OK rename-write-ownership protected_cases=7
+```
+
+Format, workspace check and diff check were also green. This closes the
+`file/hardlink -> absent/file/hardlink` C2 slice. The next selected extension
+is symlink source/target support in the same transactional namespace primitive;
+directory rename/replace remains on the legacy path after that slice.
 
 Add one PostgreSQL-authoritative rename/replace primitive rather than chaining
 the existing single-resource ownership calls.
