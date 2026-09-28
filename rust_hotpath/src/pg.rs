@@ -11478,8 +11478,8 @@ impl DbRepo {
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
-                                    "new parent id contains NUL byte".to_string()
-                                })?;
+                                        "new parent id contains NUL byte".to_string()
+                                    })?;
                                 let params =
                                     [&new_name_param, &new_parent_id_param, &file_id_param];
                                 exec_command_params(conn, &sql_rename_file_nested, &params)?;
@@ -11494,8 +11494,8 @@ impl DbRepo {
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
-                                    "new parent id contains NUL byte".to_string()
-                                })?;
+                                        "new parent id contains NUL byte".to_string()
+                                    })?;
                                 let params =
                                     [&new_name_param, &new_parent_id_param, &hardlink_id_param];
                                 exec_command_params(conn, &sql_rename_hardlink_nested, &params)?;
@@ -11510,8 +11510,8 @@ impl DbRepo {
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
-                                    "new parent id contains NUL byte".to_string()
-                                })?;
+                                        "new parent id contains NUL byte".to_string()
+                                    })?;
                                 let params =
                                     [&new_name_param, &new_parent_id_param, &symlink_id_param];
                                 exec_command_params(conn, &sql_rename_symlink_nested, &params)?;

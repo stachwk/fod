@@ -20,7 +20,7 @@ use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
-    PersistBlockRow, RenameNamespaceSource, RenameNamespaceTarget, RenameFileReplaceOutcome,
+    PersistBlockRow, RenameFileReplaceOutcome, RenameNamespaceSource, RenameNamespaceTarget,
     WriteOwnershipLease, WritePersistenceFence, STORAGE_QUOTA_EXCEEDED_PREFIX,
     WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
