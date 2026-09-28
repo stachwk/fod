@@ -10988,9 +10988,8 @@ impl DbRepo {
         let sql_update_nested =
             CString::new("UPDATE files SET id_directory = $1, name = $2 WHERE id_file = $3")
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_hardlink =
-            CString::new("DELETE FROM hardlinks WHERE id_hardlink = $1")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_hardlink = CString::new("DELETE FROM hardlinks WHERE id_hardlink = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_lookup_object = CString::new(
             "SELECT COALESCE(data_object_id::text, 'NULL') FROM files WHERE id_file = $1",
         )
@@ -11275,14 +11274,13 @@ impl DbRepo {
                     ];
                     exec_command_params(conn, &sql_prune_destinations, &destination_params)?;
 
-                    let res =
-                        exec_params(conn, &sql_destination_conflict, &destination_params)?;
+                    let res = exec_params(conn, &sql_destination_conflict, &destination_params)?;
                     if parse_bool(&fetch_single_text(res)?) {
                         return Ok(RenameFileReplaceOutcome::Busy);
                     }
 
-                    for file_id_param in std::iter::once(&source_file_id_param)
-                        .chain(target_file_id_param.iter())
+                    for file_id_param in
+                        std::iter::once(&source_file_id_param).chain(target_file_id_param.iter())
                     {
                         let params = [file_id_param];
                         exec_command_params(conn, &sql_prune_file, &params)?;
@@ -11330,20 +11328,13 @@ impl DbRepo {
                         if target_file_id == source_file_id {
                             return Ok(RenameFileReplaceOutcome::Busy);
                         }
-                        self.remove_primary_file_or_promote_hardlink_on_conn(
-                            conn,
-                            target_file_id,
-                        )?;
+                        self.remove_primary_file_or_promote_hardlink_on_conn(conn, target_file_id)?;
                     }
 
                     if let Some(new_parent_id) = new_parent_id {
                         let new_parent_id_param = CString::new(new_parent_id.to_string())
                             .map_err(|_| "new parent id contains NUL byte".to_string())?;
-                        let params = [
-                            &new_name_param,
-                            &new_parent_id_param,
-                            &source_file_id_param,
-                        ];
+                        let params = [&new_name_param, &new_parent_id_param, &source_file_id_param];
                         exec_command_params(conn, &sql_rename_nested, &params)?;
                     } else {
                         let params = [&new_name_param, &source_file_id_param];

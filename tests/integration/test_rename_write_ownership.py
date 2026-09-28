@@ -90,6 +90,15 @@ def wait_for_counts(
     )
 
 
+def wait_for_absent(path: Path) -> None:
+    deadline = time.monotonic() + WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if not path.exists():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"{path}: path still exists after timeout")
+
+
 def wait_for_bytes(path: Path, expected: bytes) -> None:
     deadline = time.monotonic() + WAIT_SECONDS
     observed: bytes | None = None
@@ -217,8 +226,8 @@ def source_writer_is_fenced(
     os.replace(source_b, destination_b)
     wait_for_bytes(destination_a, payload)
     wait_for_bytes(destination_b, payload)
-    if source_a.exists() or source_b.exists():
-        raise AssertionError("source still exists after post-release rename")
+    wait_for_absent(source_a)
+    wait_for_absent(source_b)
 
 
 def main() -> None:

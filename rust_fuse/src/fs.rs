@@ -21,8 +21,7 @@ use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
     PersistBlockRow, RenameFileReplaceOutcome, WriteOwnershipLease, WritePersistenceFence,
-    STORAGE_QUOTA_EXCEEDED_PREFIX,
-    WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+    STORAGE_QUOTA_EXCEEDED_PREFIX, WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
