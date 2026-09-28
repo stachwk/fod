@@ -2887,4 +2887,5 @@ test-rename-write-ownership: init
 
 .PHONY: test-rename-symlink-transactional
 test-rename-symlink-transactional: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_rename_symlink_transactional.py
