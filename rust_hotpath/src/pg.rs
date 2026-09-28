@@ -11309,15 +11309,19 @@ impl DbRepo {
                 "t" | "true" | "1" | "on"
             )
         };
-        let parse_resolved = |rows: Vec<Vec<String>>| -> Option<(String, u64, Option<u64>)> {
-            let row = rows.first()?;
-            if rows.len() != 1 || row.len() < 3 {
-                return None;
-            }
-            let entry_id = row[1].trim().parse::<u64>().ok()?;
-            let file_id = row[2].trim().parse::<u64>().ok();
-            Some((row[0].clone(), entry_id, file_id))
-        };
+        let parse_resolved =
+            |rows: Vec<Vec<String>>| -> Result<Option<(String, u64, Option<u64>)>, ()> {
+                if rows.is_empty() {
+                    return Ok(None);
+                }
+                if rows.len() != 1 || rows[0].len() < 3 {
+                    return Err(());
+                }
+                let row = &rows[0];
+                let entry_id = row[1].trim().parse::<u64>().map_err(|_| ())?;
+                let file_id = row[2].trim().parse::<u64>().ok();
+                Ok(Some((row[0].clone(), entry_id, file_id)))
+            };
         let matches_source = |resolved: Option<(String, u64, Option<u64>)>| match resolved {
             Some((kind, entry_id, Some(file_id))) => {
                 kind == source.entry_kind()
@@ -11344,10 +11348,11 @@ impl DbRepo {
                 |conn| {
                     let params = [&new_parent_key_param, &new_name_param];
                     let res = exec_params(conn, &sql_resolve_entry, &params)?;
-                    if matches_source(parse_resolved(fetch_rows_text(res)?)) {
-                        Ok(Some(RenameFileReplaceOutcome::Applied))
-                    } else {
-                        Ok(None)
+                    match parse_resolved(fetch_rows_text(res)?) {
+                        Ok(resolved) if matches_source(resolved) => {
+                            Ok(Some(RenameFileReplaceOutcome::Applied))
+                        }
+                        _ => Ok(None),
                     }
                 },
                 |conn| {
@@ -11383,13 +11388,20 @@ impl DbRepo {
 
                     let source_params = [&old_parent_key_param, &old_name_param];
                     let res = exec_params(conn, &sql_resolve_entry, &source_params)?;
-                    if !matches_source(parse_resolved(fetch_rows_text(res)?)) {
+                    let current_source = match parse_resolved(fetch_rows_text(res)?) {
+                        Ok(value) => value,
+                        Err(()) => return Ok(RenameFileReplaceOutcome::Busy),
+                    };
+                    if !matches_source(current_source) {
                         return Ok(RenameFileReplaceOutcome::SourceMissing);
                     }
 
                     let target_params = [&new_parent_key_param, &new_name_param];
                     let res = exec_params(conn, &sql_resolve_entry, &target_params)?;
-                    let current_target = parse_resolved(fetch_rows_text(res)?);
+                    let current_target = match parse_resolved(fetch_rows_text(res)?) {
+                        Ok(value) => value,
+                        Err(()) => return Ok(RenameFileReplaceOutcome::Busy),
+                    };
                     if !matches_target(current_target) {
                         return Ok(RenameFileReplaceOutcome::Busy);
                     }

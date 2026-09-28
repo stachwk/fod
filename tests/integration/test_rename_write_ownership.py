@@ -426,6 +426,29 @@ def hardlink_source_and_target_cases(
     wait_for_bytes(primary_b, original)
     wait_for_bytes(source_b, original)
 
+    fd = os.open(primary_a, os.O_WRONLY)
+    try:
+        wait_for_counts(launcher, primary_name, (1, 1))
+        elapsed = expect_replace_ebusy(
+            source_b,
+            moved_b,
+            "hardlink source backing writer",
+        )
+        wait_for_bytes(source_a, original)
+        wait_for_bytes(source_b, original)
+        if moved_a.exists() or moved_b.exists():
+            raise AssertionError(
+                "hardlink destination appeared after rejected source rename"
+            )
+        print(
+            "OK rename-hardlink-source-writer "
+            f"errno={errno.EBUSY} elapsed_ms={elapsed * 1000.0:.3f} "
+            "source_preserved=1 destination_absent=1"
+        )
+    finally:
+        os.close(fd)
+
+    wait_for_counts(launcher, primary_name, (0, 0))
     os.replace(source_b, moved_b)
     wait_for_absent(source_a)
     wait_for_absent(source_b)
