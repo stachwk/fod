@@ -4252,6 +4252,7 @@ pub enum RenameNamespaceSource {
     File { file_id: u64 },
     Hardlink { hardlink_id: u64, file_id: u64 },
     Symlink { symlink_id: u64 },
+    Directory { directory_id: u64 },
 }
 
 impl RenameNamespaceSource {
@@ -4260,6 +4261,7 @@ impl RenameNamespaceSource {
             Self::File { .. } => "file",
             Self::Hardlink { .. } => "hardlink",
             Self::Symlink { .. } => "symlink",
+            Self::Directory { .. } => "dir",
         }
     }
 
@@ -4268,13 +4270,14 @@ impl RenameNamespaceSource {
             Self::File { file_id } => file_id,
             Self::Hardlink { hardlink_id, .. } => hardlink_id,
             Self::Symlink { symlink_id } => symlink_id,
+            Self::Directory { directory_id } => directory_id,
         }
     }
 
     fn file_id(self) -> Option<u64> {
         match self {
             Self::File { file_id } | Self::Hardlink { file_id, .. } => Some(file_id),
-            Self::Symlink { .. } => None,
+            Self::Symlink { .. } | Self::Directory { .. } => None,
         }
     }
 }
@@ -4284,6 +4287,7 @@ pub enum RenameNamespaceTarget {
     File { file_id: u64 },
     Hardlink { hardlink_id: u64, file_id: u64 },
     Symlink { symlink_id: u64 },
+    Directory { directory_id: u64 },
 }
 
 impl RenameNamespaceTarget {
@@ -4292,6 +4296,7 @@ impl RenameNamespaceTarget {
             Self::File { .. } => "file",
             Self::Hardlink { .. } => "hardlink",
             Self::Symlink { .. } => "symlink",
+            Self::Directory { .. } => "dir",
         }
     }
 
@@ -4300,13 +4305,14 @@ impl RenameNamespaceTarget {
             Self::File { file_id } => file_id,
             Self::Hardlink { hardlink_id, .. } => hardlink_id,
             Self::Symlink { symlink_id } => symlink_id,
+            Self::Directory { directory_id } => directory_id,
         }
     }
 
     fn file_id(self) -> Option<u64> {
         match self {
             Self::File { file_id } | Self::Hardlink { file_id, .. } => Some(file_id),
-            Self::Symlink { .. } => None,
+            Self::Symlink { .. } | Self::Directory { .. } => None,
         }
     }
 }
@@ -4317,6 +4323,7 @@ pub enum RenameFileReplaceOutcome {
     NoOpSameFile,
     Busy,
     SourceMissing,
+    TargetNotEmpty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11290,6 +11297,19 @@ impl DbRepo {
             .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_symlink = CString::new("DELETE FROM symlinks WHERE id_symlink = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_directory =
+            CString::new("DELETE FROM directories WHERE id_directory = $1")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_count_directory_children = CString::new(
+            "
+            SELECT
+                (SELECT COUNT(*) FROM directories WHERE id_parent = $1)
+              + (SELECT COUNT(*) FROM files WHERE id_directory = $1)
+              + (SELECT COUNT(*) FROM hardlinks WHERE id_directory = $1)
+              + (SELECT COUNT(*) FROM symlinks WHERE id_parent = $1)
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_rename_file_root = CString::new(
             "UPDATE files SET name = $1, id_directory = NULL, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
         )
@@ -11312,6 +11332,14 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_rename_symlink_nested = CString::new(
             "UPDATE symlinks SET name = $1, id_parent = $2, modification_date = NOW() WHERE id_symlink = $3",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_rename_directory_root = CString::new(
+            "UPDATE directories SET name = $1, id_parent = NULL, modification_date = NOW(), change_date = NOW() WHERE id_directory = $2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_rename_directory_nested = CString::new(
+            "UPDATE directories SET name = $1, id_parent = $2, modification_date = NOW(), change_date = NOW() WHERE id_directory = $3",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
@@ -11450,6 +11478,25 @@ impl DbRepo {
                                 let params = [&symlink_id_param];
                                 exec_command_params(conn, &sql_delete_symlink, &params)?;
                             }
+                            RenameNamespaceTarget::Directory { directory_id } => {
+                                let directory_id_param = CString::new(directory_id.to_string())
+                                    .map_err(|_| {
+                                        "target directory id contains NUL byte".to_string()
+                                    })?;
+                                let params = [&directory_id_param];
+                                let res =
+                                    exec_params(conn, &sql_count_directory_children, &params)?;
+                                let count = fetch_single_text(res)?
+                                    .trim()
+                                    .parse::<u64>()
+                                    .map_err(|_| {
+                                        "invalid target directory children count".to_string()
+                                    })?;
+                                if count != 0 {
+                                    return Ok(RenameFileReplaceOutcome::TargetNotEmpty);
+                                }
+                                exec_command_params(conn, &sql_delete_directory, &params)?;
+                            }
                         }
 
                         #[cfg(feature = "integration-test-hooks")]
@@ -11518,6 +11565,22 @@ impl DbRepo {
                             } else {
                                 let params = [&new_name_param, &symlink_id_param];
                                 exec_command_params(conn, &sql_rename_symlink_root, &params)?;
+                            }
+                        }
+                        RenameNamespaceSource::Directory { directory_id } => {
+                            let directory_id_param = CString::new(directory_id.to_string())
+                                .map_err(|_| "source directory id contains NUL byte".to_string())?;
+                            if let Some(new_parent_id) = new_parent_id {
+                                let new_parent_id_param = CString::new(new_parent_id.to_string())
+                                    .map_err(|_| {
+                                        "new parent id contains NUL byte".to_string()
+                                    })?;
+                                let params =
+                                    [&new_name_param, &new_parent_id_param, &directory_id_param];
+                                exec_command_params(conn, &sql_rename_directory_nested, &params)?;
+                            } else {
+                                let params = [&new_name_param, &directory_id_param];
+                                exec_command_params(conn, &sql_rename_directory_root, &params)?;
                             }
                         }
                     }
