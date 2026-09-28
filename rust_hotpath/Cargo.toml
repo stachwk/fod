@@ -9,6 +9,10 @@ name = "fod_rust_hotpath"
 path = "src/lib.rs"
 crate-type = ["rlib"]
 
+[features]
+default = []
+integration-test-hooks = []
+
 [dependencies]
 base64 = "0.23.1"
 fod_rust_runtime = { package = "fod-rust-runtime", path = "../rust_runtime" }

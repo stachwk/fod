@@ -402,8 +402,21 @@ OK rename-write-ownership protected_cases=2
 ```
 
 The corresponding format, workspace check and rename/root-conflict regression
-were also green. C2.4 now extends this gate with deterministic same-destination
-races and hardlink-alias target fencing.
+were also green.
+
+The extended C2.4 gate then passed on 2026-09-28:
+
+```text
+OK rename-hardlink-target-writer errno=16 elapsed_ms=7.066 target_unchanged=1 source_preserved=1
+OK rename-same-destination-race scenario=absent winner=A loser=B loser_errno=16 winner_payload_only=1 loser_source_preserved=1 ownership_leaks=0
+OK rename-same-destination-race scenario=existing winner=A loser=B loser_errno=16 winner_payload_only=1 loser_source_preserved=1 ownership_leaks=0
+OK rename-write-ownership protected_cases=5
+```
+
+Production-hook isolation, integration-hook presence, create ownership and
+rename/root-conflict regressions were all green. The remaining regular-file
+atomicy gate is deterministic rollback injection after target removal and
+before source move.
 
 Add one PostgreSQL-authoritative rename/replace primitive rather than chaining
 the existing single-resource ownership calls.

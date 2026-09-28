@@ -7,7 +7,7 @@ build = "build.rs"
 
 [features]
 default = []
-integration-test-hooks = []
+integration-test-hooks = ["rust_hotpath/integration-test-hooks"]
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

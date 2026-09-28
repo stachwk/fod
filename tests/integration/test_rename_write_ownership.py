@@ -168,6 +168,20 @@ def disarm_rename_barrier(barrier_dir: Path) -> None:
         (barrier_dir / name).unlink(missing_ok=True)
 
 
+def arm_rename_fault_after_target_removal(
+    barrier_dir: Path,
+    destination_name: str,
+) -> None:
+    (barrier_dir / "fail_after_target_removal").write_text(
+        destination_name,
+        encoding="utf-8",
+    )
+
+
+def disarm_rename_fault_after_target_removal(barrier_dir: Path) -> None:
+    (barrier_dir / "fail_after_target_removal").unlink(missing_ok=True)
+
+
 def destination_writer_is_fenced(
     launcher: FODMount,
     mount_a: Path,
@@ -321,6 +335,67 @@ def hardlink_target_writer_is_fenced(
     wait_for_bytes(alias_b, original)
 
 
+def fault_after_target_removal_rolls_back(
+    launcher: FODMount,
+    mount_a: Path,
+    mount_b: Path,
+    barrier_dir: Path,
+) -> None:
+    suffix = uuid.uuid4().hex
+    source_name = f"rename-fault-source-{suffix}.bin"
+    destination_name = f"rename-fault-target-{suffix}.bin"
+
+    source_a = mount_a / source_name
+    source_b = mount_b / source_name
+    destination_a = mount_a / destination_name
+    destination_b = mount_b / destination_name
+
+    original = b"rename-fault-original-target"
+    replacement = b"rename-fault-replacement-source"
+
+    destination_a.write_bytes(original)
+    source_b.write_bytes(replacement)
+    wait_for_bytes(destination_b, original)
+    wait_for_bytes(source_a, replacement)
+    wait_for_counts(launcher, destination_name, (0, 0))
+    wait_for_counts(launcher, source_name, (0, 0))
+
+    arm_rename_fault_after_target_removal(barrier_dir, destination_name)
+    try:
+        observed_errno = None
+        try:
+            os.replace(source_b, destination_b)
+        except OSError as exc:
+            observed_errno = exc.errno
+
+        if observed_errno != errno.EIO:
+            raise AssertionError(
+                "fault injection expected EIO, "
+                f"observed_errno={observed_errno}"
+            )
+
+        wait_for_bytes(destination_a, original)
+        wait_for_bytes(destination_b, original)
+        wait_for_bytes(source_a, replacement)
+        wait_for_bytes(source_b, replacement)
+        wait_for_counts(launcher, destination_name, (0, 0))
+        wait_for_counts(launcher, source_name, (0, 0))
+
+        print(
+            "OK rename-fault-rollback "
+            f"errno={errno.EIO} target_restored=1 source_restored=1 "
+            "ownership_leaks=0"
+        )
+    finally:
+        disarm_rename_fault_after_target_removal(barrier_dir)
+
+    os.replace(source_b, destination_b)
+    wait_for_bytes(destination_a, replacement)
+    wait_for_bytes(destination_b, replacement)
+    wait_for_absent(source_a)
+    wait_for_absent(source_b)
+
+
 def same_destination_race(
     launcher: FODMount,
     mount_a: Path,
@@ -457,6 +532,12 @@ def main() -> None:
             destination_writer_is_fenced(launcher_a, mount_a, mount_b)
             source_writer_is_fenced(launcher_a, mount_a, mount_b)
             hardlink_target_writer_is_fenced(launcher_a, mount_a, mount_b)
+            fault_after_target_removal_rolls_back(
+                launcher_a,
+                mount_a,
+                mount_b,
+                barrier_dir,
+            )
             same_destination_race(
                 launcher_a,
                 mount_a,
@@ -472,7 +553,7 @@ def main() -> None:
                 existing_destination=True,
             )
 
-            print("OK rename-write-ownership protected_cases=5")
+            print("OK rename-write-ownership protected_cases=6")
         except BaseException:
             print("\n=== MOUNT A LOG ===")
             launcher_a._dump_log()
@@ -481,6 +562,7 @@ def main() -> None:
             raise
         finally:
             disarm_rename_barrier(barrier_dir)
+            disarm_rename_fault_after_target_removal(barrier_dir)
             launcher_b.stop()
             launcher_a.stop()
 

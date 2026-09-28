@@ -11329,6 +11329,24 @@ impl DbRepo {
                             return Ok(RenameFileReplaceOutcome::Busy);
                         }
                         self.remove_primary_file_or_promote_hardlink_on_conn(conn, target_file_id)?;
+
+                        #[cfg(feature = "integration-test-hooks")]
+                        if let Ok(hook_dir) =
+                            std::env::var("FOD_TEST_RENAME_BEFORE_OWNERSHIP_BARRIER_DIR")
+                        {
+                            if !hook_dir.trim().is_empty() {
+                                let fault_path =
+                                    std::path::Path::new(&hook_dir).join("fail_after_target_removal");
+                                if let Ok(target) = std::fs::read_to_string(&fault_path) {
+                                    if target.trim() == new_name {
+                                        return Err(
+                                            "FOD test rename injected failure after target removal"
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     if let Some(new_parent_id) = new_parent_id {
