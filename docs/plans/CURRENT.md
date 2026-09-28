@@ -296,6 +296,29 @@ Validation completed successfully:
 
 S1.2 is complete in FOD 3.4.29. No schema or storage-format change was needed.
 
+## C1 — Same-destination concurrent writable `create` race — completed
+
+FOD 3.4.30 closes the remaining cross-mount race where two clients could
+simultaneously copy to the same initially absent logical destination.
+
+Writable `create` now acquires destination-only ownership before namespace
+mutation, rechecks the namespace under that reservation and upgrades the same
+owner key to file ownership only after the file identity is known. Rollback
+removes namespace state only when the current request actually created it.
+A recovered existing file keeps normal non-`O_EXCL`/`O_TRUNC` semantics.
+
+The deterministic two-mount regression releases two GNU `cp` processes from one
+`SIGCONT` process-group barrier. Acceptance requires exactly one successful
+copy, exactly one `EBUSY` loser, identical final SHA-256 through both mounts and
+zero destination/file ownership leaks. A test-only pre-ownership barrier also
+forces the post-negative-lookup recovered-existing paths: `O_CREAT|O_TRUNC`
+must atomically truncate the recovered file, while `O_CREAT|O_EXCL` must return
+`EEXIST` without changing the existing file. Both paths must leave zero
+destination/file ownership leases. Existing path truncate, heartbeat and
+stale-writer fencing regressions remain green.
+
+No database schema or storage-format change was required.
+
 ## Deferred measured follow-ups
 
 These remain candidates, not parallel active implementation projects:

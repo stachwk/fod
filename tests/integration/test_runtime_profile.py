@@ -31,12 +31,41 @@ from tests.integration.fod_runtime_testlib import (
 from tests.integration.fod_mount import FODMount
 
 
-def _docker(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _selected_primary_dsn() -> dict[str, str]:
+    dsn, _ = load_dsn_from_config(ROOT)
+
+    # Make can select a PostgreSQL endpoint independently of fod_config.ini.
+    # Prefer FOD_PG_* and then POSTGRES_* over config-file defaults.
+    overrides = {
+        "host": ("FOD_PG_HOST", "POSTGRES_HOST"),
+        "port": ("FOD_PG_PORT", "POSTGRES_PORT"),
+        "dbname": ("FOD_PG_DBNAME", "POSTGRES_DB"),
+        "user": ("FOD_PG_USER", "POSTGRES_USER"),
+        "password": ("FOD_PG_PASSWORD", "POSTGRES_PASSWORD"),
+    }
+
+    for dsn_key, env_keys in overrides.items():
+        for env_key in env_keys:
+            value = os.environ.get(env_key)
+            if value is not None:
+                dsn[dsn_key] = value
+                break
+
+    return dsn
+
+
+def _docker(
+    args: list[str],
+    *,
+    check: bool = True,
+    timeout_seconds: float | None = None,
+) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["docker", *args],
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout_seconds,
     )
     if check and result.returncode != 0:
         raise RuntimeError(
@@ -62,13 +91,33 @@ def _docker_primary_network(container_name: str = "fod-postgres") -> str:
     return networks[0]
 
 
+def _docker_container_image(container_name: str = "fod-postgres") -> str:
+    result = _docker(
+        [
+            "inspect",
+            "-f",
+            "{{.Config.Image}}",
+            container_name,
+        ]
+    )
+    image = result.stdout.strip()
+    if not image:
+        raise RuntimeError(f"could not determine Docker image for {container_name}")
+    return image
+
+
 def _pick_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
 
 
-def _write_recovery_config(source_config: Path, destination_dir: Path, port: int) -> Path:
+def _write_recovery_config(
+    source_config: Path,
+    destination_dir: Path,
+    port: int,
+    primary_dsn: dict[str, str],
+) -> Path:
     source_dsn, _ = load_dsn_from_config(source_config)
     parser = configparser.ConfigParser(interpolation=None)
     if not parser.read(source_config):
@@ -77,6 +126,9 @@ def _write_recovery_config(source_config: Path, destination_dir: Path, port: int
         raise ValueError(f"missing [database] section in {source_config}")
     parser["database"]["host"] = "127.0.0.1"
     parser["database"]["port"] = str(port)
+    parser["database"]["dbname"] = primary_dsn["dbname"]
+    parser["database"]["user"] = primary_dsn["user"]
+    parser["database"]["password"] = primary_dsn["password"]
     for key in ("sslmode", "sslrootcert", "sslcert", "sslkey"):
         if key in source_dsn:
             parser["database"][key] = source_dsn[key]
@@ -90,6 +142,28 @@ def _wait_for_recovery_database(dsn: dict[str, str], container_name: str) -> Non
     deadline = time.monotonic() + 120.0
     last_error: Exception | None = None
     while time.monotonic() < deadline:
+        state = _docker(
+            [
+                "inspect",
+                "-f",
+                "{{.State.Status}} {{.State.ExitCode}}",
+                container_name,
+            ],
+            check=False,
+        )
+        state_text = state.stdout.strip()
+        if state.returncode == 0 and (
+            state_text.startswith("exited ")
+            or state_text.startswith("dead ")
+        ):
+            logs = _docker(["logs", container_name], check=False)
+            raise AssertionError(
+                "recovery standby exited before becoming ready:\n"
+                f"state={state_text}\n"
+                f"stdout:\n{logs.stdout}\n"
+                f"stderr:\n{logs.stderr}"
+            )
+
         try:
             with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
                 cur.execute("SHOW transaction_read_only")
@@ -113,7 +187,7 @@ def _wait_for_recovery_database(dsn: dict[str, str], container_name: str) -> Non
 
 def main() -> None:
     require_root("tests/integration/test_runtime_profile.py")
-    dsn, _ = load_dsn_from_config(ROOT)
+    dsn = _selected_primary_dsn()
     config_path = ROOT / "fod_config.ini"
     original_profile = os.environ.get("FOD_PROFILE")
     original_sync_commit = os.environ.get("FOD_SYNCHRONOUS_COMMIT")
@@ -343,6 +417,7 @@ def main() -> None:
         try:
             FODMount(str(ROOT)).init_schema()
             primary_network = _docker_primary_network()
+            primary_image = _docker_container_image()
             standby_data_path = Path(standby_data_dir.name)
             standby_data_path.chmod(0o777)
             standby_pgdata = standby_data_path / "pgdata"
@@ -352,13 +427,16 @@ def main() -> None:
                     "exec",
                     "-u",
                     "postgres",
+                    "-e",
+                    f"PGPASSWORD={dsn['password']}",
                     "fod-postgres",
                     "sh",
                     "-lc",
                     f"mkdir -p {standby_backup_path} && "
-                    "pg_basebackup -h 127.0.0.1 -p 5432 -U "
+                    "pg_basebackup -w -h 127.0.0.1 -p 5432 -U "
                     f"{dsn['user']} -D {standby_backup_path} -Fp -Xs -P",
-                ]
+                ],
+                timeout_seconds=120.0,
             )
             _docker(
                 [
@@ -377,6 +455,7 @@ def main() -> None:
                 config_path,
                 Path(standby_config_dir.name),
                 recovery_port,
+                dsn,
             )
             standby_result = _docker(
                 [
@@ -398,7 +477,7 @@ def main() -> None:
                     "PGDATA=/var/lib/postgresql/data/pgdata",
                     "-v",
                     f"{standby_data_path}:/var/lib/postgresql/data",
-                    "postgres:16-alpine",
+                    primary_image,
                 ]
             )
             if not standby_result.stdout.strip():

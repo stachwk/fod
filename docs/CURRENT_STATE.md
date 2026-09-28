@@ -263,6 +263,17 @@ The runtime contract is:
 
 - destination/file ownership is first-writer-wins and acquired with
   non-blocking PostgreSQL try-lock coordination;
+- writable `create` reserves destination ownership before namespace mutation,
+  then rechecks the namespace while that reservation is held;
+- concurrent writable creates of the same initially absent destination
+  therefore produce exactly one namespace creator; the competing creator fails
+  promptly with `EBUSY` instead of mutating and rolling back the winner;
+- the creator upgrades the same owner key from destination-only ownership to
+  destination+file ownership, and namespace rollback is allowed only when that
+  request actually created the file;
+- if the post-reservation recheck finds an existing file, non-`O_EXCL` create
+  attaches to that file identity and preserves `O_TRUNC` atomic-truncate
+  semantics; `O_EXCL` still returns `EEXIST`;
 - a competing writer fails promptly with `EBUSY` instead of waiting;
 - active ownership is renewed together with client-session heartbeat activity;
 - lease expiry and heartbeat decisions use PostgreSQL `clock_timestamp()` as the

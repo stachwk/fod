@@ -1930,7 +1930,7 @@ test-mount-suite: venv
 
 test-all: test-target-disk-clean-policy smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
 test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke
-test-integration: test-runtime-profile
+test-integration: test-runtime-profile test-dual-host-same-file-cp-race test-create-write-ownership
 
 benchmark: benchmarks
 
@@ -2870,3 +2870,12 @@ test-lseek-sparse-contract: init
 .PHONY: test-lseek-sparse-runtime
 test-lseek-sparse-runtime: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_lseek_sparse_runtime.py
+
+.PHONY: test-dual-host-same-file-cp-race
+test-dual-host-same-file-cp-race: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_dual_host_same_file_cp_race.py
+
+.PHONY: test-create-write-ownership
+test-create-write-ownership: init
+	@CARGO_TARGET_DIR="$(CURDIR)/target/integration-test-hooks" cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --features integration-test-hooks --bin fod-rust-fuse
+	@FOD_RUST_FUSE_BIN="$(CURDIR)/target/integration-test-hooks/release-lto/fod-rust-fuse" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_create_write_ownership.py

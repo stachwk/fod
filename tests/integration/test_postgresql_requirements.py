@@ -20,6 +20,29 @@ from fod_backend import load_dsn_from_config, load_fod_runtime_config
 from fod_time import db_timestamp_to_epoch, epoch_to_utc_datetime
 
 
+def _selected_dsn() -> dict[str, str]:
+    dsn, _ = load_dsn_from_config(ROOT)
+
+    # Make can select a PostgreSQL endpoint independently of fod_config.ini.
+    # Prefer FOD_PG_* and then POSTGRES_* over config-file defaults.
+    overrides = {
+        "host": ("FOD_PG_HOST", "POSTGRES_HOST"),
+        "port": ("FOD_PG_PORT", "POSTGRES_PORT"),
+        "dbname": ("FOD_PG_DBNAME", "POSTGRES_DB"),
+        "user": ("FOD_PG_USER", "POSTGRES_USER"),
+        "password": ("FOD_PG_PASSWORD", "POSTGRES_PASSWORD"),
+    }
+
+    for dsn_key, env_keys in overrides.items():
+        for env_key in env_keys:
+            value = os.environ.get(env_key)
+            if value is not None:
+                dsn[dsn_key] = value
+                break
+
+    return dsn
+
+
 def _expected_autocommit_mode() -> bool:
     value = os.environ.get("FOD_POSTGRES_AUTOCOMMIT", "off").strip().lower()
     if value in {"1", "true", "yes", "on"}:
@@ -37,7 +60,7 @@ def main() -> None:
     ).timestamp()
     assert db_timestamp_to_epoch(epoch_to_utc_datetime(0)) == 0.0
 
-    dsn, _ = load_dsn_from_config(ROOT)
+    dsn = _selected_dsn()
     runtime_config = load_fod_runtime_config(ROOT)
     pool_max_connections = int(runtime_config.get("pool_max_connections", 10))
     expected_autocommit = _expected_autocommit_mode()
@@ -52,6 +75,8 @@ def main() -> None:
             cur.execute("SET TIME ZONE 'UTC'")
             cur.execute("SHOW TIME ZONE")
             time_zone = cur.fetchone()[0]
+            cur.execute("SELECT current_database()")
+            current_database = cur.fetchone()[0]
             cur.execute("SHOW server_version_num")
             server_version_num = int(cur.fetchone()[0])
             cur.execute("SHOW max_connections")
@@ -74,6 +99,7 @@ def main() -> None:
 
     print(
         f"OK postgres-requirements autocommit={'on' if expected_autocommit else 'off'} "
+        f"database={current_database} "
         f"version={server_version_num} max_connections={max_connections} "
         f"pool_max_connections={pool_max_connections}"
     )

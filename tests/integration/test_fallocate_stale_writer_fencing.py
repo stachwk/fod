@@ -149,6 +149,13 @@ def require_ebusy(result, label: str) -> None:
 
 def main() -> int:
     template = FODMount(str(ROOT))
+
+    # Keep direct psql probes on the same database and credentials as FODMount.
+    # Otherwise psql_scalar() falls back to foddbname_test.
+    os.environ["POSTGRES_DB"] = template.postgres_db
+    os.environ["POSTGRES_USER"] = template.postgres_user
+    os.environ["POSTGRES_PASSWORD"] = template.postgres_password
+
     template.init_schema()
     bs = block_size()
     mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE

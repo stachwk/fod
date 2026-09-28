@@ -55,9 +55,21 @@ class MountConfig:
 class FODMount:
     def __init__(self, root: str, *, role: str | None = None):
         self.root = Path(root)
-        self.postgres_db = os.environ.get("POSTGRES_DB", "foddbname")
-        self.postgres_user = os.environ.get("POSTGRES_USER", "foduser")
-        self.postgres_password = os.environ.get("POSTGRES_PASSWORD", "cichosza")
+        self.postgres_db = (
+            os.environ.get("FOD_PG_DBNAME")
+            or os.environ.get("POSTGRES_DB")
+            or "foddbname"
+        )
+        self.postgres_user = (
+            os.environ.get("FOD_PG_USER")
+            or os.environ.get("POSTGRES_USER")
+            or "foduser"
+        )
+        self.postgres_password = (
+            os.environ.get("FOD_PG_PASSWORD")
+            or os.environ.get("POSTGRES_PASSWORD")
+            or "cichosza"
+        )
         self.schema_admin_password = os.environ.get("FOD_SCHEMA_ADMIN_PASSWORD") or f"fod-{secrets.token_urlsafe(24)}"
         self.role = (role or os.environ.get("FOD_ROLE", "auto")).lower()
         self.selinux = os.environ.get("FOD_SELINUX", "off")
@@ -77,10 +89,29 @@ class FODMount:
 
     def _runtime_env(self) -> dict[str, str]:
         env = os.environ.copy()
+
+        # Python-side helpers historically use POSTGRES_* while the Rust
+        # runtime resolves database overrides from FOD_PG_*. Keep both views
+        # on the same selected test endpoint.
         env["POSTGRES_DB"] = self.postgres_db
         env["POSTGRES_USER"] = self.postgres_user
         env["POSTGRES_PASSWORD"] = self.postgres_password
+        env["FOD_PG_DBNAME"] = self.postgres_db
+        env["FOD_PG_USER"] = self.postgres_user
+        env["FOD_PG_PASSWORD"] = self.postgres_password
+
+        postgres_host = env.get("FOD_PG_HOST") or env.get("POSTGRES_HOST")
+        if postgres_host:
+            env["FOD_PG_HOST"] = postgres_host
+            env["POSTGRES_HOST"] = postgres_host
+
+        postgres_port = env.get("FOD_PG_PORT") or env.get("POSTGRES_PORT")
+        if postgres_port:
+            env["FOD_PG_PORT"] = postgres_port
+            env["POSTGRES_PORT"] = postgres_port
+
         # Test harness musi uzywac tego samego configu dla mkfs i mountu.
+        # Database endpoint values above intentionally override [database].
         env["FOD_CONFIG"] = str(self._config_path())
         return env
 

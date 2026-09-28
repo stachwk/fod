@@ -84,6 +84,13 @@ def main() -> None:
 
         launcher_a = FODMount(str(root))
         launcher_b = FODMount(str(root))
+
+        # Direct test execution must query the same PostgreSQL database used
+        # by FODMount. Without this, psql_scalar() falls back to foddbname_test.
+        os.environ["POSTGRES_DB"] = launcher_a.postgres_db
+        os.environ["POSTGRES_USER"] = launcher_a.postgres_user
+        os.environ["POSTGRES_PASSWORD"] = launcher_a.postgres_password
+
         launcher_a.init_schema()
 
         fd_a: int | None = None

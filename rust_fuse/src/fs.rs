@@ -4276,6 +4276,247 @@ impl FodFuse {
         Ok(())
     }
 
+    // Integration-test-only deterministic race hook.
+    // This code is absent from normal production builds.
+    #[cfg(feature = "integration-test-hooks")]
+    fn test_create_before_ownership_barrier(path: &str) -> Result<(), libc::c_int> {
+        let Ok(barrier_dir) = std::env::var("FOD_TEST_CREATE_BEFORE_OWNERSHIP_BARRIER_DIR") else {
+            return Ok(());
+        };
+
+        if barrier_dir.trim().is_empty() {
+            return Ok(());
+        }
+
+        let barrier_dir = PathBuf::from(barrier_dir);
+        let target_path = barrier_dir.join("target");
+
+        let target = match fs::read_to_string(&target_path) {
+            Ok(value) => value,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                warn!(
+                    "FOD test create barrier target read failed path={} err={}",
+                    path, err
+                );
+                return Err(EIO);
+            }
+        };
+
+        if target.trim() != path {
+            return Ok(());
+        }
+
+        let ready_path = barrier_dir.join("ready");
+        if let Err(err) = fs::write(&ready_path, path.as_bytes()) {
+            warn!(
+                "FOD test create barrier ready write failed path={} err={}",
+                path, err
+            );
+            return Err(EIO);
+        }
+
+        let release_path = barrier_dir.join("release");
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        while !release_path.exists() {
+            if Instant::now() >= deadline {
+                warn!("FOD test create barrier timeout path={}", path);
+                return Err(EIO);
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        let _ = fs::remove_file(&target_path);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_writable_file_with_destination_ownership(
+        &self,
+        path: String,
+        parent_id: Option<u64>,
+        name: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+        flags: i32,
+    ) -> Result<(u64, u64, bool), libc::c_int> {
+        let _gate = self.write_ownership_gate.lock().map_err(|_| EIO)?;
+        let fh = self.next_handle();
+
+        if self.session_id.is_none() {
+            warn!(
+                "FOD create destination ownership unavailable path={} reason=no_client_session",
+                path
+            );
+            return Err(EIO);
+        }
+
+        let ownership_repo = self.client_session_repo().ok_or(EIO)?;
+        let owner_key = fh;
+
+        #[cfg(feature = "integration-test-hooks")]
+        Self::test_create_before_ownership_barrier(&path)?;
+
+        let destination_lease = match ownership_repo.acquire_write_ownership(
+            parent_id,
+            name,
+            None,
+            owner_key,
+            self.client_session_lease_ttl_seconds,
+        ) {
+            Ok(Some(lease)) => lease,
+            Ok(None) => {
+                debug!(
+                    "FOD create destination ownership busy path={} owner_key={}",
+                    path, owner_key
+                );
+                return Err(libc::EBUSY);
+            }
+            Err(err) => {
+                warn!(
+                    "FOD create destination ownership acquire failed path={} owner_key={} err={}",
+                    path, owner_key, err
+                );
+                return Err(EIO);
+            }
+        };
+
+        let release_destination = |reason: &str| {
+            if let Err(err) = ownership_repo.release_write_ownership(owner_key, destination_lease) {
+                warn!(
+                    "FOD create destination ownership release failed path={} owner_key={} reason={} err={}",
+                    path, owner_key, reason, err
+                );
+            }
+        };
+
+        // Re-check the namespace only after destination ownership is ours.
+        // This closes the cross-mount negative-lookup/create race.
+        let resolved = match self.repo.resolve_path(&path) {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(
+                    "FOD create destination recheck failed path={} owner_key={} err={}",
+                    path, owner_key, err
+                );
+                release_destination("resolve_path");
+                return Err(EIO);
+            }
+        };
+
+        let (file_id, created_new) = match resolved.kind.as_deref() {
+            Some("file") => {
+                if flags & libc::O_EXCL != 0 {
+                    release_destination("existing_file_excl");
+                    return Err(libc::EEXIST);
+                }
+                match resolved.entry_id {
+                    Some(file_id) => (file_id, false),
+                    None => {
+                        release_destination("existing_file_missing_id");
+                        return Err(EIO);
+                    }
+                }
+            }
+            Some("hardlink") => {
+                if flags & libc::O_EXCL != 0 {
+                    release_destination("existing_hardlink_excl");
+                    return Err(libc::EEXIST);
+                }
+                let Some(hardlink_id) = resolved.entry_id else {
+                    release_destination("existing_hardlink_missing_id");
+                    return Err(EIO);
+                };
+                match self.repo.get_hardlink_file_id(hardlink_id) {
+                    Ok(Some(file_id)) => (file_id, false),
+                    Ok(None) => {
+                        release_destination("existing_hardlink_missing_file");
+                        return Err(EIO);
+                    }
+                    Err(err) => {
+                        warn!(
+                            "FOD create hardlink file lookup failed path={} hardlink_id={} err={}",
+                            path, hardlink_id, err
+                        );
+                        release_destination("existing_hardlink_lookup");
+                        return Err(EIO);
+                    }
+                }
+            }
+            Some(_) => {
+                release_destination("existing_non_file");
+                return Err(libc::EEXIST);
+            }
+            None => match self
+                .repo
+                .create_file(parent_id, name, mode, uid, gid, &path)
+            {
+                Ok(file_id) => (file_id, true),
+                Err(err) => {
+                    warn!(
+                        "FOD create pre-owned destination create_file failed path={} owner_key={} err={}",
+                        path, owner_key, err
+                    );
+                    release_destination("create_file");
+                    return Err(EIO);
+                }
+            },
+        };
+
+        let lease = match ownership_repo.acquire_write_ownership(
+            parent_id,
+            name,
+            Some(file_id),
+            owner_key,
+            self.client_session_lease_ttl_seconds,
+        ) {
+            Ok(Some(lease)) => lease,
+            Ok(None) => {
+                let mut rollback_failed = false;
+                if created_new {
+                    if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
+                        rollback_failed = true;
+                        warn!(
+                            "FOD create file-ownership rollback failed path={} file_id={} owner_key={} err={}",
+                            path, file_id, owner_key, err
+                        );
+                    }
+                }
+                release_destination("file_ownership_busy");
+                return Err(if rollback_failed { EIO } else { libc::EBUSY });
+            }
+            Err(err) => {
+                if created_new {
+                    if let Err(rollback_err) = self.remove_primary_file_or_promote_hardlink(file_id)
+                    {
+                        warn!(
+                            "FOD create file-ownership error rollback failed path={} file_id={} owner_key={} err={}",
+                            path, file_id, owner_key, rollback_err
+                        );
+                    }
+                }
+                warn!(
+                    "FOD create file ownership acquire failed path={} file_id={} owner_key={} err={}",
+                    path, file_id, owner_key, err
+                );
+                release_destination("file_ownership_error");
+                return Err(EIO);
+            }
+        };
+
+        let ownership = FileWriteOwnership {
+            parent_id,
+            name: name.to_string(),
+            file_id,
+            owner_key,
+            lease,
+        };
+        self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
+        Ok((file_id, fh, created_new))
+    }
+
     fn create_writable_handle_with_ownership(
         &self,
         path: String,
@@ -7396,44 +7637,20 @@ impl Filesystem for FodFuse {
         if !subject.is_root() {
             mode &= !(libc::S_ISUID | libc::S_ISGID);
         }
-        let file_id = match self.repo.create_file(
-            parent_id,
-            name.to_string_lossy().as_ref(),
-            mode,
-            subject.uid,
-            subject.gid,
-            &child_path,
-        ) {
-            Ok(file_id) => file_id,
-            Err(_) => {
-                fuse_reply_error!(reply, EIO);
-                return;
-            }
-        };
-        // O_CREAT z uchwytem do zapisu musi wejsc w ten sam mechanizm
-        // first-writer-wins co zwykle open(O_WRONLY/O_RDWR). Samo create_file()
-        // tworzy obiekt w bazie, ale bez ownership drugi mount mogl otworzyc
-        // ten sam plik do zapisu zanim pierwszy uchwyt zostal zamkniety.
         let writable = matches!(flags & libc::O_ACCMODE, libc::O_WRONLY | libc::O_RDWR);
 
-        let fh = if writable {
-            match self.create_writable_handle_with_ownership(child_path.clone(), file_id, flags) {
-                Ok(fh) => fh,
+        let (file_id, fh, created_new) = if writable {
+            match self.create_writable_file_with_destination_ownership(
+                child_path.clone(),
+                parent_id,
+                name.to_string_lossy().as_ref(),
+                mode,
+                subject.uid,
+                subject.gid,
+                flags,
+            ) {
+                Ok(value) => value,
                 Err(errno) => {
-                    // create_file() wykonalo juz mutacje. Jezeli nie mozemy
-                    // zdobyc ownership, cofamy swiezo utworzony plik, aby
-                    // create() nie zwrocil bledu pozostawiajac wpis w FOD.
-                    if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
-                        warn!(
-                            "FOD create ownership rollback failed path={} file_id={} errno={} err={}",
-                            child_path, file_id, errno, err
-                        );
-                        self.remove_cached_path(&child_path);
-                        self.invalidate_statfs_cache();
-                        fuse_reply_error!(reply, EIO);
-                        return;
-                    }
-
                     self.remove_cached_path(&child_path);
                     self.invalidate_statfs_cache();
                     fuse_reply_error!(reply, errno);
@@ -7441,27 +7658,86 @@ impl Filesystem for FodFuse {
                 }
             }
         } else {
-            self.create_handle_for_file(child_path.clone(), Some(file_id), flags)
+            let file_id = match self.repo.create_file(
+                parent_id,
+                name.to_string_lossy().as_ref(),
+                mode,
+                subject.uid,
+                subject.gid,
+                &child_path,
+            ) {
+                Ok(file_id) => file_id,
+                Err(_) => {
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
+            };
+            let fh = self.create_handle_for_file(child_path.clone(), Some(file_id), flags);
+            (file_id, fh, true)
         };
+
+        // create() can recover an entry that appeared after the initial negative
+        // lookup but before destination ownership was acquired. In that case the
+        // kernel still expects O_TRUNC semantics exactly like open(O_TRUNC).
+        if writable && !created_new && (flags & libc::O_TRUNC) != 0 {
+            let mut state = Self::new_write_state(file_id, 0, true);
+            if let Err(errno) = self.attach_write_persistence_fence_for_handle(fh, &mut state) {
+                self.rollback_open_handle(fh);
+                self.log_request_error(
+                    req_id,
+                    "create",
+                    errno,
+                    format!(
+                        "path={} file_id={} recovered O_TRUNC fence",
+                        child_path, file_id
+                    ),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+            if let Err(errno) = self.flush_write_state(&mut state) {
+                self.rollback_open_handle(fh);
+                self.log_request_error(
+                    req_id,
+                    "create",
+                    errno,
+                    format!(
+                        "path={} file_id={} recovered O_TRUNC flush",
+                        child_path, file_id
+                    ),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+            self.remove_write_state(fh);
+            debug!(
+                "FOD req={} op=create recovered_existing_atomic_truncate path={} file_id={} fh={}",
+                req_id, child_path, file_id, fh
+            );
+        }
 
         // ACL kopiujemy dopiero po uzyskaniu ownership dla uchwytu zapisywalnego.
         // Ogranicza to skutki uboczne w sciezce rollbacku po EBUSY/EIO.
-        let _ = self.copy_default_acl_to_child(&parent_path, "file", file_id, false);
+        if created_new {
+            let _ = self.copy_default_acl_to_child(&parent_path, "file", file_id, false);
+        }
 
         match self.lookup_path(&child_path) {
             Ok(Some(attrs)) => {
                 self.register_path(&child_path, attrs.file_attr.ino.0);
-                let _ = self.append_journal_event(
-                    subject.uid,
-                    "create",
-                    &child_path,
-                    Some(file_id),
-                    None,
-                );
+                if created_new {
+                    let _ = self.append_journal_event(
+                        subject.uid,
+                        "create",
+                        &child_path,
+                        Some(file_id),
+                        None,
+                    );
+                }
                 self.invalidate_statfs_cache();
                 debug!(
-                    "FOD req={} op=create completed path={} file_id={} fh={}",
-                    req_id, child_path, file_id, fh
+                    "FOD req={} op=create completed path={} file_id={} fh={} created_new={}",
+                    req_id, child_path, file_id, fh, created_new
                 );
                 reply.created(
                     &self.metadata_cache_ttl_live(),
@@ -7484,11 +7760,13 @@ impl Filesystem for FodFuse {
                 }
                 self.remove_handle_state(fh);
 
-                if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
-                    warn!(
-                        "FOD create rollback after lookup miss failed path={} file_id={} err={}",
-                        child_path, file_id, err
-                    );
+                if created_new {
+                    if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
+                        warn!(
+                            "FOD create rollback after lookup miss failed path={} file_id={} err={}",
+                            child_path, file_id, err
+                        );
+                    }
                 }
                 self.remove_cached_path(&child_path);
                 self.invalidate_statfs_cache();
@@ -7507,9 +7785,10 @@ impl Filesystem for FodFuse {
                 }
                 self.remove_handle_state(fh);
 
-                let rollback_failed = self
-                    .remove_primary_file_or_promote_hardlink(file_id)
-                    .is_err();
+                let rollback_failed = created_new
+                    && self
+                        .remove_primary_file_or_promote_hardlink(file_id)
+                        .is_err();
                 self.remove_cached_path(&child_path);
                 self.invalidate_statfs_cache();
 
