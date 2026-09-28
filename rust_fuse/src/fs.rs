@@ -20,7 +20,8 @@ use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
-    PersistBlockRow, WriteOwnershipLease, WritePersistenceFence, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    PersistBlockRow, RenameFileReplaceOutcome, WriteOwnershipLease, WritePersistenceFence,
+    STORAGE_QUOTA_EXCEEDED_PREFIX,
     WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
@@ -7403,6 +7404,7 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        let old_name = name.to_string_lossy().to_string();
         let new_name = newname.to_string_lossy().to_string();
         let source_attrs = self.lookup_path(&old_path).ok().flatten();
         let old_ino = source_attrs
@@ -7437,6 +7439,7 @@ impl Filesystem for FodFuse {
                     return;
                 }
             };
+
             if let Some(existing_kind) = existing.0.as_deref() {
                 let existing_attrs = self.lookup_path(&new_path).ok().flatten();
                 if matches!(existing_kind, "file" | "hardlink" | "symlink") {
@@ -7457,6 +7460,100 @@ impl Filesystem for FodFuse {
                         }
                     }
                 }
+            }
+
+            if matches!(kind.as_deref(), Some("file"))
+                && matches!(existing.0.as_deref(), None | Some("file"))
+            {
+                let Some(source_file_id) = entry_id else {
+                    self.log_request_error(
+                        req_id,
+                        "rename",
+                        EIO,
+                        format!("old_path={} missing source file id", old_path),
+                    );
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                };
+                let old_parent_id = match self.parent_entry_id_for_inode(parent) {
+                    Ok(value) => value,
+                    Err(errno) => {
+                        self.log_request_error(
+                            req_id,
+                            "rename",
+                            errno,
+                            format!("parent={} parent_id", parent),
+                        );
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                };
+                let expected_target_file_id = existing.1;
+
+                match self.repo.rename_file_replace_with_ownership_guard(
+                    source_file_id,
+                    old_parent_id,
+                    &old_name,
+                    new_parent_id,
+                    &new_name,
+                    expected_target_file_id,
+                ) {
+                    Ok(RenameFileReplaceOutcome::Applied) => {
+                        if expected_target_file_id.is_some() {
+                            self.remove_cached_path(&new_path);
+                            self.remove_cached_handle_paths(&new_path);
+                        }
+                        let _ = self.append_journal_event(
+                            subject.uid,
+                            "rename",
+                            &format!("{old_path}->{new_path}"),
+                            None,
+                            None,
+                        );
+                        self.move_cached_path(&old_path, &new_path, old_ino);
+                        self.invalidate_statfs_cache();
+                        debug!(
+                            "FOD req={} op=rename completed protected_file_replace old_path={} new_path={}",
+                            req_id, old_path, new_path
+                        );
+                        reply.ok();
+                        return;
+                    }
+                    Ok(RenameFileReplaceOutcome::Busy) => {
+                        self.log_request_error(
+                            req_id,
+                            "rename",
+                            libc::EBUSY,
+                            format!(
+                                "old_path={} new_path={} ownership conflict",
+                                old_path, new_path
+                            ),
+                        );
+                        fuse_reply_error!(reply, libc::EBUSY);
+                        return;
+                    }
+                    Ok(RenameFileReplaceOutcome::SourceMissing) => {
+                        self.log_request_error(
+                            req_id,
+                            "rename",
+                            ENOENT,
+                            format!("old_path={} source changed", old_path),
+                        );
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                    Err(err) => {
+                        warn!(
+                            "FOD req={} op=rename protected file replace failed old_path={} new_path={} err={}",
+                            req_id, old_path, new_path, err
+                        );
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                }
+            }
+
+            if let Some(existing_kind) = existing.0.as_deref() {
                 let removal_result = match existing_kind {
                     "file" => match self.file_id_for_path(&new_path) {
                         Ok(Some(file_id)) => self.remove_primary_file_or_promote_hardlink(file_id),

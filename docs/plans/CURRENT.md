@@ -389,6 +389,11 @@ The selected contract is fail-fast first-writer-wins:
 
 ### C2.2 — Transactional repository primitive
 
+FOD 3.4.31 starts with the regular-file slice: file sources whose destination
+is absent or another primary file use one guarded PostgreSQL transaction.
+Hardlink/symlink/directory rename paths remain on the legacy path until the
+later C2 slices close them.
+
 Add one PostgreSQL-authoritative rename/replace primitive rather than chaining
 the existing single-resource ownership calls.
 
