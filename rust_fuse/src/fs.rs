@@ -7579,9 +7579,7 @@ impl Filesystem for FodFuse {
 
                 let expected_target = match (existing.0.as_deref(), existing.1) {
                     (None, _) => None,
-                    (Some("file"), Some(file_id)) => {
-                        Some(RenameFileLikeTarget::File { file_id })
-                    }
+                    (Some("file"), Some(file_id)) => Some(RenameFileLikeTarget::File { file_id }),
                     (Some("hardlink"), Some(hardlink_id)) => {
                         let file_id = match self.repo.get_hardlink_file_id(hardlink_id) {
                             Ok(Some(file_id)) => file_id,
