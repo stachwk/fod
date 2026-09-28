@@ -147,6 +147,7 @@ def destination_writer_is_fenced(
     try:
         wait_for_counts(launcher, destination_name, (1, 1))
         temporary_b.write_bytes(replacement)
+        wait_for_counts(launcher, temporary_name, (0, 0))
         elapsed = expect_replace_ebusy(
             temporary_b,
             destination_b,
