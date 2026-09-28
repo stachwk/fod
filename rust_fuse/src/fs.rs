@@ -20,7 +20,7 @@ use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
-    PersistBlockRow, RenameFileLikeSource, RenameFileLikeTarget, RenameFileReplaceOutcome,
+    PersistBlockRow, RenameNamespaceSource, RenameNamespaceTarget, RenameFileReplaceOutcome,
     WriteOwnershipLease, WritePersistenceFence, STORAGE_QUOTA_EXCEEDED_PREFIX,
     WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
@@ -7516,8 +7516,11 @@ impl Filesystem for FodFuse {
                 }
             }
 
-            if matches!(kind.as_deref(), Some("file" | "hardlink"))
-                && matches!(existing.0.as_deref(), None | Some("file" | "hardlink"))
+            if matches!(kind.as_deref(), Some("file" | "hardlink" | "symlink"))
+                && matches!(
+                    existing.0.as_deref(),
+                    None | Some("file" | "hardlink" | "symlink")
+                )
             {
                 let old_parent_id = match self.parent_entry_id_for_inode(parent) {
                     Ok(value) => value,
@@ -7534,7 +7537,7 @@ impl Filesystem for FodFuse {
                 };
 
                 let source = match (kind.as_deref(), entry_id) {
-                    (Some("file"), Some(file_id)) => RenameFileLikeSource::File { file_id },
+                    (Some("file"), Some(file_id)) => RenameNamespaceSource::File { file_id },
                     (Some("hardlink"), Some(hardlink_id)) => {
                         let file_id = match self.repo.get_hardlink_file_id(hardlink_id) {
                             Ok(Some(file_id)) => file_id,
@@ -7560,17 +7563,20 @@ impl Filesystem for FodFuse {
                                 return;
                             }
                         };
-                        RenameFileLikeSource::Hardlink {
+                        RenameNamespaceSource::Hardlink {
                             hardlink_id,
                             file_id,
                         }
+                    }
+                    (Some("symlink"), Some(symlink_id)) => {
+                        RenameNamespaceSource::Symlink { symlink_id }
                     }
                     _ => {
                         self.log_request_error(
                             req_id,
                             "rename",
                             EIO,
-                            format!("old_path={} missing file-like source id", old_path),
+                            format!("old_path={} missing namespace source id", old_path),
                         );
                         fuse_reply_error!(reply, EIO);
                         return;
@@ -7579,7 +7585,7 @@ impl Filesystem for FodFuse {
 
                 let expected_target = match (existing.0.as_deref(), existing.1) {
                     (None, _) => None,
-                    (Some("file"), Some(file_id)) => Some(RenameFileLikeTarget::File { file_id }),
+                    (Some("file"), Some(file_id)) => Some(RenameNamespaceTarget::File { file_id }),
                     (Some("hardlink"), Some(hardlink_id)) => {
                         let file_id = match self.repo.get_hardlink_file_id(hardlink_id) {
                             Ok(Some(file_id)) => file_id,
@@ -7605,17 +7611,20 @@ impl Filesystem for FodFuse {
                                 return;
                             }
                         };
-                        Some(RenameFileLikeTarget::Hardlink {
+                        Some(RenameNamespaceTarget::Hardlink {
                             hardlink_id,
                             file_id,
                         })
+                    }
+                    (Some("symlink"), Some(symlink_id)) => {
+                        Some(RenameNamespaceTarget::Symlink { symlink_id })
                     }
                     _ => {
                         self.log_request_error(
                             req_id,
                             "rename",
                             EIO,
-                            format!("new_path={} invalid file-like target", new_path),
+                            format!("new_path={} invalid protected namespace target", new_path),
                         );
                         fuse_reply_error!(reply, EIO);
                         return;
@@ -7634,7 +7643,7 @@ impl Filesystem for FodFuse {
                     return;
                 }
 
-                match self.repo.rename_file_like_replace_with_ownership_guard(
+                match self.repo.rename_namespace_replace_with_ownership_guard(
                     source,
                     old_parent_id,
                     &old_name,
@@ -7657,7 +7666,7 @@ impl Filesystem for FodFuse {
                         self.move_cached_path(&old_path, &new_path, old_ino);
                         self.invalidate_statfs_cache();
                         debug!(
-                            "FOD req={} op=rename completed protected_file_like_replace old_path={} new_path={}",
+                            "FOD req={} op=rename completed protected_namespace_replace old_path={} new_path={}",
                             req_id, old_path, new_path
                         );
                         reply.ok();
@@ -7696,7 +7705,7 @@ impl Filesystem for FodFuse {
                     }
                     Err(err) => {
                         warn!(
-                            "FOD req={} op=rename protected file-like replace failed old_path={} new_path={} err={}",
+                            "FOD req={} op=rename protected namespace replace failed old_path={} new_path={} err={}",
                             req_id, old_path, new_path, err
                         );
                         fuse_reply_error!(reply, EIO);
