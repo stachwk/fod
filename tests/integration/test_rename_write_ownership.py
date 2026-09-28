@@ -486,6 +486,33 @@ def hardlink_source_and_target_cases(
     )
 
 
+def same_path_rename_is_noop(
+    launcher: FODMount,
+    mount_a: Path,
+    mount_b: Path,
+) -> None:
+    suffix = uuid.uuid4().hex
+    name = f"rename-same-path-{suffix}.bin"
+    path_a = mount_a / name
+    path_b = mount_b / name
+    payload = b"rename-same-path-payload"
+
+    path_a.write_bytes(payload)
+    wait_for_bytes(path_b, payload)
+    wait_for_counts(launcher, name, (0, 0))
+
+    os.replace(path_a, path_a)
+
+    wait_for_bytes(path_a, payload)
+    wait_for_bytes(path_b, payload)
+    wait_for_counts(launcher, name, (0, 0))
+
+    print(
+        "OK rename-same-path-noop "
+        "payload_preserved=1 ownership_leaks=0"
+    )
+
+
 def same_destination_race(
     launcher: FODMount,
     mount_a: Path,
@@ -629,6 +656,7 @@ def main() -> None:
                 mount_b,
                 barrier_dir,
             )
+            same_path_rename_is_noop(launcher_a, mount_a, mount_b)
             same_destination_race(
                 launcher_a,
                 mount_a,
@@ -644,7 +672,7 @@ def main() -> None:
                 existing_destination=True,
             )
 
-            print("OK rename-write-ownership protected_cases=7")
+            print("OK rename-write-ownership protected_cases=8")
         except BaseException:
             print("\n=== MOUNT A LOG ===")
             launcher_a._dump_log()
