@@ -322,16 +322,121 @@ No database schema or storage-format change was required.
 ## C2 — Same-destination rename/replace ownership — selected
 
 C1 closes the direct writable `create`/copy race, but the current mounted
-`rename()` path can still resolve and remove an existing destination before
-renaming the source without acquiring PostgreSQL destination ownership. This
-leaves the temporary-file plus rename/replace half of the older destination
-ownership TODO open.
+`rename()` path still has two related correctness gaps:
 
-The next correctness slice must define deterministic ordering for every
-namespace resource needed by rename/replace, prevent replacement from bypassing
-active destination/file ownership, preserve the intended replace semantics and
-add a deterministic two-mount regression. Keep this separate from C1 and do
-not change runtime behavior as part of this planning cleanup.
+- it resolves and removes an existing destination before checking PostgreSQL
+  destination/file ownership, so temporary-file plus rename/replace can bypass
+  the C1 first-writer-wins contract;
+- target removal and source rename are separate repository calls. A failure
+  after target removal can therefore leave a partially applied replacement
+  instead of rolling the namespace mutation back atomically.
+
+The current write-ownership primitive is intentionally narrower: one
+destination plus an optional file identity are acquired in one transaction.
+That is sufficient for writable `create`, but rename/replace needs an operation
+that coordinates the old destination, the new destination and, when replacing
+a regular file or hardlink, the existing target file identity.
+
+A further source-side detail is explicit in C2: open writable handles store
+their destination lease as `parent_id + name`. The current cache move updates
+the handle path after rename but does not migrate that lease. C2 therefore does
+not attempt lease migration for an actively write-owned source. If the source
+pathname has live write ownership, rename fails promptly with `EBUSY`; the
+ordinary temporary-file workflow remains supported because the temporary file
+is closed before the final rename.
+
+### C2.1 — Baseline and contract
+
+Capture the current two-mount behavior before changing runtime code:
+
+- mount A holds an active writer on the destination while mount B closes a
+  temporary source and renames it over that destination;
+- two mounts concurrently rename different closed temporary files to the same
+  initially absent destination;
+- the same race with an already existing destination;
+- rename of a source pathname while that pathname has active write ownership;
+- replacement of a target file whose file identity is write-owned through a
+  different hardlink pathname.
+
+The selected contract is fail-fast first-writer-wins:
+
+- any advisory-lock contention or live conflicting destination/file ownership
+  returns `EBUSY` without waiting;
+- no destination payload or namespace row is removed before all ownership and
+  namespace preconditions pass;
+- a losing rename leaves both its source and the destination unchanged;
+- existing POSIX error behavior such as `ENOENT`, `EISDIR`, `ENOTEMPTY`,
+  `EINVAL` and root `EXDEV` remains separate from ownership conflicts.
+
+### C2.2 — Transactional repository primitive
+
+Add one PostgreSQL-authoritative rename/replace primitive rather than chaining
+the existing single-resource ownership calls.
+
+The operation should:
+
+1. derive resource keys for the old and new namespace destinations and use
+   non-blocking PostgreSQL advisory transaction locks; known keys are acquired
+   in deterministic order;
+2. re-resolve source and destination after the destination locks are held;
+3. when the destination resolves to a file identity, include/check its file
+   ownership so a writer through another hardlink alias also fences replace;
+4. prune expired ownership rows and reject every live conflicting source
+   destination, target destination or target-file lease with `EBUSY`;
+5. perform target removal/hardlink promotion and source rename in the same
+   PostgreSQL transaction, so any error rolls the complete replacement back;
+6. keep the operation replay-safe according to the existing repository
+   transaction policy and map backend uncertainty to `EIO`, never to a
+   partially successful rename.
+
+No persistent rename-specific lease table is selected. Transaction-scoped
+advisory locks serialize the namespace mutation, while the existing persistent
+destination/file lease rows are the authority for active writers. No schema or
+storage-format change is expected.
+
+### C2.3 — FUSE integration and cache state
+
+The FUSE callback keeps permission, sticky-bit, directory-cycle and root
+validation at the mounted boundary, but delegates the final protected namespace
+mutation to the transactional repository primitive.
+
+After a successful transaction:
+
+- invalidate old/new path and statfs metadata coherently;
+- move source cached path state only after commit;
+- do not drop source or target handle state before the repository transaction
+  succeeds;
+- do not migrate a live source write lease in C2; active source ownership is an
+  `EBUSY` condition.
+
+The existing `test_rename_root_conflict.sh` behavior remains a mandatory
+regression.
+
+### C2.4 — Deterministic acceptance
+
+Extend the existing `integration-test-hooks` feature with a rename barrier so
+the concurrency windows are deterministic without shipping test hooks in the
+production binary.
+
+Acceptance requires:
+
+- active destination writer vs rename/replace -> prompt `EBUSY`, unchanged
+  destination payload and unchanged temporary source;
+- two simultaneous closed-temp renames to one absent destination -> exactly
+  one winner, exactly one `EBUSY` loser and winner-only final content;
+- the same race over an existing destination -> one atomic winner, no transient
+  mixed/partial replacement and loser source preserved;
+- target file write-owned through another hardlink pathname -> `EBUSY`;
+- actively write-owned source pathname -> `EBUSY`, then successful rename
+  after the writer closes;
+- injected failure between logical target removal and source move proves
+  PostgreSQL rollback restores the original target and source;
+- cross-parent file rename and the existing file/directory/root conflict tests
+  remain green;
+- zero leaked destination/file ownership rows after every case;
+- normal production `fod-rust-fuse` contains no rename test-hook marker.
+
+Only after these gates pass should C2 change from selected to completed.
 
 ## Deferred measured follow-ups
 
