@@ -414,9 +414,20 @@ OK rename-write-ownership protected_cases=5
 ```
 
 Production-hook isolation, integration-hook presence, create ownership and
-rename/root-conflict regressions were all green. The remaining regular-file
-atomicy gate is deterministic rollback injection after target removal and
-before source move.
+rename/root-conflict regressions were all green.
+
+The final regular-file atomicy gate also passed on 2026-09-28:
+
+```text
+OK rename-fault-rollback errno=5 target_restored=1 source_restored=1 ownership_leaks=0
+OK rename-write-ownership protected_cases=6
+```
+
+Together with green format/workspace/diff checks, this closes the regular
+`file -> absent/file` C2 slice. The next selected extension is file-like
+hardlink coverage: hardlink sources, hardlink destinations and same-backing-file
+no-op semantics. Symlink and directory rename/replace remain on the legacy path
+after this slice.
 
 Add one PostgreSQL-authoritative rename/replace primitive rather than chaining
 the existing single-resource ownership calls.

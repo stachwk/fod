@@ -20,8 +20,9 @@ use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
-    PersistBlockRow, RenameFileReplaceOutcome, WriteOwnershipLease, WritePersistenceFence,
-    STORAGE_QUOTA_EXCEEDED_PREFIX, WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+    PersistBlockRow, RenameFileLikeSource, RenameFileLikeTarget, RenameFileReplaceOutcome,
+    WriteOwnershipLease, WritePersistenceFence, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
@@ -7515,19 +7516,9 @@ impl Filesystem for FodFuse {
                 }
             }
 
-            if matches!(kind.as_deref(), Some("file"))
-                && matches!(existing.0.as_deref(), None | Some("file"))
+            if matches!(kind.as_deref(), Some("file" | "hardlink"))
+                && matches!(existing.0.as_deref(), None | Some("file" | "hardlink"))
             {
-                let Some(source_file_id) = entry_id else {
-                    self.log_request_error(
-                        req_id,
-                        "rename",
-                        EIO,
-                        format!("old_path={} missing source file id", old_path),
-                    );
-                    fuse_reply_error!(reply, EIO);
-                    return;
-                };
                 let old_parent_id = match self.parent_entry_id_for_inode(parent) {
                     Ok(value) => value,
                     Err(errno) => {
@@ -7541,7 +7532,97 @@ impl Filesystem for FodFuse {
                         return;
                     }
                 };
-                let expected_target_file_id = existing.1;
+
+                let source = match (kind.as_deref(), entry_id) {
+                    (Some("file"), Some(file_id)) => RenameFileLikeSource::File { file_id },
+                    (Some("hardlink"), Some(hardlink_id)) => {
+                        let file_id = match self.repo.get_hardlink_file_id(hardlink_id) {
+                            Ok(Some(file_id)) => file_id,
+                            Ok(None) => {
+                                self.log_request_error(
+                                    req_id,
+                                    "rename",
+                                    EIO,
+                                    format!(
+                                        "old_path={} hardlink_id={} missing backing file",
+                                        old_path, hardlink_id
+                                    ),
+                                );
+                                fuse_reply_error!(reply, EIO);
+                                return;
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "FOD req={} op=rename hardlink source lookup failed old_path={} hardlink_id={} err={}",
+                                    req_id, old_path, hardlink_id, err
+                                );
+                                fuse_reply_error!(reply, EIO);
+                                return;
+                            }
+                        };
+                        RenameFileLikeSource::Hardlink {
+                            hardlink_id,
+                            file_id,
+                        }
+                    }
+                    _ => {
+                        self.log_request_error(
+                            req_id,
+                            "rename",
+                            EIO,
+                            format!("old_path={} missing file-like source id", old_path),
+                        );
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                };
+
+                let expected_target = match (existing.0.as_deref(), existing.1) {
+                    (None, _) => None,
+                    (Some("file"), Some(file_id)) => {
+                        Some(RenameFileLikeTarget::File { file_id })
+                    }
+                    (Some("hardlink"), Some(hardlink_id)) => {
+                        let file_id = match self.repo.get_hardlink_file_id(hardlink_id) {
+                            Ok(Some(file_id)) => file_id,
+                            Ok(None) => {
+                                self.log_request_error(
+                                    req_id,
+                                    "rename",
+                                    EIO,
+                                    format!(
+                                        "new_path={} hardlink_id={} missing backing file",
+                                        new_path, hardlink_id
+                                    ),
+                                );
+                                fuse_reply_error!(reply, EIO);
+                                return;
+                            }
+                            Err(err) => {
+                                warn!(
+                                    "FOD req={} op=rename hardlink target lookup failed new_path={} hardlink_id={} err={}",
+                                    req_id, new_path, hardlink_id, err
+                                );
+                                fuse_reply_error!(reply, EIO);
+                                return;
+                            }
+                        };
+                        Some(RenameFileLikeTarget::Hardlink {
+                            hardlink_id,
+                            file_id,
+                        })
+                    }
+                    _ => {
+                        self.log_request_error(
+                            req_id,
+                            "rename",
+                            EIO,
+                            format!("new_path={} invalid file-like target", new_path),
+                        );
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                };
 
                 #[cfg(feature = "integration-test-hooks")]
                 if let Err(errno) = Self::test_rename_before_ownership_barrier(&new_path) {
@@ -7555,16 +7636,16 @@ impl Filesystem for FodFuse {
                     return;
                 }
 
-                match self.repo.rename_file_replace_with_ownership_guard(
-                    source_file_id,
+                match self.repo.rename_file_like_replace_with_ownership_guard(
+                    source,
                     old_parent_id,
                     &old_name,
                     new_parent_id,
                     &new_name,
-                    expected_target_file_id,
+                    expected_target,
                 ) {
                     Ok(RenameFileReplaceOutcome::Applied) => {
-                        if expected_target_file_id.is_some() {
+                        if expected_target.is_some() {
                             self.remove_cached_path(&new_path);
                             self.remove_cached_handle_paths(&new_path);
                         }
@@ -7578,7 +7659,15 @@ impl Filesystem for FodFuse {
                         self.move_cached_path(&old_path, &new_path, old_ino);
                         self.invalidate_statfs_cache();
                         debug!(
-                            "FOD req={} op=rename completed protected_file_replace old_path={} new_path={}",
+                            "FOD req={} op=rename completed protected_file_like_replace old_path={} new_path={}",
+                            req_id, old_path, new_path
+                        );
+                        reply.ok();
+                        return;
+                    }
+                    Ok(RenameFileReplaceOutcome::NoOpSameFile) => {
+                        debug!(
+                            "FOD req={} op=rename completed no-op same backing file old_path={} new_path={}",
                             req_id, old_path, new_path
                         );
                         reply.ok();
@@ -7609,7 +7698,7 @@ impl Filesystem for FodFuse {
                     }
                     Err(err) => {
                         warn!(
-                            "FOD req={} op=rename protected file replace failed old_path={} new_path={} err={}",
+                            "FOD req={} op=rename protected file-like replace failed old_path={} new_path={} err={}",
                             req_id, old_path, new_path, err
                         );
                         fuse_reply_error!(reply, EIO);

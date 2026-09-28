@@ -4248,8 +4248,75 @@ pub struct ResolvedPath {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameFileLikeSource {
+    File {
+        file_id: u64,
+    },
+    Hardlink {
+        hardlink_id: u64,
+        file_id: u64,
+    },
+}
+
+impl RenameFileLikeSource {
+    fn entry_kind(self) -> &'static str {
+        match self {
+            Self::File { .. } => "file",
+            Self::Hardlink { .. } => "hardlink",
+        }
+    }
+
+    fn entry_id(self) -> u64 {
+        match self {
+            Self::File { file_id } => file_id,
+            Self::Hardlink { hardlink_id, .. } => hardlink_id,
+        }
+    }
+
+    fn file_id(self) -> u64 {
+        match self {
+            Self::File { file_id } | Self::Hardlink { file_id, .. } => file_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameFileLikeTarget {
+    File {
+        file_id: u64,
+    },
+    Hardlink {
+        hardlink_id: u64,
+        file_id: u64,
+    },
+}
+
+impl RenameFileLikeTarget {
+    fn entry_kind(self) -> &'static str {
+        match self {
+            Self::File { .. } => "file",
+            Self::Hardlink { .. } => "hardlink",
+        }
+    }
+
+    fn entry_id(self) -> u64 {
+        match self {
+            Self::File { file_id } => file_id,
+            Self::Hardlink { hardlink_id, .. } => hardlink_id,
+        }
+    }
+
+    fn file_id(self) -> u64 {
+        match self {
+            Self::File { file_id } | Self::Hardlink { file_id, .. } => file_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameFileReplaceOutcome {
     Applied,
+    NoOpSameFile,
     Busy,
     SourceMissing,
 }
@@ -11080,14 +11147,14 @@ impl DbRepo {
         Ok(())
     }
 
-    pub fn rename_file_replace_with_ownership_guard(
+    pub fn rename_file_like_replace_with_ownership_guard(
         &self,
-        source_file_id: u64,
+        source: RenameFileLikeSource,
         old_parent_id: Option<u64>,
         old_name: &str,
         new_parent_id: Option<u64>,
         new_name: &str,
-        expected_target_file_id: Option<u64>,
+        expected_target: Option<RenameFileLikeTarget>,
     ) -> Result<RenameFileReplaceOutcome, String> {
         if old_name.is_empty() || new_name.is_empty() {
             return Err("rename destination name is empty".to_string());
@@ -11095,7 +11162,10 @@ impl DbRepo {
 
         let old_parent_key = old_parent_id.unwrap_or(0);
         let new_parent_key = new_parent_id.unwrap_or(0);
+        let source_file_id = source.file_id();
 
+        let source_entry_id_param = CString::new(source.entry_id().to_string())
+            .map_err(|_| "source entry id contains NUL byte".to_string())?;
         let source_file_id_param = CString::new(source_file_id.to_string())
             .map_err(|_| "source file id contains NUL byte".to_string())?;
         let old_parent_key_param = CString::new(old_parent_key.to_string())
@@ -11106,9 +11176,9 @@ impl DbRepo {
             .map_err(|_| "new parent key contains NUL byte".to_string())?;
         let new_name_param =
             CString::new(new_name).map_err(|_| "new name contains NUL byte".to_string())?;
-        let target_file_id_param = expected_target_file_id
-            .map(|value| {
-                CString::new(value.to_string())
+        let target_file_id_param = expected_target
+            .map(|target| {
+                CString::new(target.file_id().to_string())
                     .map_err(|_| "target file id contains NUL byte".to_string())
             })
             .transpose()?;
@@ -11124,8 +11194,8 @@ impl DbRepo {
             ),
             format!("fod:write:file:{source_file_id}"),
         ];
-        if let Some(target_file_id) = expected_target_file_id {
-            resource_keys.push(format!("fod:write:file:{target_file_id}"));
+        if let Some(target) = expected_target {
+            resource_keys.push(format!("fod:write:file:{}", target.file_id()));
         }
         resource_keys.sort_unstable();
         resource_keys.dedup();
@@ -11137,15 +11207,40 @@ impl DbRepo {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let sql_source_at_destination = CString::new(
+        let sql_resolve_entry = CString::new(
             "
-            SELECT EXISTS (
-                SELECT 1
+            SELECT kind, entry_id, file_id
+            FROM (
+                SELECT
+                    'file'::text AS kind,
+                    id_file::text AS entry_id,
+                    id_file::text AS file_id
                 FROM files
-                WHERE id_file = $1
-                  AND COALESCE(id_directory, 0) = $2
-                  AND name = $3
-            )::text
+                WHERE COALESCE(id_directory, 0) = $1 AND name = $2
+                UNION ALL
+                SELECT
+                    'hardlink'::text AS kind,
+                    id_hardlink::text AS entry_id,
+                    id_file::text AS file_id
+                FROM hardlinks
+                WHERE COALESCE(id_directory, 0) = $1 AND name = $2
+                UNION ALL
+                SELECT
+                    'symlink'::text AS kind,
+                    id_symlink::text AS entry_id,
+                    ''::text AS file_id
+                FROM symlinks
+                WHERE COALESCE(id_parent, 0) = $1 AND name = $2
+                UNION ALL
+                SELECT
+                    'dir'::text AS kind,
+                    id_directory::text AS entry_id,
+                    ''::text AS file_id
+                FROM directories
+                WHERE COALESCE(id_parent, 0) = $1 AND name = $2
+            ) AS entries
+            ORDER BY kind, entry_id
+            LIMIT 2
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -11189,49 +11284,24 @@ impl DbRepo {
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_source_exists = CString::new(
-            "
-            SELECT EXISTS (
-                SELECT 1
-                FROM files
-                WHERE id_file = $1
-                  AND COALESCE(id_directory, 0) = $2
-                  AND name = $3
-            )::text
-            ",
+        let sql_delete_hardlink = CString::new(
+            "DELETE FROM hardlinks WHERE id_hardlink = $1",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_resolve_target = CString::new(
-            "
-            SELECT kind, entry_id
-            FROM (
-                SELECT 'file'::text AS kind, id_file::text AS entry_id
-                FROM files
-                WHERE COALESCE(id_directory, 0) = $1 AND name = $2
-                UNION ALL
-                SELECT 'hardlink'::text AS kind, id_hardlink::text AS entry_id
-                FROM hardlinks
-                WHERE COALESCE(id_directory, 0) = $1 AND name = $2
-                UNION ALL
-                SELECT 'symlink'::text AS kind, id_symlink::text AS entry_id
-                FROM symlinks
-                WHERE COALESCE(id_parent, 0) = $1 AND name = $2
-                UNION ALL
-                SELECT 'dir'::text AS kind, id_directory::text AS entry_id
-                FROM directories
-                WHERE COALESCE(id_parent, 0) = $1 AND name = $2
-            ) AS entries
-            ORDER BY kind, entry_id
-            LIMIT 2
-            ",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_rename_root = CString::new(
+        let sql_rename_file_root = CString::new(
             "UPDATE files SET name = $1, id_directory = NULL, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_rename_nested = CString::new(
+        let sql_rename_file_nested = CString::new(
             "UPDATE files SET name = $1, id_directory = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_rename_hardlink_root = CString::new(
+            "UPDATE hardlinks SET name = $1, id_directory = NULL, modification_date = NOW() WHERE id_hardlink = $2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_rename_hardlink_nested = CString::new(
+            "UPDATE hardlinks SET name = $1, id_directory = $2, modification_date = NOW() WHERE id_hardlink = $3",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
@@ -11241,19 +11311,42 @@ impl DbRepo {
                 "t" | "true" | "1" | "on"
             )
         };
+        let parse_resolved = |rows: Vec<Vec<String>>| -> Option<(&str, u64, Option<u64>)> {
+            let row = rows.first()?;
+            if rows.len() != 1 || row.len() < 3 {
+                return None;
+            }
+            let entry_id = row[1].trim().parse::<u64>().ok()?;
+            let file_id = row[2].trim().parse::<u64>().ok();
+            Some((row[0].as_str(), entry_id, file_id))
+        };
+        let matches_source = |resolved: Option<(&str, u64, Option<u64>)>| {
+            matches!(
+                resolved,
+                Some((kind, entry_id, Some(file_id)))
+                    if kind == source.entry_kind()
+                        && entry_id == source.entry_id()
+                        && file_id == source.file_id()
+            )
+        };
+        let matches_target = |resolved: Option<(&str, u64, Option<u64>)>| match expected_target {
+            None => resolved.is_none(),
+            Some(target) => matches!(
+                resolved,
+                Some((kind, entry_id, Some(file_id)))
+                    if kind == target.entry_kind()
+                        && entry_id == target.entry_id()
+                        && file_id == target.file_id()
+            ),
+        };
 
         self.with_cached_connection(|conn| unsafe {
             transactional_replay_confirmed(
                 conn,
                 |conn| {
-                    let params = [
-                        &source_file_id_param,
-                        &new_parent_key_param,
-                        &new_name_param,
-                    ];
-                    let res = exec_params(conn, &sql_source_at_destination, &params)?;
-                    let already_applied = fetch_single_text(res)?;
-                    if parse_bool(&already_applied) {
+                    let params = [&new_parent_key_param, &new_name_param];
+                    let res = exec_params(conn, &sql_resolve_entry, &params)?;
+                    if matches_source(parse_resolved(fetch_rows_text(res)?)) {
                         Ok(Some(RenameFileReplaceOutcome::Applied))
                     } else {
                         Ok(None)
@@ -11290,45 +11383,35 @@ impl DbRepo {
                         }
                     }
 
-                    let source_params = [
-                        &source_file_id_param,
-                        &old_parent_key_param,
-                        &old_name_param,
-                    ];
-                    let res = exec_params(conn, &sql_source_exists, &source_params)?;
-                    if !parse_bool(&fetch_single_text(res)?) {
+                    let source_params = [&old_parent_key_param, &old_name_param];
+                    let res = exec_params(conn, &sql_resolve_entry, &source_params)?;
+                    if !matches_source(parse_resolved(fetch_rows_text(res)?)) {
                         return Ok(RenameFileReplaceOutcome::SourceMissing);
                     }
 
                     let target_params = [&new_parent_key_param, &new_name_param];
-                    let res = exec_params(conn, &sql_resolve_target, &target_params)?;
-                    let target_rows = fetch_rows_text(res)?;
-                    if target_rows.len() > 1 {
+                    let res = exec_params(conn, &sql_resolve_entry, &target_params)?;
+                    let current_target = parse_resolved(fetch_rows_text(res)?);
+                    if !matches_target(current_target) {
                         return Ok(RenameFileReplaceOutcome::Busy);
                     }
 
-                    let current_target = target_rows.first().and_then(|row| {
-                        if row.len() < 2 {
-                            return None;
+                    if let Some(target) = expected_target {
+                        if target.file_id() == source.file_id() {
+                            return Ok(RenameFileReplaceOutcome::NoOpSameFile);
                         }
-                        row[1]
-                            .trim()
-                            .parse::<u64>()
-                            .ok()
-                            .map(|entry_id| (row[0].as_str(), entry_id))
-                    });
 
-                    match (expected_target_file_id, current_target) {
-                        (None, None) => {}
-                        (Some(expected), Some(("file", observed))) if expected == observed => {}
-                        _ => return Ok(RenameFileReplaceOutcome::Busy),
-                    }
-
-                    if let Some(target_file_id) = expected_target_file_id {
-                        if target_file_id == source_file_id {
-                            return Ok(RenameFileReplaceOutcome::Busy);
+                        match target {
+                            RenameFileLikeTarget::File { file_id } => {
+                                self.remove_primary_file_or_promote_hardlink_on_conn(conn, file_id)?;
+                            }
+                            RenameFileLikeTarget::Hardlink { hardlink_id, .. } => {
+                                let hardlink_id_param = CString::new(hardlink_id.to_string())
+                                    .map_err(|_| "target hardlink id contains NUL byte".to_string())?;
+                                let params = [&hardlink_id_param];
+                                exec_command_params(conn, &sql_delete_hardlink, &params)?;
+                            }
                         }
-                        self.remove_primary_file_or_promote_hardlink_on_conn(conn, target_file_id)?;
 
                         #[cfg(feature = "integration-test-hooks")]
                         if let Ok(hook_dir) =
@@ -11337,8 +11420,8 @@ impl DbRepo {
                             if !hook_dir.trim().is_empty() {
                                 let fault_path = std::path::Path::new(&hook_dir)
                                     .join("fail_after_target_removal");
-                                if let Ok(target) = std::fs::read_to_string(&fault_path) {
-                                    if target.trim() == new_name {
+                                if let Ok(target_name) = std::fs::read_to_string(&fault_path) {
+                                    if target_name.trim() == new_name {
                                         return Err(
                                             "FOD test rename injected failure after target removal"
                                                 .to_string(),
@@ -11349,14 +11432,35 @@ impl DbRepo {
                         }
                     }
 
-                    if let Some(new_parent_id) = new_parent_id {
-                        let new_parent_id_param = CString::new(new_parent_id.to_string())
-                            .map_err(|_| "new parent id contains NUL byte".to_string())?;
-                        let params = [&new_name_param, &new_parent_id_param, &source_file_id_param];
-                        exec_command_params(conn, &sql_rename_nested, &params)?;
-                    } else {
-                        let params = [&new_name_param, &source_file_id_param];
-                        exec_command_params(conn, &sql_rename_root, &params)?;
+                    match source {
+                        RenameFileLikeSource::File { file_id } => {
+                            let file_id_param = CString::new(file_id.to_string())
+                                .map_err(|_| "source file id contains NUL byte".to_string())?;
+                            if let Some(new_parent_id) = new_parent_id {
+                                let new_parent_id_param = CString::new(new_parent_id.to_string())
+                                    .map_err(|_| "new parent id contains NUL byte".to_string())?;
+                                let params =
+                                    [&new_name_param, &new_parent_id_param, &file_id_param];
+                                exec_command_params(conn, &sql_rename_file_nested, &params)?;
+                            } else {
+                                let params = [&new_name_param, &file_id_param];
+                                exec_command_params(conn, &sql_rename_file_root, &params)?;
+                            }
+                        }
+                        RenameFileLikeSource::Hardlink { hardlink_id, .. } => {
+                            let hardlink_id_param = CString::new(hardlink_id.to_string())
+                                .map_err(|_| "source hardlink id contains NUL byte".to_string())?;
+                            if let Some(new_parent_id) = new_parent_id {
+                                let new_parent_id_param = CString::new(new_parent_id.to_string())
+                                    .map_err(|_| "new parent id contains NUL byte".to_string())?;
+                                let params =
+                                    [&new_name_param, &new_parent_id_param, &hardlink_id_param];
+                                exec_command_params(conn, &sql_rename_hardlink_nested, &params)?;
+                            } else {
+                                let params = [&new_name_param, &hardlink_id_param];
+                                exec_command_params(conn, &sql_rename_hardlink_root, &params)?;
+                            }
+                        }
                     }
 
                     Ok(RenameFileReplaceOutcome::Applied)

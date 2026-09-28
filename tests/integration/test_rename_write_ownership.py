@@ -396,6 +396,73 @@ def fault_after_target_removal_rolls_back(
     wait_for_absent(source_b)
 
 
+def hardlink_source_and_target_cases(
+    launcher: FODMount,
+    mount_a: Path,
+    mount_b: Path,
+) -> None:
+    suffix = uuid.uuid4().hex
+    primary_name = f"rename-hardlink-source-primary-{suffix}.bin"
+    source_name = f"rename-hardlink-source-{suffix}.bin"
+    moved_name = f"rename-hardlink-moved-{suffix}.bin"
+    target_name = f"rename-hardlink-target-entry-{suffix}.bin"
+    replacement_name = f"rename-hardlink-replacement-{suffix}.bin"
+
+    primary_a = mount_a / primary_name
+    primary_b = mount_b / primary_name
+    source_a = mount_a / source_name
+    source_b = mount_b / source_name
+    moved_a = mount_a / moved_name
+    moved_b = mount_b / moved_name
+    target_a = mount_a / target_name
+    target_b = mount_b / target_name
+    replacement_b = mount_b / replacement_name
+
+    original = b"hardlink-source-payload"
+    replacement = b"hardlink-target-replacement"
+
+    primary_a.write_bytes(original)
+    os.link(primary_a, source_a)
+    wait_for_bytes(primary_b, original)
+    wait_for_bytes(source_b, original)
+
+    os.replace(source_b, moved_b)
+    wait_for_absent(source_a)
+    wait_for_absent(source_b)
+    wait_for_bytes(moved_a, original)
+    wait_for_bytes(moved_b, original)
+    wait_for_bytes(primary_a, original)
+    wait_for_bytes(primary_b, original)
+
+    os.link(primary_a, target_a)
+    wait_for_bytes(target_b, original)
+    replacement_b.write_bytes(replacement)
+    wait_for_counts(launcher, replacement_name, (0, 0))
+    os.replace(replacement_b, target_b)
+    wait_for_bytes(target_a, replacement)
+    wait_for_bytes(target_b, replacement)
+    wait_for_bytes(primary_a, original)
+    wait_for_bytes(moved_a, original)
+
+    same_file_alias_name = f"rename-hardlink-same-file-{suffix}.bin"
+    same_file_alias_a = mount_a / same_file_alias_name
+    same_file_alias_b = mount_b / same_file_alias_name
+    os.link(primary_a, same_file_alias_a)
+    wait_for_bytes(same_file_alias_b, original)
+
+    os.replace(moved_b, same_file_alias_b)
+
+    wait_for_bytes(moved_a, original)
+    wait_for_bytes(moved_b, original)
+    wait_for_bytes(same_file_alias_a, original)
+    wait_for_bytes(same_file_alias_b, original)
+
+    print(
+        "OK rename-hardlink-file-like "
+        "hardlink_source_move=1 hardlink_target_replace=1 same_file_noop=1"
+    )
+
+
 def same_destination_race(
     launcher: FODMount,
     mount_a: Path,
@@ -532,6 +599,7 @@ def main() -> None:
             destination_writer_is_fenced(launcher_a, mount_a, mount_b)
             source_writer_is_fenced(launcher_a, mount_a, mount_b)
             hardlink_target_writer_is_fenced(launcher_a, mount_a, mount_b)
+            hardlink_source_and_target_cases(launcher_a, mount_a, mount_b)
             fault_after_target_removal_rolls_back(
                 launcher_a,
                 mount_a,
@@ -553,7 +621,7 @@ def main() -> None:
                 existing_destination=True,
             )
 
-            print("OK rename-write-ownership protected_cases=6")
+            print("OK rename-write-ownership protected_cases=7")
         except BaseException:
             print("\n=== MOUNT A LOG ===")
             launcher_a._dump_log()
