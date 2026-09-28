@@ -52,7 +52,7 @@
 - Treat compatibility-diagnostics aggregation as closed. Extend source fields only when a concrete consumer needs additional trustworthy machine-readable data; do not invent a new compatibility subsystem.
 - Instrument inode/path cache lifetime and implement `forget` plus `batch_forget` only if large-tree measurements show retained-state pressure that the current cache/path model does not bound adequately.
 - Benchmark `readdirplus` against `readdir` for large directories and keep it only when it measurably reduces callbacks or PostgreSQL work without weakening cache correctness.
-- Define sparse-file edge cases before adding mounted `lseek(SEEK_DATA/SEEK_HOLE)` semantics; existing generic seek/helper behavior must not be mistaken for sparse-aware mounted support.
+- Close the remaining temporary-file plus `rename`/replace destination-ownership gap. FOD 3.4.30 closes direct writable `create`/copy races; rename/replace must not bypass active destination/file ownership and needs deterministic two-mount replacement coverage before it is considered closed.
 - Keep local quality gates, benchmark baselines, current documentation, and authoritative version/schema metadata synchronized with code changes.
 
 ## Medium Term

@@ -1,6 +1,6 @@
 # FOD current implementation plan
 
-Status: 2026-09-15.
+Status: 2026-09-28.
 
 This file contains only work that is current enough to direct the next change.
 
@@ -319,6 +319,20 @@ stale-writer fencing regressions remain green.
 
 No database schema or storage-format change was required.
 
+## C2 — Same-destination rename/replace ownership — selected
+
+C1 closes the direct writable `create`/copy race, but the current mounted
+`rename()` path can still resolve and remove an existing destination before
+renaming the source without acquiring PostgreSQL destination ownership. This
+leaves the temporary-file plus rename/replace half of the older destination
+ownership TODO open.
+
+The next correctness slice must define deterministic ordering for every
+namespace resource needed by rename/replace, prevent replacement from bypassing
+active destination/file ownership, preserve the intended replace semantics and
+add a deterministic two-mount regression. Keep this separate from C1 and do
+not change runtime behavior as part of this planning cleanup.
+
 ## Deferred measured follow-ups
 
 These remain candidates, not parallel active implementation projects:
@@ -326,8 +340,6 @@ These remain candidates, not parallel active implementation projects:
 - instrument inode/path cache lifetime and add `forget`/`batch_forget` only if
   large-tree measurements show retained-state pressure;
 - benchmark `readdirplus` against `readdir` before enabling or relying on it;
-- define and test sparse-file edge cases before implementing mounted
-  `lseek(SEEK_DATA/SEEK_HOLE)` semantics;
 - repeat QNAP COPY-buffer tuning only after a new measured regression or a
   materially changed QNAP/network/Docker environment;
 - reopen external-unmount/session teardown only if a future fuser/libfuse3
