@@ -11164,8 +11164,6 @@ impl DbRepo {
         let new_parent_key = new_parent_id.unwrap_or(0);
         let source_file_id = source.file_id();
 
-        let source_entry_id_param = CString::new(source.entry_id().to_string())
-            .map_err(|_| "source entry id contains NUL byte".to_string())?;
         let source_file_id_param = CString::new(source_file_id.to_string())
             .map_err(|_| "source file id contains NUL byte".to_string())?;
         let old_parent_key_param = CString::new(old_parent_key.to_string())
@@ -11311,33 +11309,33 @@ impl DbRepo {
                 "t" | "true" | "1" | "on"
             )
         };
-        let parse_resolved = |rows: Vec<Vec<String>>| -> Option<(&str, u64, Option<u64>)> {
+        let parse_resolved = |rows: Vec<Vec<String>>| -> Option<(String, u64, Option<u64>)> {
             let row = rows.first()?;
             if rows.len() != 1 || row.len() < 3 {
                 return None;
             }
             let entry_id = row[1].trim().parse::<u64>().ok()?;
             let file_id = row[2].trim().parse::<u64>().ok();
-            Some((row[0].as_str(), entry_id, file_id))
+            Some((row[0].clone(), entry_id, file_id))
         };
-        let matches_source = |resolved: Option<(&str, u64, Option<u64>)>| {
-            matches!(
-                resolved,
-                Some((kind, entry_id, Some(file_id)))
-                    if kind == source.entry_kind()
-                        && entry_id == source.entry_id()
-                        && file_id == source.file_id()
-            )
+        let matches_source = |resolved: Option<(String, u64, Option<u64>)>| match resolved {
+            Some((kind, entry_id, Some(file_id))) => {
+                kind == source.entry_kind()
+                    && entry_id == source.entry_id()
+                    && file_id == source.file_id()
+            }
+            _ => false,
         };
-        let matches_target = |resolved: Option<(&str, u64, Option<u64>)>| match expected_target {
+        let matches_target = |resolved: Option<(String, u64, Option<u64>)>| match expected_target {
             None => resolved.is_none(),
-            Some(target) => matches!(
-                resolved,
-                Some((kind, entry_id, Some(file_id)))
-                    if kind == target.entry_kind()
+            Some(target) => match resolved {
+                Some((kind, entry_id, Some(file_id))) => {
+                    kind == target.entry_kind()
                         && entry_id == target.entry_id()
                         && file_id == target.file_id()
-            ),
+                }
+                _ => false,
+            },
         };
 
         self.with_cached_connection(|conn| unsafe {
