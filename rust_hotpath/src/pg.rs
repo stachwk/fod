@@ -11335,8 +11335,8 @@ impl DbRepo {
                             std::env::var("FOD_TEST_RENAME_BEFORE_OWNERSHIP_BARRIER_DIR")
                         {
                             if !hook_dir.trim().is_empty() {
-                                let fault_path =
-                                    std::path::Path::new(&hook_dir).join("fail_after_target_removal");
+                                let fault_path = std::path::Path::new(&hook_dir)
+                                    .join("fail_after_target_removal");
                                 if let Ok(target) = std::fs::read_to_string(&fault_path) {
                                     if target.trim() == new_name {
                                         return Err(
