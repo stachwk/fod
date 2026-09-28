@@ -11485,12 +11485,9 @@ impl DbRepo {
                                 let params = [&directory_id_param];
                                 let res =
                                     exec_params(conn, &sql_count_directory_children, &params)?;
-                                let count = fetch_single_text(res)?
-                                    .trim()
-                                    .parse::<u64>()
-                                    .map_err(|_| {
-                                        "invalid target directory children count".to_string()
-                                    })?;
+                                let count = fetch_single_text(res)?.trim().parse::<u64>().map_err(
+                                    |_| "invalid target directory children count".to_string(),
+                                )?;
                                 if count != 0 {
                                     return Ok(RenameFileReplaceOutcome::TargetNotEmpty);
                                 }
@@ -11524,8 +11521,8 @@ impl DbRepo {
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
-                                        "new parent id contains NUL byte".to_string()
-                                    })?;
+                                    "new parent id contains NUL byte".to_string()
+                                })?;
                                 let params =
                                     [&new_name_param, &new_parent_id_param, &file_id_param];
                                 exec_command_params(conn, &sql_rename_file_nested, &params)?;
@@ -11540,8 +11537,8 @@ impl DbRepo {
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
-                                        "new parent id contains NUL byte".to_string()
-                                    })?;
+                                    "new parent id contains NUL byte".to_string()
+                                })?;
                                 let params =
                                     [&new_name_param, &new_parent_id_param, &hardlink_id_param];
                                 exec_command_params(conn, &sql_rename_hardlink_nested, &params)?;
@@ -11556,8 +11553,8 @@ impl DbRepo {
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
-                                        "new parent id contains NUL byte".to_string()
-                                    })?;
+                                    "new parent id contains NUL byte".to_string()
+                                })?;
                                 let params =
                                     [&new_name_param, &new_parent_id_param, &symlink_id_param];
                                 exec_command_params(conn, &sql_rename_symlink_nested, &params)?;
@@ -11568,14 +11565,12 @@ impl DbRepo {
                         }
                         RenameNamespaceSource::Directory { directory_id } => {
                             let directory_id_param = CString::new(directory_id.to_string())
-                                .map_err(|_| {
-                                    "source directory id contains NUL byte".to_string()
-                                })?;
+                                .map_err(|_| "source directory id contains NUL byte".to_string())?;
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
-                                        "new parent id contains NUL byte".to_string()
-                                    })?;
+                                    "new parent id contains NUL byte".to_string()
+                                })?;
                                 let params =
                                     [&new_name_param, &new_parent_id_param, &directory_id_param];
                                 exec_command_params(conn, &sql_rename_directory_nested, &params)?;

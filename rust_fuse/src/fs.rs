@@ -7555,12 +7555,13 @@ impl Filesystem for FodFuse {
                 return;
             }
 
-            if matches!(kind.as_deref(), Some("file" | "hardlink" | "symlink" | "dir"))
-                && matches!(
+            if matches!(
+                kind.as_deref(),
+                Some("file" | "hardlink" | "symlink" | "dir")
+            ) && matches!(
                 existing.0.as_deref(),
                 None | Some("file" | "hardlink" | "symlink" | "dir")
-            )
-            {
+            ) {
                 let old_parent_id = match self.parent_entry_id_for_inode(parent) {
                     Ok(value) => value,
                     Err(errno) => {
