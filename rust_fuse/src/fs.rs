@@ -7555,10 +7555,8 @@ impl Filesystem for FodFuse {
                 return;
             }
 
-            if matches!(
-                kind.as_deref(),
-                Some("file" | "hardlink" | "symlink" | "dir")
-            ) && matches!(
+            if matches!(kind.as_deref(), Some("file" | "hardlink" | "symlink" | "dir"))
+                && matches!(
                 existing.0.as_deref(),
                 None | Some("file" | "hardlink" | "symlink" | "dir")
             )

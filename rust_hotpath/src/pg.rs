@@ -11297,9 +11297,8 @@ impl DbRepo {
             .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_symlink = CString::new("DELETE FROM symlinks WHERE id_symlink = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_directory =
-            CString::new("DELETE FROM directories WHERE id_directory = $1")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_directory = CString::new("DELETE FROM directories WHERE id_directory = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_count_directory_children = CString::new(
             "
             SELECT
@@ -11569,7 +11568,9 @@ impl DbRepo {
                         }
                         RenameNamespaceSource::Directory { directory_id } => {
                             let directory_id_param = CString::new(directory_id.to_string())
-                                .map_err(|_| "source directory id contains NUL byte".to_string())?;
+                                .map_err(|_| {
+                                    "source directory id contains NUL byte".to_string()
+                                })?;
                             if let Some(new_parent_id) = new_parent_id {
                                 let new_parent_id_param = CString::new(new_parent_id.to_string())
                                     .map_err(|_| {
