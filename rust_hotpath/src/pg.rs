@@ -4248,16 +4248,18 @@ pub struct ResolvedPath {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenameFileLikeSource {
+pub enum RenameNamespaceSource {
     File { file_id: u64 },
     Hardlink { hardlink_id: u64, file_id: u64 },
+    Symlink { symlink_id: u64 },
 }
 
-impl RenameFileLikeSource {
+impl RenameNamespaceSource {
     fn entry_kind(self) -> &'static str {
         match self {
             Self::File { .. } => "file",
             Self::Hardlink { .. } => "hardlink",
+            Self::Symlink { .. } => "symlink",
         }
     }
 
@@ -4265,27 +4267,31 @@ impl RenameFileLikeSource {
         match self {
             Self::File { file_id } => file_id,
             Self::Hardlink { hardlink_id, .. } => hardlink_id,
+            Self::Symlink { symlink_id } => symlink_id,
         }
     }
 
-    fn file_id(self) -> u64 {
+    fn file_id(self) -> Option<u64> {
         match self {
-            Self::File { file_id } | Self::Hardlink { file_id, .. } => file_id,
+            Self::File { file_id } | Self::Hardlink { file_id, .. } => Some(file_id),
+            Self::Symlink { .. } => None,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenameFileLikeTarget {
+pub enum RenameNamespaceTarget {
     File { file_id: u64 },
     Hardlink { hardlink_id: u64, file_id: u64 },
+    Symlink { symlink_id: u64 },
 }
 
-impl RenameFileLikeTarget {
+impl RenameNamespaceTarget {
     fn entry_kind(self) -> &'static str {
         match self {
             Self::File { .. } => "file",
             Self::Hardlink { .. } => "hardlink",
+            Self::Symlink { .. } => "symlink",
         }
     }
 
@@ -4293,12 +4299,14 @@ impl RenameFileLikeTarget {
         match self {
             Self::File { file_id } => file_id,
             Self::Hardlink { hardlink_id, .. } => hardlink_id,
+            Self::Symlink { symlink_id } => symlink_id,
         }
     }
 
-    fn file_id(self) -> u64 {
+    fn file_id(self) -> Option<u64> {
         match self {
-            Self::File { file_id } | Self::Hardlink { file_id, .. } => file_id,
+            Self::File { file_id } | Self::Hardlink { file_id, .. } => Some(file_id),
+            Self::Symlink { .. } => None,
         }
     }
 }
@@ -11137,14 +11145,14 @@ impl DbRepo {
         Ok(())
     }
 
-    pub fn rename_file_like_replace_with_ownership_guard(
+    pub fn rename_namespace_replace_with_ownership_guard(
         &self,
-        source: RenameFileLikeSource,
+        source: RenameNamespaceSource,
         old_parent_id: Option<u64>,
         old_name: &str,
         new_parent_id: Option<u64>,
         new_name: &str,
-        expected_target: Option<RenameFileLikeTarget>,
+        expected_target: Option<RenameNamespaceTarget>,
     ) -> Result<RenameFileReplaceOutcome, String> {
         if old_name.is_empty() || new_name.is_empty() {
             return Err("rename destination name is empty".to_string());
@@ -11152,10 +11160,13 @@ impl DbRepo {
 
         let old_parent_key = old_parent_id.unwrap_or(0);
         let new_parent_key = new_parent_id.unwrap_or(0);
-        let source_file_id = source.file_id();
-
-        let source_file_id_param = CString::new(source_file_id.to_string())
-            .map_err(|_| "source file id contains NUL byte".to_string())?;
+        let source_file_id_param = source
+            .file_id()
+            .map(|file_id| {
+                CString::new(file_id.to_string())
+                    .map_err(|_| "source file id contains NUL byte".to_string())
+            })
+            .transpose()?;
         let old_parent_key_param = CString::new(old_parent_key.to_string())
             .map_err(|_| "old parent key contains NUL byte".to_string())?;
         let old_name_param =
@@ -11165,8 +11176,9 @@ impl DbRepo {
         let new_name_param =
             CString::new(new_name).map_err(|_| "new name contains NUL byte".to_string())?;
         let target_file_id_param = expected_target
-            .map(|target| {
-                CString::new(target.file_id().to_string())
+            .and_then(|target| target.file_id())
+            .map(|file_id| {
+                CString::new(file_id.to_string())
                     .map_err(|_| "target file id contains NUL byte".to_string())
             })
             .transpose()?;
@@ -11180,10 +11192,12 @@ impl DbRepo {
                 "fod:write:destination:{new_parent_key}:{}:{new_name}",
                 new_name.len()
             ),
-            format!("fod:write:file:{source_file_id}"),
         ];
-        if let Some(target) = expected_target {
-            resource_keys.push(format!("fod:write:file:{}", target.file_id()));
+        if let Some(source_file_id) = source.file_id() {
+            resource_keys.push(format!("fod:write:file:{source_file_id}"));
+        }
+        if let Some(target_file_id) = expected_target.and_then(|target| target.file_id()) {
+            resource_keys.push(format!("fod:write:file:{target_file_id}"));
         }
         resource_keys.sort_unstable();
         resource_keys.dedup();
@@ -11274,6 +11288,8 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_hardlink = CString::new("DELETE FROM hardlinks WHERE id_hardlink = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_symlink = CString::new("DELETE FROM symlinks WHERE id_symlink = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_rename_file_root = CString::new(
             "UPDATE files SET name = $1, id_directory = NULL, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
         )
@@ -11288,6 +11304,14 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_rename_hardlink_nested = CString::new(
             "UPDATE hardlinks SET name = $1, id_directory = $2, modification_date = NOW() WHERE id_hardlink = $3",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_rename_symlink_root = CString::new(
+            "UPDATE symlinks SET name = $1, id_parent = NULL, modification_date = NOW() WHERE id_symlink = $2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_rename_symlink_nested = CString::new(
+            "UPDATE symlinks SET name = $1, id_parent = $2, modification_date = NOW() WHERE id_symlink = $3",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
@@ -11311,7 +11335,7 @@ impl DbRepo {
                 Ok(Some((row[0].clone(), entry_id, file_id)))
             };
         let matches_source = |resolved: Option<&(String, u64, Option<u64>)>| match resolved {
-            Some((kind, entry_id, Some(file_id))) => {
+            Some((kind, entry_id, file_id)) => {
                 kind == source.entry_kind()
                     && *entry_id == source.entry_id()
                     && *file_id == source.file_id()
@@ -11321,7 +11345,7 @@ impl DbRepo {
         let matches_target = |resolved: Option<&(String, u64, Option<u64>)>| match expected_target {
             None => resolved.is_none(),
             Some(target) => match resolved {
-                Some((kind, entry_id, Some(file_id))) => {
+                Some((kind, entry_id, file_id)) => {
                     kind == target.entry_kind()
                         && *entry_id == target.entry_id()
                         && *file_id == target.file_id()
@@ -11363,8 +11387,9 @@ impl DbRepo {
                         return Ok(RenameFileReplaceOutcome::Busy);
                     }
 
-                    for file_id_param in
-                        std::iter::once(&source_file_id_param).chain(target_file_id_param.iter())
+                    for file_id_param in source_file_id_param
+                        .iter()
+                        .chain(target_file_id_param.iter())
                     {
                         let params = [file_id_param];
                         exec_command_params(conn, &sql_prune_file, &params)?;
@@ -11395,23 +11420,35 @@ impl DbRepo {
                     }
 
                     if let Some(target) = expected_target {
-                        if target.file_id() == source.file_id() {
-                            return Ok(RenameFileReplaceOutcome::NoOpSameFile);
+                        if let (Some(source_file_id), Some(target_file_id)) =
+                            (source.file_id(), target.file_id())
+                        {
+                            if source_file_id == target_file_id {
+                                return Ok(RenameFileReplaceOutcome::NoOpSameFile);
+                            }
                         }
 
                         match target {
-                            RenameFileLikeTarget::File { file_id } => {
+                            RenameNamespaceTarget::File { file_id } => {
                                 self.remove_primary_file_or_promote_hardlink_on_conn(
                                     conn, file_id,
                                 )?;
                             }
-                            RenameFileLikeTarget::Hardlink { hardlink_id, .. } => {
+                            RenameNamespaceTarget::Hardlink { hardlink_id, .. } => {
                                 let hardlink_id_param = CString::new(hardlink_id.to_string())
                                     .map_err(|_| {
                                         "target hardlink id contains NUL byte".to_string()
                                     })?;
                                 let params = [&hardlink_id_param];
                                 exec_command_params(conn, &sql_delete_hardlink, &params)?;
+                            }
+                            RenameNamespaceTarget::Symlink { symlink_id } => {
+                                let symlink_id_param = CString::new(symlink_id.to_string())
+                                    .map_err(|_| {
+                                        "target symlink id contains NUL byte".to_string()
+                                    })?;
+                                let params = [&symlink_id_param];
+                                exec_command_params(conn, &sql_delete_symlink, &params)?;
                             }
                         }
 
@@ -11435,7 +11472,7 @@ impl DbRepo {
                     }
 
                     match source {
-                        RenameFileLikeSource::File { file_id } => {
+                        RenameNamespaceSource::File { file_id } => {
                             let file_id_param = CString::new(file_id.to_string())
                                 .map_err(|_| "source file id contains NUL byte".to_string())?;
                             if let Some(new_parent_id) = new_parent_id {
@@ -11451,7 +11488,7 @@ impl DbRepo {
                                 exec_command_params(conn, &sql_rename_file_root, &params)?;
                             }
                         }
-                        RenameFileLikeSource::Hardlink { hardlink_id, .. } => {
+                        RenameNamespaceSource::Hardlink { hardlink_id, .. } => {
                             let hardlink_id_param = CString::new(hardlink_id.to_string())
                                 .map_err(|_| "source hardlink id contains NUL byte".to_string())?;
                             if let Some(new_parent_id) = new_parent_id {
@@ -11465,6 +11502,22 @@ impl DbRepo {
                             } else {
                                 let params = [&new_name_param, &hardlink_id_param];
                                 exec_command_params(conn, &sql_rename_hardlink_root, &params)?;
+                            }
+                        }
+                        RenameNamespaceSource::Symlink { symlink_id } => {
+                            let symlink_id_param = CString::new(symlink_id.to_string())
+                                .map_err(|_| "source symlink id contains NUL byte".to_string())?;
+                            if let Some(new_parent_id) = new_parent_id {
+                                let new_parent_id_param = CString::new(new_parent_id.to_string())
+                                    .map_err(|_| {
+                                    "new parent id contains NUL byte".to_string()
+                                })?;
+                                let params =
+                                    [&new_name_param, &new_parent_id_param, &symlink_id_param];
+                                exec_command_params(conn, &sql_rename_symlink_nested, &params)?;
+                            } else {
+                                let params = [&new_name_param, &symlink_id_param];
+                                exec_command_params(conn, &sql_rename_symlink_root, &params)?;
                             }
                         }
                     }
