@@ -15,7 +15,7 @@ use fuser::{
     ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyLseek,
     ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
-use libc::{EIO, ENOENT, ENOSPC, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
+use libc::{EIO, ENOENT, ENOSPC, ENOTDIR, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
@@ -7496,7 +7496,7 @@ impl Filesystem for FodFuse {
 
             if let Some(existing_kind) = existing.0.as_deref() {
                 let existing_attrs = self.lookup_path(&new_path).ok().flatten();
-                if matches!(existing_kind, "file" | "hardlink" | "symlink") {
+                if matches!(existing_kind, "file" | "hardlink" | "symlink" | "dir") {
                     if let Some(existing_attrs) = existing_attrs.as_ref() {
                         if let Err(errno) = self.enforce_sticky_bit(
                             &new_parent_path,
@@ -7516,11 +7516,52 @@ impl Filesystem for FodFuse {
                 }
             }
 
-            if matches!(kind.as_deref(), Some("file" | "hardlink" | "symlink"))
-                && matches!(
-                    existing.0.as_deref(),
-                    None | Some("file" | "hardlink" | "symlink")
-                )
+            let source_is_directory = matches!(kind.as_deref(), Some("dir"));
+            let target_is_directory = matches!(existing.0.as_deref(), Some("dir"));
+
+            if source_is_directory {
+                let old_prefix = format!("{}/", old_path.trim_end_matches('/'));
+                if new_parent_path == old_path || new_parent_path.starts_with(&old_prefix) {
+                    self.log_request_error(
+                        req_id,
+                        "rename",
+                        libc::EINVAL,
+                        format!(
+                            "old_path={} new_parent_path={} directory cycle",
+                            old_path, new_parent_path
+                        ),
+                    );
+                    fuse_reply_error!(reply, libc::EINVAL);
+                    return;
+                }
+                if existing.0.is_some() && !target_is_directory {
+                    self.log_request_error(
+                        req_id,
+                        "rename",
+                        ENOTDIR,
+                        format!("new_path={} non-directory target", new_path),
+                    );
+                    fuse_reply_error!(reply, ENOTDIR);
+                    return;
+                }
+            } else if target_is_directory {
+                self.log_request_error(
+                    req_id,
+                    "rename",
+                    libc::EISDIR,
+                    format!("new_path={} directory target", new_path),
+                );
+                fuse_reply_error!(reply, libc::EISDIR);
+                return;
+            }
+
+            if matches!(
+                kind.as_deref(),
+                Some("file" | "hardlink" | "symlink" | "dir")
+            ) && matches!(
+                existing.0.as_deref(),
+                None | Some("file" | "hardlink" | "symlink" | "dir")
+            )
             {
                 let old_parent_id = match self.parent_entry_id_for_inode(parent) {
                     Ok(value) => value,
@@ -7571,6 +7612,9 @@ impl Filesystem for FodFuse {
                     (Some("symlink"), Some(symlink_id)) => {
                         RenameNamespaceSource::Symlink { symlink_id }
                     }
+                    (Some("dir"), Some(directory_id)) => {
+                        RenameNamespaceSource::Directory { directory_id }
+                    }
                     _ => {
                         self.log_request_error(
                             req_id,
@@ -7618,6 +7662,9 @@ impl Filesystem for FodFuse {
                     }
                     (Some("symlink"), Some(symlink_id)) => {
                         Some(RenameNamespaceTarget::Symlink { symlink_id })
+                    }
+                    (Some("dir"), Some(directory_id)) => {
+                        Some(RenameNamespaceTarget::Directory { directory_id })
                     }
                     _ => {
                         self.log_request_error(
@@ -7701,6 +7748,16 @@ impl Filesystem for FodFuse {
                             format!("old_path={} source changed", old_path),
                         );
                         fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                    Ok(RenameFileReplaceOutcome::TargetNotEmpty) => {
+                        self.log_request_error(
+                            req_id,
+                            "rename",
+                            ENOTEMPTY,
+                            format!("new_path={} target directory not empty", new_path),
+                        );
+                        fuse_reply_error!(reply, ENOTEMPTY);
                         return;
                     }
                     Err(err) => {
