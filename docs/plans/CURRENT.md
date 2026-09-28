@@ -347,6 +347,12 @@ is closed before the final rename.
 
 ### C2.1 — Baseline and contract
 
+A dedicated non-gating diagnostic target,
+`make test-rename-write-ownership-baseline`, captures the known unsafe
+pre-C2 behavior before runtime changes. It is intentionally not part of
+`test-integration`; once C2 is implemented its assertions will be inverted
+into blocking regressions.
+
 Capture the current two-mount behavior before changing runtime code:
 
 - mount A holds an active writer on the destination while mount B closes a
