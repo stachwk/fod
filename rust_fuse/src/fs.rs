@@ -3,7 +3,8 @@
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use fod_rust_monitor::{
-    log_logical_task_observability as log_logical_task_snapshots, LogicalTaskAdmissionGate,
+    current_process_rss_bytes, log_logical_task_observability as log_logical_task_snapshots,
+    LogicalTaskAdmissionGate,
     LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
     LogicalTaskQueueObservability, SharedMonitorFuseCompatibilityStats, SharedMonitorSessionStats,
     SharedMonitorSessionStatsInput, SharedMonitorSourceStats, SharedMonitorTimingStats,
@@ -4904,7 +4905,12 @@ impl Drop for FodFuse {
             sampler.stop();
         }
         if fod_fuse_profile_metadata_cache_enabled() {
-            info!("FOD metadata cache profile: {}", self.debug_snapshot());
+            let process_rss_bytes = current_process_rss_bytes().ok();
+            info!(
+                "FOD metadata cache profile: process_rss_bytes={:?} {}",
+                process_rss_bytes,
+                self.debug_snapshot()
+            );
         }
         if fod_fuse_profile_io_enabled() && self.profile.has_activity() {
             info!("FOD boundary profile:");
