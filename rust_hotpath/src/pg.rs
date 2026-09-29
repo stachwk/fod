@@ -14829,8 +14829,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
 
-    const TEST_BLOCK_SIZE: u64 = 4096;
-
     fn conninfo() -> String {
         let dbname = std::env::var("POSTGRES_DB").unwrap_or_else(|_| "foddbname".to_string());
         let user = std::env::var("POSTGRES_USER").unwrap_or_else(|_| "foduser".to_string());
@@ -14981,6 +14979,14 @@ mod tests {
         .unwrap()
     }
 
+    fn current_block_size(repo: &DbRepo) -> u64 {
+        repo.query_scalar_text("SELECT value FROM config WHERE key = 'block_size'")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
     fn wait_for_advisory_waiters(repo: &DbRepo, expected: u64) -> Result<u64, String> {
         let deadline = Instant::now() + Duration::from_secs(10);
         let sql = "
@@ -15062,19 +15068,20 @@ mod tests {
         repo: DbRepo,
         file_id: u64,
         fill: u8,
+        block_size: u64,
         barrier: Arc<std::sync::Barrier>,
     ) -> Result<(), String> {
-        let block = vec![fill; TEST_BLOCK_SIZE as usize];
+        let block = vec![fill; block_size as usize];
         let rows = [PersistBlockRow {
             block_index: 0,
             data: &block,
-            used_len: TEST_BLOCK_SIZE,
+            used_len: block_size,
         }];
         barrier.wait();
         repo.persist_file_blocks_with_crc_flag(
             file_id,
-            TEST_BLOCK_SIZE,
-            TEST_BLOCK_SIZE,
+            block_size,
+            block_size,
             1,
             false,
             &rows,
@@ -15377,12 +15384,13 @@ mod tests {
                 .unwrap(),
         ];
 
+        let block_size = current_block_size(&observer);
         let baseline_payload = current_payload_bytes(&observer);
         let quota_accounted = current_quota_accounted_bytes(&observer);
         let _limit_guard = ConfigValueGuard::set(
             &observer,
             "max_fs_size_bytes",
-            &quota_accounted.saturating_add(TEST_BLOCK_SIZE).to_string(),
+            &quota_accounted.saturating_add(block_size).to_string(),
         );
 
         let blocker = repo_with_global_payload(Arc::clone(&global));
@@ -15391,13 +15399,13 @@ mod tests {
             {
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
-                    run_single_block_persist(repo_a, file_ids[0], b'A', barrier)
+                    run_single_block_persist(repo_a, file_ids[0], b'A', block_size, barrier)
                 })
             },
             {
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
-                    run_single_block_persist(repo_b, file_ids[1], b'B', barrier)
+                    run_single_block_persist(repo_b, file_ids[1], b'B', block_size, barrier)
                 })
             },
         ];
@@ -15468,10 +15476,10 @@ mod tests {
         );
 
         let after_payload = current_payload_bytes(&observer);
-        assert_eq!(after_payload, baseline_payload + TEST_BLOCK_SIZE);
+        assert_eq!(after_payload, baseline_payload + block_size);
         let states = file_storage_state(&observer, &names);
         let expected_states = HashMap::from([
-            (names[winners[0]].clone(), (TEST_BLOCK_SIZE, 1)),
+            (names[winners[0]].clone(), (block_size, 1)),
             (names[rejected[0]].clone(), (0, 0)),
         ]);
         assert_eq!(states, expected_states);
