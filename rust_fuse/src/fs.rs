@@ -98,6 +98,13 @@ fn fod_fuse_profile_io_enabled() -> bool {
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_IO", false))
 }
 
+fn fod_fuse_profile_metadata_cache_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        env_var_truthy_with_legacy_alias("FOD_PROFILE_METADATA_CACHE", false)
+    })
+}
+
 pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
         ENOSPC
@@ -4895,6 +4902,9 @@ impl Drop for FodFuse {
         }
         if let Some(mut sampler) = self.logical_task_observability.take() {
             sampler.stop();
+        }
+        if fod_fuse_profile_metadata_cache_enabled() {
+            info!("FOD metadata cache profile: {}", self.debug_snapshot());
         }
         if fod_fuse_profile_io_enabled() && self.profile.has_activity() {
             info!("FOD boundary profile:");

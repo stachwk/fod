@@ -293,6 +293,10 @@ fod_test_cleanup() {
     # wait completes the final shutdown/post-mount observability is stable.
     wait "${FOD_PID}" >/dev/null 2>&1 || true
   fi
+  if fod_test_truthy "${FOD_PROFILE_METADATA_CACHE:-0}" && [[ -f "${LOG_FILE:-}" ]]; then
+    echo "FOD metadata cache profile summary:"
+    grep -E "FOD metadata cache profile:" "${LOG_FILE}" | tail -n 1 || true
+  fi
   if [[ "${FOD_PROFILE_IO:-0}" =~ ^(1|true|True|yes|on)$ && -f "${LOG_FILE:-}" ]]; then
     local read_calls write_calls copy_file_range_calls
     read_calls="$(grep -oE 'FOD req=[0-9]+ op=read( |$)' "${LOG_FILE}" | sort -u | wc -l | tr -d ' ')"
