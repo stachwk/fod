@@ -2881,6 +2881,33 @@ unsafe fn fetch_rows_text(res: *mut PGresult) -> Result<Vec<Vec<String>>, String
     result
 }
 
+fn parse_directory_entry_metadata_rows(
+    rows: Vec<Vec<String>>,
+) -> Result<Vec<DirectoryEntryMetadata>, String> {
+    rows.into_iter()
+        .map(|row| {
+            if row.len() < 5 {
+                return Err("directory entry metadata row is missing fields".to_string());
+            }
+            let entry_id = row[2]
+                .trim()
+                .parse::<u64>()
+                .map_err(|err| format!("invalid directory entry id: {err}"))?;
+            let special_type = match row[4].trim() {
+                "" => None,
+                value => Some(value.to_string()),
+            };
+            Ok(DirectoryEntryMetadata {
+                name: row[0].clone(),
+                kind: row[1].clone(),
+                entry_id,
+                inode_seed: row[3].clone(),
+                special_type,
+            })
+        })
+        .collect()
+}
+
 unsafe fn fetch_first_column_texts(res: *mut PGresult) -> Result<Vec<String>, String> {
     let result = match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
@@ -4245,6 +4272,14 @@ pub struct ResolvedPath {
     pub parent_id: Option<u64>,
     pub kind: Option<String>,
     pub entry_id: Option<u64>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryEntryMetadata {
+    pub name: String,
+    pub kind: String,
+    pub entry_id: u64,
+    pub inode_seed: String,
+    pub special_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14426,6 +14461,75 @@ impl DbRepo {
         })
     }
 
+    pub fn list_directory_entry_metadata(
+        &self,
+        path: &str,
+    ) -> Result<Vec<DirectoryEntryMetadata>, String> {
+        let normalized = path.trim();
+        let parent_id = self.get_dir_id(normalized)?;
+        let (sql, params) = if let Some(parent_id) = parent_id {
+            (
+                CString::new(
+                    "
+                    SELECT f.name, 'file', f.id_file, f.inode_seed, COALESCE(sf.file_type, '')
+                    FROM files f
+                    LEFT JOIN special_files sf ON sf.id_file = f.id_file
+                    WHERE f.id_directory = $1
+                    UNION ALL
+                    SELECT h.name, 'hardlink', h.id_hardlink, f.inode_seed, COALESCE(sf.file_type, '')
+                    FROM hardlinks h
+                    JOIN files f ON f.id_file = h.id_file
+                    LEFT JOIN special_files sf ON sf.id_file = f.id_file
+                    WHERE h.id_directory = $1
+                    UNION ALL
+                    SELECT d.name, 'dir', d.id_directory, d.inode_seed, ''
+                    FROM directories d
+                    WHERE d.id_parent = $1
+                    UNION ALL
+                    SELECT s.name, 'symlink', s.id_symlink, s.inode_seed, ''
+                    FROM symlinks s
+                    WHERE s.id_parent = $1
+                    ",
+                )
+                .map_err(|_| "SQL contains NUL byte".to_string())?,
+                vec![CString::new(parent_id.to_string())
+                    .map_err(|_| "parent id contains NUL byte".to_string())?],
+            )
+        } else {
+            (
+                CString::new(
+                    "
+                    SELECT f.name, 'file', f.id_file, f.inode_seed, COALESCE(sf.file_type, '')
+                    FROM files f
+                    LEFT JOIN special_files sf ON sf.id_file = f.id_file
+                    WHERE f.id_directory IS NULL
+                    UNION ALL
+                    SELECT h.name, 'hardlink', h.id_hardlink, f.inode_seed, COALESCE(sf.file_type, '')
+                    FROM hardlinks h
+                    JOIN files f ON f.id_file = h.id_file
+                    LEFT JOIN special_files sf ON sf.id_file = f.id_file
+                    WHERE h.id_directory IS NULL
+                    UNION ALL
+                    SELECT d.name, 'dir', d.id_directory, d.inode_seed, ''
+                    FROM directories d
+                    WHERE d.id_parent IS NULL AND d.name != '/'
+                    UNION ALL
+                    SELECT s.name, 'symlink', s.id_symlink, s.inode_seed, ''
+                    FROM symlinks s
+                    WHERE s.id_parent IS NULL
+                    ",
+                )
+                .map_err(|_| "SQL contains NUL byte".to_string())?,
+                Vec::new(),
+            )
+        };
+
+        self.with_read_connection(|conn| unsafe {
+            let param_refs = params.iter().collect::<Vec<_>>();
+            let res = exec_params(conn, &sql, &param_refs)?;
+            parse_directory_entry_metadata_rows(fetch_rows_text(res)?)
+        })
+    }
     pub fn list_directory_entries_blob(&self, path: &str) -> Result<Option<Vec<u8>>, String> {
         let normalized = path.trim();
         let parent_id = self.get_dir_id(normalized)?;
