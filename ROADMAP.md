@@ -34,6 +34,7 @@
 - mounted `df`/`du`/sparse/shared-object regression before and after remount
 - forced concurrent two-mount quota regression
 - PostgreSQL-authoritative cross-mount destination/write ownership with fencing tokens and stale-writer rejection
+- transactional PostgreSQL-authoritative rename/replace across file, hardlink, symlink and directory namespaces with active-writer fencing and rollback
 - explicit writable-mount requirement for `FUSE_ATOMIC_O_TRUNC`
 - role-aware PostgreSQL endpoint selection, failover, WAL-gated replica reads, scoring, and promotion validation
 - validated external `fusermount3 -u` teardown on the current fuser/libfuse3 stack without the historical benign `EINVAL`
@@ -52,7 +53,7 @@
 - Treat compatibility-diagnostics aggregation as closed. Extend source fields only when a concrete consumer needs additional trustworthy machine-readable data; do not invent a new compatibility subsystem.
 - Instrument inode/path cache lifetime and implement `forget` plus `batch_forget` only if large-tree measurements show retained-state pressure that the current cache/path model does not bound adequately.
 - Benchmark `readdirplus` against `readdir` for large directories and keep it only when it measurably reduces callbacks or PostgreSQL work without weakening cache correctness.
-- Close the remaining temporary-file plus `rename`/replace destination-ownership gap. FOD 3.4.30 closes direct writable `create`/copy races; rename/replace must not bypass active destination/file ownership and needs deterministic two-mount replacement coverage before it is considered closed.
+- Treat same-destination writable create/copy and temporary-file `rename`/replace ownership as closed in FOD 3.4.30-3.4.31. Transactional rename/replace now covers file, hardlink, symlink and directory namespaces with active-writer fencing, deterministic two-mount races and rollback validation; reopen only for a new correctness regression.
 - Keep local quality gates, benchmark baselines, current documentation, and authoritative version/schema metadata synchronized with code changes.
 
 ## Medium Term

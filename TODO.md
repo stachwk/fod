@@ -11,18 +11,13 @@ Reading guide:
 
 ## Current Follow-ups
 
-- [ ] Protect one destination path against concurrent copies from independent FOD mounts or machines.
-  - Partial closure (2026-09-28, FOD 3.4.30): direct writable `create`/copy to an initially absent destination is now PostgreSQL-authoritative first-writer-wins. Deterministic two-mount coverage verifies one winner, one prompt `EBUSY` loser, winner-only SHA-256 through both mounts, and zero destination/file ownership leaks.
-  - Remaining scope: temporary-file plus `rename`/replace still needs destination ownership and deterministic resource ordering so replacement cannot bypass the direct-create protection.
-  - Reproduce two independent FOD clients on separate mounts/hosts copying a file with the same destination pathname into the same FOD directory at the same time. Test both identical source content and different source content using the same destination filename.
-  - Coordination must be authoritative in PostgreSQL and work across processes and machines; a process-local mutex is not sufficient.
-  - Use first-writer-wins semantics for concurrent destination ownership. The first writer that atomically acquires ownership for the destination may continue. Any later concurrent writer must use a non-blocking try-acquire, fail immediately with a deterministic conflict error, and must not wait for the first writer to finish.
-  - The losing writer must not write, truncate or otherwise mutate destination payload or metadata before ownership is granted. Concurrent writers must never interleave into one logical file.
-  - Destination ownership acquisition must not introduce a wait queue or deadlock. Operations that need more than one namespace resource, especially rename/replace, must acquire them in one deterministic global order or fail without waiting.
-  - Direct `O_CREAT` / `O_TRUNC` create/write paths are closed in FOD 3.4.30; temporary-file plus rename/replace workflows remain open so a later rename cannot bypass destination ownership.
-  - A crashed/disconnected owner must not leave a permanent lock, orphan payload rows, leaked capacity reservations or inconsistent metadata. After lease expiry/recovery another writer may acquire ownership, while stale writers must be fenced from further persistence.
-  - A direct POSIX writer that crashes after successful writes may leave a valid prefix from that one writer; it must never leave mixed blocks from multiple writers. Temporary-file plus atomic rename workflows retain atomic replacement semantics.
-  - Add a two-mount/two-host regression that races copies to the same pathname and verifies: exactly one writer acquires ownership, the loser fails promptly without waiting, the loser writes zero destination payload, the final file contains data from only the winner, size/content/hash are consistent, no deadlock occurs, no orphan payload/reservation remains, stale-writer persistence is fenced, and remount behavior remains correct.
+- [x] Protect one destination path against concurrent copies from independent FOD mounts or machines.
+  - Closure note (2026-09-29, FOD 3.4.30-3.4.31): direct writable `create`/copy and temporary-file plus `rename`/replace are PostgreSQL-authoritative first-writer-wins paths.
+  - Direct `O_CREAT`/`O_TRUNC` creation acquires destination ownership before namespace mutation. Protected rename/replace acquires namespace resources in deterministic order, re-resolves under the transaction, checks conflicting destination/file ownership and commits target replacement plus source move atomically.
+  - Competing writers fail promptly with deterministic `EBUSY` and do not wait for the winner. A losing rename preserves its source and the destination; injected post-target-removal failure rolls the whole PostgreSQL transaction back.
+  - Deterministic two-mount coverage includes absent and existing same-destination races, active source/destination writers, hardlink-alias ownership, symlink and directory rename/replace, same-file and literal same-path no-op behavior, root/type/descendant errors and zero ownership leaks.
+  - The legacy non-transactional rename fallback and its unused direct `DbRepo::rename_*_entry()`/FFI helper API were removed after the blocking rename gates passed.
+  - A crashed/disconnected owner still relies on the existing lease expiry and stale-writer fencing model; temporary-file workflows retain atomic replacement semantics.
 
 - [x] Reconcile the QNAP FOD test database schema-admin secret or deliberately reset that dedicated QNAP database before running mounted FUSE/ACL tests there.
   - 2026-08-22, commit `43724e8`: QNAP PostgreSQL smoke and PostgreSQL-only checks passed, but the FOD schema on QNAP was version `16` with pending migrations `0017..0022`; the guarded upgrade correctly rejected the unrelated local schema-admin secret.
