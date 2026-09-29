@@ -4273,6 +4273,7 @@ pub struct ResolvedPath {
     pub kind: Option<String>,
     pub entry_id: Option<u64>,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryEntryMetadata {
     pub name: String,
@@ -14499,6 +14500,10 @@ impl DbRepo {
             (
                 CString::new(
                     "
+                    SELECT d.name, 'dir', d.id_directory, d.inode_seed, ''
+                    FROM directories d
+                    WHERE d.id_parent IS NULL AND d.name != '/'
+                    UNION ALL
                     SELECT f.name, 'file', f.id_file, f.inode_seed, COALESCE(sf.file_type, '')
                     FROM files f
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
@@ -14509,10 +14514,6 @@ impl DbRepo {
                     JOIN files f ON f.id_file = h.id_file
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
                     WHERE h.id_directory IS NULL
-                    UNION ALL
-                    SELECT d.name, 'dir', d.id_directory, d.inode_seed, ''
-                    FROM directories d
-                    WHERE d.id_parent IS NULL AND d.name != '/'
                     UNION ALL
                     SELECT s.name, 'symlink', s.id_symlink, s.inode_seed, ''
                     FROM symlinks s
@@ -14530,6 +14531,7 @@ impl DbRepo {
             parse_directory_entry_metadata_rows(fetch_rows_text(res)?)
         })
     }
+
     pub fn list_directory_entries_blob(&self, path: &str) -> Result<Option<Vec<u8>>, String> {
         let normalized = path.trim();
         let parent_id = self.get_dir_id(normalized)?;
