@@ -402,6 +402,15 @@ documentation/tests and follows the repository versioning policy.
 After every commit compare it with its parent using `git diff HEAD~1..HEAD` or
 `git show`, inspect the complete file set and run `git diff --check`.
 
+When a defect cannot be assigned a single credible cause after source-level
+analysis, deterministic tests and normal runtime/log instrumentation, especially
+for timing-sensitive or Heisenbug-like behavior, escalate the diagnosis to the
+generated machine code. Inspect the ASM/disassembly and ELF metadata from the
+same build profile, toolchain and flags that reproduce the issue before changing
+behavior merely to make the symptom disappear. Compare relevant symbols,
+inlining/optimization decisions and control/data flow with the source-level
+expectation; retain the resulting evidence with the diagnosis.
+
 Do not add or modify GitHub Actions workflows.
 
 ## Historical plans
