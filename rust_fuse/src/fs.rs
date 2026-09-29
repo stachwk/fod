@@ -776,6 +776,13 @@ struct SharedMonitorPublisherInput {
     write: Arc<LogicalTaskQueueObservability>,
     copy: Arc<LogicalTaskQueueObservability>,
     profile: Arc<FodFuseProfileCounters>,
+    metadata_profile_readdir_calls: AtomicU64,
+    metadata_profile_readdir_entries: AtomicU64,
+    metadata_profile_readdir_total_us: AtomicU64,
+    metadata_profile_readdir_parent_lookup_us: AtomicU64,
+    metadata_profile_readdir_list_us: AtomicU64,
+    metadata_profile_readdir_child_lookup_us: AtomicU64,
+    metadata_profile_readdir_register_us: AtomicU64,
     fuse_compatibility: Arc<RwLock<Option<SharedMonitorFuseCompatibilityStats>>>,
 }
 
@@ -1685,6 +1692,13 @@ impl FodFuse {
             statfs_cache: Mutex::new(None),
             last_write_session_touch: Mutex::new(None),
             profile: Arc::new(FodFuseProfileCounters::default()),
+            metadata_profile_readdir_calls: AtomicU64::new(0),
+            metadata_profile_readdir_entries: AtomicU64::new(0),
+            metadata_profile_readdir_total_us: AtomicU64::new(0),
+            metadata_profile_readdir_parent_lookup_us: AtomicU64::new(0),
+            metadata_profile_readdir_list_us: AtomicU64::new(0),
+            metadata_profile_readdir_child_lookup_us: AtomicU64::new(0),
+            metadata_profile_readdir_register_us: AtomicU64::new(0),
             fuse_compatibility: Arc::new(RwLock::new(None)),
             logical_read_tasks,
             logical_write_tasks,
@@ -2157,7 +2171,7 @@ impl FodFuse {
             }
         }
         format!(
-            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, direct_io_read_prefetch_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, client_session_heartbeat_interval_secs={}, client_session_lease_ttl_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, samples=[{}]}}",
+            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, direct_io_read_prefetch_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, client_session_heartbeat_interval_secs={}, client_session_lease_ttl_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, readdir_calls={}, readdir_entries={}, readdir_total_us={}, readdir_parent_lookup_us={}, readdir_list_us={}, readdir_child_lookup_us={}, readdir_register_us={}, samples=[{}]}}",
             self.read_only,
             self.use_fuse_context,
             self.fopen_direct_io,
@@ -2195,6 +2209,16 @@ impl FodFuse {
             read_cache_count,
             read_sequence_count,
             lock_count,
+            self.metadata_profile_readdir_calls.load(Ordering::Relaxed),
+            self.metadata_profile_readdir_entries.load(Ordering::Relaxed),
+            self.metadata_profile_readdir_total_us.load(Ordering::Relaxed),
+            self.metadata_profile_readdir_parent_lookup_us
+                .load(Ordering::Relaxed),
+            self.metadata_profile_readdir_list_us.load(Ordering::Relaxed),
+            self.metadata_profile_readdir_child_lookup_us
+                .load(Ordering::Relaxed),
+            self.metadata_profile_readdir_register_us
+                .load(Ordering::Relaxed),
             samples.join(", ")
         )
     }
@@ -5024,10 +5048,23 @@ impl Filesystem for FodFuse {
             "readdir",
             format!("path={} ino={} offset={}", path, ino, offset),
         );
+        let metadata_profile_enabled = fod_fuse_profile_metadata_cache_enabled();
+        let readdir_started = metadata_profile_enabled.then(Instant::now);
+        let mut readdir_parent_lookup_us = 0u64;
+        let mut readdir_list_us = 0u64;
+        let mut readdir_child_lookup_us = 0u64;
+        let mut readdir_register_us = 0u64;
+        let mut readdir_entries = 0u64;
         let current_attrs = if path == "/" {
             None
         } else {
-            match self.lookup_path(&path) {
+            let lookup_started = metadata_profile_enabled.then(Instant::now);
+            let result = self.lookup_path(&path);
+            if let Some(started) = lookup_started {
+                readdir_parent_lookup_us =
+                    readdir_parent_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
+            }
+            match result {
                 Ok(Some(attrs)) => Some(attrs.file_attr),
                 Err(errno) => {
                     self.log_request_error(
@@ -5041,7 +5078,13 @@ impl Filesystem for FodFuse {
                 Ok(None) => None,
             }
         };
-        let blob = match self.repo.list_directory_entries_blob(&path) {
+        let list_started = metadata_profile_enabled.then(Instant::now);
+        let list_result = self.repo.list_directory_entries_blob(&path);
+        if let Some(started) = list_started {
+            readdir_list_us =
+                readdir_list_us.saturating_add(duration_to_micros(started.elapsed()));
+        }
+        let blob = match list_result {
             Ok(Some(blob)) => blob,
             Ok(None) => {
                 debug!("FOD readdir path={} empty", path);
@@ -5074,10 +5117,22 @@ impl Filesystem for FodFuse {
             next_offset = 2;
         }
         for (index, name) in entries.into_iter().enumerate().skip(offset as usize) {
+            readdir_entries = readdir_entries.saturating_add(1);
             let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
-            match self.lookup_path(&child_path) {
+            let lookup_started = metadata_profile_enabled.then(Instant::now);
+            let lookup_result = self.lookup_path(&child_path);
+            if let Some(started) = lookup_started {
+                readdir_child_lookup_us =
+                    readdir_child_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
+            }
+            match lookup_result {
                 Ok(Some(attrs)) => {
+                    let register_started = metadata_profile_enabled.then(Instant::now);
                     self.register_path(&child_path, attrs.file_attr.ino.0);
+                    if let Some(started) = register_started {
+                        readdir_register_us =
+                            readdir_register_us.saturating_add(duration_to_micros(started.elapsed()));
+                    }
                     let kind = attrs.file_attr.kind;
                     let added = reply.add(attrs.file_attr.ino, (index + 3) as u64, kind, name);
                     if added {
@@ -5091,6 +5146,24 @@ impl Filesystem for FodFuse {
             next_offset = (index + 3) as i64;
         }
         let _ = next_offset;
+        if metadata_profile_enabled {
+            self.metadata_profile_readdir_calls
+                .fetch_add(1, Ordering::Relaxed);
+            self.metadata_profile_readdir_entries
+                .fetch_add(readdir_entries, Ordering::Relaxed);
+            self.metadata_profile_readdir_parent_lookup_us
+                .fetch_add(readdir_parent_lookup_us, Ordering::Relaxed);
+            self.metadata_profile_readdir_list_us
+                .fetch_add(readdir_list_us, Ordering::Relaxed);
+            self.metadata_profile_readdir_child_lookup_us
+                .fetch_add(readdir_child_lookup_us, Ordering::Relaxed);
+            self.metadata_profile_readdir_register_us
+                .fetch_add(readdir_register_us, Ordering::Relaxed);
+            if let Some(started) = readdir_started {
+                self.metadata_profile_readdir_total_us
+                    .fetch_add(duration_to_micros(started.elapsed()), Ordering::Relaxed);
+            }
+        }
         if let Some(attrs) = current_attrs.as_ref() {
             self.touch_access_time(&path, attrs);
         }
