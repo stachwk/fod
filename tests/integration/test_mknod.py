@@ -56,6 +56,17 @@ def known_special_node_limit(exc: OSError) -> bool:
     return exc.errno in allowed
 
 
+def assert_scandir_not_regular(path: Path) -> None:
+    entries = {entry.name: entry for entry in os.scandir(path.parent)}
+    entry = entries[path.name]
+    if entry.is_file(follow_symlinks=False):
+        raise AssertionError(f"{path}: readdir reported special node as regular file")
+    if entry.is_dir(follow_symlinks=False):
+        raise AssertionError(f"{path}: readdir reported special node as directory")
+    if entry.is_symlink():
+        raise AssertionError(f"{path}: readdir reported special node as symlink")
+
+
 def safe_unlink(path: Path) -> None:
     # Usuwanie pomocnicze odporne na bledy FUSE.
     try:
@@ -135,6 +146,8 @@ def test_fifo_mknod(work_dir: Path) -> None:
             return
         raise
 
+    assert_scandir_not_regular(fifo_path)
+
     st = assert_mode_permissions(
         fifo_path,
         stat.S_ISFIFO,
@@ -173,6 +186,8 @@ def test_character_device_mknod(work_dir: Path) -> None:
             return
         raise
 
+    assert_scandir_not_regular(chr_path)
+
     st = assert_mode_permissions(
         chr_path,
         stat.S_ISCHR,
@@ -203,6 +218,8 @@ def test_block_device_mknod(work_dir: Path) -> None:
             print(f"SKIP: block device mknod returns errno={exc.errno} on current FOD")
             return
         raise
+
+    assert_scandir_not_regular(block_path)
 
     st = assert_mode_permissions(
         block_path,
