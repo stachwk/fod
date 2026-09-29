@@ -106,6 +106,11 @@ fn fod_fuse_profile_metadata_cache_enabled() -> bool {
     })
 }
 
+fn fod_fuse_readdir_batch_metadata_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_BATCH_METADATA", false))
+}
+
 pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
         ENOSPC
@@ -5078,29 +5083,7 @@ impl Filesystem for FodFuse {
                 Ok(None) => None,
             }
         };
-        let list_started = metadata_profile_enabled.then(Instant::now);
-        let list_result = self.repo.list_directory_entries_blob(&path);
-        if let Some(started) = list_started {
-            readdir_list_us =
-                readdir_list_us.saturating_add(duration_to_micros(started.elapsed()));
-        }
-        let blob = match list_result {
-            Ok(Some(blob)) => blob,
-            Ok(None) => {
-                debug!("FOD readdir path={} empty", path);
-                if let Some(attrs) = current_attrs.as_ref() {
-                    self.touch_access_time(&path, attrs);
-                }
-                reply.ok();
-                return;
-            }
-            Err(_) => {
-                fuse_reply_error!(reply, EIO);
-                return;
-            }
-        };
-        let entries = Self::decode_nul_fields(&blob);
-        debug!("FOD readdir path={} entries={}", path, entries.len());
+        let batch_metadata_enabled = fod_fuse_readdir_batch_metadata_enabled();
         let mut next_offset = 1i64;
         if offset == 0 {
             let _ = reply.add(INodeNo(ino), 1, FileType::Directory, ".");
@@ -5116,35 +5099,107 @@ impl Filesystem for FodFuse {
             let _ = reply.add(INodeNo(parent_ino), 2, FileType::Directory, "..");
             next_offset = 2;
         }
-        for (index, name) in entries.into_iter().enumerate().skip(offset as usize) {
-            readdir_entries = readdir_entries.saturating_add(1);
-            let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
-            let lookup_started = metadata_profile_enabled.then(Instant::now);
-            let lookup_result = self.lookup_path(&child_path);
-            if let Some(started) = lookup_started {
-                readdir_child_lookup_us =
-                    readdir_child_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
+
+        if batch_metadata_enabled {
+            let list_started = metadata_profile_enabled.then(Instant::now);
+            let list_result = self.repo.list_directory_entry_metadata(&path);
+            if let Some(started) = list_started {
+                readdir_list_us =
+                    readdir_list_us.saturating_add(duration_to_micros(started.elapsed()));
             }
-            match lookup_result {
-                Ok(Some(attrs)) => {
-                    let register_started = metadata_profile_enabled.then(Instant::now);
-                    self.register_path(&child_path, attrs.file_attr.ino.0);
-                    if let Some(started) = register_started {
-                        readdir_register_us =
-                            readdir_register_us.saturating_add(duration_to_micros(started.elapsed()));
-                    }
-                    let kind = attrs.file_attr.kind;
-                    let added = reply.add(attrs.file_attr.ino, (index + 3) as u64, kind, name);
-                    if added {
-                        break;
-                    }
+            let entries = match list_result {
+                Ok(entries) => entries,
+                Err(_) => {
+                    fuse_reply_error!(reply, EIO);
+                    return;
                 }
-                _ => {
-                    continue;
+            };
+            debug!(
+                "FOD readdir path={} entries={} batch_metadata=1",
+                path,
+                entries.len()
+            );
+            for (index, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+                readdir_entries = readdir_entries.saturating_add(1);
+                let kind = match entry.kind.as_str() {
+                    "dir" => FileType::Directory,
+                    "symlink" => FileType::Symlink,
+                    "file" | "hardlink" => entry
+                        .special_type
+                        .as_deref()
+                        .map(Self::file_type_from_special)
+                        .unwrap_or(FileType::RegularFile),
+                    _ => continue,
+                };
+                let inode = self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
+                let child_path =
+                    Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
+                let register_started = metadata_profile_enabled.then(Instant::now);
+                self.register_path(&child_path, inode);
+                if let Some(started) = register_started {
+                    readdir_register_us =
+                        readdir_register_us.saturating_add(duration_to_micros(started.elapsed()));
                 }
+                let added = reply.add(INodeNo(inode), (index + 3) as u64, kind, entry.name);
+                if added {
+                    break;
+                }
+                next_offset = (index + 3) as i64;
             }
-            next_offset = (index + 3) as i64;
+        } else {
+            let list_started = metadata_profile_enabled.then(Instant::now);
+            let list_result = self.repo.list_directory_entries_blob(&path);
+            if let Some(started) = list_started {
+                readdir_list_us =
+                    readdir_list_us.saturating_add(duration_to_micros(started.elapsed()));
+            }
+            let blob = match list_result {
+                Ok(Some(blob)) => blob,
+                Ok(None) => {
+                    debug!("FOD readdir path={} empty", path);
+                    if let Some(attrs) = current_attrs.as_ref() {
+                        self.touch_access_time(&path, attrs);
+                    }
+                    reply.ok();
+                    return;
+                }
+                Err(_) => {
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
+            };
+            let entries = Self::decode_nul_fields(&blob);
+            debug!("FOD readdir path={} entries={}", path, entries.len());
+            for (index, name) in entries.into_iter().enumerate().skip(offset as usize) {
+                readdir_entries = readdir_entries.saturating_add(1);
+                let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
+                let lookup_started = metadata_profile_enabled.then(Instant::now);
+                let lookup_result = self.lookup_path(&child_path);
+                if let Some(started) = lookup_started {
+                    readdir_child_lookup_us =
+                        readdir_child_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
+                }
+                match lookup_result {
+                    Ok(Some(attrs)) => {
+                        let register_started = metadata_profile_enabled.then(Instant::now);
+                        self.register_path(&child_path, attrs.file_attr.ino.0);
+                        if let Some(started) = register_started {
+                            readdir_register_us = readdir_register_us
+                                .saturating_add(duration_to_micros(started.elapsed()));
+                        }
+                        let kind = attrs.file_attr.kind;
+                        let added =
+                            reply.add(attrs.file_attr.ino, (index + 3) as u64, kind, name);
+                        if added {
+                            break;
+                        }
+                    }
+                    _ => continue,
+                }
+                next_offset = (index + 3) as i64;
+            }
         }
+
         let _ = next_offset;
         if metadata_profile_enabled {
             self.metadata_profile_readdir_calls
