@@ -14980,13 +14980,11 @@ mod tests {
     }
 
     fn current_block_size(repo: &DbRepo) -> u64 {
-        repo.query_scalar_text(
-            "SELECT value FROM config WHERE key = 'block_size'",
-        )
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap()
+        repo.query_scalar_text("SELECT value FROM config WHERE key = 'block_size'")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
     }
 
     fn wait_for_advisory_waiters(repo: &DbRepo, expected: u64) -> Result<u64, String> {
@@ -15081,13 +15079,7 @@ mod tests {
         }];
         barrier.wait();
         repo.persist_file_blocks_with_crc_flag(
-            file_id,
-            block_size,
-            block_size,
-            1,
-            false,
-            &rows,
-            false,
+            file_id, block_size, block_size, 1, false, &rows, false,
         )
     }
 
