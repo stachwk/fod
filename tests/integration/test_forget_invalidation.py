@@ -16,7 +16,9 @@ from fod_mount import FODMount
 CONTROL_DIR_ENV = "FOD_TEST_FORGET_INVALIDATE_DIR"
 CONTROL_NAME_ENV = "FOD_TEST_FORGET_INVALIDATE_NAME"
 WAIT_SECONDS = 10.0
-FORGET_RE = re.compile(\n    r"FOD forget profile: ino=(\\d+) nlookup=(\\d+) remaining=(\\d+) evicted=(true|false)"\n)
+FORGET_RE = re.compile(
+    r"FOD forget profile: ino=(\d+) nlookup=(\d+) remaining=(\d+) evicted=(true|false)"
+)
 
 
 def wait_for_control(control_dir: Path) -> None:
