@@ -111,7 +111,7 @@ fn fod_fuse_readdir_batch_metadata_enabled() -> bool {
 
 fn fod_fuse_readdir_register_paths_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_REGISTER_PATHS", true))
+    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_REGISTER_PATHS", false))
 }
 
 pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
