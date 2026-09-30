@@ -109,6 +109,11 @@ fn fod_fuse_readdir_batch_metadata_enabled() -> bool {
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_BATCH_METADATA", true))
 }
 
+fn fod_fuse_readdir_register_paths_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_REGISTER_PATHS", true))
+}
+
 pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
         ENOSPC
@@ -5131,11 +5136,13 @@ impl Filesystem for FodFuse {
                 };
                 let inode = self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
                 let child_path = Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
-                let register_started = metadata_profile_enabled.then(Instant::now);
-                self.register_path(&child_path, inode);
-                if let Some(started) = register_started {
-                    readdir_register_us =
-                        readdir_register_us.saturating_add(duration_to_micros(started.elapsed()));
+                if fod_fuse_readdir_register_paths_enabled() {
+                    let register_started = metadata_profile_enabled.then(Instant::now);
+                    self.register_path(&child_path, inode);
+                    if let Some(started) = register_started {
+                        readdir_register_us = readdir_register_us
+                            .saturating_add(duration_to_micros(started.elapsed()));
+                    }
                 }
                 let added = reply.add(INodeNo(inode), (index + 3) as u64, kind, entry.name);
                 if added {
@@ -5178,11 +5185,13 @@ impl Filesystem for FodFuse {
                 }
                 match lookup_result {
                     Ok(Some(attrs)) => {
-                        let register_started = metadata_profile_enabled.then(Instant::now);
-                        self.register_path(&child_path, attrs.file_attr.ino.0);
-                        if let Some(started) = register_started {
-                            readdir_register_us = readdir_register_us
-                                .saturating_add(duration_to_micros(started.elapsed()));
+                        if fod_fuse_readdir_register_paths_enabled() {
+                            let register_started = metadata_profile_enabled.then(Instant::now);
+                            self.register_path(&child_path, attrs.file_attr.ino.0);
+                            if let Some(started) = register_started {
+                                readdir_register_us = readdir_register_us
+                                    .saturating_add(duration_to_micros(started.elapsed()));
+                            }
                         }
                         let kind = attrs.file_attr.kind;
                         let added = reply.add(attrs.file_attr.ino, (index + 3) as u64, kind, name);
