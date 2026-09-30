@@ -51,8 +51,8 @@
 - Treat the FOD 3.4.16-3.4.20 read-path optimization sequence as closed. Reopen metadata/range-cache tuning only for a new measured regression.
 - Treat external-unmount/session teardown as closed on the validated current stack. Reopen only if a future fuser/libfuse3 version reproduces a correctness or warning regression.
 - Treat compatibility-diagnostics aggregation as closed. Extend source fields only when a concrete consumer needs additional trustworthy machine-readable data; do not invent a new compatibility subsystem.
-- Instrument inode/path cache lifetime and implement `forget` plus `batch_forget` only if large-tree measurements show retained-state pressure that the current cache/path model does not bound adequately.
-- Benchmark `readdirplus` against `readdir` for large directories and keep it only when it measurably reduces callbacks or PostgreSQL work without weakening cache correctness.
+- Implement and validate `forget` plus `batch_forget` for inode/path-cache retirement. Large-tree measurements now confirm deterministic retained-state pressure (`6063 -> 12123 -> 24243` cached paths with increasing process RSS), so this is an active measured follow-up rather than a hypothetical candidate.
+- Treat per-child `readdir` metadata fanout as closed in FOD 3.4.31: batched directory metadata is the production default after 14.45-20.30x median `find` speedups and inode/type parity gates. Keep the legacy path only as a controlled regression fallback; revisit `readdirplus` only for a newly measured residual gap.
 - Treat same-destination writable create/copy and temporary-file `rename`/replace ownership as closed in FOD 3.4.30-3.4.31. Transactional rename/replace now covers file, hardlink, symlink and directory namespaces with active-writer fencing, deterministic two-mount races and rollback validation; reopen only for a new correctness regression.
 - Keep local quality gates, benchmark baselines, current documentation, and authoritative version/schema metadata synchronized with code changes.
 

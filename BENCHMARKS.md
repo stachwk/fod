@@ -1778,6 +1778,55 @@ Notes from the current host:
 - At `1 MiB` and `4 MiB`, extents are slower on both read and write.
 - This is the important counterweight to the sequential matrix: `64 KiB` IO does not turn extents into a general-purpose default path.
 
+## FOD 3.4.31 batched readdir metadata A/B
+
+Measured locally on 2026-09-29 after profiling the large-tree metadata path.
+The profile showed that per-child `lookup_path()` calls consumed about 95-96%
+of cumulative `readdir` time, while local path registration was negligible.
+
+Three interleaved legacy/batch runs were executed at each tree size. Median
+results:
+
+| Tree | Legacy `ls` | Batch `ls` | Legacy `find` | Batch `find` | `find` speedup |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 60 dirs × 100 files | 121.99 ms | 77.07 ms | 7838.58 ms | 386.19 ms | 20.30× |
+| 120 dirs × 100 files | 236.54 ms | 123.95 ms | 13096.88 ms | 654.39 ms | 20.01× |
+| 240 dirs × 100 files | 503.53 ms | 344.57 ms | 26665.86 ms | 1845.70 ms | 14.45× |
+
+The batched path replaces N child metadata lookups with one directory metadata
+query returning the name, namespace kind, entry id, inode seed and optional
+special-file type. In every batch run
+`readdir_child_lookup_us=0`. All 18 A/B runs completed with `rc=0`.
+
+The same runs confirmed deterministic inode/path-cache retention:
+
+- 60 × 100: `inode_to_path=6063`, `path_to_inode=6063`;
+- 120 × 100: `inode_to_path=12123`, `path_to_inode=12123`;
+- 240 × 100: `inode_to_path=24243`, `path_to_inode=24243`.
+
+Median process RSS for batch was approximately 15.30 MiB, 16.66 MiB and
+19.96 MiB respectively. The retained mappings are therefore a real, separately
+measured memory-lifetime issue, but they are not the cause of the former
+large-tree latency.
+
+Correctness gates before enabling the batch path by default covered:
+
+- `os.scandir()` inode and type parity for regular files, hardlinks,
+  symlinks and directories, including remount;
+- hardlink behavior;
+- symlink/readlink behavior;
+- FIFO, character-device and block-device directory-entry types;
+- the 82-test `fod-rust-hotpath --lib` suite.
+
+On 2026-09-30 the final default-path gate passed with
+`fmt=0 check=0 hotpath=0 diff=0 parity=0 tree_default=0`. A forced legacy
+smoke using `FOD_READDIR_BATCH_METADATA=0` also passed, with
+`dirs=60 files_per_dir=100 ls_ms=124.86 find_ms=6179.37`.
+
+Batched directory metadata is now the production default.
+`FOD_READDIR_BATCH_METADATA=0` remains available as a controlled legacy
+fallback for regression isolation.
+
 ## Current Baseline Snapshot
 
 ### Latest Local Run

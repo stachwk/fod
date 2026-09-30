@@ -361,13 +361,25 @@ No database schema or storage-format change was required. Detailed C2 planning,
 baseline evidence and closure notes are archived in
 [`../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md`](../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md).
 
+## Active measured follow-up
+
+Large-tree profiling now establishes retained inode/path mappings as a separate
+memory-lifetime issue: complete walks retained 6063, 12123 and 24243 entries,
+with process RSS increasing with tree size. The next selected task is therefore
+to implement and validate FUSE `forget`/`batch_forget` cache retirement
+without weakening stable-inode correctness.
+
+The `readdir` metadata fanout issue is closed: batched directory metadata is
+the production default after 14.45-20.30× median `find` speedups and parity
+coverage for regular files, directories, hardlinks, symlinks and special files.
+`FOD_READDIR_BATCH_METADATA=0` remains a diagnostic legacy fallback.
+
 ## Deferred measured follow-ups
 
 These remain candidates, not parallel active implementation projects:
 
-- instrument inode/path cache lifetime and add `forget`/`batch_forget` only if
-  large-tree measurements show retained-state pressure;
-- benchmark `readdirplus` against `readdir` before enabling or relying on it;
+- evaluate `readdirplus` only if a new measurement shows additional callback
+  or PostgreSQL work after the batched `readdir` change;
 - repeat QNAP COPY-buffer tuning only after a new measured regression or a
   materially changed QNAP/network/Docker environment;
 - reopen external-unmount/session teardown only if a future fuser/libfuse3
