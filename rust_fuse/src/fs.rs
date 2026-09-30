@@ -4863,7 +4863,33 @@ impl FodFuse {
         }
         if let Some(path) = removed_path {
             if let Some(ino) = self.inode_for_path(&path) {
-                let _ = self.evict_inode_if_unreferenced(ino);
+                let evicted = self.evict_inode_if_unreferenced(ino);
+                if fod_fuse_profile_metadata_cache_enabled() {
+                    let lookup_remaining = self
+                        .lookup_refs
+                        .lock()
+                        .map(|guard| guard.get(&ino).copied().unwrap_or(0))
+                        .unwrap_or(u64::MAX);
+                    let inode_cached = self
+                        .inode_to_path
+                        .read()
+                        .map(|guard| guard.contains_key(&ino))
+                        .unwrap_or(true);
+                    let path_cached = self
+                        .path_to_inode
+                        .read()
+                        .map(|guard| guard.values().any(|cached_ino| *cached_ino == ino))
+                        .unwrap_or(true);
+                    info!(
+                        "FOD release cache profile: fh={} ino={} evicted={} lookup_remaining={} inode_cached={} path_cached={}",
+                        fh,
+                        ino,
+                        evicted,
+                        lookup_remaining,
+                        inode_cached,
+                        path_cached
+                    );
+                }
             }
         }
     }
