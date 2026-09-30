@@ -20,15 +20,35 @@ from fod_mount import FODMount
 CONTROL_DIR_ENV = "FOD_TEST_FORGET_INVALIDATE_DIR"
 CONTROL_NAME_ENV = "FOD_TEST_FORGET_INVALIDATE_NAME"
 CONTROL_COUNT_ENV = "FOD_TEST_FORGET_INVALIDATE_COUNT"
+CYCLES_ENV = "FOD_TEST_FORGET_CYCLES"
+RSS_MAX_GROWTH_ENV = "FOD_TEST_FORGET_RSS_MAX_GROWTH_BYTES"
 
-# Dziesiec cykli jest celowo male: to gate funkcjonalny C1, a nie jeszcze soak.
-CYCLES = 10
+# Domyslnie test pozostaje malym gate C1. Target convergence ustawia wiecej cykli.
+DEFAULT_CYCLES = 10
+DEFAULT_RSS_MAX_GROWTH_BYTES = 16 * 1024 * 1024
 WAIT_SECONDS = 10.0
 
-# Profil FORGET jest zrodlem prawdy dla licznika lookup oraz decyzji eviction.
+# Rozszerzony profil pozwala sprawdzic konwergencje lookup_refs, map inode/path i RSS.
+# Starszy test pojedynczej invalidacji nadal pasuje do prefiksu tego komunikatu.
 FORGET_RE = re.compile(
-    r"FOD forget profile: ino=(\d+) nlookup=(\d+) remaining=(\d+) evicted=(true|false)"
+    r"FOD forget profile: ino=(\d+) nlookup=(\d+) remaining=(\d+) "
+    r"evicted=(true|false) lookup_ref_inodes=(\d+) lookup_ref_total=(\d+) "
+    r"inode_to_path=(\d+) path_to_inode=(\d+) process_rss_bytes=(\d+)"
 )
+
+
+def positive_int_env(name: str, default: int) -> int:
+    """Czyta dodatnia wartosc calkowita z env."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise AssertionError(f"{name} must be an integer, got {raw!r}") from exc
+    if value <= 0:
+        raise AssertionError(f"{name} must be greater than zero, got {value}")
+    return value
 
 
 def wait_for_control(control_dir: Path, cycle: int) -> None:
@@ -51,8 +71,8 @@ def wait_for_forget(
     log_file: Path,
     target_ino: int,
     expected_count: int,
-) -> tuple[int, int, int, bool]:
-    """Czeka az log zawiera oczekiwana liczbe FORGET dla badanego inode."""
+) -> tuple[int, int, int, bool, int, int, int, int, int]:
+    """Czeka na oczekiwany profil FORGET dla badanego inode."""
     deadline = time.monotonic() + WAIT_SECONDS
     last = ""
 
@@ -69,12 +89,27 @@ def wait_for_forget(
             if int(match[0]) == target_ino
         ]
         if len(matching) >= expected_count:
-            ino, nlookup, remaining, evicted = matching[expected_count - 1]
+            (
+                ino,
+                nlookup,
+                remaining,
+                evicted,
+                lookup_ref_inodes,
+                lookup_ref_total,
+                inode_to_path,
+                path_to_inode,
+                process_rss_bytes,
+            ) = matching[expected_count - 1]
             return (
                 int(ino),
                 int(nlookup),
                 int(remaining),
                 evicted == "true",
+                int(lookup_ref_inodes),
+                int(lookup_ref_total),
+                int(inode_to_path),
+                int(path_to_inode),
+                int(process_rss_bytes),
             )
         time.sleep(0.01)
 
@@ -93,6 +128,12 @@ def main() -> None:
             "FOD_RUST_FUSE_BIN must point to fod-rust-fuse built with "
             "--features integration-test-hooks"
         )
+
+    cycles = positive_int_env(CYCLES_ENV, DEFAULT_CYCLES)
+    rss_max_growth_bytes = positive_int_env(
+        RSS_MAX_GROWTH_ENV,
+        DEFAULT_RSS_MAX_GROWTH_BYTES,
+    )
 
     with tempfile.TemporaryDirectory(prefix="fod-forget-repeated-") as temp_dir:
         temp = Path(temp_dir)
@@ -119,11 +160,15 @@ def main() -> None:
 
         os.environ[CONTROL_DIR_ENV] = str(control_dir)
         os.environ[CONTROL_NAME_ENV] = name
-        os.environ[CONTROL_COUNT_ENV] = str(CYCLES)
+        os.environ[CONTROL_COUNT_ENV] = str(cycles)
         os.environ["FOD_PROFILE_METADATA_CACHE"] = "1"
         os.environ["FOD_READDIR_REGISTER_PATHS"] = "0"
         os.environ["FOD_READDIR_BATCH_METADATA"] = "1"
         os.environ["FOD_LOG_LEVEL"] = "info"
+
+        baseline_inode_to_path: int | None = None
+        baseline_path_to_inode: int | None = None
+        rss_samples: list[int] = []
 
         try:
             launcher.start(
@@ -140,8 +185,8 @@ def main() -> None:
                 raise AssertionError("pre-invalidation payload mismatch")
 
             # Kazdy cykl wymusza invalidacje dentry, oczekuje FORGET, a potem
-            # robi relookup. Stable inode musi pozostac identyczny.
-            for cycle in range(1, CYCLES + 1):
+            # robi relookup. Punkt po FORGET musi wracac do stalego baseline.
+            for cycle in range(1, cycles + 1):
                 (control_dir / f"trigger.{cycle}").write_text(
                     "invalidate\n",
                     encoding="utf-8",
@@ -151,7 +196,17 @@ def main() -> None:
                 if launcher.config is None:
                     raise AssertionError("mount config unavailable")
 
-                forget_ino, nlookup, remaining, evicted = wait_for_forget(
+                (
+                    forget_ino,
+                    nlookup,
+                    remaining,
+                    evicted,
+                    lookup_ref_inodes,
+                    lookup_ref_total,
+                    inode_to_path,
+                    path_to_inode,
+                    process_rss_bytes,
+                ) = wait_for_forget(
                     launcher.config.log_file,
                     target_ino,
                     cycle,
@@ -171,6 +226,36 @@ def main() -> None:
                         f"cycle={cycle} ino={forget_ino} "
                         f"remaining={remaining} evicted={evicted}"
                     )
+                if lookup_ref_inodes != 0 or lookup_ref_total != 0:
+                    raise AssertionError(
+                        "lookup refs did not converge after forget: "
+                        f"cycle={cycle} lookup_ref_inodes={lookup_ref_inodes} "
+                        f"lookup_ref_total={lookup_ref_total}"
+                    )
+
+                if baseline_inode_to_path is None:
+                    baseline_inode_to_path = inode_to_path
+                    baseline_path_to_inode = path_to_inode
+                elif (
+                    inode_to_path != baseline_inode_to_path
+                    or path_to_inode != baseline_path_to_inode
+                ):
+                    raise AssertionError(
+                        "inode/path cache did not converge to baseline: "
+                        f"cycle={cycle} inode_to_path={inode_to_path} "
+                        f"path_to_inode={path_to_inode} "
+                        f"baseline_inode_to_path={baseline_inode_to_path} "
+                        f"baseline_path_to_inode={baseline_path_to_inode}"
+                    )
+
+                if inode_to_path != path_to_inode:
+                    raise AssertionError(
+                        "inode/path cache sizes diverged: "
+                        f"cycle={cycle} inode_to_path={inode_to_path} "
+                        f"path_to_inode={path_to_inode}"
+                    )
+
+                rss_samples.append(process_rss_bytes)
 
                 after = target.stat()
                 if after.st_ino != target_ino:
@@ -183,11 +268,32 @@ def main() -> None:
                         f"post-invalidation payload mismatch cycle={cycle}"
                     )
 
+            # Pomijamy poczatkowy warmup alokatora przy ocenie stabilizacji RSS.
+            warmup_samples = min(max(cycles // 10, 1), 50)
+            rss_baseline = rss_samples[warmup_samples - 1]
+            rss_tail = rss_samples[warmup_samples:]
+            rss_peak = max(rss_tail) if rss_tail else rss_baseline
+            rss_end = rss_samples[-1]
+            rss_growth = max(0, rss_peak - rss_baseline)
+
+            if rss_growth > rss_max_growth_bytes:
+                raise AssertionError(
+                    "RSS did not stabilize during forget churn: "
+                    f"cycles={cycles} baseline={rss_baseline} peak={rss_peak} "
+                    f"end={rss_end} growth={rss_growth} "
+                    f"limit={rss_max_growth_bytes}"
+                )
+
             target.unlink()
             print(
                 "OK forget-repeated-invalidation "
-                f"cycles={CYCLES} ino={target_ino} "
-                "remaining=0 evicted=1 stable_inode=1 relookup=1"
+                f"cycles={cycles} ino={target_ino} "
+                "remaining=0 evicted=1 lookup_ref_inodes=0 lookup_ref_total=0 "
+                f"inode_to_path={baseline_inode_to_path} "
+                f"path_to_inode={baseline_path_to_inode} "
+                f"rss_baseline={rss_baseline} rss_end={rss_end} "
+                f"rss_peak={rss_peak} rss_growth={rss_growth} "
+                "stable_inode=1 relookup=1"
             )
         except Exception:
             launcher._dump_log()

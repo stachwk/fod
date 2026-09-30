@@ -5133,9 +5133,40 @@ impl Filesystem for FodFuse {
                 .fetch_add(1, Ordering::Relaxed);
             self.metadata_profile_forget_nlookup
                 .fetch_add(nlookup, Ordering::Relaxed);
+
+            let (lookup_ref_inodes, lookup_ref_total) = self
+                .lookup_refs
+                .lock()
+                .map(|guard| {
+                    (
+                        guard.len(),
+                        guard.values().copied().fold(0u64, u64::saturating_add),
+                    )
+                })
+                .unwrap_or((0, 0));
+            let inode_to_path = self
+                .inode_to_path
+                .read()
+                .map(|guard| guard.len())
+                .unwrap_or(0);
+            let path_to_inode = self
+                .path_to_inode
+                .read()
+                .map(|guard| guard.len())
+                .unwrap_or(0);
+            let process_rss_bytes = current_process_rss_bytes().unwrap_or(0);
+
             info!(
-                "FOD forget profile: ino={} nlookup={} remaining={} evicted={}",
-                ino.0, nlookup, remaining, evicted
+                "FOD forget profile: ino={} nlookup={} remaining={} evicted={} lookup_ref_inodes={} lookup_ref_total={} inode_to_path={} path_to_inode={} process_rss_bytes={}",
+                ino.0,
+                nlookup,
+                remaining,
+                evicted,
+                lookup_ref_inodes,
+                lookup_ref_total,
+                inode_to_path,
+                path_to_inode,
+                process_rss_bytes
             );
         }
     }
