@@ -49,6 +49,22 @@ def wait_for_control(control_dir: Path) -> None:
     raise AssertionError("forget active-handle invalidation hook did not complete")
 
 
+def assert_no_forget(log_file: Path, target_ino: int, duration: float = 0.5) -> None:
+    """Aktywny fh powinien utrzymac inode mimo invalidacji dentry."""
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        matching = [
+            match
+            for match in FORGET_RE.findall(read_log(log_file))
+            if int(match[0]) == target_ino
+        ]
+        if matching:
+            raise AssertionError(
+                "kernel emitted FUSE FORGET while file handle was still active"
+            )
+        time.sleep(0.01)
+
+
 def wait_for_forget(log_file: Path, target_ino: int) -> tuple[int, int, bool]:
     deadline = time.monotonic() + WAIT_SECONDS
     last = ""
@@ -168,25 +184,13 @@ def main() -> None:
             (control_dir / "trigger").write_text("invalidate\n", encoding="utf-8")
             wait_for_control(control_dir)
 
-            nlookup, remaining, evicted = wait_for_forget(
-                launcher.config.log_file,
-                target_ino,
-            )
-            if nlookup <= 0:
-                raise AssertionError(
-                    f"invalid active-handle forget nlookup={nlookup} ino={target_ino}"
-                )
-            if remaining != 0:
-                raise AssertionError(
-                    f"active-handle forget retained lookup refs remaining={remaining}"
-                )
-            if evicted:
-                raise AssertionError(
-                    "active handle did not protect inode cache from FORGET eviction"
-                )
+            # Na tym kernelu invalidacja aktywnego dentry nie wysyla FORGET
+            # dopoki otwarty fh nadal utrzymuje inode. To jest wlasciwy kontrakt
+            # do sprawdzenia przed zamknieciem uchwytu.
+            assert_no_forget(launcher.config.log_file, target_ino)
 
             if handle.read() != payload:
-                raise AssertionError("open handle stopped reading after FORGET")
+                raise AssertionError("open handle stopped reading after invalidation")
             handle.seek(0)
 
             releases_before_close = len(
@@ -207,19 +211,36 @@ def main() -> None:
                 releases_before_close,
             )
 
-            if not release_evicted:
+            if release_evicted:
                 raise AssertionError(
-                    f"last active handle release did not evict inode fh={released_fh}"
+                    "release evicted inode before kernel retired its lookup ref: "
+                    f"fh={released_fh}"
                 )
-            if lookup_remaining != 0:
+            if lookup_remaining <= 0:
                 raise AssertionError(
-                    "lookup refs remained after last active handle release: "
-                    f"{lookup_remaining}"
+                    "release unexpectedly observed no outstanding lookup ref"
                 )
-            if inode_cached or path_cached:
+            if not inode_cached or not path_cached:
                 raise AssertionError(
-                    "inode/path cache remained after last active handle release: "
+                    "release dropped inode/path cache before kernel FORGET: "
                     f"inode_cached={inode_cached} path_cached={path_cached}"
+                )
+
+            nlookup, remaining, evicted = wait_for_forget(
+                launcher.config.log_file,
+                target_ino,
+            )
+            if nlookup <= 0:
+                raise AssertionError(
+                    f"invalid deferred forget nlookup={nlookup} ino={target_ino}"
+                )
+            if remaining != 0:
+                raise AssertionError(
+                    f"deferred forget retained lookup refs remaining={remaining}"
+                )
+            if not evicted:
+                raise AssertionError(
+                    "deferred FORGET after last handle release did not evict inode"
                 )
 
             after = target.stat()
@@ -234,10 +255,10 @@ def main() -> None:
             target.unlink()
             print(
                 "OK forget-active-handle "
-                f"ino={target_ino} forget_nlookup={nlookup} "
-                "forget_remaining=0 forget_evicted=0 "
-                f"release_fh={released_fh} release_evicted=1 "
-                "lookup_remaining=0 inode_cached=0 path_cached=0 "
+                f"ino={target_ino} release_fh={released_fh} "
+                "release_evicted=0 release_lookup_remaining>0 "
+                "release_inode_cached=1 release_path_cached=1 "
+                f"forget_nlookup={nlookup} forget_remaining=0 forget_evicted=1 "
                 "stable_inode=1 relookup=1"
             )
         except Exception:
