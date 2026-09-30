@@ -166,6 +166,8 @@ def main() -> None:
         os.environ["FOD_READDIR_BATCH_METADATA"] = "1"
         os.environ["FOD_LOG_LEVEL"] = "info"
 
+        baseline_lookup_ref_inodes: int | None = None
+        baseline_lookup_ref_total: int | None = None
         baseline_inode_to_path: int | None = None
         baseline_path_to_inode: int | None = None
         rss_samples: list[int] = []
@@ -226,11 +228,22 @@ def main() -> None:
                         f"cycle={cycle} ino={forget_ino} "
                         f"remaining={remaining} evicted={evicted}"
                     )
-                if lookup_ref_inodes != 0 or lookup_ref_total != 0:
+                # Liczniki lookup sa globalne dla calego mountu. Pierwszy cykl
+                # ustala baseline po usunieciu badanego inode; kolejne cykle
+                # musza wracac do tego samego stanu, ale niekoniecznie do zera.
+                if baseline_lookup_ref_inodes is None:
+                    baseline_lookup_ref_inodes = lookup_ref_inodes
+                    baseline_lookup_ref_total = lookup_ref_total
+                elif (
+                    lookup_ref_inodes != baseline_lookup_ref_inodes
+                    or lookup_ref_total != baseline_lookup_ref_total
+                ):
                     raise AssertionError(
-                        "lookup refs did not converge after forget: "
+                        "lookup refs did not converge to baseline after forget: "
                         f"cycle={cycle} lookup_ref_inodes={lookup_ref_inodes} "
-                        f"lookup_ref_total={lookup_ref_total}"
+                        f"lookup_ref_total={lookup_ref_total} "
+                        f"baseline_lookup_ref_inodes={baseline_lookup_ref_inodes} "
+                        f"baseline_lookup_ref_total={baseline_lookup_ref_total}"
                     )
 
                 if baseline_inode_to_path is None:
@@ -292,7 +305,9 @@ def main() -> None:
             print(
                 "OK forget-repeated-invalidation "
                 f"cycles={cycles} ino={target_ino} "
-                "remaining=0 evicted=1 lookup_ref_inodes=0 lookup_ref_total=0 "
+                "remaining=0 evicted=1 "
+                f"lookup_ref_inodes={baseline_lookup_ref_inodes} "
+                f"lookup_ref_total={baseline_lookup_ref_total} "
                 f"inode_to_path={baseline_inode_to_path} "
                 f"path_to_inode={baseline_path_to_inode} "
                 f"rss_baseline={rss_baseline} rss_end={rss_end} "
