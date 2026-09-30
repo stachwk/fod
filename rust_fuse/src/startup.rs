@@ -506,6 +506,23 @@ pub fn mount_fuse(
                     .to_string()
             })?;
 
+        let invalidate_count = env_var_with_legacy_alias("FOD_TEST_FORGET_INVALIDATE_COUNT")
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                value.parse::<usize>().map_err(|err| {
+                    format!(
+                        "FOD_TEST_FORGET_INVALIDATE_COUNT must be a positive integer: {err}"
+                    )
+                })
+            })
+            .transpose()?
+            .unwrap_or(1);
+        if invalidate_count == 0 {
+            return Err(
+                "FOD_TEST_FORGET_INVALIDATE_COUNT must be greater than zero".to_string(),
+            );
+        }
+
         let session = fuser::Session::new(fs, mountpoint, &config)
             .map_err(|err| format!("mount failed: {:?}", err))?;
         let notifier = session.notifier();
@@ -513,25 +530,43 @@ pub fn mount_fuse(
         let control_name = name.clone();
 
         let control = std::thread::spawn(move || {
-            let trigger = control_dir.join("trigger");
-            let done = control_dir.join("done");
             let error = control_dir.join("error");
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
 
-            while !trigger.exists() {
-                if std::time::Instant::now() >= deadline {
-                    let _ = std::fs::write(&error, "timeout waiting for trigger\n");
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            for cycle in 1..=invalidate_count {
+                let (trigger, done) = if invalidate_count == 1 {
+                    (control_dir.join("trigger"), control_dir.join("done"))
+                } else {
+                    (
+                        control_dir.join(format!("trigger.{cycle}")),
+                        control_dir.join(format!("done.{cycle}")),
+                    )
+                };
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
 
-            match notifier.inval_entry(fuser::INodeNo::ROOT, std::ffi::OsStr::new(&control_name)) {
-                Ok(()) => {
-                    let _ = std::fs::write(&done, "ok\n");
+                while !trigger.exists() {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = std::fs::write(
+                            &error,
+                            format!("timeout waiting for trigger cycle={cycle}\n"),
+                        );
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
                 }
-                Err(err) => {
-                    let _ = std::fs::write(&error, format!("inval_entry failed: {err}\n"));
+
+                match notifier
+                    .inval_entry(fuser::INodeNo::ROOT, std::ffi::OsStr::new(&control_name))
+                {
+                    Ok(()) => {
+                        let _ = std::fs::write(&done, format!("ok cycle={cycle}\n"));
+                    }
+                    Err(err) => {
+                        let _ = std::fs::write(
+                            &error,
+                            format!("inval_entry failed cycle={cycle}: {err}\n"),
+                        );
+                        return;
+                    }
                 }
             }
         });
