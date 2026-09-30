@@ -255,6 +255,10 @@ def main() -> None:
                         f"path_to_inode={path_to_inode}"
                     )
 
+                if process_rss_bytes == 0:
+                    raise AssertionError(
+                        f"RSS sample unavailable cycle={cycle}"
+                    )
                 rss_samples.append(process_rss_bytes)
 
                 after = target.stat()
