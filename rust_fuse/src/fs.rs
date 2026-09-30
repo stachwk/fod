@@ -5115,7 +5115,7 @@ impl Filesystem for FodFuse {
         );
         match self.lookup_path(&child_path) {
             Ok(Some(attrs)) => {
-                self.register_path(&child_path, attrs.file_attr.ino.0);
+                self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                 reply.entry(
                     &self.metadata_cache_ttl_live(),
                     &attrs.file_attr,
@@ -7315,7 +7315,7 @@ impl Filesystem for FodFuse {
                 self.invalidate_statfs_cache();
                 match self.lookup_path(&child_path) {
                     Ok(Some(attrs)) => {
-                        self.register_path(&child_path, attrs.file_attr.ino.0);
+                        self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                         debug!(
                             "FOD req={} op=mkdir created path={} directory_id={}",
                             req_id, child_path, directory_id
@@ -8216,7 +8216,7 @@ impl Filesystem for FodFuse {
 
         match self.lookup_path(&child_path) {
             Ok(Some(attrs)) => {
-                self.register_path(&child_path, attrs.file_attr.ino.0);
+                self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                 if created_new {
                     let _ = self.append_journal_event(
                         subject.uid,
@@ -9274,7 +9274,7 @@ impl Filesystem for FodFuse {
             ) {
                 Ok(_) => match self.lookup_path(&child_path) {
                     Ok(Some(attrs)) => {
-                        self.register_path(&child_path, attrs.file_attr.ino.0);
+                        self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                         self.invalidate_statfs_cache();
                         reply.entry(
                             &self.metadata_cache_ttl_live(),
@@ -9341,7 +9341,7 @@ impl Filesystem for FodFuse {
         };
         match self.lookup_path(&child_path) {
             Ok(Some(attrs)) => {
-                self.register_path(&child_path, attrs.file_attr.ino.0);
+                self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                 self.invalidate_statfs_cache();
                 reply.entry(
                     &self.metadata_cache_ttl_live(),
@@ -9398,7 +9398,7 @@ impl Filesystem for FodFuse {
         ) {
             Ok(_) => match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {
-                    self.register_path(&child_path, attrs.file_attr.ino.0);
+                    self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                     self.invalidate_statfs_cache();
                     reply.entry(
                         &self.metadata_cache_ttl_live(),
@@ -9474,7 +9474,7 @@ impl Filesystem for FodFuse {
         ) {
             Ok(_) => match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {
-                    self.register_path(&child_path, attrs.file_attr.ino.0);
+                    self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                     self.invalidate_statfs_cache();
                     reply.entry(
                         &self.metadata_cache_ttl_live(),
