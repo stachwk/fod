@@ -1570,6 +1570,7 @@ pub struct FodFuse {
     pub acl_enabled: bool,
     inode_to_path: RwLock<HashMap<u64, String>>,
     path_to_inode: RwLock<HashMap<String, u64>>,
+    lookup_refs: Mutex<HashMap<u64, u64>>,
     fh_table: Arc<Mutex<HashMap<u64, FileHandleState>>>,
     write_ownership_gate: Mutex<()>,
     pub(crate) write_states: Mutex<HashMap<u64, WriteState>>,
@@ -1686,6 +1687,7 @@ impl FodFuse {
             acl_enabled: security.acl_enabled,
             inode_to_path: RwLock::new(inode_to_path),
             path_to_inode: RwLock::new(path_to_inode),
+            lookup_refs: Mutex::new(HashMap::new()),
             fh_table: Arc::new(Mutex::new(HashMap::new())),
             write_ownership_gate: Mutex::new(()),
             write_states: Mutex::new(HashMap::new()),
@@ -2176,6 +2178,16 @@ impl FodFuse {
             .lock()
             .map(|guard| guard.len())
             .unwrap_or(0);
+        let (lookup_ref_inodes, lookup_ref_total) = self
+            .lookup_refs
+            .lock()
+            .map(|guard| {
+                (
+                    guard.len(),
+                    guard.values().copied().fold(0u64, u64::saturating_add),
+                )
+            })
+            .unwrap_or((0, 0));
         let mut samples = Vec::new();
         if let Ok(guard) = self.path_to_inode.read() {
             for (path, ino) in guard.iter().take(5) {
@@ -2183,7 +2195,7 @@ impl FodFuse {
             }
         }
         format!(
-            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, direct_io_read_prefetch_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, client_session_heartbeat_interval_secs={}, client_session_lease_ttl_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, readdir_calls={}, readdir_entries={}, readdir_total_us={}, readdir_parent_lookup_us={}, readdir_list_us={}, readdir_child_lookup_us={}, readdir_register_us={}, forget_calls={}, forget_nlookup={}, samples=[{}]}}",
+            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, direct_io_read_prefetch_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, client_session_heartbeat_interval_secs={}, client_session_lease_ttl_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, readdir_calls={}, readdir_entries={}, readdir_total_us={}, readdir_parent_lookup_us={}, readdir_list_us={}, readdir_child_lookup_us={}, readdir_register_us={}, forget_calls={}, forget_nlookup={}, lookup_ref_inodes={}, lookup_ref_total={}, samples=[{}]}}",
             self.read_only,
             self.use_fuse_context,
             self.fopen_direct_io,
@@ -2233,6 +2245,8 @@ impl FodFuse {
                 .load(Ordering::Relaxed),
             self.metadata_profile_forget_calls.load(Ordering::Relaxed),
             self.metadata_profile_forget_nlookup.load(Ordering::Relaxed),
+            lookup_ref_inodes,
+            lookup_ref_total,
             samples.join(", ")
         )
     }
@@ -4013,6 +4027,97 @@ impl FodFuse {
             cache.insert(ino, path.to_string());
         }
     }
+    fn register_lookup_path(&self, path: &str, ino: u64) {
+        if let Ok(mut refs) = self.lookup_refs.lock() {
+            self.register_path(path, ino);
+            let count = refs.entry(ino).or_insert(0);
+            *count = count.saturating_add(1);
+        } else {
+            self.register_path(path, ino);
+        }
+    }
+
+    fn inode_has_active_handle(&self, ino: u64) -> bool {
+        let paths = self
+            .path_to_inode
+            .read()
+            .map(|guard| {
+                guard
+                    .iter()
+                    .filter_map(|(path, cached_ino)| {
+                        (*cached_ino == ino).then_some(path.clone())
+                    })
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        if paths.is_empty() {
+            return false;
+        }
+        self.fh_table
+            .lock()
+            .map(|guard| guard.values().any(|state| paths.contains(&state.path)))
+            .unwrap_or(true)
+    }
+
+    fn remove_cached_inode_paths(&self, ino: u64) {
+        if ino == ROOT_INO {
+            return;
+        }
+        if let Ok(mut path_guard) = self.path_to_inode.write() {
+            path_guard.retain(|_, cached_ino| *cached_ino != ino);
+        }
+        if let Ok(mut inode_guard) = self.inode_to_path.write() {
+            inode_guard.remove(&ino);
+        }
+    }
+
+    fn evict_inode_if_unreferenced(&self, ino: u64) -> bool {
+        if ino == ROOT_INO {
+            return false;
+        }
+        let refs = match self.lookup_refs.lock() {
+            Ok(refs) => refs,
+            Err(_) => return false,
+        };
+        if refs.get(&ino).copied().unwrap_or(0) != 0 {
+            return false;
+        }
+        if self.inode_has_active_handle(ino) {
+            return false;
+        }
+        self.remove_cached_inode_paths(ino);
+        true
+    }
+
+    fn forget_lookup_refs(&self, ino: u64, nlookup: u64) -> (u64, bool) {
+        if ino == ROOT_INO {
+            return (0, false);
+        }
+        let mut refs = match self.lookup_refs.lock() {
+            Ok(refs) => refs,
+            Err(_) => return (0, false),
+        };
+        let Some(current) = refs.get(&ino).copied() else {
+            return (0, false);
+        };
+        let remaining = current.saturating_sub(nlookup);
+        if nlookup > current {
+            warn!(
+                "FOD forget lookup underflow ino={} tracked={} nlookup={}",
+                ino, current, nlookup
+            );
+        }
+        if remaining != 0 {
+            refs.insert(ino, remaining);
+            return (remaining, false);
+        }
+        refs.remove(&ino);
+        if self.inode_has_active_handle(ino) {
+            return (0, false);
+        }
+        self.remove_cached_inode_paths(ino);
+        (0, true)
+    }
 
     fn touch_access_time(&self, path: &str, file_attr: &FileAttr) {
         // A read-only mount is observation-only. Never emit automatic
@@ -4748,11 +4853,19 @@ impl FodFuse {
     }
 
     fn remove_handle_state(&self, fh: u64) {
-        if let Ok(mut guard) = self.fh_table.lock() {
-            guard.remove(&fh);
-        }
+        let removed_path = self
+            .fh_table
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.remove(&fh))
+            .map(|state| state.path);
         if let Ok(mut guard) = self.write_states.lock() {
             guard.remove(&fh);
+        }
+        if let Some(path) = removed_path {
+            if let Some(ino) = self.inode_for_path(&path) {
+                let _ = self.evict_inode_if_unreferenced(ino);
+            }
         }
     }
 
@@ -5015,12 +5128,16 @@ impl Filesystem for FodFuse {
     }
 
     fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
+        let (remaining, evicted) = self.forget_lookup_refs(ino.0, nlookup);
         if fod_fuse_profile_metadata_cache_enabled() {
             self.metadata_profile_forget_calls
                 .fetch_add(1, Ordering::Relaxed);
             self.metadata_profile_forget_nlookup
                 .fetch_add(nlookup, Ordering::Relaxed);
-            info!("FOD forget profile: ino={} nlookup={}", ino.0, nlookup);
+            info!(
+                "FOD forget profile: ino={} nlookup={} remaining={} evicted={}",
+                ino.0, nlookup, remaining, evicted
+            );
         }
     }
 
