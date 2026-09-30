@@ -4,10 +4,10 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 use fod_rust_monitor::{
     current_process_rss_bytes, log_logical_task_observability as log_logical_task_snapshots,
-    LogicalTaskAdmissionGate,
-    LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
-    LogicalTaskQueueObservability, SharedMonitorFuseCompatibilityStats, SharedMonitorSessionStats,
-    SharedMonitorSessionStatsInput, SharedMonitorSourceStats, SharedMonitorTimingStats,
+    LogicalTaskAdmissionGate, LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler,
+    LogicalTaskOperation, LogicalTaskQueueObservability, SharedMonitorFuseCompatibilityStats,
+    SharedMonitorSessionStats, SharedMonitorSessionStatsInput, SharedMonitorSourceStats,
+    SharedMonitorTimingStats,
 };
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
@@ -101,9 +101,7 @@ fn fod_fuse_profile_io_enabled() -> bool {
 
 fn fod_fuse_profile_metadata_cache_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        env_var_truthy_with_legacy_alias("FOD_PROFILE_METADATA_CACHE", false)
-    })
+    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_METADATA_CACHE", false))
 }
 
 fn fod_fuse_readdir_batch_metadata_enabled() -> bool {
@@ -5132,8 +5130,7 @@ impl Filesystem for FodFuse {
                     _ => continue,
                 };
                 let inode = self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
-                let child_path =
-                    Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
+                let child_path = Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
                 let register_started = metadata_profile_enabled.then(Instant::now);
                 self.register_path(&child_path, inode);
                 if let Some(started) = register_started {
@@ -5176,8 +5173,8 @@ impl Filesystem for FodFuse {
                 let lookup_started = metadata_profile_enabled.then(Instant::now);
                 let lookup_result = self.lookup_path(&child_path);
                 if let Some(started) = lookup_started {
-                    readdir_child_lookup_us =
-                        readdir_child_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
+                    readdir_child_lookup_us = readdir_child_lookup_us
+                        .saturating_add(duration_to_micros(started.elapsed()));
                 }
                 match lookup_result {
                     Ok(Some(attrs)) => {
@@ -5188,8 +5185,7 @@ impl Filesystem for FodFuse {
                                 .saturating_add(duration_to_micros(started.elapsed()));
                         }
                         let kind = attrs.file_attr.kind;
-                        let added =
-                            reply.add(attrs.file_attr.ino, (index + 3) as u64, kind, name);
+                        let added = reply.add(attrs.file_attr.ino, (index + 3) as u64, kind, name);
                         if added {
                             break;
                         }
