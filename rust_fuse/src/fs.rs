@@ -1591,6 +1591,8 @@ pub struct FodFuse {
     metadata_profile_readdir_list_us: AtomicU64,
     metadata_profile_readdir_child_lookup_us: AtomicU64,
     metadata_profile_readdir_register_us: AtomicU64,
+    metadata_profile_forget_calls: AtomicU64,
+    metadata_profile_forget_nlookup: AtomicU64,
     fuse_compatibility: Arc<RwLock<Option<SharedMonitorFuseCompatibilityStats>>>,
     logical_read_tasks: Arc<LogicalTaskQueueObservability>,
     logical_write_tasks: Arc<LogicalTaskQueueObservability>,
@@ -1707,6 +1709,8 @@ impl FodFuse {
             metadata_profile_readdir_list_us: AtomicU64::new(0),
             metadata_profile_readdir_child_lookup_us: AtomicU64::new(0),
             metadata_profile_readdir_register_us: AtomicU64::new(0),
+            metadata_profile_forget_calls: AtomicU64::new(0),
+            metadata_profile_forget_nlookup: AtomicU64::new(0),
             fuse_compatibility: Arc::new(RwLock::new(None)),
             logical_read_tasks,
             logical_write_tasks,
@@ -2179,7 +2183,7 @@ impl FodFuse {
             }
         }
         format!(
-            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, direct_io_read_prefetch_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, client_session_heartbeat_interval_secs={}, client_session_lease_ttl_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, readdir_calls={}, readdir_entries={}, readdir_total_us={}, readdir_parent_lookup_us={}, readdir_list_us={}, readdir_child_lookup_us={}, readdir_register_us={}, samples=[{}]}}",
+            "FodFuseSnapshot{{read_only={}, use_fuse_context={}, fopen_direct_io={}, block_size={}, write_flush_threshold_bytes={}, read_cache_blocks={}, read_ahead_blocks={}, sequential_read_ahead_blocks={}, direct_io_read_prefetch_blocks={}, small_file_read_threshold_blocks={}, workers_read={}, workers_read_min_blocks={}, workers_write={}, workers_write_min_blocks={}, atime_policy={:?}, lock_backend={:?}, lock_lease_ttl_secs={}, lock_heartbeat_interval_secs={}, lock_poll_interval_secs={}, client_session_heartbeat_interval_secs={}, client_session_lease_ttl_secs={}, copy_dedupe_enabled={}, copy_dedupe_min_blocks={}, copy_dedupe_max_blocks={}, copy_dedupe_crc_table={}, selinux_enabled={}, acl_enabled={}, inode_to_path={}, path_to_inode={}, fh_table={}, fh_table_file_ids={}, fh_table_flags={}, fh_table_atime_touched={}, write_states={}, read_cache_entries={}, read_sequences={}, posix_locks={}, readdir_calls={}, readdir_entries={}, readdir_total_us={}, readdir_parent_lookup_us={}, readdir_list_us={}, readdir_child_lookup_us={}, readdir_register_us={}, forget_calls={}, forget_nlookup={}, samples=[{}]}}",
             self.read_only,
             self.use_fuse_context,
             self.fopen_direct_io,
@@ -2227,6 +2231,8 @@ impl FodFuse {
                 .load(Ordering::Relaxed),
             self.metadata_profile_readdir_register_us
                 .load(Ordering::Relaxed),
+            self.metadata_profile_forget_calls.load(Ordering::Relaxed),
+            self.metadata_profile_forget_nlookup.load(Ordering::Relaxed),
             samples.join(", ")
         )
     }
@@ -5005,6 +5011,16 @@ impl Filesystem for FodFuse {
             }
             Ok(None) => fuse_reply_error!(reply, ENOENT),
             Err(errno) => fuse_reply_error!(reply, errno),
+        }
+    }
+
+    fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
+        if fod_fuse_profile_metadata_cache_enabled() {
+            self.metadata_profile_forget_calls
+                .fetch_add(1, Ordering::Relaxed);
+            self.metadata_profile_forget_nlookup
+                .fetch_add(nlookup, Ordering::Relaxed);
+            debug!("FOD forget ino={} nlookup={}", ino.0, nlookup);
         }
     }
 
