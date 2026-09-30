@@ -16,7 +16,7 @@ from fod_mount import FODMount
 CONTROL_DIR_ENV = "FOD_TEST_FORGET_INVALIDATE_DIR"
 CONTROL_NAME_ENV = "FOD_TEST_FORGET_INVALIDATE_NAME"
 WAIT_SECONDS = 10.0
-FORGET_RE = re.compile(r"FOD forget profile: ino=(\d+) nlookup=(\d+)")
+FORGET_RE = re.compile(\n    r"FOD forget profile: ino=(\\d+) nlookup=(\\d+) remaining=(\\d+) evicted=(true|false)"\n)
 
 
 def wait_for_control(control_dir: Path) -> None:
@@ -34,7 +34,7 @@ def wait_for_control(control_dir: Path) -> None:
     raise AssertionError("forget invalidation hook did not complete")
 
 
-def wait_for_forget(log_file: Path) -> tuple[int, int]:
+def wait_for_forget(log_file: Path) -> tuple[int, int, int, bool]:
     deadline = time.monotonic() + WAIT_SECONDS
     last = ""
 
@@ -45,8 +45,13 @@ def wait_for_forget(log_file: Path) -> tuple[int, int]:
             last = ""
         matches = FORGET_RE.findall(last)
         if matches:
-            ino, nlookup = matches[-1]
-            return int(ino), int(nlookup)
+            ino, nlookup, remaining, evicted = matches[-1]
+            return (
+                int(ino),
+                int(nlookup),
+                int(remaining),
+                evicted == "true",
+            )
         time.sleep(0.01)
 
     raise AssertionError(
@@ -108,11 +113,22 @@ def main() -> None:
 
             if launcher.config is None:
                 raise AssertionError("mount config unavailable")
-            forget_ino, forget_nlookup = wait_for_forget(launcher.config.log_file)
+            (
+                forget_ino,
+                forget_nlookup,
+                forget_remaining,
+                forget_evicted,
+            ) = wait_for_forget(launcher.config.log_file)
 
             if forget_nlookup <= 0:
                 raise AssertionError(
                     f"invalid forget nlookup={forget_nlookup} ino={forget_ino}"
+                )
+            if forget_remaining != 0 or not forget_evicted:
+                raise AssertionError(
+                    "forget did not retire cached inode path: "
+                    f"ino={forget_ino} remaining={forget_remaining} "
+                    f"evicted={forget_evicted}"
                 )
 
             after = target.stat()
@@ -128,6 +144,7 @@ def main() -> None:
             print(
                 "OK forget-invalidation "
                 f"ino={forget_ino} nlookup={forget_nlookup} "
+                f"remaining={forget_remaining} evicted=1 "
                 f"stable_inode={after.st_ino} relookup=1"
             )
         except Exception:
