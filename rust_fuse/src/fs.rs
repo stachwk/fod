@@ -4027,6 +4027,7 @@ impl FodFuse {
             cache.insert(ino, path.to_string());
         }
     }
+
     fn register_lookup_path(&self, path: &str, ino: u64) {
         if let Ok(mut refs) = self.lookup_refs.lock() {
             self.register_path(path, ino);
