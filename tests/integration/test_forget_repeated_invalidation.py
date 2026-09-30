@@ -230,16 +230,16 @@ def main() -> None:
                     )
                 # Liczniki lookup sa globalne dla calego mountu. Pierwszy cykl
                 # ustala baseline po usunieciu badanego inode; kolejne cykle
-                # musza wracac do tego samego stanu, ale niekoniecznie do zera.
+                # nie moga rosnac ponad ten stan, ale moga legalnie zmalec.
                 if baseline_lookup_ref_inodes is None:
                     baseline_lookup_ref_inodes = lookup_ref_inodes
                     baseline_lookup_ref_total = lookup_ref_total
                 elif (
-                    lookup_ref_inodes != baseline_lookup_ref_inodes
-                    or lookup_ref_total != baseline_lookup_ref_total
+                    lookup_ref_inodes > baseline_lookup_ref_inodes
+                    or lookup_ref_total > baseline_lookup_ref_total
                 ):
                     raise AssertionError(
-                        "lookup refs did not converge to baseline after forget: "
+                        "lookup refs grew above post-forget baseline: "
                         f"cycle={cycle} lookup_ref_inodes={lookup_ref_inodes} "
                         f"lookup_ref_total={lookup_ref_total} "
                         f"baseline_lookup_ref_inodes={baseline_lookup_ref_inodes} "
@@ -250,11 +250,11 @@ def main() -> None:
                     baseline_inode_to_path = inode_to_path
                     baseline_path_to_inode = path_to_inode
                 elif (
-                    inode_to_path != baseline_inode_to_path
-                    or path_to_inode != baseline_path_to_inode
+                    inode_to_path > baseline_inode_to_path
+                    or path_to_inode > baseline_path_to_inode
                 ):
                     raise AssertionError(
-                        "inode/path cache did not converge to baseline: "
+                        "inode/path cache grew above post-forget baseline: "
                         f"cycle={cycle} inode_to_path={inode_to_path} "
                         f"path_to_inode={path_to_inode} "
                         f"baseline_inode_to_path={baseline_inode_to_path} "
