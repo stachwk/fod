@@ -5020,7 +5020,7 @@ impl Filesystem for FodFuse {
                 .fetch_add(1, Ordering::Relaxed);
             self.metadata_profile_forget_nlookup
                 .fetch_add(nlookup, Ordering::Relaxed);
-            debug!("FOD forget ino={} nlookup={}", ino.0, nlookup);
+            info!("FOD forget profile: ino={} nlookup={}", ino.0, nlookup);
         }
     }
 

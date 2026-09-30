@@ -495,5 +495,53 @@ pub fn mount_fuse(
         mountpoint.display()
     );
 
+    #[cfg(feature = "integration-test-hooks")]
+    if let Some(control_dir) = env_var_with_legacy_alias("FOD_TEST_FORGET_INVALIDATE_DIR")
+        .filter(|value| !value.trim().is_empty())
+    {
+        let name = env_var_with_legacy_alias("FOD_TEST_FORGET_INVALIDATE_NAME")
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                "FOD_TEST_FORGET_INVALIDATE_NAME is required with FOD_TEST_FORGET_INVALIDATE_DIR"
+                    .to_string()
+            })?;
+
+        let session = fuser::Session::new(fs, mountpoint, &config)
+            .map_err(|err| format!("mount failed: {:?}", err))?;
+        let notifier = session.notifier();
+        let control_dir = PathBuf::from(control_dir);
+        let control_name = name.clone();
+
+        let control = std::thread::spawn(move || {
+            let trigger = control_dir.join("trigger");
+            let done = control_dir.join("done");
+            let error = control_dir.join("error");
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+
+            while !trigger.exists() {
+                if std::time::Instant::now() >= deadline {
+                    let _ = std::fs::write(&error, "timeout waiting for trigger\n");
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+
+            match notifier.inval_entry(fuser::INodeNo::ROOT, std::ffi::OsStr::new(&control_name)) {
+                Ok(()) => {
+                    let _ = std::fs::write(&done, "ok\n");
+                }
+                Err(err) => {
+                    let _ = std::fs::write(&error, format!("inval_entry failed: {err}\n"));
+                }
+            }
+        });
+
+        let result = session
+            .run()
+            .map_err(|err| format!("mount failed: {:?}", err));
+        let _ = control.join();
+        return result;
+    }
+
     fuser_mount(fs, mountpoint, &config).map_err(|err| format!("mount failed: {:?}", err))
 }
