@@ -4045,9 +4045,7 @@ impl FodFuse {
             .map(|guard| {
                 guard
                     .iter()
-                    .filter_map(|(path, cached_ino)| {
-                        (*cached_ino == ino).then_some(path.clone())
-                    })
+                    .filter_map(|(path, cached_ino)| (*cached_ino == ino).then_some(path.clone()))
                     .collect::<HashSet<_>>()
             })
             .unwrap_or_default();
