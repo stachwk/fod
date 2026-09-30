@@ -550,16 +550,34 @@ pub fn mount_fuse(
                     std::thread::sleep(Duration::from_millis(10));
                 }
 
-                match notifier
-                    .inval_entry(fuser::INodeNo::ROOT, std::ffi::OsStr::new(&control_name))
-                {
+                let invalidate_name = std::fs::read_to_string(&trigger)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .trim()
+                            .strip_prefix("name=")
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| control_name.clone());
+
+                match notifier.inval_entry(
+                    fuser::INodeNo::ROOT,
+                    std::ffi::OsStr::new(&invalidate_name),
+                ) {
                     Ok(()) => {
-                        let _ = std::fs::write(&done, format!("ok cycle={cycle}\n"));
+                        let _ = std::fs::write(
+                            &done,
+                            format!("ok cycle={cycle} name={invalidate_name}\n"),
+                        );
                     }
                     Err(err) => {
                         let _ = std::fs::write(
                             &error,
-                            format!("inval_entry failed cycle={cycle}: {err}\n"),
+                            format!(
+                                "inval_entry failed cycle={cycle} name={invalidate_name}: {err}\n"
+                            ),
                         );
                         return;
                     }
