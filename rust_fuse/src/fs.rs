@@ -106,7 +106,7 @@ fn fod_fuse_profile_metadata_cache_enabled() -> bool {
 
 fn fod_fuse_readdir_batch_metadata_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_BATCH_METADATA", false))
+    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_BATCH_METADATA", true))
 }
 
 pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
