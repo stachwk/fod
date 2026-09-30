@@ -510,17 +510,13 @@ pub fn mount_fuse(
             .filter(|value| !value.trim().is_empty())
             .map(|value| {
                 value.parse::<usize>().map_err(|err| {
-                    format!(
-                        "FOD_TEST_FORGET_INVALIDATE_COUNT must be a positive integer: {err}"
-                    )
+                    format!("FOD_TEST_FORGET_INVALIDATE_COUNT must be a positive integer: {err}")
                 })
             })
             .transpose()?
             .unwrap_or(1);
         if invalidate_count == 0 {
-            return Err(
-                "FOD_TEST_FORGET_INVALIDATE_COUNT must be greater than zero".to_string(),
-            );
+            return Err("FOD_TEST_FORGET_INVALIDATE_COUNT must be greater than zero".to_string());
         }
 
         let session = fuser::Session::new(fs, mountpoint, &config)
