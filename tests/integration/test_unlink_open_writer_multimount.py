@@ -137,8 +137,10 @@ def main() -> None:
         finally:
             if fd is not None:
                 os.close(fd)
-            launcher_b.stop()
-            launcher_a.stop()
+            try:
+                launcher_b.stop()
+            finally:
+                launcher_a.stop()
 
 
 if __name__ == "__main__":
