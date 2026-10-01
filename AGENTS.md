@@ -3,6 +3,27 @@
 These rules apply to repository work performed by coding agents and automated
 assistants.
 
+## PostgreSQL-authoritative multi-host correctness
+
+FOD may be mounted and used concurrently from multiple hosts. PostgreSQL is the
+single logical authority for every decision that affects shared filesystem
+correctness.
+
+Namespace mutations, open/unlink lifecycle state, write ownership, leases,
+fencing, inode-generation decisions, rename/create conflict resolution and
+other cross-host ordering decisions must be represented and serialized in
+PostgreSQL transactions, constraints, leases or advisory locks. Process-local
+mutexes, maps and caches may optimize one mount, but they must never be the
+source of truth for correctness visible to another mount.
+
+HA is compatible with this rule when the PostgreSQL topology still exposes one
+logical write order. A physical primary may fail over, or a multi-primary
+technology may be used, only if conflicting filesystem mutations retain one
+globally authoritative serial order. Eventual conflict reconciliation is not a
+valid replacement for filesystem operation ordering.
+
+See `docs/FOD_ARCHITECTURE_INVARIANTS.md`.
+
 ## Commit review
 
 After every commit, compare the new commit with its parent using
