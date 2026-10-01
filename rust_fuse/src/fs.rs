@@ -4065,6 +4065,25 @@ impl FodFuse {
         }))
     }
 
+    fn attrs_for_open_inode(&self, ino: u64) -> Result<Option<ParsedAttrs>, libc::c_int> {
+        let file_ids = self
+            .fh_table
+            .lock()
+            .map_err(|_| EIO)?
+            .values()
+            .filter_map(|state| state.file_id)
+            .collect::<HashSet<_>>();
+
+        for file_id in file_ids {
+            if let Some(attrs) = self.attrs_for_open_file_id(file_id)? {
+                if attrs.file_attr.ino.0 == ino {
+                    return Ok(Some(attrs));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     fn block_count(&self, allocated_bytes: u64, kind: &str) -> u64 {
         if kind == "dir" {
             return 1;
@@ -5051,12 +5070,13 @@ impl FodFuse {
         req_id: u64,
     ) -> Result<(), String> {
         let session_id = self.session_id.unwrap_or(0);
-        let hidden_name =
-            format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
+        let hidden_name = format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
         let hidden_path = Self::join_path(parent_path, OsStr::new(&hidden_name));
-        let (parent_id, old_name) = self
-            .write_ownership_resource_for_path(old_path)
-            .map_err(|errno| format!("deferred unlink namespace resolution failed errno={errno}"))?;
+        let (parent_id, old_name) =
+            self.write_ownership_resource_for_path(old_path)
+                .map_err(|errno| {
+                    format!("deferred unlink namespace resolution failed errno={errno}")
+                })?;
 
         self.repo
             .defer_primary_file_unlink(file_id, &hidden_name, parent_id, &old_name)?;
@@ -5522,9 +5542,31 @@ impl Filesystem for FodFuse {
                 self.register_path(&path, attrs.file_attr.ino.0);
                 reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
             }
+            Err(ENOENT) => match self.attrs_for_open_inode(ino) {
+                Ok(Some(attrs)) => {
+                    debug!(
+                        "FOD req={} op=getattr open_inode_fallback ino={} nlink={}",
+                        req_id, ino, attrs.file_attr.nlink
+                    );
+                    reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
+                }
+                Ok(None) => {
+                    self.log_request_error(req_id, "getattr", ENOENT, format!("ino={}", ino));
+                    fuse_reply_error!(reply, ENOENT);
+                }
+                Err(errno) => {
+                    self.log_request_error(
+                        req_id,
+                        "getattr",
+                        errno,
+                        format!("ino={} open_inode_fallback", ino),
+                    );
+                    fuse_reply_error!(reply, errno);
+                }
+            },
             Err(errno) => {
                 self.log_request_error(req_id, "getattr", errno, format!("ino={}", ino));
-                fuse_reply_error!(reply, errno)
+                fuse_reply_error!(reply, errno);
             }
         }
     }
@@ -8557,11 +8599,7 @@ impl Filesystem for FodFuse {
                     return;
                 }
             };
-            let fh = match self.create_handle_for_file(
-                child_path.clone(),
-                Some(file_id),
-                flags,
-            ) {
+            let fh = match self.create_handle_for_file(child_path.clone(), Some(file_id), flags) {
                 Ok(fh) => fh,
                 Err(errno) => {
                     let _ = self.remove_primary_file_or_promote_hardlink(file_id);

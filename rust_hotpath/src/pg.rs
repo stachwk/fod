@@ -9166,19 +9166,14 @@ impl DbRepo {
         })
     }
 
-    pub fn release_file_open_lease(
-        &self,
-        session_id: u64,
-        handle_id: u64,
-    ) -> Result<(), String> {
+    pub fn release_file_open_lease(&self, session_id: u64, handle_id: u64) -> Result<(), String> {
         let session_id = CString::new(session_id.to_string())
             .map_err(|_| "file open lease session id contains NUL byte".to_string())?;
         let handle_id = CString::new(handle_id.to_string())
             .map_err(|_| "file open lease handle id contains NUL byte".to_string())?;
-        let sql = CString::new(
-            "DELETE FROM file_open_leases WHERE session_id = $1 AND handle_id = $2",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql =
+            CString::new("DELETE FROM file_open_leases WHERE session_id = $1 AND handle_id = $2")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
         self.with_control_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 let params = [&session_id, &handle_id];
@@ -9294,7 +9289,8 @@ impl DbRepo {
             .map_err(|_| "file id contains NUL byte".to_string())?;
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
-            let res = exec_prepared_params(conn, PreparedStatement::FetchPathAttrsBlobFile, &params)?;
+            let res =
+                exec_prepared_params(conn, PreparedStatement::FetchPathAttrsBlobFile, &params)?;
             if res.is_null() {
                 return Err(conn_error(conn));
             }
@@ -14078,8 +14074,9 @@ impl DbRepo {
                 ];
                 resource_keys.sort_unstable();
                 for resource_key in resource_keys {
-                    let resource_key = CString::new(resource_key)
-                        .map_err(|_| "deferred unlink advisory key contains NUL byte".to_string())?;
+                    let resource_key = CString::new(resource_key).map_err(|_| {
+                        "deferred unlink advisory key contains NUL byte".to_string()
+                    })?;
                     Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
                 }
 
