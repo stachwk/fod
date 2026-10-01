@@ -59,11 +59,29 @@ def forget_matches(log_file: Path, target_ino: int) -> list[tuple[str, ...]]:
     ]
 
 
-def wait_for_forget(
+def assert_no_forget(
     log_file: Path,
     target_ino: int,
     previous_count: int,
-) -> tuple[int, int, bool]:
+    duration: float = 0.5,
+) -> None:
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        matching = [
+            match
+            for match in FORGET_RE.findall(read_log(log_file))
+            if int(match[0]) == target_ino
+        ]
+        if len(matching) != previous_count:
+            raise AssertionError("unexpected hardlink FORGET before all aliases invalidate")
+        time.sleep(0.01)
+
+
+def wait_for_retirement(
+    log_file: Path,
+    target_ino: int,
+    previous_count: int,
+) -> tuple[int, int, int, bool]:
     deadline = time.monotonic() + WAIT_SECONDS
     last = ""
 
@@ -74,13 +92,17 @@ def wait_for_forget(
             for match in FORGET_RE.findall(last)
             if int(match[0]) == target_ino
         ]
-        if len(matching) > previous_count:
-            _, nlookup, remaining, evicted = matching[previous_count]
-            return int(nlookup), int(remaining), evicted == "true"
+        new_matches = matching[previous_count:]
+        if new_matches:
+            total_nlookup = sum(int(match[1]) for match in new_matches)
+            _, _, remaining, evicted = new_matches[-1]
+            if int(remaining) == 0 and evicted == "true":
+                return len(new_matches), total_nlookup, 0, True
         time.sleep(0.01)
 
     raise AssertionError(
-        "kernel did not emit expected hardlink FUSE FORGET\n" + last[-4000:]
+        "kernel did not retire hardlink inode after both aliases invalidated\n"
+        + last[-4000:]
     )
 
 
@@ -173,24 +195,15 @@ def main() -> None:
                 cycle=1,
                 name=source_name,
             )
-            first_nlookup, first_remaining, first_evicted = wait_for_forget(
+
+            # Linux moze zatrzymac caly nlookup wspolnego inode, dopoki drugi
+            # hardlink nadal ma wazne dentry. Pierwsza invalidacja nie musi
+            # generowac czesciowego FORGET.
+            assert_no_forget(
                 launcher.config.log_file,
                 source_ino,
                 before_first,
             )
-
-            if first_nlookup <= 0:
-                raise AssertionError(
-                    f"invalid first hardlink forget nlookup={first_nlookup}"
-                )
-            if first_remaining <= 0:
-                raise AssertionError(
-                    "first hardlink alias invalidation retired all lookup refs"
-                )
-            if first_evicted:
-                raise AssertionError(
-                    "first hardlink alias invalidation evicted shared inode early"
-                )
 
             # Nie dotykamy zadnej nazwy pomiedzy invalidacjami, aby nie tworzyc
             # nowego lookup ref i zachowac deterministyczny bilans nlookup.
@@ -200,20 +213,26 @@ def main() -> None:
                 cycle=2,
                 name=alias_name,
             )
-            second_nlookup, second_remaining, second_evicted = wait_for_forget(
+            (
+                forget_events,
+                forget_nlookup_total,
+                final_remaining,
+                final_evicted,
+            ) = wait_for_retirement(
                 launcher.config.log_file,
                 source_ino,
                 before_second,
             )
 
-            if second_nlookup <= 0:
+            if forget_nlookup_total < 2:
                 raise AssertionError(
-                    f"invalid second hardlink forget nlookup={second_nlookup}"
+                    "hardlink retirement did not account for both lookup refs: "
+                    f"events={forget_events} nlookup_total={forget_nlookup_total}"
                 )
-            if second_remaining != 0 or not second_evicted:
+            if final_remaining != 0 or not final_evicted:
                 raise AssertionError(
-                    "final hardlink alias invalidation did not retire shared inode: "
-                    f"remaining={second_remaining} evicted={second_evicted}"
+                    "final hardlink retirement did not evict shared inode: "
+                    f"remaining={final_remaining} evicted={final_evicted}"
                 )
 
             source_after = source.stat()
@@ -238,10 +257,10 @@ def main() -> None:
 
             print(
                 "OK forget-hardlink-alias "
-                f"ino={source_ino} "
-                f"first_nlookup={first_nlookup} first_remaining={first_remaining} "
-                "first_evicted=0 "
-                f"second_nlookup={second_nlookup} second_remaining=0 second_evicted=1 "
+                f"ino={source_ino} first_forget=deferred "
+                f"forget_events={forget_events} "
+                f"forget_nlookup_total={forget_nlookup_total} "
+                "forget_remaining=0 forget_evicted=1 "
                 "stable_inode=1 nlink=2 payload=1 relookup=1"
             )
         except Exception:
