@@ -3826,6 +3826,21 @@ impl FodFuse {
     fn entry_attrs_for_ino(&self, ino: u64) -> Result<(String, ParsedAttrs), libc::c_int> {
         let path = self.entry_path_for_ino(ino)?;
         let attrs = self.lookup_path(&path)?.ok_or(ENOENT)?;
+
+        // Sciezka zapamietana lokalnie moze zostac zdalnie usunieta i odtworzona
+        // przez inny mount z nowa generacja inode. W takim przypadku nie wolno
+        // zwracac atrybutow nowego obiektu dla starego inode przekazanego przez
+        // kernel. ENOENT pozwala getattr przejsc do fallbacku po file_id dla
+        // nadal otwartego starego inode, a pozostale operacje nie trafiaja
+        // przypadkiem w replacement.
+        if attrs.file_attr.ino.0 != ino {
+            debug!(
+                "FOD stale inode path mapping ino={} path={} resolved_ino={}",
+                ino, path, attrs.file_attr.ino.0
+            );
+            return Err(ENOENT);
+        }
+
         Ok((path, attrs))
     }
 
