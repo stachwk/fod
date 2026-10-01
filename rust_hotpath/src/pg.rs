@@ -3270,6 +3270,7 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
         || sql.starts_with("UPDATE files SET size = ")
         || sql.starts_with("UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
         || sql.starts_with("UPDATE files SET modification_date = NOW(), change_date = NOW() WHERE id_file = $1")
+        || sql.starts_with("UPDATE files SET name = $1, change_date = NOW(), modification_date = NOW() WHERE id_file = $2")
         || sql.starts_with("UPDATE directories SET modification_date = NOW(), change_date = NOW() WHERE id_directory = $1")
         || sql.starts_with("UPDATE symlinks SET modification_date = NOW(), change_date = NOW() WHERE id_symlink = $1")
         || sql.starts_with("UPDATE files SET name = $1, id_directory = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
@@ -9756,6 +9757,74 @@ impl DbRepo {
         })
     }
 
+    pub fn heartbeat_file_write_ownership(
+        &self,
+        file_id: u64,
+        owner_key: u64,
+        file_fencing_token: u64,
+        lease_ttl_seconds: u64,
+    ) -> Result<bool, String> {
+        if lease_ttl_seconds == 0 {
+            return Err("write ownership lease ttl must be greater than zero".to_string());
+        }
+
+        let session_id_value = self.current_lock_session_id()?;
+        if session_id_value <= 0 {
+            return Ok(false);
+        }
+
+        let file_id_param = CString::new(file_id.to_string())
+            .map_err(|_| "write ownership file id contains NUL byte".to_string())?;
+        let session_id = CString::new(session_id_value.to_string())
+            .map_err(|_| "write ownership session id contains NUL byte".to_string())?;
+        let owner_key_param = CString::new(owner_key.to_string())
+            .map_err(|_| "write ownership owner key contains NUL byte".to_string())?;
+        let lease_ttl = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "write ownership lease ttl contains NUL byte".to_string())?;
+        let file_token = CString::new(file_fencing_token.to_string())
+            .map_err(|_| "file write fencing token contains NUL byte".to_string())?;
+        let resource_key = CString::new(format!("fod:write:file:{file_id}"))
+            .map_err(|_| "write ownership advisory key contains NUL byte".to_string())?;
+
+        let heartbeat_file_sql = CString::new(
+            "
+            WITH server_time AS (
+                SELECT clock_timestamp() AS now
+            )
+            UPDATE file_write_leases
+            SET lease_expires_at =
+                    server_time.now + ($5 || ' seconds')::interval,
+                heartbeat_at = server_time.now,
+                updated_at = server_time.now
+            FROM server_time
+            WHERE fencing_token = $1
+              AND file_id = $2
+              AND session_id = $3
+              AND owner_key = $4
+              AND lease_expires_at > server_time.now
+            RETURNING fencing_token
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                if !Self::try_advisory_xact_lock_text_on_conn(conn, &resource_key)? {
+                    return Ok(false);
+                }
+                let params = [
+                    &file_token,
+                    &file_id_param,
+                    &session_id,
+                    &owner_key_param,
+                    &lease_ttl,
+                ];
+                let res = exec_params(conn, &heartbeat_file_sql, &params)?;
+                Ok(!fetch_single_text(res)?.trim().is_empty())
+            })
+        })
+    }
+
     pub fn release_write_ownership(
         &self,
         owner_key: u64,
@@ -13717,6 +13786,63 @@ impl DbRepo {
                     Ok(())
                 },
             )
+        })
+    }
+
+    pub fn defer_primary_file_unlink(
+        &self,
+        file_id: u64,
+        hidden_name: &str,
+        destination_leases: &[(u64, u64)],
+    ) -> Result<(), String> {
+        if hidden_name.is_empty() {
+            return Err("deferred unlink hidden name is empty".to_string());
+        }
+
+        let file_id_param = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let hidden_name_param = CString::new(hidden_name)
+            .map_err(|_| "deferred unlink hidden name contains NUL byte".to_string())?;
+        let session_id_value = if destination_leases.is_empty() {
+            0
+        } else {
+            self.current_lock_session_id()?
+        };
+        if !destination_leases.is_empty() && session_id_value <= 0 {
+            return Err("deferred unlink has write ownership without client session".to_string());
+        }
+        let session_id = CString::new(session_id_value.to_string())
+            .map_err(|_| "write ownership session id contains NUL byte".to_string())?;
+
+        let sql_rename = CString::new(
+            "UPDATE files SET name = $1, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_destination = CString::new(
+            "
+            DELETE FROM destination_write_leases
+            WHERE fencing_token = $1
+              AND session_id = $2
+              AND owner_key = $3
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let rename_params = [&hidden_name_param, &file_id_param];
+                exec_command_params(conn, &sql_rename, &rename_params)?;
+
+                for (owner_key, destination_token) in destination_leases {
+                    let owner_key_param = CString::new(owner_key.to_string())
+                        .map_err(|_| "write ownership owner key contains NUL byte".to_string())?;
+                    let destination_token = CString::new(destination_token.to_string())
+                        .map_err(|_| "destination write fencing token contains NUL byte".to_string())?;
+                    let params = [&destination_token, &session_id, &owner_key_param];
+                    exec_command_params(conn, &sql_delete_destination, &params)?;
+                }
+                Ok(())
+            })
         })
     }
 

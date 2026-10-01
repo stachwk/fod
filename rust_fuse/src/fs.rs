@@ -58,6 +58,7 @@ const REQUEST_PID_GROUPS_CACHE_TTL: Duration = Duration::from_millis(500);
 const CLIENT_WRITE_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
 // Default atime updates are throttled so repeated reads do not hammer PostgreSQL.
 const ATIME_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
+const DEFERRED_UNLINK_NAME_PREFIX: &str = ".fod-unlinked-";
 // Linux FIGETBSZ is _IO(0x00, 2) and reports the filesystem block size.
 const IOCTL_FIGETBSZ: u32 = 2;
 // linux/fs.h also exposes the generic XFS-style fsxattr ioctls.
@@ -265,6 +266,7 @@ struct FileWriteOwnership {
     file_id: u64,
     owner_key: u64,
     lease: WriteOwnershipLease,
+    destination_released: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -319,19 +321,34 @@ fn heartbeat_active_write_ownerships(
 
     let mut failed = false;
     for ownership in ownerships {
-        match repo.heartbeat_write_ownership(
-            ownership.parent_id,
-            &ownership.name,
-            Some(ownership.file_id),
-            ownership.owner_key,
-            ownership.lease,
-            lease_ttl_seconds,
-        ) {
-            Ok(true) => {
-                debug!(
-                    "FOD write ownership heartbeat renewed file_id={} owner_key={} destination_token={} file_token={:?}",
+        let heartbeat = if ownership.destination_released {
+            match ownership.lease.file_fencing_token {
+                Some(file_fencing_token) => repo.heartbeat_file_write_ownership(
                     ownership.file_id,
                     ownership.owner_key,
+                    file_fencing_token,
+                    lease_ttl_seconds,
+                ),
+                None => Err("deferred unlink writer is missing file fencing token".to_string()),
+            }
+        } else {
+            repo.heartbeat_write_ownership(
+                ownership.parent_id,
+                &ownership.name,
+                Some(ownership.file_id),
+                ownership.owner_key,
+                ownership.lease,
+                lease_ttl_seconds,
+            )
+        };
+
+        match heartbeat {
+            Ok(true) => {
+                debug!(
+                    "FOD write ownership heartbeat renewed file_id={} owner_key={} destination_released={} destination_token={} file_token={:?}",
+                    ownership.file_id,
+                    ownership.owner_key,
+                    ownership.destination_released,
                     ownership.lease.destination_fencing_token,
                     ownership.lease.file_fencing_token
                 );
@@ -339,9 +356,10 @@ fn heartbeat_active_write_ownerships(
             Ok(false) => {
                 failed = true;
                 warn!(
-                    "FOD write ownership heartbeat not renewed file_id={} owner_key={} destination_token={} file_token={:?}",
+                    "FOD write ownership heartbeat not renewed file_id={} owner_key={} destination_released={} destination_token={} file_token={:?}",
                     ownership.file_id,
                     ownership.owner_key,
+                    ownership.destination_released,
                     ownership.lease.destination_fencing_token,
                     ownership.lease.file_fencing_token
                 );
@@ -349,9 +367,10 @@ fn heartbeat_active_write_ownerships(
             Err(err) => {
                 failed = true;
                 warn!(
-                    "FOD write ownership heartbeat failed file_id={} owner_key={} destination_token={} file_token={:?} err={}",
+                    "FOD write ownership heartbeat failed file_id={} owner_key={} destination_released={} destination_token={} file_token={:?} err={}",
                     ownership.file_id,
                     ownership.owner_key,
+                    ownership.destination_released,
                     ownership.lease.destination_fencing_token,
                     ownership.lease.file_fencing_token,
                     err
@@ -1572,6 +1591,7 @@ pub struct FodFuse {
     path_to_inode: RwLock<HashMap<String, u64>>,
     lookup_refs: Mutex<HashMap<u64, u64>>,
     fh_table: Arc<Mutex<HashMap<u64, FileHandleState>>>,
+    deferred_unlinks: Mutex<HashMap<u64, String>>,
     write_ownership_gate: Mutex<()>,
     pub(crate) write_states: Mutex<HashMap<u64, WriteState>>,
     pub(crate) read_block_cache: Mutex<ReadBlockCache>,
@@ -1689,6 +1709,7 @@ impl FodFuse {
             path_to_inode: RwLock::new(path_to_inode),
             lookup_refs: Mutex::new(HashMap::new()),
             fh_table: Arc::new(Mutex::new(HashMap::new())),
+            deferred_unlinks: Mutex::new(HashMap::new()),
             write_ownership_gate: Mutex::new(()),
             write_states: Mutex::new(HashMap::new()),
             read_block_cache: Mutex::new(ReadBlockCache::new(
@@ -4717,6 +4738,7 @@ impl FodFuse {
             file_id,
             owner_key,
             lease,
+            destination_released: false,
         };
         self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
         Ok((file_id, fh, created_new))
@@ -4775,6 +4797,7 @@ impl FodFuse {
             file_id,
             owner_key,
             lease,
+            destination_released: false,
         };
         self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
         Ok(fh)
@@ -4851,18 +4874,142 @@ impl FodFuse {
             .unwrap_or(0)
     }
 
-    fn remove_handle_state(&self, fh: u64) {
-        let removed_path = self
+    fn is_deferred_unlink_path(&self, path: &str) -> bool {
+        self.deferred_unlinks
+            .lock()
+            .map(|guard| guard.values().any(|hidden_path| hidden_path == path))
+            .unwrap_or(false)
+    }
+
+    fn deferred_unlink_destination_leases(&self, file_id: u64) -> Vec<(u64, u64)> {
+        self.fh_table
+            .lock()
+            .map(|guard| {
+                let mut seen = HashSet::new();
+                guard
+                    .values()
+                    .filter(|state| state.file_id == Some(file_id))
+                    .filter_map(|state| state.write_ownership.as_ref())
+                    .filter(|ownership| !ownership.destination_released)
+                    .filter_map(|ownership| {
+                        seen.insert(ownership.owner_key).then_some((
+                            ownership.owner_key,
+                            ownership.lease.destination_fencing_token,
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn mark_deferred_unlink_destination_released(&self, file_id: u64) {
+        if let Ok(mut guard) = self.fh_table.lock() {
+            for state in guard.values_mut() {
+                if state.file_id == Some(file_id) {
+                    if let Some(ownership) = state.write_ownership.as_mut() {
+                        ownership.destination_released = true;
+                    }
+                }
+            }
+        }
+    }
+
+    fn defer_open_primary_unlink(
+        &self,
+        file_id: u64,
+        parent_path: &str,
+        old_path: &str,
+        ino: u64,
+        req_id: u64,
+    ) -> Result<(), String> {
+        let session_id = self.session_id.unwrap_or(0);
+        let hidden_name =
+            format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
+        let hidden_path = Self::join_path(parent_path, OsStr::new(&hidden_name));
+        let destination_leases = self.deferred_unlink_destination_leases(file_id);
+
+        {
+            let mut guard = self
+                .deferred_unlinks
+                .lock()
+                .map_err(|_| "deferred unlink state lock poisoned".to_string())?;
+            guard.insert(file_id, hidden_path.clone());
+        }
+
+        if let Err(err) =
+            self.repo
+                .defer_primary_file_unlink(file_id, &hidden_name, &destination_leases)
+        {
+            if let Ok(mut guard) = self.deferred_unlinks.lock() {
+                guard.remove(&file_id);
+            }
+            return Err(err);
+        }
+
+        self.mark_deferred_unlink_destination_released(file_id);
+        self.move_cached_path(old_path, &hidden_path, ino);
+        info!(
+            "FOD deferred unlink staged file_id={} ino={} old_path={} hidden_path={} open_handles={} destination_leases_released={}",
+            file_id,
+            ino,
+            old_path,
+            hidden_path,
+            self.open_handle_count_for_file(file_id),
+            destination_leases.len()
+        );
+        Ok(())
+    }
+
+    fn finalize_deferred_unlink_after_handle_removal(
+        &self,
+        removed_state: Option<&FileHandleState>,
+    ) -> Result<(), libc::c_int> {
+        let Some(file_id) = removed_state.and_then(|state| state.file_id) else {
+            return Ok(());
+        };
+        if self.open_handle_count_for_file(file_id) != 0 {
+            return Ok(());
+        }
+
+        let hidden_path = self
+            .deferred_unlinks
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(&file_id).cloned());
+        let Some(hidden_path) = hidden_path else {
+            return Ok(());
+        };
+
+        self.repo.purge_primary_file(file_id).map_err(|err| {
+            warn!(
+                "FOD deferred unlink final purge failed file_id={} hidden_path={} err={}",
+                file_id, hidden_path, err
+            );
+            EIO
+        })?;
+        if let Ok(mut guard) = self.deferred_unlinks.lock() {
+            guard.remove(&file_id);
+        }
+        self.remove_cached_path(&hidden_path);
+        self.invalidate_statfs_cache();
+        info!(
+            "FOD deferred unlink finalized file_id={} hidden_path={}",
+            file_id, hidden_path
+        );
+        Ok(())
+    }
+
+    fn take_handle_state(&self, fh: u64) -> Option<FileHandleState> {
+        let removed_state = self
             .fh_table
             .lock()
             .ok()
-            .and_then(|mut guard| guard.remove(&fh))
-            .map(|state| state.path);
+            .and_then(|mut guard| guard.remove(&fh));
         if let Ok(mut guard) = self.write_states.lock() {
             guard.remove(&fh);
         }
-        if let Some(path) = removed_path {
-            if let Some(ino) = self.inode_for_path(&path) {
+        if let Some(path) = removed_state.as_ref().map(|state| state.path.as_str()) {
+            if let Some(ino) = self.inode_for_path(path) {
                 let evicted = self.evict_inode_if_unreferenced(ino);
                 if fod_fuse_profile_metadata_cache_enabled() {
                     let lookup_remaining = self
@@ -4892,6 +5039,11 @@ impl FodFuse {
                 }
             }
         }
+        removed_state
+    }
+
+    fn remove_handle_state(&self, fh: u64) {
+        let _ = self.take_handle_state(fh);
     }
 
     fn flush_write_state_for_handle(&self, fh: u64) -> Result<bool, libc::c_int> {
@@ -5133,6 +5285,10 @@ impl Filesystem for FodFuse {
             return;
         };
         let child_path = Self::join_path(&parent_path, name);
+        if self.is_deferred_unlink_path(&child_path) {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        }
         self.log_request_start(
             req_id,
             "lookup",
@@ -5325,6 +5481,10 @@ impl Filesystem for FodFuse {
                 };
                 let inode = self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
                 let child_path = Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
+                if self.is_deferred_unlink_path(&child_path) {
+                    next_offset = (index + 3) as i64;
+                    continue;
+                }
                 if fod_fuse_readdir_register_paths_enabled() {
                     let register_started = metadata_profile_enabled.then(Instant::now);
                     self.register_path(&child_path, inode);
@@ -5364,8 +5524,12 @@ impl Filesystem for FodFuse {
             let entries = Self::decode_nul_fields(&blob);
             debug!("FOD readdir path={} entries={}", path, entries.len());
             for (index, name) in entries.into_iter().enumerate().skip(offset as usize) {
-                readdir_entries = readdir_entries.saturating_add(1);
                 let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
+                if self.is_deferred_unlink_path(&child_path) {
+                    next_offset = (index + 3) as i64;
+                    continue;
+                }
+                readdir_entries = readdir_entries.saturating_add(1);
                 let lookup_started = metadata_profile_enabled.then(Instant::now);
                 let lookup_result = self.lookup_path(&child_path);
                 if let Some(started) = lookup_started {
@@ -6995,7 +7159,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, errno);
             return;
         }
-        self.remove_handle_state(fh);
+        let removed_state = self.take_handle_state(fh);
+        if let Err(errno) =
+            self.finalize_deferred_unlink_after_handle_removal(removed_state.as_ref())
+        {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         debug!("FOD release completed fh={}", fh);
         reply.ok();
     }
@@ -7472,7 +7642,21 @@ impl Filesystem for FodFuse {
                     fuse_reply_error!(reply, errno);
                     return;
                 }
-                self.remove_primary_file_or_promote_hardlink(file_id)
+                match self.repo.count_file_links(file_id) {
+                    Ok(link_count)
+                        if link_count <= 1 && self.open_handle_count_for_file(file_id) > 0 =>
+                    {
+                        self.defer_open_primary_unlink(
+                            file_id,
+                            &parent_path,
+                            &child_path,
+                            entry_attrs.ino.0,
+                            req_id,
+                        )
+                    }
+                    Ok(_) => self.remove_primary_file_or_promote_hardlink(file_id),
+                    Err(err) => Err(err),
+                }
             }
             Some("hardlink") => {
                 let entry_attrs = match self.lookup_path(&child_path) {
@@ -7564,7 +7748,6 @@ impl Filesystem for FodFuse {
                 let _ =
                     self.append_journal_event(subject.uid, "unlink", &child_path, file_id, dir_id);
                 self.remove_cached_path(&child_path);
-                self.remove_cached_handle_paths(&child_path);
                 self.invalidate_statfs_cache();
                 debug!("FOD req={} op=unlink completed path={}", req_id, child_path);
                 reply.ok();
@@ -8445,11 +8628,11 @@ impl Filesystem for FodFuse {
         let existing_size = if let Some(state) = existing_state.as_ref() {
             state.file_size
         } else {
-            let attrs_started = Instant::now();
-            let attrs_result = self.entry_attrs_for_ino(ino);
-            self.record_write_existing_size_lookup_elapsed(attrs_started.elapsed());
-            match attrs_result {
-                Ok((_, attrs)) => attrs.file_attr.size,
+            let size_started = Instant::now();
+            let size_result = self.file_size_for_file_id_or_errno(file_id);
+            self.record_write_existing_size_lookup_elapsed(size_started.elapsed());
+            match size_result {
+                Ok(size) => size,
                 Err(errno) => {
                     if let Some(existing_state) = existing_state {
                         self.update_write_state(fh, existing_state);
@@ -8461,7 +8644,7 @@ impl Filesystem for FodFuse {
                         req_id,
                         "write",
                         errno,
-                        format!("ino={} fh={} attrs", ino, fh),
+                        format!("ino={} fh={} file_id={} size", ino, fh, file_id),
                     );
                     fuse_reply_error!(reply, errno);
                     return;

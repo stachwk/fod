@@ -55,6 +55,25 @@ def main() -> None:
             if target.exists():
                 raise AssertionError("unlinked pathname is still visible")
 
+            replacement = b"replacement path payload\n"
+            target.write_bytes(replacement)
+            replacement_ino = target.stat().st_ino
+            if replacement_ino == target_ino:
+                raise AssertionError(
+                    "recreated pathname unexpectedly reused unlinked open inode"
+                )
+
+            visible_names = set(os.listdir(mountpoint))
+            if name not in visible_names:
+                raise AssertionError("recreated pathname missing from directory listing")
+            leaked_internal = sorted(
+                item for item in visible_names if item.startswith(".fod-unlinked-")
+            )
+            if leaked_internal:
+                raise AssertionError(
+                    f"deferred unlink backend name leaked through readdir: {leaked_internal}"
+                )
+
             try:
                 written = os.pwrite(fd, patch, patch_offset)
             except OSError as err:
@@ -90,17 +109,28 @@ def main() -> None:
                     f"expected_len={len(expected)} actual_len={len(after)}"
                 )
 
+            if target.read_bytes() != replacement:
+                raise AssertionError(
+                    "post-unlink writes leaked into recreated pathname"
+                )
+
             os.close(fd)
             fd = None
 
-            if target.exists():
-                raise AssertionError("unlinked pathname reappeared after writer close")
+            if target.read_bytes() != replacement:
+                raise AssertionError(
+                    "recreated pathname changed after final close of old inode"
+                )
+
+            target.unlink()
 
             print(
                 "OK unlink-open-writer "
                 f"ino={target_ino} pathname_removed=1 "
+                f"replacement_ino={replacement_ino} replacement_recreated=1 "
                 f"pwrite_after_unlink={written} fsync_after_unlink=1 "
-                "pread_after_write=1 final_close=1 pathname_absent=1"
+                "pread_after_write=1 replacement_isolated=1 hidden_entry_leaks=0 "
+                "final_old_close=1 cleanup=1"
             )
         except Exception:
             launcher._dump_log()
