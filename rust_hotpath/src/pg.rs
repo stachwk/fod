@@ -9106,7 +9106,8 @@ impl DbRepo {
         if lease_ttl_seconds == 0 {
             return Err("file open lease ttl must be greater than zero".to_string());
         }
-        let file_id = CString::new(file_id.to_string())
+        let file_id_value = file_id;
+        let file_id = CString::new(file_id_value.to_string())
             .map_err(|_| "file open lease file id contains NUL byte".to_string())?;
         let session_id = CString::new(session_id.to_string())
             .map_err(|_| "file open lease session id contains NUL byte".to_string())?;
@@ -9114,6 +9115,8 @@ impl DbRepo {
             .map_err(|_| "file open lease handle id contains NUL byte".to_string())?;
         let lease_ttl = CString::new(lease_ttl_seconds.to_string())
             .map_err(|_| "file open lease ttl contains NUL byte".to_string())?;
+        let resource_key = CString::new(format!("fod:open:file:{file_id_value}"))
+            .map_err(|_| "file open lease advisory key contains NUL byte".to_string())?;
         let sql = CString::new(
             "
             INSERT INTO file_open_leases (
@@ -9134,6 +9137,7 @@ impl DbRepo {
                 clock_timestamp(),
                 clock_timestamp()
             FROM client_sessions
+            JOIN files f ON f.id_file = $1 AND NOT f.unlinked
             WHERE session_id = $2
               AND lease_expires_at > clock_timestamp()
             ON CONFLICT (session_id, handle_id)
@@ -9149,6 +9153,7 @@ impl DbRepo {
 
         self.with_control_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
+                Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
                 let params = [&file_id, &session_id, &handle_id, &lease_ttl];
                 let res = exec_params(conn, &sql, &params)?;
                 let value = fetch_single_text(res)?;
@@ -9236,6 +9241,78 @@ impl DbRepo {
                 value.trim().to_ascii_lowercase().as_str(),
                 "t" | "true" | "1" | "on"
             ))
+        })
+    }
+
+    pub fn file_is_unlinked(&self, file_id: u64) -> Result<Option<bool>, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let sql = CString::new("SELECT unlinked::text FROM files WHERE id_file = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file_id];
+            let res = exec_params(conn, &sql, &params)?;
+            Ok(fetch_single_text_option(res)?.map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "t" | "true" | "1" | "on"
+                )
+            }))
+        })
+    }
+
+    pub fn file_link_count_for_stat(&self, file_id: u64) -> Result<Option<u64>, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "
+            SELECT
+                (CASE WHEN f.unlinked THEN 0 ELSE 1 END) + COUNT(h.id_hardlink)
+            FROM files f
+            LEFT JOIN hardlinks h ON h.id_file = f.id_file
+            WHERE f.id_file = $1
+            GROUP BY f.id_file, f.unlinked
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file_id];
+            let res = exec_params(conn, &sql, &params)?;
+            let value = fetch_single_text_option(res)?;
+            value
+                .map(|text| {
+                    text.trim()
+                        .parse::<u64>()
+                        .map_err(|_| "invalid file link count".to_string())
+                })
+                .transpose()
+        })
+    }
+
+    pub fn fetch_file_attrs_blob(&self, file_id: u64) -> Result<Option<Vec<u8>>, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file_id];
+            let res = exec_prepared_params(conn, PreparedStatement::FetchPathAttrsBlobFile, &params)?;
+            if res.is_null() {
+                return Err(conn_error(conn));
+            }
+            match PQresultStatus(res) {
+                PGRES_TUPLES_OK => {
+                    let row = fetch_first_row_texts(res)?;
+                    if row.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(join_nul_text(&row)))
+                    }
+                }
+                _ => {
+                    let err = result_error(res);
+                    PQclear(res);
+                    Err(err)
+                }
+            }
         })
     }
 
@@ -9447,6 +9524,18 @@ impl DbRepo {
             value.trim().to_ascii_lowercase().as_str(),
             "t" | "true" | "1" | "on"
         ))
+    }
+
+    unsafe fn advisory_xact_lock_text_on_conn(
+        conn: *mut PGconn,
+        resource_key: &CString,
+    ) -> Result<(), String> {
+        let sql = CString::new("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let params = [resource_key];
+        let res = exec_params(conn, &sql, &params)?;
+        let _ = fetch_single_text(res)?;
+        Ok(())
     }
 
     pub fn try_advisory_xact_lock(&self, resource_lock_id: i64) -> Result<bool, String> {
@@ -13978,15 +14067,20 @@ impl DbRepo {
 
         self.with_control_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
-                let resource_key = CString::new(format!(
-                    "fod:write:destination:{}:{}:{}",
-                    parent_id.unwrap_or(0),
-                    old_name.len(),
-                    old_name
-                ))
-                .map_err(|_| "deferred unlink advisory key contains NUL byte".to_string())?;
-                if !Self::try_advisory_xact_lock_text_on_conn(conn, &resource_key)? {
-                    return Err("deferred unlink destination is busy".to_string());
+                let mut resource_keys = vec![
+                    format!("fod:open:file:{file_id}"),
+                    format!(
+                        "fod:write:destination:{}:{}:{}",
+                        parent_id.unwrap_or(0),
+                        old_name.len(),
+                        old_name
+                    ),
+                ];
+                resource_keys.sort_unstable();
+                for resource_key in resource_keys {
+                    let resource_key = CString::new(resource_key)
+                        .map_err(|_| "deferred unlink advisory key contains NUL byte".to_string())?;
+                    Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
                 }
 
                 let rename_params = [&hidden_name_param, &file_id_param];
@@ -14052,8 +14146,23 @@ impl DbRepo {
             "UPDATE data_objects SET reference_count = GREATEST(reference_count - 1, 0), modification_date = NOW() WHERE id_data_object = $1",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let resource_key = CString::new(format!("fod:open:file:{file_id}"))
+            .map_err(|_| "file purge advisory key contains NUL byte".to_string())?;
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
+        let sql_open = CString::new(
+            "
+            SELECT EXISTS (
+                SELECT 1
+                FROM file_open_leases l
+                JOIN client_sessions s ON s.session_id = l.session_id
+                WHERE l.file_id = $1
+                  AND l.lease_expires_at > clock_timestamp()
+                  AND s.lease_expires_at > clock_timestamp()
+            )::text
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
             // A committed purge is observable because the file row disappears,
@@ -14070,6 +14179,16 @@ impl DbRepo {
                     }
                 },
                 |conn| {
+                    Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
+                    let open_params = [&file_id];
+                    let open_res = exec_params(conn, &sql_open, &open_params)?;
+                    let open = fetch_single_text(open_res)?;
+                    if matches!(
+                        open.trim().to_ascii_lowercase().as_str(),
+                        "t" | "true" | "1" | "on"
+                    ) {
+                        return Err("file has active open leases".to_string());
+                    }
                     let data_object_id = {
                         let params = [&file_id];
                         let res = exec_params(conn, &sql_lookup, &params)?;

@@ -55,6 +55,18 @@ def main() -> None:
             if target.exists():
                 raise AssertionError("unlinked pathname is still visible")
 
+            unlinked_stat = os.fstat(fd)
+            if unlinked_stat.st_ino != target_ino:
+                raise AssertionError(
+                    "fstat changed inode after unlink: "
+                    f"expected={target_ino} actual={unlinked_stat.st_ino}"
+                )
+            if unlinked_stat.st_nlink != 0:
+                raise AssertionError(
+                    "fstat did not report zero links after unlink: "
+                    f"st_nlink={unlinked_stat.st_nlink}"
+                )
+
             replacement = b"replacement path payload\n"
             target.write_bytes(replacement)
             replacement_ino = target.stat().st_ino
@@ -128,6 +140,7 @@ def main() -> None:
                 "OK unlink-open-writer "
                 f"ino={target_ino} pathname_removed=1 "
                 f"replacement_ino={replacement_ino} replacement_recreated=1 "
+                "fstat_inode_stable=1 fstat_nlink_zero=1 "
                 f"pwrite_after_unlink={written} fsync_after_unlink=1 "
                 "pread_after_write=1 replacement_isolated=1 hidden_entry_leaks=0 "
                 "final_old_close=1 cleanup=1"
