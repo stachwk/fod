@@ -570,7 +570,7 @@ FOD_CHANGE_PASSWORD ?=
 FOD_LOG_LEVEL ?= INFO
 FOD_ACL ?= off
 ifndef FOD_SCHEMA_ADMIN_PASSWORD
-FOD_SCHEMA_ADMIN_PASSWORD := $(shell $(PYTHON) -c 'import secrets; print("fod-" + secrets.token_urlsafe(24))')
+FOD_SCHEMA_ADMIN_PASSWORD := $(shell if [ -r "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)" ]; then cat "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"; else $(PYTHON) -c 'import secrets; print("fod-" + secrets.token_urlsafe(24))'; fi)
 endif
 export FOD_SCHEMA_ADMIN_PASSWORD
 FOD_SELINUX_CONTEXT ?=
@@ -1067,9 +1067,12 @@ wait-client:
 
 init: build-runtime up
 	@set -eu; \
-	status_output="$$($(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
-	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
+	status_output="$($(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
+	if printf '%s\n' "$status_output" | grep -Fq 'FOD ready: yes'; then \
 		echo 'FOD schema already initialized; skipping init.'; \
+	elif printf '%s\n' "$status_output" | grep -Fq 'fod objects: yes'; then \
+		echo 'FOD schema requires upgrade.'; \
+		POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_RUNTIME_BIN) upgrade --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 	else \
 		POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_RUNTIME_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 		mkdir -p .fod; \
@@ -1078,9 +1081,12 @@ init: build-runtime up
 
 init-qnap: build-runtime
 	@set -eu; \
-	status_output="$$($(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
-	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
+	status_output="$($(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
+	if printf '%s\n' "$status_output" | grep -Fq 'FOD ready: yes'; then \
 		echo 'FOD schema already initialized; skipping qnap init.'; \
+	elif printf '%s\n' "$status_output" | grep -Fq 'fod objects: yes'; then \
+		echo 'FOD schema requires qnap upgrade.'; \
+		$(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) upgrade --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 	else \
 		$(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 		mkdir -p .fod; \
