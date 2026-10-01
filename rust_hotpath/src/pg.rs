@@ -2119,7 +2119,7 @@ impl PreparedStatement {
                 SELECT id_file FROM (
                     SELECT 1 AS precedence, id_file FROM hardlinks WHERE name = $1 AND id_directory IS NULL
                     UNION ALL
-                    SELECT 2 AS precedence, id_file FROM files WHERE name = $1 AND id_directory IS NULL
+                    SELECT 2 AS precedence, id_file FROM files WHERE name = $1 AND id_directory IS NULL AND NOT unlinked
                 ) entries
                 ORDER BY precedence
                 LIMIT 1
@@ -2130,7 +2130,7 @@ impl PreparedStatement {
                 SELECT id_file FROM (
                     SELECT 1 AS precedence, id_file FROM hardlinks WHERE name = $1 AND id_directory = $2
                     UNION ALL
-                    SELECT 2 AS precedence, id_file FROM files WHERE name = $1 AND id_directory = $2
+                    SELECT 2 AS precedence, id_file FROM files WHERE name = $1 AND id_directory = $2 AND NOT unlinked
                 ) entries
                 ORDER BY precedence
                 LIMIT 1
@@ -2141,11 +2141,11 @@ impl PreparedStatement {
                 SELECT mode FROM (
                     SELECT 1 AS precedence, mode
                     FROM hardlinks JOIN files ON hardlinks.id_file = files.id_file
-                    WHERE hardlinks.name = $1 AND hardlinks.id_directory IS NULL
+                    WHERE hardlinks.name = $1 AND hardlinks.id_directory IS NULL AND NOT files.unlinked
                     UNION ALL
                     SELECT 2 AS precedence, mode
                     FROM files
-                    WHERE name = $1 AND id_directory IS NULL
+                    WHERE name = $1 AND id_directory IS NULL AND NOT unlinked
                 ) entries
                 ORDER BY precedence
                 LIMIT 1
@@ -2156,11 +2156,11 @@ impl PreparedStatement {
                 SELECT mode FROM (
                     SELECT 1 AS precedence, mode
                     FROM hardlinks JOIN files ON hardlinks.id_file = files.id_file
-                    WHERE hardlinks.name = $1 AND hardlinks.id_directory = $2
+                    WHERE hardlinks.name = $1 AND hardlinks.id_directory = $2 AND NOT files.unlinked
                     UNION ALL
                     SELECT 2 AS precedence, mode
                     FROM files
-                    WHERE name = $1 AND id_directory = $2
+                    WHERE name = $1 AND id_directory = $2 AND NOT unlinked
                 ) entries
                 ORDER BY precedence
                 LIMIT 1
@@ -2228,7 +2228,7 @@ impl PreparedStatement {
                     UNION ALL
                     SELECT 3 AS precedence, 'file' AS kind, f.id_file AS entry_id
                     FROM files f
-                    WHERE f.name = $1 AND f.id_directory IS NULL
+                    WHERE f.name = $1 AND f.id_directory IS NULL AND NOT f.unlinked
                     UNION ALL
                     SELECT 4 AS precedence, 'dir' AS kind, d.id_directory AS entry_id
                     FROM directories d
@@ -2251,7 +2251,7 @@ impl PreparedStatement {
                     UNION ALL
                     SELECT 3 AS precedence, 'file' AS kind, f.id_file AS entry_id
                     FROM files f
-                    WHERE f.name = $1 AND f.id_directory = $2
+                    WHERE f.name = $1 AND f.id_directory = $2 AND NOT f.unlinked
                     UNION ALL
                     SELECT 4 AS precedence, 'dir' AS kind, d.id_directory AS entry_id
                     FROM directories d
@@ -3270,7 +3270,7 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
         || sql.starts_with("UPDATE files SET size = ")
         || sql.starts_with("UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
         || sql.starts_with("UPDATE files SET modification_date = NOW(), change_date = NOW() WHERE id_file = $1")
-        || sql.starts_with("UPDATE files SET name = $1, change_date = NOW(), modification_date = NOW() WHERE id_file = $2")
+        || sql.starts_with("UPDATE files SET name = $1, unlinked = TRUE, change_date = NOW(), modification_date = NOW() WHERE id_file = $2")
         || sql.starts_with("UPDATE directories SET modification_date = NOW(), change_date = NOW() WHERE id_directory = $1")
         || sql.starts_with("UPDATE symlinks SET modification_date = NOW(), change_date = NOW() WHERE id_symlink = $1")
         || sql.starts_with("UPDATE files SET name = $1, id_directory = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
@@ -9096,6 +9096,149 @@ impl DbRepo {
         })
     }
 
+    pub fn register_file_open_lease(
+        &self,
+        file_id: u64,
+        session_id: u64,
+        handle_id: u64,
+        lease_ttl_seconds: u64,
+    ) -> Result<(), String> {
+        if lease_ttl_seconds == 0 {
+            return Err("file open lease ttl must be greater than zero".to_string());
+        }
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file open lease file id contains NUL byte".to_string())?;
+        let session_id = CString::new(session_id.to_string())
+            .map_err(|_| "file open lease session id contains NUL byte".to_string())?;
+        let handle_id = CString::new(handle_id.to_string())
+            .map_err(|_| "file open lease handle id contains NUL byte".to_string())?;
+        let lease_ttl = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "file open lease ttl contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "
+            INSERT INTO file_open_leases (
+                file_id,
+                session_id,
+                handle_id,
+                lease_expires_at,
+                heartbeat_at,
+                created_at,
+                updated_at
+            )
+            SELECT
+                $1,
+                session_id,
+                $3,
+                clock_timestamp() + ($4 || ' seconds')::interval,
+                clock_timestamp(),
+                clock_timestamp(),
+                clock_timestamp()
+            FROM client_sessions
+            WHERE session_id = $2
+              AND lease_expires_at > clock_timestamp()
+            ON CONFLICT (session_id, handle_id)
+            DO UPDATE SET
+                file_id = EXCLUDED.file_id,
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                heartbeat_at = EXCLUDED.heartbeat_at,
+                updated_at = clock_timestamp()
+            RETURNING file_id
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let params = [&file_id, &session_id, &handle_id, &lease_ttl];
+                let res = exec_params(conn, &sql, &params)?;
+                let value = fetch_single_text(res)?;
+                if value.trim().is_empty() {
+                    Err("file open lease requires an active client session".to_string())
+                } else {
+                    Ok(())
+                }
+            })
+        })
+    }
+
+    pub fn release_file_open_lease(
+        &self,
+        session_id: u64,
+        handle_id: u64,
+    ) -> Result<(), String> {
+        let session_id = CString::new(session_id.to_string())
+            .map_err(|_| "file open lease session id contains NUL byte".to_string())?;
+        let handle_id = CString::new(handle_id.to_string())
+            .map_err(|_| "file open lease handle id contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "DELETE FROM file_open_leases WHERE session_id = $1 AND handle_id = $2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let params = [&session_id, &handle_id];
+                exec_command_params(conn, &sql, &params)
+            })
+        })
+    }
+
+    pub fn heartbeat_file_open_leases(
+        &self,
+        session_id: u64,
+        lease_ttl_seconds: u64,
+    ) -> Result<(), String> {
+        if lease_ttl_seconds == 0 {
+            return Err("file open lease ttl must be greater than zero".to_string());
+        }
+        let session_id = CString::new(session_id.to_string())
+            .map_err(|_| "file open lease session id contains NUL byte".to_string())?;
+        let lease_ttl = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "file open lease ttl contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "
+            UPDATE file_open_leases
+            SET lease_expires_at =
+                    clock_timestamp() + ($2 || ' seconds')::interval,
+                heartbeat_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE session_id = $1
+              AND lease_expires_at > clock_timestamp()
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_control_connection(|conn| unsafe {
+            let params = [&session_id, &lease_ttl];
+            exec_command_params(conn, &sql, &params)
+        })
+    }
+
+    pub fn has_active_file_open_leases(&self, file_id: u64) -> Result<bool, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file open lease file id contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "
+            SELECT EXISTS (
+                SELECT 1
+                FROM file_open_leases l
+                JOIN client_sessions s ON s.session_id = l.session_id
+                WHERE l.file_id = $1
+                  AND l.lease_expires_at > clock_timestamp()
+                  AND s.lease_expires_at > clock_timestamp()
+            )::text
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_control_connection(|conn| unsafe {
+            let params = [&file_id];
+            let res = exec_params(conn, &sql, &params)?;
+            let value = fetch_single_text(res)?;
+            Ok(matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "t" | "true" | "1" | "on"
+            ))
+        })
+    }
+
     pub fn touch_client_session_owner_key(
         &self,
         session_id: u64,
@@ -9729,13 +9872,26 @@ impl DbRepo {
                 let destination_res =
                     exec_params(conn, &heartbeat_destination_sql, &destination_params)?;
                 let destination_value = fetch_single_text(destination_res)?;
-                if destination_value.trim().is_empty() {
-                    return Ok(false);
-                }
+                let destination_active = !destination_value.trim().is_empty();
 
                 if let (Some(file_id_param), Some(file_token_param)) =
                     (file_id_param.as_ref(), file_token_param.as_ref())
                 {
+                    if !destination_active {
+                        let unlinked_sql = CString::new(
+                            "SELECT COALESCE((SELECT unlinked::text FROM files WHERE id_file = $1), 'false')",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?;
+                        let unlinked_params = [file_id_param];
+                        let unlinked_res = exec_params(conn, &unlinked_sql, &unlinked_params)?;
+                        let unlinked = fetch_single_text(unlinked_res)?;
+                        if !matches!(
+                            unlinked.trim().to_ascii_lowercase().as_str(),
+                            "t" | "true" | "1" | "on"
+                        ) {
+                            return Ok(false);
+                        }
+                    }
                     let file_params = [
                         file_token_param,
                         file_id_param,
@@ -9750,6 +9906,8 @@ impl DbRepo {
                             "write ownership file lease disappeared during heartbeat".to_string()
                         );
                     }
+                } else if !destination_active {
+                    return Ok(false);
                 }
 
                 Ok(true)
@@ -11330,7 +11488,7 @@ impl DbRepo {
                     id_file::text AS entry_id,
                     id_file::text AS file_id
                 FROM files
-                WHERE COALESCE(id_directory, 0) = $1 AND name = $2
+                WHERE COALESCE(id_directory, 0) = $1 AND name = $2 AND NOT unlinked
                 UNION ALL
                 SELECT
                     'hardlink'::text AS kind,
@@ -11408,7 +11566,7 @@ impl DbRepo {
             "
             SELECT
                 (SELECT COUNT(*) FROM directories WHERE id_parent = $1)
-              + (SELECT COUNT(*) FROM files WHERE id_directory = $1)
+              + (SELECT COUNT(*) FROM files WHERE id_directory = $1 AND NOT unlinked)
               + (SELECT COUNT(*) FROM hardlinks WHERE id_directory = $1)
               + (SELECT COUNT(*) FROM symlinks WHERE id_parent = $1)
             ",
@@ -13793,57 +13951,93 @@ impl DbRepo {
         &self,
         file_id: u64,
         hidden_name: &str,
-        destination_leases: &[(u64, u64)],
+        parent_id: Option<u64>,
+        old_name: &str,
     ) -> Result<(), String> {
-        if hidden_name.is_empty() {
-            return Err("deferred unlink hidden name is empty".to_string());
+        if hidden_name.is_empty() || old_name.is_empty() {
+            return Err("deferred unlink name is empty".to_string());
         }
 
         let file_id_param = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
         let hidden_name_param = CString::new(hidden_name)
             .map_err(|_| "deferred unlink hidden name contains NUL byte".to_string())?;
-        let session_id_value = if destination_leases.is_empty() {
-            0
-        } else {
-            self.current_lock_session_id()?
-        };
-        if !destination_leases.is_empty() && session_id_value <= 0 {
-            return Err("deferred unlink has write ownership without client session".to_string());
-        }
-        let session_id = CString::new(session_id_value.to_string())
-            .map_err(|_| "write ownership session id contains NUL byte".to_string())?;
+        let parent_key = CString::new(parent_id.unwrap_or(0).to_string())
+            .map_err(|_| "deferred unlink parent key contains NUL byte".to_string())?;
+        let old_name_param = CString::new(old_name)
+            .map_err(|_| "deferred unlink old name contains NUL byte".to_string())?;
 
         let sql_rename = CString::new(
-            "UPDATE files SET name = $1, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
+            "UPDATE files SET name = $1, unlinked = TRUE, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_destination = CString::new(
-            "
-            DELETE FROM destination_write_leases
-            WHERE fencing_token = $1
-              AND session_id = $2
-              AND owner_key = $3
-            ",
+            "DELETE FROM destination_write_leases WHERE parent_key = $1 AND name = $2",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         self.with_control_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
+                let resource_key = CString::new(format!(
+                    "fod:write:destination:{}:{}:{}",
+                    parent_id.unwrap_or(0),
+                    old_name.len(),
+                    old_name
+                ))
+                .map_err(|_| "deferred unlink advisory key contains NUL byte".to_string())?;
+                if !Self::try_advisory_xact_lock_text_on_conn(conn, &resource_key)? {
+                    return Err("deferred unlink destination is busy".to_string());
+                }
+
                 let rename_params = [&hidden_name_param, &file_id_param];
                 exec_command_params(conn, &sql_rename, &rename_params)?;
-
-                for (owner_key, destination_token) in destination_leases {
-                    let owner_key_param = CString::new(owner_key.to_string())
-                        .map_err(|_| "write ownership owner key contains NUL byte".to_string())?;
-                    let destination_token = CString::new(destination_token.to_string())
-                        .map_err(|_| "destination write fencing token contains NUL byte".to_string())?;
-                    let params = [&destination_token, &session_id, &owner_key_param];
-                    exec_command_params(conn, &sql_delete_destination, &params)?;
-                }
+                let destination_params = [&parent_key, &old_name_param];
+                exec_command_params(conn, &sql_delete_destination, &destination_params)?;
                 Ok(())
             })
         })
+    }
+
+    pub fn purge_orphaned_unlinked_files(&self, limit: u64) -> Result<u64, String> {
+        if limit == 0 {
+            return Ok(0);
+        }
+        let sql = CString::new(
+            "
+            SELECT f.id_file
+            FROM files f
+            WHERE f.unlinked
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_open_leases l
+                    JOIN client_sessions s ON s.session_id = l.session_id
+                    WHERE l.file_id = f.id_file
+                      AND l.lease_expires_at > clock_timestamp()
+                      AND s.lease_expires_at > clock_timestamp()
+              )
+            ORDER BY f.id_file
+            LIMIT $1
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let limit_param = CString::new(limit.to_string())
+            .map_err(|_| "orphan cleanup limit contains NUL byte".to_string())?;
+        let file_ids = self.with_control_connection(|conn| unsafe {
+            let params = [&limit_param];
+            let res = exec_params(conn, &sql, &params)?;
+            fetch_first_column_texts(res)
+        })?;
+
+        let mut purged = 0_u64;
+        for file_id in file_ids {
+            let file_id = file_id
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid deferred unlink file id".to_string())?;
+            self.purge_primary_file(file_id)?;
+            purged = purged.saturating_add(1);
+        }
+        Ok(purged)
     }
 
     pub fn purge_primary_file(&self, file_id: u64) -> Result<(), String> {
@@ -13992,7 +14186,7 @@ impl DbRepo {
             "
             SELECT 1
             FROM files
-            WHERE id_directory = $1
+            WHERE id_directory = $1 AND NOT unlinked
             UNION ALL
             SELECT 1
             FROM directories
@@ -14028,7 +14222,7 @@ impl DbRepo {
             "
             SELECT
                 (SELECT COUNT(*) FROM directories WHERE id_parent = $1)
-              + (SELECT COUNT(*) FROM files WHERE id_directory = $1)
+              + (SELECT COUNT(*) FROM files WHERE id_directory = $1 AND NOT unlinked)
               + (SELECT COUNT(*) FROM hardlinks WHERE id_directory = $1)
               + (SELECT COUNT(*) FROM symlinks WHERE id_parent = $1)
             ",
@@ -14601,13 +14795,13 @@ impl DbRepo {
                     SELECT f.name, 'file', f.id_file, f.inode_seed, COALESCE(sf.file_type, '')
                     FROM files f
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
-                    WHERE f.id_directory = $1
+                    WHERE f.id_directory = $1 AND NOT f.unlinked
                     UNION ALL
                     SELECT h.name, 'hardlink', h.id_hardlink, f.inode_seed, COALESCE(sf.file_type, '')
                     FROM hardlinks h
                     JOIN files f ON f.id_file = h.id_file
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
-                    WHERE h.id_directory = $1
+                    WHERE h.id_directory = $1 AND NOT f.unlinked
                     UNION ALL
                     SELECT d.name, 'dir', d.id_directory, d.inode_seed, ''
                     FROM directories d
@@ -14633,13 +14827,13 @@ impl DbRepo {
                     SELECT f.name, 'file', f.id_file, f.inode_seed, COALESCE(sf.file_type, '')
                     FROM files f
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
-                    WHERE f.id_directory IS NULL
+                    WHERE f.id_directory IS NULL AND NOT f.unlinked
                     UNION ALL
                     SELECT h.name, 'hardlink', h.id_hardlink, f.inode_seed, COALESCE(sf.file_type, '')
                     FROM hardlinks h
                     JOIN files f ON f.id_file = h.id_file
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
-                    WHERE h.id_directory IS NULL
+                    WHERE h.id_directory IS NULL AND NOT f.unlinked
                     UNION ALL
                     SELECT s.name, 'symlink', s.id_symlink, s.inode_seed, ''
                     FROM symlinks s
@@ -14665,7 +14859,7 @@ impl DbRepo {
             (
                 CString::new(
                     "
-                    SELECT name FROM files WHERE id_directory = $1
+                    SELECT name FROM files WHERE id_directory = $1 AND NOT unlinked
                     UNION ALL
                     SELECT name FROM hardlinks WHERE id_directory = $1
                     UNION ALL
@@ -14684,7 +14878,7 @@ impl DbRepo {
                     "
                     SELECT name FROM directories WHERE id_parent IS NULL AND name != '/'
                     UNION ALL
-                    SELECT name FROM files WHERE id_directory IS NULL
+                    SELECT name FROM files WHERE id_directory IS NULL AND NOT unlinked
                     UNION ALL
                     SELECT name FROM hardlinks WHERE id_directory IS NULL
                     UNION ALL

@@ -552,10 +552,24 @@ impl ClientSessionHeartbeatHandle {
                         &fh_table,
                         lease_ttl_seconds,
                     );
-                    if session_failed || ownership_failed {
+                    let open_lease_failed =
+                        match repo.heartbeat_file_open_leases(session_id, lease_ttl_seconds) {
+                            Ok(()) => false,
+                            Err(err) => {
+                                warn!(
+                                    "FOD file open lease heartbeat failed session_id={} err={}",
+                                    session_id, err
+                                );
+                                true
+                            }
+                        };
+                    if session_failed || ownership_failed || open_lease_failed {
                         debug!(
-                            "FOD client heartbeat cycle completed with failures session_id={} session_failed={} ownership_failed={}",
-                            session_id, session_failed, ownership_failed
+                            "FOD client heartbeat cycle completed with failures session_id={} session_failed={} ownership_failed={} open_lease_failed={}",
+                            session_id,
+                            session_failed,
+                            ownership_failed,
+                            open_lease_failed
                         );
                     }
                     if stop_thread.load(Ordering::Relaxed) {
@@ -610,6 +624,18 @@ impl ClientSessionMaintenanceHandle {
                         Ok(false) => {}
                         Err(err) => {
                             warn!("FOD client session maintenance prune failed: {}", err);
+                        }
+                    }
+                    match repo.purge_orphaned_unlinked_files(64) {
+                        Ok(count) if count > 0 => {
+                            info!(
+                                "FOD client session maintenance purged deferred unlinks count={}",
+                                count
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            warn!("FOD deferred unlink maintenance purge failed: {}", err);
                         }
                     }
                 }
@@ -4353,10 +4379,57 @@ impl FodFuse {
         }
     }
 
-    fn create_handle_for_file(&self, path: String, file_id: Option<u64>, flags: i32) -> u64 {
+    fn register_file_open_lease_for_handle(
+        &self,
+        fh: u64,
+        file_id: u64,
+    ) -> Result<(), libc::c_int> {
+        let Some(session_id) = self.session_id else {
+            if self.read_only {
+                return Ok(());
+            }
+            warn!(
+                "FOD file open lease unavailable fh={} file_id={} reason=no_client_session",
+                fh, file_id
+            );
+            return Err(EIO);
+        };
+        let Some(repo) = self.client_session_repo() else {
+            if self.read_only {
+                return Ok(());
+            }
+            return Err(EIO);
+        };
+        repo.register_file_open_lease(
+            file_id,
+            session_id,
+            fh,
+            self.client_session_lease_ttl_seconds,
+        )
+        .map_err(|err| {
+            warn!(
+                "FOD file open lease registration failed fh={} file_id={} session_id={} err={}",
+                fh, file_id, session_id, err
+            );
+            EIO
+        })
+    }
+
+    fn create_handle_for_file(
+        &self,
+        path: String,
+        file_id: Option<u64>,
+        flags: i32,
+    ) -> Result<u64, libc::c_int> {
         let fh = self.next_handle();
         self.insert_handle_for_file(fh, path, file_id, flags, None);
-        fh
+        if let Some(file_id) = file_id {
+            if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
+                self.remove_handle_state(fh);
+                return Err(errno);
+            }
+        }
+        Ok(fh)
     }
 
     fn write_ownership_resource_for_path(
@@ -4741,6 +4814,19 @@ impl FodFuse {
             destination_released: false,
         };
         self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
+        if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
+            let _ = self.release_write_ownership_for_handle(fh);
+            self.remove_handle_state(fh);
+            if created_new {
+                if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
+                    warn!(
+                        "FOD create open-lease rollback failed file_id={} err={}",
+                        file_id, err
+                    );
+                }
+            }
+            return Err(errno);
+        }
         Ok((file_id, fh, created_new))
     }
 
@@ -4755,6 +4841,10 @@ impl FodFuse {
 
         if let Some(ownership) = self.local_write_ownership_for_file(file_id) {
             self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
+            if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
+                self.remove_handle_state(fh);
+                return Err(errno);
+            }
             return Ok(fh);
         }
 
@@ -4800,6 +4890,11 @@ impl FodFuse {
             destination_released: false,
         };
         self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
+        if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
+            let _ = self.release_write_ownership_for_handle(fh);
+            self.remove_handle_state(fh);
+            return Err(errno);
+        }
         Ok(fh)
     }
 
@@ -4881,27 +4976,6 @@ impl FodFuse {
             .unwrap_or(false)
     }
 
-    fn deferred_unlink_destination_leases(&self, file_id: u64) -> Vec<(u64, u64)> {
-        self.fh_table
-            .lock()
-            .map(|guard| {
-                let mut seen = HashSet::new();
-                guard
-                    .values()
-                    .filter(|state| state.file_id == Some(file_id))
-                    .filter_map(|state| state.write_ownership.as_ref())
-                    .filter(|ownership| !ownership.destination_released)
-                    .filter_map(|ownership| {
-                        seen.insert(ownership.owner_key).then_some((
-                            ownership.owner_key,
-                            ownership.lease.destination_fencing_token,
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     fn mark_deferred_unlink_destination_released(&self, file_id: u64) {
         if let Ok(mut guard) = self.fh_table.lock() {
             for state in guard.values_mut() {
@@ -4926,7 +5000,9 @@ impl FodFuse {
         let hidden_name =
             format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
         let hidden_path = Self::join_path(parent_path, OsStr::new(&hidden_name));
-        let destination_leases = self.deferred_unlink_destination_leases(file_id);
+        let (parent_id, old_name) = self
+            .write_ownership_resource_for_path(old_path)
+            .map_err(|errno| format!("deferred unlink namespace resolution failed errno={errno}"))?;
 
         {
             let mut guard = self
@@ -4938,7 +5014,7 @@ impl FodFuse {
 
         if let Err(err) =
             self.repo
-                .defer_primary_file_unlink(file_id, &hidden_name, &destination_leases)
+                .defer_primary_file_unlink(file_id, &hidden_name, parent_id, &old_name)
         {
             if let Ok(mut guard) = self.deferred_unlinks.lock() {
                 guard.remove(&file_id);
@@ -4949,13 +5025,12 @@ impl FodFuse {
         self.mark_deferred_unlink_destination_released(file_id);
         self.move_cached_path(old_path, &hidden_path, ino);
         info!(
-            "FOD deferred unlink staged file_id={} ino={} old_path={} hidden_path={} open_handles={} destination_leases_released={}",
+            "FOD deferred unlink staged file_id={} ino={} old_path={} hidden_path={} local_open_handles={}",
             file_id,
             ino,
             old_path,
             hidden_path,
-            self.open_handle_count_for_file(file_id),
-            destination_leases.len()
+            self.open_handle_count_for_file(file_id)
         );
         Ok(())
     }
@@ -4967,7 +5042,17 @@ impl FodFuse {
         let Some(file_id) = removed_state.and_then(|state| state.file_id) else {
             return Ok(());
         };
-        if self.open_handle_count_for_file(file_id) != 0 {
+        let open_elsewhere = self
+            .repo
+            .has_active_file_open_leases(file_id)
+            .map_err(|err| {
+                warn!(
+                    "FOD deferred unlink open-lease check failed file_id={} err={}",
+                    file_id, err
+                );
+                EIO
+            })?;
+        if open_elsewhere {
             return Ok(());
         }
 
@@ -5007,6 +5092,16 @@ impl FodFuse {
             .and_then(|mut guard| guard.remove(&fh));
         if let Ok(mut guard) = self.write_states.lock() {
             guard.remove(&fh);
+        }
+        if let Some(file_id) = removed_state.as_ref().and_then(|state| state.file_id) {
+            if let (Some(session_id), Some(repo)) = (self.session_id, self.client_session_repo()) {
+                if let Err(err) = repo.release_file_open_lease(session_id, fh) {
+                    warn!(
+                        "FOD file open lease release failed fh={} file_id={} session_id={} err={}",
+                        fh, file_id, session_id, err
+                    );
+                }
+            }
         }
         if let Some(path) = removed_state.as_ref().map(|state| state.path.as_str()) {
             if let Some(ino) = self.inode_for_path(path) {
@@ -6459,7 +6554,13 @@ impl Filesystem for FodFuse {
         let fh = if writable {
             fh
         } else {
-            self.create_handle_for_file(path.clone(), Some(file_id), flags)
+            match self.create_handle_for_file(path.clone(), Some(file_id), flags) {
+                Ok(fh) => fh,
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
         };
 
         if writable && (flags & libc::O_TRUNC) != 0 {
@@ -7643,16 +7744,18 @@ impl Filesystem for FodFuse {
                     return;
                 }
                 match self.repo.count_file_links(file_id) {
-                    Ok(link_count)
-                        if link_count <= 1 && self.open_handle_count_for_file(file_id) > 0 =>
-                    {
-                        self.defer_open_primary_unlink(
-                            file_id,
-                            &parent_path,
-                            &child_path,
-                            entry_attrs.ino.0,
-                            req_id,
-                        )
+                    Ok(link_count) if link_count <= 1 => {
+                        match self.repo.has_active_file_open_leases(file_id) {
+                            Ok(true) => self.defer_open_primary_unlink(
+                                file_id,
+                                &parent_path,
+                                &child_path,
+                                entry_attrs.ino.0,
+                                req_id,
+                            ),
+                            Ok(false) => self.remove_primary_file_or_promote_hardlink(file_id),
+                            Err(err) => Err(err),
+                        }
                     }
                     Ok(_) => self.remove_primary_file_or_promote_hardlink(file_id),
                     Err(err) => Err(err),
@@ -8403,7 +8506,18 @@ impl Filesystem for FodFuse {
                     return;
                 }
             };
-            let fh = self.create_handle_for_file(child_path.clone(), Some(file_id), flags);
+            let fh = match self.create_handle_for_file(
+                child_path.clone(),
+                Some(file_id),
+                flags,
+            ) {
+                Ok(fh) => fh,
+                Err(errno) => {
+                    let _ = self.remove_primary_file_or_promote_hardlink(file_id);
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            };
             (file_id, fh, true)
         };
 
