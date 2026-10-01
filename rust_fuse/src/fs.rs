@@ -4422,13 +4422,10 @@ impl FodFuse {
         flags: i32,
     ) -> Result<u64, libc::c_int> {
         let fh = self.next_handle();
-        self.insert_handle_for_file(fh, path, file_id, flags, None);
         if let Some(file_id) = file_id {
-            if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
-                self.remove_handle_state(fh);
-                return Err(errno);
-            }
+            self.register_file_open_lease_for_handle(fh, file_id)?;
         }
+        self.insert_handle_for_file(fh, path, file_id, flags, None);
         Ok(fh)
     }
 
@@ -4805,6 +4802,23 @@ impl FodFuse {
             }
         };
 
+        if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
+            if let Err(err) = ownership_repo.release_write_ownership(owner_key, lease) {
+                warn!(
+                    "FOD create open-lease ownership rollback failed file_id={} owner_key={} err={}",
+                    file_id, owner_key, err
+                );
+            }
+            if created_new {
+                if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
+                    warn!(
+                        "FOD create open-lease file rollback failed file_id={} err={}",
+                        file_id, err
+                    );
+                }
+            }
+            return Err(errno);
+        }
         let ownership = FileWriteOwnership {
             parent_id,
             name: name.to_string(),
@@ -4814,19 +4828,6 @@ impl FodFuse {
             destination_released: false,
         };
         self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
-        if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
-            let _ = self.release_write_ownership_for_handle(fh);
-            self.remove_handle_state(fh);
-            if created_new {
-                if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
-                    warn!(
-                        "FOD create open-lease rollback failed file_id={} err={}",
-                        file_id, err
-                    );
-                }
-            }
-            return Err(errno);
-        }
         Ok((file_id, fh, created_new))
     }
 
@@ -4840,11 +4841,8 @@ impl FodFuse {
         let fh = self.next_handle();
 
         if let Some(ownership) = self.local_write_ownership_for_file(file_id) {
+            self.register_file_open_lease_for_handle(fh, file_id)?;
             self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
-            if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
-                self.remove_handle_state(fh);
-                return Err(errno);
-            }
             return Ok(fh);
         }
 
@@ -4881,6 +4879,15 @@ impl FodFuse {
                 return Err(EIO);
             }
         };
+        if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
+            if let Err(err) = ownership_repo.release_write_ownership(owner_key, lease) {
+                warn!(
+                    "FOD open-lease ownership rollback failed file_id={} owner_key={} err={}",
+                    file_id, owner_key, err
+                );
+            }
+            return Err(errno);
+        }
         let ownership = FileWriteOwnership {
             parent_id,
             name,
@@ -4890,11 +4897,6 @@ impl FodFuse {
             destination_released: false,
         };
         self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
-        if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
-            let _ = self.release_write_ownership_for_handle(fh);
-            self.remove_handle_state(fh);
-            return Err(errno);
-        }
         Ok(fh)
     }
 
