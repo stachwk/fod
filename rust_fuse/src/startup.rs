@@ -562,10 +562,9 @@ pub fn mount_fuse(
                     })
                     .unwrap_or_else(|| control_name.clone());
 
-                match notifier.inval_entry(
-                    fuser::INodeNo::ROOT,
-                    std::ffi::OsStr::new(&invalidate_name),
-                ) {
+                match notifier
+                    .inval_entry(fuser::INodeNo::ROOT, std::ffi::OsStr::new(&invalidate_name))
+                {
                     Ok(()) => {
                         let _ = std::fs::write(
                             &done,
