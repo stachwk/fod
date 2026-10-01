@@ -1067,10 +1067,10 @@ wait-client:
 
 init: build-runtime up
 	@set -eu; \
-	status_output="$($(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
-	if printf '%s\n' "$status_output" | grep -Fq 'FOD ready: yes'; then \
+	status_output="$$($(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
+	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
 		echo 'FOD schema already initialized; skipping init.'; \
-	elif printf '%s\n' "$status_output" | grep -Fq 'fod objects: yes'; then \
+	elif printf '%s\n' "$$status_output" | grep -Fq 'fod objects: yes'; then \
 		echo 'FOD schema requires upgrade.'; \
 		POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_RUNTIME_BIN) upgrade --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 	else \
@@ -1081,10 +1081,10 @@ init: build-runtime up
 
 init-qnap: build-runtime
 	@set -eu; \
-	status_output="$($(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
-	if printf '%s\n' "$status_output" | grep -Fq 'FOD ready: yes'; then \
+	status_output="$$($(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
+	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
 		echo 'FOD schema already initialized; skipping qnap init.'; \
-	elif printf '%s\n' "$status_output" | grep -Fq 'fod objects: yes'; then \
+	elif printf '%s\n' "$$status_output" | grep -Fq 'fod objects: yes'; then \
 		echo 'FOD schema requires qnap upgrade.'; \
 		$(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) upgrade --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 	else \
