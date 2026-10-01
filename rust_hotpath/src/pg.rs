@@ -6177,6 +6177,42 @@ impl DbRepo {
         }
     }
 
+    fn created_inode_seed_matches(actual: &str, requested: &str) -> bool {
+        if actual == requested {
+            return true;
+        }
+        let prefix = format!("{requested}#open-unlink:");
+        actual
+            .strip_prefix(&prefix)
+            .map(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+            .unwrap_or(false)
+    }
+
+    unsafe fn effective_file_inode_seed_on_conn(
+        conn: *mut PGconn,
+        requested: &CString,
+    ) -> Result<CString, String> {
+        let sql = CString::new(
+            "
+            SELECT CASE
+                WHEN COUNT(*) = 0 THEN $1
+                ELSE $1 || '#open-unlink:' || MAX(id_file)::text
+            END
+            FROM files
+            WHERE unlinked
+              AND (
+                    inode_seed = $1
+                    OR strpos(inode_seed, $1 || '#open-unlink:') = 1
+              )
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let params = [requested];
+        let res = exec_params(conn, &sql, &params)?;
+        let value = fetch_single_text(res)?;
+        CString::new(value).map_err(|_| "effective inode seed contains NUL byte".to_string())
+    }
+
     fn confirm_created_file(
         &self,
         target_parent_id: Option<u64>,
@@ -6207,7 +6243,7 @@ impl DbRepo {
             && row[2].trim() == mode
             && row[3].trim() == uid.to_string()
             && row[4].trim() == gid.to_string()
-            && row[5].trim() == inode_seed;
+            && Self::created_inode_seed_matches(row[5].trim(), inode_seed);
         if matches {
             Ok(file_id)
         } else {
@@ -6249,7 +6285,7 @@ impl DbRepo {
             && row[2].trim() == mode
             && row[3].trim() == uid.to_string()
             && row[4].trim() == gid.to_string()
-            && row[5].trim() == inode_seed
+            && Self::created_inode_seed_matches(row[5].trim(), inode_seed)
             && row[6].trim() == file_kind
             && row[7].trim() == rdev_major.to_string()
             && row[8].trim() == rdev_minor.to_string();
@@ -12329,6 +12365,8 @@ impl DbRepo {
 
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
+                let effective_inode_seed =
+                    Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
                 let data_object_id = fetch_single_text(data_object_res)?
                     .trim()
@@ -12344,7 +12382,7 @@ impl DbRepo {
                         &mode,
                         &uid,
                         &gid,
-                        &inode_seed,
+                        &effective_inode_seed,
                         &data_object_id,
                         &parent_id,
                     ];
@@ -12355,7 +12393,7 @@ impl DbRepo {
                         &mode,
                         &uid,
                         &gid,
-                        &inode_seed,
+                        &effective_inode_seed,
                         &data_object_id,
                     ];
                     exec_params(conn, &sql_null_parent, &params)?
@@ -12482,6 +12520,8 @@ impl DbRepo {
 
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
+                let effective_inode_seed =
+                    Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
                 let data_object_id = fetch_single_text(data_object_res)?
                     .trim()
@@ -12497,7 +12537,7 @@ impl DbRepo {
                         &mode,
                         &uid,
                         &gid,
-                        &inode_seed,
+                        &effective_inode_seed,
                         &data_object_id,
                         &parent_id,
                     ];
@@ -12508,7 +12548,7 @@ impl DbRepo {
                         &mode,
                         &uid,
                         &gid,
-                        &inode_seed,
+                        &effective_inode_seed,
                         &data_object_id,
                     ];
                     exec_params(conn, &sql_null_parent, &params)?
