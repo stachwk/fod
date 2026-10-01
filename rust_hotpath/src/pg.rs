@@ -6188,6 +6188,26 @@ impl DbRepo {
             .unwrap_or(false)
     }
 
+    fn file_create_serialization_keys(
+        parent_id: Option<u64>,
+        name: &str,
+        inode_seed: &str,
+    ) -> Result<Vec<CString>, String> {
+        let parent_key = parent_id.unwrap_or(0);
+        let mut keys = vec![
+            format!("fod:write:destination:{parent_key}:{}:{name}", name.len()),
+            format!("fod:inode-seed:{}:{inode_seed}", inode_seed.len()),
+        ];
+        keys.sort_unstable();
+        keys.dedup();
+        keys.into_iter()
+            .map(|key| {
+                CString::new(key)
+                    .map_err(|_| "file create serialization key contains NUL byte".to_string())
+            })
+            .collect()
+    }
+
     unsafe fn effective_file_inode_seed_on_conn(
         conn: *mut PGconn,
         requested: &CString,
@@ -12326,6 +12346,8 @@ impl DbRepo {
     ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
         let inode_seed_text = inode_seed.to_string();
+        let serialization_keys =
+            Self::file_create_serialization_keys(target_parent_id, target_name, inode_seed)?;
         let mode_text = format!("{:o}", mode);
         let uid_value = uid;
         let gid_value = gid;
@@ -12365,6 +12387,9 @@ impl DbRepo {
 
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
+                for serialization_key in &serialization_keys {
+                    Self::advisory_xact_lock_text_on_conn(conn, serialization_key)?;
+                }
                 let effective_inode_seed =
                     Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
@@ -12465,6 +12490,8 @@ impl DbRepo {
     ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
         let inode_seed_text = inode_seed.to_string();
+        let serialization_keys =
+            Self::file_create_serialization_keys(target_parent_id, target_name, inode_seed)?;
         let file_kind_text = file_kind.to_string();
         let mode_text = format!("{:o}", mode);
         let uid_value = uid;
@@ -12520,6 +12547,9 @@ impl DbRepo {
 
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
+                for serialization_key in &serialization_keys {
+                    Self::advisory_xact_lock_text_on_conn(conn, serialization_key)?;
+                }
                 let effective_inode_seed =
                     Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
@@ -14091,6 +14121,8 @@ impl DbRepo {
             .map_err(|_| "deferred unlink parent key contains NUL byte".to_string())?;
         let old_name_param = CString::new(old_name)
             .map_err(|_| "deferred unlink old name contains NUL byte".to_string())?;
+        let sql_inode_seed = CString::new("SELECT inode_seed FROM files WHERE id_file = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         let sql_rename = CString::new(
             "UPDATE files SET name = $1, unlinked = TRUE, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
@@ -14103,6 +14135,13 @@ impl DbRepo {
 
         self.with_control_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
+                let inode_seed_params = [&file_id_param];
+                let inode_seed_res = exec_params(conn, &sql_inode_seed, &inode_seed_params)?;
+                let inode_seed = fetch_single_text(inode_seed_res)?;
+                if inode_seed.is_empty() {
+                    return Ok(());
+                }
+
                 let mut resource_keys = vec![
                     format!("fod:open:file:{file_id}"),
                     format!(
@@ -14111,8 +14150,10 @@ impl DbRepo {
                         old_name.len(),
                         old_name
                     ),
+                    format!("fod:inode-seed:{}:{inode_seed}", inode_seed.len()),
                 ];
                 resource_keys.sort_unstable();
+                resource_keys.dedup();
                 for resource_key in resource_keys {
                     let resource_key = CString::new(resource_key).map_err(|_| {
                         "deferred unlink advisory key contains NUL byte".to_string()
