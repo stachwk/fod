@@ -6219,11 +6219,8 @@ impl DbRepo {
                 ELSE $1 || '#open-unlink:' || MAX(id_file)::text
             END
             FROM files
-            WHERE unlinked
-              AND (
-                    inode_seed = $1
-                    OR strpos(inode_seed, $1 || '#open-unlink:') = 1
-              )
+            WHERE inode_seed = $1
+               OR strpos(inode_seed, $1 || '#open-unlink:') = 1
             ",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
