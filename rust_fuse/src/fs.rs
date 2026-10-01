@@ -5070,6 +5070,18 @@ impl FodFuse {
                 }
             }
         }
+
+        let active_open_leases = self.repo.has_active_file_open_leases(file_id)?;
+        if !active_open_leases {
+            self.repo.purge_primary_file(file_id)?;
+            self.invalidate_statfs_cache();
+            info!(
+                "FOD deferred unlink finalized immediately file_id={} ino={} old_path={}",
+                file_id, ino, old_path
+            );
+            return Ok(());
+        }
+
         info!(
             "FOD deferred unlink staged file_id={} ino={} old_path={} hidden_path={} local_open_handles={}",
             file_id,
