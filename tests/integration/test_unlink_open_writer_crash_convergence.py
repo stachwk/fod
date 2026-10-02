@@ -214,35 +214,92 @@ def main() -> None:
             launcher_a.process.kill()
             crash_rc = launcher_a.process.wait(timeout=5)
 
-            # Zamkniecie lokalnego fd po smierci demona nie moze wykonac release
-            # w PostgreSQL, bo proces FOD juz nie istnieje.
+            # Stan PostgreSQL sprawdzamy natychmiast po SIGKILL, zanim
+            # dotkniemy fd nalezacego do martwego polaczenia FUSE. close(2) na
+            # martwym mountcie nie jest elementem crash semantics i moze opoznic
+            # obserwacje na tyle, ze naturalny TTL zdazy wygasnac.
+            crash_lease_state = scalar(
+                database,
+                """
+                SELECT
+                    (s.lease_expires_at > clock_timestamp()) AS session_active,
+                    (l.lease_expires_at > clock_timestamp()) AS open_lease_active,
+                    GREATEST(
+                        EXTRACT(EPOCH FROM (s.lease_expires_at - clock_timestamp())),
+                        0
+                    )::double precision AS session_remaining,
+                    GREATEST(
+                        EXTRACT(EPOCH FROM (l.lease_expires_at - clock_timestamp())),
+                        0
+                    )::double precision AS open_lease_remaining
+                FROM fod.client_sessions s
+                JOIN fod.file_open_leases l
+                  ON l.session_id = s.session_id
+                WHERE s.session_id = %s
+                  AND l.file_id = %s
+                LIMIT 1
+                """,
+                (old_session_id, old_file_id),
+            )
+            if crash_lease_state is None:
+                raise AssertionError(
+                    "crash lost PostgreSQL open lease before immediate observation"
+                )
+
+            # scalar() zwraca tylko pierwsza kolumne, dlatego pelny snapshot
+            # pobieramy osobnym kursorem.
+            with database.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        (s.lease_expires_at > clock_timestamp()) AS session_active,
+                        (l.lease_expires_at > clock_timestamp()) AS open_lease_active,
+                        GREATEST(
+                            EXTRACT(EPOCH FROM (s.lease_expires_at - clock_timestamp())),
+                            0
+                        )::double precision AS session_remaining,
+                        GREATEST(
+                            EXTRACT(EPOCH FROM (l.lease_expires_at - clock_timestamp())),
+                            0
+                        )::double precision AS open_lease_remaining
+                    FROM fod.client_sessions s
+                    JOIN fod.file_open_leases l
+                      ON l.session_id = s.session_id
+                    WHERE s.session_id = %s
+                      AND l.file_id = %s
+                    LIMIT 1
+                    """,
+                    (old_session_id, old_file_id),
+                )
+                lease_row = cursor.fetchone()
+
+            if lease_row is None:
+                raise AssertionError(
+                    "crash lost PostgreSQL open lease before immediate snapshot"
+                )
+
+            session_active_after_crash = bool(lease_row[0])
+            open_lease_active_after_crash = bool(lease_row[1])
+            session_remaining_after_crash = float(lease_row[2] or 0.0)
+            open_lease_remaining_after_crash = float(lease_row[3] or 0.0)
+
+            if not session_active_after_crash or not open_lease_active_after_crash:
+                raise AssertionError(
+                    "crash left an already-expired PostgreSQL lease: "
+                    f"session_active={int(session_active_after_crash)} "
+                    f"open_lease_active={int(open_lease_active_after_crash)} "
+                    f"session_remaining={session_remaining_after_crash:.3f} "
+                    f"open_lease_remaining={open_lease_remaining_after_crash:.3f}"
+                )
+
+            # Dopiero po potwierdzeniu crash semantics zamykamy lokalny fd.
+            # Proces FOD juz nie istnieje, wiec ta operacja nie moze wykonac
+            # release_file_open_lease() w PostgreSQL.
             os.close(fd)
             fd = None
 
-            session_after_crash = int(
-                scalar(
-                    database,
-                    "SELECT COUNT(*) FROM fod.client_sessions WHERE session_id = %s",
-                    (old_session_id,),
-                )
-                or 0
-            )
-            leases_after_crash = int(
-                scalar(
-                    database,
-                    "SELECT COUNT(*) FROM fod.file_open_leases WHERE file_id = %s",
-                    (old_file_id,),
-                )
-                or 0
-            )
-            if session_after_crash != 1 or leases_after_crash != 1:
-                raise AssertionError(
-                    "crash unexpectedly performed graceful PostgreSQL cleanup: "
-                    f"session={session_after_crash} open_leases={leases_after_crash}"
-                )
-
-            # Usuwamy martwy mount z kernela dopiero po potwierdzeniu, ze stan
-            # lease pozostal w centralnym autorytecie.
+            # Usuwamy martwy mount z kernela po zapisaniu autorytatywnego
+            # snapshotu lease.
             launcher_a.stop()
 
             # Tryb szybki przesuwa sesje za granice expiry. Tryb naturalny
@@ -326,6 +383,8 @@ def main() -> None:
                 f"old_ino={old_ino} replacement_ino={replacement_ino} "
                 f"crash_rc={crash_rc} postgres_authority=1 "
                 "lease_survived_crash=1 "
+                f"session_remaining_after_crash={session_remaining_after_crash:.3f} "
+                f"open_lease_remaining_after_crash={open_lease_remaining_after_crash:.3f} "
                 f"forced_session_expiry={int(force_session_expiry)} "
                 f"natural_session_expiry={int(not force_session_expiry)} "
                 f"expiry_remaining_seconds={expiry_remaining_seconds:.3f} "
