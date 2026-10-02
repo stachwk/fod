@@ -216,38 +216,8 @@ def main() -> None:
 
             # Stan PostgreSQL sprawdzamy natychmiast po SIGKILL, zanim
             # dotkniemy fd nalezacego do martwego polaczenia FUSE. close(2) na
-            # martwym mountcie nie jest elementem crash semantics i moze opoznic
-            # obserwacje na tyle, ze naturalny TTL zdazy wygasnac.
-            crash_lease_state = scalar(
-                database,
-                """
-                SELECT
-                    (s.lease_expires_at > clock_timestamp()) AS session_active,
-                    (l.lease_expires_at > clock_timestamp()) AS open_lease_active,
-                    GREATEST(
-                        EXTRACT(EPOCH FROM (s.lease_expires_at - clock_timestamp())),
-                        0
-                    )::double precision AS session_remaining,
-                    GREATEST(
-                        EXTRACT(EPOCH FROM (l.lease_expires_at - clock_timestamp())),
-                        0
-                    )::double precision AS open_lease_remaining
-                FROM fod.client_sessions s
-                JOIN fod.file_open_leases l
-                  ON l.session_id = s.session_id
-                WHERE s.session_id = %s
-                  AND l.file_id = %s
-                LIMIT 1
-                """,
-                (old_session_id, old_file_id),
-            )
-            if crash_lease_state is None:
-                raise AssertionError(
-                    "crash lost PostgreSQL open lease before immediate observation"
-                )
-
-            # scalar() zwraca tylko pierwsza kolumne, dlatego pelny snapshot
-            # pobieramy osobnym kursorem.
+            # martwym mountcie nie jest elementem crash semantics i nie moze
+            # wplywac na pomiar naturalnego TTL.
             with database.cursor() as cursor:
                 cursor.execute(
                     """
@@ -291,16 +261,6 @@ def main() -> None:
                     f"session_remaining={session_remaining_after_crash:.3f} "
                     f"open_lease_remaining={open_lease_remaining_after_crash:.3f}"
                 )
-
-            # Dopiero po potwierdzeniu crash semantics zamykamy lokalny fd.
-            # Proces FOD juz nie istnieje, wiec ta operacja nie moze wykonac
-            # release_file_open_lease() w PostgreSQL.
-            os.close(fd)
-            fd = None
-
-            # Usuwamy martwy mount z kernela po zapisaniu autorytatywnego
-            # snapshotu lease.
-            launcher_a.stop()
 
             # Tryb szybki przesuwa sesje za granice expiry. Tryb naturalny
             # nie modyfikuje lease i czeka na rzeczywiste lease_expires_at
@@ -374,6 +334,14 @@ def main() -> None:
                 raise AssertionError(
                     f"deferred-unlink name leaked after crash convergence: {leaked_internal}"
                 )
+
+            # Cleanup martwego mountu wykonujemy dopiero po potwierdzeniu
+            # naturalnej konwergencji w PostgreSQL. Do tego momentu lokalny fd
+            # pozostaje otwarty, ale nie istnieje juz proces, ktory moglby
+            # odnowic lub zwolnic jego lease.
+            launcher_a.stop()
+            os.close(fd)
+            fd = None
 
             target_b.unlink()
 
