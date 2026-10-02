@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # Copyright (c) 2026 Wojciech Stach
 # Licensed under BSL 1.1
 
@@ -38,6 +38,13 @@ def scalar(connection, sql: str, params: tuple[object, ...] = ()):
         cursor.execute(sql, params)
         row = cursor.fetchone()
     return None if row is None else row[0]
+
+
+def env_truthy(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def wait_until_old_generation_purged(
@@ -105,6 +112,7 @@ def main() -> None:
 
         fd: int | None = None
         database = postgres_connection(launcher_a)
+        force_session_expiry = env_truthy("FOD_TEST_FORCE_SESSION_EXPIRY", True)
 
         try:
             launcher_a.start(
@@ -237,28 +245,55 @@ def main() -> None:
             # lease pozostal w centralnym autorytecie.
             launcher_a.stop()
 
-            # Zamiast czekac na produkcyjny TTL test deterministycznie przesuwa
-            # sesje za granice expiry. Dalsze prune i purge wykonuje zwykly
-            # maintenance thread zywego mountu B.
-            with database.cursor() as cursor:
-                cursor.execute(
+            # Tryb szybki przesuwa sesje za granice expiry. Tryb naturalny
+            # nie modyfikuje lease i czeka na rzeczywiste lease_expires_at
+            # wyliczone przez PostgreSQL. W obu przypadkach prune oraz purge
+            # wykonuje zwykly maintenance thread zywego mountu B.
+            expiry_remaining_seconds = float(
+                scalar(
+                    database,
                     """
-                    UPDATE fod.client_sessions
-                    SET lease_expires_at = clock_timestamp() - INTERVAL '1 second'
+                    SELECT GREATEST(
+                        EXTRACT(EPOCH FROM (lease_expires_at - clock_timestamp())),
+                        0
+                    )::double precision
+                    FROM fod.client_sessions
                     WHERE session_id = %s
                     """,
                     (old_session_id,),
                 )
-                if cursor.rowcount != 1:
-                    raise AssertionError(
-                        "failed to expire crashed client session in PostgreSQL"
+                or 0.0
+            )
+
+            if force_session_expiry:
+                with database.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE fod.client_sessions
+                        SET lease_expires_at = clock_timestamp() - INTERVAL '1 second'
+                        WHERE session_id = %s
+                        """,
+                        (old_session_id,),
                     )
+                    if cursor.rowcount != 1:
+                        raise AssertionError(
+                            "failed to expire crashed client session in PostgreSQL"
+                        )
+                convergence_timeout_seconds = 10.0
+            else:
+                # Dodajemy zapas na maintenance B oraz scheduler hosta. Test
+                # nadal czeka na rzeczywisty zegar PostgreSQL, bez zmiany lease.
+                convergence_timeout_seconds = max(
+                    10.0,
+                    expiry_remaining_seconds + 10.0,
+                )
 
             purged, sessions_left, open_leases_left, files_left = (
                 wait_until_old_generation_purged(
                     database,
                     old_file_id,
                     old_session_id,
+                    timeout_seconds=convergence_timeout_seconds,
                 )
             )
             if not purged:
@@ -290,7 +325,10 @@ def main() -> None:
                 f"old_file_id={old_file_id} replacement_file_id={replacement_file_id} "
                 f"old_ino={old_ino} replacement_ino={replacement_ino} "
                 f"crash_rc={crash_rc} postgres_authority=1 "
-                "lease_survived_crash=1 forced_session_expiry=1 "
+                "lease_survived_crash=1 "
+                f"forced_session_expiry={int(force_session_expiry)} "
+                f"natural_session_expiry={int(not force_session_expiry)} "
+                f"expiry_remaining_seconds={expiry_remaining_seconds:.3f} "
                 "remote_prune=1 orphan_purge=1 old_generation_removed=1 "
                 "replacement_isolated=1 hidden_entry_leaks=0 cleanup=1"
             )

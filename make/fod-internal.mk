@@ -2958,7 +2958,14 @@ test-unlink-remote-open-writer-multimount: init
 .PHONY: test-unlink-open-writer-crash-convergence
 test-unlink-open-writer-crash-convergence: init
 	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
-	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 \
+	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 FOD_TEST_FORCE_SESSION_EXPIRY=1 \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	$(VENV_PYTHON) tests/integration/test_unlink_open_writer_crash_convergence.py
+
+.PHONY: test-unlink-open-writer-crash-natural-expiry
+test-unlink-open-writer-crash-natural-expiry: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 FOD_TEST_FORCE_SESSION_EXPIRY=0 \
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
 	$(VENV_PYTHON) tests/integration/test_unlink_open_writer_crash_convergence.py
 
