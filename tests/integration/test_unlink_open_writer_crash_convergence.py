@@ -1,9 +1,11 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # Copyright (c) 2026 Wojciech Stach
 # Licensed under BSL 1.1
 
 from __future__ import annotations
 
+import errno
 import os
 import signal
 import subprocess
@@ -361,9 +363,18 @@ def main() -> None:
             # naturalnej konwergencji w PostgreSQL. Do tego momentu lokalny fd
             # pozostaje otwarty, ale nie istnieje juz proces, ktory moglby
             # odnowic lub zwolnic jego lease.
-            launcher_a.stop()
-            os.close(fd)
+            crashed_fd_close_errno = 0
+            try:
+                os.close(fd)
+            except OSError as err:
+                if err.errno != errno.ENOTCONN:
+                    raise
+                crashed_fd_close_errno = err.errno
             fd = None
+
+            # Najpierw zwalniamy ostatni lokalny fd martwego FUSE. Dopiero
+            # potem stop() moze polegac na AutoUnmount i oczyscic mountpoint.
+            launcher_a.stop()
 
             target_b.unlink()
 
@@ -373,6 +384,7 @@ def main() -> None:
                 f"old_ino={old_ino} replacement_ino={replacement_ino} "
                 f"bootstrap_pid={bootstrap_pid} fuse_pid={fuse_pid} "
                 f"crash_signal={crash_signal} bootstrap_rc={bootstrap_rc} "
+                f"crashed_fd_close_errno={crashed_fd_close_errno} "
                 "postgres_authority=1 lease_survived_crash=1 "
                 f"session_remaining_after_crash={session_remaining_after_crash:.3f} "
                 f"open_lease_remaining_after_crash={open_lease_remaining_after_crash:.3f} "
