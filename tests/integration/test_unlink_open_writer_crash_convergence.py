@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import os
+import signal
+import subprocess
 import time
 import tempfile
 import uuid
@@ -165,6 +167,15 @@ def main() -> None:
                 raise AssertionError("PostgreSQL open lease missing for mount A handle")
             old_session_id = int(old_session_id)
 
+            fuse_pid = scalar(
+                database,
+                "SELECT pid FROM fod.client_sessions WHERE session_id = %s",
+                (old_session_id,),
+            )
+            if fuse_pid is None:
+                raise AssertionError("mount A FUSE pid missing from client_sessions")
+            fuse_pid = int(fuse_pid)
+
             # B wykonuje unlink bez lokalnej wiedzy o fh z A. Stara generacja
             # musi pozostac w PostgreSQL jako unlinked, dopoki lease A jest zywy.
             target_b.unlink()
@@ -207,12 +218,23 @@ def main() -> None:
             if replacement_ino == old_ino:
                 raise AssertionError("replacement reused old inode generation")
 
-            # SIGKILL symuluje utrate hosta/procesu. Nie wolno wywolywac normalnego
-            # release przed sprawdzeniem, ze lease nadal istnieje w PostgreSQL.
+            # FODMount uruchamia fod-bootstrap, ktory z kolei spawnuje
+            # fod-rust-fuse. Zabicie launcher_a.process ubiloby tylko wrapper,
+            # a daemon nadal odnawialby lease. Autorytatywny PID procesu FUSE
+            # pochodzi z client_sessions.pid i to jego zabijamy SIGKILL.
             if launcher_a.process is None:
-                raise AssertionError("mount A process missing before crash")
-            launcher_a.process.kill()
-            crash_rc = launcher_a.process.wait(timeout=5)
+                raise AssertionError("mount A bootstrap process missing before crash")
+            bootstrap_pid = launcher_a.process.pid
+            os.kill(fuse_pid, signal.SIGKILL)
+            crash_signal = signal.SIGKILL
+
+            # Bootstrap powinien zakonczyc sie po smierci potomnego FUSE.
+            # Nie jest to warunek crash semantics, ale potwierdza, ze wrapper
+            # nie utrzymuje ukrytego potomka po zabiciu autorytatywnego PID.
+            try:
+                bootstrap_rc = launcher_a.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                bootstrap_rc = None
 
             # Stan PostgreSQL sprawdzamy natychmiast po SIGKILL, zanim
             # dotkniemy fd nalezacego do martwego polaczenia FUSE. close(2) na
@@ -349,8 +371,9 @@ def main() -> None:
                 "OK unlink-open-writer-crash-convergence "
                 f"old_file_id={old_file_id} replacement_file_id={replacement_file_id} "
                 f"old_ino={old_ino} replacement_ino={replacement_ino} "
-                f"crash_rc={crash_rc} postgres_authority=1 "
-                "lease_survived_crash=1 "
+                f"bootstrap_pid={bootstrap_pid} fuse_pid={fuse_pid} "
+                f"crash_signal={crash_signal} bootstrap_rc={bootstrap_rc} "
+                "postgres_authority=1 lease_survived_crash=1 "
                 f"session_remaining_after_crash={session_remaining_after_crash:.3f} "
                 f"open_lease_remaining_after_crash={open_lease_remaining_after_crash:.3f} "
                 f"forced_session_expiry={int(force_session_expiry)} "
