@@ -313,9 +313,9 @@ def main() -> None:
                 )
                 or 0
             )
-            if active_lease_count < 2:
+            if active_lease_count != 2:
                 raise AssertionError(
-                    f"expected two independent open leases, got {active_lease_count}"
+                    f"expected exactly two independent open leases, got {active_lease_count}"
                 )
 
             # C zmienia namespace bez lokalnej wiedzy o uchwytach A/B.
@@ -461,7 +461,7 @@ def main() -> None:
                 f"bootstrap_pid_a={bootstrap_pid_a} fuse_pid_a={fuse_pid_a} "
                 f"bootstrap_rc_a={bootstrap_rc_a} crashed_fd_close_errno={crashed_fd_close_errno} "
                 f"ttl_after_crash={ttl_after_crash:.3f} "
-                "postgres_authority=1 independent_mounts=3 active_open_leases_before_crash=2 "
+                f"postgres_authority=1 independent_mounts=3 active_open_leases_before_crash={active_lease_count} "
                 f"crashed_sessions_left={crashed_sessions_left} "
                 f"crashed_leases_left={crashed_leases_left} "
                 f"survivor_leases_left={survivor_leases_left} "
