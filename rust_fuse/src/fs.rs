@@ -11,7 +11,8 @@ use fod_rust_monitor::{
 };
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
-    Filesystem, FopenFlags, Generation, INodeNo, InitFlags, IoctlFlags, KernelConfig, LockOwner,
+    Filesystem, FopenFlags, ForgetOne, Generation, INodeNo, InitFlags, IoctlFlags, KernelConfig,
+    LockOwner,
     OpenFlags, PollEvents, PollFlags, PollNotifier, RenameFlags, ReplyAttr, ReplyBmap, ReplyCreate,
     ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyLseek,
     ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
@@ -4228,14 +4229,14 @@ impl FodFuse {
         true
     }
 
-    fn forget_lookup_refs(&self, ino: u64, nlookup: u64) -> (u64, bool) {
+    fn apply_forget_ref_delta(
+        refs: &mut HashMap<u64, u64>,
+        ino: u64,
+        nlookup: u64,
+    ) -> (u64, bool) {
         if ino == ROOT_INO {
             return (0, false);
         }
-        let mut refs = match self.lookup_refs.lock() {
-            Ok(refs) => refs,
-            Err(_) => return (0, false),
-        };
         let Some(current) = refs.get(&ino).copied() else {
             return (0, false);
         };
@@ -4251,11 +4252,106 @@ impl FodFuse {
             return (remaining, false);
         }
         refs.remove(&ino);
-        if self.inode_has_active_handle(ino) {
-            return (0, false);
-        }
-        self.remove_cached_inode_paths(ino);
         (0, true)
+    }
+
+    fn forget_lookup_refs(&self, ino: u64, nlookup: u64) -> (u64, bool) {
+        let (remaining, retire_candidate) = {
+            let mut refs = match self.lookup_refs.lock() {
+                Ok(refs) => refs,
+                Err(_) => return (0, false),
+            };
+            Self::apply_forget_ref_delta(&mut refs, ino, nlookup)
+        };
+        let evicted = retire_candidate && self.evict_inode_if_unreferenced(ino);
+        (remaining, evicted)
+    }
+
+    fn forget_lookup_refs_batch(
+        &self,
+        nodes: &[ForgetOne],
+    ) -> Vec<(u64, u64, u64, bool)> {
+        let updates = {
+            let mut refs = match self.lookup_refs.lock() {
+                Ok(refs) => refs,
+                Err(_) => {
+                    return nodes
+                        .iter()
+                        .map(|node| (node.nodeid().0, node.nlookup(), 0, false))
+                        .collect();
+                }
+            };
+            nodes
+                .iter()
+                .map(|node| {
+                    let ino = node.nodeid().0;
+                    let nlookup = node.nlookup();
+                    let (remaining, retire_candidate) =
+                        Self::apply_forget_ref_delta(&mut refs, ino, nlookup);
+                    (ino, nlookup, remaining, retire_candidate)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        updates
+            .into_iter()
+            .map(|(ino, nlookup, remaining, retire_candidate)| {
+                let evicted = retire_candidate && self.evict_inode_if_unreferenced(ino);
+                (ino, nlookup, remaining, evicted)
+            })
+            .collect()
+    }
+
+    fn profile_forget_event(
+        &self,
+        ino: u64,
+        nlookup: u64,
+        remaining: u64,
+        evicted: bool,
+    ) {
+        if !fod_fuse_profile_metadata_cache_enabled() {
+            return;
+        }
+
+        self.metadata_profile_forget_calls
+            .fetch_add(1, Ordering::Relaxed);
+        self.metadata_profile_forget_nlookup
+            .fetch_add(nlookup, Ordering::Relaxed);
+
+        let (lookup_ref_inodes, lookup_ref_total) = self
+            .lookup_refs
+            .lock()
+            .map(|guard| {
+                (
+                    guard.len(),
+                    guard.values().copied().fold(0u64, u64::saturating_add),
+                )
+            })
+            .unwrap_or((0, 0));
+        let inode_to_path = self
+            .inode_to_path
+            .read()
+            .map(|guard| guard.len())
+            .unwrap_or(0);
+        let path_to_inode = self
+            .path_to_inode
+            .read()
+            .map(|guard| guard.len())
+            .unwrap_or(0);
+        let process_rss_bytes = current_process_rss_bytes().unwrap_or(0);
+
+        info!(
+            "FOD forget profile: ino={} nlookup={} remaining={} evicted={} lookup_ref_inodes={} lookup_ref_total={} inode_to_path={} path_to_inode={} process_rss_bytes={}",
+            ino,
+            nlookup,
+            remaining,
+            evicted,
+            lookup_ref_inodes,
+            lookup_ref_total,
+            inode_to_path,
+            path_to_inode,
+            process_rss_bytes
+        );
     }
 
     fn touch_access_time(&self, path: &str, file_attr: &FileAttr) {
@@ -5475,46 +5571,12 @@ impl Filesystem for FodFuse {
 
     fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
         let (remaining, evicted) = self.forget_lookup_refs(ino.0, nlookup);
-        if fod_fuse_profile_metadata_cache_enabled() {
-            self.metadata_profile_forget_calls
-                .fetch_add(1, Ordering::Relaxed);
-            self.metadata_profile_forget_nlookup
-                .fetch_add(nlookup, Ordering::Relaxed);
+        self.profile_forget_event(ino.0, nlookup, remaining, evicted);
+    }
 
-            let (lookup_ref_inodes, lookup_ref_total) = self
-                .lookup_refs
-                .lock()
-                .map(|guard| {
-                    (
-                        guard.len(),
-                        guard.values().copied().fold(0u64, u64::saturating_add),
-                    )
-                })
-                .unwrap_or((0, 0));
-            let inode_to_path = self
-                .inode_to_path
-                .read()
-                .map(|guard| guard.len())
-                .unwrap_or(0);
-            let path_to_inode = self
-                .path_to_inode
-                .read()
-                .map(|guard| guard.len())
-                .unwrap_or(0);
-            let process_rss_bytes = current_process_rss_bytes().unwrap_or(0);
-
-            info!(
-                "FOD forget profile: ino={} nlookup={} remaining={} evicted={} lookup_ref_inodes={} lookup_ref_total={} inode_to_path={} path_to_inode={} process_rss_bytes={}",
-                ino.0,
-                nlookup,
-                remaining,
-                evicted,
-                lookup_ref_inodes,
-                lookup_ref_total,
-                inode_to_path,
-                path_to_inode,
-                process_rss_bytes
-            );
+    fn batch_forget(&self, _req: &Request, nodes: &[ForgetOne]) {
+        for (ino, nlookup, remaining, evicted) in self.forget_lookup_refs_batch(nodes) {
+            self.profile_forget_event(ino, nlookup, remaining, evicted);
         }
     }
 
@@ -9955,7 +10017,7 @@ mod tests {
     };
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::time::{Duration, SystemTime};
 
     fn file_attr(kind: FileType, atime_age_secs: u64, mtime_age_secs: u64) -> FileAttr {
@@ -9977,6 +10039,53 @@ mod tests {
             flags: 0,
             blksize: 4096,
         }
+    }
+
+    #[test]
+    fn forget_ref_delta_preserves_partial_lookup_count() {
+        let mut refs = HashMap::from([(11_u64, 3_u64)]);
+
+        assert_eq!(
+            super::FodFuse::apply_forget_ref_delta(&mut refs, 11, 1),
+            (2, false)
+        );
+        assert_eq!(refs.get(&11), Some(&2));
+    }
+
+    #[test]
+    fn forget_ref_delta_retires_exact_lookup_count() {
+        let mut refs = HashMap::from([(12_u64, 2_u64)]);
+
+        assert_eq!(
+            super::FodFuse::apply_forget_ref_delta(&mut refs, 12, 2),
+            (0, true)
+        );
+        assert!(!refs.contains_key(&12));
+    }
+
+    #[test]
+    fn forget_ref_delta_duplicate_inode_matches_sequential_forget() {
+        let mut refs = HashMap::from([(13_u64, 3_u64)]);
+
+        let first = super::FodFuse::apply_forget_ref_delta(&mut refs, 13, 1);
+        let second = super::FodFuse::apply_forget_ref_delta(&mut refs, 13, 2);
+        let third = super::FodFuse::apply_forget_ref_delta(&mut refs, 13, 1);
+
+        assert_eq!(first, (2, false));
+        assert_eq!(second, (0, true));
+        assert_eq!(third, (0, false));
+        assert!(!refs.contains_key(&13));
+    }
+
+    #[test]
+    fn forget_ref_delta_underflow_saturates_and_retires() {
+        let mut refs = HashMap::from([(14_u64, 1_u64)]);
+
+        assert_eq!(
+            super::FodFuse::apply_forget_ref_delta(&mut refs, 14, 3),
+            (0, true)
+        );
+        assert!(!refs.contains_key(&14));
     }
 
     #[test]
