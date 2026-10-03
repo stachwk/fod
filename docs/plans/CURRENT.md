@@ -1,6 +1,6 @@
 # FOD current implementation plan
 
-Status: 2026-09-29.
+Status: 2026-10-04.
 
 This file contains only work that is current enough to direct the next change.
 
@@ -360,6 +360,36 @@ rename/root-conflict gate. Workspace check, pinned rustfmt, diff checks and the
 No database schema or storage-format change was required. Detailed C2 planning,
 baseline evidence and closure notes are archived in
 [`../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md`](../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md).
+
+## C3-C6 — PostgreSQL-authoritative open-unlink crash convergence — completed
+
+Schema v25 extends the multi-host authority model to open-unlinked file
+generations through `files.unlinked` and `file_open_leases`. Validation on the
+current branch now covers the crash/liveness boundary rather than only normal
+close behavior:
+
+- C3 kills the authoritative `fod-rust-fuse` PID and verifies both forced and
+  natural session expiry. The PostgreSQL lease survives the crash, another live
+  mount performs session prune plus orphan purge, and a recreated pathname
+  remains a distinct file/inode generation.
+- C4 keeps two independent holders of the old generation. After holder A dies
+  and its lease expires, holder B's active lease keeps the unlinked generation
+  alive and readable. Closing B releases the last lease and allows reclamation.
+- C5 crashes A and B at different times. PostgreSQL removes A without reclaiming
+  the old generation while B is active, then reclaims only after B later dies
+  and its natural TTL expires.
+- C6 kills both holder FUSE processes in one crash episode. A single PostgreSQL
+  snapshot checks session rows, lease rows, active leases and the unlinked file
+  row together. The measured run observed the intermediate one-active-lease
+  state and then zero active leases before purge; reclamation happened only
+  after the authoritative active-lease count reached zero.
+
+The mounted gates also verify replacement payload/inode isolation, hidden-name
+non-leakage and dead-FUSE teardown. No manual lease expiry is used in C4-C6.
+
+The open-unlink convergence sequence is therefore closed unless a new
+correctness regression appears. The next selected task remains the measured
+inode/path cache-retirement work below.
 
 ## Active measured follow-up
 
