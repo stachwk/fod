@@ -292,9 +292,9 @@ def main() -> None:
                 session_a,
                 session_b,
             )
-            if initial_state != (2, 2, 2, 1):
+            if initial_state != (2, 2, 2, 0):
                 raise AssertionError(
-                    "unexpected initial holder state: "
+                    "unexpected pre-unlink holder state: "
                     f"sessions={initial_state[0]} leases={initial_state[1]} "
                     f"active_leases={initial_state[2]} old_file={initial_state[3]}"
                 )
@@ -308,6 +308,19 @@ def main() -> None:
                 (old_file_id,),
             ) is not True:
                 raise AssertionError("old generation was not staged as unlinked")
+
+            staged_state = holder_state(
+                database,
+                old_file_id,
+                session_a,
+                session_b,
+            )
+            if staged_state != (2, 2, 2, 1):
+                raise AssertionError(
+                    "unexpected post-unlink holder state: "
+                    f"sessions={staged_state[0]} leases={staged_state[1]} "
+                    f"active_leases={staged_state[2]} old_file={staged_state[3]}"
+                )
 
             target_c.write_bytes(replacement)
             replacement_ino = target_c.stat().st_ino
@@ -430,6 +443,8 @@ def main() -> None:
                 f"ttl_a_after_crash={ttl_a_after_crash:.3f} "
                 f"ttl_b_after_crash={ttl_b_after_crash:.3f} "
                 "postgres_authority=1 independent_mounts=3 "
+                f"pre_unlink_old_file={initial_state[3]} "
+                f"staged_old_file={staged_state[3]} "
                 "active_open_leases_before_crash=2 "
                 f"immediate_active_leases={immediate_state[2]} "
                 f"immediate_old_file={immediate_state[3]} "
