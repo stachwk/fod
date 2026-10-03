@@ -395,9 +395,20 @@ inode/path cache-retirement work below.
 
 Large-tree profiling now establishes retained inode/path mappings as a separate
 memory-lifetime issue: complete walks retained 6063, 12123 and 24243 entries,
-with process RSS increasing with tree size. The next selected task is therefore
-to implement and validate FUSE `forget`/`batch_forget` cache retirement
-without weakening stable-inode correctness.
+with process RSS increasing with tree size.
+
+The single-inode FUSE `forget` path is now implemented with lookup-reference
+accounting, active-handle protection, cache retirement and stable-inode
+relookup coverage. The next gate is to repeat the large-tree measurement and
+prove that real kernel FORGET traffic makes the retained maps/RSS converge.
+
+`fuser 0.18.0` exposes `Filesystem::batch_forget`, and its default
+implementation delegates each batch item to `forget`. However the
+`ForgetOne` parameter type is not publicly re-exported by the crate, so a
+downstream filesystem cannot name the type and provide its own batch override
+without patching/upgrading fuser. FOD therefore keeps the public-API-compatible
+fallback for now. Only patch or upgrade the dependency if post-correctness
+measurement shows per-item fallback locking is materially expensive.
 
 The `readdir` metadata fanout issue is closed: batched directory metadata is
 the production default after 14.45-20.30× median `find` speedups and parity
