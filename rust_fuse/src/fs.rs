@@ -4228,11 +4228,7 @@ impl FodFuse {
         true
     }
 
-    fn apply_forget_ref_delta(
-        refs: &mut HashMap<u64, u64>,
-        ino: u64,
-        nlookup: u64,
-    ) -> (u64, bool) {
+    fn apply_forget_ref_delta(refs: &mut HashMap<u64, u64>, ino: u64, nlookup: u64) -> (u64, bool) {
         if ino == ROOT_INO {
             return (0, false);
         }
@@ -4266,13 +4262,7 @@ impl FodFuse {
         (remaining, evicted)
     }
 
-    fn profile_forget_event(
-        &self,
-        ino: u64,
-        nlookup: u64,
-        remaining: u64,
-        evicted: bool,
-    ) {
+    fn profile_forget_event(&self, ino: u64, nlookup: u64, remaining: u64, evicted: bool) {
         if !fod_fuse_profile_metadata_cache_enabled() {
             return;
         }
