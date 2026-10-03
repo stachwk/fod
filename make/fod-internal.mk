@@ -2976,6 +2976,13 @@ test-unlink-multiholder-crash-survivor: init
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
 	$(VENV_PYTHON) tests/integration/test_unlink_multiholder_crash_survivor.py
 
+.PHONY: test-unlink-multiholder-staggered-crash
+test-unlink-multiholder-staggered-crash: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	$(VENV_PYTHON) tests/integration/test_unlink_multiholder_staggered_crash.py
+
 .PHONY: test-rename-symlink-transactional
 test-rename-symlink-transactional: init
 	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
