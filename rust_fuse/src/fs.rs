@@ -11,8 +11,7 @@ use fod_rust_monitor::{
 };
 use fuser::{
     AccessFlags, BsdFileFlags, CopyFileRangeFlags, Errno, FileAttr, FileHandle, FileType,
-    Filesystem, FopenFlags, ForgetOne, Generation, INodeNo, InitFlags, IoctlFlags, KernelConfig,
-    LockOwner,
+    Filesystem, FopenFlags, Generation, INodeNo, InitFlags, IoctlFlags, KernelConfig, LockOwner,
     OpenFlags, PollEvents, PollFlags, PollNotifier, RenameFlags, ReplyAttr, ReplyBmap, ReplyCreate,
     ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyLseek,
     ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
@@ -4267,41 +4266,6 @@ impl FodFuse {
         (remaining, evicted)
     }
 
-    fn forget_lookup_refs_batch(
-        &self,
-        nodes: &[ForgetOne],
-    ) -> Vec<(u64, u64, u64, bool)> {
-        let updates = {
-            let mut refs = match self.lookup_refs.lock() {
-                Ok(refs) => refs,
-                Err(_) => {
-                    return nodes
-                        .iter()
-                        .map(|node| (node.nodeid().0, node.nlookup(), 0, false))
-                        .collect();
-                }
-            };
-            nodes
-                .iter()
-                .map(|node| {
-                    let ino = node.nodeid().0;
-                    let nlookup = node.nlookup();
-                    let (remaining, retire_candidate) =
-                        Self::apply_forget_ref_delta(&mut refs, ino, nlookup);
-                    (ino, nlookup, remaining, retire_candidate)
-                })
-                .collect::<Vec<_>>()
-        };
-
-        updates
-            .into_iter()
-            .map(|(ino, nlookup, remaining, retire_candidate)| {
-                let evicted = retire_candidate && self.evict_inode_if_unreferenced(ino);
-                (ino, nlookup, remaining, evicted)
-            })
-            .collect()
-    }
-
     fn profile_forget_event(
         &self,
         ino: u64,
@@ -5572,12 +5536,6 @@ impl Filesystem for FodFuse {
     fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
         let (remaining, evicted) = self.forget_lookup_refs(ino.0, nlookup);
         self.profile_forget_event(ino.0, nlookup, remaining, evicted);
-    }
-
-    fn batch_forget(&self, _req: &Request, nodes: &[ForgetOne]) {
-        for (ino, nlookup, remaining, evicted) in self.forget_lookup_refs_batch(nodes) {
-            self.profile_forget_event(ino, nlookup, remaining, evicted);
-        }
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
