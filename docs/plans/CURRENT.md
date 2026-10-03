@@ -391,24 +391,26 @@ The open-unlink convergence sequence is therefore closed unless a new
 correctness regression appears. The next selected task remains the measured
 inode/path cache-retirement work below.
 
-## Active measured follow-up
+## Inode/path cache retirement follow-up — completed
 
-Large-tree profiling now establishes retained inode/path mappings as a separate
-memory-lifetime issue: complete walks retained 6063, 12123 and 24243 entries,
-with process RSS increasing with tree size.
+The historical large-tree profile retained 6063, 12123 and 24243 inode/path
+entries as file count increased. The current production profile no longer
+reproduces that retained-file-path growth: 60/120/240 directories with 100
+files each ended at 64/124/244 inode/path entries and RSS of
+14,721,024/14,737,408/15,208,448 bytes.
 
-The single-inode FUSE `forget` path is now implemented with lookup-reference
-accounting, active-handle protection, cache retirement and stable-inode
-relookup coverage. The next gate is to repeat the large-tree measurement and
-prove that real kernel FORGET traffic makes the retained maps/RSS converge.
+All three tree-scale runs reported `forget_calls=0`, so the improvement comes
+from the production default `FOD_READDIR_REGISTER_PATHS=0`, not from relying
+on kernel FORGET traffic. Explicit `forget` remains independently validated,
+including active handles, hardlink aliases and the 500-cycle convergence gate.
 
 `fuser 0.18.0` exposes `Filesystem::batch_forget`, and its default
 implementation delegates each batch item to `forget`. However the
 `ForgetOne` parameter type is not publicly re-exported by the crate, so a
 downstream filesystem cannot name the type and provide its own batch override
-without patching/upgrading fuser. FOD therefore keeps the public-API-compatible
-fallback for now. Only patch or upgrade the dependency if post-correctness
-measurement shows per-item fallback locking is materially expensive.
+without patching/upgrading fuser. FOD keeps the public-API-compatible fallback;
+reopen this only for a new measured need, especially directory-dominated cache
+growth or measurable per-item batch-forget overhead.
 
 The `readdir` metadata fanout issue is closed: batched directory metadata is
 the production default after 14.45-20.30× median `find` speedups and parity
