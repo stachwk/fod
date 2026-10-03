@@ -23,7 +23,7 @@
 - xattr and ACL support
 - PostgreSQL-backed advisory locking and session leases
 - runtime tunables in `fod_config.ini`
-- safe schema init, repair, status, and migration handling through schema version `24`
+- safe schema init, repair, status, and migration handling through schema version `25`
 - Rust-backed repository and query layers
 - split attribute and directory-entry caches
 - shared Rust `fod-indexer` core with capability-driven source kinds
@@ -52,7 +52,7 @@
 - Treat external-unmount/session teardown as closed on the validated current stack. Reopen only if a future fuser/libfuse3 version reproduces a correctness or warning regression.
 - Treat compatibility-diagnostics aggregation as closed. Extend source fields only when a concrete consumer needs additional trustworthy machine-readable data; do not invent a new compatibility subsystem.
 - Treat PostgreSQL-authoritative open-unlink crash convergence as validated on the current branch: schema v25 tracks `files.unlinked` plus cross-host `file_open_leases`; forced and natural single-holder expiry, surviving second-holder protection, staggered holder crashes and near-simultaneous dual crashes all preserve replacement isolation and reclaim the old generation only after PostgreSQL sees no active open lease.
-- Validate inode/path-cache retirement at large-tree scale with the implemented `forget` path. `fuser 0.18.0` dispatches `batch_forget` through its default per-node `forget` fallback, but its `ForgetOne` type is not publicly re-exported, so FOD cannot override the batch callback without patching the dependency. Patch or upgrade fuser only if measurements show the fallback itself is material after correctness/convergence is proven. Large-tree measurements previously showed deterministic retained-state pressure (`6063 -> 12123 -> 24243` cached paths with increasing process RSS).
+- Treat inode/path retained-state pressure as closed for the current production profile. With `FOD_READDIR_REGISTER_PATHS=0`, 60/120/240 directories with 100 files each retained only `64/124/244` inode/path entries rather than the historical `6063/12123/24243`; RSS rose only from 14.72 MiB to 15.21 MiB. Kernel `FORGET` count was zero in these tree walks, proving the improvement comes from not registering every readdir child path, while the explicit single-inode `forget` lifecycle remains separately validated. `fuser 0.18.0` keeps its per-node `batch_forget` fallback; patch or upgrade it only for a new measured need.
 - Treat per-child `readdir` metadata fanout as closed in FOD 3.4.31: batched directory metadata is the production default after 14.45-20.30x median `find` speedups and inode/type parity gates. Keep the legacy path only as a controlled regression fallback; revisit `readdirplus` only for a newly measured residual gap.
 - Treat same-destination writable create/copy and temporary-file `rename`/replace ownership as closed in FOD 3.4.30-3.4.31. Transactional rename/replace now covers file, hardlink, symlink and directory namespaces with active-writer fencing, deterministic two-mount races and rollback validation; reopen only for a new correctness regression.
 - Keep local quality gates, benchmark baselines, current documentation, and authoritative version/schema metadata synchronized with code changes.
