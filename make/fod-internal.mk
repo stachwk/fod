@@ -1946,7 +1946,7 @@ test-mount-suite: venv
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mount_suite.py
 
 test-all: test-target-disk-clean-policy smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
-test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke
+test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke test-forget-open-unlink-full
 test-integration: test-runtime-profile test-dual-host-same-file-cp-race test-create-write-ownership test-rename-write-ownership test-rename-symlink-transactional test-rename-directory-transactional
 
 benchmark: benchmarks
@@ -2989,6 +2989,25 @@ test-unlink-multiholder-dual-crash: init
 	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 \
 	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
 	$(VENV_PYTHON) tests/integration/test_unlink_multiholder_dual_crash.py
+
+.PHONY: test-forget-open-unlink-full
+test-forget-open-unlink-full: \
+	test-forget-invalidation \
+	test-forget-repeated-invalidation \
+	test-forget-active-handle \
+	test-forget-multiple-handles \
+	test-forget-hardlink-alias \
+	test-forget-convergence \
+	test-unlink-open-handle \
+	test-unlink-open-writer \
+	test-unlink-open-writer-multimount \
+	test-unlink-remote-open-writer-multimount \
+	test-unlink-open-writer-crash-convergence \
+	test-unlink-open-writer-crash-natural-expiry \
+	test-unlink-multiholder-crash-survivor \
+	test-unlink-multiholder-staggered-crash \
+	test-unlink-multiholder-dual-crash
+	@:
 
 .PHONY: test-rename-symlink-transactional
 test-rename-symlink-transactional: init
