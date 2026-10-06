@@ -1783,13 +1783,12 @@ impl FodFuse {
     }
 
     fn client_session_repo(&self) -> Option<&DbRepo> {
-        self.telemetry_repo
-            .as_ref()
-            .or_else(|| (!self.read_only).then_some(&self.repo))
-    }
-
-    pub fn has_client_session_repo(&self) -> bool {
-        self.client_session_repo().is_some()
+        // Kazdy mount potrzebuje centralnej authority dla sesji i open leases.
+        // Read-only mount preferuje osobny writable control repo, ale gdy jego
+        // data repo samo wskazuje primary, moze bezpiecznie uzyc go do DML
+        // sterujacego lifecycle. Proba uzycia repliki zostanie odrzucona przez
+        // PostgreSQL podczas obowiazkowej rejestracji sesji przy starcie.
+        self.telemetry_repo.as_ref().or(Some(&self.repo))
     }
 
     pub fn session_id(&self) -> Option<u64> {
@@ -4528,9 +4527,6 @@ impl FodFuse {
         file_id: u64,
     ) -> Result<(), libc::c_int> {
         let Some(session_id) = self.session_id else {
-            if self.read_only {
-                return Ok(());
-            }
             warn!(
                 "FOD file open lease unavailable fh={} file_id={} reason=no_client_session",
                 fh, file_id
@@ -4538,9 +4534,6 @@ impl FodFuse {
             return Err(EIO);
         };
         let Some(repo) = self.client_session_repo() else {
-            if self.read_only {
-                return Ok(());
-            }
             return Err(EIO);
         };
         repo.register_file_open_lease(

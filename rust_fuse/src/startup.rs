@@ -440,36 +440,33 @@ pub fn mount_fuse(
         if let Err(err) = fs.start_shared_monitor_publisher() {
             warn!("FOD shared monitor publisher unavailable: {}", err);
         }
-    } else if fs.has_client_session_repo() {
-        if let Err(err) = fs.register_client_session(mountpoint, "replica") {
+    } else {
+        // Od schema v25 read-only mount takze uczestniczy w open-file
+        // lifecycle. Bez writable PostgreSQL authority nie wolno uruchamiac
+        // mounta, bo open() nie moglby utworzyc centralnego file_open_lease.
+        fs.register_client_session(mountpoint, "replica")
+            .map_err(|err| {
+                format!(
+                    "read-only mount requires writable PostgreSQL authority for client/open lease state: {err}"
+                )
+            })?;
+        fs.start_client_session_heartbeat().map_err(|err| {
+            format!(
+                "failed to start required read-only client/open lease heartbeat: {err}"
+            )
+        })?;
+        if let Err(err) = fs.start_client_session_maintenance() {
             warn!(
-                "FOD read-only shared monitor session unavailable; continuing without central telemetry: {}",
+                "FOD read-only session maintenance unavailable; another authority client must perform expiry cleanup: {}",
                 err
             );
-        } else if fs.session_id().is_some() {
-            if let Err(err) = fs.start_client_session_heartbeat() {
-                warn!(
-                    "FOD read-only session heartbeat unavailable; continuing without central telemetry heartbeat: {}",
-                    err
-                );
-            }
-            if let Err(err) = fs.start_client_session_maintenance() {
-                warn!(
-                    "FOD read-only session maintenance unavailable; continuing without central telemetry maintenance: {}",
-                    err
-                );
-            }
-            if let Err(err) = fs.start_shared_monitor_publisher() {
-                warn!(
-                    "FOD read-only shared monitor publisher unavailable; continuing without central telemetry samples: {}",
-                    err
-                );
-            }
         }
-    } else {
-        info!(
-            "FOD read-only shared monitor publisher disabled: no writable telemetry endpoint configured"
-        );
+        if let Err(err) = fs.start_shared_monitor_publisher() {
+            warn!(
+                "FOD read-only shared monitor publisher unavailable; open-lease authority remains active: {}",
+                err
+            );
+        }
     }
     fs.start_runtime_reload(runtime)
         .map_err(|err| format!("failed to start runtime reload: {err}"))?;

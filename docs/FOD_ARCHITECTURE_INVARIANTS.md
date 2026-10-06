@@ -99,7 +99,10 @@ Schema v25 applies this principle to open-unlink handling:
 - PostgreSQL advisory locks serialize open/unlink/purge boundaries;
 - deferred reclamation waits for authoritative lease state;
 - recreated files must use a distinct inode generation while an older
-  open-unlinked generation remains alive.
+  open-unlinked generation remains alive;
+- read-only mounts also require access to a writable PostgreSQL authority for
+  `client_sessions` and `file_open_leases`; a replica-only mount must fail
+  closed rather than operate without centrally visible open-handle state.
 
 The FUSE process can cache and mirror this state, but PostgreSQL remains the
 authority.
