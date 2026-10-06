@@ -1791,10 +1791,6 @@ impl FodFuse {
         self.telemetry_repo.as_ref().or(Some(&self.repo))
     }
 
-    pub fn session_id(&self) -> Option<u64> {
-        self.session_id
-    }
-
     fn request_prefix(&self, req_id: u64, op: &str) -> String {
         format!("req={} op={}", req_id, op)
     }
@@ -6975,7 +6971,16 @@ impl Filesystem for FodFuse {
             fh, lock_owner, self.read_only
         );
         if self.read_only {
-            fuse_reply_error!(reply, libc::EROFS);
+            // flush(2) jest wywolywany przez kernel takze podczas close()
+            // czystego O_RDONLY. Read-only mount nie ma wtedy danych do
+            // utrwalenia, wiec EROFS byloby bledem close(), a nie ochrona
+            // przed modyfikacja filesystemu.
+            self.clear_locks_for_owner_and_sync(lock_owner, "flush", fh);
+            debug!(
+                "FOD flush completed read-only fh={} lock_owner={}",
+                fh, lock_owner
+            );
+            reply.ok();
             return;
         }
         self.register_local_lock_owner(lock_owner);

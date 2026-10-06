@@ -2889,4 +2889,3 @@ Conclusion: there is no current evidence of a tree-scale `find` regression
 associated with the forget changes. The retained-state follow-up remains
 closed; reopen performance work only from a new repeated measurement showing a
 material regression.
-

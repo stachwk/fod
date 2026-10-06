@@ -451,9 +451,7 @@ pub fn mount_fuse(
                 )
             })?;
         fs.start_client_session_heartbeat().map_err(|err| {
-            format!(
-                "failed to start required read-only client/open lease heartbeat: {err}"
-            )
+            format!("failed to start required read-only client/open lease heartbeat: {err}")
         })?;
         if let Err(err) = fs.start_client_session_maintenance() {
             warn!(

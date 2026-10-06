@@ -199,7 +199,21 @@ def main() -> None:
                 if replacement_ino == old_ino:
                     raise AssertionError("replacement reused old inode generation")
 
+                # Zdalny host nie moze natychmiast uniewaznic kernelowego
+                # attr cache tego mounta. Czekamy tylko na jego ograniczona
+                # konwergencje; inode starego fd musi pozostac stabilny przez
+                # caly okres, a authority w PostgreSQL juz ma unlinked=true.
+                attr_deadline = time.monotonic() + 5.0
                 old_stat = os.fstat(fd)
+                while old_stat.st_nlink != 0 and time.monotonic() < attr_deadline:
+                    if old_stat.st_ino != old_ino:
+                        raise AssertionError(
+                            "read-only open fd changed inode during attr convergence: "
+                            f"expected={old_ino} actual={old_stat.st_ino}"
+                        )
+                    time.sleep(0.05)
+                    old_stat = os.fstat(fd)
+
                 if old_stat.st_ino != old_ino:
                     raise AssertionError(
                         "read-only open fd changed inode after remote unlink: "
@@ -207,7 +221,7 @@ def main() -> None:
                     )
                 if old_stat.st_nlink != 0:
                     raise AssertionError(
-                        "read-only open-unlinked fd did not report zero links: "
+                        "read-only open-unlinked fd did not converge to zero links: "
                         f"st_nlink={old_stat.st_nlink}"
                     )
                 if os.pread(fd, len(initial), 0) != initial:
@@ -263,7 +277,12 @@ def main() -> None:
                 raise
             finally:
                 if fd is not None:
-                    os.close(fd)
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        # Cleanup nie moze zamaskowac pierwotnego bledu testu.
+                        # Poprawny close jest sprawdzany jawnie na sciezce PASS.
+                        pass
                 database.close()
                 try:
                     launcher_b.stop()
