@@ -281,7 +281,7 @@ test-target-disk-clean-policy:
 
 # The local integration suites share one Docker/PostgreSQL database and FUSE
 # mount resources. Keep their prerequisites serial even when make receives -j.
-.NOTPARALLEL: test-integration test-all test-all-full
+.NOTPARALLEL: test-integration test-all test-all-full test-forget-open-unlink-full
 
 # Benchmark targets are run sequentially because they share the same local
 # Docker/PostgreSQL state and often rebuild the same binaries.
