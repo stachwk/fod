@@ -1,6 +1,6 @@
 # FOD current implementation plan
 
-Status: 2026-10-04.
+Status: 2026-10-06.
 
 This file contains only work that is current enough to direct the next change.
 
@@ -388,8 +388,8 @@ The mounted gates also verify replacement payload/inode isolation, hidden-name
 non-leakage and dead-FUSE teardown. No manual lease expiry is used in C4-C6.
 
 The open-unlink convergence sequence is therefore closed unless a new
-correctness regression appears. The next selected task remains the measured
-inode/path cache-retirement work below.
+correctness regression appears. The inode/path cache-retirement follow-up below
+is also complete on the current production profile.
 
 ## Inode/path cache retirement follow-up — completed
 
