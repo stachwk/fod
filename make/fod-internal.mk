@@ -439,6 +439,7 @@ POSTGRES_DB_BASE ?= foddbname
 POSTGRES_USER_BASE ?= foduser
 POSTGRES_PASSWORD_BASE ?= cichosza
 POSTGRES_PORT_BASE ?= 5432
+MKFS_TEST_DB ?= $(POSTGRES_DB)_mkfs_test
 POSTGRES_SHARED_PRELOAD_LIBRARIES ?= pg_stat_statements
 POSTGRES_SHARED_BUFFERS ?=
 POSTGRES_WORK_MEM ?=
@@ -1557,26 +1558,43 @@ test-mkfs-config-suite:
 test-runtime-config: init test-mkfs-config-suite
 	@:
 
-test-rust-mkfs-suite:
-	$(CARGO_TEST_MKFS)
-
-# The complete mkfs suite intentionally exercises malformed and incomplete
-# schemas. Restore the selected test database before later FUSE integration
-# tests consume it. QNAP restore is allowed only with an explicit destructive
-# opt-in, and restore is attempted even when the suite fails.
-test-rust-mkfs-suite-restored: test-db-destructive-guard
+# Schema-upgrade tests sa celowo destrukcyjne. Zawsze uruchamiaj caly mkfs
+# suite na osobnej bazie, nigdy na glownej bazie FOD uzywanej przez mounty.
+# Baza testowa jest usuwana takze po bledzie suite.
+test-rust-mkfs-suite: up test-db-destructive-guard
 	@set -u; \
+		db="$(MKFS_TEST_DB)"; \
+		case "$$db" in \
+			""|*[!A-Za-z0-9_]*) echo "Refusing mkfs test database name: $$db" >&2; exit 2 ;; \
+		esac; \
+		case "$$db" in *test*) ;; *) echo "Refusing non-test mkfs database name: $$db" >&2; exit 2 ;; esac; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "CREATE DATABASE \"$$db\";" >/dev/null; \
 		suite_status=0; \
-		restore_status=0; \
-		$(MAKE) --no-print-directory test-rust-mkfs-suite || suite_status=$$?; \
-		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
+		cleanup_status=0; \
+		FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" $(CARGO_TEST_MKFS) || suite_status=$$?; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null || cleanup_status=$$?; \
+		if [ "$$cleanup_status" -eq 0 ]; then \
+			PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+				-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null || cleanup_status=$$?; \
+		fi; \
 		if [ "$$suite_status" -ne 0 ]; then \
-			if [ "$$restore_status" -ne 0 ]; then \
-				echo "mkfs suite failed with status $$suite_status and selected database restore failed with status $$restore_status" >&2; \
+			if [ "$$cleanup_status" -ne 0 ]; then \
+				echo "mkfs suite failed with status $$suite_status and isolated database cleanup failed with status $$cleanup_status" >&2; \
 			fi; \
 			exit "$$suite_status"; \
 		fi; \
-		exit "$$restore_status"
+		exit "$$cleanup_status"
+
+# Compatibility alias retained for existing callers. The suite now restores
+# isolation by dropping its dedicated database instead of resetting foddbname.
+test-rust-mkfs-suite-restored: test-rust-mkfs-suite
+	@:
 
 .PHONY: test-rust-mkfs-suite-restored
 
@@ -1590,35 +1608,67 @@ test-runtime-validation: test-rust-mkfs-suite
 
 test-rust-hotpath-runtime-size-limits: test-rust-mkfs-suite
 	@:
-test-schema-upgrade: up
-	@$(MAKE) --no-print-directory test-db-destructive-guard
+test-schema-upgrade: up test-db-destructive-guard
 	@set -u; \
+		db="$(MKFS_TEST_DB)"; \
+		case "$$db" in \
+			""|*[!A-Za-z0-9_]*) echo "Refusing mkfs test database name: $$db" >&2; exit 2 ;; \
+		esac; \
+		case "$$db" in *test*) ;; *) echo "Refusing non-test mkfs database name: $$db" >&2; exit 2 ;; esac; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "CREATE DATABASE \"$$db\";" >/dev/null; \
 		test_status=0; \
-		restore_status=0; \
-		$(CARGO_TEST_MKFS) --test schema_upgrade schema_upgrade_non_destructive_password_protected --offline || test_status=$$?; \
-		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
+		cleanup_status=0; \
+		FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" $(CARGO_TEST_MKFS) --test schema_upgrade schema_upgrade_non_destructive_password_protected --offline || test_status=$$?; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null || cleanup_status=$$?; \
+		if [ "$$cleanup_status" -eq 0 ]; then \
+			PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+				-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null || cleanup_status=$$?; \
+		fi; \
 		if [ "$$test_status" -ne 0 ]; then \
-			if [ "$$restore_status" -ne 0 ]; then \
-				echo "test-schema-upgrade failed with status $$test_status and selected database restore failed with status $$restore_status" >&2; \
+			if [ "$$cleanup_status" -ne 0 ]; then \
+				echo "test-schema-upgrade failed with status $$test_status and isolated database cleanup failed with status $$cleanup_status" >&2; \
 			fi; \
 			exit "$$test_status"; \
 		fi; \
-		exit "$$restore_status"
+		exit "$$cleanup_status"
 
-test-schema-status: up
-	@$(MAKE) --no-print-directory test-db-destructive-guard
+
+test-schema-status: up test-db-destructive-guard
 	@set -u; \
+		db="$(MKFS_TEST_DB)"; \
+		case "$$db" in \
+			""|*[!A-Za-z0-9_]*) echo "Refusing mkfs test database name: $$db" >&2; exit 2 ;; \
+		esac; \
+		case "$$db" in *test*) ;; *) echo "Refusing non-test mkfs database name: $$db" >&2; exit 2 ;; esac; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "CREATE DATABASE \"$$db\";" >/dev/null; \
 		test_status=0; \
-		restore_status=0; \
-		$(CARGO_TEST_MKFS) --test schema_upgrade schema_status_reports_version_secret_and_pending_migrations --offline || test_status=$$?; \
-		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
+		cleanup_status=0; \
+		FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" $(CARGO_TEST_MKFS) --test schema_upgrade schema_status_reports_version_secret_and_pending_migrations --offline || test_status=$$?; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null || cleanup_status=$$?; \
+		if [ "$$cleanup_status" -eq 0 ]; then \
+			PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+				-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null || cleanup_status=$$?; \
+		fi; \
 		if [ "$$test_status" -ne 0 ]; then \
-			if [ "$$restore_status" -ne 0 ]; then \
-				echo "test-schema-status failed with status $$test_status and selected database restore failed with status $$restore_status" >&2; \
+			if [ "$$cleanup_status" -ne 0 ]; then \
+				echo "test-schema-status failed with status $$test_status and isolated database cleanup failed with status $$cleanup_status" >&2; \
 			fi; \
 			exit "$$test_status"; \
 		fi; \
-		exit "$$restore_status"
+		exit "$$cleanup_status"
+
 
 test-df: build-runtime venv up
 	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_df.sh
