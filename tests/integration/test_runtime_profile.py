@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # Copyright (c) 2026 Wojciech Stach
 # Licensed under BSL 1.1
 
@@ -52,6 +53,17 @@ def _selected_primary_dsn() -> dict[str, str]:
                 break
 
     return dsn
+
+
+def _conninfo_from_dsn(dsn: dict[str, str]) -> str:
+    # psycopg2 buduje poprawnie quoted libpq conninfo dla control/authority.
+    return psycopg2.extensions.make_dsn(
+        host=dsn["host"],
+        port=dsn["port"],
+        dbname=dsn["dbname"],
+        user=dsn["user"],
+        password=dsn["password"],
+    )
 
 
 def _docker(
@@ -489,6 +501,9 @@ def main() -> None:
                 {
                     "FOD_CONFIG": str(recovery_config_path),
                     "FOD_PROFILE": mount_profile,
+                    # Recovery/standby pozostaje read-only data endpointem,
+                    # ale open-file lifecycle wymaga writable authority.
+                    "FOD_TELEMETRY_DSN": _conninfo_from_dsn(dsn),
                 }
             )
             try:
@@ -502,6 +517,7 @@ def main() -> None:
                 assert "FOD core role=auto" in recovery_log_text, recovery_log_text
                 assert "force_read_only=false" in recovery_log_text, recovery_log_text
                 assert "FOD mount read_only=true" in recovery_log_text, recovery_log_text
+                assert "FOD read-only telemetry repo configured from explicit telemetry DSN" in recovery_log_text, recovery_log_text
                 assert "FOD lock backend=Memory" in recovery_log_text, recovery_log_text
                 assert "FOD mount options:" in recovery_log_text, recovery_log_text
                 print("OK runtime-profile-auto-recovery")
