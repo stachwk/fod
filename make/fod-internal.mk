@@ -1172,6 +1172,11 @@ test-makefile-db-restore-order:
 
 .PHONY: test-makefile-db-restore-order
 
+test-fod-backend:
+	$(PYTHON) tests/test_fod_backend.py
+
+.PHONY: test-fod-backend
+
 test-makefile-uninstall-on-root:
 	$(PYTHON) tests/test_makefile_uninstall_on_root.py
 
@@ -1408,7 +1413,7 @@ unmount:
 		umount $(MOUNTPOINT); \
 	fi
 
-test-integration: test-makefile-db-restore-order test-primary-replica-benchmark-wiring venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-mkfs-suite-restored test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-schema-upgrade test-block-read test-primary-read-fused test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-acl-mount-option test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary test-two-mount-quota
+test-integration: test-makefile-db-restore-order test-fod-backend test-primary-replica-benchmark-wiring venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-mkfs-suite-restored test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-schema-upgrade test-block-read test-primary-read-fused test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-acl-mount-option test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary test-two-mount-quota
 test-integration: test-rust-hotpath-persist-block-plan
 test-integration: test-rust-hotpath-persist-block-crc-plan
 test-integration: test-config-warning
@@ -1932,21 +1937,21 @@ test-connection-recovery: init
 test-pool-connections: venv
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_pool_connections.py
 
-test-postgresql-requirements-autocommit-off: venv up
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=off $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
+test-postgresql-requirements-autocommit-off: venv build-runtime up
+	@FOD_CONFIG_BIN=$(abspath $(FOD_CONFIG_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=off $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
 
-test-postgresql-requirements-autocommit-on: venv up
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=on $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
+test-postgresql-requirements-autocommit-on: venv build-runtime up
+	@FOD_CONFIG_BIN=$(abspath $(FOD_CONFIG_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=on $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
 
 test-postgresql-requirements: test-postgresql-requirements-autocommit-off
 	@:
 
 test-runtime-profile: venv build-runtime up
-	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_profile.py
+	@sudo env $(ADMP_TRACE_ENV) FOD_CONFIG_BIN=$(abspath $(FOD_CONFIG_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_profile.py
 
 test-runtime-reload: venv build-runtime
 	$(MAKE) reset
-	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_reload.py
+	@sudo env $(ADMP_TRACE_ENV) FOD_CONFIG_BIN=$(abspath $(FOD_CONFIG_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_reload.py
 
 .PHONY: test-runtime-reload
 

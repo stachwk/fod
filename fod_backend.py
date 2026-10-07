@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # Copyright (c) 2026 Wojciech Stach
 # Licensed under BSL 1.1
 
@@ -27,24 +28,54 @@ def _clean_env() -> dict[str, str]:
     return env
 
 
+def _runtime_artifact_profile() -> str:
+    profile = os.environ.get("FOD_RUNTIME_PROFILE", "release-lto").strip()
+    if not profile:
+        profile = "release-lto"
+    return "debug" if profile == "dev" else profile
+
+
+def _cargo_target_root() -> Path:
+    configured = os.environ.get("CARGO_TARGET_DIR", "").strip()
+    if not configured:
+        return ROOT / "target"
+    path = Path(configured).expanduser()
+    if not path.is_absolute():
+        path = ROOT / path
+    return path
+
+
+def _resolve_config_binary(path: Path, source: str) -> list[str]:
+    if not path.is_file():
+        raise RuntimeError(f"{source} does not point to an existing fod-config binary: {path}")
+    if not os.access(path, os.X_OK):
+        raise RuntimeError(f"{source} fod-config binary is not executable: {path}")
+    return [str(path)]
+
+
 def _fod_config_cmd() -> list[str]:
-    for candidate in (
-        ROOT / "rust_mkfs/target/debug/fod-config",
-        ROOT / "rust_mkfs/target/release/fod-config",
+    # Jawna binarka ma pierwszenstwo i nigdy nie uruchamia ukrytego builda.
+    explicit = os.environ.get("FOD_CONFIG_BIN", "").strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.is_absolute():
+            path = ROOT / path
+        return _resolve_config_binary(path, "FOD_CONFIG_BIN")
+
+    profile = _runtime_artifact_profile()
+    candidates = [
+        _cargo_target_root() / profile / "fod-config",
+        ROOT / "rust_mkfs" / "target" / profile / "fod-config",
         Path("/usr/local/bin/fod-config"),
-    ):
-        if candidate.is_file():
-            return [str(candidate)]
-    return [
-        "cargo",
-        "run",
-        "--manifest-path",
-        str(ROOT / "rust_mkfs/Cargo.toml"),
-        "--quiet",
-        "--bin",
-        "fod-config",
-        "--",
     ]
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return [str(candidate)]
+
+    raise RuntimeError(
+        "fod-config binary not found; run make build-runtime or set "
+        "FOD_CONFIG_BIN to an existing runtime binary"
+    )
 
 
 def load_fod_runtime_config(config_or_root: str | Path) -> dict[str, str]:
