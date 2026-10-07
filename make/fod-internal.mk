@@ -281,7 +281,7 @@ test-target-disk-clean-policy:
 
 # The local integration suites share one Docker/PostgreSQL database and FUSE
 # mount resources. Keep their prerequisites serial even when make receives -j.
-.NOTPARALLEL: test-integration test-all test-all-full
+.NOTPARALLEL: test-integration test-all test-all-full test-forget-open-unlink-full
 
 # Benchmark targets are run sequentially because they share the same local
 # Docker/PostgreSQL state and often rebuild the same binaries.
@@ -439,6 +439,7 @@ POSTGRES_DB_BASE ?= foddbname
 POSTGRES_USER_BASE ?= foduser
 POSTGRES_PASSWORD_BASE ?= cichosza
 POSTGRES_PORT_BASE ?= 5432
+MKFS_TEST_DB ?= $(POSTGRES_DB)_mkfs_test
 POSTGRES_SHARED_PRELOAD_LIBRARIES ?= pg_stat_statements
 POSTGRES_SHARED_BUFFERS ?=
 POSTGRES_WORK_MEM ?=
@@ -570,7 +571,7 @@ FOD_CHANGE_PASSWORD ?=
 FOD_LOG_LEVEL ?= INFO
 FOD_ACL ?= off
 ifndef FOD_SCHEMA_ADMIN_PASSWORD
-FOD_SCHEMA_ADMIN_PASSWORD := $(shell $(PYTHON) -c 'import secrets; print("fod-" + secrets.token_urlsafe(24))')
+FOD_SCHEMA_ADMIN_PASSWORD := $(shell if [ -r "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)" ]; then cat "$(FOD_SCHEMA_ADMIN_PASSWORD_FILE)"; else $(PYTHON) -c 'import secrets; print("fod-" + secrets.token_urlsafe(24))'; fi)
 endif
 export FOD_SCHEMA_ADMIN_PASSWORD
 FOD_SELINUX_CONTEXT ?=
@@ -1070,6 +1071,9 @@ init: build-runtime up
 	status_output="$$($(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
 	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
 		echo 'FOD schema already initialized; skipping init.'; \
+	elif printf '%s\n' "$$status_output" | grep -Fq 'fod objects: yes'; then \
+		echo 'FOD schema requires upgrade.'; \
+		POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_RUNTIME_BIN) upgrade --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 	else \
 		POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(FOD_MKFS_RUNTIME_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 		mkdir -p .fod; \
@@ -1081,6 +1085,9 @@ init-qnap: build-runtime
 	status_output="$$($(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) status 2>/dev/null || true)"; \
 	if printf '%s\n' "$$status_output" | grep -Fq 'FOD ready: yes'; then \
 		echo 'FOD schema already initialized; skipping qnap init.'; \
+	elif printf '%s\n' "$$status_output" | grep -Fq 'fod objects: yes'; then \
+		echo 'FOD schema requires qnap upgrade.'; \
+		$(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) upgrade --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 	else \
 		$(FOD_REMOTE_PG_ENV) $(FOD_MKFS_RUNTIME_BIN) init --schema-admin-password "$(FOD_SCHEMA_ADMIN_PASSWORD)"; \
 		mkdir -p .fod; \
@@ -1164,6 +1171,11 @@ test-makefile-db-restore-order:
 	$(PYTHON) tests/test_makefile_db_restore_order.py
 
 .PHONY: test-makefile-db-restore-order
+
+test-fod-backend:
+	$(PYTHON) tests/test_fod_backend.py
+
+.PHONY: test-fod-backend
 
 test-makefile-uninstall-on-root:
 	$(PYTHON) tests/test_makefile_uninstall_on_root.py
@@ -1401,7 +1413,7 @@ unmount:
 		umount $(MOUNTPOINT); \
 	fi
 
-test-integration: test-makefile-db-restore-order test-primary-replica-benchmark-wiring venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-mkfs-suite-restored test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-schema-upgrade test-block-read test-primary-read-fused test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-acl-mount-option test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary test-two-mount-quota
+test-integration: test-makefile-db-restore-order test-fod-backend test-primary-replica-benchmark-wiring venv reset test-persist-buffer-chunking test-write-flush-threshold test-utimens-noop test-write-noop test-unlink-after-write test-local-vs-fod-permissions test-copy-block-crc-table test-multi-open-unique-handles test-workers-read-parallel test-workers-write-parallel-copy test-worker-thresholds-block-size test-rust-hotpath-copy-plan test-rust-hotpath-crc32 test-rust-hotpath-read-ahead test-rust-hotpath-read-sequence test-rust-hotpath-read-fetch-bounds test-rust-hotpath-read-slice-plan test-rust-hotpath-read-missing-range-worker-count test-rust-hotpath-block-count test-rust-hotpath-dirty-block-size test-rust-hotpath-logical-resize-plan test-rust-hotpath-persist-layout-plan test-rust-hotpath-write-copy-worker-count test-rust-hotpath-block-transfer-plan test-rust-hotpath-write-copy-plan test-rust-hotpath-parallel-worker-count test-rust-hotpath-missing-ranges test-rust-hotpath-copy-dedupe test-rust-hotpath-copy-pack test-rust-hotpath-persist-pad test-rust-hotpath-read-assemble test-rust-pg-query test-rust-mkfs-suite-restored test-version test-timestamp-touch-once test-read-ahead-sequence test-runtime-config test-schema-upgrade test-block-read test-primary-read-fused test-pg-lock-manager test-mount-root-permissions test-mount-wrapper-options test-acl-mount-option test-connection-recovery test-fuse-context-identity test-postgresql-requirements test-runtime-profile test-mkfs-pg-tls test-metadata-cache test-truncate-shrink-block-boundary test-two-mount-quota
 test-integration: test-rust-hotpath-persist-block-plan
 test-integration: test-rust-hotpath-persist-block-crc-plan
 test-integration: test-config-warning
@@ -1551,26 +1563,43 @@ test-mkfs-config-suite:
 test-runtime-config: init test-mkfs-config-suite
 	@:
 
-test-rust-mkfs-suite:
-	$(CARGO_TEST_MKFS)
-
-# The complete mkfs suite intentionally exercises malformed and incomplete
-# schemas. Restore the selected test database before later FUSE integration
-# tests consume it. QNAP restore is allowed only with an explicit destructive
-# opt-in, and restore is attempted even when the suite fails.
-test-rust-mkfs-suite-restored: test-db-destructive-guard
+# Schema-upgrade tests sa celowo destrukcyjne. Zawsze uruchamiaj caly mkfs
+# suite na osobnej bazie, nigdy na glownej bazie FOD uzywanej przez mounty.
+# Baza testowa jest usuwana takze po bledzie suite.
+test-rust-mkfs-suite: up test-db-destructive-guard
 	@set -u; \
+		db="$(MKFS_TEST_DB)"; \
+		case "$$db" in \
+			""|*[!A-Za-z0-9_]*) echo "Refusing mkfs test database name: $$db" >&2; exit 2 ;; \
+		esac; \
+		case "$$db" in *test*) ;; *) echo "Refusing non-test mkfs database name: $$db" >&2; exit 2 ;; esac; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "CREATE DATABASE \"$$db\";" >/dev/null; \
 		suite_status=0; \
-		restore_status=0; \
-		$(MAKE) --no-print-directory test-rust-mkfs-suite || suite_status=$$?; \
-		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
+		cleanup_status=0; \
+		FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" $(CARGO_TEST_MKFS) || suite_status=$$?; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null || cleanup_status=$$?; \
+		if [ "$$cleanup_status" -eq 0 ]; then \
+			PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+				-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null || cleanup_status=$$?; \
+		fi; \
 		if [ "$$suite_status" -ne 0 ]; then \
-			if [ "$$restore_status" -ne 0 ]; then \
-				echo "mkfs suite failed with status $$suite_status and selected database restore failed with status $$restore_status" >&2; \
+			if [ "$$cleanup_status" -ne 0 ]; then \
+				echo "mkfs suite failed with status $$suite_status and isolated database cleanup failed with status $$cleanup_status" >&2; \
 			fi; \
 			exit "$$suite_status"; \
 		fi; \
-		exit "$$restore_status"
+		exit "$$cleanup_status"
+
+# Compatibility alias retained for existing callers. The suite now restores
+# isolation by dropping its dedicated database instead of resetting foddbname.
+test-rust-mkfs-suite-restored: test-rust-mkfs-suite
+	@:
 
 .PHONY: test-rust-mkfs-suite-restored
 
@@ -1584,35 +1613,67 @@ test-runtime-validation: test-rust-mkfs-suite
 
 test-rust-hotpath-runtime-size-limits: test-rust-mkfs-suite
 	@:
-test-schema-upgrade: up
-	@$(MAKE) --no-print-directory test-db-destructive-guard
+test-schema-upgrade: up test-db-destructive-guard
 	@set -u; \
+		db="$(MKFS_TEST_DB)"; \
+		case "$$db" in \
+			""|*[!A-Za-z0-9_]*) echo "Refusing mkfs test database name: $$db" >&2; exit 2 ;; \
+		esac; \
+		case "$$db" in *test*) ;; *) echo "Refusing non-test mkfs database name: $$db" >&2; exit 2 ;; esac; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "CREATE DATABASE \"$$db\";" >/dev/null; \
 		test_status=0; \
-		restore_status=0; \
-		$(CARGO_TEST_MKFS) --test schema_upgrade schema_upgrade_non_destructive_password_protected --offline || test_status=$$?; \
-		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
+		cleanup_status=0; \
+		FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" $(CARGO_TEST_MKFS) --test schema_upgrade schema_upgrade_non_destructive_password_protected --offline || test_status=$$?; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null || cleanup_status=$$?; \
+		if [ "$$cleanup_status" -eq 0 ]; then \
+			PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+				-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null || cleanup_status=$$?; \
+		fi; \
 		if [ "$$test_status" -ne 0 ]; then \
-			if [ "$$restore_status" -ne 0 ]; then \
-				echo "test-schema-upgrade failed with status $$test_status and selected database restore failed with status $$restore_status" >&2; \
+			if [ "$$cleanup_status" -ne 0 ]; then \
+				echo "test-schema-upgrade failed with status $$test_status and isolated database cleanup failed with status $$cleanup_status" >&2; \
 			fi; \
 			exit "$$test_status"; \
 		fi; \
-		exit "$$restore_status"
+		exit "$$cleanup_status"
 
-test-schema-status: up
-	@$(MAKE) --no-print-directory test-db-destructive-guard
+
+test-schema-status: up test-db-destructive-guard
 	@set -u; \
+		db="$(MKFS_TEST_DB)"; \
+		case "$$db" in \
+			""|*[!A-Za-z0-9_]*) echo "Refusing mkfs test database name: $$db" >&2; exit 2 ;; \
+		esac; \
+		case "$$db" in *test*) ;; *) echo "Refusing non-test mkfs database name: $$db" >&2; exit 2 ;; esac; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "CREATE DATABASE \"$$db\";" >/dev/null; \
 		test_status=0; \
-		restore_status=0; \
-		$(CARGO_TEST_MKFS) --test schema_upgrade schema_status_reports_version_secret_and_pending_migrations --offline || test_status=$$?; \
-		$(MAKE) --no-print-directory test-db-restore-selected || restore_status=$$?; \
+		cleanup_status=0; \
+		FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" $(CARGO_TEST_MKFS) --test schema_upgrade schema_status_reports_version_secret_and_pending_migrations --offline || test_status=$$?; \
+		PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+			-c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$$db' AND pid <> pg_backend_pid();" >/dev/null || cleanup_status=$$?; \
+		if [ "$$cleanup_status" -eq 0 ]; then \
+			PGPASSWORD="$(FOD_PG_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(FOD_PG_HOST)" -p "$(FOD_PG_PORT)" -U "$(FOD_PG_USER)" -d postgres \
+				-c "DROP DATABASE IF EXISTS \"$$db\";" >/dev/null || cleanup_status=$$?; \
+		fi; \
 		if [ "$$test_status" -ne 0 ]; then \
-			if [ "$$restore_status" -ne 0 ]; then \
-				echo "test-schema-status failed with status $$test_status and selected database restore failed with status $$restore_status" >&2; \
+			if [ "$$cleanup_status" -ne 0 ]; then \
+				echo "test-schema-status failed with status $$test_status and isolated database cleanup failed with status $$cleanup_status" >&2; \
 			fi; \
 			exit "$$test_status"; \
 		fi; \
-		exit "$$restore_status"
+		exit "$$cleanup_status"
+
 
 test-df: build-runtime venv up
 	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_df.sh
@@ -1876,21 +1937,21 @@ test-connection-recovery: init
 test-pool-connections: venv
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_pool_connections.py
 
-test-postgresql-requirements-autocommit-off: venv up
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=off $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
+test-postgresql-requirements-autocommit-off: venv build-runtime up
+	@FOD_CONFIG_BIN=$(abspath $(FOD_CONFIG_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=off $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
 
-test-postgresql-requirements-autocommit-on: venv up
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=on $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
+test-postgresql-requirements-autocommit-on: venv build-runtime up
+	@FOD_CONFIG_BIN=$(abspath $(FOD_CONFIG_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_POSTGRES_AUTOCOMMIT=on $(VENV_PYTHON) tests/integration/test_postgresql_requirements.py
 
 test-postgresql-requirements: test-postgresql-requirements-autocommit-off
 	@:
 
 test-runtime-profile: venv build-runtime up
-	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_profile.py
+	@sudo env $(ADMP_TRACE_ENV) FOD_CONFIG_BIN=$(abspath $(FOD_CONFIG_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_profile.py
 
 test-runtime-reload: venv build-runtime
 	$(MAKE) reset
-	@sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_reload.py
+	@sudo env $(ADMP_TRACE_ENV) FOD_CONFIG_BIN=$(abspath $(FOD_CONFIG_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) $(VENV_PYTHON) tests/integration/test_runtime_reload.py
 
 .PHONY: test-runtime-reload
 
@@ -1940,7 +2001,7 @@ test-mount-suite: venv
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) VENV_PYTHON=$(VENV_PYTHON) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_ROLE=$(FOD_ROLE) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) FOD_SELINUX_CONTEXT=$(FOD_SELINUX_CONTEXT) FOD_SELINUX_FSCONTEXT=$(FOD_SELINUX_FSCONTEXT) FOD_SELINUX_DEFCONTEXT=$(FOD_SELINUX_DEFCONTEXT) FOD_SELINUX_ROOTCONTEXT=$(FOD_SELINUX_ROOTCONTEXT) $(VENV_PYTHON) tests/integration/test_mount_suite.py
 
 test-all: test-target-disk-clean-policy smoke test-integration test-mount-suite test-locking test-journal test-rename-root-conflict test-pool-connections
-test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke
+test-all-full: test-all test-files test-directories test-metadata test-symlink test-mount-workflow test-statfs-use-ino test-atime-noatime test-atime-nodiratime test-atime-relatime test-fod-indexer-smoke test-fod-indexer-materialize-rollback test-fod-indexer-usability test-fod-indexer-parallel-smoke test-forget-open-unlink-full
 test-integration: test-runtime-profile test-dual-host-same-file-cp-race test-create-write-ownership test-rename-write-ownership test-rename-symlink-transactional test-rename-directory-transactional
 
 benchmark: benchmarks
@@ -2900,6 +2961,116 @@ test-rename-write-ownership: init
 test-forget-invalidation: init
 	@CARGO_TARGET_DIR="$(CURDIR)/target/integration-test-hooks" cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --features integration-test-hooks --bin fod-rust-fuse
 	@FOD_RUST_FUSE_BIN="$(CURDIR)/target/integration-test-hooks/release-lto/fod-rust-fuse" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_forget_invalidation.py
+
+.PHONY: test-forget-repeated-invalidation
+test-forget-repeated-invalidation: init
+	@CARGO_TARGET_DIR="$(CURDIR)/target/integration-test-hooks" cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --features integration-test-hooks --bin fod-rust-fuse
+	@FOD_RUST_FUSE_BIN="$(CURDIR)/target/integration-test-hooks/release-lto/fod-rust-fuse" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_forget_repeated_invalidation.py
+
+FORGET_CONVERGENCE_CYCLES ?= 500
+FORGET_CONVERGENCE_RSS_MAX_GROWTH_BYTES ?= 16777216
+
+.PHONY: test-forget-convergence
+test-forget-convergence: init
+	@CARGO_TARGET_DIR="$(CURDIR)/target/integration-test-hooks" cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --features integration-test-hooks --bin fod-rust-fuse
+	@FOD_RUST_FUSE_BIN="$(CURDIR)/target/integration-test-hooks/release-lto/fod-rust-fuse" FOD_TEST_FORGET_CYCLES="$(FORGET_CONVERGENCE_CYCLES)" FOD_TEST_FORGET_RSS_MAX_GROWTH_BYTES="$(FORGET_CONVERGENCE_RSS_MAX_GROWTH_BYTES)" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_forget_repeated_invalidation.py
+
+.PHONY: test-forget-active-handle
+test-forget-active-handle: init
+	@CARGO_TARGET_DIR="$(CURDIR)/target/integration-test-hooks" cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --features integration-test-hooks --bin fod-rust-fuse
+	@FOD_RUST_FUSE_BIN="$(CURDIR)/target/integration-test-hooks/release-lto/fod-rust-fuse" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_forget_active_handle.py
+
+.PHONY: test-forget-multiple-handles
+test-forget-multiple-handles: init
+	@CARGO_TARGET_DIR="$(CURDIR)/target/integration-test-hooks" cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --features integration-test-hooks --bin fod-rust-fuse
+	@FOD_RUST_FUSE_BIN="$(CURDIR)/target/integration-test-hooks/release-lto/fod-rust-fuse" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_forget_multiple_handles.py
+
+.PHONY: test-forget-hardlink-alias
+test-forget-hardlink-alias: init
+	@CARGO_TARGET_DIR="$(CURDIR)/target/integration-test-hooks" cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --features integration-test-hooks --bin fod-rust-fuse
+	@FOD_RUST_FUSE_BIN="$(CURDIR)/target/integration-test-hooks/release-lto/fod-rust-fuse" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_forget_hardlink_alias.py
+
+.PHONY: test-unlink-open-handle
+test-unlink-open-handle: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_unlink_open_handle.py
+
+.PHONY: test-unlink-open-writer
+test-unlink-open-writer: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_unlink_open_writer.py
+
+.PHONY: test-unlink-open-writer-multimount
+test-unlink-open-writer-multimount: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_unlink_open_writer_multimount.py
+
+.PHONY: test-unlink-remote-open-writer-multimount
+test-unlink-remote-open-writer-multimount: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_unlink_remote_open_writer_multimount.py
+
+.PHONY: test-unlink-remote-open-readonly-multimount
+test-unlink-remote-open-readonly-multimount: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	$(VENV_PYTHON) tests/integration/test_unlink_remote_open_readonly_multimount.py
+
+.PHONY: test-unlink-open-writer-crash-convergence
+test-unlink-open-writer-crash-convergence: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 FOD_TEST_FORCE_SESSION_EXPIRY=1 \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	$(VENV_PYTHON) tests/integration/test_unlink_open_writer_crash_convergence.py
+
+.PHONY: test-unlink-open-writer-crash-natural-expiry
+test-unlink-open-writer-crash-natural-expiry: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 FOD_TEST_FORCE_SESSION_EXPIRY=0 \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	$(VENV_PYTHON) tests/integration/test_unlink_open_writer_crash_convergence.py
+
+.PHONY: test-unlink-multiholder-crash-survivor
+test-unlink-multiholder-crash-survivor: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	$(VENV_PYTHON) tests/integration/test_unlink_multiholder_crash_survivor.py
+
+.PHONY: test-unlink-multiholder-staggered-crash
+test-unlink-multiholder-staggered-crash: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	$(VENV_PYTHON) tests/integration/test_unlink_multiholder_staggered_crash.py
+
+.PHONY: test-unlink-multiholder-dual-crash
+test-unlink-multiholder-dual-crash: init
+	@cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --bin fod-rust-fuse
+	@FOD_SESSION_MAINTENANCE_INTERVAL_MS=500 \
+	POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+	$(VENV_PYTHON) tests/integration/test_unlink_multiholder_dual_crash.py
+
+.PHONY: test-forget-open-unlink-full
+test-forget-open-unlink-full: \
+	test-forget-invalidation \
+	test-forget-repeated-invalidation \
+	test-forget-active-handle \
+	test-forget-multiple-handles \
+	test-forget-hardlink-alias \
+	test-forget-convergence \
+	test-unlink-open-handle \
+	test-unlink-open-writer \
+	test-unlink-open-writer-multimount \
+	test-unlink-remote-open-writer-multimount \
+	test-unlink-remote-open-readonly-multimount \
+	test-unlink-open-writer-crash-convergence \
+	test-unlink-open-writer-crash-natural-expiry \
+	test-unlink-multiholder-crash-survivor \
+	test-unlink-multiholder-staggered-crash \
+	test-unlink-multiholder-dual-crash
+	@:
 
 .PHONY: test-rename-symlink-transactional
 test-rename-symlink-transactional: init

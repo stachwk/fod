@@ -58,6 +58,7 @@ const REQUEST_PID_GROUPS_CACHE_TTL: Duration = Duration::from_millis(500);
 const CLIENT_WRITE_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
 // Default atime updates are throttled so repeated reads do not hammer PostgreSQL.
 const ATIME_TOUCH_INTERVAL: Duration = Duration::from_secs(5);
+const DEFERRED_UNLINK_NAME_PREFIX: &str = ".fod-unlinked-";
 // Linux FIGETBSZ is _IO(0x00, 2) and reports the filesystem block size.
 const IOCTL_FIGETBSZ: u32 = 2;
 // linux/fs.h also exposes the generic XFS-style fsxattr ioctls.
@@ -265,6 +266,7 @@ struct FileWriteOwnership {
     file_id: u64,
     owner_key: u64,
     lease: WriteOwnershipLease,
+    destination_released: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -319,19 +321,34 @@ fn heartbeat_active_write_ownerships(
 
     let mut failed = false;
     for ownership in ownerships {
-        match repo.heartbeat_write_ownership(
-            ownership.parent_id,
-            &ownership.name,
-            Some(ownership.file_id),
-            ownership.owner_key,
-            ownership.lease,
-            lease_ttl_seconds,
-        ) {
-            Ok(true) => {
-                debug!(
-                    "FOD write ownership heartbeat renewed file_id={} owner_key={} destination_token={} file_token={:?}",
+        let heartbeat = if ownership.destination_released {
+            match ownership.lease.file_fencing_token {
+                Some(file_fencing_token) => repo.heartbeat_file_write_ownership(
                     ownership.file_id,
                     ownership.owner_key,
+                    file_fencing_token,
+                    lease_ttl_seconds,
+                ),
+                None => Err("deferred unlink writer is missing file fencing token".to_string()),
+            }
+        } else {
+            repo.heartbeat_write_ownership(
+                ownership.parent_id,
+                &ownership.name,
+                Some(ownership.file_id),
+                ownership.owner_key,
+                ownership.lease,
+                lease_ttl_seconds,
+            )
+        };
+
+        match heartbeat {
+            Ok(true) => {
+                debug!(
+                    "FOD write ownership heartbeat renewed file_id={} owner_key={} destination_released={} destination_token={} file_token={:?}",
+                    ownership.file_id,
+                    ownership.owner_key,
+                    ownership.destination_released,
                     ownership.lease.destination_fencing_token,
                     ownership.lease.file_fencing_token
                 );
@@ -339,9 +356,10 @@ fn heartbeat_active_write_ownerships(
             Ok(false) => {
                 failed = true;
                 warn!(
-                    "FOD write ownership heartbeat not renewed file_id={} owner_key={} destination_token={} file_token={:?}",
+                    "FOD write ownership heartbeat not renewed file_id={} owner_key={} destination_released={} destination_token={} file_token={:?}",
                     ownership.file_id,
                     ownership.owner_key,
+                    ownership.destination_released,
                     ownership.lease.destination_fencing_token,
                     ownership.lease.file_fencing_token
                 );
@@ -349,9 +367,10 @@ fn heartbeat_active_write_ownerships(
             Err(err) => {
                 failed = true;
                 warn!(
-                    "FOD write ownership heartbeat failed file_id={} owner_key={} destination_token={} file_token={:?} err={}",
+                    "FOD write ownership heartbeat failed file_id={} owner_key={} destination_released={} destination_token={} file_token={:?} err={}",
                     ownership.file_id,
                     ownership.owner_key,
+                    ownership.destination_released,
                     ownership.lease.destination_fencing_token,
                     ownership.lease.file_fencing_token,
                     err
@@ -533,10 +552,24 @@ impl ClientSessionHeartbeatHandle {
                         &fh_table,
                         lease_ttl_seconds,
                     );
-                    if session_failed || ownership_failed {
+                    let open_lease_failed =
+                        match repo.heartbeat_file_open_leases(session_id, lease_ttl_seconds) {
+                            Ok(()) => false,
+                            Err(err) => {
+                                warn!(
+                                    "FOD file open lease heartbeat failed session_id={} err={}",
+                                    session_id, err
+                                );
+                                true
+                            }
+                        };
+                    if session_failed || ownership_failed || open_lease_failed {
                         debug!(
-                            "FOD client heartbeat cycle completed with failures session_id={} session_failed={} ownership_failed={}",
-                            session_id, session_failed, ownership_failed
+                            "FOD client heartbeat cycle completed with failures session_id={} session_failed={} ownership_failed={} open_lease_failed={}",
+                            session_id,
+                            session_failed,
+                            ownership_failed,
+                            open_lease_failed
                         );
                     }
                     if stop_thread.load(Ordering::Relaxed) {
@@ -591,6 +624,18 @@ impl ClientSessionMaintenanceHandle {
                         Ok(false) => {}
                         Err(err) => {
                             warn!("FOD client session maintenance prune failed: {}", err);
+                        }
+                    }
+                    match repo.purge_orphaned_unlinked_files(64) {
+                        Ok(count) if count > 0 => {
+                            info!(
+                                "FOD client session maintenance purged deferred unlinks count={}",
+                                count
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            warn!("FOD deferred unlink maintenance purge failed: {}", err);
                         }
                     }
                 }
@@ -1738,17 +1783,12 @@ impl FodFuse {
     }
 
     fn client_session_repo(&self) -> Option<&DbRepo> {
-        self.telemetry_repo
-            .as_ref()
-            .or_else(|| (!self.read_only).then_some(&self.repo))
-    }
-
-    pub fn has_client_session_repo(&self) -> bool {
-        self.client_session_repo().is_some()
-    }
-
-    pub fn session_id(&self) -> Option<u64> {
-        self.session_id
+        // Kazdy mount potrzebuje centralnej authority dla sesji i open leases.
+        // Read-only mount preferuje osobny writable control repo, ale gdy jego
+        // data repo samo wskazuje primary, moze bezpiecznie uzyc go do DML
+        // sterujacego lifecycle. Proba uzycia repliki zostanie odrzucona przez
+        // PostgreSQL podczas obowiazkowej rejestracji sesji przy starcie.
+        self.telemetry_repo.as_ref().or(Some(&self.repo))
     }
 
     fn request_prefix(&self, req_id: u64, op: &str) -> String {
@@ -3781,6 +3821,21 @@ impl FodFuse {
     fn entry_attrs_for_ino(&self, ino: u64) -> Result<(String, ParsedAttrs), libc::c_int> {
         let path = self.entry_path_for_ino(ino)?;
         let attrs = self.lookup_path(&path)?.ok_or(ENOENT)?;
+
+        // Sciezka zapamietana lokalnie moze zostac zdalnie usunieta i odtworzona
+        // przez inny mount z nowa generacja inode. W takim przypadku nie wolno
+        // zwracac atrybutow nowego obiektu dla starego inode przekazanego przez
+        // kernel. ENOENT pozwala getattr przejsc do fallbacku po file_id dla
+        // nadal otwartego starego inode, a pozostale operacje nie trafiaja
+        // przypadkiem w replacement.
+        if attrs.file_attr.ino.0 != ino {
+            debug!(
+                "FOD stale inode path mapping ino={} path={} resolved_ino={}",
+                ino, path, attrs.file_attr.ino.0
+            );
+            return Err(ENOENT);
+        }
+
         Ok((path, attrs))
     }
 
@@ -3959,6 +4014,86 @@ impl FodFuse {
         Ok(Some(ParsedAttrs { file_attr }))
     }
 
+    fn attrs_for_open_file_id(&self, file_id: u64) -> Result<Option<ParsedAttrs>, libc::c_int> {
+        let blob = self.repo.fetch_file_attrs_blob(file_id).map_err(|_| EIO)?;
+        let Some(blob) = blob else {
+            return Ok(None);
+        };
+        let fields = Self::decode_nul_fields(&blob);
+        if fields.len() < 10 {
+            return Err(EIO);
+        }
+
+        let process_identity = Self::process_identity();
+        let raw_inode = fields[0].parse::<u64>().map_err(|_| EIO)?;
+        let size = fields[1].parse::<u64>().unwrap_or(0);
+        let mode = fields[2].clone();
+        let mod_date = fields[3].clone();
+        let acc_date = fields[4].clone();
+        let chg_date = fields[5].clone();
+        let uid = fields[6].parse::<u32>().unwrap_or(process_identity.uid);
+        let gid = fields[7].parse::<u32>().unwrap_or(process_identity.gid);
+        let inode_seed = fields[8].clone();
+        let allocated_bytes = fields[9].parse::<u64>().map_err(|_| EIO)?;
+
+        let mut kind = FileType::RegularFile;
+        let perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).unwrap_or(0o644);
+        let mut rdev = 0_u64;
+        if let Some((special_type, major, minor)) = self
+            .repo
+            .get_special_file_metadata(raw_inode)
+            .map_err(|_| EIO)?
+        {
+            kind = Self::file_type_from_special(&special_type);
+            rdev = ((major as u64) << 8) | (minor as u64);
+        }
+
+        let nlink = self
+            .repo
+            .file_link_count_for_stat(raw_inode)
+            .map_err(|_| EIO)?
+            .unwrap_or(0);
+        let inode = self.stable_inode("file", &inode_seed, raw_inode);
+        Ok(Some(ParsedAttrs {
+            file_attr: FileAttr {
+                ino: INodeNo(inode),
+                size,
+                blocks: self.block_count(allocated_bytes, "file"),
+                atime: Self::parse_time(&acc_date),
+                mtime: Self::parse_time(&mod_date),
+                ctime: Self::parse_time(&chg_date),
+                crtime: Self::parse_time(&chg_date),
+                kind,
+                perm,
+                nlink: nlink.try_into().unwrap_or(u32::MAX),
+                uid,
+                gid,
+                rdev: rdev.try_into().unwrap_or(u32::MAX),
+                flags: 0,
+                blksize: self.block_size as u32,
+            },
+        }))
+    }
+
+    fn attrs_for_open_inode(&self, ino: u64) -> Result<Option<ParsedAttrs>, libc::c_int> {
+        let file_ids = self
+            .fh_table
+            .lock()
+            .map_err(|_| EIO)?
+            .values()
+            .filter_map(|state| state.file_id)
+            .collect::<HashSet<_>>();
+
+        for file_id in file_ids {
+            if let Some(attrs) = self.attrs_for_open_file_id(file_id)? {
+                if attrs.file_attr.ino.0 == ino {
+                    return Ok(Some(attrs));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     fn block_count(&self, allocated_bytes: u64, kind: &str) -> u64 {
         if kind == "dir" {
             return 1;
@@ -4088,14 +4223,10 @@ impl FodFuse {
         true
     }
 
-    fn forget_lookup_refs(&self, ino: u64, nlookup: u64) -> (u64, bool) {
+    fn apply_forget_ref_delta(refs: &mut HashMap<u64, u64>, ino: u64, nlookup: u64) -> (u64, bool) {
         if ino == ROOT_INO {
             return (0, false);
         }
-        let mut refs = match self.lookup_refs.lock() {
-            Ok(refs) => refs,
-            Err(_) => return (0, false),
-        };
         let Some(current) = refs.get(&ino).copied() else {
             return (0, false);
         };
@@ -4111,11 +4242,65 @@ impl FodFuse {
             return (remaining, false);
         }
         refs.remove(&ino);
-        if self.inode_has_active_handle(ino) {
-            return (0, false);
-        }
-        self.remove_cached_inode_paths(ino);
         (0, true)
+    }
+
+    fn forget_lookup_refs(&self, ino: u64, nlookup: u64) -> (u64, bool) {
+        let (remaining, retire_candidate) = {
+            let mut refs = match self.lookup_refs.lock() {
+                Ok(refs) => refs,
+                Err(_) => return (0, false),
+            };
+            Self::apply_forget_ref_delta(&mut refs, ino, nlookup)
+        };
+        let evicted = retire_candidate && self.evict_inode_if_unreferenced(ino);
+        (remaining, evicted)
+    }
+
+    fn profile_forget_event(&self, ino: u64, nlookup: u64, remaining: u64, evicted: bool) {
+        if !fod_fuse_profile_metadata_cache_enabled() {
+            return;
+        }
+
+        self.metadata_profile_forget_calls
+            .fetch_add(1, Ordering::Relaxed);
+        self.metadata_profile_forget_nlookup
+            .fetch_add(nlookup, Ordering::Relaxed);
+
+        let (lookup_ref_inodes, lookup_ref_total) = self
+            .lookup_refs
+            .lock()
+            .map(|guard| {
+                (
+                    guard.len(),
+                    guard.values().copied().fold(0u64, u64::saturating_add),
+                )
+            })
+            .unwrap_or((0, 0));
+        let inode_to_path = self
+            .inode_to_path
+            .read()
+            .map(|guard| guard.len())
+            .unwrap_or(0);
+        let path_to_inode = self
+            .path_to_inode
+            .read()
+            .map(|guard| guard.len())
+            .unwrap_or(0);
+        let process_rss_bytes = current_process_rss_bytes().unwrap_or(0);
+
+        info!(
+            "FOD forget profile: ino={} nlookup={} remaining={} evicted={} lookup_ref_inodes={} lookup_ref_total={} inode_to_path={} path_to_inode={} process_rss_bytes={}",
+            ino,
+            nlookup,
+            remaining,
+            evicted,
+            lookup_ref_inodes,
+            lookup_ref_total,
+            inode_to_path,
+            path_to_inode,
+            process_rss_bytes
+        );
     }
 
     fn touch_access_time(&self, path: &str, file_attr: &FileAttr) {
@@ -4332,10 +4517,48 @@ impl FodFuse {
         }
     }
 
-    fn create_handle_for_file(&self, path: String, file_id: Option<u64>, flags: i32) -> u64 {
+    fn register_file_open_lease_for_handle(
+        &self,
+        fh: u64,
+        file_id: u64,
+    ) -> Result<(), libc::c_int> {
+        let Some(session_id) = self.session_id else {
+            warn!(
+                "FOD file open lease unavailable fh={} file_id={} reason=no_client_session",
+                fh, file_id
+            );
+            return Err(EIO);
+        };
+        let Some(repo) = self.client_session_repo() else {
+            return Err(EIO);
+        };
+        repo.register_file_open_lease(
+            file_id,
+            session_id,
+            fh,
+            self.client_session_lease_ttl_seconds,
+        )
+        .map_err(|err| {
+            warn!(
+                "FOD file open lease registration failed fh={} file_id={} session_id={} err={}",
+                fh, file_id, session_id, err
+            );
+            EIO
+        })
+    }
+
+    fn create_handle_for_file(
+        &self,
+        path: String,
+        file_id: Option<u64>,
+        flags: i32,
+    ) -> Result<u64, libc::c_int> {
         let fh = self.next_handle();
+        if let Some(file_id) = file_id {
+            self.register_file_open_lease_for_handle(fh, file_id)?;
+        }
         self.insert_handle_for_file(fh, path, file_id, flags, None);
-        fh
+        Ok(fh)
     }
 
     fn write_ownership_resource_for_path(
@@ -4711,12 +4934,30 @@ impl FodFuse {
             }
         };
 
+        if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
+            if let Err(err) = ownership_repo.release_write_ownership(owner_key, lease) {
+                warn!(
+                    "FOD create open-lease ownership rollback failed file_id={} owner_key={} err={}",
+                    file_id, owner_key, err
+                );
+            }
+            if created_new {
+                if let Err(err) = self.remove_primary_file_or_promote_hardlink(file_id) {
+                    warn!(
+                        "FOD create open-lease file rollback failed file_id={} err={}",
+                        file_id, err
+                    );
+                }
+            }
+            return Err(errno);
+        }
         let ownership = FileWriteOwnership {
             parent_id,
             name: name.to_string(),
             file_id,
             owner_key,
             lease,
+            destination_released: false,
         };
         self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
         Ok((file_id, fh, created_new))
@@ -4732,6 +4973,7 @@ impl FodFuse {
         let fh = self.next_handle();
 
         if let Some(ownership) = self.local_write_ownership_for_file(file_id) {
+            self.register_file_open_lease_for_handle(fh, file_id)?;
             self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
             return Ok(fh);
         }
@@ -4769,12 +5011,22 @@ impl FodFuse {
                 return Err(EIO);
             }
         };
+        if let Err(errno) = self.register_file_open_lease_for_handle(fh, file_id) {
+            if let Err(err) = ownership_repo.release_write_ownership(owner_key, lease) {
+                warn!(
+                    "FOD open-lease ownership rollback failed file_id={} owner_key={} err={}",
+                    file_id, owner_key, err
+                );
+            }
+            return Err(errno);
+        }
         let ownership = FileWriteOwnership {
             parent_id,
             name,
             file_id,
             owner_key,
             lease,
+            destination_released: false,
         };
         self.insert_handle_for_file(fh, path, Some(file_id), flags, Some(ownership));
         Ok(fh)
@@ -4851,21 +5103,155 @@ impl FodFuse {
             .unwrap_or(0)
     }
 
-    fn remove_handle_state(&self, fh: u64) {
-        let removed_path = self
+    fn mark_deferred_unlink_destination_released(&self, file_id: u64) {
+        if let Ok(mut guard) = self.fh_table.lock() {
+            for state in guard.values_mut() {
+                if state.file_id == Some(file_id) {
+                    if let Some(ownership) = state.write_ownership.as_mut() {
+                        ownership.destination_released = true;
+                    }
+                }
+            }
+        }
+    }
+
+    fn defer_open_primary_unlink(
+        &self,
+        file_id: u64,
+        parent_path: &str,
+        old_path: &str,
+        ino: u64,
+        req_id: u64,
+    ) -> Result<(), String> {
+        let session_id = self.session_id.unwrap_or(0);
+        let hidden_name = format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
+        let hidden_path = Self::join_path(parent_path, OsStr::new(&hidden_name));
+        let (parent_id, old_name) =
+            self.write_ownership_resource_for_path(old_path)
+                .map_err(|errno| {
+                    format!("deferred unlink namespace resolution failed errno={errno}")
+                })?;
+
+        self.repo
+            .defer_primary_file_unlink(file_id, &hidden_name, parent_id, &old_name)?;
+
+        self.mark_deferred_unlink_destination_released(file_id);
+        self.remove_cached_path(old_path);
+        if let Ok(mut guard) = self.fh_table.lock() {
+            for state in guard.values_mut() {
+                if state.file_id == Some(file_id) && state.path == old_path {
+                    state.path = hidden_path.clone();
+                }
+            }
+        }
+
+        let active_open_leases = self.repo.has_active_file_open_leases(file_id)?;
+        if !active_open_leases {
+            self.repo.purge_primary_file(file_id)?;
+            self.invalidate_statfs_cache();
+            info!(
+                "FOD deferred unlink finalized immediately file_id={} ino={} old_path={}",
+                file_id, ino, old_path
+            );
+            return Ok(());
+        }
+
+        info!(
+            "FOD deferred unlink staged file_id={} ino={} old_path={} hidden_path={} local_open_handles={}",
+            file_id,
+            ino,
+            old_path,
+            hidden_path,
+            self.open_handle_count_for_file(file_id)
+        );
+        Ok(())
+    }
+
+    fn finalize_deferred_unlink_after_handle_removal(
+        &self,
+        removed_state: Option<&FileHandleState>,
+    ) -> Result<(), libc::c_int> {
+        let Some(file_id) = removed_state.and_then(|state| state.file_id) else {
+            return Ok(());
+        };
+        if self.repo.file_is_unlinked(file_id).map_err(|_| EIO)? != Some(true) {
+            return Ok(());
+        }
+        if self
+            .repo
+            .has_active_file_open_leases(file_id)
+            .map_err(|_| EIO)?
+        {
+            return Ok(());
+        }
+
+        self.repo.purge_primary_file(file_id).map_err(|err| {
+            warn!(
+                "FOD deferred unlink final purge failed file_id={} err={}",
+                file_id, err
+            );
+            EIO
+        })?;
+        self.invalidate_statfs_cache();
+        info!("FOD deferred unlink finalized file_id={}", file_id);
+        Ok(())
+    }
+
+    fn take_handle_state(&self, fh: u64) -> Option<FileHandleState> {
+        let removed_state = self
             .fh_table
             .lock()
             .ok()
-            .and_then(|mut guard| guard.remove(&fh))
-            .map(|state| state.path);
+            .and_then(|mut guard| guard.remove(&fh));
         if let Ok(mut guard) = self.write_states.lock() {
             guard.remove(&fh);
         }
-        if let Some(path) = removed_path {
-            if let Some(ino) = self.inode_for_path(&path) {
-                let _ = self.evict_inode_if_unreferenced(ino);
+        if let Some(file_id) = removed_state.as_ref().and_then(|state| state.file_id) {
+            if let (Some(session_id), Some(repo)) = (self.session_id, self.client_session_repo()) {
+                if let Err(err) = repo.release_file_open_lease(session_id, fh) {
+                    warn!(
+                        "FOD file open lease release failed fh={} file_id={} session_id={} err={}",
+                        fh, file_id, session_id, err
+                    );
+                }
             }
         }
+        if let Some(path) = removed_state.as_ref().map(|state| state.path.as_str()) {
+            if let Some(ino) = self.inode_for_path(path) {
+                let evicted = self.evict_inode_if_unreferenced(ino);
+                if fod_fuse_profile_metadata_cache_enabled() {
+                    let lookup_remaining = self
+                        .lookup_refs
+                        .lock()
+                        .map(|guard| guard.get(&ino).copied().unwrap_or(0))
+                        .unwrap_or(u64::MAX);
+                    let inode_cached = self
+                        .inode_to_path
+                        .read()
+                        .map(|guard| guard.contains_key(&ino))
+                        .unwrap_or(true);
+                    let path_cached = self
+                        .path_to_inode
+                        .read()
+                        .map(|guard| guard.values().any(|cached_ino| *cached_ino == ino))
+                        .unwrap_or(true);
+                    info!(
+                        "FOD release cache profile: fh={} ino={} evicted={} lookup_remaining={} inode_cached={} path_cached={}",
+                        fh,
+                        ino,
+                        evicted,
+                        lookup_remaining,
+                        inode_cached,
+                        path_cached
+                    );
+                }
+            }
+        }
+        removed_state
+    }
+
+    fn remove_handle_state(&self, fh: u64) {
+        let _ = self.take_handle_state(fh);
     }
 
     fn flush_write_state_for_handle(&self, fh: u64) -> Result<bool, libc::c_int> {
@@ -5128,30 +5514,73 @@ impl Filesystem for FodFuse {
 
     fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
         let (remaining, evicted) = self.forget_lookup_refs(ino.0, nlookup);
-        if fod_fuse_profile_metadata_cache_enabled() {
-            self.metadata_profile_forget_calls
-                .fetch_add(1, Ordering::Relaxed);
-            self.metadata_profile_forget_nlookup
-                .fetch_add(nlookup, Ordering::Relaxed);
-            info!(
-                "FOD forget profile: ino={} nlookup={} remaining={} evicted={}",
-                ino.0, nlookup, remaining, evicted
-            );
-        }
+        self.profile_forget_event(ino.0, nlookup, remaining, evicted);
     }
 
-    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+    fn getattr(&self, _req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
         let ino = ino.0;
         let req_id = self.next_request_id();
-        self.log_request_start(req_id, "getattr", format!("ino={}", ino));
+        self.log_request_start(req_id, "getattr", format!("ino={} fh={:?}", ino, fh));
+        if let Some(fh) = fh {
+            let fh = fh.0;
+            let file_id = self
+                .fh_table
+                .lock()
+                .ok()
+                .and_then(|guard| guard.get(&fh).and_then(|state| state.file_id));
+            if let Some(file_id) = file_id {
+                match self.attrs_for_open_file_id(file_id) {
+                    Ok(Some(attrs)) => {
+                        reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
+                        return;
+                    }
+                    Ok(None) => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                    Err(errno) => {
+                        self.log_request_error(
+                            req_id,
+                            "getattr",
+                            errno,
+                            format!("ino={} fh={} file_id={}", ino, fh, file_id),
+                        );
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                }
+            }
+        }
         match self.entry_attrs_for_ino(ino) {
             Ok((path, attrs)) => {
                 self.register_path(&path, attrs.file_attr.ino.0);
                 reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
             }
+            Err(ENOENT) => match self.attrs_for_open_inode(ino) {
+                Ok(Some(attrs)) => {
+                    debug!(
+                        "FOD req={} op=getattr open_inode_fallback ino={} nlink={}",
+                        req_id, ino, attrs.file_attr.nlink
+                    );
+                    reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
+                }
+                Ok(None) => {
+                    self.log_request_error(req_id, "getattr", ENOENT, format!("ino={}", ino));
+                    fuse_reply_error!(reply, ENOENT);
+                }
+                Err(errno) => {
+                    self.log_request_error(
+                        req_id,
+                        "getattr",
+                        errno,
+                        format!("ino={} open_inode_fallback", ino),
+                    );
+                    fuse_reply_error!(reply, errno);
+                }
+            },
             Err(errno) => {
                 self.log_request_error(req_id, "getattr", errno, format!("ino={}", ino));
-                fuse_reply_error!(reply, errno)
+                fuse_reply_error!(reply, errno);
             }
         }
     }
@@ -5307,8 +5736,8 @@ impl Filesystem for FodFuse {
             let entries = Self::decode_nul_fields(&blob);
             debug!("FOD readdir path={} entries={}", path, entries.len());
             for (index, name) in entries.into_iter().enumerate().skip(offset as usize) {
-                readdir_entries = readdir_entries.saturating_add(1);
                 let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
+                readdir_entries = readdir_entries.saturating_add(1);
                 let lookup_started = metadata_profile_enabled.then(Instant::now);
                 let lookup_result = self.lookup_path(&child_path);
                 if let Some(started) = lookup_started {
@@ -6238,7 +6667,13 @@ impl Filesystem for FodFuse {
         let fh = if writable {
             fh
         } else {
-            self.create_handle_for_file(path.clone(), Some(file_id), flags)
+            match self.create_handle_for_file(path.clone(), Some(file_id), flags) {
+                Ok(fh) => fh,
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
         };
 
         if writable && (flags & libc::O_TRUNC) != 0 {
@@ -6536,7 +6971,16 @@ impl Filesystem for FodFuse {
             fh, lock_owner, self.read_only
         );
         if self.read_only {
-            fuse_reply_error!(reply, libc::EROFS);
+            // flush(2) jest wywolywany przez kernel takze podczas close()
+            // czystego O_RDONLY. Read-only mount nie ma wtedy danych do
+            // utrwalenia, wiec EROFS byloby bledem close(), a nie ochrona
+            // przed modyfikacja filesystemu.
+            self.clear_locks_for_owner_and_sync(lock_owner, "flush", fh);
+            debug!(
+                "FOD flush completed read-only fh={} lock_owner={}",
+                fh, lock_owner
+            );
+            reply.ok();
             return;
         }
         self.register_local_lock_owner(lock_owner);
@@ -6938,7 +7382,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, errno);
             return;
         }
-        self.remove_handle_state(fh);
+        let removed_state = self.take_handle_state(fh);
+        if let Err(errno) =
+            self.finalize_deferred_unlink_after_handle_removal(removed_state.as_ref())
+        {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         debug!("FOD release completed fh={}", fh);
         reply.ok();
     }
@@ -7415,7 +7865,17 @@ impl Filesystem for FodFuse {
                     fuse_reply_error!(reply, errno);
                     return;
                 }
-                self.remove_primary_file_or_promote_hardlink(file_id)
+                match self.repo.count_file_links(file_id) {
+                    Ok(link_count) if link_count <= 1 => self.defer_open_primary_unlink(
+                        file_id,
+                        &parent_path,
+                        &child_path,
+                        entry_attrs.ino.0,
+                        req_id,
+                    ),
+                    Ok(_) => self.remove_primary_file_or_promote_hardlink(file_id),
+                    Err(err) => Err(err),
+                }
             }
             Some("hardlink") => {
                 let entry_attrs = match self.lookup_path(&child_path) {
@@ -7507,7 +7967,6 @@ impl Filesystem for FodFuse {
                 let _ =
                     self.append_journal_event(subject.uid, "unlink", &child_path, file_id, dir_id);
                 self.remove_cached_path(&child_path);
-                self.remove_cached_handle_paths(&child_path);
                 self.invalidate_statfs_cache();
                 debug!("FOD req={} op=unlink completed path={}", req_id, child_path);
                 reply.ok();
@@ -8163,7 +8622,14 @@ impl Filesystem for FodFuse {
                     return;
                 }
             };
-            let fh = self.create_handle_for_file(child_path.clone(), Some(file_id), flags);
+            let fh = match self.create_handle_for_file(child_path.clone(), Some(file_id), flags) {
+                Ok(fh) => fh,
+                Err(errno) => {
+                    let _ = self.remove_primary_file_or_promote_hardlink(file_id);
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            };
             (file_id, fh, true)
         };
 
@@ -8388,11 +8854,11 @@ impl Filesystem for FodFuse {
         let existing_size = if let Some(state) = existing_state.as_ref() {
             state.file_size
         } else {
-            let attrs_started = Instant::now();
-            let attrs_result = self.entry_attrs_for_ino(ino);
-            self.record_write_existing_size_lookup_elapsed(attrs_started.elapsed());
-            match attrs_result {
-                Ok((_, attrs)) => attrs.file_attr.size,
+            let size_started = Instant::now();
+            let size_result = self.file_size_for_file_id_or_errno(file_id);
+            self.record_write_existing_size_lookup_elapsed(size_started.elapsed());
+            match size_result {
+                Ok(size) => size,
                 Err(errno) => {
                     if let Some(existing_state) = existing_state {
                         self.update_write_state(fh, existing_state);
@@ -8404,7 +8870,7 @@ impl Filesystem for FodFuse {
                         req_id,
                         "write",
                         errno,
-                        format!("ino={} fh={} attrs", ino, fh),
+                        format!("ino={} fh={} file_id={} size", ino, fh, file_id),
                     );
                     fuse_reply_error!(reply, errno);
                     return;
@@ -9497,7 +9963,7 @@ mod tests {
     };
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::time::{Duration, SystemTime};
 
     fn file_attr(kind: FileType, atime_age_secs: u64, mtime_age_secs: u64) -> FileAttr {
@@ -9519,6 +9985,53 @@ mod tests {
             flags: 0,
             blksize: 4096,
         }
+    }
+
+    #[test]
+    fn forget_ref_delta_preserves_partial_lookup_count() {
+        let mut refs = HashMap::from([(11_u64, 3_u64)]);
+
+        assert_eq!(
+            super::FodFuse::apply_forget_ref_delta(&mut refs, 11, 1),
+            (2, false)
+        );
+        assert_eq!(refs.get(&11), Some(&2));
+    }
+
+    #[test]
+    fn forget_ref_delta_retires_exact_lookup_count() {
+        let mut refs = HashMap::from([(12_u64, 2_u64)]);
+
+        assert_eq!(
+            super::FodFuse::apply_forget_ref_delta(&mut refs, 12, 2),
+            (0, true)
+        );
+        assert!(!refs.contains_key(&12));
+    }
+
+    #[test]
+    fn forget_ref_delta_duplicate_inode_matches_sequential_forget() {
+        let mut refs = HashMap::from([(13_u64, 3_u64)]);
+
+        let first = super::FodFuse::apply_forget_ref_delta(&mut refs, 13, 1);
+        let second = super::FodFuse::apply_forget_ref_delta(&mut refs, 13, 2);
+        let third = super::FodFuse::apply_forget_ref_delta(&mut refs, 13, 1);
+
+        assert_eq!(first, (2, false));
+        assert_eq!(second, (0, true));
+        assert_eq!(third, (0, false));
+        assert!(!refs.contains_key(&13));
+    }
+
+    #[test]
+    fn forget_ref_delta_underflow_saturates_and_retires() {
+        let mut refs = HashMap::from([(14_u64, 1_u64)]);
+
+        assert_eq!(
+            super::FodFuse::apply_forget_ref_delta(&mut refs, 14, 3),
+            (0, true)
+        );
+        assert!(!refs.contains_key(&14));
     }
 
     #[test]

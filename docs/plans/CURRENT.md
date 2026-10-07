@@ -1,6 +1,6 @@
 # FOD current implementation plan
 
-Status: 2026-09-29.
+Status: 2026-10-06.
 
 This file contains only work that is current enough to direct the next change.
 
@@ -361,13 +361,56 @@ No database schema or storage-format change was required. Detailed C2 planning,
 baseline evidence and closure notes are archived in
 [`../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md`](../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md).
 
-## Active measured follow-up
+## C3-C6 — PostgreSQL-authoritative open-unlink crash convergence — completed
 
-Large-tree profiling now establishes retained inode/path mappings as a separate
-memory-lifetime issue: complete walks retained 6063, 12123 and 24243 entries,
-with process RSS increasing with tree size. The next selected task is therefore
-to implement and validate FUSE `forget`/`batch_forget` cache retirement
-without weakening stable-inode correctness.
+Schema v25 extends the multi-host authority model to open-unlinked file
+generations through `files.unlinked` and `file_open_leases`. Validation on the
+current branch now covers the crash/liveness boundary rather than only normal
+close behavior:
+
+- C3 kills the authoritative `fod-rust-fuse` PID and verifies both forced and
+  natural session expiry. The PostgreSQL lease survives the crash, another live
+  mount performs session prune plus orphan purge, and a recreated pathname
+  remains a distinct file/inode generation.
+- C4 keeps two independent holders of the old generation. After holder A dies
+  and its lease expires, holder B's active lease keeps the unlinked generation
+  alive and readable. Closing B releases the last lease and allows reclamation.
+- C5 crashes A and B at different times. PostgreSQL removes A without reclaiming
+  the old generation while B is active, then reclaims only after B later dies
+  and its natural TTL expires.
+- C6 kills both holder FUSE processes in one crash episode. A single PostgreSQL
+  snapshot checks session rows, lease rows, active leases and the unlinked file
+  row together. The measured run observed the intermediate one-active-lease
+  state and then zero active leases before purge; reclamation happened only
+  after the authoritative active-lease count reached zero.
+
+The mounted gates also verify replacement payload/inode isolation, hidden-name
+non-leakage and dead-FUSE teardown. No manual lease expiry is used in C4-C6.
+
+The open-unlink convergence sequence is therefore closed unless a new
+correctness regression appears. The inode/path cache-retirement follow-up below
+is also complete on the current production profile.
+
+## Inode/path cache retirement follow-up — completed
+
+The historical large-tree profile retained 6063, 12123 and 24243 inode/path
+entries as file count increased. The current production profile no longer
+reproduces that retained-file-path growth: 60/120/240 directories with 100
+files each ended at 64/124/244 inode/path entries and RSS of
+14,721,024/14,737,408/15,208,448 bytes.
+
+All three tree-scale runs reported `forget_calls=0`, so the improvement comes
+from the production default `FOD_READDIR_REGISTER_PATHS=0`, not from relying
+on kernel FORGET traffic. Explicit `forget` remains independently validated,
+including active handles, hardlink aliases and the 500-cycle convergence gate.
+
+`fuser 0.18.0` exposes `Filesystem::batch_forget`, and its default
+implementation delegates each batch item to `forget`. However the
+`ForgetOne` parameter type is not publicly re-exported by the crate, so a
+downstream filesystem cannot name the type and provide its own batch override
+without patching/upgrading fuser. FOD keeps the public-API-compatible fallback;
+reopen this only for a new measured need, especially directory-dominated cache
+growth or measurable per-item batch-forget overhead.
 
 The `readdir` metadata fanout issue is closed: batched directory metadata is
 the production default after 14.45-20.30× median `find` speedups and parity

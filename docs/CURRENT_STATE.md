@@ -259,6 +259,19 @@ Writable FOD mounts use PostgreSQL-authoritative write ownership introduced with
 schema version 24. The schema contains `fod.destination_write_leases` and
 `fod.file_write_leases`.
 
+Schema version 25 extends the same authority rule to open-unlink lifetime.
+`fod.files.unlinked` records a namespace-removed primary generation and
+`fod.file_open_leases` records open handles by client session. An unlinked file
+is reclaimed only when PostgreSQL sees no active open lease joined to an active
+client session. A recreated pathname uses a distinct file/inode generation.
+
+Crash convergence has mounted coverage for a single crashed holder with forced
+and natural TTL expiry, a surviving second holder, staggered crashes of two
+holders, and near-simultaneous crashes of both holders. In every validated
+case, another live mount's maintenance prunes expired sessions and purges the
+old generation only after the last authoritative lease is inactive; the
+replacement remains isolated.
+
 The runtime contract is:
 
 - destination/file ownership is first-writer-wins and acquired with
