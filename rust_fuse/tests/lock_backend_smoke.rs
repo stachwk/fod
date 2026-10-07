@@ -200,7 +200,6 @@ fn primary_lease_expiry_allows_second_mount_reacquire() -> Result<(), String> {
     )?;
     let fd_b = OpenOptions::new()
         .read(true)
-        .write(true)
         .open(
             primary_b
                 .mountpoint
@@ -230,18 +229,21 @@ fn primary_lease_expiry_allows_second_mount_reacquire() -> Result<(), String> {
         ));
     }
 
-    let mut reacquire = flock(libc::F_WRLCK as i16, 0, 0);
+    // Primary B jest celowo O_RDONLY: write ownership pozostaje pojedyncze,
+    // natomiast POSIX lock backend nadal musi pozwolic na read-lock po
+    // wygaśnięciu centralnego write-lock lease.
+    let mut reacquire = flock(libc::F_RDLCK as i16, 0, 0);
     fcntl_lock(fd_b.as_raw_fd(), libc::F_SETLK, &mut reacquire).map_err(|err| {
         format!(
-            "primary B reacquire after expiry failed: {err}\n{}",
+            "primary B read-lock reacquire after expiry failed: {err}\n{}",
             primary_b.log_tail(200)
         )
     })?;
 
     let primary_a_after_b_reacquire = query_lock(fd_a.as_raw_fd(), libc::F_WRLCK as i16)?;
-    if primary_a_after_b_reacquire.l_type != libc::F_WRLCK as i16 {
+    if primary_a_after_b_reacquire.l_type != libc::F_RDLCK as i16 {
         return Err(format!(
-            "primary A should see the reacquired lock as conflicting, got l_type={}",
+            "primary A should see the reacquired read lock as conflicting, got l_type={}",
             primary_a_after_b_reacquire.l_type
         ));
     }
@@ -296,7 +298,6 @@ fn primary_uses_pg_leases_and_replica_stays_memory_backed() -> Result<(), String
     let primary_b = MountedFs::start_with_role("lock-backend-primary-b", "primary", &[])?;
     let fd_b = OpenOptions::new()
         .read(true)
-        .write(true)
         .open(
             primary_b
                 .mountpoint
@@ -311,10 +312,12 @@ fn primary_uses_pg_leases_and_replica_stays_memory_backed() -> Result<(), String
         ));
     }
 
-    let mut blocked_write_lock = flock(libc::F_WRLCK as i16, 0, 0);
-    let blocked = unsafe { libc::fcntl(fd_b.as_raw_fd(), libc::F_SETLK, &mut blocked_write_lock) };
+    // O_RDONLY primary B nie konkuruje o write ownership. F_RDLCK jest
+    // jednak prawidlowym POSIX probe i musi konfliktowac z cudzym F_WRLCK.
+    let mut blocked_read_lock = flock(libc::F_RDLCK as i16, 0, 0);
+    let blocked = unsafe { libc::fcntl(fd_b.as_raw_fd(), libc::F_SETLK, &mut blocked_read_lock) };
     if blocked != -1 {
-        return Err("primary B unexpectedly acquired conflicting write lock".to_string());
+        return Err("primary B unexpectedly acquired conflicting read lock".to_string());
     }
     let blocked_errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
     if blocked_errno != libc::EWOULDBLOCK && blocked_errno != libc::EACCES {
@@ -396,7 +399,6 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
     let primary_b = MountedFs::start_with_role("lock-backend-range-primary-b", "primary", &[])?;
     let fd_b = OpenOptions::new()
         .read(true)
-        .write(true)
         .open(
             primary_b
                 .mountpoint
@@ -416,10 +418,12 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
         ));
     }
 
-    let mut blocked_write_lock = flock(libc::F_WRLCK as i16, range_start, range_len);
-    let blocked = unsafe { libc::fcntl(fd_b.as_raw_fd(), libc::F_SETLK, &mut blocked_write_lock) };
+    // Zakresowy read lock jest legalny na O_RDONLY i nadal musi widziec
+    // centralny write-lock lease pierwszego primary.
+    let mut blocked_read_lock = flock(libc::F_RDLCK as i16, range_start, range_len);
+    let blocked = unsafe { libc::fcntl(fd_b.as_raw_fd(), libc::F_SETLK, &mut blocked_read_lock) };
     if blocked != -1 {
-        return Err("primary B unexpectedly acquired conflicting range write lock".to_string());
+        return Err("primary B unexpectedly acquired conflicting range read lock".to_string());
     }
     let blocked_errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
     if blocked_errno != libc::EWOULDBLOCK && blocked_errno != libc::EACCES {
@@ -489,7 +493,6 @@ fn primary_uses_pg_range_leases_and_replica_stays_memory_backed() -> Result<(), 
     let primary_b = MountedFs::start_with_role("lock-backend-range-replica-b", "primary", &[])?;
     let fd_b = OpenOptions::new()
         .read(true)
-        .write(true)
         .open(
             primary_b
                 .mountpoint
