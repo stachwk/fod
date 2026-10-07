@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # Copyright (c) 2026 Wojciech Stach
 # Licensed under BSL 1.1
 
@@ -21,7 +22,6 @@ if str(ROOT) not in sys.path:
 
 from tests.integration.fod_mount import FODMount
 
-BLOCK_SIZE = 4096
 QUOTA_LOCK_KEY = (4607812, 1)
 
 
@@ -37,26 +37,37 @@ def database_connection(launcher: FODMount, *, autocommit: bool = True):
     return connection
 
 
-def payload_bytes(connection) -> int:
+def storage_snapshot(connection) -> tuple[int, int]:
+    # Quota jest liczona w skonfigurowanych blokach FOD. Test nie moze
+    # zakladac historycznego 4 KiB, bo produkcyjny block_size moze byc inny.
     with connection.cursor() as cursor:
         cursor.execute(
             """
             SELECT
                 (SELECT COUNT(*)::bigint FROM fod.data_blocks)
-                    * (SELECT value FROM fod.config WHERE key = 'block_size')
+                    * (SELECT value FROM fod.config WHERE key = 'block_size'),
+                (SELECT value FROM fod.config WHERE key = 'block_size')
             """
         )
-        return int(cursor.fetchone()[0])
+        payload_bytes, block_size = cursor.fetchone()
+        return int(payload_bytes), int(block_size)
 
 
-def write_and_sync(path: Path, marker: bytes, barrier: threading.Barrier) -> int | None:
+def write_and_sync(
+    path: Path,
+    marker: bytes,
+    write_size: int,
+    barrier: threading.Barrier,
+) -> int | None:
     descriptor = os.open(path, os.O_WRONLY)
     error_number = None
     try:
         barrier.wait()
-        written = os.write(descriptor, marker * BLOCK_SIZE)
-        if written != BLOCK_SIZE:
-            raise AssertionError(f"short write for {path}: {written}")
+        written = os.write(descriptor, marker * write_size)
+        if written != write_size:
+            raise AssertionError(
+                f"short write for {path}: expected={write_size} actual={written}"
+            )
         os.fsync(descriptor)
     except OSError as error:
         error_number = error.errno
@@ -137,7 +148,7 @@ def main() -> None:
             for path in paths:
                 path.touch()
 
-            baseline = payload_bytes(observer)
+            baseline, block_size = storage_snapshot(observer)
             with observer.cursor() as cursor:
                 cursor.execute(
                     "SELECT value FROM fod.config WHERE key = 'max_fs_size_bytes'"
@@ -149,7 +160,7 @@ def main() -> None:
                     SET value = %s
                     WHERE key = 'max_fs_size_bytes'
                     """,
-                    (baseline + BLOCK_SIZE,),
+                    (baseline + block_size,),
                 )
 
             with blocker.cursor() as cursor:
@@ -163,7 +174,10 @@ def main() -> None:
             def run_writer(index: int) -> None:
                 try:
                     results[index] = write_and_sync(
-                        paths[index], bytes([65 + index]), barrier
+                        paths[index],
+                        bytes([65 + index]),
+                        block_size,
+                        barrier,
                     )
                 except BaseException as error:
                     results[index] = error
@@ -198,15 +212,19 @@ def main() -> None:
                     f"expected one success and one ENOSPC, got {results}"
                 )
 
-            after = payload_bytes(observer)
-            if after != baseline + BLOCK_SIZE:
+            after, observed_block_size = storage_snapshot(observer)
+            if observed_block_size != block_size:
                 raise AssertionError(
-                    f"payload changed by {after - baseline}, expected {BLOCK_SIZE}"
+                    f"block_size changed during test: before={block_size} after={observed_block_size}"
+                )
+            if after != baseline + block_size:
+                raise AssertionError(
+                    f"payload changed by {after - baseline}, expected {block_size}"
                 )
 
             states = file_storage_state(observer, names)
             expected_states = {
-                names[winners[0]]: (BLOCK_SIZE, 1),
+                names[winners[0]]: (block_size, 1),
                 names[rejected[0]]: (0, 0),
             }
             if states != expected_states:
@@ -217,7 +235,8 @@ def main() -> None:
             print(
                 "OK two-mount quota "
                 f"waiters={waiting} winner={names[winners[0]]} "
-                f"rejected={names[rejected[0]]} payload_delta={after - baseline}"
+                f"rejected={names[rejected[0]]} payload_delta={after - baseline} "
+                f"block_size={block_size}"
             )
         finally:
             try:
