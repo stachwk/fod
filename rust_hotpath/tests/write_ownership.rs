@@ -404,13 +404,8 @@ fn c2_worker_entrypoint() {
 
     let result = (|| -> Result<(), String> {
         let started = Instant::now();
-        let lease = repo.acquire_write_ownership(
-            None,
-            &name,
-            Some(file_id),
-            owner,
-            WRITE_TTL_SECONDS,
-        )?;
+        let lease =
+            repo.acquire_write_ownership(None, &name, Some(file_id), owner, WRITE_TTL_SECONDS)?;
 
         match mode.as_str() {
             "reject" => {
@@ -432,7 +427,8 @@ fn c2_worker_entrypoint() {
                 println!(
                     "C2_WORKER_TOKENS={} {}",
                     lease.destination_fencing_token,
-                    lease.file_fencing_token
+                    lease
+                        .file_fencing_token
                         .ok_or_else(|| "C2: missing file fencing token".to_string())?
                 );
                 repo.release_write_ownership(owner, lease)?;
@@ -482,13 +478,7 @@ fn c2_independent_processes() {
     let result = (|| -> Result<(), String> {
         // A uzyskuje dzierzawe zanim B zostanie uruchomiony.
         let lease_a = repo
-            .acquire_write_ownership(
-                None,
-                &name,
-                Some(file_id),
-                owner_a,
-                WRITE_TTL_SECONDS,
-            )?
+            .acquire_write_ownership(None, &name, Some(file_id), owner_a, WRITE_TTL_SECONDS)?
             .ok_or_else(|| "C2: parent failed to acquire".to_string())?;
 
         let run_worker = |mode: &str| -> Result<String, String> {
@@ -532,7 +522,7 @@ fn c2_independent_processes() {
         let stdout = run_worker("takeover")?;
         let tokens_line = stdout
             .lines()
-            .find_map(|line| line.trim().strip_prefix("C2_WORKER_TOKENS="))
+            .find_map(|line| line.split_once("C2_WORKER_TOKENS=").map(|(_, value)| value.trim()))
             .ok_or_else(|| format!("C2: worker tokens missing:\n{stdout}"))?;
         let tokens = tokens_line
             .split_whitespace()
