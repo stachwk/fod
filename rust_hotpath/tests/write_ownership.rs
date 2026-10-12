@@ -2,6 +2,7 @@
 // Licensed under BSL 1.1
 
 use std::env;
+use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fod_rust_hotpath::pg::{DbRepo, WriteOwnershipLease};
@@ -361,6 +362,216 @@ fn first_writer_wins_heartbeat_release_and_stale_fencing() {
 
     cleanup(&repo_a, session_a, session_b, file_id, data_object_id);
 
+    if let Err(err) = result {
+        panic!("{err}");
+    }
+}
+
+ 
+// Proces pomocniczy C2 jest uruchamiany oddzielnie przez test nadrzedny.
+// Domyslnie jest ignorowany, aby nie wykonywac przypadkowych operacji.
+#[test]
+#[ignore = "Uruchamiany przez c2_independent_processes"]
+fn c2_worker_entrypoint() {
+    assert_isolated_test_database();
+
+    let mode = env::var("FOD_C2_MODE").expect("C2 mode");
+    let name = env::var("FOD_C2_NAME").expect("C2 name");
+    let file_id: u64 = env::var("FOD_C2_FILE_ID")
+        .expect("C2 file ID")
+        .parse()
+        .expect("numeric C2 file ID");
+    let owner: u64 = env::var("FOD_C2_OWNER")
+        .expect("C2 owner")
+        .parse()
+        .expect("numeric C2 owner");
+
+    let repo = DbRepo::new(&conninfo()).expect("C2 worker connect");
+    require_schema(&repo);
+
+    // Kazdy proces otrzymuje wlasna sesje i unikatowy klucz wlasciciela.
+    let session = repo
+        .register_client_session(
+            "write-ownership-c2-worker",
+            "/tmp/write-ownership-c2-worker",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C2 register worker session");
+    repo.touch_client_session_owner_key(session, owner)
+        .expect("C2 touch worker owner");
+
+    let result = (|| -> Result<(), String> {
+        let started = Instant::now();
+        let lease = repo.acquire_write_ownership(
+            None,
+            &name,
+            Some(file_id),
+            owner,
+            WRITE_TTL_SECONDS,
+        )?;
+
+        match mode.as_str() {
+            "reject" => {
+                // W razie regresji nie pozostawiamy przypadkowej dzierzawy.
+                if let Some(unexpected) = lease {
+                    repo.release_write_ownership(owner, unexpected)?;
+                    return Err("C2: second process acquired active ownership".into());
+                }
+                if started.elapsed() >= FAIL_FAST_LIMIT {
+                    return Err("C2: second process did not fail fast".into());
+                }
+                println!("C2_WORKER_REJECT=PASS");
+            }
+            "takeover" => {
+                let lease = lease.ok_or_else(|| {
+                    "C2: second process could not acquire released ownership".to_string()
+                })?;
+                // Zwracamy obydwa tokeny do procesu nadrzednego.
+                println!(
+                    "C2_WORKER_TOKENS={} {}",
+                    lease.destination_fencing_token,
+                    lease.file_fencing_token
+                        .ok_or_else(|| "C2: missing file fencing token".to_string())?
+                );
+                repo.release_write_ownership(owner, lease)?;
+                println!("C2_WORKER_TAKEOVER=PASS");
+            }
+            _ => return Err(format!("C2: unsupported mode {mode}")),
+        }
+        Ok(())
+    })();
+
+    // Sprzatamy sesje rowniez, gdy samo sprawdzenie nie przeszlo.
+    let cleanup_result = repo.exec(&format!(
+        "DELETE FROM client_sessions WHERE session_id = {session}"
+    ));
+    if let Err(err) = result {
+        panic!("{err}");
+    }
+    cleanup_result.expect("C2 worker session cleanup");
+}
+
+// C2: odrebne procesy OS konkuruja o jeden zasob, PostgreSQL rozstrzyga wlasnosc.
+#[test]
+fn c2_independent_processes() {
+    assert_isolated_test_database();
+    let repo = DbRepo::new(&conninfo()).expect("C2 parent connect");
+    repo.ensure_client_session_schema()
+        .expect("C2 ensure session schema");
+    require_schema(&repo);
+
+    let suffix = unique_suffix();
+    let owner_a = suffix.wrapping_add(30_001);
+    let owner_b = suffix.wrapping_add(40_001);
+    let session_a = repo
+        .register_client_session(
+            "write-ownership-c2-parent",
+            "/tmp/write-ownership-c2-parent",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C2 register parent session");
+    repo.touch_client_session_owner_key(session_a, owner_a)
+        .expect("C2 touch parent owner");
+
+    let (name, file_id, data_object_id) = create_test_file(&repo, suffix);
+    let result = (|| -> Result<(), String> {
+        // A uzyskuje dzierzawe zanim B zostanie uruchomiony.
+        let lease_a = repo
+            .acquire_write_ownership(
+                None,
+                &name,
+                Some(file_id),
+                owner_a,
+                WRITE_TTL_SECONDS,
+            )?
+            .ok_or_else(|| "C2: parent failed to acquire".to_string())?;
+
+        let run_worker = |mode: &str| -> Result<String, String> {
+            let binary = env::current_exe().map_err(|err| err.to_string())?;
+            let output = Command::new(binary)
+                .args([
+                    "--exact",
+                    "c2_worker_entrypoint",
+                    "--ignored",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("FOD_C2_MODE", mode)
+                .env("FOD_C2_NAME", &name)
+                .env("FOD_C2_FILE_ID", file_id.to_string())
+                .env("FOD_C2_OWNER", owner_b.to_string())
+                .output()
+                .map_err(|err| format!("C2 worker {mode} launch: {err}"))?;
+
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !output.status.success() {
+                return Err(format!("C2 worker {mode} failed:\n{stdout}\n{stderr}"));
+            }
+            let marker = match mode {
+                "reject" => "C2_WORKER_REJECT=PASS",
+                "takeover" => "C2_WORKER_TAKEOVER=PASS",
+                _ => return Err(format!("C2: unsupported worker mode {mode}")),
+            };
+            if !stdout.contains(marker) {
+                return Err(format!("C2 worker {mode} missing marker:\n{stdout}"));
+            }
+            Ok(stdout)
+        };
+
+        // B musi szybko przegrac z aktywnym A.
+        run_worker("reject")?;
+        repo.release_write_ownership(owner_a, lease_a)?;
+
+        // B przejmuje zwolniony zasob; porownujemy tokeny obu poziomow.
+        let stdout = run_worker("takeover")?;
+        let tokens_line = stdout
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("C2_WORKER_TOKENS="))
+            .ok_or_else(|| format!("C2: worker tokens missing:\n{stdout}"))?;
+        let tokens = tokens_line
+            .split_whitespace()
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("C2: invalid worker tokens: {err}"))?;
+        if tokens.len() != 2 {
+            return Err(format!("C2: expected two fencing tokens, got {tokens:?}"));
+        }
+        if tokens[0] <= lease_a.destination_fencing_token
+            || Some(tokens[1]) <= lease_a.file_fencing_token
+        {
+            return Err(format!(
+                "C2: fencing did not advance: old={:?}, new={tokens:?}",
+                lease_a
+            ));
+        }
+
+        // Stary wlasciciel nie moze odnowic nieaktualnego tokenu.
+        if repo.heartbeat_write_ownership(
+            None,
+            &name,
+            Some(file_id),
+            owner_a,
+            lease_a,
+            WRITE_TTL_SECONDS,
+        )? {
+            return Err("C2: stale parent heartbeat unexpectedly succeeded".into());
+        }
+        println!(
+            "C2_PROCESSES=PASS fencing={}->{}",
+            lease_a.destination_fencing_token, tokens[0]
+        );
+        Ok(())
+    })();
+
+    // Nie zostawiamy plikow ani sesji w bazie testowej.
+    cleanup(&repo, session_a, session_a, file_id, data_object_id);
     if let Err(err) = result {
         panic!("{err}");
     }
