@@ -367,7 +367,6 @@ fn first_writer_wins_heartbeat_release_and_stale_fencing() {
     }
 }
 
- 
 // Proces pomocniczy C2 jest uruchamiany oddzielnie przez test nadrzedny.
 // Domyslnie jest ignorowany, aby nie wykonywac przypadkowych operacji.
 #[test]
