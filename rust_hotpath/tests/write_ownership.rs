@@ -522,7 +522,10 @@ fn c2_independent_processes() {
         let stdout = run_worker("takeover")?;
         let tokens_line = stdout
             .lines()
-            .find_map(|line| line.split_once("C2_WORKER_TOKENS=").map(|(_, value)| value.trim()))
+            .find_map(|line| {
+                line.split_once("C2_WORKER_TOKENS=")
+                    .map(|(_, value)| value.trim())
+            })
             .ok_or_else(|| format!("C2: worker tokens missing:\n{stdout}"))?;
         let tokens = tokens_line
             .split_whitespace()
