@@ -2,7 +2,9 @@
 // Licensed under BSL 1.1
 
 use std::env;
-use std::process::Command;
+use std::fs;
+use std::thread;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fod_rust_hotpath::pg::{DbRepo, WriteOwnershipLease};
@@ -434,6 +436,25 @@ fn c2_worker_entrypoint() {
                 repo.release_write_ownership(owner, lease)?;
                 println!("C2_WORKER_TAKEOVER=PASS");
             }
+            "hold" => {
+                let lease = lease.ok_or_else(|| "C3: holder could not acquire".to_string())?;
+                let ready = env::var("FOD_C3_READY_FILE").map_err(|err| err.to_string())?;
+                // Sygnał gotowosci jest zapisywany dopiero po uzyskaniu dzierzawy.
+                fs::write(
+                    ready,
+                    format!(
+                        "{} {} {} {}",
+                        session,
+                        lease.destination_fencing_token,
+                        lease.file_fencing_token.ok_or_else(|| "C3: missing file token".to_string())?,
+                        owner
+                    ),
+                )
+                .map_err(|err| err.to_string())?;
+                // Proces nadrzedny zakonczy nas SIGKILL, bez zwalniania dzierzawy.
+                thread::sleep(Duration::from_secs(60));
+                return Err("C3: holder survived without SIGKILL".into());
+            }
             _ => return Err(format!("C2: unsupported mode {mode}")),
         }
         Ok(())
@@ -564,6 +585,112 @@ fn c2_independent_processes() {
 
     // Nie zostawiamy plikow ani sesji w bazie testowej.
     cleanup(&repo, session_a, session_a, file_id, data_object_id);
+    if let Err(err) = result {
+        panic!("{err}");
+    }
+}
+
+// C3: awaria procesu-wlasciciela i odzyskanie po wygasnieciu lease.
+// Wygasniecie jest przyspieszane wylacznie w izolowanej bazie testowej.
+#[cfg(unix)]
+#[test]
+fn c3_sigkill_holder_then_reacquire() {
+    assert_isolated_test_database();
+    let repo = DbRepo::new(&conninfo()).expect("C3 parent connect");
+    repo.ensure_client_session_schema().expect("C3 ensure schema");
+    require_schema(&repo);
+
+    let suffix = unique_suffix();
+    let owner_b = suffix.wrapping_add(50_001);
+    let (name, file_id, data_object_id) = create_test_file(&repo, suffix);
+    let ready = env::temp_dir().join(format!("fod-c3-ready-{}-{suffix}", std::process::id()));
+    let _ = fs::remove_file(&ready);
+    let mut child = Command::new(env::current_exe().expect("C3 executable"))
+        .args(["--exact", "c2_worker_entrypoint", "--ignored", "--nocapture", "--test-threads=1"])
+        .env("FOD_C2_MODE", "hold")
+        .env("FOD_C2_NAME", &name)
+        .env("FOD_C2_FILE_ID", file_id.to_string())
+        .env("FOD_C2_OWNER", suffix.wrapping_add(60_001).to_string())
+        .env("FOD_C3_READY_FILE", &ready)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("C3 spawn holder");
+
+    // Ograniczony czas oczekiwania i bezwarunkowe zakonczenie dziecka.
+    let result = (|| -> Result<(), String> {
+        let started = Instant::now();
+        while !ready.exists() {
+            if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
+                return Err(format!("C3 holder exited early: {status}"));
+            }
+            if started.elapsed() > Duration::from_secs(5) {
+                return Err("C3 holder readiness timeout".into());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let contents = fs::read_to_string(&ready).map_err(|err| err.to_string())?;
+        let values = contents
+            .split_whitespace()
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("C3 invalid readiness tokens: {err}"))?;
+        if values.len() != 4 {
+            return Err(format!("C3 invalid readiness payload: {contents}"));
+        }
+        let (session_a, destination_token, file_token, owner_a) =
+            (values[0], values[1], values[2], values[3]);
+
+        child.kill().map_err(|err| format!("C3 SIGKILL: {err}"))?;
+        child.wait().map_err(|err| format!("C3 wait: {err}"))?;
+
+        // Sam SIGKILL nie upowaznia drugiego procesu do przejecia.
+        if repo.acquire_write_ownership(None, &name, Some(file_id), owner_b, WRITE_TTL_SECONDS)?.is_some() {
+            return Err("C3: resource acquired before lease expiry".into());
+        }
+
+        // Testowe przyspieszenie zegara dzierzawy, bez 30-sekundowego sleep.
+        repo.exec(&format!(
+            "UPDATE destination_write_leases SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE name = '{name}' AND fencing_token = {destination_token};              UPDATE file_write_leases SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE file_id = {file_id} AND fencing_token = {file_token};"
+        ))?;
+
+        let lease_b = repo.acquire_write_ownership(
+            None, &name, Some(file_id), owner_b, WRITE_TTL_SECONDS
+        )?.ok_or_else(|| "C3: could not acquire after expiry".to_string())?;
+        assert!(
+            lease_b.destination_fencing_token > destination_token
+                && lease_b.file_fencing_token > Some(file_token),
+            "C3: fencing tokens did not advance"
+        );
+        // Stary token musi pozostac nieaktywny nawet po przejeciu przez B.
+        let old = WriteOwnershipLease {
+            destination_fencing_token: destination_token,
+            file_fencing_token: Some(file_token),
+        };
+        if repo.heartbeat_write_ownership(
+            None, &name, Some(file_id), owner_a, old, WRITE_TTL_SECONDS
+        )? {
+            return Err("C3: stale holder heartbeat succeeded".into());
+        }
+        repo.release_write_ownership(owner_b, lease_b)?;
+        repo.exec(&format!("DELETE FROM client_sessions WHERE session_id = {session_a}"))?;
+        println!("C3_SIGKILL=PASS fencing={destination_token}->{}", lease_b.destination_fencing_token);
+        Ok(())
+    })();
+
+    // Sprzatanie po bledzie, lacznie z przypadkiem timeout.
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_file(&ready);
+    let _ = repo.exec(&format!(
+        "DELETE FROM client_sessions WHERE session_id IN          (SELECT session_id FROM client_session_owner_keys WHERE owner_key = {})",
+        suffix.wrapping_add(60_001)
+    ));
+    // Awaryjne usuniecie dzierzaw dotyczy tylko identyfikatora testowego pliku.
+    let _ = repo.exec(&format!(
+        "DELETE FROM destination_write_leases WHERE name = '{name}';          DELETE FROM file_write_leases WHERE file_id = {file_id};"
+    ));
+    cleanup(&repo, 0, 0, file_id, data_object_id);
     if let Err(err) = result {
         panic!("{err}");
     }
