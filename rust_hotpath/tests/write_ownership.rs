@@ -446,7 +446,9 @@ fn c2_worker_entrypoint() {
                         "{} {} {} {}",
                         session,
                         lease.destination_fencing_token,
-                        lease.file_fencing_token.ok_or_else(|| "C3: missing file token".to_string())?,
+                        lease
+                            .file_fencing_token
+                            .ok_or_else(|| "C3: missing file token".to_string())?,
                         owner
                     ),
                 )
@@ -597,7 +599,8 @@ fn c2_independent_processes() {
 fn c3_sigkill_holder_then_reacquire() {
     assert_isolated_test_database();
     let repo = DbRepo::new(&conninfo()).expect("C3 parent connect");
-    repo.ensure_client_session_schema().expect("C3 ensure schema");
+    repo.ensure_client_session_schema()
+        .expect("C3 ensure schema");
     require_schema(&repo);
 
     let suffix = unique_suffix();
@@ -618,7 +621,13 @@ fn c3_sigkill_holder_then_reacquire() {
     let ready = env::temp_dir().join(format!("fod-c3-ready-{}-{suffix}", std::process::id()));
     let _ = fs::remove_file(&ready);
     let mut child = Command::new(env::current_exe().expect("C3 executable"))
-        .args(["--exact", "c2_worker_entrypoint", "--ignored", "--nocapture", "--test-threads=1"])
+        .args([
+            "--exact",
+            "c2_worker_entrypoint",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env("FOD_C2_MODE", "hold")
         .env("FOD_C2_NAME", &name)
         .env("FOD_C2_FILE_ID", file_id.to_string())
@@ -657,7 +666,10 @@ fn c3_sigkill_holder_then_reacquire() {
         child.wait().map_err(|err| format!("C3 wait: {err}"))?;
 
         // Sam SIGKILL nie upowaznia drugiego procesu do przejecia.
-        if repo.acquire_write_ownership(None, &name, Some(file_id), owner_b, WRITE_TTL_SECONDS)?.is_some() {
+        if repo
+            .acquire_write_ownership(None, &name, Some(file_id), owner_b, WRITE_TTL_SECONDS)?
+            .is_some()
+        {
             return Err("C3: resource acquired before lease expiry".into());
         }
 
@@ -666,9 +678,9 @@ fn c3_sigkill_holder_then_reacquire() {
             "UPDATE destination_write_leases SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE name = '{name}' AND fencing_token = {destination_token};              UPDATE file_write_leases SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE file_id = {file_id} AND fencing_token = {file_token};"
         ))?;
 
-        let lease_b = repo.acquire_write_ownership(
-            None, &name, Some(file_id), owner_b, WRITE_TTL_SECONDS
-        )?.ok_or_else(|| "C3: could not acquire after expiry".to_string())?;
+        let lease_b = repo
+            .acquire_write_ownership(None, &name, Some(file_id), owner_b, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C3: could not acquire after expiry".to_string())?;
         assert!(
             lease_b.destination_fencing_token > destination_token
                 && lease_b.file_fencing_token > Some(file_token),
@@ -680,13 +692,23 @@ fn c3_sigkill_holder_then_reacquire() {
             file_fencing_token: Some(file_token),
         };
         if repo.heartbeat_write_ownership(
-            None, &name, Some(file_id), owner_a, old, WRITE_TTL_SECONDS
+            None,
+            &name,
+            Some(file_id),
+            owner_a,
+            old,
+            WRITE_TTL_SECONDS,
         )? {
             return Err("C3: stale holder heartbeat succeeded".into());
         }
         repo.release_write_ownership(owner_b, lease_b)?;
-        repo.exec(&format!("DELETE FROM client_sessions WHERE session_id = {session_a}"))?;
-        println!("C3_SIGKILL=PASS fencing={destination_token}->{}", lease_b.destination_fencing_token);
+        repo.exec(&format!(
+            "DELETE FROM client_sessions WHERE session_id = {session_a}"
+        ))?;
+        println!(
+            "C3_SIGKILL=PASS fencing={destination_token}->{}",
+            lease_b.destination_fencing_token
+        );
         Ok(())
     })();
 
