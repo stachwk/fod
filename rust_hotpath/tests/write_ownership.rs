@@ -3,8 +3,8 @@
 
 use std::env;
 use std::fs;
-use std::thread;
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fod_rust_hotpath::pg::{DbRepo, WriteOwnershipLease};
@@ -439,7 +439,7 @@ fn c2_worker_entrypoint() {
             "hold" => {
                 let lease = lease.ok_or_else(|| "C3: holder could not acquire".to_string())?;
                 let ready = env::var("FOD_C3_READY_FILE").map_err(|err| err.to_string())?;
-                // Sygnał gotowosci jest zapisywany dopiero po uzyskaniu dzierzawy.
+                // Sygnal gotowosci jest zapisywany dopiero po uzyskaniu dzierzawy.
                 fs::write(
                     ready,
                     format!(
@@ -602,6 +602,18 @@ fn c3_sigkill_holder_then_reacquire() {
 
     let suffix = unique_suffix();
     let owner_b = suffix.wrapping_add(50_001);
+    let session_b = repo
+        .register_client_session(
+            "write-ownership-c3-parent",
+            "/tmp/write-ownership-c3-parent",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C3 register parent session");
+    repo.touch_client_session_owner_key(session_b, owner_b)
+        .expect("C3 touch parent owner");
     let (name, file_id, data_object_id) = create_test_file(&repo, suffix);
     let ready = env::temp_dir().join(format!("fod-c3-ready-{}-{suffix}", std::process::id()));
     let _ = fs::remove_file(&ready);
@@ -690,7 +702,7 @@ fn c3_sigkill_holder_then_reacquire() {
     let _ = repo.exec(&format!(
         "DELETE FROM destination_write_leases WHERE name = '{name}';          DELETE FROM file_write_leases WHERE file_id = {file_id};"
     ));
-    cleanup(&repo, 0, 0, file_id, data_object_id);
+    cleanup(&repo, session_b, session_b, file_id, data_object_id);
     if let Err(err) = result {
         panic!("{err}");
     }
