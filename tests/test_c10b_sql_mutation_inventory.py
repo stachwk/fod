@@ -157,6 +157,7 @@ GRANT SELECT ON file_write_leases TO fod_runtime;
             self.assertEqual(compact["files_scanned"], 2)
             self.assertEqual(compact["findings_count"], report["findings_count"])
             self.assertNotIn("findings", compact)
+
     def test_ignores_unscoped_paths_and_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
