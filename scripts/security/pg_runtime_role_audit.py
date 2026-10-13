@@ -27,18 +27,18 @@ def yesno(value: bool) -> str:
     return "YES" if value else "NO"
 
 
-def database_connection():
+def database_connection(database: str):
     return psycopg2.connect(
         host=os.environ.get("FOD_PG_HOST") or os.environ.get("POSTGRES_HOST", "127.0.0.1"),
         port=os.environ.get("FOD_PG_PORT") or os.environ.get("POSTGRES_PORT", "5432"),
-        dbname=os.environ.get("FOD_PG_DBNAME") or os.environ.get("POSTGRES_DB", "foddbname"),
+        dbname=database,
         user=os.environ.get("FOD_PG_USER") or os.environ.get("POSTGRES_USER", "foduser"),
         password=os.environ.get("FOD_PG_PASSWORD") or os.environ.get("POSTGRES_PASSWORD", ""),
         connect_timeout=5,
     )
 
 
-def audit(connection) -> tuple[str, list[str]]:
+def audit(connection, expected_database: str) -> tuple[str, list[str]]:
     # Set the transaction read-only before examining user and table privileges.
     connection.set_session(readonly=True, autocommit=False)
     with connection.cursor() as cursor:
@@ -56,6 +56,10 @@ def audit(connection) -> tuple[str, list[str]]:
         if row is None:
             raise RuntimeError("current database role was not found in pg_roles")
         database, role, session_role, superuser, createdb, createrole, bypassrls, owns_db = row
+        if database != expected_database:
+            raise RuntimeError(
+                f"audit connected to {database!r}, expected {expected_database!r}"
+            )
         print(
             f"C10_ROLE database={database} role={role} session_role={session_role} "
             f"superuser={yesno(superuser)} createdb={yesno(createdb)} "
@@ -143,14 +147,28 @@ def main() -> int:
         action="store_true",
         help="return nonzero if the current role can directly mutate FOD state",
     )
+    parser.add_argument(
+        "--database",
+        default=os.environ.get("FOD_AUDIT_DBNAME"),
+        help="explicit PostgreSQL database to audit; no implicit default",
+    )
     args = parser.parse_args()
+    if not args.database or not args.database.strip():
+        print(
+            "C10_AUDIT=ERROR stage=configuration "
+            "message=explicit_database_required "
+            "(use --database or FOD_AUDIT_DBNAME)",
+            file=sys.stderr,
+        )
+        return 3
+    print(f"C10_TARGET database={args.database}")
     try:
-        connection = database_connection()
+        connection = database_connection(args.database)
     except psycopg2.Error as error:
         print(f"C10_AUDIT=ERROR stage=connect type={type(error).__name__}", file=sys.stderr)
         return 3
     try:
-        status, reasons = audit(connection)
+        status, reasons = audit(connection, args.database)
     except (psycopg2.Error, RuntimeError) as error:
         print(f"C10_AUDIT=ERROR stage=query type={type(error).__name__}", file=sys.stderr)
         return 3
