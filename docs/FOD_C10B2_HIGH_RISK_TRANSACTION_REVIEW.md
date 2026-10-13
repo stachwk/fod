@@ -57,6 +57,7 @@ Próba TX-02A nie dowodzi jeszcze, że rzeczywisty cleanup utracił
 atomowość lub uszkodził dane. Następny warunek: dedykowane API
 przypiętej transakcji i test pozytywny izolacji wraz z rollback
 i konkurencyjnym writerem.
+
 ## TX-01/TX-02 — wymagany test atomowości przed poprawianiem cleanup
 
 1. Użyć **izolowanej bazy testowej**, nigdy `foddbname` ani produkcyjnego
