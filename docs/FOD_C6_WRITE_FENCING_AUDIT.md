@@ -134,7 +134,12 @@ Po zwolnieniu blokady rekordowej A zatwierdza przyłączenie
 obiektu danych. Dopiero wtedy B zdobywa wyższy token, zmienia dane
 i sprawdza odrzucenie ponownej adopcji na starym tokenie A.
 
-**C9: implementacja zapisana, walidacja lokalna oczekuje na wykonanie.**
+**C9: pierwsza walidacja FAILED (test readiness timeout, `C5: backend ... did not reach Lock/*`).**
+Przyczyna w kodzie testu: obie sesje zostały rejestrowane przez jeden `DbRepo`, którego
+`current_lock_session_id` wskazywał już sesję B podczas próby uzyskania lease A.
+Skorygowano na oddzielne `DbRepo` dla A i B oraz dodano asercję zgodności
+`file_write_leases.session_id` z sesją `WritePersistenceFence`.
+**C9 po poprawce: oczekuje na ponowną walidację.**
 C9 bada produkcyjną metodę PostgreSQL z kontrolowaną transakcją,
 ale nie stanowi jeszcze testu zatrzymanego jądrowego
 `copy_file_range` na poziomie dwóch rzeczywistych mountów FUSE.
