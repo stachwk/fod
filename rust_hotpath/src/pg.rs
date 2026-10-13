@@ -14002,15 +14002,6 @@ impl DbRepo {
             transactional_replay_confirmed(
                 conn,
                 |conn| {
-                    // Copy-on-write adoption modifies the destination file. The
-                    // advisory lock must be held through the same transaction.
-                    if let Some(fence) = write_fence {
-                        self.validate_write_persistence_fence_on_conn(
-                            conn,
-                            dst_file_id_for_fence,
-                            fence,
-                        )?;
-                    }
                     let src_info = fetch_file_info(conn, &src_file_id)?;
                     let (src_size, src_data_object_id) = match src_info {
                         Some(value) => value,
@@ -14031,6 +14022,15 @@ impl DbRepo {
                     Ok(None)
                 },
                 |conn| {
+                    // Copy-on-write adoption modifies the destination file. The
+                    // advisory lock must be held through the same transaction.
+                    if let Some(fence) = write_fence {
+                        self.validate_write_persistence_fence_on_conn(
+                            conn,
+                            dst_file_id_for_fence,
+                            fence,
+                        )?;
+                    }
                     let src_info = fetch_file_info(conn, &src_file_id)?;
                     let (src_size, src_data_object_id) = match src_info {
                         Some(value) => value,
