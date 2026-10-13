@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -130,6 +131,32 @@ GRANT SELECT ON file_write_leases TO fod_runtime;
                 for item in report["findings"]
             ))
 
+    def test_summary_is_compact_and_file_count_includes_zero_hit_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "rust_indexer/src/cleanup.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('repo.exec("DELETE FROM files WHERE id_file = 1")\n', encoding="utf-8")
+            untouched = root / "rust_fuse/src/read_cache.rs"
+            untouched.parent.mkdir(parents=True)
+            untouched.write_text("pub fn readonly() {}\n", encoding="utf-8")
+            report = collect(root)
+            self.assertEqual(report["files_scanned"], 2)
+            self.assertEqual(report["by_component"], {"rust_indexer": report["findings_count"]})
+            self.assertEqual(report["top_paths"][0]["path"], "rust_indexer/src/cleanup.rs")
+            runner = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/security/inventory_sql_mutations.py"),
+                    "--root", str(root), "--format", "json", "--summary", "--fail-on-empty",
+                ],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertEqual(runner.stderr, "")
+            compact = json.loads(runner.stdout)
+            self.assertEqual(compact["files_scanned"], 2)
+            self.assertEqual(compact["findings_count"], report["findings_count"])
+            self.assertNotIn("findings", compact)
     def test_ignores_unscoped_paths_and_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
