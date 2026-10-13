@@ -817,6 +817,7 @@ help:
 		'  make test-large-copy-benchmark - benchmark large copy_file_range transfers' \
 		'  make test-large-copy-object-adoption - verify one-request whole-file data-object adoption' \
 		'  make test-copy-file-range-multimount-ownership - check two-mount lease rejection and fenced full-object adoption (test DB only)' \
+		'  make test-copy-file-range-stale-multimount - reject stale full-object copy after cross-mount lease takeover (test DB only)' \
 		'  make test-data-blocks-conflict-benchmark - benchmark overwrite conflict updates in data_blocks' \
 		'  make test-data-blocks-conflict-noop-benchmark - benchmark same-payload overwrite filtering in data_blocks' \
 		'  make test-large-file-multiblock-benchmark - benchmark large multi-block file writes' \
@@ -1492,6 +1493,10 @@ test-copy-file-range: init
 .PHONY: test-copy-file-range-multimount-ownership
 test-copy-file-range-multimount-ownership: build-runtime venv
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range_multimount_ownership.py
+
+.PHONY: test-copy-file-range-stale-multimount
+test-copy-file-range-stale-multimount: build-runtime venv
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range_stale_multimount.py
 
 
 test-copy-dedupe-benchmark: test-rust-hotpath-copy-dedupe-benchmark
