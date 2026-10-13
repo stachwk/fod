@@ -26,6 +26,8 @@ RUST_DIRS = (
     "rust_runtime/src",
 )
 SQL_DIRS = ("migrations",)
+AUX_SOURCE_DIRS = ("scripts", "docker")
+AUX_EXTENSIONS = frozenset((".py", ".sh", ".sql"))
 OPERATION = re.compile(
     r"\b(?P<operation>"
     r"INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|"
@@ -41,7 +43,8 @@ EXECUTION_SINK = re.compile(
     r"\b(?P<sink>"
     r"PQexec(?:Params)?|exec_command_params|exec_params|exec_raw|"
     r"query_rows_text|query_scalar_text|"
-    r"(?:repo|conn|self)\s*\.\s*exec"
+    r"(?:repo|conn|self)\s*\.\s*exec|"
+    r"(?:cursor|connection|conn)\s*\.\s*execute"
     r")\s*\(",
 )
 FUNCTION = re.compile(
@@ -66,6 +69,13 @@ def discover(root: Path) -> list[Path]:
         folder = root / dirname
         if folder.is_dir():
             paths.update(p for p in folder.rglob("*.sql") if p.is_file())
+    for dirname in AUX_SOURCE_DIRS:
+        folder = root / dirname
+        if folder.is_dir():
+            paths.update(
+                p for p in folder.rglob("*")
+                if p.is_file() and p.suffix in AUX_EXTENSIONS
+            )
     return sorted(paths)
 
 
@@ -125,7 +135,7 @@ def inventory_file(path: Path, root: Path) -> list[dict[str, object]]:
                     "category": _category(relpath, operation, relation),
                 }
             )
-        if path.suffix == ".rs":
+        if path.suffix in (".rs", ".py"):
             for match in EXECUTION_SINK.finditer(line):
                 sink = " ".join(match.group("sink").split())
                 key = (index + 1, "sink", sink)
