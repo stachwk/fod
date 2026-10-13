@@ -1,6 +1,6 @@
 # C10 — PostgreSQL role boundary and direct-write bypass audit
 
-Status: **C10-A implemented, awaiting local read-only validation** (2026-10-13).
+Status: **C10-A implemented, awaiting local read-only validation** (2026-10-13). The first execution returned `make: No rule to make target 'audit-postgres-runtime-role'` because only the internal Makefile had that target. The public `Makefile` now forwards the command, and `tests/test_make_target_naming_policy.sh` verifies that the public target resolves.
 
 ## Why this audit is necessary
 
