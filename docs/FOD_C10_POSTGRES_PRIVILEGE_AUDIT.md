@@ -1,6 +1,6 @@
 # C10 — PostgreSQL role boundary and direct-write bypass audit
 
-Status: **C10-A implemented, awaiting local read-only validation** (2026-10-13). The first execution returned `make: No rule to make target 'audit-postgres-runtime-role'` because only the internal Makefile had that target. The public `Makefile` now forwards the command, and `tests/test_make_target_naming_policy.sh` verifies that the public target resolves.
+Status: **C10-A preliminary privilege audit completed; database targeting defect corrected, rerun pending** (2026-10-13). The first successful audit reported `database=foddbname`, `role=foduser`, `superuser=YES`, direct DML on 6/6 FOD tables and `C10_DIRECT_DML_BYPASS=YES`. This was not the requested `foddbname_hotpath_test` database: internal Make rewrote the environment's `POSTGRES_DB` to `POSTGRES_DB_BASE`. The initial run was strictly read-only. A subsequent fix captures the caller's explicit database before Make recursion and requires the audit script to verify `current_database()`.
 
 ## Why this audit is necessary
 
@@ -51,10 +51,15 @@ POSTGRES_DB=foddbname_hotpath_test make audit-postgres-runtime-role
 Or for the strict policy check (exit 2 if unrestricted or incomplete):
 
 ```bash
-FOD_PG_DBNAME=foddbname_hotpath_test \
-POSTGRES_DB=foddbname_hotpath_test \
-.venv/bin/python scripts/security/pg_runtime_role_audit.py --strict
+.venv/bin/python scripts/security/pg_runtime_role_audit.py \
+  --database foddbname_hotpath_test --strict
 ```
+
+The public Make target also accepts `FOD_AUDIT_DBNAME=foddbname_hotpath_test`
+as an explicit override. It **requires** an explicitly chosen database;
+omitting the database returns `C10_AUDIT=ERROR stage=configuration` instead
+of silently checking `foddbname`. The script prints `C10_TARGET database=...`
+and validates `current_database()` before interpreting any privilege results.
 
 The script connects as the configured **runtime role**, enters a
 `READ ONLY` transaction, reads `pg_roles`, schema ownership and effective
