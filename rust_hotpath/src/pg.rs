@@ -13907,6 +13907,25 @@ impl DbRepo {
         src_file_id: u64,
         dst_file_id: u64,
     ) -> Result<bool, String> {
+        self.adopt_source_data_object_optional_fence(src_file_id, dst_file_id, None)
+    }
+
+    pub fn adopt_source_data_object_with_fence(
+        &self,
+        src_file_id: u64,
+        dst_file_id: u64,
+        write_fence: WritePersistenceFence,
+    ) -> Result<bool, String> {
+        self.adopt_source_data_object_optional_fence(src_file_id, dst_file_id, Some(write_fence))
+    }
+
+    fn adopt_source_data_object_optional_fence(
+        &self,
+        src_file_id: u64,
+        dst_file_id: u64,
+        write_fence: Option<WritePersistenceFence>,
+    ) -> Result<bool, String> {
+        let dst_file_id_for_fence = dst_file_id;
         let sql_file_info =
             CString::new("SELECT size, data_object_id FROM files WHERE id_file = $1")
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -13983,6 +14002,15 @@ impl DbRepo {
             transactional_replay_confirmed(
                 conn,
                 |conn| {
+                    // Copy-on-write adoption modifies the destination file. The
+                    // advisory lock must be held through the same transaction.
+                    if let Some(fence) = write_fence {
+                        self.validate_write_persistence_fence_on_conn(
+                            conn,
+                            dst_file_id_for_fence,
+                            fence,
+                        )?;
+                    }
                     let src_info = fetch_file_info(conn, &src_file_id)?;
                     let (src_size, src_data_object_id) = match src_info {
                         Some(value) => value,
