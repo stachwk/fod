@@ -3477,6 +3477,7 @@ impl FodFuse {
                 state.buffered_bytes = 0;
                 state.load_error = false;
                 state.clear_payload();
+                self.attach_write_persistence_fence_for_handle(fh_out, &mut state)?;
                 if let Err(errno) = self.flush_write_state(&mut state) {
                     self.log_request_error(req_id, op, errno, format!("fh_out={} flush", fh_out));
                     return Err(errno);
@@ -3517,7 +3518,7 @@ impl FodFuse {
         let dedupe_enabled = self.copy_dedupe_enabled_for_len(copy_len);
 
         if adopt_whole_object {
-            match self.repo.adopt_source_data_object(src_file_id, dst_file_id) {
+            match self.adopt_source_data_object_for_handle(fh_out, src_file_id, dst_file_id) {
                 Ok(true) => {
                     if let Some(state) = dst_state.as_ref() {
                         let mut state = self.clone_write_state_profiled(state);
@@ -4620,6 +4621,39 @@ impl FodFuse {
                 },
             ))
         })
+    }
+
+    fn adopt_source_data_object_for_handle(
+        &self,
+        fh_out: u64,
+        src_file_id: u64,
+        dst_file_id: u64,
+    ) -> Result<bool, libc::c_int> {
+        let Some((ownership_file_id, write_fence)) =
+            self.write_persistence_fence_for_handle(fh_out)
+        else {
+            warn!(
+                "FOD data-object adoption refused fh_out={} dst_file_id={} reason=no_write_fence",
+                fh_out, dst_file_id
+            );
+            return Err(EIO);
+        };
+        if ownership_file_id != dst_file_id {
+            warn!(
+                "FOD data-object adoption refused fh_out={} dst_file_id={} owned_file_id={}",
+                fh_out, dst_file_id, ownership_file_id
+            );
+            return Err(EIO);
+        }
+        self.repo
+            .adopt_source_data_object_with_fence(src_file_id, dst_file_id, write_fence)
+            .map_err(|err| {
+                warn!(
+                    "FOD data-object adoption fenced transaction failed src_file_id={} dst_file_id={} err={}",
+                    src_file_id, dst_file_id, err
+                );
+                EIO
+            })
     }
 
     fn attach_write_persistence_fence_for_handle(
@@ -9436,7 +9470,7 @@ impl Filesystem for FodFuse {
         let dedupe_enabled = self.copy_dedupe_enabled_for_len(copy_len);
 
         if adopt_whole_object {
-            match self.repo.adopt_source_data_object(src_file_id, dst_file_id) {
+            match self.adopt_source_data_object_for_handle(fh_out, src_file_id, dst_file_id) {
                 Ok(true) => {
                     if let Some(state) = dst_state.as_ref() {
                         let mut state = self.clone_write_state_profiled(state);
