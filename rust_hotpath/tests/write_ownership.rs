@@ -1035,12 +1035,14 @@ fn c5_persist_worker_entrypoint() {
     // Sygnal zawiera identyfikatory dzierzawy przed wywolaniem prawdziwego persist.
     fs::write(
         ready,
-        format!("{session} {} {token} {owner}", lease.destination_fencing_token),
+        format!(
+            "{session} {} {token} {owner}",
+            lease.destination_fencing_token
+        ),
     )
     .expect("C5 publish ready");
     let data = vec![b'A'; usize::try_from(block_size).expect("C5 block size usize")];
-    c4_persist_payload(&repo, file_id, block_size, &data, fence)
-        .expect("C5 writer persist");
+    c4_persist_payload(&repo, file_id, block_size, &data, fence).expect("C5 writer persist");
     // Celowo zostawiamy wygasly lease i aktywna sesje do czasu przejecia przez B.
     // Test nadrzedny usuwa sesje po sprawdzeniu odrzucenia starego tokenu.
     println!("C5_WORKER_COMMIT=PASS");
@@ -1292,9 +1294,7 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
         }
         c4_assert_payload(&repo_b, file_id, block_size, &after_b)?;
         repo_b.release_write_ownership(owner_b, lease_b)?;
-        println!(
-            "C5_INFLIGHT_PERSIST=PASS fencing={file_token}->{new_token} bytes={block_size}"
-        );
+        println!("C5_INFLIGHT_PERSIST=PASS fencing={file_token}->{new_token} bytes={block_size}");
         Ok(())
     })();
 
