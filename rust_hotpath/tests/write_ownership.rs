@@ -904,8 +904,8 @@ fn c4_stale_fence_rejects_persisted_payload() {
         c4_assert_payload(&repo_a, file_id, block_size, &data_b)?;
 
         // A probuje zapisac CCCC z nieaktualnym tokenem A.
-        let stale_error =
-            match c4_persist_payload(&repo_a, file_id, block_size, &data_stale, fence_a) {
+        let stale_result = c4_persist_payload(&repo_a, file_id, block_size, &data_stale, fence_a);
+        let stale_error = match stale_result {
             Ok(()) => return Err("C4: stale writer A persisted data".into()),
             Err(err) => err,
         };
