@@ -1960,8 +1960,10 @@ fn c6_stream_import_and_size_require_no_active_file_lease() {
 #[test]
 fn c9_inflight_adoption_blocks_takeover_until_commit() {
     assert_isolated_test_database();
-    let repo_b = DbRepo::new(&conninfo()).expect("C9 connect coordinator");
-    repo_b.ensure_client_session_schema().expect("C9 ensure schema");
+    let repo_a = DbRepo::new(&conninfo()).expect("C9 connect adopter owner");
+    let repo_b = DbRepo::new(&conninfo()).expect("C9 connect contender");
+    repo_a.ensure_client_session_schema().expect("C9 ensure schema A");
+    repo_b.ensure_client_session_schema().expect("C9 ensure schema B");
     require_schema(&repo_b);
 
     let bs = scalar_u64(
@@ -1978,7 +1980,7 @@ fn c9_inflight_adoption_blocks_takeover_until_commit() {
         create_test_file(&repo_b, suffix.wrapping_add(1));
     let mut objects = vec![src_initial_object, dst_initial_object];
 
-    let session_a = repo_b
+    let session_a = repo_a
         .register_client_session(
             "write-ownership-c9-adopter",
             "/tmp/write-ownership-c9-adopter",
@@ -1998,7 +2000,7 @@ fn c9_inflight_adoption_blocks_takeover_until_commit() {
             SESSION_TTL_SECONDS,
         )
         .expect("C9 register session B");
-    repo_b
+    repo_a
         .touch_client_session_owner_key(session_a, owner_a)
         .expect("C9 owner A");
     repo_b
@@ -2023,11 +2025,23 @@ fn c9_inflight_adoption_blocks_takeover_until_commit() {
     );
     objects.push(source_object);
 
-    let lease_a = repo_b
+    let lease_a = repo_a
         .acquire_write_ownership(None, &dst_name, Some(dst_id), owner_a, WRITE_TTL_SECONDS)
         .expect("C9 acquire A")
         .expect("C9 owner A must acquire destination");
     let token_a = lease_a.file_fencing_token.expect("C9 file token A");
+    // The database lease MUST belong to the same client session as the
+    // fencing token. A shared DbRepo for A and B would silently switch
+    // current_lock_session_id and make this test exit before its row lock.
+    let actual_session_a = scalar_u64(
+        &repo_b,
+        &format!("SELECT session_id FROM file_write_leases WHERE file_id = {dst_id}"),
+        "C9 file lease session A",
+    );
+    assert_eq!(
+        actual_session_a, session_a,
+        "C9 lease is not registered for the adopter's fencing session"
+    );
     let fence_a = WritePersistenceFence {
         session_id: session_a,
         owner_key: owner_a,
