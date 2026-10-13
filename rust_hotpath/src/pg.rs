@@ -13607,6 +13607,48 @@ impl DbRepo {
         ))
     }
 
+    // Legacy and FFI callers do not carry WritePersistenceFence. A legacy
+    // mutation is permitted only while no live file write lease exists.
+    // The same advisory xact lock serializes this check with new ownership
+    // acquisition and with fenced writes on all FOD clients.
+    unsafe fn reject_unfenced_write_during_active_lease_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+    ) -> Result<(), String> {
+        let resource_key = CString::new(format!("fod:write:file:{file_id}"))
+            .map_err(|_| "legacy write advisory resource contains NUL byte".to_string())?;
+        if !Self::try_advisory_xact_lock_text_on_conn(conn, &resource_key)? {
+            return Err(format!(
+                "{} file_id={} missing_fence advisory_busy",
+                WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX, file_id
+            ));
+        }
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "legacy write file id contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM file_write_leases
+                WHERE file_id = $1
+                  AND lease_expires_at > clock_timestamp()
+            )::text",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let res = exec_params(conn, &sql, &[&file_id_text])?;
+        let active = fetch_single_text(res)?;
+        if matches!(
+            active.trim().to_ascii_lowercase().as_str(),
+            "t" | "true" | "1" | "on"
+        ) {
+            return Err(format!(
+                "{} file_id={} missing_fence active_file_lease",
+                WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX, file_id
+            ));
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn persist_file_blocks_with_crc_flag_reservation_and_fence(
         &self,
@@ -13627,6 +13669,8 @@ impl DbRepo {
             let result = transactional_replayable(conn, |conn| {
                 if let Some(write_fence) = write_fence {
                     self.validate_write_persistence_fence_on_conn(conn, file_id, write_fence)?;
+                } else {
+                    self.reject_unfenced_write_during_active_lease_on_conn(conn, file_id)?;
                 }
                 if capacity_reservation_token.is_some() {
                     let quota_lock = self.lock_payload_quota_on_conn(conn)?;
