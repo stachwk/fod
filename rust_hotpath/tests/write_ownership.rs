@@ -7,7 +7,10 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use fod_rust_hotpath::pg::{DbRepo, WriteOwnershipLease};
+use fod_rust_hotpath::pg::{
+    DbRepo, PersistBlockRow, WriteOwnershipLease, WritePersistenceFence,
+    WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+};
 
 const FAIL_FAST_LIMIT: Duration = Duration::from_secs(1);
 const SESSION_TTL_SECONDS: u64 = 120;
@@ -725,6 +728,263 @@ fn c3_sigkill_holder_then_reacquire() {
         "DELETE FROM destination_write_leases WHERE name = '{name}';          DELETE FROM file_write_leases WHERE file_id = {file_id};"
     ));
     cleanup(&repo, session_b, session_b, file_id, data_object_id);
+    if let Err(err) = result {
+        panic!("{err}");
+    }
+}
+
+
+// C4 uzywa rzeczywistej sciezki utrwalania blokow, bez recznego UPDATE data_blocks.
+fn c4_persist_payload(
+    repo: &DbRepo,
+    file_id: u64,
+    block_size: u64,
+    data: &[u8],
+    fence: WritePersistenceFence,
+) -> Result<(), String> {
+    let blocks = [PersistBlockRow {
+        block_index: 0,
+        data,
+        used_len: block_size,
+    }];
+    repo.persist_file_blocks_with_crc_flag_reservation_and_fence(
+        file_id,
+        block_size,
+        block_size,
+        1,
+        true,
+        &blocks,
+        false,
+        None,
+        Some(fence),
+    )
+}
+
+// C4 sprawdza bajty odczytane przez API PostgreSQL, a nie stan lokalnego bufora.
+fn c4_assert_payload(
+    repo: &DbRepo,
+    file_id: u64,
+    block_size: u64,
+    expected: &[u8],
+) -> Result<(), String> {
+    let actual = repo
+        .load_block(file_id, 0, block_size)?
+        .ok_or_else(|| "C4: persisted data block is missing".to_string())?;
+    if actual != expected {
+        return Err("C4: persisted payload differs from expected bytes".into());
+    }
+    Ok(())
+}
+
+// C4: przejecie wlasnosci nie moze pozwolic staremu klientowi nadpisac danych.
+#[test]
+fn c4_stale_fence_rejects_persisted_payload() {
+    assert_isolated_test_database();
+
+    let repo_a = DbRepo::new(&conninfo()).expect("C4 connect A");
+    let repo_b = DbRepo::new(&conninfo()).expect("C4 connect B");
+    repo_a
+        .ensure_client_session_schema()
+        .expect("C4 ensure session schema A");
+    repo_b
+        .ensure_client_session_schema()
+        .expect("C4 ensure session schema B");
+    require_schema(&repo_a);
+
+    let block_size = scalar_u64(
+        &repo_a,
+        "SELECT value FROM config WHERE key = 'block_size'",
+        "C4 read configured block size",
+    );
+    assert!(
+        (1024..=1024 * 1024).contains(&block_size),
+        "C4: unexpected test block size: {block_size}"
+    );
+    let block_size_usize = usize::try_from(block_size).expect("C4 block size fits usize");
+    let data_a = vec![b'A'; block_size_usize];
+    let data_b = vec![b'B'; block_size_usize];
+    let data_stale = vec![b'C'; block_size_usize];
+
+    let suffix = unique_suffix();
+    let owner_a = suffix.wrapping_add(70_001);
+    let owner_b = suffix.wrapping_add(80_001);
+    let session_a = repo_a
+        .register_client_session(
+            "write-ownership-c4-a",
+            "/tmp/write-ownership-c4-a",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C4 register A");
+    let session_b = repo_b
+        .register_client_session(
+            "write-ownership-c4-b",
+            "/tmp/write-ownership-c4-b",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()).saturating_add(1),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C4 register B");
+    repo_a
+        .touch_client_session_owner_key(session_a, owner_a)
+        .expect("C4 touch owner A");
+    repo_b
+        .touch_client_session_owner_key(session_b, owner_b)
+        .expect("C4 touch owner B");
+
+    let (name, file_id, initial_data_object_id) = create_test_file(&repo_a, suffix);
+    // Zapis pelnego bloku moze zamieniac data_object_id (copy-on-write).
+    let mut data_object_ids = vec![initial_data_object_id];
+
+    let result = (|| -> Result<(), String> {
+        let lease_a = repo_a
+            .acquire_write_ownership(None, &name, Some(file_id), owner_a, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C4: writer A could not acquire".to_string())?;
+        let file_token_a = lease_a
+            .file_fencing_token
+            .ok_or_else(|| "C4: writer A has no file fencing token".to_string())?;
+        let fence_a = WritePersistenceFence {
+            session_id: session_a,
+            owner_key: owner_a,
+            file_fencing_token: file_token_a,
+        };
+
+        // A utrwala dane z aktywnym tokenem i odczytuje je przez PostgreSQL.
+        c4_persist_payload(&repo_a, file_id, block_size, &data_a, fence_a)?;
+        data_object_ids.push(scalar_u64(
+            &repo_a,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {file_id}"),
+            "C4 data object after A",
+        ));
+        c4_assert_payload(&repo_b, file_id, block_size, &data_a)?;
+
+        // B nie moze przejac aktywnego lease A.
+        if repo_b
+            .acquire_write_ownership(None, &name, Some(file_id), owner_b, WRITE_TTL_SECONDS)?
+            .is_some()
+        {
+            return Err("C4: B acquired active A ownership".into());
+        }
+
+        // Przyspieszamy wygasniecie tylko w izolowanej bazie testowej.
+        repo_a.exec(&format!(
+            "UPDATE destination_write_leases \
+             SET lease_expires_at = clock_timestamp() - interval '1 second' \
+             WHERE parent_key = 0 AND name = '{name}' \
+               AND fencing_token = {}; \
+             UPDATE file_write_leases \
+             SET lease_expires_at = clock_timestamp() - interval '1 second' \
+             WHERE file_id = {file_id} AND fencing_token = {file_token_a};",
+            lease_a.destination_fencing_token
+        ))?;
+
+        let lease_b = repo_b
+            .acquire_write_ownership(None, &name, Some(file_id), owner_b, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C4: B could not acquire expired ownership".to_string())?;
+        assert_token_advanced(lease_a, lease_b);
+        let file_token_b = lease_b
+            .file_fencing_token
+            .ok_or_else(|| "C4: writer B has no file fencing token".to_string())?;
+        let fence_b = WritePersistenceFence {
+            session_id: session_b,
+            owner_key: owner_b,
+            file_fencing_token: file_token_b,
+        };
+
+        // B zatwierdza swoj blok. Musi on pozostac niezmieniony po probie A.
+        c4_persist_payload(&repo_b, file_id, block_size, &data_b, fence_b)?;
+        let object_after_b = scalar_u64(
+            &repo_b,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {file_id}"),
+            "C4 data object after B",
+        );
+        data_object_ids.push(object_after_b);
+        c4_assert_payload(&repo_a, file_id, block_size, &data_b)?;
+
+        // A probuje zapisac CCCC z nieaktualnym tokenem A.
+        let stale_error = match c4_persist_payload(
+            &repo_a,
+            file_id,
+            block_size,
+            &data_stale,
+            fence_a,
+        ) {
+            Ok(()) => return Err("C4: stale writer A persisted data".into()),
+            Err(err) => err,
+        };
+        if !stale_error.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) {
+            return Err(format!(
+                "C4: stale write failed for an unexpected reason: {stale_error}"
+            ));
+        }
+
+        // Sprawdzamy bajty, liczbe blokow oraz brak zmiany data_object_id.
+        c4_assert_payload(&repo_b, file_id, block_size, &data_b)?;
+        let object_after_rejection = scalar_u64(
+            &repo_b,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {file_id}"),
+            "C4 data object after stale rejection",
+        );
+        if object_after_rejection != object_after_b {
+            return Err("C4: stale write changed data_object_id".into());
+        }
+        if repo_b.count_file_blocks(file_id)? != 1 {
+            return Err("C4: expected exactly one persisted block".into());
+        }
+        if repo_b.file_read_metadata(file_id)?
+            .ok_or_else(|| "C4: file metadata missing".to_string())?
+            .size != block_size
+        {
+            return Err("C4: persisted file size changed".into());
+        }
+
+        // A po utracie lease nie moze rowniez odnowic starego tokenu.
+        if repo_a.heartbeat_write_ownership(
+            None,
+            &name,
+            Some(file_id),
+            owner_a,
+            lease_a,
+            WRITE_TTL_SECONDS,
+        )? {
+            return Err("C4: stale A heartbeat succeeded".into());
+        }
+        repo_b.release_write_ownership(owner_b, lease_b)?;
+        println!(
+            "C4_STALE_PERSIST=PASS fencing={}->{} bytes={} stale_rejected=1",
+            file_token_a, file_token_b, block_size
+        );
+        Ok(())
+    })();
+
+    // Sprzatanie obiektow utworzonych przez copy-on-write, nawet po bledzie testu.
+    if let Ok(current) = repo_a.query_scalar_text(&format!(
+        "SELECT data_object_id FROM files WHERE id_file = {file_id}"
+    )) {
+        if let Ok(id) = current.trim().parse::<u64>() {
+            data_object_ids.push(id);
+        }
+    }
+    data_object_ids.sort_unstable();
+    data_object_ids.dedup();
+    let object_ids = data_object_ids
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let cleanup_result = repo_a.exec(&format!(
+        "DELETE FROM destination_write_leases WHERE parent_key = 0 AND name = '{name}'; \
+         DELETE FROM file_write_leases WHERE file_id = {file_id}; \
+         DELETE FROM client_sessions WHERE session_id IN ({session_a}, {session_b}); \
+         DELETE FROM files WHERE id_file = {file_id}; \
+         DELETE FROM data_objects WHERE id_data_object IN ({object_ids});"
+    ));
+    if let Err(err) = cleanup_result {
+        panic!("C4 cleanup failed: {err}; test result: {result:?}");
+    }
     if let Err(err) = result {
         panic!("{err}");
     }
