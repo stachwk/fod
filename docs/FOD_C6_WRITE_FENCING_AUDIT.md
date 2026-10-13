@@ -107,9 +107,34 @@ tworzy źródło z danymi i pusty plik docelowy, a następnie:
 
 Wymagana baza testowa: `FOD_PG_DBNAME=foddbname_hotpath_test`
 i `POSTGRES_DB=foddbname_hotpath_test`.
-**C8 oczekuje na lokalną walidację z uruchomionym FUSE.**
+**C8 PASS (2026-10-13).** Wykonano test z dwoma mountami: `C8_FUSE_STALE_COPY=PASS token=80->81 stale_errno=5 takeover_ms=20.913 stale_ms=14.672 bytes=65536 mounts=2`, `C8_MULTIMOUNT_RC=0`. Test potwierdza odmowę pełnoobiektowej adopcji przez nieaktualny uchwyt, poprawne przejęcie i integralność danych.
 
 Scenariusz dowodzi ochrony przed *stale handle after takeover*,
 ale nie wstrzymuje operacji wewnątrz transakcji adopcji: rzeczywisty
 *in-flight takeover race* wymaga osobnego, deterministycznego hooka
 oraz kontroli kolejności transakcji. Nie uznawać go za pokryty przez C8.
+
+## C9 — in-flight adoption a współbieżne przejęcie lease
+
+Dodano `c9_inflight_adoption_blocks_takeover_until_commit` w
+`rust_hotpath/tests/write_ownership.rs`.
+
+Test w izolowanej bazie PostgreSQL przygotowuje niepuste źródło i pusty
+plik docelowy. A ma poprawny token fencing docelowego pliku.
+Osobna transakcja blokuje rekord `files` przy użyciu
+`FOR NO KEY UPDATE`. W tym czasie rzeczywista operacja
+`adopt_source_data_object_with_fence` klienta A waliduje fencing,
+uzyskuje advisory transaction lock i zatrzymuje się na modyfikacji
+zablokowanego rekordu.
+
+Po potwierdzeniu `pg_stat_activity.wait_event_type = 'Lock'`
+test wymusza wygaśnięcie lease A w odizolowanej bazie. B musi
+**odmówić przejęcia przed COMMIT A** pomimo wygaśnięcia lease.
+Po zwolnieniu blokady rekordowej A zatwierdza przyłączenie
+obiektu danych. Dopiero wtedy B zdobywa wyższy token, zmienia dane
+i sprawdza odrzucenie ponownej adopcji na starym tokenie A.
+
+**C9: implementacja zapisana, walidacja lokalna oczekuje na wykonanie.**
+C9 bada produkcyjną metodę PostgreSQL z kontrolowaną transakcją,
+ale nie stanowi jeszcze testu zatrzymanego jądrowego
+`copy_file_range` na poziomie dwóch rzeczywistych mountów FUSE.
