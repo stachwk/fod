@@ -205,11 +205,11 @@ def markdown(report: dict[str, object]) -> str:
     ]
     for row in report["findings"]:
         fields = (
-            f"\`{row['path']}:{row['line']}\`",
-            f"\`{row['symbol_hint']}\`",
+            f"`{row['path']}:{row['line']}`",
+            f"`{row['symbol_hint']}`",
             str(row["kind"]),
-            f"\`{row['operation']}\`",
-            f"\`{row['relation_hint']}\`",
+            f"`{row['operation']}`",
+            f"`{row['relation_hint']}`",
             str(row["category"]),
         )
         lines.append("| " + " | ".join(value.replace("|", "\\|") for value in fields) + " |")
