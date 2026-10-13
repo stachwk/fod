@@ -102,6 +102,15 @@ def revoke_only_test_lease(
         raise AssertionError(f"C8 lease revocation was incomplete: {result!r}")
 
 
+def wait_for_path(path: Path, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"C8 remote mount did not observe {path}")
+
+
 def main() -> None:
     suffix = uuid.uuid4().hex[:12]
     src_name = f"c8-source-{suffix}.bin"
@@ -148,6 +157,8 @@ def main() -> None:
             (mount_a / dst_name).write_bytes(b"")
             src_a, src_b = mount_a / src_name, mount_b / src_name
             dst_a, dst_b = mount_a / dst_name, mount_b / dst_name
+            wait_for_path(src_b)
+            wait_for_path(dst_b)
             src_before = file_snapshot(conn, src_name)
             dst_before = file_snapshot(conn, dst_name)
             if src_before[2] != len(payload) or dst_before[2] != 0:
