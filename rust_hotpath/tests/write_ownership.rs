@@ -1345,3 +1345,186 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
         panic!("{error}");
     }
 }
+
+
+// C6-A: optymalizacja copy-on-write/adoption nie moze ominac fencing docelowego pliku.
+#[test]
+fn c6_adopt_requires_current_destination_fence() {
+    assert_isolated_test_database();
+    let repo_a = DbRepo::new(&conninfo()).expect("C6-A connect A");
+    let repo_b = DbRepo::new(&conninfo()).expect("C6-A connect B");
+    repo_a.ensure_client_session_schema().expect("C6-A schema");
+    require_schema(&repo_a);
+
+    let block_size = scalar_u64(
+        &repo_a,
+        "SELECT value FROM config WHERE key = 'block_size'",
+        "C6-A block size",
+    );
+    let suffix = unique_suffix();
+    let owner_a = suffix.wrapping_add(110_001);
+    let owner_b = suffix.wrapping_add(120_001);
+    let session_a = repo_a
+        .register_client_session(
+            "write-ownership-c6-a",
+            "/tmp/write-ownership-c6-a",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C6-A session A");
+    let session_b = repo_b
+        .register_client_session(
+            "write-ownership-c6-b",
+            "/tmp/write-ownership-c6-b",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()).saturating_add(1),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C6-A session B");
+    repo_a
+        .touch_client_session_owner_key(session_a, owner_a)
+        .expect("C6-A owner A");
+    repo_b
+        .touch_client_session_owner_key(session_b, owner_b)
+        .expect("C6-A owner B");
+
+    let (src_name, src_id, src_initial_object) = create_test_file(&repo_a, suffix);
+    let (dst_name, dst_id, dst_initial_object) =
+        create_test_file(&repo_a, suffix.wrapping_add(1));
+    let mut objects = vec![src_initial_object, dst_initial_object];
+
+    let result = (|| -> Result<(), String> {
+        let lease_src = repo_a
+            .acquire_write_ownership(None, &src_name, Some(src_id), owner_a, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C6-A source lease unavailable".to_string())?;
+        let fence_src = WritePersistenceFence {
+            session_id: session_a,
+            owner_key: owner_a,
+            file_fencing_token: lease_src
+                .file_fencing_token
+                .ok_or_else(|| "C6-A no source token".to_string())?,
+        };
+        let src_data = vec![b'S'; usize::try_from(block_size).map_err(|err| err.to_string())?];
+        c4_persist_payload(&repo_a, src_id, block_size, &src_data, fence_src)?;
+        let source_object = scalar_u64(
+            &repo_a,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {src_id}"),
+            "C6-A source object",
+        );
+        objects.push(source_object);
+
+        let lease_a = repo_a
+            .acquire_write_ownership(None, &dst_name, Some(dst_id), owner_a, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C6-A destination lease unavailable".to_string())?;
+        let old_file_token = lease_a
+            .file_fencing_token
+            .ok_or_else(|| "C6-A missing destination token".to_string())?;
+        let fence_a = WritePersistenceFence {
+            session_id: session_a,
+            owner_key: owner_a,
+            file_fencing_token: old_file_token,
+        };
+
+        // Przyspieszenie TTL tylko w odizolowanej testowej bazie danych.
+        repo_a.exec(&format!(
+            "UPDATE destination_write_leases \
+             SET lease_expires_at = clock_timestamp() - interval '1 second' \
+             WHERE parent_key = 0 AND name = '{dst_name}' \
+               AND fencing_token = {}; \
+             UPDATE file_write_leases \
+             SET lease_expires_at = clock_timestamp() - interval '1 second' \
+             WHERE file_id = {dst_id} AND fencing_token = {old_file_token};",
+            lease_a.destination_fencing_token
+        ))?;
+
+        let lease_b = repo_b
+            .acquire_write_ownership(None, &dst_name, Some(dst_id), owner_b, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C6-A B could not take over destination".to_string())?;
+        assert_token_advanced(lease_a, lease_b);
+
+        // Operacja stale A ma dotyczyc pustego celu; nie moze go adoptowac.
+        let stale_result =
+            repo_a.adopt_source_data_object_with_fence(src_id, dst_id, fence_a);
+        match stale_result {
+            Err(error) if error.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
+            other => return Err(format!("C6-A stale adoption was not fenced: {other:?}")),
+        }
+        let after_stale = scalar_u64(
+            &repo_b,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
+            "C6-A destination after stale attempt",
+        );
+        if after_stale != dst_initial_object {
+            return Err("C6-A stale adoption changed destination object".into());
+        }
+        if repo_b.file_read_metadata(dst_id)?
+            .ok_or_else(|| "C6-A destination metadata missing".to_string())?
+            .size != 0
+        {
+            return Err("C6-A stale adoption changed destination size".into());
+        }
+
+        let new_file_token = lease_b
+            .file_fencing_token
+            .ok_or_else(|| "C6-A missing B fencing token".to_string())?;
+        let fence_b = WritePersistenceFence {
+            session_id: session_b,
+            owner_key: owner_b,
+            file_fencing_token: new_file_token,
+        };
+        if !repo_b.adopt_source_data_object_with_fence(src_id, dst_id, fence_b)? {
+            return Err("C6-A current B could not adopt source data".into());
+        }
+        let after_b = scalar_u64(
+            &repo_b,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
+            "C6-A destination object after B",
+        );
+        objects.push(after_b);
+        if after_b != source_object {
+            return Err("C6-A destination did not adopt source object".into());
+        }
+        c4_assert_payload(&repo_a, dst_id, block_size, &src_data)?;
+
+        repo_b.release_write_ownership(owner_b, lease_b)?;
+        repo_a.release_write_ownership(owner_a, lease_src)?;
+        println!(
+            "C6_ADOPTION_FENCE=PASS token={old_file_token}->{new_file_token} bytes={block_size}"
+        );
+        Ok(())
+    })();
+
+    for file_id in [src_id, dst_id] {
+        if let Ok(value) = repo_a.query_scalar_text(&format!(
+            "SELECT data_object_id FROM files WHERE id_file = {file_id}"
+        )) {
+            if let Ok(id) = value.trim().parse::<u64>() {
+                objects.push(id);
+            }
+        }
+    }
+    objects.sort_unstable();
+    objects.dedup();
+    let object_list = objects
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let cleanup_result = repo_a.exec(&format!(
+        "DELETE FROM destination_write_leases \
+         WHERE parent_key = 0 AND name IN ('{src_name}', '{dst_name}'); \
+         DELETE FROM file_write_leases WHERE file_id IN ({src_id}, {dst_id}); \
+         DELETE FROM client_sessions WHERE session_id IN ({session_a}, {session_b}); \
+         DELETE FROM files WHERE id_file IN ({src_id}, {dst_id}); \
+         DELETE FROM data_objects WHERE id_data_object IN ({object_list});"
+    ));
+    if let Err(err) = cleanup_result {
+        panic!("C6-A cleanup failed: {err}; test result: {result:?}");
+    }
+    if let Err(err) = result {
+        panic!("{err}");
+    }
+}
