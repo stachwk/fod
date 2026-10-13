@@ -1490,7 +1490,7 @@ test-copy-file-range: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range.py
 
 .PHONY: test-copy-file-range-multimount-ownership
-test-copy-file-range-multimount-ownership: venv
+test-copy-file-range-multimount-ownership: build-runtime venv
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_copy_file_range_multimount_ownership.py
 
 
