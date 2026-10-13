@@ -14066,13 +14066,18 @@ impl DbRepo {
                     Ok(None)
                 },
                 |conn| {
-                    // Copy-on-write adoption modifies the destination file. The
-                    // advisory lock must be held through the same transaction.
+                    // Copy-on-write adoption modifies the destination file.
+                    // The ownership check and mutation share the transaction.
                     if let Some(fence) = write_fence {
                         self.validate_write_persistence_fence_on_conn(
                             conn,
                             dst_file_id_for_fence,
                             fence,
+                        )?;
+                    } else {
+                        self.reject_unfenced_write_during_active_lease_on_conn(
+                            conn,
+                            dst_file_id_for_fence,
                         )?;
                     }
                     let src_info = fetch_file_info(conn, &src_file_id)?;
