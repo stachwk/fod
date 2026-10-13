@@ -99,6 +99,35 @@ GRANT SELECT ON file_write_leases TO fod_runtime;
             json.dumps(report)
             self.assertIn("rust_indexer/src/cleanup.rs:2", markdown(report))
 
+    def test_deployment_and_python_sources_are_included(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            deployment = root / "docker/deploy/primary-init.sh"
+            deployment.parent.mkdir(parents=True)
+            deployment.write_text(
+                "psql -c 'CREATE ROLE fod_repl WITH LOGIN'\n",
+                encoding="utf-8",
+            )
+            helper = root / "scripts/security/repair.py"
+            helper.parent.mkdir(parents=True)
+            helper.write_text(
+                'def write(cursor):\n'
+                '    cursor.execute("UPDATE file_write_leases SET owner_key = 0")\n',
+                encoding="utf-8",
+            )
+            report = collect(root)
+            self.assertEqual(report["files_scanned"], 2)
+            self.assertTrue(any(
+                item["path"] == "docker/deploy/primary-init.sh"
+                and item["operation"] == "CREATE ROLE"
+                for item in report["findings"]
+            ))
+            self.assertTrue(any(
+                item["path"] == "scripts/security/repair.py"
+                and item["kind"] == "sql_execution_sink"
+                for item in report["findings"]
+            ))
+
     def test_ignores_unscoped_paths_and_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
