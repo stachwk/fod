@@ -58,6 +58,8 @@ $(eval $(call FOD_FORWARD_TARGET,postgres-smoke,smoke))
 $(eval $(call FOD_FORWARD_TARGET,postgres-shell,db-shell))
 $(eval $(call FOD_FORWARD_TARGET,postgres-config-show,postgres-config-show))
 $(eval $(call FOD_FORWARD_TARGET,postgres-qnap-config-show,qnap-config-show))
+# C10 read-only role/privilege inventory (not auto-discovered from internal Make).
+$(eval $(call FOD_FORWARD_TARGET,audit-postgres-runtime-role,audit-postgres-runtime-role))
 $(eval $(call FOD_FORWARD_TARGET,postgres-enable-pg-stat-statements,enable-pg-stat-statements))
 
 # FOD schema and mount lifecycle.
@@ -218,6 +220,7 @@ help:
 		'  postgres-up | postgres-down | postgres-restart | postgres-logs' \
 		'  postgres-wait | postgres-wait-client | postgres-smoke | postgres-reset' \
 		'  postgres-shell | postgres-config-show | postgres-qnap-config-show' \
+		'  audit-postgres-runtime-role (read-only C10 security audit)' \
 		'' \
 		'FOD:' \
 		'  fod-init | fod-remote-init | fod-mount | fod-remote-mount' \
