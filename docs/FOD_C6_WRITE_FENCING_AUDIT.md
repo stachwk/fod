@@ -79,8 +79,11 @@ proces B wykonuje pełnoplikowe `copy_file_range` i sprawdza, czy
 `data_object_id` źródła został przyłączony do pliku docelowego,
 a zawartość i rozmiar są identyczne.
 
-**C7 jest niezweryfikowanym testem integracyjnym.** Nie wykonano dotąd dwóch
-rzeczywistych mountów w lokalnym środowisku. Dopiero jego wynik pozwoli
-potwierdzić zachowanie produkcyjnej ścieżki FUSE. Test nie zastępuje osobnej
-regresji wymuszonego przejęcia lease podczas trwającego `copy_file_range`
-ani audytu uprawnień PostgreSQL.
+**C7 PASS (2026-10-13).** Wykonano dwa rzeczywiste mounty z runtime
+`release-lto`: `C7_FUSE_COPY_ADOPTION=PASS loser_errno=16
+loser_elapsed_ms=3.222 bytes=65536 shared_object=63 mounts=2`;
+`C7_MULTIMOUNT_RC=0`. Wynik potwierdza odmowę otwarcia destination podczas
+aktywnego lease oraz pełnoobiektowe przyłączenie po jego zwolnieniu.
+
+C7 **nie zastępuje** testu nieaktualnego `copy_file_range` po wymuszonym
+przejęciu lease ani audytu uprawnień PostgreSQL.
