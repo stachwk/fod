@@ -1755,7 +1755,6 @@ fn c6_legacy_payload_requires_no_active_file_lease() {
     }
 }
 
-
 // C6-C: legacy indexer stream-import i FFI size update nie moga zmienic pliku
 // w trakcie aktywnego ownership innego klienta.
 #[test]
@@ -1916,7 +1915,8 @@ fn c6_stream_import_and_size_require_no_active_file_lease() {
             return Err("C6-C legacy size update after release did not persist".into());
         }
         println!(
-            "C6_STREAM_SIZE_FENCE=PASS token={file_token} bytes={block_size} stream_denied=1 size_denied=1 ffi_denied=1"
+            "C6_STREAM_SIZE_FENCE=PASS token={file_token} bytes={block_size} \
+             stream_denied=1 size_denied=1 ffi_denied=1"
         );
         Ok(())
     })();
@@ -1930,7 +1930,11 @@ fn c6_stream_import_and_size_require_no_active_file_lease() {
     }
     objects.sort_unstable();
     objects.dedup();
-    let object_list = objects.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+    let object_list = objects
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let cleanup_result = repo_a.exec(&format!(
         "DELETE FROM destination_write_leases WHERE parent_key = 0 AND name = '{name}'; \
          DELETE FROM file_write_leases WHERE file_id = {file_id}; \
