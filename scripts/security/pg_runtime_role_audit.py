@@ -130,7 +130,8 @@ def audit(connection) -> tuple[str, list[str]]:
                 "tables without invoking Rust fencing validation"
             )
         connection.rollback()
-        return ("UNRESTRICTED" if bypass else "RESTRICTED"), reasons
+        status = "UNRESTRICTED" if bypass else ("INCOMPLETE" if missing else "RESTRICTED")
+        return status, reasons
 
 
 def main() -> int:
