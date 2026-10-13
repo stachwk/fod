@@ -139,7 +139,7 @@ Przyczyna w kodzie testu: obie sesje zostały rejestrowane przez jeden `DbRepo`,
 `current_lock_session_id` wskazywał już sesję B podczas próby uzyskania lease A.
 Skorygowano na oddzielne `DbRepo` dla A i B oraz dodano asercję zgodności
 `file_write_leases.session_id` z sesją `WritePersistenceFence`.
-**C9 po poprawce: oczekuje na ponowną walidację.**
+**C9 PASS (2026-10-13):** `C9_INFLIGHT_ADOPTION=PASS fencing=83->84 bytes=32768 early_takeover_denied=1 stale_adoption_denied=1`; `1 passed; 0 failed`. `cargo check --workspace` i `git diff --check` przeszły (`check=0 test=0 diff=0`). Pozostało formatowanie testu (`fmt=1`), które wymaga `cargo fmt --all` i weryfikacji nowego commita. Ostrzeżenie `there is no transaction in progress` pochodzi najprawdopodobniej z końcowego `ROLLBACK` po anulowaniu strażnika testowego.
 C9 bada produkcyjną metodę PostgreSQL z kontrolowaną transakcją,
 ale nie stanowi jeszcze testu zatrzymanego jądrowego
 `copy_file_range` na poziomie dwóch rzeczywistych mountów FUSE.
