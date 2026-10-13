@@ -61,6 +61,26 @@ To **audyt statyczny**, nie potwierdzenie wykorzystania luki w działającym FUS
 
 **C6-B — implementacja do walidacji:** `persist_file_blocks_with_crc_flag_reservation_and_fence` przy `None` oraz legacy `adopt_source_data_object` walidują brak aktywnej dzierżawy pliku przy tej samej blokadzie advisory co operacje z fencing. Zachowano możliwość użycia starszych API bez aktywnej dzierżawy, istotną dla narzędzi indeksujących i zgodności FFI. Dodano test `c6_legacy_payload_requires_no_active_file_lease`, obejmujący zarówno Rust API, jak i bezpośrednie eksporty FFI (adoption, payload persist i pusty truncate); walidacja C6-B zakończyła się wynikiem PASS (`bytes=32768`, `deny_adopt=1`, `deny_persist=1`, `ffi_deny=3`, `fmt=0 check=0 test=0 diff=0`). **Nie jest to zastępstwo pełnego obowiązkowego fencing** — gdy dzierżawa wygasła, ścieżka bez tokenu może nadal modyfikować plik, dlatego wymaga dalszej polityki administracyjnej.
 
-**C6-C — implementacja do walidacji:** import `persist_file_blocks_from_path` oraz `set_file_size` odmawiają mutacji podczas aktywnej dzierżawy, używając blokady advisory w tej samej transakcji. Dotyczy to również `fod_rust_pg_repo_set_file_size` przez delegowanie do zabezpieczonego Rust API. Test `c6_stream_import_and_size_require_no_active_file_lease` weryfikuje odmowę i niezmienność danych w trakcie lease oraz zgodność legacy po `release`. **C6-C PASS:** test wykonany w izolowanej bazie `foddbname_hotpath_test`, wynik `C6_STREAM_SIZE_FENCE=PASS token=55 bytes=32768 stream_denied=1 size_denied=1 ffi_denied=1`, `C6_C_TEST_RC=0`; kompilacja workspace oraz `cargo fmt --check` i `git diff --check` zakończone powodzeniem. Pełna regresja C1–C6-C i testy FUSE/multimount pozostają do wykonania.
+**C6-C — implementacja do walidacji:** import `persist_file_blocks_from_path` oraz `set_file_size` odmawiają mutacji podczas aktywnej dzierżawy, używając blokady advisory w tej samej transakcji. Dotyczy to również `fod_rust_pg_repo_set_file_size` przez delegowanie do zabezpieczonego Rust API. Test `c6_stream_import_and_size_require_no_active_file_lease` weryfikuje odmowę i niezmienność danych w trakcie lease oraz zgodność legacy po `release`. **C6-C PASS:** test wykonany w izolowanej bazie `foddbname_hotpath_test`, wynik `C6_STREAM_SIZE_FENCE=PASS token=55 bytes=32768 stream_denied=1 size_denied=1 ffi_denied=1`, `C6_C_TEST_RC=0`; kompilacja workspace oraz `cargo fmt --check` i `git diff --check` zakończone powodzeniem. Pełna regresja C1–C6-C została wykonana: `8 passed; 0 failed; 2 ignored`, `FINAL fmt=0 check=0 test=0 diff=0`. Testy FUSE/multimount pozostają do wykonania.
 
 **Dalsze ryzyka i prace:** pozostałe mutacje bez fencing (w tym bezpośrednie SQL poza DbRepo oraz polityka uprawnień PostgreSQL), obsługa wygaśnięcia lease i brak obowiązkowego fencing w administracyjnym legacy API. Niezbędne są regresja C1–C6, testy FUSE/multimount, kompatybilność indexera i audyt uprawnień bazy. Po każdym commicie: przegląd diffu i testy.
+
+## C7 — walidacja FUSE na dwóch niezależnych mountach
+
+Dodano `tests/integration/test_copy_file_range_multimount_ownership.py` i target
+`make test-copy-file-range-multimount-ownership`, wyłącznie dla izolowanej bazy
+z nazwą zawierającą `test`.
+
+Test uruchamia dwa procesy FOD na tej samej bazie PostgreSQL. A otwiera
+plik docelowy do zapisu i utrzymuje lease; B próbuje otworzyć ten sam plik
+w trybie zapisu, oczekując szybkiego `EBUSY` oraz niezmienności
+`data_object_id`, rozmiaru i zawartości. Po zwolnieniu lease przez A
+proces B wykonuje pełnoplikowe `copy_file_range` i sprawdza, czy
+`data_object_id` źródła został przyłączony do pliku docelowego,
+a zawartość i rozmiar są identyczne.
+
+**C7 jest niezweryfikowanym testem integracyjnym.** Nie wykonano dotąd dwóch
+rzeczywistych mountów w lokalnym środowisku. Dopiero jego wynik pozwoli
+potwierdzić zachowanie produkcyjnej ścieżki FUSE. Test nie zastępuje osobnej
+regresji wymuszonego przejęcia lease podczas trwającego `copy_file_range`
+ani audytu uprawnień PostgreSQL.
