@@ -13267,6 +13267,9 @@ impl DbRepo {
         let result = self.with_cached_connection(|conn| unsafe {
             let transaction_started = Instant::now();
             let result = transactional_replayable(conn, |conn| {
+                // Indexer/legacy import is unfenced. Hold the same file-level
+                // advisory lock as ordinary fenced writers through COMMIT.
+                self.reject_unfenced_write_during_active_lease_on_conn(conn, file_id)?;
                 self.persist_file_blocks_streaming_on_conn(
                     conn,
                     file_id,
@@ -14134,6 +14137,7 @@ impl DbRepo {
     }
 
     pub fn set_file_size(&self, file_id: u64, file_size: u64) -> Result<(), String> {
+        let file_id_for_fence = file_id;
         let desired_file_size = file_size;
         let sql_update_file = CString::new(
             "UPDATE files SET size = $1, modification_date = NOW(), change_date = NOW() WHERE id_file = $2",
@@ -14168,6 +14172,12 @@ impl DbRepo {
                     }
                 },
                 |conn| {
+                    // A size-only legacy/FFI mutation must not bypass an active
+                    // file lease, including across hosts and shared PG pools.
+                    self.reject_unfenced_write_during_active_lease_on_conn(
+                        conn,
+                        file_id_for_fence,
+                    )?;
                     let params = [&file_size, &file_id];
                     exec_command_params(conn, &sql_update_file, &params)?;
                     Ok(())
