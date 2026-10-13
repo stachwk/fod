@@ -984,7 +984,6 @@ fn c4_stale_fence_rejects_persisted_payload() {
     }
 }
 
-
 // C5: proces A zapisuje blok podczas kontrolowanego wyczekiwania na blokade w PG.
 // Wlasna sesja procesu i identyfikator aplikacji pozwalaja obserwowac rzeczywisty zapis.
 #[cfg(unix)]
@@ -1064,7 +1063,7 @@ fn c5_wait_for_pg_activity(
              WHERE datname = current_database() \
                AND application_name = '{application}' \
                AND wait_event_type = '{event_type}' \
-               AND wait_event = '{event_name}')::text"
+               AND ('{event_name}' = '*' OR wait_event = '{event_name}'))::text"
         ))?;
         if matches!(active.trim(), "t" | "true") {
             return Ok(());
@@ -1130,6 +1129,7 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
     });
 
     let mut worker: Option<std::process::Child> = None;
+    let mut data_object_ids = vec![initial_object];
     let result = (|| -> Result<(), String> {
         c5_wait_for_pg_activity(&repo_b, &guard_name, "Timeout", "PgSleep")?;
 
@@ -1183,7 +1183,7 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
         }
 
         // Warunek obserwowalny: rzeczywisty SQL writer A czeka na blokade files.
-        c5_wait_for_pg_activity(&repo_b, &writer_name, "Lock", "transactionid")?;
+        c5_wait_for_pg_activity(&repo_b, &writer_name, "Lock", "*")?;
 
         // Dzierzawa wygasa dopiero po walidacji w transakcji A.
         repo_b.exec(&format!(
@@ -1238,6 +1238,11 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
         }
         let after_a = vec![b'A'; usize::try_from(block_size).map_err(|err| err.to_string())?];
         c4_assert_payload(&repo_b, file_id, block_size, &after_a)?;
+        data_object_ids.push(scalar_u64(
+            &repo_b,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {file_id}"),
+            "C5 data object after A",
+        ));
 
         // Dopiero po COMMIT A nowy klient moze przejac i zapisac blok B.
         let lease_b = repo_b
@@ -1257,6 +1262,11 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
         let after_b = vec![b'B'; usize::try_from(block_size).map_err(|err| err.to_string())?];
         c4_persist_payload(&repo_b, file_id, block_size, &after_b, fence_b)?;
         c4_assert_payload(&repo_b, file_id, block_size, &after_b)?;
+        data_object_ids.push(scalar_u64(
+            &repo_b,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {file_id}"),
+            "C5 data object after B",
+        ));
 
         // Odrzucenie starego tokenu z A nie moze nadpisac zatwierdzonych B.
         let old_fence = WritePersistenceFence {
@@ -1298,13 +1308,12 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
         ))
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok());
-    let mut object_ids = vec![initial_object];
     if let Some(id) = current_object {
-        object_ids.push(id);
+        data_object_ids.push(id);
     }
-    object_ids.sort_unstable();
-    object_ids.dedup();
-    let object_list = object_ids
+    data_object_ids.sort_unstable();
+    data_object_ids.dedup();
+    let object_list = data_object_ids
         .iter()
         .map(u64::to_string)
         .collect::<Vec<_>>()
