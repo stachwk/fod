@@ -118,16 +118,26 @@ grep -Eq '^mount:' "${INTERNAL}"
 public_make -n help >/dev/null
 public_make -n postgres-up >/dev/null
 public_make -n audit-postgres-runtime-role >/dev/null
-# The internal dispatcher rewrites POSTGRES_DB, so the public interface
-# must capture an explicit caller database before that normalization.
+# GNU Make -n displays the forwarded sub-make invocation, but does not
+# necessarily recurse to the final Python command. Check both stages.
+# The public dispatcher must preserve an explicit caller database.
 audit_env_dry_run="$(POSTGRES_DB=foddbname_hotpath_test public_make -n audit-postgres-runtime-role)"
-grep -Fq -- '--database "foddbname_hotpath_test"' <<< "${audit_env_dry_run}" || {
-    echo "C10 audit lost explicit POSTGRES_DB environment selection" >&2
+grep -Fq -- 'FOD_AUDIT_DBNAME="foddbname_hotpath_test"' <<< "${audit_env_dry_run}" || {
+    echo "C10 public audit lost explicit POSTGRES_DB environment selection" >&2
+    printf '%s\n' "${audit_env_dry_run}" >&2
     exit 1
 }
 audit_cli_dry_run="$(public_make -n audit-postgres-runtime-role FOD_AUDIT_DBNAME=foddbname_hotpath_test)"
-grep -Fq -- '--database "foddbname_hotpath_test"' <<< "${audit_cli_dry_run}" || {
-    echo "C10 audit lost explicit FOD_AUDIT_DBNAME selection" >&2
+grep -Fq -- 'FOD_AUDIT_DBNAME="foddbname_hotpath_test"' <<< "${audit_cli_dry_run}" || {
+    echo "C10 public audit lost explicit FOD_AUDIT_DBNAME selection" >&2
+    printf '%s\n' "${audit_cli_dry_run}" >&2
+    exit 1
+}
+# The internal dispatcher must pass that same value to the read-only script.
+audit_internal_dry_run="$(env -u FOD_INTERNAL_MAKE make -C "${ROOT}" --no-print-directory -n -f make/fod-internal-entry.mk audit-postgres-runtime-role FOD_AUDIT_DBNAME=foddbname_hotpath_test)"
+grep -Fq -- '--database "foddbname_hotpath_test"' <<< "${audit_internal_dry_run}" || {
+    echo "C10 internal audit lost explicit database argument" >&2
+    printf '%s\n' "${audit_internal_dry_run}" >&2
     exit 1
 }
 public_make -n fod-init >/dev/null
