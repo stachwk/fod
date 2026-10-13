@@ -180,6 +180,14 @@ def collect(root: Path) -> dict[str, object]:
     findings.sort(key=lambda item: (item["path"], item["line"], item["kind"], item["operation"]))
     summary = dict(sorted(Counter(str(item["category"]) for item in findings).items()))
     kinds = dict(sorted(Counter(str(item["kind"]) for item in findings).items()))
+    components = dict(sorted(Counter(
+        str(item["path"]).split("/", 1)[0] for item in findings
+    ).items()))
+    paths = Counter(str(item["path"]) for item in findings)
+    top_paths = [
+        {"path": path, "findings": count}
+        for path, count in sorted(paths.items(), key=lambda item: (-item[1], item[0]))[:20]
+    ]
     return {
         "schema_version": 1,
         "scope": "C10-B2 static candidates, not a complete SQL or fencing proof",
@@ -187,6 +195,8 @@ def collect(root: Path) -> dict[str, object]:
         "findings_count": len(findings),
         "by_category": summary,
         "by_kind": kinds,
+        "by_component": components,
+        "top_paths": top_paths,
         "findings": findings,
     }
 
@@ -223,13 +233,18 @@ def main() -> int:
         help="FOD repository checkout to scan",
     )
     parser.add_argument("--format", choices=("json", "markdown"), default="json")
+    parser.add_argument("--summary", action="store_true",
+                        help="print JSON counts/top 20 files without all findings")
     parser.add_argument("--fail-on-empty", action="store_true")
     args = parser.parse_args()
+    if args.summary and args.format != "json":
+        parser.error("--summary is only supported for JSON output")
     report = collect(args.root)
     if args.format == "markdown":
         print(markdown(report), end="")
     else:
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        result = {key: value for key, value in report.items() if key != "findings"} if args.summary else report
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return int(args.fail_on_empty and not report["findings_count"])
 
 
