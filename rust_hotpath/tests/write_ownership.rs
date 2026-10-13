@@ -1780,7 +1780,10 @@ fn c6_stream_import_and_size_require_no_active_file_lease() {
     let bytes = usize::try_from(block_size).expect("C6-C block size fits usize");
     let initial_payload = vec![b'A'; bytes];
     let imported_payload = vec![b'I'; bytes];
-    let imported_sha256 = format!("{:x}", Sha256::digest(&imported_payload));
+    let imported_sha256 = Sha256::digest(&imported_payload)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let suffix = unique_suffix();
     let path = env::temp_dir().join(format!("fod-c6-c-import-{suffix}.bin"));
     fs::write(&path, &imported_payload).expect("C6-C write import source");
