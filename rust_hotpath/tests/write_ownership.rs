@@ -1953,3 +1953,279 @@ fn c6_stream_import_and_size_require_no_active_file_lease() {
         panic!("{error}");
     }
 }
+
+
+// C9: an in-flight data-object adoption must serialize a competing lease
+// acquisition via PostgreSQL even when the old lease expires mid-transaction.
+#[cfg(unix)]
+#[test]
+fn c9_inflight_adoption_blocks_takeover_until_commit() {
+    assert_isolated_test_database();
+    let repo_b = DbRepo::new(&conninfo()).expect("C9 connect coordinator");
+    repo_b.ensure_client_session_schema().expect("C9 ensure schema");
+    require_schema(&repo_b);
+
+    let bs = scalar_u64(
+        &repo_b,
+        "SELECT value FROM config WHERE key = 'block_size'",
+        "C9 block size",
+    );
+    assert!((1024..=1024 * 1024).contains(&bs));
+    let suffix = unique_suffix();
+    let owner_a = suffix.wrapping_add(150_001);
+    let owner_b = suffix.wrapping_add(160_001);
+    let (src_name, src_id, src_initial_object) = create_test_file(&repo_b, suffix);
+    let (dst_name, dst_id, dst_initial_object) =
+        create_test_file(&repo_b, suffix.wrapping_add(1));
+    let mut objects = vec![src_initial_object, dst_initial_object];
+
+    let session_a = repo_b
+        .register_client_session(
+            "write-ownership-c9-adopter",
+            "/tmp/write-ownership-c9-adopter",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C9 register session A");
+    let session_b = repo_b
+        .register_client_session(
+            "write-ownership-c9-contender",
+            "/tmp/write-ownership-c9-contender",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()).saturating_add(1),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C9 register session B");
+    repo_b
+        .touch_client_session_owner_key(session_a, owner_a)
+        .expect("C9 owner A");
+    repo_b
+        .touch_client_session_owner_key(session_b, owner_b)
+        .expect("C9 owner B");
+
+    // Materialize a non-empty source using the legacy path before granting
+    // either destination lease. C6-B permits this only without a live lease.
+    let source_payload = vec![b'S'; usize::try_from(bs).expect("C9 block size usize")];
+    let source_rows = [PersistBlockRow {
+        block_index: 0,
+        data: &source_payload,
+        used_len: bs,
+    }];
+    repo_b
+        .persist_file_blocks(src_id, bs, bs, 1, false, &source_rows)
+        .expect("C9 seed source");
+    let source_object = scalar_u64(
+        &repo_b,
+        &format!("SELECT data_object_id FROM files WHERE id_file = {src_id}"),
+        "C9 source data object",
+    );
+    objects.push(source_object);
+
+    let lease_a = repo_b
+        .acquire_write_ownership(None, &dst_name, Some(dst_id), owner_a, WRITE_TTL_SECONDS)
+        .expect("C9 acquire A")
+        .expect("C9 owner A must acquire destination");
+    let token_a = lease_a.file_fencing_token.expect("C9 file token A");
+    let fence_a = WritePersistenceFence {
+        session_id: session_a,
+        owner_key: owner_a,
+        file_fencing_token: token_a,
+    };
+
+    let guard_name = format!("fod_c9_guard_{suffix}");
+    let adopter_name = format!("fod_c9_adopter_{suffix}");
+    let guard_conninfo = format!("{} application_name={guard_name}", conninfo());
+    let guard = thread::spawn(move || -> Result<(), String> {
+        let repo = DbRepo::new(&guard_conninfo)?;
+        repo.exec("BEGIN")?;
+        // FOR NO KEY UPDATE blocks UPDATE files, but not the KEY SHARE
+        // needed by referential integrity checks on the file lease.
+        if let Err(error) = repo.exec(&format!(
+            "SELECT 1 FROM files WHERE id_file = {dst_id} FOR NO KEY UPDATE"
+        )) {
+            let _ = repo.exec("ROLLBACK");
+            return Err(error);
+        }
+        // The coordinator observes PgSleep, then explicitly cancels it.
+        // Always roll back the guard so the adopter may commit.
+        let _ = repo.exec("SELECT pg_sleep(15)");
+        repo.exec("ROLLBACK")
+    });
+
+    let mut adopter: Option<thread::JoinHandle<Result<bool, String>>> = None;
+    let result = (|| -> Result<(), String> {
+        c5_wait_for_pg_activity(&repo_b, &guard_name, "Timeout", "PgSleep")?;
+
+        let adopter_conninfo = format!("{} application_name={adopter_name}", conninfo());
+        adopter = Some(thread::spawn(move || -> Result<bool, String> {
+            let repo = DbRepo::new(&adopter_conninfo)?;
+            repo.adopt_source_data_object_with_fence(src_id, dst_id, fence_a)
+        }));
+
+        // The adopter must have entered its mutating transaction and
+        // obtained the PG advisory lock before its UPDATE files waits.
+        c5_wait_for_pg_activity(&repo_b, &adopter_name, "Lock", "*")?;
+
+        // Expire both leases after A validated fencing but before commit.
+        // A direct SQL lease expiration does not take the file advisory lock.
+        repo_b.exec(&format!(
+            "UPDATE destination_write_leases \
+             SET lease_expires_at = clock_timestamp() - interval '1 second' \
+             WHERE parent_key = 0 AND name = '{dst_name}' \
+               AND fencing_token = {}; \
+             UPDATE file_write_leases \
+             SET lease_expires_at = clock_timestamp() - interval '1 second' \
+             WHERE file_id = {dst_id} AND fencing_token = {token_a};",
+            lease_a.destination_fencing_token
+        ))?;
+
+        let takeover_started = Instant::now();
+        let premature = repo_b.acquire_write_ownership(
+            None,
+            &dst_name,
+            Some(dst_id),
+            owner_b,
+            WRITE_TTL_SECONDS,
+        )?;
+        if let Some(unexpected) = premature {
+            repo_b.release_write_ownership(owner_b, unexpected)?;
+            return Err("C9: B acquired destination before A's adoption COMMIT".into());
+        }
+        if takeover_started.elapsed() >= FAIL_FAST_LIMIT {
+            return Err("C9: competing acquisition failed to return quickly".into());
+        }
+        if scalar_u64(
+            &repo_b,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
+            "C9 destination while A pending",
+        ) != dst_initial_object {
+            return Err("C9: uncommitted adoption was visible to B".into());
+        }
+
+        // Cancel only the uniquely named row guard, not the adopter.
+        let canceled = repo_b.query_scalar_text(&format!(
+            "SELECT COALESCE((SELECT pg_cancel_backend(pid) \
+             FROM pg_stat_activity WHERE datname = current_database() \
+             AND application_name = '{guard_name}' LIMIT 1), false)::text"
+        ))?;
+        if !matches!(canceled.trim(), "t" | "true") {
+            return Err(format!("C9: could not cancel row guard: {canceled}"));
+        }
+
+        let adoption_result = adopter
+            .take()
+            .expect("C9 adopter worker")
+            .join()
+            .map_err(|_| "C9 adopter worker panicked".to_string())??;
+        if !adoption_result {
+            return Err("C9: A's in-flight adoption returned false".into());
+        }
+        let after_a = scalar_u64(
+            &repo_b,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
+            "C9 data object after A COMMIT",
+        );
+        objects.push(after_a);
+        if after_a != source_object {
+            return Err("C9: adoption did not commit the source object".into());
+        }
+        c4_assert_payload(&repo_b, dst_id, bs, &source_payload)?;
+
+        // After A commits, expired ownership may be taken by B. An
+        // unfenced or stale operation must not undo B's later write.
+        let lease_b = repo_b
+            .acquire_write_ownership(None, &dst_name, Some(dst_id), owner_b, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C9: B could not take over after A committed".to_string())?;
+        assert_token_advanced(lease_a, lease_b);
+        let token_b = lease_b
+            .file_fencing_token
+            .ok_or_else(|| "C9: missing file token B".to_string())?;
+        let fence_b = WritePersistenceFence {
+            session_id: session_b,
+            owner_key: owner_b,
+            file_fencing_token: token_b,
+        };
+        let winner_payload = vec![b'B'; source_payload.len()];
+        c4_persist_payload(&repo_b, dst_id, bs, &winner_payload, fence_b)?;
+        objects.push(scalar_u64(
+            &repo_b,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
+            "C9 destination after B persist",
+        ));
+
+        match repo_b.adopt_source_data_object_with_fence(src_id, dst_id, fence_a) {
+            Err(error) if error.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
+            other => return Err(format!("C9: stale adopter not rejected: {other:?}")),
+        }
+        c4_assert_payload(&repo_b, dst_id, bs, &winner_payload)?;
+        repo_b.release_write_ownership(owner_b, lease_b)?;
+
+        println!(
+            "C9_INFLIGHT_ADOPTION=PASS fencing={token_a}->{token_b} \
+             bytes={bs} early_takeover_denied=1 stale_adoption_denied=1"
+        );
+        Ok(())
+    })();
+
+    // Failure-safe cleanup: the row guard must be canceled even when the
+    // assertion above fails, before joining the adopter and deleting rows.
+    let _ = repo_b.query_scalar_text(&format!(
+        "SELECT COALESCE((SELECT pg_cancel_backend(pid) \
+         FROM pg_stat_activity WHERE datname = current_database() \
+         AND application_name = '{guard_name}' LIMIT 1), false)::text"
+    ));
+    let guard_result = guard
+        .join()
+        .map_err(|_| "C9 guard worker panicked".to_string())
+        .and_then(|value| value);
+    let adopter_result = adopter
+        .take()
+        .map(|worker| {
+            worker
+                .join()
+                .map_err(|_| "C9 adopter worker panicked during cleanup".to_string())
+        })
+        .transpose();
+
+    // Record the final object before deleting test-only files and leases.
+    for file_id in [src_id, dst_id] {
+        if let Ok(value) = repo_b.query_scalar_text(&format!(
+            "SELECT data_object_id FROM files WHERE id_file = {file_id}"
+        )) {
+            if let Ok(id) = value.trim().parse::<u64>() {
+                objects.push(id);
+            }
+        }
+    }
+    objects.sort_unstable();
+    objects.dedup();
+    let object_list = objects
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let cleanup_result = repo_b.exec(&format!(
+        "DELETE FROM destination_write_leases \
+         WHERE parent_key = 0 AND name = '{dst_name}'; \
+         DELETE FROM file_write_leases WHERE file_id = {dst_id}; \
+         DELETE FROM client_sessions WHERE session_id IN ({session_a}, {session_b}); \
+         DELETE FROM files WHERE id_file IN ({src_id}, {dst_id}); \
+         DELETE FROM data_objects WHERE id_data_object IN ({object_list});"
+    ));
+    if let Err(error) = cleanup_result {
+        panic!("C9 cleanup failed: {error}; test result: {result:?}");
+    }
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    if let Err(error) = guard_result {
+        panic!("C9 guard failure: {error}");
+    }
+    if let Err(error) = adopter_result {
+        panic!("C9 adopter cleanup failure: {error}");
+    }
+    let _ = src_name;
+}
