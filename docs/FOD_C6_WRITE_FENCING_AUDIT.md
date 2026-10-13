@@ -55,4 +55,8 @@ Wykonywać testy destrukcyjne wyłącznie w `foddbname_hotpath_test` lub osobnej
 
 ## Status i ograniczenia
 
-To **audyt statyczny**, nie potwierdzenie wykorzystania luki w działającym FUSE. Stan zabezpieczenia C4/C5 nie dowodzi bezpieczeństwa alternatywnych ścieżek. Nie wprowadzono jeszcze zmian do produkcyjnej logiki ani zmian schematu bazy. Kolejność realizacji: **C6-A → C6-B → C6-C**, z kontrolą diffu po każdym commicie.
+To **audyt statyczny**, nie potwierdzenie wykorzystania luki w działającym FUSE. Stan zabezpieczenia C4/C5 nie dowodzi bezpieczeństwa alternatywnych ścieżek.
+
+**C6-A — implementacja do walidacji:** `rust_hotpath/src/pg.rs` otrzymał `adopt_source_data_object_with_fence`, z walidacją w transakcji mutującej; oba wywołania adoption z `rust_fuse/src/fs.rs` wymagają aktualnego fencing pliku docelowego. Ścieżka pustego źródła i truncate uzyskuje fence przed `flush`. Dodano test `c6_adopt_requires_current_destination_fence`; jego wynik na izolowanej bazie nie został jeszcze potwierdzony. Publiczny legacy `adopt_source_data_object` nadal istnieje bez wymuszonego fencing i wymaga osobnej polityki oraz przeglądu konsumentów.
+
+**C6-B/C6-C — otwarte:** pozostałe legacy/FFI, import i `set_file_size` nadal wymagają zabezpieczenia. Kolejność: weryfikacja C6-A → C6-B → C6-C, z kontrolą diffu i regresji po każdym commicie.
