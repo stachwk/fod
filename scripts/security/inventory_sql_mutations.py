@@ -183,10 +183,10 @@ def collect(root: Path) -> dict[str, object]:
     components = dict(sorted(Counter(
         str(item["path"]).split("/", 1)[0] for item in findings
     ).items()))
-    paths = Counter(str(item["path"]) for item in findings)
+    path_counts = Counter(str(item["path"]) for item in findings)
     top_paths = [
         {"path": path, "findings": count}
-        for path, count in sorted(paths.items(), key=lambda item: (-item[1], item[0]))[:20]
+        for path, count in sorted(path_counts.items(), key=lambda item: (-item[1], item[0]))[:20]
     ]
     return {
         "schema_version": 1,
@@ -243,7 +243,11 @@ def main() -> int:
     if args.format == "markdown":
         print(markdown(report), end="")
     else:
-        result = {key: value for key, value in report.items() if key != "findings"} if args.summary else report
+        result = (
+            {key: value for key, value in report.items() if key != "findings"}
+            if args.summary
+            else report
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return int(args.fail_on_empty and not report["findings_count"])
 
