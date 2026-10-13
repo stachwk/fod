@@ -733,7 +733,6 @@ fn c3_sigkill_holder_then_reacquire() {
     }
 }
 
-
 // C4 uzywa rzeczywistej sciezki utrwalania blokow, bez recznego UPDATE data_blocks.
 fn c4_persist_payload(
     repo: &DbRepo,
@@ -905,13 +904,8 @@ fn c4_stale_fence_rejects_persisted_payload() {
         c4_assert_payload(&repo_a, file_id, block_size, &data_b)?;
 
         // A probuje zapisac CCCC z nieaktualnym tokenem A.
-        let stale_error = match c4_persist_payload(
-            &repo_a,
-            file_id,
-            block_size,
-            &data_stale,
-            fence_a,
-        ) {
+        let stale_error =
+            match c4_persist_payload(&repo_a, file_id, block_size, &data_stale, fence_a) {
             Ok(()) => return Err("C4: stale writer A persisted data".into()),
             Err(err) => err,
         };
@@ -934,10 +928,10 @@ fn c4_stale_fence_rejects_persisted_payload() {
         if repo_b.count_file_blocks(file_id)? != 1 {
             return Err("C4: expected exactly one persisted block".into());
         }
-        if repo_b.file_read_metadata(file_id)?
-            .ok_or_else(|| "C4: file metadata missing".to_string())?
-            .size != block_size
-        {
+        let metadata = repo_b
+            .file_read_metadata(file_id)?
+            .ok_or_else(|| "C4: file metadata missing".to_string())?;
+        if metadata.size != block_size {
             return Err("C4: persisted file size changed".into());
         }
 
