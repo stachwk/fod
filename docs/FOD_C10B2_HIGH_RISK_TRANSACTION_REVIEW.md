@@ -29,6 +29,34 @@ o poprawnym uwierzytelnieniu lub granicy transakcyjnej.
 | DDL-01 | `rust_hotpath/src/pg.rs:8543-8612` | `ensure_client_session_schema` może wywołać `CREATE TABLE`, `CREATE INDEX`, `ALTER TABLE` przy starcie. | Ograniczony runtime nie może samodzielnie prowadzić DDL; bootstrap i migration muszą dostarczać kompletnego schematu, runtime ma wyłącznie sprawdzać gotowość. |
 | GRANT-01 | `rust_mkfs/src/main.rs:611-619,786-791,876-881` | `ensure_fod_privileges` nadaje `SELECT, INSERT, UPDATE, DELETE` do wszystkich tabel FOD na `init` i `upgrade`, oraz prawa do sekwencji. | Dowolna migracja do konta restrykcyjnego będzie cofnięta przez obecny `GRANT`. Ten punkt jest blokadą wdrożenia C10-B3. |
 
+### TX-02A — izolowana próba współdzielenia transakcji (do uruchomienia)
+
+Dodano test `rust_hotpath/tests/tx02_pool_transaction_affinity.rs`.
+Cel: w **izolowanej bazie testowej** otworzyć transakcję przez
+`DbRepo::exec("BEGIN")`, uzyskać blokadę `pg_try_advisory_xact_lock`,
+sprawdzić, czy odrębne połączenie widzi zajętą blokadę, oraz czy
+inny wątek współdzielący repo otrzymuje tę samą sesję `pg_backend_pid()`.
+Po wykonaniu próby wywoływany jest `ROLLBACK`, po czym sprawdzane
+jest zwolnienie blokady transakcyjnej. Test **nie zapisuje danych FOD**.
+
+```bash
+cd ~/git/fod
+FOD_PG_DBNAME=foddbname_hotpath_test \
+POSTGRES_DB=foddbname_hotpath_test \
+cargo test --locked -p fod-rust-hotpath \
+  --test tx02_pool_transaction_affinity -- --nocapture
+```
+
+Jeżeli test wypisze `TX02_POOL_TRANSACTION_SHARING=OBSERVED
+same_backend=1 xact_lock_held=1 xact_lock_released=1`,
+potwierdzi niebezpieczne ponowne użycie **otwartej** transakcji przy
+rozbiciu na niezależne wywołania `DbRepo`. Jest to test diagnostyczny,
+nie test PASS bezpieczeństwa; samo zaliczenie odtwarza antywzorzec.
+
+Próba TX-02A nie dowodzi jeszcze, że rzeczywisty cleanup utracił
+atomowość lub uszkodził dane. Następny warunek: dedykowane API
+przypiętej transakcji i test pozytywny izolacji wraz z rollback
+i konkurencyjnym writerem.
 ## TX-01/TX-02 — wymagany test atomowości przed poprawianiem cleanup
 
 1. Użyć **izolowanej bazy testowej**, nigdy `foddbname` ani produkcyjnego
