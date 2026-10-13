@@ -1526,3 +1526,173 @@ fn c6_adopt_requires_current_destination_fence() {
         panic!("{err}");
     }
 }
+
+
+// C6-B: legacy persist/FFI oraz legacy adoption nie moga ominac aktywnej
+// dzierzawy, nawet gdy nie dostarczaja tokenu fencing.
+#[test]
+fn c6_legacy_payload_requires_no_active_file_lease() {
+    assert_isolated_test_database();
+    let repo_a = DbRepo::new(&conninfo()).expect("C6-B connect A");
+    let repo_legacy = DbRepo::new(&conninfo()).expect("C6-B connect legacy");
+    repo_a
+        .ensure_client_session_schema()
+        .expect("C6-B ensure schema");
+    require_schema(&repo_a);
+
+    let block_size = scalar_u64(
+        &repo_a,
+        "SELECT value FROM config WHERE key = 'block_size'",
+        "C6-B block size",
+    );
+    let block_size_usize = usize::try_from(block_size).expect("C6-B block size usize");
+    let data_a = vec![b'A'; block_size_usize];
+    let data_b = vec![b'B'; block_size_usize];
+    let suffix = unique_suffix();
+    let owner_a = suffix.wrapping_add(130_001);
+    let session_a = repo_a
+        .register_client_session(
+            "write-ownership-c6-legacy-guard",
+            "/tmp/write-ownership-c6-legacy-guard",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C6-B register session");
+    repo_a
+        .touch_client_session_owner_key(session_a, owner_a)
+        .expect("C6-B touch owner");
+
+    let (src_name, src_id, src_initial_object) = create_test_file(&repo_a, suffix);
+    let (dst_name, dst_id, dst_initial_object) =
+        create_test_file(&repo_a, suffix.wrapping_add(1));
+    let mut data_object_ids = vec![src_initial_object, dst_initial_object];
+    let result = (|| -> Result<(), String> {
+        let src_lease = repo_a
+            .acquire_write_ownership(None, &src_name, Some(src_id), owner_a, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C6-B source lease not acquired".to_string())?;
+        let src_fence = WritePersistenceFence {
+            session_id: session_a,
+            owner_key: owner_a,
+            file_fencing_token: src_lease
+                .file_fencing_token
+                .ok_or_else(|| "C6-B source token missing".to_string())?,
+        };
+        c4_persist_payload(&repo_a, src_id, block_size, &data_a, src_fence)?;
+        data_object_ids.push(scalar_u64(
+            &repo_a,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {src_id}"),
+            "C6-B source object after persist",
+        ));
+
+        let dst_lease = repo_a
+            .acquire_write_ownership(None, &dst_name, Some(dst_id), owner_a, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C6-B destination lease not acquired".to_string())?;
+        let dst_fence = WritePersistenceFence {
+            session_id: session_a,
+            owner_key: owner_a,
+            file_fencing_token: dst_lease
+                .file_fencing_token
+                .ok_or_else(|| "C6-B destination token missing".to_string())?,
+        };
+
+        // Legacy adoption bez tokenu musi odmowic modyfikacji pustego celu.
+        let legacy_adopt = repo_legacy.adopt_source_data_object(src_id, dst_id);
+        match legacy_adopt {
+            Err(err) if err.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
+            other => return Err(format!("C6-B unguarded adoption: {other:?}")),
+        }
+        if scalar_u64(
+            &repo_a,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
+            "C6-B destination object after denied adoption",
+        ) != dst_initial_object {
+            return Err("C6-B denied legacy adoption changed destination object".into());
+        }
+
+        // Aktualny wlasciciel moze nadal zapisac dane poprawnym fencing.
+        c4_persist_payload(&repo_a, dst_id, block_size, &data_a, dst_fence)?;
+        data_object_ids.push(scalar_u64(
+            &repo_a,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
+            "C6-B destination object after fenced persist",
+        ));
+        c4_assert_payload(&repo_legacy, dst_id, block_size, &data_a)?;
+
+        // Ten sam plik jest teraz chroniony przed legacy persist bez tokenu.
+        let legacy_row = [PersistBlockRow {
+            block_index: 0,
+            data: &data_b,
+            used_len: block_size,
+        }];
+        let legacy_persist = repo_legacy.persist_file_blocks_with_crc_flag(
+            dst_id,
+            block_size,
+            block_size,
+            1,
+            true,
+            &legacy_row,
+            false,
+        );
+        match legacy_persist {
+            Err(err) if err.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
+            other => return Err(format!("C6-B unguarded payload persist: {other:?}")),
+        }
+        c4_assert_payload(&repo_a, dst_id, block_size, &data_a)?;
+
+        // Po release starsza sciezka pozostaje dostepna dla narzedzi
+        // administracyjnych, pod warunkiem braku aktywnej dzierzawy.
+        repo_a.release_write_ownership(owner_a, dst_lease)?;
+        repo_legacy.persist_file_blocks_with_crc_flag(
+            dst_id,
+            block_size,
+            block_size,
+            1,
+            true,
+            &legacy_row,
+            false,
+        )?;
+        data_object_ids.push(scalar_u64(
+            &repo_legacy,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
+            "C6-B destination object after legacy persist",
+        ));
+        c4_assert_payload(&repo_a, dst_id, block_size, &data_b)?;
+        repo_a.release_write_ownership(owner_a, src_lease)?;
+        println!("C6_LEGACY_FENCE=PASS bytes={block_size} deny_adopt=1 deny_persist=1");
+        Ok(())
+    })();
+
+    // Cleanup ograniczony do dwoch plikow testowych i ich obiektow danych.
+    for file_id in [src_id, dst_id] {
+        if let Ok(value) = repo_a.query_scalar_text(&format!(
+            "SELECT data_object_id FROM files WHERE id_file = {file_id}"
+        )) {
+            if let Ok(id) = value.trim().parse::<u64>() {
+                data_object_ids.push(id);
+            }
+        }
+    }
+    data_object_ids.sort_unstable();
+    data_object_ids.dedup();
+    let object_list = data_object_ids
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let cleanup_result = repo_a.exec(&format!(
+        "DELETE FROM destination_write_leases \
+         WHERE parent_key = 0 AND name IN ('{src_name}', '{dst_name}'); \
+         DELETE FROM file_write_leases WHERE file_id IN ({src_id}, {dst_id}); \
+         DELETE FROM client_sessions WHERE session_id = {session_a}; \
+         DELETE FROM files WHERE id_file IN ({src_id}, {dst_id}); \
+         DELETE FROM data_objects WHERE id_data_object IN ({object_list});"
+    ));
+    if let Err(err) = cleanup_result {
+        panic!("C6-B cleanup failed: {err}; test result: {result:?}");
+    }
+    if let Err(err) = result {
+        panic!("{err}");
+    }
+}
