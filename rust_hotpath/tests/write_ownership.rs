@@ -1534,6 +1534,9 @@ fn c6_legacy_payload_requires_no_active_file_lease() {
     assert_isolated_test_database();
     let repo_a = DbRepo::new(&conninfo()).expect("C6-B connect A");
     let repo_legacy = DbRepo::new(&conninfo()).expect("C6-B connect legacy");
+    let mut ffi_repo = fod_rust_hotpath::ffi::DbfsPgRepo {
+        repo: DbRepo::new(&conninfo()).expect("C6-B connect FFI"),
+    };
     repo_a
         .ensure_client_session_schema()
         .expect("C6-B ensure schema");
@@ -1602,6 +1605,20 @@ fn c6_legacy_payload_requires_no_active_file_lease() {
             Err(err) if err.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
             other => return Err(format!("C6-B unguarded adoption: {other:?}")),
         }
+        let mut ffi_adopted: u8 = 0;
+        let ffi_adopt_status = unsafe {
+            fod_rust_hotpath::ffi::fod_rust_pg_repo_adopt_source_data_object(
+                &mut ffi_repo,
+                src_id,
+                dst_id,
+                &mut ffi_adopted,
+            )
+        };
+        if ffi_adopt_status != 3 || ffi_adopted != 0 {
+            return Err(format!(
+                "C6-B FFI adoption bypassed active lease: status={ffi_adopt_status} adopted={ffi_adopted}"
+            ));
+        }
         if scalar_u64(
             &repo_a,
             &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
@@ -1638,6 +1655,46 @@ fn c6_legacy_payload_requires_no_active_file_lease() {
             Err(err) if err.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
             other => return Err(format!("C6-B unguarded payload persist: {other:?}")),
         }
+        let ffi_row = [fod_rust_hotpath::ffi::DbfsPersistBlockInput {
+            block_index: 0,
+            ptr: data_b.as_ptr(),
+            len: data_b.len(),
+            used_len: block_size,
+        }];
+        let ffi_write_status = unsafe {
+            fod_rust_hotpath::ffi::fod_rust_pg_repo_persist_file_blocks(
+                &mut ffi_repo,
+                dst_id,
+                block_size,
+                block_size,
+                1,
+                1,
+                ffi_row.as_ptr(),
+                ffi_row.len(),
+            )
+        };
+        if ffi_write_status != 3 {
+            return Err(format!(
+                "C6-B FFI payload bypassed active lease: status={ffi_write_status}"
+            ));
+        }
+        let ffi_truncate_status = unsafe {
+            fod_rust_hotpath::ffi::fod_rust_pg_repo_persist_file_blocks(
+                &mut ffi_repo,
+                dst_id,
+                0,
+                block_size,
+                0,
+                1,
+                std::ptr::null(),
+                0,
+            )
+        };
+        if ffi_truncate_status != 3 {
+            return Err(format!(
+                "C6-B FFI empty-payload truncate bypassed active lease: status={ffi_truncate_status}"
+            ));
+        }
         c4_assert_payload(&repo_a, dst_id, block_size, &data_a)?;
 
         // Po release starsza sciezka pozostaje dostepna dla narzedzi
@@ -1659,7 +1716,9 @@ fn c6_legacy_payload_requires_no_active_file_lease() {
         ));
         c4_assert_payload(&repo_a, dst_id, block_size, &data_b)?;
         repo_a.release_write_ownership(owner_a, src_lease)?;
-        println!("C6_LEGACY_FENCE=PASS bytes={block_size} deny_adopt=1 deny_persist=1");
+        println!(
+            "C6_LEGACY_FENCE=PASS bytes={block_size} deny_adopt=1 deny_persist=1 ffi_deny=3"
+        );
         Ok(())
     })();
 
