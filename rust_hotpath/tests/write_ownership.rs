@@ -1041,10 +1041,8 @@ fn c5_persist_worker_entrypoint() {
     let data = vec![b'A'; usize::try_from(block_size).expect("C5 block size usize")];
     c4_persist_payload(&repo, file_id, block_size, &data, fence)
         .expect("C5 writer persist");
-    repo.release_write_ownership(owner, lease)
-        .expect("C5 writer release");
-    repo.exec(&format!("DELETE FROM client_sessions WHERE session_id = {session}"))
-        .expect("C5 writer session cleanup");
+    // Celowo zostawiamy wygasly lease i aktywna sesje do czasu przejecia przez B.
+    // Test nadrzedny usuwa sesje po sprawdzeniu odrzucenia starego tokenu.
     println!("C5_WORKER_COMMIT=PASS");
 }
 
