@@ -1527,7 +1527,6 @@ fn c6_adopt_requires_current_destination_fence() {
     }
 }
 
-
 // C6-B: legacy persist/FFI oraz legacy adoption nie moga ominac aktywnej
 // dzierzawy, nawet gdy nie dostarczaja tokenu fencing.
 #[test]
