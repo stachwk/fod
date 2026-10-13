@@ -1,6 +1,6 @@
 # C10 — PostgreSQL role boundary and direct-write bypass audit
 
-Status: **C10-A read-only privilege audit completed for the explicitly selected test database; security finding confirmed** (2026-10-13). After correcting database routing, `C10_TARGET database=foddbname_hotpath_test` matched `C10_ROLE database=foddbname_hotpath_test`, with `role=foduser`, `superuser=YES`, `createdb=YES`, `createrole=YES`, `bypassrls=YES`, `owns_database=YES` and full `INSERT,UPDATE,DELETE,TRUNCATE` on all 6/6 inspected tables. `C10_DIRECT_DML_BYPASS=YES`, `C10_AUDIT=UNRESTRICTED`, `audit=0`, `diff=0`. The caller also reported `policy=2` while an `OK: public Make target namespace is normalized and alias-free` line appeared; the policy exit-code discrepancy remains unverified and must be diagnosed separately. Earlier auditing `foddbname` instead of the requested test database was read-only and has been fixed.
+Status: **C10-A closed (privilege exposure confirmed; target routing and Make policy tests PASS); C10-B1 initial SQL mutation inventory created** (2026-10-13). After correcting database routing, `C10_TARGET database=foddbname_hotpath_test` matched `C10_ROLE database=foddbname_hotpath_test`, with `role=foduser`, `superuser=YES`, `createdb=YES`, `createrole=YES`, `bypassrls=YES`, `owns_database=YES` and full `INSERT,UPDATE,DELETE,TRUNCATE` on all 6/6 inspected tables. `C10_DIRECT_DML_BYPASS=YES`, `C10_AUDIT=UNRESTRICTED`, `audit=0`, `diff=0`. The caller also reported `policy=2` while an `OK: public Make target namespace is normalized and alias-free` line appeared; the policy exit-code discrepancy remains unverified and must be diagnosed separately. Earlier auditing `foddbname` instead of the requested test database was read-only and has been fixed.
 
 ## Why this audit is necessary
 
@@ -161,3 +161,10 @@ The policy test now verifies two stages separately: the public
 selection, and the internal `--database "..."` argument. These checks
 passed against a minimal reproducer; the full repository test remains to be
 rerun locally. No PostgreSQL permissions or FOD runtime behavior changed.
+
+## C10-B1 initial source inventory
+
+The first-pass source review is in [`FOD_C10B_SQL_MUTATION_INVENTORY.md`](FOD_C10B_SQL_MUTATION_INVENTORY.md).
+It identifies concrete FUSE/hotpath/indexer/mkfs mutation paths and the order of work needed before a restricted PostgreSQL role could safely operate. Especially important: `rust_mkfs/src/main.rs::ensure_fod_privileges` grants broad DML on all FOD tables, `rust_hotpath/src/pg.rs::ensure_client_session_schema` still performs runtime DDL when necessary, and `rust_indexer/src/cleanup.rs` issues direct deletes and reference-count updates. These paths must be addressed before changing grants. **This is an initial inventory, not full SQL mutation coverage.**
+
+The public Make policy tests were rerun after the two-stage `make -n` correction and passed: `C10_POLICY direct=0 make=0 diff=0`. C10-A's read-only audit result remains `C10_AUDIT=UNRESTRICTED`; the role/security remediation is still pending.
