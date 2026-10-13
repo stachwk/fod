@@ -1754,3 +1754,195 @@ fn c6_legacy_payload_requires_no_active_file_lease() {
         panic!("{err}");
     }
 }
+
+
+// C6-C: legacy indexer stream-import i FFI size update nie moga zmienic pliku
+// w trakcie aktywnego ownership innego klienta.
+#[test]
+fn c6_stream_import_and_size_require_no_active_file_lease() {
+    use sha2::{Digest, Sha256};
+
+    assert_isolated_test_database();
+    let repo_a = DbRepo::new(&conninfo()).expect("C6-C owner connection");
+    let repo_legacy = DbRepo::new(&conninfo()).expect("C6-C legacy connection");
+    let mut ffi_repo = fod_rust_hotpath::ffi::DbfsPgRepo {
+        repo: DbRepo::new(&conninfo()).expect("C6-C FFI connection"),
+    };
+    repo_a
+        .ensure_client_session_schema()
+        .expect("C6-C session schema");
+    require_schema(&repo_a);
+
+    let block_size = scalar_u64(
+        &repo_a,
+        "SELECT value FROM config WHERE key = 'block_size'",
+        "C6-C configured block size",
+    );
+    let bytes = usize::try_from(block_size).expect("C6-C block size fits usize");
+    let initial_payload = vec![b'A'; bytes];
+    let imported_payload = vec![b'I'; bytes];
+    let imported_sha256 = format!("{:x}", Sha256::digest(&imported_payload));
+    let suffix = unique_suffix();
+    let path = env::temp_dir().join(format!("fod-c6-c-import-{suffix}.bin"));
+    fs::write(&path, &imported_payload).expect("C6-C write import source");
+
+    let owner_a = suffix.wrapping_add(140_001);
+    let session_a = repo_a
+        .register_client_session(
+            "write-ownership-c6-c-guard",
+            "/tmp/write-ownership-c6-c-guard",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C6-C register owner session");
+    repo_a
+        .touch_client_session_owner_key(session_a, owner_a)
+        .expect("C6-C touch owner");
+
+    let (name, file_id, initial_object) = create_test_file(&repo_a, suffix);
+    let mut objects = vec![initial_object];
+    let result = (|| -> Result<(), String> {
+        let lease = repo_a
+            .acquire_write_ownership(None, &name, Some(file_id), owner_a, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C6-C owner could not acquire".to_string())?;
+        let file_token = lease
+            .file_fencing_token
+            .ok_or_else(|| "C6-C file fencing token missing".to_string())?;
+        let fence = WritePersistenceFence {
+            session_id: session_a,
+            owner_key: owner_a,
+            file_fencing_token: file_token,
+        };
+        c4_persist_payload(&repo_a, file_id, block_size, &initial_payload, fence)?;
+        let object_after_owner = scalar_u64(
+            &repo_a,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {file_id}"),
+            "C6-C object after owner write",
+        );
+        objects.push(object_after_owner);
+
+        // Indexer import bez tokenu: kontrola musi nastapic przed modyfikacja
+        // oraz utrzymywac advisory lock do COMMIT.
+        let import_result = repo_legacy.persist_file_blocks_from_path(
+            file_id,
+            block_size,
+            block_size,
+            1,
+            true,
+            &path,
+            &imported_sha256,
+            false,
+        );
+        match import_result {
+            Err(error) if error.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
+            other => return Err(format!("C6-C stream import bypassed file lease: {other:?}")),
+        }
+
+        // Zmiana rozmiaru musi odmowic zarowno w API Rust, jak i FFI.
+        let requested_size = block_size.saturating_add(128);
+        let size_result = repo_legacy.set_file_size(file_id, requested_size);
+        match size_result {
+            Err(error) if error.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
+            other => return Err(format!("C6-C set_file_size bypassed lease: {other:?}")),
+        }
+        let ffi_result = unsafe {
+            fod_rust_hotpath::ffi::fod_rust_pg_repo_set_file_size(
+                &mut ffi_repo,
+                file_id,
+                requested_size,
+            )
+        };
+        if ffi_result != 3 {
+            return Err(format!(
+                "C6-C FFI set_file_size bypassed active lease: status={ffi_result}"
+            ));
+        }
+
+        c4_assert_payload(&repo_a, file_id, block_size, &initial_payload)?;
+        let current_object = scalar_u64(
+            &repo_a,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {file_id}"),
+            "C6-C object after rejected mutation",
+        );
+        if current_object != object_after_owner {
+            return Err("C6-C denied mutation changed data object".into());
+        }
+        let metadata = repo_a
+            .file_read_metadata(file_id)?
+            .ok_or_else(|| "C6-C file missing after denied mutations".to_string())?;
+        if metadata.size != block_size {
+            return Err("C6-C denied mutation changed file size".into());
+        }
+
+        // Zachowanie kompatybilnosci: po release starszy indexer nadal importuje.
+        repo_a.release_write_ownership(owner_a, lease)?;
+        repo_legacy.persist_file_blocks_from_path(
+            file_id,
+            block_size,
+            block_size,
+            1,
+            true,
+            &path,
+            &imported_sha256,
+            false,
+        )?;
+        let imported_object = scalar_u64(
+            &repo_legacy,
+            &format!("SELECT data_object_id FROM files WHERE id_file = {file_id}"),
+            "C6-C imported object",
+        );
+        objects.push(imported_object);
+        c4_assert_payload(&repo_a, file_id, block_size, &imported_payload)?;
+
+        // FFI size update nadal dziala po zwolnieniu ownership.
+        let ffi_after_release = unsafe {
+            fod_rust_hotpath::ffi::fod_rust_pg_repo_set_file_size(
+                &mut ffi_repo,
+                file_id,
+                requested_size,
+            )
+        };
+        if ffi_after_release != 0 {
+            return Err(format!(
+                "C6-C size update without lease failed: status={ffi_after_release}"
+            ));
+        }
+        let final_metadata = repo_legacy
+            .file_read_metadata(file_id)?
+            .ok_or_else(|| "C6-C file metadata missing after release".to_string())?;
+        if final_metadata.size != requested_size {
+            return Err("C6-C legacy size update after release did not persist".into());
+        }
+        println!(
+            "C6_STREAM_SIZE_FENCE=PASS token={file_token} bytes={block_size} stream_denied=1 size_denied=1 ffi_denied=1"
+        );
+        Ok(())
+    })();
+
+    if let Ok(value) = repo_a.query_scalar_text(&format!(
+        "SELECT data_object_id FROM files WHERE id_file = {file_id}"
+    )) {
+        if let Ok(id) = value.trim().parse::<u64>() {
+            objects.push(id);
+        }
+    }
+    objects.sort_unstable();
+    objects.dedup();
+    let object_list = objects.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+    let cleanup_result = repo_a.exec(&format!(
+        "DELETE FROM destination_write_leases WHERE parent_key = 0 AND name = '{name}'; \
+         DELETE FROM file_write_leases WHERE file_id = {file_id}; \
+         DELETE FROM client_sessions WHERE session_id = {session_a}; \
+         DELETE FROM files WHERE id_file = {file_id}; \
+         DELETE FROM data_objects WHERE id_data_object IN ({object_list});"
+    ));
+    let _ = fs::remove_file(&path);
+    if let Err(error) = cleanup_result {
+        panic!("C6-C cleanup failed: {error}; result: {result:?}");
+    }
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+}
