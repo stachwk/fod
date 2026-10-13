@@ -128,6 +128,19 @@ and fail-closed negative tests. C10-B3 must not start simply because
 the scanner produced a report. Priority: indexer cleanup, tokenless
 legacy paths, runtime DDL and direct lease-table updates.
 
+## C10-B2 — ręczna kwalifikacja P0/P1
+
+Pierwszy przegląd funkcji `DbRepo`, importu i cleanup jest zapisany w
+[`FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`](FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md).
+Obejmuje dzierżawy, atomowość transakcji, legacy tokenless persistence,
+adopcję obiektów, runtime DDL oraz szerokie granty `mkfs`.
+
+**Nowe ryzyko do sprawdzenia testem:** `cleanup_failed_materialization`
+otwiera transakcję przez `repo.exec("BEGIN")`, a kolejne metody wykonują
+osobne pobrania połączeń z puli; nie udowodniono, że cały cleanup odbywa
+się na jednym backendzie PostgreSQL. Nie ogłaszamy regresji bez
+deterministycznego testu sesji i rollback.
+
 ## Risk priority and migration order
 
 **P0 — control-plane authorization.**
