@@ -27,6 +27,7 @@ required_targets=(
     postgres-down
     postgres-reset
     postgres-shell
+    audit-postgres-runtime-role
     fod-init
     fod-mount
     fod-remote-mount
@@ -116,6 +117,7 @@ grep -Eq '^mount:' "${INTERNAL}"
 # invocation exported FOD_INTERNAL_MAKE=1.
 public_make -n help >/dev/null
 public_make -n postgres-up >/dev/null
+public_make -n audit-postgres-runtime-role >/dev/null
 public_make -n fod-init >/dev/null
 public_make -n package-deb-build >/dev/null
 
