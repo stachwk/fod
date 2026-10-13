@@ -98,6 +98,8 @@ GRANT SELECT ON file_write_leases TO fod_runtime;
             # Report can be serialized and rendered without invoking PostgreSQL.
             json.dumps(report)
             self.assertIn("rust_indexer/src/cleanup.rs:2", markdown(report))
+            self.assertIn("`rust_indexer/src/cleanup.rs:2`", markdown(report))
+            self.assertNotIn("\\`", markdown(report))
 
     def test_deployment_and_python_sources_are_included(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
