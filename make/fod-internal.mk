@@ -1503,7 +1503,7 @@ test-copy-file-range-stale-multimount: build-runtime venv
 # schema ownership, or runtime configuration.
 .PHONY: audit-postgres-runtime-role
 audit-postgres-runtime-role: venv
-	@FOD_PG_DBNAME=$(POSTGRES_DB) FOD_PG_USER=$(POSTGRES_USER) FOD_PG_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) scripts/security/pg_runtime_role_audit.py
+	@$(VENV_PYTHON) scripts/security/pg_runtime_role_audit.py --database "$(FOD_AUDIT_DBNAME)"
 
 
 
