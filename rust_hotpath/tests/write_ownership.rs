@@ -1954,7 +1954,6 @@ fn c6_stream_import_and_size_require_no_active_file_lease() {
     }
 }
 
-
 // C9: an in-flight data-object adoption must serialize a competing lease
 // acquisition via PostgreSQL even when the old lease expires mid-transaction.
 #[cfg(unix)]
@@ -1974,7 +1973,7 @@ fn c9_inflight_adoption_blocks_takeover_until_commit() {
     let suffix = unique_suffix();
     let owner_a = suffix.wrapping_add(150_001);
     let owner_b = suffix.wrapping_add(160_001);
-    let (src_name, src_id, src_initial_object) = create_test_file(&repo_b, suffix);
+    let (_src_name, src_id, src_initial_object) = create_test_file(&repo_b, suffix);
     let (dst_name, dst_id, dst_initial_object) =
         create_test_file(&repo_b, suffix.wrapping_add(1));
     let mut objects = vec![src_initial_object, dst_initial_object];
@@ -2040,19 +2039,21 @@ fn c9_inflight_adoption_blocks_takeover_until_commit() {
     let guard_conninfo = format!("{} application_name={guard_name}", conninfo());
     let guard = thread::spawn(move || -> Result<(), String> {
         let repo = DbRepo::new(&guard_conninfo)?;
-        repo.exec("BEGIN")?;
-        // FOR NO KEY UPDATE blocks UPDATE files, but not the KEY SHARE
-        // needed by referential integrity checks on the file lease.
-        if let Err(error) = repo.exec(&format!(
-            "SELECT 1 FROM files WHERE id_file = {dst_id} FOR NO KEY UPDATE"
-        )) {
-            let _ = repo.exec("ROLLBACK");
-            return Err(error);
+        // Execute all statements on ONE PG connection. DbRepo::exec
+        // accepts command status only, so individual SELECT calls cannot
+        // be used to coordinate the transaction.
+        // FOR NO KEY UPDATE blocks UPDATE files without blocking lease FKs.
+        let result = repo.exec(&format!(
+            "BEGIN; SELECT 1 FROM files WHERE id_file = {dst_id} FOR NO KEY UPDATE; \
+             SELECT pg_sleep(15); COMMIT;"
+        ));
+        // The coordinator cancels only pg_sleep. PostgreSQL rolls back
+        // the guard transaction and releases the row lock.
+        let rollback = repo.exec("ROLLBACK");
+        if result.is_ok() {
+            return Err("C9 guard completed naturally instead of being canceled".into());
         }
-        // The coordinator observes PgSleep, then explicitly cancels it.
-        // Always roll back the guard so the adopter may commit.
-        let _ = repo.exec("SELECT pg_sleep(15)");
-        repo.exec("ROLLBACK")
+        rollback
     });
 
     let mut adopter: Option<thread::JoinHandle<Result<bool, String>>> = None;
@@ -2227,5 +2228,4 @@ fn c9_inflight_adoption_blocks_takeover_until_commit() {
     if let Err(error) = adopter_result {
         panic!("C9 adopter cleanup failure: {error}");
     }
-    let _ = src_name;
 }
