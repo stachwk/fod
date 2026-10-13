@@ -1,8 +1,6 @@
 # C10-B1 — inventory of SQL mutations and PostgreSQL authorization boundaries
 
-Status: **initial, source-verified inventory** (2026-10-13). This is a
-read-only design artifact. No DDL, GRANT, REVOKE, role changes, or production
-code changes have been applied.
+Status: **C10-B1 source review completed; C10-B2 static candidate collector and offline regression tests implemented, local execution pending** (2026-10-13). This remains a read-only audit. No DDL, GRANT, REVOKE, role changes or FOD storage/runtime behavior changes have been applied.
 
 ## Safety objective
 
@@ -48,6 +46,53 @@ every caller in `rust_fuse`, `rust_indexer`, `rust_libfod`, `rust_monitor`,
 are separate privileged DDL and must not be granted to the FUSE runtime.
 This document does not assert that every path listed is currently exploitable
 under a valid FUSE API; direct SQL rights are a separate, confirmed boundary.
+
+## C10-B2 — repeatable candidate collection (requires manual classification)
+
+New components:
+
+- `scripts/security/inventory_sql_mutations.py` scans Rust source,
+  `migrations/*.sql`, and Python, shell and SQL files under `scripts/`
+  and `docker/`.
+- `tests/test_c10b_sql_mutation_inventory.py` exercises source locations,
+  comment skipping, migration DDL, execution sinks and deployment scripts.
+- The collector emits deterministic JSON or Markdown including file,
+  line number, approximate enclosing function, operation/object hint and
+  optional guard markers. It does not connect to PostgreSQL.
+
+Run from the checkout:
+
+```bash
+cd ~/git/fod
+python3 tests/test_c10b_sql_mutation_inventory.py -v
+python3 scripts/security/inventory_sql_mutations.py \
+  --format json --fail-on-empty > /tmp/fod-c10b2-mutations.json
+python3 scripts/security/inventory_sql_mutations.py \
+  --format markdown > /tmp/fod-c10b2-mutations.md
+python3 - <<'PY'
+import json
+with open('/tmp/fod-c10b2-mutations.json', encoding='utf-8') as stream:
+    report = json.load(stream)
+print('C10_B2 files=', report['files_scanned'])
+print('C10_B2 findings=', report['findings_count'])
+print('C10_B2 categories=', report['by_category'])
+print('C10_B2 kinds=', report['by_kind'])
+PY
+```
+
+**Coverage limitations:** This is a conservative text scanner, not
+a Rust AST or PostgreSQL parser. Dynamic SQL, multiline constructs,
+indirect SQL helpers and generated statements can be missed.
+`relation_hint=UNKNOWN` does not imply a safe statement.
+Source-function and `guard_hints_not_proof` values are navigation aids;
+they do not establish a valid transaction, authenticated session or
+successful fencing. There may also be false positive textual matches.
+
+Every high-risk row must be manually classified against callers, tables,
+transaction/advisory locks, lease/fence checks, PostgreSQL role grants
+and fail-closed negative tests. C10-B3 must not start simply because
+the scanner produced a report. Priority: indexer cleanup, tokenless
+legacy paths, runtime DDL and direct lease-table updates.
 
 ## Risk priority and migration order
 
@@ -102,9 +147,11 @@ if protected functions cannot be used as an equivalent unrestricted bypass.
 
 ## Next implementation gates
 
-1. **C10-B2 exhaustive inventory:** collect every SQL mutation and all
-   `DbRepo::exec` callsites into a reviewable table, including dynamic SQL.
-   Map component -> table -> operation -> fence/lease/transaction guard.
+1. **C10-B2 manual completion:** run the static inventory, review all
+   candidates and dynamic SQL execution sinks, and map each reachable
+   mutation to component -> table -> operation -> authorization ->
+   transaction -> fence/lease/lock. The static collector alone does not
+   satisfy the complete-inventory gate.
 2. **C10-B3 isolated role bootstrap:** separate test database with distinct
    owner/admin/runtime/indexer credentials and no silent grants at upgrade.
    Produce a read-only report for each role before performing negative tests.
