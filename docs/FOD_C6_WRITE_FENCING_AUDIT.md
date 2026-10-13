@@ -87,3 +87,29 @@ aktywnego lease oraz pełnoobiektowe przyłączenie po jego zwolnieniu.
 
 C7 **nie zastępuje** testu nieaktualnego `copy_file_range` po wymuszonym
 przejęciu lease ani audytu uprawnień PostgreSQL.
+
+## C8 — stale copy_file_range po przejęciu lease
+
+Dodano `tests/integration/test_copy_file_range_stale_multimount.py`
+i `make test-copy-file-range-stale-multimount`.
+
+W izolowanej bazie PostgreSQL test montuje FOD w dwóch procesach,
+tworzy źródło z danymi i pusty plik docelowy, a następnie:
+
+1. A otwiera `destination` do zapisu i otrzymuje fencing token.
+2. Test usuwa tylko lease przypisany do sesji A i pliku testowego,
+   pozostawiając uchwyt i daemon A aktywne.
+3. B otwiera ten sam plik i otrzymuje **wyższy** fencing token.
+4. A próbuje pełnoobiektowego `copy_file_range` ze starym uchwytem;
+   oczekiwane szybkie `EIO` z warstwy FUSE, bez zmiany
+   `data_object_id`, rozmiaru, bajtów ani aktywnego lease B.
+5. B z poprawnym tokenem przyłącza obiekt źródłowy i weryfikuje dane.
+
+Wymagana baza testowa: `FOD_PG_DBNAME=foddbname_hotpath_test`
+i `POSTGRES_DB=foddbname_hotpath_test`.
+**C8 oczekuje na lokalną walidację z uruchomionym FUSE.**
+
+Scenariusz dowodzi ochrony przed *stale handle after takeover*,
+ale nie wstrzymuje operacji wewnątrz transakcji adopcji: rzeczywisty
+*in-flight takeover race* wymaga osobnego, deterministycznego hooka
+oraz kontroli kolejności transakcji. Nie uznawać go za pokryty przez C8.
