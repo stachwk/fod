@@ -1,6 +1,6 @@
 # C10-B1 — inventory of SQL mutations and PostgreSQL authorization boundaries
 
-Status: **C10-B1 source review completed; C10-B2 static candidate collector and offline regression tests implemented, local execution pending** (2026-10-13). This remains a read-only audit. No DDL, GRANT, REVOKE, role changes or FOD storage/runtime behavior changes have been applied.
+Status: **C10-B2 static candidate collection locally validated; manual authorization/transaction review pending** (2026-10-13). The first local run passed 4/4 offline tests and returned scan_rc=0. Subsequent fixes for Markdown SyntaxWarning and new grouped-summary CLI have not yet been locally revalidated. This remains a read-only audit. No DDL, GRANT, REVOKE, role changes or production write-path changes have been applied.
 
 ## Safety objective
 
@@ -47,6 +47,39 @@ are separate privileged DDL and must not be granted to the FUSE runtime.
 This document does not assert that every path listed is currently exploitable
 under a valid FUSE API; direct SQL rights are a separate, confirmed boundary.
 
+### First local source scan, 2026-10-13
+
+Baseline reported by the local checkout at `63ee5df`:
+
+- 149 source files scanned, 1,045 candidate findings;
+- 700 textual SQL mutation candidates and 345 SQL execution sinks;
+- category counts: filesystem_state 135, index_catalog 26,
+  lease_or_session 109, schema_admin 277, manual_review 498;
+- offline tests 4/4 PASS, `test=0 scan=0`;
+- Python emitted `SyntaxWarning` for escaped Markdown backticks.
+
+The warnings were corrected by rendering literal backticks, and a
+Markdown-regression assertion was added. C10-B2 also gained `by_component`,
+`top_paths` (top 20), and a JSON `--summary` option to focus manual review
+without copying all 1,045 findings. The new summary deliberately retains
+the total count of scanned files, even when a source has zero matches.
+
+Run after updating to the new commits:
+
+```bash
+cd ~/git/fod
+python3 -W error::SyntaxWarning -m py_compile \
+  scripts/security/inventory_sql_mutations.py \
+  tests/test_c10b_sql_mutation_inventory.py
+python3 -W error::SyntaxWarning tests/test_c10b_sql_mutation_inventory.py -v
+python3 scripts/security/inventory_sql_mutations.py --summary --fail-on-empty
+```
+
+Do not interpret counts or guard hint presence as a validated privilege
+boundary. Confirm the individual SQL operation and its caller, authenticated
+role, transaction/advisory lock, fence, and a negative test before restricting
+runtime permissions.
+
 ## C10-B2 — repeatable candidate collection (requires manual classification)
 
 New components:
@@ -55,7 +88,8 @@ New components:
   `migrations/*.sql`, and Python, shell and SQL files under `scripts/`
   and `docker/`.
 - `tests/test_c10b_sql_mutation_inventory.py` exercises source locations,
-  comment skipping, migration DDL, execution sinks and deployment scripts.
+  comment skipping, migration DDL, execution sinks, deployment scripts,
+  Markdown output and compact JSON summaries.
 - The collector emits deterministic JSON or Markdown including file,
   line number, approximate enclosing function, operation/object hint and
   optional guard markers. It does not connect to PostgreSQL.
