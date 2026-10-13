@@ -1391,8 +1391,7 @@ fn c6_adopt_requires_current_destination_fence() {
         .expect("C6-A owner B");
 
     let (src_name, src_id, src_initial_object) = create_test_file(&repo_a, suffix);
-    let (dst_name, dst_id, dst_initial_object) =
-        create_test_file(&repo_a, suffix.wrapping_add(1));
+    let (dst_name, dst_id, dst_initial_object) = create_test_file(&repo_a, suffix.wrapping_add(1));
     let mut objects = vec![src_initial_object, dst_initial_object];
 
     let result = (|| -> Result<(), String> {
@@ -1567,8 +1566,7 @@ fn c6_legacy_payload_requires_no_active_file_lease() {
         .expect("C6-B touch owner");
 
     let (src_name, src_id, src_initial_object) = create_test_file(&repo_a, suffix);
-    let (dst_name, dst_id, dst_initial_object) =
-        create_test_file(&repo_a, suffix.wrapping_add(1));
+    let (dst_name, dst_id, dst_initial_object) = create_test_file(&repo_a, suffix.wrapping_add(1));
     let mut data_object_ids = vec![src_initial_object, dst_initial_object];
     let result = (|| -> Result<(), String> {
         let src_lease = repo_a
@@ -1623,7 +1621,8 @@ fn c6_legacy_payload_requires_no_active_file_lease() {
             &repo_a,
             &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
             "C6-B destination object after denied adoption",
-        ) != dst_initial_object {
+        ) != dst_initial_object
+        {
             return Err("C6-B denied legacy adoption changed destination object".into());
         }
 
@@ -1716,9 +1715,7 @@ fn c6_legacy_payload_requires_no_active_file_lease() {
         ));
         c4_assert_payload(&repo_a, dst_id, block_size, &data_b)?;
         repo_a.release_write_ownership(owner_a, src_lease)?;
-        println!(
-            "C6_LEGACY_FENCE=PASS bytes={block_size} deny_adopt=1 deny_persist=1 ffi_deny=3"
-        );
+        println!("C6_LEGACY_FENCE=PASS bytes={block_size} deny_adopt=1 deny_persist=1 ffi_deny=3");
         Ok(())
     })();
 
@@ -1962,8 +1959,12 @@ fn c9_inflight_adoption_blocks_takeover_until_commit() {
     assert_isolated_test_database();
     let repo_a = DbRepo::new(&conninfo()).expect("C9 connect adopter owner");
     let repo_b = DbRepo::new(&conninfo()).expect("C9 connect contender");
-    repo_a.ensure_client_session_schema().expect("C9 ensure schema A");
-    repo_b.ensure_client_session_schema().expect("C9 ensure schema B");
+    repo_a
+        .ensure_client_session_schema()
+        .expect("C9 ensure schema A");
+    repo_b
+        .ensure_client_session_schema()
+        .expect("C9 ensure schema B");
     require_schema(&repo_b);
 
     let bs = scalar_u64(
@@ -1976,8 +1977,7 @@ fn c9_inflight_adoption_blocks_takeover_until_commit() {
     let owner_a = suffix.wrapping_add(150_001);
     let owner_b = suffix.wrapping_add(160_001);
     let (_src_name, src_id, src_initial_object) = create_test_file(&repo_b, suffix);
-    let (dst_name, dst_id, dst_initial_object) =
-        create_test_file(&repo_b, suffix.wrapping_add(1));
+    let (dst_name, dst_id, dst_initial_object) = create_test_file(&repo_b, suffix.wrapping_add(1));
     let mut objects = vec![src_initial_object, dst_initial_object];
 
     let session_a = repo_a
@@ -2116,7 +2116,8 @@ fn c9_inflight_adoption_blocks_takeover_until_commit() {
             &repo_b,
             &format!("SELECT data_object_id FROM files WHERE id_file = {dst_id}"),
             "C9 destination while A pending",
-        ) != dst_initial_object {
+        ) != dst_initial_object
+        {
             return Err("C9: uncommitted adoption was visible to B".into());
         }
 
