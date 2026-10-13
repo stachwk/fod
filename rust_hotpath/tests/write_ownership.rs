@@ -1346,7 +1346,6 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
     }
 }
 
-
 // C6-A: optymalizacja copy-on-write/adoption nie moze ominac fencing docelowego pliku.
 #[test]
 fn c6_adopt_requires_current_destination_fence() {
@@ -1446,8 +1445,7 @@ fn c6_adopt_requires_current_destination_fence() {
         assert_token_advanced(lease_a, lease_b);
 
         // Operacja stale A ma dotyczyc pustego celu; nie moze go adoptowac.
-        let stale_result =
-            repo_a.adopt_source_data_object_with_fence(src_id, dst_id, fence_a);
+        let stale_result = repo_a.adopt_source_data_object_with_fence(src_id, dst_id, fence_a);
         match stale_result {
             Err(error) if error.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
             other => return Err(format!("C6-A stale adoption was not fenced: {other:?}")),
@@ -1460,10 +1458,10 @@ fn c6_adopt_requires_current_destination_fence() {
         if after_stale != dst_initial_object {
             return Err("C6-A stale adoption changed destination object".into());
         }
-        if repo_b.file_read_metadata(dst_id)?
-            .ok_or_else(|| "C6-A destination metadata missing".to_string())?
-            .size != 0
-        {
+        let dest_metadata = repo_b
+            .file_read_metadata(dst_id)?
+            .ok_or_else(|| "C6-A destination metadata missing".to_string())?;
+        if dest_metadata.size != 0 {
             return Err("C6-A stale adoption changed destination size".into());
         }
 
