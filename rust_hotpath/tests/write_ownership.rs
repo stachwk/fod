@@ -1120,10 +1120,18 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
     let guard_conninfo = format!("{} application_name={guard_name}", conninfo());
     let guard = thread::spawn(move || -> Result<(), String> {
         let guard_repo = DbRepo::new(&guard_conninfo)?;
-        guard_repo.exec(&format!(
-            "BEGIN; SELECT 1 FROM files WHERE id_file = {file_id} FOR UPDATE; \
+        // NO KEY UPDATE blokuje UPDATE files w persist, ale dopuszcza
+        // KEY SHARE uzywany przez sprawdzenie FK przy zakladaniu lease.
+        // FOR UPDATE blokowalo takze FK i writer nie docieral do READY.
+        let result = guard_repo.exec(&format!(
+            "BEGIN; SELECT 1 FROM files WHERE id_file = {file_id} FOR NO KEY UPDATE; \
              SELECT pg_sleep(15); COMMIT;"
-        ))
+        ));
+        // pg_cancel_backend przerywa pg_sleep. Jawny ROLLBACK zwalnia
+        // blokade rekordu jeszcze przed zakonczeniem watku.
+        let rollback = guard_repo.exec("ROLLBACK");
+        result?;
+        rollback
     });
 
     let mut worker: Option<std::process::Child> = None;
@@ -1153,7 +1161,12 @@ fn c5_inflight_persist_blocks_takeover_until_commit() {
         let started = Instant::now();
         while !ready.exists() {
             if started.elapsed() > Duration::from_secs(5) {
-                return Err("C5: writer readiness timeout".into());
+                let diagnostics = repo_b
+                    .query_scalar_text(&format!(
+                        "SELECT COALESCE((SELECT                          'state=' || COALESCE(state, '') ||                          ' wait=' || COALESCE(wait_event_type, '') || '/' || COALESCE(wait_event, '') ||                          ' blockers=' || array_to_string(pg_blocking_pids(pid), ',')                          FROM pg_stat_activity                          WHERE application_name = '{writer_name}'                            AND datname = current_database() LIMIT 1), 'backend_not_found')"
+                    ))
+                    .unwrap_or_else(|error| format!("diagnostics_failed={error}"));
+                return Err(format!("C5: writer readiness timeout: {diagnostics}"));
             }
             if let Some(status) = worker
                 .as_mut()
