@@ -118,6 +118,18 @@ grep -Eq '^mount:' "${INTERNAL}"
 public_make -n help >/dev/null
 public_make -n postgres-up >/dev/null
 public_make -n audit-postgres-runtime-role >/dev/null
+# The internal dispatcher rewrites POSTGRES_DB, so the public interface
+# must capture an explicit caller database before that normalization.
+audit_env_dry_run="$(POSTGRES_DB=foddbname_hotpath_test public_make -n audit-postgres-runtime-role)"
+grep -Fq -- '--database "foddbname_hotpath_test"' <<< "${audit_env_dry_run}" || {
+    echo "C10 audit lost explicit POSTGRES_DB environment selection" >&2
+    exit 1
+}
+audit_cli_dry_run="$(public_make -n audit-postgres-runtime-role FOD_AUDIT_DBNAME=foddbname_hotpath_test)"
+grep -Fq -- '--database "foddbname_hotpath_test"' <<< "${audit_cli_dry_run}" || {
+    echo "C10 audit lost explicit FOD_AUDIT_DBNAME selection" >&2
+    exit 1
+}
 public_make -n fod-init >/dev/null
 public_make -n package-deb-build >/dev/null
 
