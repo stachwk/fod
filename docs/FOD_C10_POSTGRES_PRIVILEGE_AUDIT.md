@@ -1,6 +1,6 @@
 # C10 — PostgreSQL role boundary and direct-write bypass audit
 
-Status: **C10-A closed (privilege exposure confirmed; target routing and Make policy tests PASS); C10-B1 initial SQL mutation inventory created** (2026-10-13). After correcting database routing, `C10_TARGET database=foddbname_hotpath_test` matched `C10_ROLE database=foddbname_hotpath_test`, with `role=foduser`, `superuser=YES`, `createdb=YES`, `createrole=YES`, `bypassrls=YES`, `owns_database=YES` and full `INSERT,UPDATE,DELETE,TRUNCATE` on all 6/6 inspected tables. `C10_DIRECT_DML_BYPASS=YES`, `C10_AUDIT=UNRESTRICTED`, `audit=0`, `diff=0`. The caller also reported `policy=2` while an `OK: public Make target namespace is normalized and alias-free` line appeared; the policy exit-code discrepancy remains unverified and must be diagnosed separately. Earlier auditing `foddbname` instead of the requested test database was read-only and has been fixed.
+Status: **C10-A closed (privilege exposure confirmed; target routing and Make policy tests PASS); C10-B1 initial SQL mutation inventory created** (2026-10-13). After correcting database routing, `C10_TARGET database=foddbname_hotpath_test` matched `C10_ROLE database=foddbname_hotpath_test`, with `role=foduser`, `superuser=YES`, `createdb=YES`, `createrole=YES`, `bypassrls=YES`, `owns_database=YES` and full `INSERT,UPDATE,DELETE,TRUNCATE` on all 6/6 inspected tables. `C10_DIRECT_DML_BYPASS=YES`, `C10_AUDIT=UNRESTRICTED`, `audit=0`, `diff=0`. The public Make target policy initially failed because its dry-run check searched for the Python argument in the public dispatcher output. The two-stage policy assertion was corrected, and the local rerun passed (`C10_POLICY direct=0 make=0 diff=0`). Earlier auditing `foddbname` instead of the requested test database was read-only and has been fixed.
 
 ## Why this audit is necessary
 
@@ -158,9 +158,10 @@ the final Python `--database` invocation. It therefore searched for
 
 The policy test now verifies two stages separately: the public
 `FOD_AUDIT_DBNAME="..."` forwarding for both environment and command-line
-selection, and the internal `--database "..."` argument. These checks
-passed against a minimal reproducer; the full repository test remains to be
-rerun locally. No PostgreSQL permissions or FOD runtime behavior changed.
+selection, and the internal `--database "..."` argument. Both standalone
+and public-Make invocations passed on the user's checkout:
+`C10_POLICY direct=0 make=0 diff=0`. No PostgreSQL permissions or FOD
+runtime behavior changed.
 
 ## C10-B1 initial source inventory
 
