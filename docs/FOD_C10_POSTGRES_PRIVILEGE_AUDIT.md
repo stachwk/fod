@@ -146,11 +146,18 @@ A role with unrestricted access to the database is not the same
 as a filesystem writer holding a current FOD ownership lease. Never
 equate these two authorization mechanisms.
 
-### Reported Make policy exit-code discrepancy
+### Make policy test failure: fixed assertion, local rerun pending
 
-The user log includes both the final `OK: public Make target namespace is
-normalized and alias-free` marker and `C10_A policy=2`. The latter
-does not correspond to the test script's final `echo` and should not be
-treated as a known Make failure without isolating the command's actual
-exit status. Repeat the policy test standalone, reporting `$?` immediately,
-before further modifications of the Make target routing.
+The direct policy test returned `DIRECT_POLICY_RC=1` with
+`C10 audit lost explicit POSTGRES_DB environment selection`.
+The public Make wrapper **did** preserve the chosen database and the
+correctly targeted C10 audit succeeded. The test was incorrect: GNU Make
+`-n` printed the *forwarded make* command without recursively printing
+the final Python `--database` invocation. It therefore searched for
+`--database ...` in the wrong layer.
+
+The policy test now verifies two stages separately: the public
+`FOD_AUDIT_DBNAME="..."` forwarding for both environment and command-line
+selection, and the internal `--database "..."` argument. These checks
+passed against a minimal reproducer; the full repository test remains to be
+rerun locally. No PostgreSQL permissions or FOD runtime behavior changed.
