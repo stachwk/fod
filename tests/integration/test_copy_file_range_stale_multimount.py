@@ -251,6 +251,22 @@ def main() -> None:
             if lease_snapshot(conn, dst_before[0]) != (token_b, session_b):
                 raise AssertionError("C8 B lost lease after valid adoption")
 
+            # Closing the stale A handle must not roll back B's successful
+            # adoption or clear B's ownership. The kernel may report the
+            # failed stale-handle state during close; only these errors are OK.
+            try:
+                os.close(stale_fd)
+            except OSError as error:
+                if error.errno not in (errno.EIO, errno.EBUSY):
+                    raise
+            stale_fd = None
+            if file_snapshot(conn, dst_name) != dst_after:
+                raise AssertionError("C8 stale handle close reverted valid adoption")
+            if dst_b.read_bytes() != payload:
+                raise AssertionError("C8 stale handle close changed B's payload")
+            if lease_snapshot(conn, dst_before[0]) != (token_b, session_b):
+                raise AssertionError("C8 stale handle close changed B's lease")
+
             print(
                 "C8_FUSE_STALE_COPY=PASS "
                 f"token={token_a}->{token_b} stale_errno={stale_errno} "
