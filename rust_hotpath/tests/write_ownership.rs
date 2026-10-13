@@ -983,3 +983,345 @@ fn c4_stale_fence_rejects_persisted_payload() {
         panic!("{err}");
     }
 }
+
+
+// C5: proces A zapisuje blok podczas kontrolowanego wyczekiwania na blokade w PG.
+// Wlasna sesja procesu i identyfikator aplikacji pozwalaja obserwowac rzeczywisty zapis.
+#[cfg(unix)]
+#[test]
+#[ignore = "Uruchamiany przez c5_inflight_persist_blocks_takeover_until_commit"]
+fn c5_persist_worker_entrypoint() {
+    assert_isolated_test_database();
+    let name = env::var("FOD_C5_NAME").expect("C5 name");
+    let ready = env::var("FOD_C5_READY_FILE").expect("C5 ready path");
+    let app_name = env::var("FOD_C5_WRITER_APP").expect("C5 writer app");
+    let file_id: u64 = env::var("FOD_C5_FILE_ID")
+        .expect("C5 file ID")
+        .parse()
+        .expect("C5 numeric file ID");
+    let owner: u64 = env::var("FOD_C5_OWNER")
+        .expect("C5 owner")
+        .parse()
+        .expect("C5 numeric owner");
+    let repo = DbRepo::new(&format!("{} application_name={app_name}", conninfo()))
+        .expect("C5 connect writer");
+    require_schema(&repo);
+    let session = repo
+        .register_client_session(
+            "write-ownership-c5-writer",
+            "/tmp/write-ownership-c5-writer",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C5 register writer session");
+    repo.touch_client_session_owner_key(session, owner)
+        .expect("C5 touch writer owner");
+    let lease = repo
+        .acquire_write_ownership(None, &name, Some(file_id), owner, WRITE_TTL_SECONDS)
+        .expect("C5 writer acquire query")
+        .expect("C5 writer acquire lease");
+    let token = lease.file_fencing_token.expect("C5 file token");
+    let fence = WritePersistenceFence {
+        session_id: session,
+        owner_key: owner,
+        file_fencing_token: token,
+    };
+    let block_size = scalar_u64(
+        &repo,
+        "SELECT value FROM config WHERE key = 'block_size'",
+        "C5 writer block size",
+    );
+    // Sygnal zawiera identyfikatory dzierzawy przed wywolaniem prawdziwego persist.
+    fs::write(
+        ready,
+        format!("{session} {} {token} {owner}", lease.destination_fencing_token),
+    )
+    .expect("C5 publish ready");
+    let data = vec![b'A'; usize::try_from(block_size).expect("C5 block size usize")];
+    c4_persist_payload(&repo, file_id, block_size, &data, fence)
+        .expect("C5 writer persist");
+    repo.release_write_ownership(owner, lease)
+        .expect("C5 writer release");
+    repo.exec(&format!("DELETE FROM client_sessions WHERE session_id = {session}"))
+        .expect("C5 writer session cleanup");
+    println!("C5_WORKER_COMMIT=PASS");
+}
+
+// C5: testowa obserwacja stanu backendu PG o unikatowym application_name.
+#[cfg(unix)]
+fn c5_wait_for_pg_activity(
+    repo: &DbRepo,
+    application: &str,
+    event_type: &str,
+    event_name: &str,
+) -> Result<(), String> {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(5) {
+        let active = repo.query_scalar_text(&format!(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+             WHERE datname = current_database() \
+               AND application_name = '{application}' \
+               AND wait_event_type = '{event_type}' \
+               AND wait_event = '{event_name}')::text"
+        ))?;
+        if matches!(active.trim(), "t" | "true") {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(format!(
+        "C5: backend {application} did not reach {event_type}/{event_name}"
+    ))
+}
+
+// C5: transakcja A posiada advisory lock i czeka na blokade rekordu.
+// B musi przegrac nawet wtedy, gdy dzierzawa A wygasla w trakcie zapisu.
+#[cfg(unix)]
+#[test]
+fn c5_inflight_persist_blocks_takeover_until_commit() {
+    assert_isolated_test_database();
+    let repo_b = DbRepo::new(&conninfo()).expect("C5 connect contender");
+    repo_b
+        .ensure_client_session_schema()
+        .expect("C5 ensure schema");
+    require_schema(&repo_b);
+
+    let block_size = scalar_u64(
+        &repo_b,
+        "SELECT value FROM config WHERE key = 'block_size'",
+        "C5 read block size",
+    );
+    assert!((1024..=1024 * 1024).contains(&block_size));
+    let suffix = unique_suffix();
+    let owner_a = suffix.wrapping_add(90_001);
+    let owner_b = suffix.wrapping_add(100_001);
+    let (name, file_id, initial_object) = create_test_file(&repo_b, suffix);
+    let session_b = repo_b
+        .register_client_session(
+            "write-ownership-c5-contender",
+            "/tmp/write-ownership-c5-contender",
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            SESSION_TTL_SECONDS,
+        )
+        .expect("C5 register contender");
+    repo_b
+        .touch_client_session_owner_key(session_b, owner_b)
+        .expect("C5 touch contender owner");
+
+    let ready = env::temp_dir().join(format!("fod-c5-ready-{}-{suffix}", std::process::id()));
+    let _ = fs::remove_file(&ready);
+    let guard_name = format!("fod_c5_guard_{suffix}");
+    let writer_name = format!("fod_c5_writer_{suffix}");
+
+    // Oddzielne polaczenie blokuje rekord pliku, ale nie dzierzawy.
+    // Writer wejdzie w persist, sprawdzi fencing, uzyska advisory lock,
+    // a nastepnie zatrzyma sie na UPDATE files do czasu odblokowania rekordu.
+    let guard_conninfo = format!("{} application_name={guard_name}", conninfo());
+    let guard = thread::spawn(move || -> Result<(), String> {
+        let guard_repo = DbRepo::new(&guard_conninfo)?;
+        guard_repo.exec(&format!(
+            "BEGIN; SELECT 1 FROM files WHERE id_file = {file_id} FOR UPDATE; \
+             SELECT pg_sleep(15); COMMIT;"
+        ))
+    });
+
+    let mut worker: Option<std::process::Child> = None;
+    let result = (|| -> Result<(), String> {
+        c5_wait_for_pg_activity(&repo_b, &guard_name, "Timeout", "PgSleep")?;
+
+        let process = Command::new(env::current_exe().map_err(|err| err.to_string())?)
+            .args([
+                "--exact",
+                "c5_persist_worker_entrypoint",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("FOD_C5_NAME", &name)
+            .env("FOD_C5_FILE_ID", file_id.to_string())
+            .env("FOD_C5_OWNER", owner_a.to_string())
+            .env("FOD_C5_READY_FILE", &ready)
+            .env("FOD_C5_WRITER_APP", &writer_name)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| format!("C5 worker spawn: {err}"))?;
+        worker = Some(process);
+
+        let started = Instant::now();
+        while !ready.exists() {
+            if started.elapsed() > Duration::from_secs(5) {
+                return Err("C5: writer readiness timeout".into());
+            }
+            if let Some(status) = worker
+                .as_mut()
+                .expect("C5 worker")
+                .try_wait()
+                .map_err(|err| err.to_string())?
+            {
+                return Err(format!("C5: worker exited before ready: {status}"));
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let values = fs::read_to_string(&ready)
+            .map_err(|err| err.to_string())?
+            .split_whitespace()
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        if values.len() != 4 {
+            return Err(format!("C5: invalid worker readiness: {values:?}"));
+        }
+        let (session_a, destination_token, file_token, owner_from_worker) =
+            (values[0], values[1], values[2], values[3]);
+        if owner_from_worker != owner_a {
+            return Err("C5: worker owner mismatch".into());
+        }
+
+        // Warunek obserwowalny: rzeczywisty SQL writer A czeka na blokade files.
+        c5_wait_for_pg_activity(&repo_b, &writer_name, "Lock", "transactionid")?;
+
+        // Dzierzawa wygasa dopiero po walidacji w transakcji A.
+        repo_b.exec(&format!(
+            "UPDATE destination_write_leases \
+             SET lease_expires_at = clock_timestamp() - interval '1 second' \
+             WHERE parent_key = 0 AND name = '{name}' AND fencing_token = {destination_token}; \
+             UPDATE file_write_leases \
+             SET lease_expires_at = clock_timestamp() - interval '1 second' \
+             WHERE file_id = {file_id} AND fencing_token = {file_token};"
+        ))?;
+
+        let takeover_started = Instant::now();
+        let premature = repo_b.acquire_write_ownership(
+            None,
+            &name,
+            Some(file_id),
+            owner_b,
+            WRITE_TTL_SECONDS,
+        )?;
+        if let Some(unexpected) = premature {
+            repo_b.release_write_ownership(owner_b, unexpected)?;
+            return Err("C5: B took over while A persisted within a transaction".into());
+        }
+        if takeover_started.elapsed() >= FAIL_FAST_LIMIT {
+            return Err("C5: takeover did not fail fast".into());
+        }
+
+        // Anulujemy tylko unikatowe zapytanie straznika testowego; jego
+        // transakcja zostanie wycofana i zwolni blokade files.
+        let cancel = repo_b.query_scalar_text(&format!(
+            "SELECT COALESCE((SELECT pg_cancel_backend(pid) \
+             FROM pg_stat_activity WHERE datname = current_database() \
+             AND application_name = '{guard_name}' LIMIT 1), false)::text"
+        ))?;
+        if !matches!(cancel.trim(), "t" | "true") {
+            return Err(format!("C5: could not cancel row guard: {cancel}"));
+        }
+
+        let output = worker
+            .take()
+            .expect("C5 worker exists")
+            .wait_with_output()
+            .map_err(|err| format!("C5 worker wait: {err}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !output.status.success() || !stdout.contains("C5_WORKER_COMMIT=PASS") {
+            return Err(format!(
+                "C5: writer A failed: {}\n{}\n{}",
+                output.status,
+                stdout,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let after_a = vec![b'A'; usize::try_from(block_size).map_err(|err| err.to_string())?];
+        c4_assert_payload(&repo_b, file_id, block_size, &after_a)?;
+
+        // Dopiero po COMMIT A nowy klient moze przejac i zapisac blok B.
+        let lease_b = repo_b
+            .acquire_write_ownership(None, &name, Some(file_id), owner_b, WRITE_TTL_SECONDS)?
+            .ok_or_else(|| "C5: B failed to acquire after A committed".to_string())?;
+        let new_token = lease_b
+            .file_fencing_token
+            .ok_or_else(|| "C5: missing new file token".to_string())?;
+        if new_token <= file_token {
+            return Err("C5: new file fencing token did not advance".into());
+        }
+        let fence_b = WritePersistenceFence {
+            session_id: session_b,
+            owner_key: owner_b,
+            file_fencing_token: new_token,
+        };
+        let after_b = vec![b'B'; usize::try_from(block_size).map_err(|err| err.to_string())?];
+        c4_persist_payload(&repo_b, file_id, block_size, &after_b, fence_b)?;
+        c4_assert_payload(&repo_b, file_id, block_size, &after_b)?;
+
+        // Odrzucenie starego tokenu z A nie moze nadpisac zatwierdzonych B.
+        let old_fence = WritePersistenceFence {
+            session_id: session_a,
+            owner_key: owner_a,
+            file_fencing_token: file_token,
+        };
+        let stale = c4_persist_payload(&repo_b, file_id, block_size, &after_a, old_fence);
+        match stale {
+            Err(error) if error.contains(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) => {}
+            other => return Err(format!("C5: stale writer was not fenced: {other:?}")),
+        }
+        c4_assert_payload(&repo_b, file_id, block_size, &after_b)?;
+        repo_b.release_write_ownership(owner_b, lease_b)?;
+        println!(
+            "C5_INFLIGHT_PERSIST=PASS fencing={file_token}->{new_token} bytes={block_size}"
+        );
+        Ok(())
+    })();
+
+    // Cleanup jest wykonywany rowniez po timeout lub nieoczekiwanym wyniku.
+    let _ = repo_b.query_scalar_text(&format!(
+        "SELECT COALESCE((SELECT pg_cancel_backend(pid) \
+         FROM pg_stat_activity WHERE datname = current_database() \
+         AND application_name = '{guard_name}' LIMIT 1), false)::text"
+    ));
+    if let Some(mut child) = worker {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let _ = guard.join();
+    let _ = fs::remove_file(&ready);
+
+    // Zbieramy wszystkie obiekty danych, ktore mogly powstac po swapach.
+    // Jedynie obiekty tego pliku sa usuwane, inne testy pozostaja nietkniete.
+    let current_object = repo_b
+        .query_scalar_text(&format!(
+            "SELECT data_object_id FROM files WHERE id_file = {file_id}"
+        ))
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let mut object_ids = vec![initial_object];
+    if let Some(id) = current_object {
+        object_ids.push(id);
+    }
+    object_ids.sort_unstable();
+    object_ids.dedup();
+    let object_list = object_ids
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let cleanup_result = repo_b.exec(&format!(
+        "DELETE FROM destination_write_leases WHERE parent_key = 0 AND name = '{name}'; \
+         DELETE FROM file_write_leases WHERE file_id = {file_id}; \
+         DELETE FROM client_sessions WHERE session_id IN \
+           (SELECT session_id FROM client_session_owner_keys WHERE owner_key = {owner_a}) \
+           OR session_id = {session_b}; \
+         DELETE FROM files WHERE id_file = {file_id}; \
+         DELETE FROM data_objects WHERE id_data_object IN ({object_list});"
+    ));
+    if let Err(error) = cleanup_result {
+        panic!("C5 cleanup failed: {error}; test result: {result:?}");
+    }
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+}
