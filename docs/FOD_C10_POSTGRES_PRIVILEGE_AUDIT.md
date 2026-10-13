@@ -1,6 +1,6 @@
 # C10 — PostgreSQL role boundary and direct-write bypass audit
 
-Status: **C10-A preliminary privilege audit completed; database targeting defect corrected, rerun pending** (2026-10-13). The first successful audit reported `database=foddbname`, `role=foduser`, `superuser=YES`, direct DML on 6/6 FOD tables and `C10_DIRECT_DML_BYPASS=YES`. This was not the requested `foddbname_hotpath_test` database: internal Make rewrote the environment's `POSTGRES_DB` to `POSTGRES_DB_BASE`. The initial run was strictly read-only. A subsequent fix captures the caller's explicit database before Make recursion and requires the audit script to verify `current_database()`.
+Status: **C10-A read-only privilege audit completed for the explicitly selected test database; security finding confirmed** (2026-10-13). After correcting database routing, `C10_TARGET database=foddbname_hotpath_test` matched `C10_ROLE database=foddbname_hotpath_test`, with `role=foduser`, `superuser=YES`, `createdb=YES`, `createrole=YES`, `bypassrls=YES`, `owns_database=YES` and full `INSERT,UPDATE,DELETE,TRUNCATE` on all 6/6 inspected tables. `C10_DIRECT_DML_BYPASS=YES`, `C10_AUDIT=UNRESTRICTED`, `audit=0`, `diff=0`. The caller also reported `policy=2` while an `OK: public Make target namespace is normalized and alias-free` line appeared; the policy exit-code discrepancy remains unverified and must be diagnosed separately. Earlier auditing `foddbname` instead of the requested test database was read-only and has been fixed.
 
 ## Why this audit is necessary
 
@@ -116,3 +116,41 @@ Required follow-up design:
 PostgreSQL remains the **single logical authority** for conflicts across hosts.
 This audit makes no changes to that authority or to the currently passing
 write-persistence implementation.
+
+## C10-A confirmed result and C10-B gate
+
+The correctly targeted read-only audit proves **direct SQL writes are authorized**,
+not that malicious writes have taken place. In this configuration the client
+credential is a PostgreSQL superuser and can bypass any application-level
+`WritePersistenceFence` check. PostgreSQL fencing still enforces the
+ordering of requests that voluntarily go through FOD's repository API;
+it is not an SQL privilege boundary.
+
+C10-B must **not** start with `REVOKE`, `ALTER ROLE ... NOSUPERUSER`,
+changing ownership of production tables, or modifying the current
+`foduser`. Such operations can break ongoing mount/indexer activity and
+cannot enforce fencing until the direct-write API has been migrated.
+
+A safe next stage is an inventory of SQL mutations by component
+(FUSE, hotpath, indexer, mkfs, libfod/FFI, monitoring and operations),
+followed by a new `NOLOGIN` storage owner and an independent
+`LOGIN NOSUPERUSER` runtime principal in a *separate test environment*.
+The restricted runtime must not own schema/tables and must not have
+direct DML on protected storage or lease records. Replace required
+mutations with narrowly granted PostgreSQL entry points whose protected
+transactions validate the lease/fence under the same advisory lock.
+Only after successful regression and rollback drills should the
+runtime use restricted credentials in production.
+
+A role with unrestricted access to the database is not the same
+as a filesystem writer holding a current FOD ownership lease. Never
+equate these two authorization mechanisms.
+
+### Reported Make policy exit-code discrepancy
+
+The user log includes both the final `OK: public Make target namespace is
+normalized and alias-free` marker and `C10_A policy=2`. The latter
+does not correspond to the test script's final `echo` and should not be
+treated as a known Make failure without isolating the command's actual
+exit status. Repeat the policy test standalone, reporting `$?` immediately,
+before further modifications of the Make target routing.
