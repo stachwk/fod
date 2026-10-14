@@ -4217,6 +4217,33 @@ pub struct DbRepo {
     owner_session_cache: Mutex<HashMap<u64, i64>>,
 }
 
+/// Operations in a single PostgreSQL transaction, pinned to one PGconn.
+///
+/// Only constructed by DbRepo::with_transaction. Do not store this handle or
+/// send it to a different worker: the underlying PG connection stays checked
+/// out until the enclosing callback returns and COMMIT/ROLLBACK finishes.
+pub struct DbRepoTransaction<'conn> {
+    conn: *mut PGconn,
+    _scope: std::marker::PhantomData<&'conn mut PGconn>,
+}
+
+impl DbRepoTransaction<'_> {
+    pub fn exec(&self, sql: &str) -> Result<(), String> {
+        let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
+        unsafe { exec_command(self.conn, &sql) }
+    }
+
+    pub fn query_rows_text(&self, sql: &str) -> Result<Vec<Vec<String>>, String> {
+        let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
+        unsafe { query_rows_text_on_conn(self.conn, &sql) }
+    }
+
+    pub fn query_scalar_text(&self, sql: &str) -> Result<String, String> {
+        let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
+        unsafe { query_scalar_text_on_conn(self.conn, &sql) }
+    }
+}
+
 impl Clone for DbRepo {
     fn clone(&self) -> Self {
         Self {
@@ -7900,6 +7927,32 @@ impl DbRepo {
                 PQclear(res);
                 Err(maybe_replayable_sql_error(conn, &sql, error))
             }
+        })
+    }
+
+    /// Run a multi-statement operation using one checked-out PostgreSQL
+    /// backend. The transaction wrapper owns BEGIN, COMMIT and ROLLBACK, so
+    /// no other pool borrower can run statements inside this transaction.
+    ///
+    /// A lost COMMIT acknowledgement is *not* replayed because an arbitrary
+    /// callback is not guaranteed to be idempotent. The caller must resolve
+    /// an ambiguous commit outcome using an application-specific receipt.
+    pub fn with_transaction<T, F>(&self, mut body: F) -> Result<T, String>
+    where
+        F: for<'txn> FnMut(&DbRepoTransaction<'txn>) -> Result<T, String>,
+    {
+        self.with_cached_connection(|conn| unsafe {
+            transactional_impl(
+                conn,
+                |conn| {
+                    let transaction = DbRepoTransaction {
+                        conn,
+                        _scope: std::marker::PhantomData,
+                    };
+                    body(&transaction)
+                },
+                false,
+            )
         })
     }
 
