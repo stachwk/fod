@@ -1,7 +1,7 @@
 # C10-B2 — ręczny przegląd transakcji o najwyższym ryzyku
 
 Data: 2026-10-13. Zakres: pierwsza transza z 1045 kandydatów skanera (149 plików).
-Stan: **przegląd kodu wykonany; hipotezy współbieżności i uprawnień oczekują na testy**.
+Stan: **TX-02A odtworzony na izolowanej bazie (współdzielenie otwartej transakcji); TX-02B: poprawka API i testy dodane, lokalna walidacja oczekuje**.
 Nie zmieniono danych PostgreSQL, schematu, kont, uprawnień ani implementacji FOD.
 
 ## Interpretacja wyników automatycznego skanera
@@ -57,6 +57,52 @@ Próba TX-02A nie dowodzi jeszcze, że rzeczywisty cleanup utracił
 atomowość lub uszkodził dane. Następny warunek: dedykowane API
 przypiętej transakcji i test pozytywny izolacji wraz z rollback
 i konkurencyjnym writerem.
+
+### TX-02B — jednosesyjne API i migracja cleanup (walidacja oczekuje)
+
+Zmiany w gałęzi `feature/forget-convergence-c1`:
+
+- `DbRepo::with_transaction` otwiera, wykonuje i zamyka transakcję na
+  **tym samym** wypożyczonym `PGconn`. W callbacku używa się
+  `DbRepoTransaction::exec/query_rows_text/query_scalar_text`.
+- `rust_indexer/src/cleanup.rs::cleanup_failed_materialization` przekazuje
+  wszystkie odczyty i mutacje do `DbRepoTransaction`, w tym odczyt stanu
+  planu. Usunięto ręczne `repo.exec("BEGIN"/"COMMIT"/"ROLLBACK")`.
+- Przypadek niejednoznacznego wyniku `COMMIT` nie jest automatycznie
+  ponawiany: arbitralny callback cleanup nie ma jeszcze zatwierdzonego
+  wzorca idempotentnego potwierdzenia; taki błąd należy rozstrzygnąć
+  przez odczyt trwałego stanu planu przed ewentualną powtórką.
+- `rust_hotpath/tests/tx02_pinned_transaction.rs` sprawdza stały backend
+  transakcji, oddzielną sesję równoległego użytkownika puli, lock
+  transakcyjny i zwolnienie przy sukcesie/błędzie. Testy nie zapisują
+  tabel FOD.
+
+Walidacja:
+
+```bash
+cd ~/git/fod
+cargo fmt --all
+cargo fmt --all --check
+cargo check --workspace --locked
+FOD_PG_DBNAME=foddbname_hotpath_test POSTGRES_DB=foddbname_hotpath_test \
+  cargo test --locked -p fod-rust-hotpath --test tx02_pinned_transaction -- --nocapture
+FOD_PG_DBNAME=foddbname_hotpath_test POSTGRES_DB=foddbname_hotpath_test \
+  cargo test --locked -p fod-rust-hotpath --test tx02_pool_transaction_affinity -- --nocapture
+cargo test --locked -p fod-rust-indexer
+git diff --check
+git diff --stat
+```
+
+**Zakres poprawki:** usuwa zagrożenie dziedziczenia sesji PostgreSQL
+przez losowego użytkownika puli w **tym** cleanup. Nie zapewnia jeszcze
+poprawnych blokad / fencing dla usuwanych plików, powiązania
+planu importu z aktualnym właścicielem ani ochrony przed modyfikacją
+tabel przez superużytkownika `foduser` (C10-A).
+
+Test TX-02A nadal jest testem **charakteryzującym wcześniejszy
+antywzorzec** i pozostaje testem pozytywnej reprodukcji, nie
+niezaliczoną regresją nowego API. Test rzeczywistej, konkurencyjnej
+operacji cleanup z błędem po częściowych DML pozostaje do wykonania.
 
 ## TX-01/TX-02 — wymagany test atomowości przed poprawianiem cleanup
 
