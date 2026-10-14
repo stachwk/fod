@@ -7942,6 +7942,10 @@ impl DbRepo {
         F: for<'txn> FnMut(&DbRepoTransaction<'txn>) -> Result<T, String>,
     {
         self.with_cached_connection(|conn| unsafe {
+            // This callback can perform non-idempotent DML and external
+            // side effects. Suppress the connection pool's generic
+            // replay-on-disconnect handling for the *entire* transaction,
+            // not only for a lost COMMIT acknowledgement.
             transactional_impl(
                 conn,
                 |conn| {
@@ -7953,6 +7957,7 @@ impl DbRepo {
                 },
                 false,
             )
+            .map_err(strip_replayable_sql_error)
         })
     }
 
