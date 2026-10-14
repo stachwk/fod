@@ -1,8 +1,8 @@
 # C10-B2 — ręczny przegląd transakcji o najwyższym ryzyku
 
-Data: 2026-10-13. Zakres: pierwsza transza z 1045 kandydatów skanera (149 plików).
+Data przeglądu: 2026-10-13; aktualizacja TX-02B: 2026-10-14. Zakres: pierwsza transza z 1045 kandydatów skanera (149 plików).
 Stan: **TX-02A odtworzony na izolowanej bazie (współdzielenie otwartej transakcji); TX-02B: poprawka API i testy dodane, lokalna walidacja oczekuje**.
-Nie zmieniono danych PostgreSQL, schematu, kont, uprawnień ani implementacji FOD.
+Nie zmieniono danych PostgreSQL, schematu, kont ani uprawnień. Zmiany TX-02B obejmują implementację API transakcyjnego i cleanup indexera; do przeprowadzenia pozostają lokalne testy kompilacji i izolacji.
 
 ## Interpretacja wyników automatycznego skanera
 
