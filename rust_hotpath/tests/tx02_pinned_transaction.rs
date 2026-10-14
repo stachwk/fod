@@ -146,7 +146,7 @@ fn tx02_pinned_error_rolls_back_and_releases_lock() -> Result<(), String> {
         }
         Err("TX02_INTENTIONAL_ROLLBACK".to_string())
     });
-    if result.as_deref() != Err("TX02_INTENTIONAL_ROLLBACK") {
+    if result.as_ref().err().map(String::as_str) != Some("TX02_INTENTIONAL_ROLLBACK") {
         return Err(format!("TX-02B unexpected rollback result: {result:?}"));
     }
 
