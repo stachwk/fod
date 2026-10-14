@@ -138,6 +138,7 @@ FOD_PG_DBNAME=foddbname_hotpath_test POSTGRES_DB=foddbname_hotpath_test \
 Zagadnienia otwarte: wyścigi cleanup/aktywny mount, spójność
 `data_objects.reference_count`, fencing i sesje właścicieli, retry
 z trwałym receipt oraz docelowe odebranie DML kontu runtime.
+
 ## TX-01/TX-02 — wymagany test atomowości przed poprawianiem cleanup
 
 1. Użyć **izolowanej bazy testowej**, nigdy `foddbname` ani produkcyjnego
