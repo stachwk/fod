@@ -1,7 +1,7 @@
 # C10-B2 — ręczny przegląd transakcji o najwyższym ryzyku
 
 Data przeglądu: 2026-10-13; aktualizacja TX-02B: 2026-10-14. Zakres: pierwsza transza z 1045 kandydatów skanera (149 plików).
-Stan: **TX-02A odtworzony na izolowanej bazie (współdzielenie otwartej transakcji); TX-02B: poprawka API i testy dodane, lokalna walidacja oczekuje**.
+Stan: **TX-02A odtworzony; TX-02B potwierdzony lokalnie: formatowanie PASS, kompilacja PASS, 2/2 testów sesji i rollback PASS, 33/33 testów indexera PASS. Nowa regresja braku replay oczekuje na test lokalny.**
 Nie zmieniono danych PostgreSQL, schematu, kont ani uprawnień. Zmiany TX-02B obejmują implementację API transakcyjnego i cleanup indexera; do przeprowadzenia pozostają lokalne testy kompilacji i izolacji.
 
 ## Interpretacja wyników automatycznego skanera
@@ -104,6 +104,40 @@ antywzorzec** i pozostaje testem pozytywnej reprodukcji, nie
 niezaliczoną regresją nowego API. Test rzeczywistej, konkurencyjnej
 operacji cleanup z błędem po częściowych DML pozostaje do wykonania.
 
+### TX-02B — wyniki lokalne i bezpieczeństwo ponawiania
+
+Użytkownik uruchomił kod na bazie `foddbname_hotpath_test`:
+`TX02_PINNED_COMMIT=PASS` (oddzielny backend drugiego wątku, blokada
+zwolniona), `TX02_PINNED_ROLLBACK=PASS` (blokada zwolniona, `SET LOCAL`
+cofnięte), 2/2 testów TX-02B oraz 33/33 testów jednostkowych indexera.
+Podsumowanie: `TX02B fmt=0 check=0 pinned=0 indexer=0 diff=0`.
+
+Po `cargo fmt --all` lokalnie pozostały wyłącznie zmiany stylu w
+`rust_hotpath/tests/tx02_pinned_transaction.rs`,
+`rust_hotpath/tests/tx02_pool_transaction_affinity.rs` i
+`rust_indexer/src/cleanup.rs`. Te zmiany należy przejrzeć i
+zapisać jako osobny commit przed kolejnym etapem; na tym etapie nie
+oznaczono ich jako committed.
+
+Dodatkowy przegląd ujawnił możliwość **automatycznego powtórzenia całego
+callbacku po rozłączeniu w jego środku**. `with_transaction` usuwa
+teraz wewnętrzny znacznik replay z błędu przed wyjściem do wspólnej
+puli; dzięki temu callback nie jest uruchamiany drugi raz na nowym
+połączeniu. Nie zmienia to zachowania innych istniejących transakcji
+FOD. Dodano diagnostyczny test
+`rust_hotpath/tests/tx02_pinned_no_replay.rs`: sztuczny znacznik
+błędu, dokładnie jedna próba oraz działający odczyt po błędzie.
+Test ten **nie symuluje fizycznego zerwania sieci** i nie zastępuje
+testu utraty ACK COMMIT ani rollback po DML.
+
+```bash
+FOD_PG_DBNAME=foddbname_hotpath_test POSTGRES_DB=foddbname_hotpath_test \
+  cargo test --locked -p fod-rust-hotpath --test tx02_pinned_no_replay -- --nocapture
+```
+
+Zagadnienia otwarte: wyścigi cleanup/aktywny mount, spójność
+`data_objects.reference_count`, fencing i sesje właścicieli, retry
+z trwałym receipt oraz docelowe odebranie DML kontu runtime.
 ## TX-01/TX-02 — wymagany test atomowości przed poprawianiem cleanup
 
 1. Użyć **izolowanej bazy testowej**, nigdy `foddbname` ani produkcyjnego
