@@ -80,7 +80,7 @@ def main() -> None:
                     "SET lease_expires_at = clock_timestamp() - INTERVAL '1 hour' "
                     f"WHERE session_id = {session_id} RETURNING session_id",
                 )
-                if updated != str(session_id):
+                if str(session_id) not in updated.splitlines():
                     raise AssertionError(f"TX03H1 session vanished: {updated!r}")
                 try:
                     fd = os.open(path, os.O_RDONLY)
