@@ -103,7 +103,7 @@ fn collect_directory_rows(
 fn collect_file_rows(
     repo: &DbRepoTransaction<'_>,
     root_name: &str,
-) -> Result<Vec<(u64, u64)>, String> {
+) -> Result<Vec<(u64, u64, u64, String)>, String> {
     let rows = repo.query_rows_text(&format!(
         "
         WITH RECURSIVE subtree AS (
@@ -115,7 +115,7 @@ fn collect_file_rows(
             FROM directories d
             JOIN subtree s ON d.id_parent = s.id_directory
         )
-        SELECT f.id_file, f.data_object_id
+        SELECT f.id_file, f.data_object_id, f.id_directory, f.name
         FROM files f
         WHERE f.id_directory IN (SELECT id_directory FROM subtree)
         ORDER BY f.id_file
@@ -124,15 +124,76 @@ fn collect_file_rows(
     ))?;
     rows.iter()
         .map(|row| {
-            if row.len() < 2 {
+            if row.len() < 4 {
                 return Err("file subtree row is too short".to_string());
             }
             Ok((
                 parse_u64(&row[0], "file id")?,
                 parse_u64(&row[1], "data object id")?,
+                parse_u64(&row[2], "file parent directory id")?,
+                row[3].clone(),
             ))
         })
         .collect()
+}
+
+/// Before deleting imported files, exclude active write owners on any
+/// matching file or destination. The advisory key scheme/order must match
+/// DbRepo::acquire_write_ownership and fenced persistence on every host.
+///
+/// This is a cooperative protocol guard, NOT a substitute for C10 role
+/// separation and not yet a full namespace/open-handle cleanup protocol.
+fn reject_cleanup_during_active_write_lease(
+    repo: &DbRepoTransaction<'_>,
+    file_rows: &[(u64, u64, u64, String)],
+) -> Result<(), String> {
+    if file_rows.is_empty() {
+        return Ok(());
+    }
+    let mut resource_keys = Vec::with_capacity(file_rows.len().saturating_mul(2));
+    for &(file_id, _, parent_id, ref name) in file_rows {
+        resource_keys.push(format!("fod:write:file:{file_id}"));
+        resource_keys.push(format!(
+            "fod:write:destination:{parent_id}:{}:{name}",
+            name.len()
+        ));
+    }
+    resource_keys.sort_unstable();
+    resource_keys.dedup();
+    for resource_key in resource_keys {
+        let locked = repo.query_scalar_text(&format!(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended({}, 0))",
+            DbRepo::quote_literal(&resource_key)
+        ))?;
+        if !matches!(locked.trim().to_ascii_lowercase().as_str(), "t" | "true") {
+            return Err(format!(
+                "FOD_INDEXER_CLEANUP_ACTIVE_WRITER advisory_busy resource={resource_key}"
+            ));
+        }
+    }
+
+    let ids = file_rows
+        .iter()
+        .map(|row| row.0.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let active = repo.query_scalar_text(&format!(
+        "SELECT EXISTS (
+            SELECT 1 FROM file_write_leases
+            WHERE file_id IN ({ids})
+              AND lease_expires_at > clock_timestamp()
+            UNION ALL
+            SELECT 1
+            FROM destination_write_leases dwl
+            JOIN files f ON dwl.parent_key = f.id_directory AND dwl.name = f.name
+            WHERE f.id_file IN ({ids})
+              AND dwl.lease_expires_at > clock_timestamp()
+        )::text"
+    ))?;
+    if matches!(active.trim().to_ascii_lowercase().as_str(), "t" | "true") {
+        return Err("FOD_INDEXER_CLEANUP_ACTIVE_WRITER active_write_lease".to_string());
+    }
+    Ok(())
 }
 
 fn collect_data_object_file_ids(
@@ -220,12 +281,13 @@ pub fn cleanup_failed_materialization(
         if let Some(root_name) = root_name.as_deref() {
             let directory_rows = collect_directory_rows(tx, root_name)?;
             let file_rows = collect_file_rows(tx, root_name)?;
+            reject_cleanup_during_active_write_lease(tx, &file_rows)?;
             let subtree_file_ids: BTreeSet<u64> =
-                file_rows.iter().map(|(file_id, _)| *file_id).collect();
+                file_rows.iter().map(|row| row.0).collect();
             let mut file_ids_by_data_object: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
             let mut exclusive_data_object_ids = Vec::new();
 
-            for (file_id, data_object_id) in &file_rows {
+            for (file_id, data_object_id, _, _) in &file_rows {
                 file_ids_by_data_object
                     .entry(*data_object_id)
                     .or_default()
@@ -263,7 +325,7 @@ pub fn cleanup_failed_materialization(
                 shared_data_objects_preserved = shared_data_objects_preserved.saturating_add(1);
             }
 
-            for (file_id, _) in &file_rows {
+            for (file_id, _, _, _) in &file_rows {
                 tx.exec(&format!("DELETE FROM files WHERE id_file = {file_id}"))?;
             }
 
