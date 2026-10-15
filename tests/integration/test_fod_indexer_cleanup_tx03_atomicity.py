@@ -303,7 +303,7 @@ def main() -> None:
                 stderr=subprocess.PIPE, text=True,
             )
             deadline = time.monotonic() + args.timeout
-            blocked_count = 0
+            # Kolejka blokad moze byc lancuchowa: drugi proces czeka na pierwszy.\n            blocked_count = 0
             while time.monotonic() < deadline:
                 if second_process.poll() is not None or process.poll() is not None:
                     raise AssertionError("TX-03C cleanup worker exited before releasing plan lock")
@@ -313,7 +313,9 @@ def main() -> None:
                         SELECT count(*)
                         FROM pg_stat_activity
                         WHERE datname = current_database()
-                          AND %s = ANY(pg_blocking_pids(pid))
+                          AND pid <> %s
+                          AND cardinality(pg_blocking_pids(pid)) > 0
+                          AND wait_event_type = 'Lock'
                           AND query ILIKE '%%FROM index_import_plans%%'
                           AND query ILIKE '%%FOR UPDATE%%'
                         """,
