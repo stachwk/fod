@@ -193,7 +193,10 @@ fn reject_cleanup_during_active_write_lease(
               AND s.lease_expires_at > clock_timestamp()
         )::text"
     ))?;
-    if matches!(open_handles.trim().to_ascii_lowercase().as_str(), "t" | "true") {
+    if matches!(
+        open_handles.trim().to_ascii_lowercase().as_str(),
+        "t" | "true"
+    ) {
         return Err("FOD_INDEXER_CLEANUP_ACTIVE_OPEN_HANDLE active_open_lease".to_string());
     }
 
