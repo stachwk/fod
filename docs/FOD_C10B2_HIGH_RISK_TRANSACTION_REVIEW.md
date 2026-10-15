@@ -163,22 +163,22 @@ z trwałym receipt oraz docelowe odebranie DML kontu runtime.
 
 Stan: **skrypt przygotowany; test na bazie lokalnej jeszcze niewykonany**.
 
-Nowy \`tests/integration/test_fod_indexer_cleanup_tx03_atomicity.py\`:
+Nowy `tests/integration/test_fod_indexer_cleanup_tx03_atomicity.py`:
 
-1. Wymaga jawnie \`FOD_PG_DBNAME\`/ \`POSTGRES_DB\`, nazwy kończącej się
-   \`_test\`, i odmawia działania na domyślnym \`foddbname\`.
-2. Używa **bezpośredniego** binarium \`fod-indexer\` z jawnie przekazanym
-   \`FOD_INDEXER_CONNINFO\`, żeby reguły \`make\` nie zmieniły bazy docelowej.
-   Przed mutacjami sprawdza \`current_database()\` oraz gotowość schematu.
+1. Wymaga jawnie `FOD_PG_DBNAME`/ `POSTGRES_DB`, nazwy kończącej się
+   `_test`, i odmawia działania na domyślnym `foddbname`.
+2. Używa **bezpośredniego** binarium `fod-indexer` z jawnie przekazanym
+   `FOD_INDEXER_CONNINFO`, żeby reguły `make` nie zmieniły bazy docelowej.
+   Przed mutacjami sprawdza `current_database()` oraz gotowość schematu.
 3. Rejestruje unikalne źródło, skanuje i materializuje dwa różne pliki.
-   Następnie oznacza plan jako \`materialize_failed\`.
-4. Osobnym backendem blokuje wiersz \`index_import_plans\` przy użyciu
-   \`SELECT ... FOR UPDATE\`. Równolegle uruchamia \`cleanup-failed\`.
-   Oczekuje na faktyczne zablokowanie \`UPDATE index_import_plans\`,
-   identyfikując je przez \`pg_stat_activity\` i \`pg_blocking_pids\`.
+   Następnie oznacza plan jako `materialize_failed`.
+4. Osobnym backendem blokuje wiersz `index_import_plans` przy użyciu
+   `SELECT ... FOR UPDATE`. Równolegle uruchamia `cleanup-failed`.
+   Oczekuje na faktyczne zablokowanie `UPDATE index_import_plans`,
+   identyfikując je przez `pg_stat_activity` i `pg_blocking_pids`.
 5. Przed zwolnieniem blokady **niezależny** obserwator SQL musi widzieć
    oba pliki i niezmieniony status planu. Po zwolnieniu blokady wymagane
-   są status \`materialize_cleaned\` i zero plików w katalogu importu.
+   są status `materialize_cleaned` i zero plików w katalogu importu.
 6. W razie błędu kończy proces cleanup **przed** zwolnieniem blokady,
    wycofuje transakcję blokującą i usuwa wyłącznie unikalne zasoby testu.
 
@@ -194,7 +194,7 @@ POSTGRES_DB=foddbname_hotpath_test \
 ```
 
 Oczekiwane:
-\`TX03_ATOMIC_PRECOMMIT=PASS\` i \`TX03_ATOMIC_COMMIT=PASS\`.
+`TX03_ATOMIC_PRECOMMIT=PASS` i `TX03_ATOMIC_COMMIT=PASS`.
 
 **Zakres:** testuje widoczność commit/rollback w trakcie prawdziwego cleanup
 indexera, ale **nie** uruchamia mounta FUSE ani aktywnego pisarza. Ujemna
