@@ -178,6 +178,7 @@ def main() -> None:
     blocker = None
     observer = None
     process = None
+    source_registered = False
     try:
         write_tree(
             source_dir,
@@ -204,6 +205,7 @@ def main() -> None:
             binary, dsn,
             ["source", "add", "--name", source_name, "--path", str(source_dir), "--kind", "local"],
         )
+        source_registered = True
         direct_indexer(binary, dsn, ["scan", "--source", source_name])
         direct_indexer(binary, dsn, ["materialize", "--source", source_name])
 
@@ -298,18 +300,22 @@ def main() -> None:
             )
         print("TX03_ATOMIC_COMMIT=PASS files=0 plan=materialize_cleaned")
     finally:
+        # Stop the diagnostic worker BEFORE releasing the blocker. Otherwise
+        # a failed pre-COMMIT assertion might unintentionally allow cleanup
+        # to commit while the failure handler is tearing down the fixture.
+        if process is not None:
+            process.kill()
+            process.communicate()
         if blocker is not None:
             try:
                 blocker.rollback()
             finally:
                 blocker.close()
-        if process is not None:
-            process.kill()
-            process.communicate()
         if observer is not None:
             observer.close()
         try:
-            cleanup_indexer_sources(dsn, [source_name])
+            if source_registered:
+                cleanup_indexer_sources(dsn, [source_name])
         finally:
             cleanup_test_dir(source_dir)
 
