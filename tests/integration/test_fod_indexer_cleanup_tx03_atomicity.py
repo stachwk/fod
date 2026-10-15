@@ -163,6 +163,11 @@ def main() -> None:
         help="path to already built fod-indexer executable",
     )
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument(
+        "--kill-before-commit",
+        action="store_true",
+        help="TX-03B: kill cleanup while UPDATE is blocked and verify rollback plus retry",
+    )
     args = parser.parse_args()
     binary = args.indexer.resolve()
     if not binary.is_file():
@@ -284,6 +289,39 @@ def main() -> None:
             f"files={before_commit_files} plan={before_commit_plan} cleanup_pid={cleanup_pid}",
             flush=True,
         )
+
+        if args.kill_before_commit:
+            # Zabij proces przed COMMIT, gdy kasowanie jest jeszcze niezatwierdzone.
+            process.kill()
+            process.communicate(timeout=args.timeout)
+            process = None
+
+            # Zwolnij blokade dopiero po zamknieciu procesu i jego transakcji.
+            blocker.rollback()
+            rolled_back_files = root_file_count(observer, root_name)
+            rolled_back_plan = plan_status(observer, plan_id)
+            if rolled_back_files != files_before or rolled_back_plan != "materialize_failed":
+                raise AssertionError(
+                    "TX-03B rollback lost data or modified plan: "
+                    f"files={rolled_back_files} plan={rolled_back_plan}"
+                )
+            print(
+                "TX03B_KILL_ROLLBACK=PASS "
+                f"files={rolled_back_files} plan={rolled_back_plan}",
+                flush=True,
+            )
+
+            # Ponowienie polecenia musi posprzatac calosc po wycofanej transakcji.
+            direct_indexer(binary, dsn, ["cleanup-failed", "--plan", str(plan_id)])
+            retried_files = root_file_count(observer, root_name)
+            retried_plan = plan_status(observer, plan_id)
+            if retried_files != 0 or retried_plan != "materialize_cleaned":
+                raise AssertionError(
+                    "TX-03B retry failed: "
+                    f"files={retried_files} plan={retried_plan}"
+                )
+            print("TX03B_RETRY_COMMIT=PASS files=0 plan=materialize_cleaned")
+            return
 
         blocker.commit()
         stdout, stderr = process.communicate(timeout=args.timeout)
