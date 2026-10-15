@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import errno
 import os
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -16,8 +17,20 @@ from fod_mount import FODMount
 
 
 def print_err(str):
-    import sys
     print(f"stderr: {str}", file=sys.stderr)
+
+
+
+def assert_open_enoent(path: Path) -> None:
+    # Sprawdz faktyczne otwarcie, nie tylko atrybuty z cache FUSE.
+    try:
+        handle = os.open(path, os.O_RDONLY)
+    except OSError as err:
+        if err.errno != errno.ENOENT:
+            raise
+    else:
+        os.close(handle)
+        raise AssertionError(f"TX03F open unexpectedly succeeded: {path}")
 
 
 def main() -> None:
@@ -53,14 +66,7 @@ def main() -> None:
 
             # Ponowny open po usunieciu nazwy musi zwrocic ENOENT.
             for path in (path_a, path_b):
-                try:
-                    new_fd = os.open(path, os.O_RDONLY)
-                except OSError as err:
-                    if err.errno != errno.ENOENT:
-                        raise
-                else:
-                    os.close(new_fd)
-                    raise AssertionError(f"TX03F new open unexpectedly succeeded: {path}")
+                assert_open_enoent(path)
             print("TX03F_NEW_OPEN_ENOENT=PASS", flush=True)
 
             # Stary deskryptor pozostaje poprawny po zdalnym unlink.
@@ -75,9 +81,32 @@ def main() -> None:
 
             os.close(fd)
             fd = None
-            if path_b.exists() or path_a.exists():
-                raise AssertionError("TX03F pathname resurrected after last close")
+            # Kernel moze jeszcze udostepniac dodatni wpis atrybutow.
+            # Bezpieczenstwo sprawdzamy przez open z obu montowan.
+            assert_open_enoent(path_a)
+            assert_open_enoent(path_b)
             print("TX03F_FINAL_CLOSE=PASS", flush=True)
+
+            # Odwrotna kolejnosc: najpierw unlink, dopiero potem open/read.
+            # Nowa nazwa nie jest wczesniej lookupowana na mount A.
+            reverse_name = f"tx03f-reverse-{uuid.uuid4().hex}.bin"
+            reverse_a = mount_a / reverse_name
+            reverse_b = mount_b / reverse_name
+            reverse_b.write_bytes(payload)
+            reverse_b.unlink()
+            assert_open_enoent(reverse_a)
+            assert_open_enoent(reverse_b)
+            print("TX03F_UNLINK_BEFORE_OPEN=PASS errno=ENOENT mounts=2", flush=True)
+
+            # Sprawdz rowniez odwrotny kierunek usuniecia.
+            reverse2_name = f"tx03f-reverse-a-{uuid.uuid4().hex}.bin"
+            reverse2_a = mount_a / reverse2_name
+            reverse2_b = mount_b / reverse2_name
+            reverse2_a.write_bytes(payload)
+            reverse2_a.unlink()
+            assert_open_enoent(reverse2_b)
+            assert_open_enoent(reverse2_a)
+            print("TX03F_UNLINK_BEFORE_REMOTE_OPEN=PASS errno=ENOENT mounts=2", flush=True)
         except Exception:
             launcher_a._dump_log()
             launcher_b._dump_log()
