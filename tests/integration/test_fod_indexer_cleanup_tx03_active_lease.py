@@ -232,7 +232,7 @@ def main() -> None:
                     clock_timestamp(), clock_timestamp(), clock_timestamp()
                 )
                 """,
-                (file_id, session_id, "tx03e-open-" + uuid.uuid4().hex),
+                (file_id, session_id, 987654321),
             )
         result = run_cleanup(binary, dsn, plan_id)
         combined = result.stdout + result.stderr
