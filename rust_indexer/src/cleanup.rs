@@ -15,12 +15,14 @@ fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
         .map_err(|err| format!("invalid {label}: {err}"))
 }
 
+// Blokada wiersza planu serializuje cleanup na wszystkich hostach przed odczytem stanu.
 fn load_cleanup_plan(repo: &DbRepoTransaction<'_>, plan_id: u64) -> Result<CleanupPlan, String> {
     let rows = repo.query_rows_text(&format!(
         "
         SELECT status, COALESCE(source_filter, '')
         FROM index_import_plans
         WHERE id_import_plan = {plan_id}
+        FOR UPDATE
         ",
     ))?;
     let row = rows
