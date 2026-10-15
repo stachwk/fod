@@ -179,6 +179,20 @@ fn reject_cleanup_during_active_write_lease(
         .map(|row| row.0.to_string())
         .collect::<Vec<_>>()
         .join(",");
+
+    // Nie wolno zwolnic danych pliku otwartego na innym hoscie.
+    // Odmowa jest bezpieczniejsza od fizycznego usuniecia aktywnego obiektu.
+    let open_handles = repo.query_scalar_text(&format!(
+        "SELECT EXISTS (
+            SELECT 1 FROM file_open_leases
+            WHERE file_id IN ({ids})
+              AND lease_expires_at > clock_timestamp()
+        )::text"
+    ))?;
+    if matches!(open_handles.trim().to_ascii_lowercase().as_str(), "t" | "true") {
+        return Err("FOD_INDEXER_CLEANUP_ACTIVE_OPEN_HANDLE active_open_lease".to_string());
+    }
+
     let active = repo.query_scalar_text(&format!(
         "SELECT EXISTS (
             SELECT 1 FROM file_write_leases
