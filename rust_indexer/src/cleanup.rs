@@ -345,6 +345,22 @@ pub fn cleanup_failed_materialization(
             removed_directories = directory_rows.len() as u64;
         }
 
+        // Punkt awarii TX03D jest dostepny tylko w debug i tylko dla bazy testowej.
+        // Po wykonaniu DELETE, ale przed COMMIT, test moze zabic proces indexera.
+        #[cfg(debug_assertions)]
+        if std::env::var("FOD_TX03D_AFTER_DELETE_PAUSE")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
+            let dbname = tx.query_scalar_text("SELECT current_database()")?;
+            if !dbname.ends_with("_test") {
+                return Err("TX03D pause requires isolated _test database".to_string());
+            }
+            eprintln!("TX03D_AFTER_DELETE_READY plan_id={plan_id}");
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+
         tx.exec(&format!(
             "
             UPDATE index_import_plans
