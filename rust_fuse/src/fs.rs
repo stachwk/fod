@@ -4544,9 +4544,9 @@ impl FodFuse {
                 "FOD file open lease registration failed fh={} file_id={} session_id={} err={}",
                 fh, file_id, session_id, err
             );
-            // Gdy unlink wygral wyścig, nie mozna juz zalozyc nowego uchwytu.
-            // Brak pliku to ENOENT, a nie blad infrastruktury EIO.
-            if err == "file open lease requires an active client session" {
+            // Only a genuinely unavailable file maps to ENOENT.
+            // An expired/missing PostgreSQL client session must fail closed.
+            if err == "FOD_OPEN_FILE_UNAVAILABLE" {
                 ENOENT
             } else {
                 EIO
