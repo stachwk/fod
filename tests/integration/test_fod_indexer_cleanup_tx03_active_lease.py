@@ -126,7 +126,8 @@ def main() -> None:
                            to_regclass('fod.files') IS NOT NULL,
                            to_regclass('fod.client_sessions') IS NOT NULL,
                            to_regclass('fod.file_write_leases') IS NOT NULL,
-                           to_regclass('fod.destination_write_leases') IS NOT NULL
+                           to_regclass('fod.destination_write_leases') IS NOT NULL,
+                           to_regclass('fod.file_open_leases') IS NOT NULL
                     """
                 )
                 values = cur.fetchone()
@@ -214,6 +215,60 @@ def main() -> None:
                 (parent_id, file_name, session_id),
             )
         assert_denied(observer, binary, dsn, plan_id, root_name, 1, "destination", parent_id)
+
+        # Test TX03E.2: aktywny uchwyt odczytu musi zablokowac cleanup.
+        with observer.cursor() as cur:
+            cur.execute(
+                "DELETE FROM destination_write_leases WHERE session_id = %s",
+                (session_id,),
+            )
+            cur.execute(
+                """
+                INSERT INTO file_open_leases (
+                    file_id, session_id, handle_id, lease_expires_at,
+                    heartbeat_at, created_at, updated_at
+                ) VALUES (
+                    %s, %s, %s, clock_timestamp() + INTERVAL '5 minutes',
+                    clock_timestamp(), clock_timestamp(), clock_timestamp()
+                )
+                """,
+                (file_id, session_id, "tx03e-open-" + uuid.uuid4().hex),
+            )
+        result = run_cleanup(binary, dsn, plan_id)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "FOD_INDEXER_CLEANUP_ACTIVE_OPEN_HANDLE" not in combined:
+            raise AssertionError(
+                f"TX03E active open lease did not protect file rc={result.returncode}\\n{combined}"
+            )
+        if root_file_count(observer, root_name) != 1 or plan_status(observer, plan_id) != "materialize_failed":
+            raise AssertionError("TX03E cleanup modified file or plan with active read handle")
+        print("TX03E_ACTIVE_OPEN_LEASE=DENIED files_preserved=1 plan_unchanged=1", flush=True)
+
+        # Weryfikacja blokady advisory uzywanej przez otwieranie pliku w FUSE.
+        with observer.cursor() as cur:
+            cur.execute(
+                "DELETE FROM file_open_leases WHERE session_id = %s",
+                (session_id,),
+            )
+        lock_conn = psycopg2.connect(**dsn)
+        try:
+            with lock_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"fod:open:file:{file_id}",),
+                )
+            result = run_cleanup(binary, dsn, plan_id)
+            combined = result.stdout + result.stderr
+            if result.returncode == 0 or "FOD_INDEXER_CLEANUP_ACTIVE_WRITER advisory_busy" not in combined:
+                raise AssertionError(
+                    f"TX03E open advisory guard missing rc={result.returncode}\\n{combined}"
+                )
+            if root_file_count(observer, root_name) != 1:
+                raise AssertionError("TX03E advisory guard failed to preserve file")
+            print("TX03E_OPEN_ADVISORY=DENIED files_preserved=1", flush=True)
+        finally:
+            lock_conn.rollback()
+            lock_conn.close()
 
         # A completed active-writer interval ends only after the fixture
         # session and its cascaded lease have been removed.
