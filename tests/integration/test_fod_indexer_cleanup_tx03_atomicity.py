@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import select
 import subprocess
 import sys
 import time
@@ -164,6 +165,10 @@ def main() -> None:
     )
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument(
+        "--crash-after-delete", action="store_true",
+        help="TX03D: kill debug indexer after DELETE before COMMIT",
+    )
+    parser.add_argument(
         "--concurrent-cleanup", action="store_true",
         help="TX-03C: run two independent cleanup processes on the same plan",
     )
@@ -253,6 +258,57 @@ def main() -> None:
                 """,
                 (plan_id,),
             )
+
+        if args.crash_after_delete:
+            # Test wykorzystuje punkt kontrolny w debug Rust, a nie blokade planu.
+            env = os.environ.copy()
+            env.pop("DATABASE_URL", None)
+            env["FOD_INDEXER_CONNINFO"] = make_dsn(**dsn)
+            env["FOD_PG_DBNAME"] = dsn["dbname"]
+            env["POSTGRES_DB"] = dsn["dbname"]
+            env["FOD_TX03D_AFTER_DELETE_PAUSE"] = "1"
+            process = subprocess.Popen(
+                [str(binary), "cleanup-failed", "--plan", str(plan_id)],
+                cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, bufsize=1,
+            )
+            deadline = time.monotonic() + args.timeout
+            ready = False
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
+                # Odczytujemy znacznik bez ryzyka blokowania readline bez danych.
+                readable, _, _ = select.select([process.stderr], [], [], 0.2)
+                if readable:
+                    line = process.stderr.readline()
+                    if f"TX03D_AFTER_DELETE_READY plan_id={plan_id}" in line:
+                        ready = True
+                        break
+            if not ready:
+                raise AssertionError("TX03D missing post-DELETE checkpoint")
+            # Inna sesja nadal widzi stan sprzed transakcji.
+            if root_file_count(observer, root_name) != files_before:
+                raise AssertionError("TX03D uncommitted file deletion became visible")
+            if plan_status(observer, plan_id) != "materialize_failed":
+                raise AssertionError("TX03D uncommitted plan status became visible")
+            print("TX03D_AFTER_DELETE_PRECOMMIT=PASS files=2", flush=True)
+
+            # SIGKILL wymusza zerwanie polaczenia i rollback w PostgreSQL.
+            process.kill()
+            process.communicate(timeout=args.timeout)
+            process = None
+            if root_file_count(observer, root_name) != files_before:
+                raise AssertionError("TX03D rollback lost files")
+            if plan_status(observer, plan_id) != "materialize_failed":
+                raise AssertionError("TX03D rollback changed plan")
+            print("TX03D_DELETE_ROLLBACK=PASS files=2 plan=materialize_failed", flush=True)
+            direct_indexer(binary, dsn, ["cleanup-failed", "--plan", str(plan_id)])
+            if root_file_count(observer, root_name) != 0:
+                raise AssertionError("TX03D retry left files")
+            if plan_status(observer, plan_id) != "materialize_cleaned":
+                raise AssertionError("TX03D retry did not clean plan")
+            print("TX03D_RETRY_COMMIT=PASS files=0 plan=materialize_cleaned")
+            return
 
         blocker = psycopg2.connect(**dsn)
         with blocker.cursor() as cur:
