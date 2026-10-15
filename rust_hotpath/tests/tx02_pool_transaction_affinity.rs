@@ -18,7 +18,11 @@ fn environment_value(primary: &str, alternate: &str, fallback: &str) -> String {
     env::var(primary)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| env::var(alternate).ok().filter(|value| !value.trim().is_empty()))
+        .or_else(|| {
+            env::var(alternate)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or_else(|| fallback.to_string())
 }
 
@@ -54,10 +58,7 @@ fn tx02_open_transaction_can_be_borrowed_by_another_thread() -> Result<(), Strin
     repo.exec("BEGIN")?;
     let check = (|| -> Result<(String, String, String), String> {
         let owner_pid = scalar(&repo, "SELECT pg_backend_pid()")?;
-        let acquired = scalar(
-            &repo,
-            &format!("SELECT pg_try_advisory_xact_lock({key})"),
-        )?;
+        let acquired = scalar(&repo, &format!("SELECT pg_try_advisory_xact_lock({key})"))?;
         if acquired != "true" && acquired != "t" {
             return Err("TX-02 failed to acquire isolated transaction advisory lock".to_string());
         }

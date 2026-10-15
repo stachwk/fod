@@ -16,7 +16,11 @@ fn selected(primary: &str, legacy: &str, fallback: &str) -> String {
     env::var(primary)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| env::var(legacy).ok().filter(|value| !value.trim().is_empty()))
+        .or_else(|| {
+            env::var(legacy)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or_else(|| fallback.to_string())
 }
 
@@ -65,13 +69,15 @@ fn tx02_pinned_session_blocks_cross_thread_transaction_borrow() -> Result<(), St
         tx.exec("SET LOCAL application_name = 'fod_tx02_pinned'")?;
         let inside = tx.query_scalar_text("SHOW application_name")?;
         if inside.trim() != "fod_tx02_pinned" {
-            return Err(format!("SET LOCAL not visible inside pinned transaction: {inside}"));
+            return Err(format!(
+                "SET LOCAL not visible inside pinned transaction: {inside}"
+            ));
         }
-        let acquired = tx.query_scalar_text(&format!(
-            "SELECT pg_try_advisory_xact_lock({key})"
-        ))?;
+        let acquired = tx.query_scalar_text(&format!("SELECT pg_try_advisory_xact_lock({key})"))?;
         if !matches!(acquired.trim(), "true" | "t") {
-            return Err(format!("TX-02B failed to acquire advisory lock: {acquired}"));
+            return Err(format!(
+                "TX-02B failed to acquire advisory lock: {acquired}"
+            ));
         }
 
         let external = scalar(
@@ -131,11 +137,11 @@ fn tx02_pinned_error_rolls_back_and_releases_lock() -> Result<(), String> {
     let before_application_name = scalar(&repo, "SHOW application_name")?;
     let result: Result<(), String> = repo.with_transaction(|tx| {
         tx.exec("SET LOCAL application_name = 'fod_tx02_rollback'")?;
-        let acquired = tx.query_scalar_text(&format!(
-            "SELECT pg_try_advisory_xact_lock({key})"
-        ))?;
+        let acquired = tx.query_scalar_text(&format!("SELECT pg_try_advisory_xact_lock({key})"))?;
         if !matches!(acquired.trim(), "true" | "t") {
-            return Err(format!("TX-02B failed to acquire rollback lock: {acquired}"));
+            return Err(format!(
+                "TX-02B failed to acquire rollback lock: {acquired}"
+            ));
         }
         let held = scalar(
             &observer,

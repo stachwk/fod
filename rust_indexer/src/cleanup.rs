@@ -66,7 +66,10 @@ fn find_root_name(repo: &DbRepoTransaction<'_>, plan_id: u64) -> Result<Option<S
     }
 }
 
-fn collect_directory_rows(repo: &DbRepoTransaction<'_>, root_name: &str) -> Result<Vec<(u64, u64)>, String> {
+fn collect_directory_rows(
+    repo: &DbRepoTransaction<'_>,
+    root_name: &str,
+) -> Result<Vec<(u64, u64)>, String> {
     let rows = repo.query_rows_text(&format!(
         "
         WITH RECURSIVE subtree AS (
@@ -97,7 +100,10 @@ fn collect_directory_rows(repo: &DbRepoTransaction<'_>, root_name: &str) -> Resu
         .collect()
 }
 
-fn collect_file_rows(repo: &DbRepoTransaction<'_>, root_name: &str) -> Result<Vec<(u64, u64)>, String> {
+fn collect_file_rows(
+    repo: &DbRepoTransaction<'_>,
+    root_name: &str,
+) -> Result<Vec<(u64, u64)>, String> {
     let rows = repo.query_rows_text(&format!(
         "
         WITH RECURSIVE subtree AS (
@@ -129,7 +135,10 @@ fn collect_file_rows(repo: &DbRepoTransaction<'_>, root_name: &str) -> Result<Ve
         .collect()
 }
 
-fn collect_data_object_file_ids(repo: &DbRepoTransaction<'_>, data_object_id: u64) -> Result<Vec<u64>, String> {
+fn collect_data_object_file_ids(
+    repo: &DbRepoTransaction<'_>,
+    data_object_id: u64,
+) -> Result<Vec<u64>, String> {
     let rows = repo.query_rows_text(&format!(
         "
         SELECT id_file
@@ -147,7 +156,10 @@ fn collect_data_object_file_ids(repo: &DbRepoTransaction<'_>, data_object_id: u6
         .collect()
 }
 
-fn delete_data_object_rows(repo: &DbRepoTransaction<'_>, data_object_id: u64) -> Result<(), String> {
+fn delete_data_object_rows(
+    repo: &DbRepoTransaction<'_>,
+    data_object_id: u64,
+) -> Result<(), String> {
     repo.exec(&format!(
         "DELETE FROM data_objects WHERE id_data_object = {data_object_id}"
     ))?;
