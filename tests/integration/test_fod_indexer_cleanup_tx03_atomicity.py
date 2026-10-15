@@ -5,8 +5,8 @@
 
 Operates ONLY on an explicitly selected isolated test database. Creates a
 uniquely named index source, materializes two files, then locks the import plan
-row so cleanup blocks at its final UPDATE. Independent SQL must still see every
-file and the old plan state until the cleanup transaction commits.
+row so cleanup blocks on its initial SELECT FOR UPDATE. Independent SQL must
+still see every file and the old plan state until cleanup commits.
 
 No FUSE mount, production database, schema migration or role changes.
 This test does NOT cover active FUSE writers or lease/advisory protection.
@@ -130,7 +130,7 @@ def wait_until_cleanup_blocked(observer, blocker_pid: int, process, timeout: flo
         if process.poll() is not None:
             stdout, stderr = process.communicate()
             raise AssertionError(
-                f"cleanup finished before blocked UPDATE rc={process.returncode}\n"
+                f"cleanup finished before blocked plan lock rc={process.returncode}\n"
                 f"stdout={stdout}\nstderr={stderr}"
             )
         with observer.cursor() as cur:
@@ -141,7 +141,7 @@ def wait_until_cleanup_blocked(observer, blocker_pid: int, process, timeout: flo
                 WHERE datname = current_database()
                   AND pid <> %s
                   AND %s = ANY(pg_blocking_pids(pid))
-                  AND query ILIKE '%%UPDATE index_import_plans%%'
+                  AND query ILIKE '%%FROM index_import_plans%%'\n                  AND query ILIKE '%%FOR UPDATE%%'
                 ORDER BY pid
                 LIMIT 1
                 """,
@@ -151,7 +151,7 @@ def wait_until_cleanup_blocked(observer, blocker_pid: int, process, timeout: flo
         if row:
             return int(row[0])
         time.sleep(0.1)
-    raise AssertionError("TX-03A did not observe a blocked cleanup UPDATE before timeout")
+    raise AssertionError("TX-03A did not observe a blocked cleanup plan lock before timeout")
 
 
 def main() -> None:
@@ -164,9 +164,13 @@ def main() -> None:
     )
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument(
+        "--concurrent-cleanup", action="store_true",
+        help="TX-03C: run two independent cleanup processes on the same plan",
+    )
+    parser.add_argument(
         "--kill-before-commit",
         action="store_true",
-        help="TX-03B: kill cleanup while UPDATE is blocked and verify rollback plus retry",
+        help="TX-03B: kill cleanup while plan row is blocked and verify rollback plus retry",
     )
     args = parser.parse_args()
     binary = args.indexer.resolve()
@@ -183,6 +187,7 @@ def main() -> None:
     blocker = None
     observer = None
     process = None
+    second_process = None
     source_registered = False
     try:
         write_tree(
@@ -290,8 +295,62 @@ def main() -> None:
             flush=True,
         )
 
+        if args.concurrent_cleanup:
+            # Uruchom drugiego indexera, gdy pierwszy oczekuje na blokade planu.
+            second_process = subprocess.Popen(
+                [str(binary), "cleanup-failed", "--plan", str(plan_id)],
+                cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True,
+            )
+            deadline = time.monotonic() + args.timeout
+            blocked_count = 0
+            while time.monotonic() < deadline:
+                if second_process.poll() is not None or process.poll() is not None:
+                    raise AssertionError("TX-03C cleanup worker exited before releasing plan lock")
+                with observer.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT count(*)
+                        FROM pg_stat_activity
+                        WHERE datname = current_database()
+                          AND %s = ANY(pg_blocking_pids(pid))
+                          AND query ILIKE '%%FROM index_import_plans%%'
+                          AND query ILIKE '%%FOR UPDATE%%'
+                        """,
+                        (blocker_pid,),
+                    )
+                    blocked_count = int(cur.fetchone()[0])
+                if blocked_count >= 2:
+                    break
+                time.sleep(0.1)
+            if blocked_count < 2:
+                raise AssertionError(
+                    f"TX-03C expected two blocked workers, observed {blocked_count}"
+                )
+            print("TX03C_TWO_WORKERS_BLOCKED=PASS workers=2", flush=True)
+            blocker.commit()
+            first_out, first_err = process.communicate(timeout=args.timeout)
+            second_out, second_err = second_process.communicate(timeout=args.timeout)
+            first_rc = process.returncode
+            second_rc = second_process.returncode
+            process = None
+            second_process = None
+            if first_rc != 0 or second_rc != 0:
+                raise AssertionError(
+                    f"TX-03C workers failed: first={first_rc} second={second_rc}\n"
+                    f"first: {first_out} {first_err}\nsecond: {second_out} {second_err}"
+                )
+            after_files = root_file_count(observer, root_name)
+            after_plan = plan_status(observer, plan_id)
+            if after_files != 0 or after_plan != "materialize_cleaned":
+                raise AssertionError(
+                    f"TX-03C inconsistent final state files={after_files} plan={after_plan}"
+                )
+            print("TX03C_SERIALIZED_COMMIT=PASS workers=2 files=0 plan=materialize_cleaned")
+            return
+
         if args.kill_before_commit:
-            # Zabij proces przed COMMIT, gdy kasowanie jest jeszcze niezatwierdzone.
+            # Zabij proces, gdy oczekuje na blokade planu przed kasowaniem.
             process.kill()
             process.communicate(timeout=args.timeout)
             process = None
@@ -341,6 +400,9 @@ def main() -> None:
         # Stop the diagnostic worker BEFORE releasing the blocker. Otherwise
         # a failed pre-COMMIT assertion might unintentionally allow cleanup
         # to commit while the failure handler is tearing down the fixture.
+        if second_process is not None:
+            second_process.kill()
+            second_process.communicate()
         if process is not None:
             process.kill()
             process.communicate()
