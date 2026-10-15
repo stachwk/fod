@@ -139,7 +139,7 @@ fn collect_file_rows(
         .collect()
 }
 
-/// Before deleting imported files, exclude active write owners on any
+/// Before deleting imported files, exclude active open handles and write owners on any
 /// matching file or destination. The advisory key scheme/order must match
 /// DbRepo::acquire_write_ownership and fenced persistence on every host.
 ///
@@ -154,6 +154,7 @@ fn reject_cleanup_during_active_write_lease(
     }
     let mut resource_keys = Vec::with_capacity(file_rows.len().saturating_mul(2));
     for &(file_id, _, parent_id, ref name) in file_rows {
+        resource_keys.push(format!("fod:open:file:{file_id}"));
         resource_keys.push(format!("fod:write:file:{file_id}"));
         resource_keys.push(format!(
             "fod:write:destination:{parent_id}:{}:{name}",
@@ -184,9 +185,12 @@ fn reject_cleanup_during_active_write_lease(
     // Odmowa jest bezpieczniejsza od fizycznego usuniecia aktywnego obiektu.
     let open_handles = repo.query_scalar_text(&format!(
         "SELECT EXISTS (
-            SELECT 1 FROM file_open_leases
-            WHERE file_id IN ({ids})
-              AND lease_expires_at > clock_timestamp()
+            SELECT 1
+            FROM file_open_leases l
+            JOIN client_sessions s ON s.session_id = l.session_id
+            WHERE l.file_id IN ({ids})
+              AND l.lease_expires_at > clock_timestamp()
+              AND s.lease_expires_at > clock_timestamp()
         )::text"
     ))?;
     if matches!(open_handles.trim().to_ascii_lowercase().as_str(), "t" | "true") {
