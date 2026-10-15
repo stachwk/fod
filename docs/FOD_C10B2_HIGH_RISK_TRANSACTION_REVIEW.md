@@ -202,6 +202,61 @@ walidacja ochrony lease, writer fencing, usuwania aktualnie otwartego pliku
 i zachowania przy zerwaniu połączenia pozostaje do TX-03B/C. Nie wolno
 interpretować TX-03A PASS jako zakończenia TX-01/C10-B2.
 
+## TX-03B — ochrona aktywnych dzierżaw przed cleanup
+
+Stan: **kod ochronny i testy negatywne dodane; lokalna walidacja oczekuje**
+(2026-10-15). TX-03A wcześniej zaliczył `build=0 compile=0 test=0`,
+z `TX03_ATOMIC_PRECOMMIT=PASS` i `TX03_ATOMIC_COMMIT=PASS`.
+
+Przegląd schematu ujawnił, że `file_write_leases.file_id` wskazuje
+na `files.id_file` przez `ON DELETE CASCADE`. Bez odrzucenia aktywnej
+dzierżawy, usunięcie pliku usuwałoby także jego rekord lease.
+
+Zmiana w `rust_indexer/src/cleanup.rs`: przed pierwszą mutacją payloadu
+zbierane są identyfikatory, katalogi nadrzędne i nazwy plików. Cleanup
+sortuje i pobiera transakcyjne, nieblokujące advisory locks dla
+`fod:write:file:<id>` oraz `fod:write:destination:<parent>:<bytes>:<name>`,
+zgodnie z `DbRepo::acquire_write_ownership`. Jeśli którykolwiek jest
+zajęty, cleanup odmawia operacji. Po uzyskaniu blokad odrzuca również
+aktywne w PostgreSQL dzierżawy `file_write_leases` lub
+`destination_write_leases`. Błąd ma prefiks
+`FOD_INDEXER_CLEANUP_ACTIVE_WRITER` i powoduje rollback całej transakcji.
+
+Nowy test `tests/integration/test_fod_indexer_cleanup_tx03_active_lease.py`
+tworzy **unikalny** import w jawnej bazie `*_test`, a następnie
+w dwóch niezależnych próbach wprowadza kontrolowane rekordy lease SQL:
+1) lease pliku, 2) lease ścieżki docelowej. W obu przypadkach
+wymaga odmowy cleanup oraz niezmienionego pliku, statusu planu i lease.
+Po usunięciu wyłącznie własnej sesji testowej ponawia cleanup i
+oczekuje jego powodzenia. Test nie montuje FUSE i nie symuluje
+rzeczywiście zapisującego klienta.
+
+```bash
+cd ~/git/fod
+cargo fmt --all --check
+cargo check --workspace --locked
+cargo build --locked -p fod-rust-indexer
+.venv/bin/python -m py_compile tests/integration/test_fod_indexer_cleanup_tx03_active_lease.py
+FOD_PG_DBNAME=foddbname_hotpath_test POSTGRES_DB=foddbname_hotpath_test \
+  .venv/bin/python tests/integration/test_fod_indexer_cleanup_tx03_active_lease.py
+FOD_PG_DBNAME=foddbname_hotpath_test POSTGRES_DB=foddbname_hotpath_test \
+  .venv/bin/python tests/integration/test_fod_indexer_cleanup_tx03_atomicity.py
+```
+
+Oczekiwane komunikaty:
+`TX03_ACTIVE_FILE_LEASE=DENIED`,
+`TX03_ACTIVE_DESTINATION_LEASE=DENIED`,
+`TX03_CLEANUP_AFTER_LEASE_RELEASE=PASS`, a także ponowny TX-03A PASS.
+
+**Ograniczenia:** dotyczy współpracujących protokołów lease i
+zaobserwowanych rekordów PostgreSQL. Nie chroni przed bezpośrednim SQL
+superużytkownika (C10-A), wyścigiem tworzenia nowych plików w
+zmieniającym się drzewie katalogów, operacjami open/unlink w innych
+hostach ani błędnym `reference_count` przy współbieżnej adopcji.
+Przed dopuszczeniem produkcyjnego cleanup potrzebne są TX-03C
+(dwa mounty FUSE, aktywny uchwyt i writer, crash/rollback) oraz
+pełna ocena lock order na namespace/data objects.
+
 ## Reguły przejścia do C10-B3
 
 - Wszystkie mutacje `indexer cleanup` mają udokumentowany porządek blokad,
