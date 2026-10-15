@@ -9269,7 +9269,36 @@ impl DbRepo {
                 let res = exec_params(conn, &sql, &params)?;
                 let value = fetch_single_text(res)?;
                 if value.trim().is_empty() {
-                    Err("file open lease requires an active client session".to_string())
+                    // The advisory lock serializes this decision with unlink/purge.
+                    // A missing file and a missing/expired client session must
+                    // never be collapsed into the same filesystem errno.
+                    let reason_sql = CString::new(
+                        "
+                        SELECT CASE
+                            WHEN NOT EXISTS (
+                                SELECT 1 FROM client_sessions
+                                WHERE session_id = $2
+                                  AND lease_expires_at > clock_timestamp()
+                            ) THEN 'SESSION_INVALID'
+                            WHEN NOT EXISTS (
+                                SELECT 1 FROM files
+                                WHERE id_file = $1 AND NOT unlinked
+                            ) THEN 'FILE_UNAVAILABLE'
+                            ELSE 'INCONSISTENT'
+                        END
+                        ",
+                    )
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let reason = fetch_single_text(exec_params(
+                        conn,
+                        &reason_sql,
+                        &[&file_id, &session_id],
+                    )?)?;
+                    match reason.trim() {
+                        "FILE_UNAVAILABLE" => Err("FOD_OPEN_FILE_UNAVAILABLE".to_string()),
+                        "SESSION_INVALID" => Err("FOD_OPEN_SESSION_INVALID".to_string()),
+                        _ => Err("FOD_OPEN_LEASE_INCONSISTENT".to_string()),
+                    }
                 } else {
                     Ok(())
                 }
