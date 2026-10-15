@@ -4544,7 +4544,13 @@ impl FodFuse {
                 "FOD file open lease registration failed fh={} file_id={} session_id={} err={}",
                 fh, file_id, session_id, err
             );
-            EIO
+            // Gdy unlink wygral wyścig, nie mozna juz zalozyc nowego uchwytu.
+            // Brak pliku to ENOENT, a nie blad infrastruktury EIO.
+            if err == "file open lease requires an active client session" {
+                ENOENT
+            } else {
+                EIO
+            }
         })
     }
 
