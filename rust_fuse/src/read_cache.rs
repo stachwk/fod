@@ -16,6 +16,50 @@ use std::time::Instant;
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type MissingBlockIndices = Vec<u64>;
 
+// TX03J.2c: per-file generation gate. A late cache fill must never
+// publish against an epoch which has already been invalidated. The ledger
+// intentionally does not own or discard pending local writer buffers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileCacheStamp {
+    generation: u64,
+    epoch: u64,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct FileCacheGenerationGate {
+    files: Mutex<HashMap<u64, FileCacheStamp>>,
+}
+
+impl FileCacheGenerationGate {
+    pub(crate) fn snapshot(&self, file_id: u64) -> FileCacheStamp {
+        let files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        files.get(&file_id).copied().unwrap_or(FileCacheStamp {
+            generation: 0,
+            epoch: 0,
+        })
+    }
+
+    // Caller must invalidate the cache for this exact file when true.
+    // Duplicated/out-of-order events do not invalidate newer data.
+    pub(crate) fn advance(&self, file_id: u64, generation: u64) -> bool {
+        let mut files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        let current = files.entry(file_id).or_insert(FileCacheStamp {
+            generation: 0,
+            epoch: 0,
+        });
+        if generation <= current.generation {
+            return false;
+        }
+        current.generation = generation;
+        current.epoch = current.epoch.saturating_add(1);
+        true
+    }
+
+    pub(crate) fn is_current(&self, file_id: u64, stamp: FileCacheStamp) -> bool {
+        self.snapshot(file_id) == stamp
+    }
+}
+
 type ReadFillRange = (u64, u64);
 
 fn read_fill_ranges(blocks: &[u64]) -> Vec<ReadFillRange> {
@@ -896,13 +940,41 @@ impl FodFuse {
 
 #[cfg(test)]
 mod tests {
-    use super::{ReadBlockCache, ReadFillCoordinator};
+    use super::{FileCacheGenerationGate, ReadBlockCache, ReadFillCoordinator};
     use std::sync::{mpsc, Arc};
     use std::thread;
     use std::time::Duration;
 
     fn block(value: u8) -> Arc<[u8]> {
         Arc::from(vec![value])
+    }
+
+    #[test]
+    fn generation_gate_is_file_scoped_and_monotonic() {
+        let gate = FileCacheGenerationGate::default();
+        let older_a = gate.snapshot(7);
+        let unchanged_b = gate.snapshot(8);
+        assert!(gate.advance(7, 41));
+        assert!(!gate.is_current(7, older_a));
+        assert!(gate.is_current(8, unchanged_b));
+        let current = gate.snapshot(7);
+        assert!(!gate.advance(7, 40));
+        assert!(!gate.advance(7, 41));
+        assert_eq!(gate.snapshot(7), current);
+        assert!(gate.advance(7, 42));
+        assert!(!gate.is_current(7, current));
+    }
+
+    #[test]
+    fn targeted_cache_clear_preserves_other_file() {
+        for policy in ["fifo", "lru"] {
+            let mut cache = ReadBlockCache::new(policy);
+            cache.insert(7, 0, block(7), 10);
+            cache.insert(8, 0, block(8), 10);
+            cache.clear_file(7);
+            assert!(cache.get(7, 0).is_none());
+            assert_eq!(cache.get(8, 0).as_deref(), Some(&[8u8][..]));
+        }
     }
 
     #[test]
