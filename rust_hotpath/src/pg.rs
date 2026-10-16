@@ -3057,7 +3057,7 @@ unsafe fn fetch_block_range_rows_shared(
     result
 }
 
-unsafe // TX03J: decode a single-statement snapshot without changing legacy read APIs.
+// TX03J: decode a single-statement snapshot without changing legacy read APIs.
 unsafe fn decode_generation_block_snapshot(
     res: *mut PGresult,
     block_size: usize,
@@ -3103,7 +3103,7 @@ unsafe fn decode_generation_block_snapshot(
     result
 }
 
-fn fetch_block_range_with_size_rows_shared(
+unsafe fn fetch_block_range_with_size_rows_shared(
     res: *mut PGresult,
     block_size: usize,
 ) -> Result<SizedSharedBlockRows, String> {
