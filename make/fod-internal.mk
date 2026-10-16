@@ -3099,3 +3099,12 @@ test-rename-symlink-transactional: init
 test-rename-directory-transactional: init
 	@CARGO_TARGET_DIR="$(CURDIR)/target/integration-test-hooks" cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --features integration-test-hooks --bin fod-rust-fuse
 	@FOD_RUST_FUSE_BIN="$(CURDIR)/target/integration-test-hooks/release-lto/fod-rust-fuse" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_rename_directory_transactional.py
+
+# TX03J strict-read regression gate. Run against a dedicated existing *_test
+# database. This target deliberately does not invoke destructive reset/init.
+.PHONY: test-tx03j-strict-coherence
+test-tx03j-strict-coherence:
+	@FOD_RUNTIME_PROFILE=$(FOD_RUNTIME_PROFILE) \
+	FOD_PG_DBNAME="$(FOD_PG_DBNAME)" POSTGRES_DB="$(POSTGRES_DB)" \
+	$(VENV_PYTHON) tests/integration/test_tx03j_cross_mount_cache.py \
+	  --strict-reads --pg-snapshot --require-coherent
