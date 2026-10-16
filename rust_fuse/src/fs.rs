@@ -4459,11 +4459,17 @@ impl FodFuse {
         Ok(data)
     }
 
+    fn strict_cross_mount_reads_enabled() -> bool {
+        std::env::var("FOD_CROSS_MOUNT_STRICT_READS")
+            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    }
+
     fn fopen_flags(&self) -> FopenFlags {
         // Domyslnie nie wymuszamy direct_io.
         // direct_io jest trybem diagnostycznym/zgodnosciowym, bo potrafi mocno spowolnic
         // sekwencyjny zapis malymi blokami przez ominiecie cache/writeback kernela.
-        if self.fopen_direct_io {
+        if self.fopen_direct_io || Self::strict_cross_mount_reads_enabled() {
             FopenFlags::FOPEN_DIRECT_IO
         } else {
             FopenFlags::empty()
@@ -7122,6 +7128,26 @@ impl Filesystem for FodFuse {
             return;
         }
         let size = size as u64;
+        // Experimental fail-closed read coherence path. The repository query
+        // resolves the file's CURRENT data_object_id and blocks together,
+        // without trusting this mount's previously read block maps.
+        // Preserve read-your-own-writes when this handle has pending changes.
+        if Self::strict_cross_mount_reads_enabled()
+            && self.write_state_for_handle(fh).is_none()
+        {
+            match self.read_noatime_direct_uncached(file_id, offset, size) {
+                Ok(data) => {
+                    read_task.complete(0, data.len() as u64);
+                    self.reply_data_profiled(reply, &data);
+                }
+                Err(errno) => {
+                    self.log_request_error(req_id, "read", errno,
+                        format!("file_id={} strict_cross_mount_read", file_id));
+                    fuse_reply_error!(reply, errno);
+                }
+            }
+            return;
+        }
         if self.atime_policy == AtimePolicy::NoAtime {
             if let Some(mut state) = self.write_state_for_handle(fh) {
                 let data = match self.read_from_write_state(&mut state, offset, size) {
