@@ -48,7 +48,7 @@ pub use fod_rust_runtime::{AtimePolicy, LockBackend};
 
 use crate::compatibility::FuseCompatibilitySnapshot;
 use crate::copy_plan::{copy_range_bounds, pack_copy_skip_unchanged_runs, CopyRangeBounds};
-use crate::read_cache::{ReadBlockCache, ReadFillCoordinator, ReadSequenceState};
+use crate::read_cache::{FileCacheGenerationGate, ReadBlockCache, ReadFillCoordinator, ReadSequenceState};
 use crate::startup::FodFuseSettings;
 pub(crate) use crate::write_buffer::{ReadCopyDestinationSlice, WriteState};
 
@@ -1621,6 +1621,7 @@ pub struct FodFuse {
     pub(crate) write_states: Mutex<HashMap<u64, WriteState>>,
     pub(crate) read_block_cache: Mutex<ReadBlockCache>,
     pub(crate) read_fill_coordinator: ReadFillCoordinator,
+    pub(crate) file_cache_generations: FileCacheGenerationGate,
     pub(crate) recent_write_blocks: Mutex<HashMap<RecentWriteBlockKey, Arc<[u8]>>>,
     pub(crate) recent_write_blocks_len: AtomicU64,
     pub(crate) read_sequence_state: Mutex<HashMap<u64, ReadSequenceState>>,
@@ -1740,6 +1741,7 @@ impl FodFuse {
                 cache.read_cache_eviction_policy.as_str(),
             )),
             read_fill_coordinator: ReadFillCoordinator::default(),
+            file_cache_generations: FileCacheGenerationGate::default(),
             recent_write_blocks: Mutex::new(HashMap::new()),
             recent_write_blocks_len: AtomicU64::new(0),
             read_sequence_state: Mutex::new(HashMap::new()),
@@ -3259,6 +3261,25 @@ impl FodFuse {
         atime_policy == AtimePolicy::NoAtime
             && (handle_flags & libc::O_ACCMODE) == libc::O_RDONLY
             && !metadata_cache_ttl.is_zero()
+    }
+
+    // TX03J staging API: cache invalidation must be limited to the
+    // committed file generation. The caller is responsible for ordering
+    // cache fills and kernel FUSE invalidations before enabling listeners.
+    pub(crate) fn invalidate_committed_file_generation(
+        &self,
+        file_id: u64,
+        generation: u64,
+    ) -> bool {
+        if !self.file_cache_generations.advance(file_id, generation) {
+            return false;
+        }
+        self.clear_read_cache_for_file(file_id);
+        self.clear_recent_write_blocks_for_file(file_id);
+        if let Ok(mut guard) = self.read_sequence_state.lock() {
+            guard.remove(&file_id);
+        }
+        true
     }
 
     pub(crate) fn invalidate_read_metadata_for_file(&self, file_id: u64) {
