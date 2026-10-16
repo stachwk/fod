@@ -411,5 +411,14 @@ FOD_TELEMETRY_DSN="host=pg-primary dbname=fod user=fod_monitor ..." fod-rust-fus
 
 `FOD_TELEMETRY_DSN` ma pierwszenstwo przed kompatybilnym fallbackiem
 `FOD_MONITOR_DSN`. Oba DSN-y musza wskazywac writable primary; FOD wymusza role
-`WritablePrimary` przy polaczeniu telemetrycznym. Awaria tego endpointu nie
-zatrzymuje read-only mounta, tylko wylacza centralna publikacje tej sesji.
+`WritablePrimary` przy polaczeniu telemetrycznym.
+
+Od schema v25 writable control sink jest rowniez authority dla
+`client_sessions` i `file_open_leases`, wiec read-only mount nie moze dzialac
+bez mozliwosci zapisania tej centralnej sesji. Endpoint routing wybiera primary
+automatycznie. W trybie legacy read-only mount moze uzyc glownego DSN, gdy ten
+wskazuje writable primary, albo jawnego `FOD_TELEMETRY_DSN` /
+`FOD_MONITOR_DSN`. Replica-only bez osiagalnego writable authority jest
+odrzucana przy starcie zamiast cicho tracic semantyke open-unlink. Awaria samej
+publikacji `monitor_session_stats` po poprawnej rejestracji sesji nadal nie
+zmienia semantyki filesystemu.

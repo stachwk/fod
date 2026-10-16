@@ -265,8 +265,41 @@ class FODMount:
         return self.config is not None and self.config.mountpoint.exists() and self._is_mountpoint(self.config.mountpoint)
 
     @staticmethod
-    def _is_mountpoint(path: Path) -> bool:
-        return subprocess.run(["mountpoint", "-q", str(path)], check=False).returncode == 0
+    def _decode_mountinfo_path(value: str) -> str:
+        return (
+            value.replace(r"\040", " ")
+            .replace(r"\011", "\t")
+            .replace(r"\012", "\n")
+            .replace(r"\134", "\\")
+        )
+
+    @classmethod
+    def _is_mountpoint(cls, path: Path) -> bool:
+        result = subprocess.run(
+            ["mountpoint", "-q", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return True
+
+        # Martwy FUSE moze zwracac ENOTCONN z mountpoint(1), mimo ze wpis
+        # nadal istnieje w /proc/self/mountinfo. W takim stanie stop() musi
+        # nadal rozpoznac mount i dojsc do istniejacego lazy unmount.
+        try:
+            contents = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+        except OSError:
+            return False
+
+        wanted = str(path.absolute())
+        for line in contents.splitlines():
+            fields = line.split()
+            if len(fields) < 5:
+                continue
+            if cls._decode_mountinfo_path(fields[4]) == wanted:
+                return True
+        return False
 
     def _dump_log(self) -> None:
         if self.config is not None and self.config.log_file.exists():

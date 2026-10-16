@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import unittest
@@ -31,7 +32,7 @@ def target_block(text: str, target: str, next_target: str) -> str:
     return text[start:end]
 
 
-class MakefileDatabaseRestoreOrderTests(unittest.TestCase):
+class MakefileDatabaseIsolationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.text = MAKEFILE.read_text(encoding="utf-8")
@@ -50,29 +51,41 @@ class MakefileDatabaseRestoreOrderTests(unittest.TestCase):
         self.assertNotIn("test-rust-hotpath-runtime-size-limits", line)
         self.assertNotIn("test-runtime-validation", line)
 
-    def test_wrapper_runs_suite_before_selected_restore(self) -> None:
+    def test_mkfs_suite_uses_and_drops_isolated_database(self) -> None:
+        block = target_block(
+            self.text,
+            "test-rust-mkfs-suite",
+            "test-rust-mkfs-suite-restored",
+        )
+        self.assertIn("MKFS_TEST_DB ?= $(POSTGRES_DB)_mkfs_test", self.text)
+        self.assertIn(
+            "test-rust-mkfs-suite: up test-db-destructive-guard",
+            self.text,
+        )
+        self.assertIn('db="$(MKFS_TEST_DB)"', block)
+        self.assertIn('CREATE DATABASE \\"$$db\\";', block)
+        self.assertIn('DROP DATABASE IF EXISTS \\"$$db\\";', block)
+        self.assertIn(
+            'FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" $(CARGO_TEST_MKFS)',
+            block,
+        )
+        self.assertIn("suite_status=0", block)
+        self.assertIn("cleanup_status=0", block)
+        self.assertIn('exit "$$suite_status"', block)
+        self.assertIn('exit "$$cleanup_status"', block)
+        self.assertNotIn("test-db-restore-selected", block)
+
+    def test_restored_wrapper_is_compatibility_alias(self) -> None:
+        self.assertEqual(
+            target_line(self.text, "test-rust-mkfs-suite-restored"),
+            "test-rust-mkfs-suite-restored: test-rust-mkfs-suite",
+        )
         block = target_block(
             self.text,
             "test-rust-mkfs-suite-restored",
             ".PHONY",
         )
-        suite_command = (
-            "$(MAKE) --no-print-directory test-rust-mkfs-suite "
-            "|| suite_status=$$?"
-        )
-        restore_command = (
-            "$(MAKE) --no-print-directory test-db-restore-selected "
-            "|| restore_status=$$?"
-        )
-        self.assertIn(
-            "test-db-destructive-guard",
-            target_line(self.text, "test-rust-mkfs-suite-restored"),
-        )
-        self.assertIn(suite_command, block)
-        self.assertIn(restore_command, block)
-        self.assertLess(block.index(suite_command), block.index(restore_command))
-        self.assertIn('exit "$$suite_status"', block)
-        self.assertIn('exit "$$restore_status"', block)
+        self.assertNotIn("test-db-restore-selected", block)
 
     def test_local_wrapper_forces_local_backend(self) -> None:
         block = target_block(
@@ -85,25 +98,28 @@ class MakefileDatabaseRestoreOrderTests(unittest.TestCase):
             block,
         )
 
-    def test_destructive_schema_targets_restore_local_database(self) -> None:
+    def test_destructive_schema_targets_use_isolated_database(self) -> None:
         for target, next_target in [
             ("test-schema-upgrade", "test-schema-status"),
             ("test-schema-status", "test-df"),
         ]:
             block = target_block(self.text, target, next_target)
+            self.assertIn(
+                f"{target}: up test-db-destructive-guard",
+                target_line(self.text, target),
+            )
+            self.assertIn('db="$(MKFS_TEST_DB)"', block)
+            self.assertIn('CREATE DATABASE \\"$$db\\";', block)
+            self.assertIn('DROP DATABASE IF EXISTS \\"$$db\\";', block)
+            self.assertIn(
+                'FOD_PG_DBNAME="$$db" POSTGRES_DB="$$db" $(CARGO_TEST_MKFS)',
+                block,
+            )
             self.assertIn("test_status=0", block)
-            self.assertIn("restore_status=0", block)
-            self.assertIn(
-                "$(MAKE) --no-print-directory test-db-restore-selected "
-                "|| restore_status=$$?",
-                block,
-            )
-            self.assertIn(
-                "$(MAKE) --no-print-directory test-db-destructive-guard",
-                block,
-            )
+            self.assertIn("cleanup_status=0", block)
+            self.assertNotIn("test-db-restore-selected", block)
             self.assertIn('exit "$$test_status"', block)
-            self.assertIn('exit "$$restore_status"', block)
+            self.assertIn('exit "$$cleanup_status"', block)
 
     def test_qnap_reset_requires_explicit_destructive_opt_in(self) -> None:
         block = target_block(self.text, "reset", "test-db-destructive-guard")

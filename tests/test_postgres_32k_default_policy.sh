@@ -104,8 +104,8 @@ CLEAN_ENV=(
     -u POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER
 )
 
-qnap_config="$("${CLEAN_ENV[@]}" make --no-print-directory -s -C "${ROOT}" QNAP=1 postgres-qnap-config-show)"
-local_config="$("${CLEAN_ENV[@]}" make --no-print-directory -s -C "${ROOT}" QNAP=0 postgres-config-show)"
+qnap_config="$("${CLEAN_ENV[@]}" make --no-print-directory -s -f "${MAKEFILE}" -C "${ROOT}" QNAP=1 postgres-qnap-config-show)"
+local_config="$("${CLEAN_ENV[@]}" make --no-print-directory -s -f "${MAKEFILE}" -C "${ROOT}" QNAP=0 postgres-config-show)"
 
 grep -F 'POSTGRES_SHARED_BUFFERS=1GB' <<<"${qnap_config}" >/dev/null
 grep -F 'POSTGRES_WORK_MEM=4MB' <<<"${qnap_config}" >/dev/null
@@ -120,7 +120,7 @@ grep -F 'POSTGRES_EFFECTIVE_IO_CONCURRENCY=<default>' <<<"${local_config}" >/dev
 grep -F 'POSTGRES_MAX_PARALLEL_WORKERS=<default>' <<<"${local_config}" >/dev/null
 
 # Explicit command-line tuning must still override the fixed QNAP default.
-qnap_override="$("${CLEAN_ENV[@]}" make --no-print-directory -s -C "${ROOT}" \
+qnap_override="$("${CLEAN_ENV[@]}" make --no-print-directory -s -f "${MAKEFILE}" -C "${ROOT}" \
     QNAP=1 POSTGRES_SHARED_BUFFERS=2GB postgres-qnap-config-show)"
 grep -F 'POSTGRES_SHARED_BUFFERS=2GB' <<<"${qnap_override}" >/dev/null
 

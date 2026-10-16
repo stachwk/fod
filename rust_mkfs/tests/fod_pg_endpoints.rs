@@ -73,7 +73,12 @@ fn config_command_with_env(
     overrides: &[(&str, &str)],
 ) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fod-config"));
+    // FOD_CONFIG takes precedence over --config-path in the runtime loader.
+    // These tests must use their generated fixture, not the caller's
+    // environment-specific configuration or runtime profile.
     for key in [
+        "FOD_CONFIG",
+        "FOD_PROFILE",
         "FOD_PG_HOST",
         "FOD_PG_PORT",
         "FOD_PG_PRIMARY_HOSTS",
