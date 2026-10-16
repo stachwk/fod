@@ -893,9 +893,12 @@ impl FodFuse {
 
             let stamp = self.file_cache_generations.snapshot(file_id);
             let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
-            if !self.file_cache_generations.publish_if_current(file_id, stamp, || {
-                self.store_read_blocks(file_id, &fetched);
-            }) {
+            if !self
+                .file_cache_generations
+                .publish_if_current(file_id, stamp, || {
+                    self.store_read_blocks(file_id, &fetched);
+                })
+            {
                 // A remote generation advanced while SQL was in flight.
                 // Retry instead of resurrecting a stale block map.
                 continue;
