@@ -3107,4 +3107,4 @@ test-tx03j-strict-coherence:
 	@FOD_RUNTIME_PROFILE=$(FOD_RUNTIME_PROFILE) \
 	FOD_PG_DBNAME="$(FOD_PG_DBNAME)" POSTGRES_DB="$(POSTGRES_DB)" \
 	$(VENV_PYTHON) tests/integration/test_tx03j_cross_mount_cache.py \
-	  --strict-reads --pg-snapshot --require-coherent
+	  --strict-reads --pg-snapshot --held-reader --require-coherent
