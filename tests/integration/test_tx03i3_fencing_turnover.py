@@ -51,6 +51,7 @@ def main() -> None:
         a, b = FODMount(str(root)), FODMount(str(root))
         db = postgres_connection(a)
         first_fd = None
+        verifier = None
         try:
             a.start(str(Path(tmp) / "mount-a"), log_prefix="/tmp/fod-tx03i3-a")
             b.start(str(Path(tmp) / "mount-b"), log_prefix="/tmp/fod-tx03i3-b")
@@ -104,15 +105,28 @@ def main() -> None:
                         raise AssertionError("TX03I3 stale token released new ownership")
                 if ownership(db, int(file_id)) != new_owner:
                     raise AssertionError("TX03I3 ownership changed after stale operations")
-            if path_a.read_bytes() != payload_b:
-                raise AssertionError("TX03I3 new owner's data not visible to mount A")
+            if path_b.read_bytes() != payload_b:
+                raise AssertionError("TX03I3 new owner's persisted data mismatch on mount B")
+
+            # Mount A read the old payload earlier; it can retain a FUSE/kernel
+            # cache entry. Observe this separately from fencing correctness.
+            stale_read_on_a = path_a.read_bytes() != payload_b
+
+            # Fresh mount C cannot reuse mount A's cached file contents.
+            verifier = FODMount(str(root))
+            mount_c = Path(tmp) / "mount-c"
+            verifier.start(str(mount_c), log_prefix="/tmp/fod-tx03i3-c")
+            if (mount_c / filename).read_bytes() != payload_b:
+                raise AssertionError("TX03I3 fresh mount C cannot read committed payload")
+            verifier.stop()
+            verifier = None
             path_b.unlink()
             print(
                 f"TX03I3_FENCING=PASS file_id={file_id} "
                 f"old_session={old_session} new_session={new_session} "
                 f"old_token={old_token} new_token={new_token} "
                 "stale_renew_rejected=1 stale_release_rejected=1 "
-                "replacement_payload_intact=1",
+                f"replacement_payload_intact=1 stale_read_on_a={int(stale_read_on_a)}",
                 flush=True,
             )
         except Exception:
@@ -120,6 +134,8 @@ def main() -> None:
             b._dump_log()
             raise
         finally:
+            if verifier is not None:
+                verifier.stop()
             if first_fd is not None:
                 os.close(first_fd)
             try:
