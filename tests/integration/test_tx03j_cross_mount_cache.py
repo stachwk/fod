@@ -44,6 +44,7 @@ def read_exact(path: Path, expected: bytes) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pg-snapshot", action="store_true")
+    parser.add_argument("--strict-reads", action="store_true")
     parser.add_argument("--direct-io", action="store_true")
     parser.add_argument("--no-read-cache", action="store_true")
     parser.add_argument("--metadata-ttl-zero", action="store_true")
@@ -55,6 +56,8 @@ def main() -> None:
     db = os.environ.get("FOD_PG_DBNAME") or os.environ.get("POSTGRES_DB")
     if not db or not db.endswith("_test"):
         raise RuntimeError("TX03J requires a dedicated *_test database")
+    if args.strict_reads:
+        os.environ["FOD_CROSS_MOUNT_STRICT_READS"] = "1"
     if args.direct_io:
         os.environ["FOD_FOPEN_DIRECT_IO"] = "1"
     if args.no_read_cache:
@@ -112,6 +115,7 @@ def main() -> None:
             print(
                 f"TX03J_DIAGNOSTIC=PASS direct_io={int(args.direct_io)} "
                 f"no_read_cache={int(args.no_read_cache)} "
+                f"strict_reads={int(args.strict_reads)} "
                 f"metadata_ttl_zero={int(args.metadata_ttl_zero)} "
                 f"a_immediate_current={int(a_immediate)} "
                 f"a_delayed_current={int(a_delayed)} "
