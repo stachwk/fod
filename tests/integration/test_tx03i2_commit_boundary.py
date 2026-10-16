@@ -104,7 +104,13 @@ def run(mode: str) -> None:
                         os.pwrite(fd, replacement, 0)
                         os.fsync(fd)
                     except OSError as exc:
-                        if exc.errno not in (errno.EIO, errno.ENOTCONN, errno.EBADF):
+                        if exc.errno not in (
+                            errno.EIO,
+                            errno.ENOTCONN,
+                            errno.EBADF,
+                            errno.ECONNABORTED,
+                            errno.ECONNRESET,
+                        ):
                             writer_error.append(exc)
                     except BaseException as exc:
                         writer_error.append(exc)
