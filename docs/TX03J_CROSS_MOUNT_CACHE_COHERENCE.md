@@ -42,3 +42,51 @@ Nie zamykamy TX03J po samym poprawnym fencing. Nowe odczyty z A musza
 zwracac dane B zgodnie z jawnie udokumentowanym kontraktem i testy
 regresyjne musza przechodzic. Wynik diagnostyczny z niespojnym A
 pozostaje FAIL/OPEN nawet gdy testy ownership sa PASS.
+
+## Decyzja architektoniczna (zatwierdzona)
+
+Wszystkie klienty FOD — rowniez na roznych hostach — musza obserwowac
+autorytatywny stan PostgreSQL, niezaleznie od `direct_io=0/1`. Nie
+wystarczy poprawny fencing zapisu. Aktualnosc tresci i metadanych jest
+osobnym kontraktem.
+
+Docelowa implementacja:
+
+1. Dwie niezalezne monotoniczne generacje: `content_generation` dla
+   zmian danych i `namespace_generation` (oraz wersjonowanie metadanych)
+   dla zmian wpisow. `file_id` moze pozostac bez zmiany podczas zapisu.
+2. Zmiana generacji w tej samej transakcji PostgreSQL co modyfikacja.
+   Kazdy odczyt sprawdza wersje zgodnie z zadeklarowanym kontraktem
+   synchronizacji i nie uzywa danych z niewlasciwej generacji.
+3. Powiadomienia `LISTEN/NOTIFY` do szybkiego lokalnego uniewazniania,
+   ale bez polegania wylacznie na dostarczeniu powiadomienia.
+4. Inwalidacja cache Rust (w tym mapowania blokow, ostatnich zapisow
+   i metadanych) oraz Linux/FUSE (data, attr, entry). Jest obowiazkowa
+   rowniez przy `direct_io=0`.
+5. Gdy walidacja generacji nie dziala, scisly tryb nie moze podawac
+   nieweryfikowanego cache jako aktualnych danych.
+6. Osobne testy: nowy `open`, ponowny `read` ze starego uchwytu,
+   wspolbieznosc zapisu, przerwanie `LISTEN`, awaria i reconnect,
+   unlink/recreate, rename i hardlink; testy wydajnosci po zmianach.
+
+### Potwierdzone wyniki TX03J.1
+
+Szesc konfiguracji (domyslna, direct I/O, brak read cache, kombinacja,
+TTL metadanych zero oraz wszystkie przelaczniki jednoczesnie)
+odczytalo stare dane w A, nawet po 2 sekundach. B i swiezy C
+odczytaly zatwierdzone dane. Jest to FAIL spojnosc odczytu;
+`TX03J_DIAGNOSTIC=PASS` oznacza jedynie wykonanie pomiaru.
+
+### Bramy wdrozenia
+
+- **J2a**: instrumentacja metadanych `file_id/data_object_id` i mapy
+  blokow, ustalenie zrodla stale A bez maskowania bledu.
+- **J2b**: atomowe generacje PostgreSQL + walidacja przed odczytem
+  i inwalidacja cache procesu oraz jadra FUSE.
+- **J2c**: kanal powiadomien i uzgadnianie generacji po reconnect;
+  powiadomienia nie stanowia zrodla prawdy.
+- **J3/J4**: przejscie testow wielomontazowych, wielohostowych,
+  crash recovery oraz testow wydajnosci. Stare A musi widziec nowe
+  dane zgodnie z kontraktem; brak PASS dla samego poprawnego B/C.
+
+Nie wlaczamy globalnie direct I/O jako obejscia.
