@@ -69,6 +69,8 @@ static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type SizedSharedBlockRows = Option<(u64, SharedBlockRows)>;
+// (file size, committed content generation, blocks) from one PostgreSQL statement.
+pub type GeneratedSharedBlockRows = Option<(u64, u64, SharedBlockRows)>;
 type StatfsSnapshotRows = (u64, u64, u64, u64, u64, Option<u64>);
 
 fn fod_profile_io_enabled() -> bool {
@@ -3055,7 +3057,47 @@ unsafe fn fetch_block_range_rows_shared(
     result
 }
 
-unsafe fn fetch_block_range_with_size_rows_shared(
+unsafe // TX03J: decode a single-statement snapshot without changing legacy read APIs.
+unsafe fn decode_generation_block_snapshot(
+    res: *mut PGresult,
+    block_size: usize,
+) -> Result<GeneratedSharedBlockRows, String> {
+    let result = (|| {
+        if PQresultStatus(res) != PGRES_TUPLES_OK {
+            return Err("generation block snapshot query failed".to_string());
+        }
+        if PQnfields(res) != 4 {
+            return Err("generation block snapshot column count mismatch".to_string());
+        }
+        let mut metadata = None;
+        let mut blocks = Vec::new();
+        for row in 0..PQntuples(res) {
+            if PQgetisnull(res, row, 0) == 0 {
+                let size = u64::try_from(result_binary_i64(res, row, 0)?)
+                    .map_err(|_| "negative snapshot file size".to_string())?;
+                let generation = u64::try_from(result_binary_i64(res, row, 1)?)
+                    .map_err(|_| "negative snapshot content generation".to_string())?;
+                if metadata.replace((size, generation)).is_some() {
+                    return Err("duplicate generation metadata row".to_string());
+                }
+            } else if PQgetisnull(res, row, 2) == 0 {
+                let index = u64::try_from(result_binary_i64(res, row, 2)?)
+                    .map_err(|_| "negative snapshot block index".to_string())?;
+                if let Some(data) = read_result_binary_field(res, row, 3, |bytes| {
+                    Ok(normalize_block_arc(bytes, block_size))
+                })? {
+                    blocks.push((index, data));
+                }
+            }
+        }
+        blocks.sort_unstable_by_key(|(index, _)| *index);
+        Ok(metadata.map(|(size, generation)| (size, generation, blocks)))
+    })();
+    PQclear(res);
+    result
+}
+
+fn fetch_block_range_with_size_rows_shared(
     res: *mut PGresult,
     block_size: usize,
 ) -> Result<SizedSharedBlockRows, String> {
@@ -6978,6 +7020,51 @@ impl DbRepo {
                 1,
             )?;
             fetch_block_range_rows_shared(res, block_size)
+        })
+    }
+
+    /// Reads size, committed content generation and blocks from one MVCC
+    /// statement snapshot. Requires schema v26; opt-in until all mounts upgrade.
+    pub fn fetch_block_range_with_generation_shared(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        block_size: u64,
+    ) -> Result<GeneratedSharedBlockRows, String> {
+        let sql = CString::new(
+            "WITH snapshot AS MATERIALIZED (
+                 SELECT size, content_generation, data_object_id
+                 FROM files WHERE id_file = $1
+             )
+             SELECT size::bigint, content_generation::bigint,
+                    NULL::bigint, NULL::bytea FROM snapshot
+             UNION ALL
+             SELECT NULL::bigint, NULL::bigint, db._order::bigint, db.data
+             FROM snapshot s JOIN data_blocks db ON db.data_object_id = s.data_object_id
+             WHERE db._order BETWEEN $2 AND $3",
+        )
+        .map_err(|_| "invalid generation SQL".to_string())?;
+        let file = CString::new(file_id.to_string()).map_err(|err| err.to_string())?;
+        let first = CString::new(first_block.to_string()).map_err(|err| err.to_string())?;
+        let last = CString::new(last_block.to_string()).map_err(|err| err.to_string())?;
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file, &first, &last];
+            let values = params.iter().map(|p| p.as_ptr()).collect::<Vec<_>>();
+            let result = PQexecParams(
+                conn,
+                sql.as_ptr(),
+                3,
+                std::ptr::null(),
+                values.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            );
+            if result.is_null() {
+                return Err(conn_error(conn));
+            }
+            decode_generation_block_snapshot(result, block_size.max(1) as usize)
         })
     }
 
