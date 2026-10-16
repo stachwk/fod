@@ -45,6 +45,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pg-snapshot", action="store_true")
     parser.add_argument("--strict-reads", action="store_true")
+    parser.add_argument("--held-reader", action="store_true")
     parser.add_argument("--direct-io", action="store_true")
     parser.add_argument("--no-read-cache", action="store_true")
     parser.add_argument("--metadata-ttl-zero", action="store_true")
@@ -76,6 +77,7 @@ def main() -> None:
         mount_c = Path(tmp) / "mount-c"
         mounted = []
         pg = None
+        held_fd = None
         try:
             for launcher, path, tag in (
                 (a, mount_a, "a"), (b, mount_b, "b")
@@ -95,6 +97,11 @@ def main() -> None:
             if not read_exact(path_a, old):
                 raise AssertionError("TX03J initial mount A read mismatch")
 
+            if args.held_reader:
+                held_fd = os.open(path_a, os.O_RDONLY)
+                if os.pread(held_fd, len(old), 0) != old:
+                    raise AssertionError("TX03J held reader initial content mismatch")
+
             with open(path_b, "r+b", buffering=0) as file_b:
                 file_b.seek(0)
                 file_b.write(new)
@@ -104,6 +111,10 @@ def main() -> None:
 
             after = pg_snapshot(pg, name) if pg is not None else None
             a_immediate = read_exact(path_a, new)
+            held_current = (
+                os.pread(held_fd, len(new), 0) == new
+                if held_fd is not None else None
+            )
             time.sleep(args.wait_seconds)
             a_delayed = read_exact(path_a, new)
             c.start(str(mount_c), log_prefix="/tmp/fod-tx03j-c")
@@ -117,6 +128,8 @@ def main() -> None:
                 f"no_read_cache={int(args.no_read_cache)} "
                 f"strict_reads={int(args.strict_reads)} "
                 f"metadata_ttl_zero={int(args.metadata_ttl_zero)} "
+                f"held_reader={int(args.held_reader)} "
+                f"held_reader_current={int(held_current) if held_current is not None else -1} "
                 f"a_immediate_current={int(a_immediate)} "
                 f"a_delayed_current={int(a_delayed)} "
                 "b_current=1 c_current=1 "
@@ -133,7 +146,7 @@ def main() -> None:
                 )
                 if before[3] == after[3]:
                     raise AssertionError("TX03J2A PostgreSQL block0 unchanged after fsync")
-            if args.require_coherent and (not a_immediate or not a_delayed):
+            if args.require_coherent and (not a_immediate or not a_delayed or held_current is False):
                 raise AssertionError("TX03J cross-mount A served stale data")
             path_b.unlink()
         except Exception:
@@ -141,6 +154,8 @@ def main() -> None:
                 launcher._dump_log()
             raise
         finally:
+            if held_fd is not None:
+                os.close(held_fd)
             if pg is not None:
                 pg.close()
             for launcher in reversed(mounted):
