@@ -90,3 +90,84 @@ odczytaly zatwierdzone dane. Jest to FAIL spojnosc odczytu;
   dane zgodnie z kontraktem; brak PASS dla samego poprawnego B/C.
 
 Nie wlaczamy globalnie direct I/O jako obejscia.
+
+## TX03J.2c — targeted invalidation and race-free publication (2026-10-16)
+
+**Hard requirement:** a notification for one `file_id` MUST NOT flush
+unrelated files or the entire cache. Notifications identify the affected
+entity, not the entire mount. A single global cache flush is forbidden.
+
+### Identity and sequence
+
+Content event: `{file_id, content_generation, data_object_id, event_id}`.
+Entry/namespace event: `{parent_directory_id, name, namespace_generation,
+event_id}` (and old/new parents for rename). Use inode identity **and**
+generation; a path alone is not safe for unlink/recreate. Hardlink aliases
+share the same content identity. Never reuse a stale event to invalidate a
+newer generation as though it were current.
+
+The authoritative change and generation increment occur in the same
+PostgreSQL transaction; publish a durable event/outbox entry atomically with
+that change. `NOTIFY` is only a wake-up hint: it may be coalesced or lost.
+A reconnecting listener replays the durable event stream or checks
+authoritative generations, without falling back to a global cache flush.
+
+### Concurrent writer/invalidation/cache-fill protocol
+
+For each `file_id`, maintain observed_generation plus a monotonic local
+invalidation epoch. Use file-scoped synchronization; holding a global lock
+across PostgreSQL I/O or FUSE notification is prohibited.
+
+1. A cache fill captures (file_id, observed_generation, local_epoch).
+2. The reader loads data from an authoritative PostgreSQL snapshot and
+   revalidates the generation before publishing data into local cache.
+3. An event with `generation > observed_generation` advances the recorded
+   version/epoch and selectively drops **only** keys belonging to its
+   `file_id` from read blocks, recent-write snapshot entries (without
+   discarding unsynced local writer buffers), read-metadata snapshots,
+   read-ahead and file-scoped lookup state. Equal/older events are harmless.
+4. In-flight fills may finish, but a fill carrying an outdated
+   generation/epoch MUST NOT publish its result into the cache. It must
+   retry against the current version or report a justified error.
+5. Local writer buffers are not invalidated by a remote event: coordinate
+   their state using PostgreSQL write ownership/fencing and let conflicting
+   operations fail safely. Never delete pending local writes as a side
+   effect of a reader's cache invalidation.
+6. Invalidate the affected kernel inode's page/attribute cache and the
+   precise directory entry for namespace mutations. For a hardlink's
+   content event, invalidate the shared inode once, not the entire parent
+   directory. Do not hold cache locks while invoking FUSE notifications.
+7. Update the local `observed_generation` before enqueueing kernel
+   invalidation and serialize/coalesce notifications per inode. A newer
+   version must not be overwritten by delayed completion of an older event.
+8. A successful, strictly coherent read following a completed remote
+   commit requires ordered validation; async NOTIFY alone is insufficient.
+   Choose and document the commit/read synchronization boundary before
+   enabling strict semantics with kernel caching.
+
+Example race:
+
+```text
+A reads generation 41 and starts DB cache fill
+B commits generation 42 and publishes event(file_id=7, gen=42)
+A advances epoch for file 7 and invalidates only file 7
+A's fill for gen 41 completes: discard/retry, never republish gen 41
+Unrelated file 8 remains cached and unaffected
+```
+
+### Mandatory adversarial regression gates
+
+- Two unrelated files A and B: remote write to A must not evict B.
+- 100+ overlapping writes, notifications and cache fills on one file:
+  no stale resurrection, no lost update, no deadlock.
+- Out-of-order/duplicate events (gen 43, then 42, then 43): no rollback.
+- Hardlink aliases, rename, unlink/recreate and recycled path names.
+- Held readers, pending local writers, disconnect/reconnect and missed NOTIFY.
+- Both `direct_io=0` and `direct_io=1` with the strict-read override off.
+- Instrument counters: targeted invalidations, skipped-old-events,
+  rejected-stale-cache-fills, reconnect reconciliations, kernel invalidation
+  errors; no metric named `global_flush` should increase on file writes.
+
+**Implementation gate:** no default-on change before race tests and FUSE
+kernel invalidation are proven. Current strict-read path is an opt-in
+diagnostic/compatibility path, not the final protocol.
