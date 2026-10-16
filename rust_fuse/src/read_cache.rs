@@ -55,6 +55,46 @@ impl FileCacheGenerationGate {
         true
     }
 
+    // Serialize publication with invalidation for the same version ledger.
+    // The closure may lock the block cache but must not re-enter this gate.
+    pub(crate) fn publish_if_current(
+        &self,
+        file_id: u64,
+        stamp: FileCacheStamp,
+        publish: impl FnOnce(),
+    ) -> bool {
+        let files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        let current = files.get(&file_id).copied().unwrap_or(FileCacheStamp {
+            generation: 0,
+            epoch: 0,
+        });
+        if current != stamp {
+            return false;
+        }
+        publish();
+        true
+    }
+
+    pub(crate) fn advance_and_invalidate(
+        &self,
+        file_id: u64,
+        generation: u64,
+        invalidate: impl FnOnce(),
+    ) -> bool {
+        let mut files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        let current = files.entry(file_id).or_insert(FileCacheStamp {
+            generation: 0,
+            epoch: 0,
+        });
+        if generation <= current.generation {
+            return false;
+        }
+        current.generation = generation;
+        current.epoch = current.epoch.saturating_add(1);
+        invalidate();
+        true
+    }
+
     pub(crate) fn is_current(&self, file_id: u64, stamp: FileCacheStamp) -> bool {
         self.snapshot(file_id) == stamp
     }
@@ -851,8 +891,15 @@ impl FodFuse {
                 return Ok(cached);
             }
 
+            let stamp = self.file_cache_generations.snapshot(file_id);
             let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
-            self.store_read_blocks(file_id, &fetched);
+            if !self.file_cache_generations.publish_if_current(file_id, stamp, || {
+                self.store_read_blocks(file_id, &fetched);
+            }) {
+                // A remote generation advanced while SQL was in flight.
+                // Retry instead of resurrecting a stale block map.
+                continue;
+            }
             cached = Self::merge_sorted_blocks(cached, fetched);
             return Ok(cached);
         }
@@ -987,6 +1034,23 @@ mod tests {
         assert!(gate.is_current(7, restarted_fill));
         assert!(gate.advance(7, 12));
         assert!(!gate.is_current(7, restarted_fill));
+    }
+
+    #[test]
+    fn stale_fill_cannot_publish_after_invalidation() {
+        let gate = FileCacheGenerationGate::default();
+        let mut cache = ReadBlockCache::new("fifo");
+        let stamp = gate.snapshot(7);
+        assert!(gate.advance_and_invalidate(7, 1, || cache.clear_file(7)));
+        assert!(!gate.publish_if_current(7, stamp, || {
+            cache.insert(7, 0, block(7), 10);
+        }));
+        assert!(cache.get(7, 0).is_none());
+        let new_stamp = gate.snapshot(7);
+        assert!(gate.publish_if_current(7, new_stamp, || {
+            cache.insert(7, 0, block(9), 10);
+        }));
+        assert_eq!(cache.get(7, 0).as_deref(), Some(&[9u8][..]));
     }
 
     #[test]
