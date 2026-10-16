@@ -28,6 +28,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--direct-io", action="store_true")
     parser.add_argument("--no-read-cache", action="store_true")
+    parser.add_argument("--metadata-ttl-zero", action="store_true")
     parser.add_argument("--wait-seconds", type=float, default=2.0)
     parser.add_argument("--require-coherent", action="store_true")
     args = parser.parse_args()
@@ -40,6 +41,8 @@ def main() -> None:
         os.environ["FOD_FOPEN_DIRECT_IO"] = "1"
     if args.no_read_cache:
         os.environ["FOD_READ_CACHE_BLOCKS"] = "0"
+    if args.metadata_ttl_zero:
+        os.environ["FOD_METADATA_CACHE_TTL"] = "0"
 
     root = Path(__file__).resolve().parents[2]
     name = f"tx03j-{uuid.uuid4().hex}.bin"
@@ -86,6 +89,7 @@ def main() -> None:
             print(
                 f"TX03J_DIAGNOSTIC=PASS direct_io={int(args.direct_io)} "
                 f"no_read_cache={int(args.no_read_cache)} "
+                f"metadata_ttl_zero={int(args.metadata_ttl_zero)} "
                 f"a_immediate_current={int(a_immediate)} "
                 f"a_delayed_current={int(a_delayed)} "
                 "b_current=1 c_current=1 "
