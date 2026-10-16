@@ -39,6 +39,9 @@ impl FileCacheGenerationGate {
         })
     }
 
+    // Only test simulations supply synthetic remote generations today.
+    // Production events must come from committed PostgreSQL state.
+    #[cfg(test)]
     // Caller must invalidate the cache for this exact file when true.
     // Duplicated/out-of-order events do not invalidate newer data.
     pub(crate) fn advance(&self, file_id: u64, generation: u64) -> bool {
@@ -75,6 +78,7 @@ impl FileCacheGenerationGate {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn advance_and_invalidate(
         &self,
         file_id: u64,
@@ -95,6 +99,7 @@ impl FileCacheGenerationGate {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn is_current(&self, file_id: u64, stamp: FileCacheStamp) -> bool {
         self.snapshot(file_id) == stamp
     }
