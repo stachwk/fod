@@ -966,6 +966,30 @@ mod tests {
     }
 
     #[test]
+    fn stale_fill_stamp_is_rejected_after_remote_generation() {
+        let gate = FileCacheGenerationGate::default();
+        assert!(gate.advance(7, 10));
+        let fill_started_at = gate.snapshot(7);
+        let independent_file = gate.snapshot(8);
+
+        // The in-flight read for generation 10 has not finished when
+        // another client commits generation 11.
+        assert!(gate.advance(7, 11));
+        assert!(!gate.is_current(7, fill_started_at));
+        assert!(gate.is_current(8, independent_file));
+
+        // Late, duplicated and out-of-order messages cannot roll back state.
+        assert!(!gate.advance(7, 10));
+        assert!(!gate.advance(7, 11));
+        assert!(!gate.is_current(7, fill_started_at));
+
+        let restarted_fill = gate.snapshot(7);
+        assert!(gate.is_current(7, restarted_fill));
+        assert!(gate.advance(7, 12));
+        assert!(!gate.is_current(7, restarted_fill));
+    }
+
+    #[test]
     fn targeted_cache_clear_preserves_other_file() {
         for policy in ["fifo", "lru"] {
             let mut cache = ReadBlockCache::new(policy);
