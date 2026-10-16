@@ -25,9 +25,9 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 25;
+const SCHEMA_VERSION: u64 = 26;
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_FILES: [&str; 25] = [
+const MIGRATION_FILES: [&str; 26] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -53,9 +53,10 @@ const MIGRATION_FILES: [&str; 25] = [
     "0023_drop_redundant_data_blocks_index.sql",
     "0024_write_ownership_leases.sql",
     "0025_open_unlinked_files.sql",
+    "0026_file_content_generation.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 25] = [
+const MIGRATION_DESCRIPTIONS: [&str; 26] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -81,6 +82,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 25] = [
     "Drop redundant data_blocks prefix index and refresh planner statistics",
     "Add PostgreSQL-authoritative destination and file write ownership leases",
     "Preserve open file handles across unlink with global open leases",
+    "Track transactional per-file content generations for cross-mount coherence",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -252,6 +254,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0025_open_unlinked_files.sql"
         )),
+        26 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0026_file_content_generation.sql"
+        )),
         _ => "",
     }
 }
@@ -283,6 +289,7 @@ fn migration_description(version: u64) -> &'static str {
         23 => MIGRATION_DESCRIPTIONS[22],
         24 => MIGRATION_DESCRIPTIONS[23],
         25 => MIGRATION_DESCRIPTIONS[24],
+        26 => MIGRATION_DESCRIPTIONS[25],
         _ => "Migration",
     }
 }
@@ -314,6 +321,7 @@ fn migration_filename(version: u64) -> &'static str {
         23 => MIGRATION_FILES[22],
         24 => MIGRATION_FILES[23],
         25 => MIGRATION_FILES[24],
+        26 => MIGRATION_FILES[25],
         _ => "unknown.sql",
     }
 }
