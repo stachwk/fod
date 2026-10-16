@@ -70,7 +70,7 @@ static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type SizedSharedBlockRows = Option<(u64, SharedBlockRows)>;
 // (file size, committed content generation, blocks) from one PostgreSQL statement.
-pub type GeneratedSharedBlockRows = Option<(u64, u64, SharedBlockRows)>;
+type GeneratedSharedBlockRows = Option<(u64, u64, SharedBlockRows)>;
 type StatfsSnapshotRows = (u64, u64, u64, u64, u64, Option<u64>);
 
 fn fod_profile_io_enabled() -> bool {
@@ -3064,7 +3064,13 @@ unsafe fn decode_generation_block_snapshot(
 ) -> Result<GeneratedSharedBlockRows, String> {
     let result = (|| {
         if PQresultStatus(res) != PGRES_TUPLES_OK {
-            return Err("generation block snapshot query failed".to_string());
+            let message_ptr = PQresultErrorMessage(res);
+            let message = if message_ptr.is_null() {
+                "unknown PostgreSQL query error".to_string()
+            } else {
+                CStr::from_ptr(message_ptr).to_string_lossy().trim().to_string()
+            };
+            return Err(format!("generation block snapshot query failed: {message}"));
         }
         if PQnfields(res) != 4 {
             return Err("generation block snapshot column count mismatch".to_string());
