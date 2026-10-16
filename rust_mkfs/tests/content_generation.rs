@@ -67,7 +67,8 @@ impl Fixture {
              SET search_path TO {schema}, public;"
         ))
         .expect("create isolated schema fixture");
-        db.exec(MIGRATION).expect("apply migration 26 against fixture");
+        db.exec(MIGRATION)
+            .expect("apply migration 26 against fixture");
         Self { db, schema }
     }
 
@@ -159,8 +160,10 @@ fn content_generation_concurrent_commits_are_monotonic() {
 
     let worker = thread::spawn(move || {
         let db = DbConn::connect(&conninfo).expect("second PostgreSQL connection");
-        db.exec(&format!("SET search_path TO {schema}, public; SET lock_timeout = '5s'"))
-            .unwrap();
+        db.exec(&format!(
+            "SET search_path TO {schema}, public; SET lock_timeout = '5s'"
+        ))
+        .unwrap();
         started_tx.send(()).unwrap();
         db.exec("UPDATE files SET data_object_id = 103 WHERE id_file = 1")
             .expect("second writer waits for first commit");
