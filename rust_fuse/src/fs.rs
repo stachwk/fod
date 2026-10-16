@@ -4461,7 +4461,12 @@ impl FodFuse {
 
     fn strict_cross_mount_reads_enabled() -> bool {
         std::env::var("FOD_CROSS_MOUNT_STRICT_READS")
-            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
             .unwrap_or(false)
     }
 
@@ -7132,17 +7137,19 @@ impl Filesystem for FodFuse {
         // resolves the file's CURRENT data_object_id and blocks together,
         // without trusting this mount's previously read block maps.
         // Preserve read-your-own-writes when this handle has pending changes.
-        if Self::strict_cross_mount_reads_enabled()
-            && self.write_state_for_handle(fh).is_none()
-        {
+        if Self::strict_cross_mount_reads_enabled() && self.write_state_for_handle(fh).is_none() {
             match self.read_noatime_direct_uncached(file_id, offset, size) {
                 Ok(data) => {
                     read_task.complete(0, data.len() as u64);
                     self.reply_data_profiled(reply, &data);
                 }
                 Err(errno) => {
-                    self.log_request_error(req_id, "read", errno,
-                        format!("file_id={} strict_cross_mount_read", file_id));
+                    self.log_request_error(
+                        req_id,
+                        "read",
+                        errno,
+                        format!("file_id={} strict_cross_mount_read", file_id),
+                    );
                     fuse_reply_error!(reply, errno);
                 }
             }
