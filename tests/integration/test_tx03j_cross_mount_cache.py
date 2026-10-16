@@ -42,7 +42,7 @@ def main() -> None:
     if args.no_read_cache:
         os.environ["FOD_READ_CACHE_BLOCKS"] = "0"
     if args.metadata_ttl_zero:
-        os.environ["FOD_METADATA_CACHE_TTL"] = "0"
+        os.environ["FOD_METADATA_CACHE_TTL_SECONDS"] = "0"
 
     root = Path(__file__).resolve().parents[2]
     name = f"tx03j-{uuid.uuid4().hex}.bin"
