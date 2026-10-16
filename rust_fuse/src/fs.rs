@@ -3273,15 +3273,14 @@ impl FodFuse {
         file_id: u64,
         generation: u64,
     ) -> bool {
-        if !self.file_cache_generations.advance(file_id, generation) {
-            return false;
-        }
-        self.clear_read_cache_for_file(file_id);
-        self.clear_recent_write_blocks_for_file(file_id);
-        if let Ok(mut guard) = self.read_sequence_state.lock() {
-            guard.remove(&file_id);
-        }
-        true
+        self.file_cache_generations
+            .advance_and_invalidate(file_id, generation, || {
+                self.clear_read_cache_for_file(file_id);
+                self.clear_recent_write_blocks_for_file(file_id);
+                if let Ok(mut guard) = self.read_sequence_state.lock() {
+                    guard.remove(&file_id);
+                }
+            })
     }
 
     pub(crate) fn invalidate_read_metadata_for_file(&self, file_id: u64) {
