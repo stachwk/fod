@@ -106,3 +106,43 @@ Schema v25 applies this principle to open-unlink handling:
 
 The FUSE process can cache and mirror this state, but PostgreSQL remains the
 authority.
+
+## Cross-mount cache coherence is mandatory (TX03J)
+
+PostgreSQL is also the authority for **the freshness of shared content and
+metadata**, not just locks, namespace changes and write ownership.
+
+After a write has passed its documented commit/durability boundary, clients
+opening and reading the file on other mounts must not indefinitely serve an
+older version. Correctness must not depend on `FOD_FOPEN_DIRECT_IO` or a
+particular local cache configuration. This applies to all clients, including
+processes on different machines.
+
+- Keep separate, monotonic generations for content and namespace/metadata
+  changes; do not confuse a stable `file_id` with a content generation.
+- Increment the relevant generation transactionally with the authoritative
+  PostgreSQL mutation, including replacement of a `data_object_id`.
+- Use commit-ordered notifications only as a low-latency *hint*; a listener
+  may disconnect or miss notifications. A durable generation check or
+  equivalent reconciliation mechanism must make missed events harmless.
+- Invalidate all affected process-local snapshots, block caches and FUSE
+  kernel cache entries (inode data, inode metadata and directory entry where
+  relevant). Kernel invalidation must work when `direct_io=0`.
+- Do not treat lease/fencing validity as proof that a reader's cached data
+  is current. Lease/fencing and cache coherency are independent contracts.
+- Fail closed on a coherence-validation error in strict mode: stale cached
+  content may not silently become a successful read.
+- Document exact synchronization semantics for already-open handles, new
+  opens, concurrent writes and reads racing a commit. The intended strong
+  contract (read after completed write) needs ordered validation on the read
+  path; asynchronous notifications alone are insufficient.
+- Preserve PostgreSQL primary authority in any HA topology; replica lag
+  cannot make a stale generation appear authoritative.
+
+### Known unresolved defect
+
+On 2026-10-16, TX03J diagnostics reproduced stale reads in an existing mount
+after another mount's `fsync`, despite `direct_io=1`, read cache disabled,
+metadata TTL set to zero, and a two-second wait. The new writer and a fresh
+mount saw the correct data. TX03J remains OPEN until the production read path
+is corrected, tests enforce coherency, and performance/regression checks pass.
