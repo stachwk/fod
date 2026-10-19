@@ -145,7 +145,7 @@ fn generated_block_snapshot_matches_committed_payload() -> Result<(), String> {
     if repo.startup_snapshot()?.schema_version != Some(26) {
         return Err("TX03J generation snapshot test requires FOD schema 26".to_string());
     }
-    let bs = repo.startup_snapshot()?.block_size.unwrap_or(32768);
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
     let file_id = repo.create_file(
         None,
         &unique_name("tx03j_generated_read"),
