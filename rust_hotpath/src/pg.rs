@@ -70,7 +70,7 @@ static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type SizedSharedBlockRows = Option<(u64, SharedBlockRows)>;
 // (file size, committed content generation, blocks) from one PostgreSQL statement.
-type GeneratedSharedBlockRows = Option<(u64, u64, SharedBlockRows)>;
+pub type GeneratedSharedBlockRows = Option<(u64, u64, Vec<(u64, Arc<[u8]>)>)>;
 type StatfsSnapshotRows = (u64, u64, u64, u64, u64, Option<u64>);
 
 fn fod_profile_io_enabled() -> bool {
@@ -15867,11 +15867,16 @@ mod tests {
     }
 
     fn current_block_size(repo: &DbRepo) -> u64 {
-        repo.query_scalar_text("SELECT value FROM config WHERE key = 'block_size'")
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap()
+        let value = repo
+            .query_scalar_text("SELECT value FROM config WHERE key = 'block_size'")
+            .expect("query FOD block_size");
+        let parsed = value.trim().parse::<u64>().unwrap_or_else(|_| {
+            panic!(
+                "FOD test database is not initialized: config.block_size is missing or invalid ({value:?}); initialize an isolated test database with fod-rust-mkfs init"
+            )
+        });
+        assert!(parsed > 0, "FOD config.block_size must be positive");
+        parsed
     }
 
     fn wait_for_advisory_waiters(repo: &DbRepo, expected: u64) -> Result<u64, String> {
