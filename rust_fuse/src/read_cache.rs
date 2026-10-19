@@ -99,7 +99,6 @@ impl FileCacheGenerationGate {
         true
     }
 
-    #[cfg(test)]
     pub(crate) fn is_current(&self, file_id: u64, stamp: FileCacheStamp) -> bool {
         self.snapshot(file_id) == stamp
     }
@@ -875,8 +874,15 @@ impl FodFuse {
         fetch_last: u64,
     ) -> Result<SharedBlockRows, libc::c_int> {
         loop {
+            // Capture the generation BEFORE touching cached blocks. Otherwise
+            // a concurrent invalidation can leave pre-invalidation blocks in
+            // the local `cached` result, even if the SQL fill is fresh.
+            let initial_stamp = self.file_cache_generations.snapshot(file_id);
             let (cached, missing) =
                 self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
+            if !self.file_cache_generations.is_current(file_id, initial_stamp) {
+                continue;
+            }
             if missing.is_empty() {
                 return Ok(cached);
             }
@@ -890,13 +896,16 @@ impl FodFuse {
 
             // A previous owner may have completed between the initial cache
             // check and acquisition of ownership. Recheck before issuing SQL.
+            let stamp = self.file_cache_generations.snapshot(file_id);
             let (mut cached, missing) =
                 self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
+            if !self.file_cache_generations.is_current(file_id, stamp) {
+                continue;
+            }
             if missing.is_empty() {
                 return Ok(cached);
             }
 
-            let stamp = self.file_cache_generations.snapshot(file_id);
             let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
             if !self
                 .file_cache_generations
