@@ -2842,3 +2842,50 @@ Artifacts:
 /tmp/fod-3.3.16-cow-random-pg-stats-5849d7caaf67-20260826T133955Z
 /tmp/fod-3.3.16-cow-random-pg-stats-5849d7caaf67-20260826T134900Z
 ```
+
+## FOD 3.4.31 tree-scale retained-state and timing repeat
+
+After closing the retained-file-path issue with
+`FOD_READDIR_REGISTER_PATHS=0`, the 240-directory / 100-file-per-directory
+case was repeated five times to check whether the earlier single
+`find_ms=2398.50` result represented a performance regression.
+
+All runs used:
+
+```text
+FOD_PROFILE_METADATA_CACHE=1
+FOD_READDIR_BATCH_METADATA=1
+FOD_READDIR_REGISTER_PATHS=0
+TREE_SCALE_DIRS=240
+TREE_SCALE_FILES=100
+```
+
+Results:
+
+| run | ls ms | find ms | RSS bytes | inode/path entries | lookup_ref_inodes | lookup_ref_total | forget_calls |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 254.28 | 1485.55 | 15,196,160 | 244 | 243 | 727 | 0 |
+| 2 | 248.73 | 1466.82 | 15,376,384 | 244 | 243 | 722 | 0 |
+| 3 | 288.73 | 1894.13 | 15,286,272 | 244 | 243 | 727 | 0 |
+| 4 | 257.37 | 1416.42 | 15,224,832 | 244 | 243 | 727 | 0 |
+| 5 | 234.48 | 1705.73 | 15,114,240 | 244 | 243 | 729 | 0 |
+| **median** | **254.28** | **1485.55** | **15,224,832** | **244** | **243** | **727** | **0** |
+
+Interpretation:
+
+- the previous one-off `find_ms=2398.50` was not reproduced in the five-run
+  repeat;
+- the five-run median `find_ms=1485.55` is only about 3.3% above the earlier
+  approximately 1438 ms reference and does not justify a regression claim;
+- the five-run median `ls_ms=254.28` is about 13% above the earlier
+  approximately 225 ms reference, but this remains a small single-host timing
+  difference rather than a demonstrated correctness or scaling regression;
+- inode/path cache size was exactly 244 in every run and
+  `lookup_ref_inodes=243` in every run;
+- `forget_calls=0` in every run, so neither the stable cache size nor the
+  timing result depends on the explicit FORGET callback in this workload.
+
+Conclusion: there is no current evidence of a tree-scale `find` regression
+associated with the forget changes. The retained-state follow-up remains
+closed; reopen performance work only from a new repeated measurement showing a
+material regression.

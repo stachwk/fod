@@ -138,6 +138,66 @@ fn fused_block_range_returns_file_size_and_payload() -> Result<(), String> {
 }
 
 #[test]
+fn generated_block_snapshot_matches_committed_payload() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    // The generation-bearing query is intentionally v26-only.
+    if repo.startup_snapshot()?.schema_version != Some(26) {
+        return Err("TX03J generation snapshot test requires FOD schema 26".to_string());
+    }
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
+    let file_id = repo.create_file(
+        None,
+        &unique_name("tx03j_generated_read"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("tx03j_generated_read_seed"),
+    )?;
+    let payload = vec![0x5a; bs as usize];
+    let rows = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: bs,
+    }];
+    let result = (|| {
+        let (_, initial_generation, empty) = repo
+            .fetch_block_range_with_generation_shared(file_id, 0, 0, bs)?
+            .ok_or_else(|| "missing initial generation metadata".to_string())?;
+        if !empty.is_empty() {
+            return Err("new file unexpectedly has content blocks".to_string());
+        }
+        repo.persist_file_blocks_with_crc_flag(file_id, bs, bs, 1, false, &rows, false)?;
+        let (size, generation, blocks) = repo
+            .fetch_block_range_with_generation_shared(file_id, 0, 0, bs)?
+            .ok_or_else(|| "missing committed snapshot metadata".to_string())?;
+        if size != bs || generation <= initial_generation {
+            return Err(format!(
+                "committed content generation not advanced: initial={initial_generation} current={generation} size={size}"
+            ));
+        }
+        if blocks.len() != 1 || blocks[0].0 != 0 || blocks[0].1.as_ref() != payload.as_slice() {
+            return Err("generation snapshot returned incorrect committed block".to_string());
+        }
+        let (eof_size, eof_generation, eof_blocks) = repo
+            .fetch_block_range_with_generation_shared(file_id, 10, 11, bs)?
+            .ok_or_else(|| "missing metadata after EOF".to_string())?;
+        if eof_size != bs || eof_generation != generation || !eof_blocks.is_empty() {
+            return Err("generation snapshot EOF metadata mismatch".to_string());
+        }
+        if repo
+            .fetch_block_range_with_generation_shared(i32::MAX as u64, 0, 0, bs)?
+            .is_some()
+        {
+            return Err("generation snapshot returned a nonexistent file".to_string());
+        }
+        Ok(())
+    })();
+    let cleanup = repo.purge_primary_file(file_id);
+    result.and(cleanup)
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

@@ -16,6 +16,94 @@ use std::time::Instant;
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type MissingBlockIndices = Vec<u64>;
 
+// TX03J.2c: per-file generation gate. A late cache fill must never
+// publish against an epoch which has already been invalidated. The ledger
+// intentionally does not own or discard pending local writer buffers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileCacheStamp {
+    generation: u64,
+    epoch: u64,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct FileCacheGenerationGate {
+    files: Mutex<HashMap<u64, FileCacheStamp>>,
+}
+
+impl FileCacheGenerationGate {
+    pub(crate) fn snapshot(&self, file_id: u64) -> FileCacheStamp {
+        let files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        files.get(&file_id).copied().unwrap_or(FileCacheStamp {
+            generation: 0,
+            epoch: 0,
+        })
+    }
+
+    // Only test simulations supply synthetic remote generations today.
+    // Production events must come from committed PostgreSQL state.
+    #[cfg(test)]
+    // Caller must invalidate the cache for this exact file when true.
+    // Duplicated/out-of-order events do not invalidate newer data.
+    pub(crate) fn advance(&self, file_id: u64, generation: u64) -> bool {
+        let mut files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        let current = files.entry(file_id).or_insert(FileCacheStamp {
+            generation: 0,
+            epoch: 0,
+        });
+        if generation <= current.generation {
+            return false;
+        }
+        current.generation = generation;
+        current.epoch = current.epoch.saturating_add(1);
+        true
+    }
+
+    // Serialize publication with invalidation for the same version ledger.
+    // The closure may lock the block cache but must not re-enter this gate.
+    pub(crate) fn publish_if_current(
+        &self,
+        file_id: u64,
+        stamp: FileCacheStamp,
+        publish: impl FnOnce(),
+    ) -> bool {
+        let files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        let current = files.get(&file_id).copied().unwrap_or(FileCacheStamp {
+            generation: 0,
+            epoch: 0,
+        });
+        if current != stamp {
+            return false;
+        }
+        publish();
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn advance_and_invalidate(
+        &self,
+        file_id: u64,
+        generation: u64,
+        invalidate: impl FnOnce(),
+    ) -> bool {
+        let mut files = self.files.lock().unwrap_or_else(|err| err.into_inner());
+        let current = files.entry(file_id).or_insert(FileCacheStamp {
+            generation: 0,
+            epoch: 0,
+        });
+        if generation <= current.generation {
+            return false;
+        }
+        current.generation = generation;
+        current.epoch = current.epoch.saturating_add(1);
+        invalidate();
+        true
+    }
+
+    pub(crate) fn is_current(&self, file_id: u64, stamp: FileCacheStamp) -> bool {
+        self.snapshot(file_id) == stamp
+    }
+}
+
 type ReadFillRange = (u64, u64);
 
 fn read_fill_ranges(blocks: &[u64]) -> Vec<ReadFillRange> {
@@ -786,8 +874,15 @@ impl FodFuse {
         fetch_last: u64,
     ) -> Result<SharedBlockRows, libc::c_int> {
         loop {
+            // Capture the generation BEFORE touching cached blocks. Otherwise
+            // a concurrent invalidation can leave pre-invalidation blocks in
+            // the local `cached` result, even if the SQL fill is fresh.
+            let initial_stamp = self.file_cache_generations.snapshot(file_id);
             let (cached, missing) =
                 self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
+            if !self.file_cache_generations.is_current(file_id, initial_stamp) {
+                continue;
+            }
             if missing.is_empty() {
                 return Ok(cached);
             }
@@ -801,14 +896,27 @@ impl FodFuse {
 
             // A previous owner may have completed between the initial cache
             // check and acquisition of ownership. Recheck before issuing SQL.
+            let stamp = self.file_cache_generations.snapshot(file_id);
             let (mut cached, missing) =
                 self.cached_read_blocks_and_missing(file_id, fetch_first, fetch_last);
+            if !self.file_cache_generations.is_current(file_id, stamp) {
+                continue;
+            }
             if missing.is_empty() {
                 return Ok(cached);
             }
 
             let fetched = self.fetch_missing_read_blocks(file_id, &missing)?;
-            self.store_read_blocks(file_id, &fetched);
+            if !self
+                .file_cache_generations
+                .publish_if_current(file_id, stamp, || {
+                    self.store_read_blocks(file_id, &fetched);
+                })
+            {
+                // A remote generation advanced while SQL was in flight.
+                // Retry instead of resurrecting a stale block map.
+                continue;
+            }
             cached = Self::merge_sorted_blocks(cached, fetched);
             return Ok(cached);
         }
@@ -896,13 +1004,82 @@ impl FodFuse {
 
 #[cfg(test)]
 mod tests {
-    use super::{ReadBlockCache, ReadFillCoordinator};
+    use super::{FileCacheGenerationGate, ReadBlockCache, ReadFillCoordinator};
     use std::sync::{mpsc, Arc};
     use std::thread;
     use std::time::Duration;
 
     fn block(value: u8) -> Arc<[u8]> {
         Arc::from(vec![value])
+    }
+
+    #[test]
+    fn generation_gate_is_file_scoped_and_monotonic() {
+        let gate = FileCacheGenerationGate::default();
+        let older_a = gate.snapshot(7);
+        let unchanged_b = gate.snapshot(8);
+        assert!(gate.advance(7, 41));
+        assert!(!gate.is_current(7, older_a));
+        assert!(gate.is_current(8, unchanged_b));
+        let current = gate.snapshot(7);
+        assert!(!gate.advance(7, 40));
+        assert!(!gate.advance(7, 41));
+        assert_eq!(gate.snapshot(7), current);
+        assert!(gate.advance(7, 42));
+        assert!(!gate.is_current(7, current));
+    }
+
+    #[test]
+    fn stale_fill_stamp_is_rejected_after_remote_generation() {
+        let gate = FileCacheGenerationGate::default();
+        assert!(gate.advance(7, 10));
+        let fill_started_at = gate.snapshot(7);
+        let independent_file = gate.snapshot(8);
+
+        // The in-flight read for generation 10 has not finished when
+        // another client commits generation 11.
+        assert!(gate.advance(7, 11));
+        assert!(!gate.is_current(7, fill_started_at));
+        assert!(gate.is_current(8, independent_file));
+
+        // Late, duplicated and out-of-order messages cannot roll back state.
+        assert!(!gate.advance(7, 10));
+        assert!(!gate.advance(7, 11));
+        assert!(!gate.is_current(7, fill_started_at));
+
+        let restarted_fill = gate.snapshot(7);
+        assert!(gate.is_current(7, restarted_fill));
+        assert!(gate.advance(7, 12));
+        assert!(!gate.is_current(7, restarted_fill));
+    }
+
+    #[test]
+    fn stale_fill_cannot_publish_after_invalidation() {
+        let gate = FileCacheGenerationGate::default();
+        let mut cache = ReadBlockCache::new("fifo");
+        let stamp = gate.snapshot(7);
+        assert!(gate.advance_and_invalidate(7, 1, || cache.clear_file(7)));
+        assert!(!gate.publish_if_current(7, stamp, || {
+            cache.insert(7, 0, block(7), 10);
+        }));
+        assert!(cache.get(7, 0).is_none());
+        let new_stamp = gate.snapshot(7);
+        assert!(gate.publish_if_current(7, new_stamp, || {
+            cache.insert(7, 0, block(9), 10);
+        }));
+        assert_eq!(cache.get(7, 0).as_deref(), Some(&[9u8][..]));
+    }
+
+    #[test]
+    fn targeted_cache_clear_preserves_other_file() {
+        for policy in ["fifo", "lru"] {
+            let mut cache = ReadBlockCache::new(policy);
+            cache.insert(7, 0, block(7), 10);
+            cache.insert(8, 0, block(8), 10);
+            cache.clear_file(7);
+            assert!(cache.get(7, 0).is_none());
+            assert_eq!(cache.get(8, 0).as_deref(), Some(&[8u8][..]));
+        }
     }
 
     #[test]

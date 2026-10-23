@@ -4,17 +4,20 @@ The FOD client image contains the FOD runtime/FUSE frontend plus PostgreSQL clie
 
 ## Release tags
 
-For normal repository-driven builds, the image is tagged with the exact FOD source release from `fod_version.txt`. For FOD 3.4.20 the immutable source-build image is:
+For normal repository-driven builds, the image is tagged with the exact FOD source release from `fod_version.txt`. Resolve the tag from the current checkout instead of copying a stale example:
 
-```text
-ghcr.io/stachwk/fod-client:3.4.20
+```bash
+FOD_CLIENT_RELEASE="$(cat fod_version.txt)"
+printf 'ghcr.io/stachwk/fod-client:%s\n' "${FOD_CLIENT_RELEASE}"
 ```
 
-Publishing also refreshes the convenience series alias:
+Publishing also refreshes the convenience series alias (for example `3.4`):
 
-```text
-ghcr.io/stachwk/fod-client:3.4
+```bash
+printf 'ghcr.io/stachwk/fod-client:%s\n' "${FOD_CLIENT_RELEASE%.*}"
 ```
+
+The exact source-release tag is created by the image build and is available from the registry only after publishing.
 
 The deployment Make interface may independently select an already-published runtime build with `FOD_CLIENT_VERSION`, for example:
 
@@ -69,32 +72,35 @@ AppArmor is controlled by the Docker host. On hosts using Docker's restrictive d
 Image-only preflight:
 
 ```bash
+FOD_CLIENT_RELEASE="$(cat fod_version.txt)"
 docker run --rm \
-  ghcr.io/stachwk/fod-client:3.4.20 \
+  "ghcr.io/stachwk/fod-client:${FOD_CLIENT_RELEASE}" \
   fod-container-preflight --image-only
 ```
 
 Runtime preflight:
 
 ```bash
+FOD_CLIENT_RELEASE="$(cat fod_version.txt)"
 docker run --rm \
   --device /dev/fuse \
   --cap-add SYS_ADMIN \
   --security-opt apparmor=unconfined \
-  ghcr.io/stachwk/fod-client:3.4.20 \
+  "ghcr.io/stachwk/fod-client:${FOD_CLIENT_RELEASE}" \
   fod-container-preflight --runtime
 ```
 
 A host-visible FOD mount additionally needs a shared source mount, for example:
 
 ```bash
+FOD_CLIENT_RELEASE="$(cat fod_version.txt)"
 docker run --rm -it \
   --device /dev/fuse \
   --cap-add SYS_ADMIN \
   --security-opt apparmor=unconfined \
   -v /path/on/host:/mnt/fod:rshared \
   -v /path/to/fod.ini:/etc/fod/fod.ini:ro \
-  ghcr.io/stachwk/fod-client:3.4.20 \
+  "ghcr.io/stachwk/fod-client:${FOD_CLIENT_RELEASE}" \
   mount.fod none /mnt/fod -o ini=/etc/fod/fod.ini,role=auto
 ```
 

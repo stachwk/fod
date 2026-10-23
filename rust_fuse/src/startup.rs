@@ -440,36 +440,31 @@ pub fn mount_fuse(
         if let Err(err) = fs.start_shared_monitor_publisher() {
             warn!("FOD shared monitor publisher unavailable: {}", err);
         }
-    } else if fs.has_client_session_repo() {
-        if let Err(err) = fs.register_client_session(mountpoint, "replica") {
+    } else {
+        // Od schema v25 read-only mount takze uczestniczy w open-file
+        // lifecycle. Bez writable PostgreSQL authority nie wolno uruchamiac
+        // mounta, bo open() nie moglby utworzyc centralnego file_open_lease.
+        fs.register_client_session(mountpoint, "replica")
+            .map_err(|err| {
+                format!(
+                    "read-only mount requires writable PostgreSQL authority for client/open lease state: {err}"
+                )
+            })?;
+        fs.start_client_session_heartbeat().map_err(|err| {
+            format!("failed to start required read-only client/open lease heartbeat: {err}")
+        })?;
+        if let Err(err) = fs.start_client_session_maintenance() {
             warn!(
-                "FOD read-only shared monitor session unavailable; continuing without central telemetry: {}",
+                "FOD read-only session maintenance unavailable; another authority client must perform expiry cleanup: {}",
                 err
             );
-        } else if fs.session_id().is_some() {
-            if let Err(err) = fs.start_client_session_heartbeat() {
-                warn!(
-                    "FOD read-only session heartbeat unavailable; continuing without central telemetry heartbeat: {}",
-                    err
-                );
-            }
-            if let Err(err) = fs.start_client_session_maintenance() {
-                warn!(
-                    "FOD read-only session maintenance unavailable; continuing without central telemetry maintenance: {}",
-                    err
-                );
-            }
-            if let Err(err) = fs.start_shared_monitor_publisher() {
-                warn!(
-                    "FOD read-only shared monitor publisher unavailable; continuing without central telemetry samples: {}",
-                    err
-                );
-            }
         }
-    } else {
-        info!(
-            "FOD read-only shared monitor publisher disabled: no writable telemetry endpoint configured"
-        );
+        if let Err(err) = fs.start_shared_monitor_publisher() {
+            warn!(
+                "FOD read-only shared monitor publisher unavailable; open-lease authority remains active: {}",
+                err
+            );
+        }
     }
     fs.start_runtime_reload(runtime)
         .map_err(|err| format!("failed to start runtime reload: {err}"))?;
@@ -506,6 +501,19 @@ pub fn mount_fuse(
                     .to_string()
             })?;
 
+        let invalidate_count = env_var_with_legacy_alias("FOD_TEST_FORGET_INVALIDATE_COUNT")
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                value.parse::<usize>().map_err(|err| {
+                    format!("FOD_TEST_FORGET_INVALIDATE_COUNT must be a positive integer: {err}")
+                })
+            })
+            .transpose()?
+            .unwrap_or(1);
+        if invalidate_count == 0 {
+            return Err("FOD_TEST_FORGET_INVALIDATE_COUNT must be greater than zero".to_string());
+        }
+
         let session = fuser::Session::new(fs, mountpoint, &config)
             .map_err(|err| format!("mount failed: {:?}", err))?;
         let notifier = session.notifier();
@@ -513,25 +521,60 @@ pub fn mount_fuse(
         let control_name = name.clone();
 
         let control = std::thread::spawn(move || {
-            let trigger = control_dir.join("trigger");
-            let done = control_dir.join("done");
             let error = control_dir.join("error");
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
 
-            while !trigger.exists() {
-                if std::time::Instant::now() >= deadline {
-                    let _ = std::fs::write(&error, "timeout waiting for trigger\n");
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            for cycle in 1..=invalidate_count {
+                let (trigger, done) = if invalidate_count == 1 {
+                    (control_dir.join("trigger"), control_dir.join("done"))
+                } else {
+                    (
+                        control_dir.join(format!("trigger.{cycle}")),
+                        control_dir.join(format!("done.{cycle}")),
+                    )
+                };
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
 
-            match notifier.inval_entry(fuser::INodeNo::ROOT, std::ffi::OsStr::new(&control_name)) {
-                Ok(()) => {
-                    let _ = std::fs::write(&done, "ok\n");
+                while !trigger.exists() {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = std::fs::write(
+                            &error,
+                            format!("timeout waiting for trigger cycle={cycle}\n"),
+                        );
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
                 }
-                Err(err) => {
-                    let _ = std::fs::write(&error, format!("inval_entry failed: {err}\n"));
+
+                let invalidate_name = std::fs::read_to_string(&trigger)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .trim()
+                            .strip_prefix("name=")
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| control_name.clone());
+
+                match notifier
+                    .inval_entry(fuser::INodeNo::ROOT, std::ffi::OsStr::new(&invalidate_name))
+                {
+                    Ok(()) => {
+                        let _ = std::fs::write(
+                            &done,
+                            format!("ok cycle={cycle} name={invalidate_name}\n"),
+                        );
+                    }
+                    Err(err) => {
+                        let _ = std::fs::write(
+                            &error,
+                            format!(
+                                "inval_entry failed cycle={cycle} name={invalidate_name}: {err}\n"
+                            ),
+                        );
+                        return;
+                    }
                 }
             }
         });

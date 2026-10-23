@@ -69,6 +69,8 @@ static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type SizedSharedBlockRows = Option<(u64, SharedBlockRows)>;
+// (file size, committed content generation, blocks) from one PostgreSQL statement.
+pub type GeneratedSharedBlockRows = Option<(u64, u64, Vec<(u64, Arc<[u8]>)>)>;
 type StatfsSnapshotRows = (u64, u64, u64, u64, u64, Option<u64>);
 
 fn fod_profile_io_enabled() -> bool {
@@ -2119,7 +2121,7 @@ impl PreparedStatement {
                 SELECT id_file FROM (
                     SELECT 1 AS precedence, id_file FROM hardlinks WHERE name = $1 AND id_directory IS NULL
                     UNION ALL
-                    SELECT 2 AS precedence, id_file FROM files WHERE name = $1 AND id_directory IS NULL
+                    SELECT 2 AS precedence, id_file FROM files WHERE name = $1 AND id_directory IS NULL AND NOT unlinked
                 ) entries
                 ORDER BY precedence
                 LIMIT 1
@@ -2130,7 +2132,7 @@ impl PreparedStatement {
                 SELECT id_file FROM (
                     SELECT 1 AS precedence, id_file FROM hardlinks WHERE name = $1 AND id_directory = $2
                     UNION ALL
-                    SELECT 2 AS precedence, id_file FROM files WHERE name = $1 AND id_directory = $2
+                    SELECT 2 AS precedence, id_file FROM files WHERE name = $1 AND id_directory = $2 AND NOT unlinked
                 ) entries
                 ORDER BY precedence
                 LIMIT 1
@@ -2141,11 +2143,11 @@ impl PreparedStatement {
                 SELECT mode FROM (
                     SELECT 1 AS precedence, mode
                     FROM hardlinks JOIN files ON hardlinks.id_file = files.id_file
-                    WHERE hardlinks.name = $1 AND hardlinks.id_directory IS NULL
+                    WHERE hardlinks.name = $1 AND hardlinks.id_directory IS NULL AND NOT files.unlinked
                     UNION ALL
                     SELECT 2 AS precedence, mode
                     FROM files
-                    WHERE name = $1 AND id_directory IS NULL
+                    WHERE name = $1 AND id_directory IS NULL AND NOT unlinked
                 ) entries
                 ORDER BY precedence
                 LIMIT 1
@@ -2156,11 +2158,11 @@ impl PreparedStatement {
                 SELECT mode FROM (
                     SELECT 1 AS precedence, mode
                     FROM hardlinks JOIN files ON hardlinks.id_file = files.id_file
-                    WHERE hardlinks.name = $1 AND hardlinks.id_directory = $2
+                    WHERE hardlinks.name = $1 AND hardlinks.id_directory = $2 AND NOT files.unlinked
                     UNION ALL
                     SELECT 2 AS precedence, mode
                     FROM files
-                    WHERE name = $1 AND id_directory = $2
+                    WHERE name = $1 AND id_directory = $2 AND NOT unlinked
                 ) entries
                 ORDER BY precedence
                 LIMIT 1
@@ -2228,7 +2230,7 @@ impl PreparedStatement {
                     UNION ALL
                     SELECT 3 AS precedence, 'file' AS kind, f.id_file AS entry_id
                     FROM files f
-                    WHERE f.name = $1 AND f.id_directory IS NULL
+                    WHERE f.name = $1 AND f.id_directory IS NULL AND NOT f.unlinked
                     UNION ALL
                     SELECT 4 AS precedence, 'dir' AS kind, d.id_directory AS entry_id
                     FROM directories d
@@ -2251,7 +2253,7 @@ impl PreparedStatement {
                     UNION ALL
                     SELECT 3 AS precedence, 'file' AS kind, f.id_file AS entry_id
                     FROM files f
-                    WHERE f.name = $1 AND f.id_directory = $2
+                    WHERE f.name = $1 AND f.id_directory = $2 AND NOT f.unlinked
                     UNION ALL
                     SELECT 4 AS precedence, 'dir' AS kind, d.id_directory AS entry_id
                     FROM directories d
@@ -3055,6 +3057,52 @@ unsafe fn fetch_block_range_rows_shared(
     result
 }
 
+// TX03J: decode a single-statement snapshot without changing legacy read APIs.
+unsafe fn decode_generation_block_snapshot(
+    res: *mut PGresult,
+    block_size: usize,
+) -> Result<GeneratedSharedBlockRows, String> {
+    let result = (|| {
+        if PQresultStatus(res) != PGRES_TUPLES_OK {
+            let message_ptr = PQresultErrorMessage(res);
+            let message = if message_ptr.is_null() {
+                "unknown PostgreSQL query error".to_string()
+            } else {
+                CStr::from_ptr(message_ptr).to_string_lossy().trim().to_string()
+            };
+            return Err(format!("generation block snapshot query failed: {message}"));
+        }
+        if PQnfields(res) != 4 {
+            return Err("generation block snapshot column count mismatch".to_string());
+        }
+        let mut metadata = None;
+        let mut blocks = Vec::new();
+        for row in 0..PQntuples(res) {
+            if PQgetisnull(res, row, 0) == 0 {
+                let size = u64::try_from(result_binary_i64(res, row, 0)?)
+                    .map_err(|_| "negative snapshot file size".to_string())?;
+                let generation = u64::try_from(result_binary_i64(res, row, 1)?)
+                    .map_err(|_| "negative snapshot content generation".to_string())?;
+                if metadata.replace((size, generation)).is_some() {
+                    return Err("duplicate generation metadata row".to_string());
+                }
+            } else if PQgetisnull(res, row, 2) == 0 {
+                let index = u64::try_from(result_binary_i64(res, row, 2)?)
+                    .map_err(|_| "negative snapshot block index".to_string())?;
+                if let Some(data) = read_result_binary_field(res, row, 3, |bytes| {
+                    Ok(normalize_block_arc(bytes, block_size))
+                })? {
+                    blocks.push((index, data));
+                }
+            }
+        }
+        blocks.sort_unstable_by_key(|(index, _)| *index);
+        Ok(metadata.map(|(size, generation)| (size, generation, blocks)))
+    })();
+    PQclear(res);
+    result
+}
+
 unsafe fn fetch_block_range_with_size_rows_shared(
     res: *mut PGresult,
     block_size: usize,
@@ -3270,6 +3318,7 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
         || sql.starts_with("UPDATE files SET size = ")
         || sql.starts_with("UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
         || sql.starts_with("UPDATE files SET modification_date = NOW(), change_date = NOW() WHERE id_file = $1")
+        || sql.starts_with("UPDATE files SET name = $1, unlinked = TRUE, change_date = NOW(), modification_date = NOW() WHERE id_file = $2")
         || sql.starts_with("UPDATE directories SET modification_date = NOW(), change_date = NOW() WHERE id_directory = $1")
         || sql.starts_with("UPDATE symlinks SET modification_date = NOW(), change_date = NOW() WHERE id_symlink = $1")
         || sql.starts_with("UPDATE files SET name = $1, id_directory = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
@@ -4214,6 +4263,33 @@ pub struct DbRepo {
     lock_session_id: Mutex<i64>,
     lock_schema_ready: Mutex<bool>,
     owner_session_cache: Mutex<HashMap<u64, i64>>,
+}
+
+/// Operations in a single PostgreSQL transaction, pinned to one PGconn.
+///
+/// Only constructed by DbRepo::with_transaction. Do not store this handle or
+/// send it to a different worker: the underlying PG connection stays checked
+/// out until the enclosing callback returns and COMMIT/ROLLBACK finishes.
+pub struct DbRepoTransaction<'conn> {
+    conn: *mut PGconn,
+    _scope: std::marker::PhantomData<&'conn mut PGconn>,
+}
+
+impl DbRepoTransaction<'_> {
+    pub fn exec(&self, sql: &str) -> Result<(), String> {
+        let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
+        unsafe { exec_command(self.conn, &sql) }
+    }
+
+    pub fn query_rows_text(&self, sql: &str) -> Result<Vec<Vec<String>>, String> {
+        let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
+        unsafe { query_rows_text_on_conn(self.conn, &sql) }
+    }
+
+    pub fn query_scalar_text(&self, sql: &str) -> Result<String, String> {
+        let sql = CString::new(sql).map_err(|_| "SQL contains NUL byte".to_string())?;
+        unsafe { query_scalar_text_on_conn(self.conn, &sql) }
+    }
 }
 
 impl Clone for DbRepo {
@@ -6176,6 +6252,59 @@ impl DbRepo {
         }
     }
 
+    fn created_inode_seed_matches(actual: &str, requested: &str) -> bool {
+        if actual == requested {
+            return true;
+        }
+        let prefix = format!("{requested}#open-unlink:");
+        actual
+            .strip_prefix(&prefix)
+            .map(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+            .unwrap_or(false)
+    }
+
+    fn file_create_serialization_keys(
+        parent_id: Option<u64>,
+        name: &str,
+        inode_seed: &str,
+    ) -> Result<Vec<CString>, String> {
+        let parent_key = parent_id.unwrap_or(0);
+        let mut keys = vec![
+            format!("fod:write:destination:{parent_key}:{}:{name}", name.len()),
+            format!("fod:inode-seed:{}:{inode_seed}", inode_seed.len()),
+        ];
+        keys.sort_unstable();
+        keys.dedup();
+        keys.into_iter()
+            .map(|key| {
+                CString::new(key)
+                    .map_err(|_| "file create serialization key contains NUL byte".to_string())
+            })
+            .collect()
+    }
+
+    unsafe fn effective_file_inode_seed_on_conn(
+        conn: *mut PGconn,
+        requested: &CString,
+    ) -> Result<CString, String> {
+        let sql = CString::new(
+            "
+            SELECT CASE
+                WHEN COUNT(*) = 0 THEN $1
+                ELSE $1 || '#open-unlink:' || MAX(id_file)::text
+            END
+            FROM files
+            WHERE inode_seed = $1
+               OR strpos(inode_seed, $1 || '#open-unlink:') = 1
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let params = [requested];
+        let res = exec_params(conn, &sql, &params)?;
+        let value = fetch_single_text(res)?;
+        CString::new(value).map_err(|_| "effective inode seed contains NUL byte".to_string())
+    }
+
     fn confirm_created_file(
         &self,
         target_parent_id: Option<u64>,
@@ -6206,7 +6335,7 @@ impl DbRepo {
             && row[2].trim() == mode
             && row[3].trim() == uid.to_string()
             && row[4].trim() == gid.to_string()
-            && row[5].trim() == inode_seed;
+            && Self::created_inode_seed_matches(row[5].trim(), inode_seed);
         if matches {
             Ok(file_id)
         } else {
@@ -6248,7 +6377,7 @@ impl DbRepo {
             && row[2].trim() == mode
             && row[3].trim() == uid.to_string()
             && row[4].trim() == gid.to_string()
-            && row[5].trim() == inode_seed
+            && Self::created_inode_seed_matches(row[5].trim(), inode_seed)
             && row[6].trim() == file_kind
             && row[7].trim() == rdev_major.to_string()
             && row[8].trim() == rdev_minor.to_string();
@@ -6897,6 +7026,51 @@ impl DbRepo {
                 1,
             )?;
             fetch_block_range_rows_shared(res, block_size)
+        })
+    }
+
+    /// Reads size, committed content generation and blocks from one MVCC
+    /// statement snapshot. Requires schema v26; opt-in until all mounts upgrade.
+    pub fn fetch_block_range_with_generation_shared(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        block_size: u64,
+    ) -> Result<GeneratedSharedBlockRows, String> {
+        let sql = CString::new(
+            "WITH snapshot AS MATERIALIZED (
+                 SELECT size, content_generation, data_object_id
+                 FROM files WHERE id_file = $1
+             )
+             SELECT size::bigint, content_generation::bigint,
+                    NULL::bigint, NULL::bytea FROM snapshot
+             UNION ALL
+             SELECT NULL::bigint, NULL::bigint, db._order::bigint, db.data
+             FROM snapshot s JOIN data_blocks db ON db.data_object_id = s.data_object_id
+             WHERE db._order BETWEEN $2 AND $3",
+        )
+        .map_err(|_| "invalid generation SQL".to_string())?;
+        let file = CString::new(file_id.to_string()).map_err(|err| err.to_string())?;
+        let first = CString::new(first_block.to_string()).map_err(|err| err.to_string())?;
+        let last = CString::new(last_block.to_string()).map_err(|err| err.to_string())?;
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file, &first, &last];
+            let values = params.iter().map(|p| p.as_ptr()).collect::<Vec<_>>();
+            let result = PQexecParams(
+                conn,
+                sql.as_ptr(),
+                3,
+                std::ptr::null(),
+                values.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            );
+            if result.is_null() {
+                return Err(conn_error(conn));
+            }
+            decode_generation_block_snapshot(result, block_size.max(1) as usize)
         })
     }
 
@@ -7846,6 +8020,37 @@ impl DbRepo {
                 PQclear(res);
                 Err(maybe_replayable_sql_error(conn, &sql, error))
             }
+        })
+    }
+
+    /// Run a multi-statement operation using one checked-out PostgreSQL
+    /// backend. The transaction wrapper owns BEGIN, COMMIT and ROLLBACK, so
+    /// no other pool borrower can run statements inside this transaction.
+    ///
+    /// A lost COMMIT acknowledgement is *not* replayed because an arbitrary
+    /// callback is not guaranteed to be idempotent. The caller must resolve
+    /// an ambiguous commit outcome using an application-specific receipt.
+    pub fn with_transaction<T, F>(&self, mut body: F) -> Result<T, String>
+    where
+        F: for<'txn> FnMut(&DbRepoTransaction<'txn>) -> Result<T, String>,
+    {
+        self.with_cached_connection(|conn| unsafe {
+            // This callback can perform non-idempotent DML and external
+            // side effects. Suppress the connection pool's generic
+            // replay-on-disconnect handling for the *entire* transaction,
+            // not only for a lost COMMIT acknowledgement.
+            transactional_impl(
+                conn,
+                |conn| {
+                    let transaction = DbRepoTransaction {
+                        conn,
+                        _scope: std::marker::PhantomData,
+                    };
+                    body(&transaction)
+                },
+                false,
+            )
+            .map_err(strip_replayable_sql_error)
         })
     }
 
@@ -9095,6 +9300,251 @@ impl DbRepo {
         })
     }
 
+    pub fn register_file_open_lease(
+        &self,
+        file_id: u64,
+        session_id: u64,
+        handle_id: u64,
+        lease_ttl_seconds: u64,
+    ) -> Result<(), String> {
+        if lease_ttl_seconds == 0 {
+            return Err("file open lease ttl must be greater than zero".to_string());
+        }
+        let file_id_value = file_id;
+        let file_id = CString::new(file_id_value.to_string())
+            .map_err(|_| "file open lease file id contains NUL byte".to_string())?;
+        let session_id = CString::new(session_id.to_string())
+            .map_err(|_| "file open lease session id contains NUL byte".to_string())?;
+        let handle_id = CString::new(handle_id.to_string())
+            .map_err(|_| "file open lease handle id contains NUL byte".to_string())?;
+        let lease_ttl = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "file open lease ttl contains NUL byte".to_string())?;
+        let resource_key = CString::new(format!("fod:open:file:{file_id_value}"))
+            .map_err(|_| "file open lease advisory key contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "
+            INSERT INTO file_open_leases (
+                file_id,
+                session_id,
+                handle_id,
+                lease_expires_at,
+                heartbeat_at,
+                created_at,
+                updated_at
+            )
+            SELECT
+                $1,
+                session_id,
+                $3,
+                clock_timestamp() + ($4 || ' seconds')::interval,
+                clock_timestamp(),
+                clock_timestamp(),
+                clock_timestamp()
+            FROM client_sessions
+            JOIN files f ON f.id_file = $1 AND NOT f.unlinked
+            WHERE session_id = $2
+              AND lease_expires_at > clock_timestamp()
+            ON CONFLICT (session_id, handle_id)
+            DO UPDATE SET
+                file_id = EXCLUDED.file_id,
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                heartbeat_at = EXCLUDED.heartbeat_at,
+                updated_at = clock_timestamp()
+            RETURNING file_id
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
+                let params = [&file_id, &session_id, &handle_id, &lease_ttl];
+                let res = exec_params(conn, &sql, &params)?;
+                let value = fetch_single_text(res)?;
+                if value.trim().is_empty() {
+                    // The advisory lock serializes this decision with unlink/purge.
+                    // A missing file and a missing/expired client session must
+                    // never be collapsed into the same filesystem errno.
+                    let reason_sql = CString::new(
+                        "
+                        SELECT CASE
+                            WHEN NOT EXISTS (
+                                SELECT 1 FROM client_sessions
+                                WHERE session_id = $2
+                                  AND lease_expires_at > clock_timestamp()
+                            ) THEN 'SESSION_INVALID'
+                            WHEN NOT EXISTS (
+                                SELECT 1 FROM files
+                                WHERE id_file = $1 AND NOT unlinked
+                            ) THEN 'FILE_UNAVAILABLE'
+                            ELSE 'INCONSISTENT'
+                        END
+                        ",
+                    )
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let reason = fetch_single_text(exec_params(
+                        conn,
+                        &reason_sql,
+                        &[&file_id, &session_id],
+                    )?)?;
+                    match reason.trim() {
+                        "FILE_UNAVAILABLE" => Err("FOD_OPEN_FILE_UNAVAILABLE".to_string()),
+                        "SESSION_INVALID" => Err("FOD_OPEN_SESSION_INVALID".to_string()),
+                        _ => Err("FOD_OPEN_LEASE_INCONSISTENT".to_string()),
+                    }
+                } else {
+                    Ok(())
+                }
+            })
+        })
+    }
+
+    pub fn release_file_open_lease(&self, session_id: u64, handle_id: u64) -> Result<(), String> {
+        let session_id = CString::new(session_id.to_string())
+            .map_err(|_| "file open lease session id contains NUL byte".to_string())?;
+        let handle_id = CString::new(handle_id.to_string())
+            .map_err(|_| "file open lease handle id contains NUL byte".to_string())?;
+        let sql =
+            CString::new("DELETE FROM file_open_leases WHERE session_id = $1 AND handle_id = $2")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let params = [&session_id, &handle_id];
+                exec_command_params(conn, &sql, &params)
+            })
+        })
+    }
+
+    pub fn heartbeat_file_open_leases(
+        &self,
+        session_id: u64,
+        lease_ttl_seconds: u64,
+    ) -> Result<(), String> {
+        if lease_ttl_seconds == 0 {
+            return Err("file open lease ttl must be greater than zero".to_string());
+        }
+        let session_id = CString::new(session_id.to_string())
+            .map_err(|_| "file open lease session id contains NUL byte".to_string())?;
+        let lease_ttl = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "file open lease ttl contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "
+            UPDATE file_open_leases
+            SET lease_expires_at =
+                    clock_timestamp() + ($2 || ' seconds')::interval,
+                heartbeat_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE session_id = $1
+              AND lease_expires_at > clock_timestamp()
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_control_connection(|conn| unsafe {
+            let params = [&session_id, &lease_ttl];
+            exec_command_params(conn, &sql, &params)
+        })
+    }
+
+    pub fn has_active_file_open_leases(&self, file_id: u64) -> Result<bool, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file open lease file id contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "
+            SELECT EXISTS (
+                SELECT 1
+                FROM file_open_leases l
+                JOIN client_sessions s ON s.session_id = l.session_id
+                WHERE l.file_id = $1
+                  AND l.lease_expires_at > clock_timestamp()
+                  AND s.lease_expires_at > clock_timestamp()
+            )::text
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_control_connection(|conn| unsafe {
+            let params = [&file_id];
+            let res = exec_params(conn, &sql, &params)?;
+            let value = fetch_single_text(res)?;
+            Ok(matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "t" | "true" | "1" | "on"
+            ))
+        })
+    }
+
+    pub fn file_is_unlinked(&self, file_id: u64) -> Result<Option<bool>, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let sql = CString::new("SELECT unlinked::text FROM files WHERE id_file = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file_id];
+            let res = exec_params(conn, &sql, &params)?;
+            Ok(fetch_single_text_option(res)?.map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "t" | "true" | "1" | "on"
+                )
+            }))
+        })
+    }
+
+    pub fn file_link_count_for_stat(&self, file_id: u64) -> Result<Option<u64>, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "
+            SELECT
+                (CASE WHEN f.unlinked THEN 0 ELSE 1 END) + COUNT(h.id_hardlink)
+            FROM files f
+            LEFT JOIN hardlinks h ON h.id_file = f.id_file
+            WHERE f.id_file = $1
+            GROUP BY f.id_file, f.unlinked
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file_id];
+            let res = exec_params(conn, &sql, &params)?;
+            let value = fetch_single_text_option(res)?;
+            value
+                .map(|text| {
+                    text.trim()
+                        .parse::<u64>()
+                        .map_err(|_| "invalid file link count".to_string())
+                })
+                .transpose()
+        })
+    }
+
+    pub fn fetch_file_attrs_blob(&self, file_id: u64) -> Result<Option<Vec<u8>>, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        self.with_read_connection(|conn| unsafe {
+            let params = [&file_id];
+            let res =
+                exec_prepared_params(conn, PreparedStatement::FetchPathAttrsBlobFile, &params)?;
+            if res.is_null() {
+                return Err(conn_error(conn));
+            }
+            match PQresultStatus(res) {
+                PGRES_TUPLES_OK => {
+                    let row = fetch_first_row_texts(res)?;
+                    if row.is_empty() {
+                        Ok(None)
+                    } else {
+                        Ok(Some(join_nul_text(&row)))
+                    }
+                }
+                _ => {
+                    let err = result_error(res);
+                    PQclear(res);
+                    Err(err)
+                }
+            }
+        })
+    }
+
     pub fn touch_client_session_owner_key(
         &self,
         session_id: u64,
@@ -9303,6 +9753,18 @@ impl DbRepo {
             value.trim().to_ascii_lowercase().as_str(),
             "t" | "true" | "1" | "on"
         ))
+    }
+
+    unsafe fn advisory_xact_lock_text_on_conn(
+        conn: *mut PGconn,
+        resource_key: &CString,
+    ) -> Result<(), String> {
+        let sql = CString::new("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let params = [resource_key];
+        let res = exec_params(conn, &sql, &params)?;
+        let _ = fetch_single_text(res)?;
+        Ok(())
     }
 
     pub fn try_advisory_xact_lock(&self, resource_lock_id: i64) -> Result<bool, String> {
@@ -9728,13 +10190,26 @@ impl DbRepo {
                 let destination_res =
                     exec_params(conn, &heartbeat_destination_sql, &destination_params)?;
                 let destination_value = fetch_single_text(destination_res)?;
-                if destination_value.trim().is_empty() {
-                    return Ok(false);
-                }
+                let destination_active = !destination_value.trim().is_empty();
 
                 if let (Some(file_id_param), Some(file_token_param)) =
                     (file_id_param.as_ref(), file_token_param.as_ref())
                 {
+                    if !destination_active {
+                        let unlinked_sql = CString::new(
+                            "SELECT COALESCE((SELECT unlinked::text FROM files WHERE id_file = $1), 'false')",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?;
+                        let unlinked_params = [file_id_param];
+                        let unlinked_res = exec_params(conn, &unlinked_sql, &unlinked_params)?;
+                        let unlinked = fetch_single_text(unlinked_res)?;
+                        if !matches!(
+                            unlinked.trim().to_ascii_lowercase().as_str(),
+                            "t" | "true" | "1" | "on"
+                        ) {
+                            return Ok(false);
+                        }
+                    }
                     let file_params = [
                         file_token_param,
                         file_id_param,
@@ -9749,9 +10224,79 @@ impl DbRepo {
                             "write ownership file lease disappeared during heartbeat".to_string()
                         );
                     }
+                } else if !destination_active {
+                    return Ok(false);
                 }
 
                 Ok(true)
+            })
+        })
+    }
+
+    pub fn heartbeat_file_write_ownership(
+        &self,
+        file_id: u64,
+        owner_key: u64,
+        file_fencing_token: u64,
+        lease_ttl_seconds: u64,
+    ) -> Result<bool, String> {
+        if lease_ttl_seconds == 0 {
+            return Err("write ownership lease ttl must be greater than zero".to_string());
+        }
+
+        let session_id_value = self.current_lock_session_id()?;
+        if session_id_value <= 0 {
+            return Ok(false);
+        }
+
+        let file_id_param = CString::new(file_id.to_string())
+            .map_err(|_| "write ownership file id contains NUL byte".to_string())?;
+        let session_id = CString::new(session_id_value.to_string())
+            .map_err(|_| "write ownership session id contains NUL byte".to_string())?;
+        let owner_key_param = CString::new(owner_key.to_string())
+            .map_err(|_| "write ownership owner key contains NUL byte".to_string())?;
+        let lease_ttl = CString::new(lease_ttl_seconds.to_string())
+            .map_err(|_| "write ownership lease ttl contains NUL byte".to_string())?;
+        let file_token = CString::new(file_fencing_token.to_string())
+            .map_err(|_| "file write fencing token contains NUL byte".to_string())?;
+        let resource_key = CString::new(format!("fod:write:file:{file_id}"))
+            .map_err(|_| "write ownership advisory key contains NUL byte".to_string())?;
+
+        let heartbeat_file_sql = CString::new(
+            "
+            WITH server_time AS (
+                SELECT clock_timestamp() AS now
+            )
+            UPDATE file_write_leases
+            SET lease_expires_at =
+                    server_time.now + ($5 || ' seconds')::interval,
+                heartbeat_at = server_time.now,
+                updated_at = server_time.now
+            FROM server_time
+            WHERE fencing_token = $1
+              AND file_id = $2
+              AND session_id = $3
+              AND owner_key = $4
+              AND lease_expires_at > server_time.now
+            RETURNING fencing_token
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                if !Self::try_advisory_xact_lock_text_on_conn(conn, &resource_key)? {
+                    return Ok(false);
+                }
+                let params = [
+                    &file_token,
+                    &file_id_param,
+                    &session_id,
+                    &owner_key_param,
+                    &lease_ttl,
+                ];
+                let res = exec_params(conn, &heartbeat_file_sql, &params)?;
+                Ok(!fetch_single_text(res)?.trim().is_empty())
             })
         })
     }
@@ -11261,7 +11806,7 @@ impl DbRepo {
                     id_file::text AS entry_id,
                     id_file::text AS file_id
                 FROM files
-                WHERE COALESCE(id_directory, 0) = $1 AND name = $2
+                WHERE COALESCE(id_directory, 0) = $1 AND name = $2 AND NOT unlinked
                 UNION ALL
                 SELECT
                     'hardlink'::text AS kind,
@@ -11339,7 +11884,7 @@ impl DbRepo {
             "
             SELECT
                 (SELECT COUNT(*) FROM directories WHERE id_parent = $1)
-              + (SELECT COUNT(*) FROM files WHERE id_directory = $1)
+              + (SELECT COUNT(*) FROM files WHERE id_directory = $1 AND NOT unlinked)
               + (SELECT COUNT(*) FROM hardlinks WHERE id_directory = $1)
               + (SELECT COUNT(*) FROM symlinks WHERE id_parent = $1)
             ",
@@ -11978,6 +12523,8 @@ impl DbRepo {
     ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
         let inode_seed_text = inode_seed.to_string();
+        let serialization_keys =
+            Self::file_create_serialization_keys(target_parent_id, target_name, inode_seed)?;
         let mode_text = format!("{:o}", mode);
         let uid_value = uid;
         let gid_value = gid;
@@ -12017,6 +12564,11 @@ impl DbRepo {
 
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
+                for serialization_key in &serialization_keys {
+                    Self::advisory_xact_lock_text_on_conn(conn, serialization_key)?;
+                }
+                let effective_inode_seed =
+                    Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
                 let data_object_id = fetch_single_text(data_object_res)?
                     .trim()
@@ -12032,7 +12584,7 @@ impl DbRepo {
                         &mode,
                         &uid,
                         &gid,
-                        &inode_seed,
+                        &effective_inode_seed,
                         &data_object_id,
                         &parent_id,
                     ];
@@ -12043,7 +12595,7 @@ impl DbRepo {
                         &mode,
                         &uid,
                         &gid,
-                        &inode_seed,
+                        &effective_inode_seed,
                         &data_object_id,
                     ];
                     exec_params(conn, &sql_null_parent, &params)?
@@ -12115,6 +12667,8 @@ impl DbRepo {
     ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
         let inode_seed_text = inode_seed.to_string();
+        let serialization_keys =
+            Self::file_create_serialization_keys(target_parent_id, target_name, inode_seed)?;
         let file_kind_text = file_kind.to_string();
         let mode_text = format!("{:o}", mode);
         let uid_value = uid;
@@ -12170,6 +12724,11 @@ impl DbRepo {
 
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
+                for serialization_key in &serialization_keys {
+                    Self::advisory_xact_lock_text_on_conn(conn, serialization_key)?;
+                }
+                let effective_inode_seed =
+                    Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
                 let data_object_id = fetch_single_text(data_object_res)?
                     .trim()
@@ -12185,7 +12744,7 @@ impl DbRepo {
                         &mode,
                         &uid,
                         &gid,
-                        &inode_seed,
+                        &effective_inode_seed,
                         &data_object_id,
                         &parent_id,
                     ];
@@ -12196,7 +12755,7 @@ impl DbRepo {
                         &mode,
                         &uid,
                         &gid,
-                        &inode_seed,
+                        &effective_inode_seed,
                         &data_object_id,
                     ];
                     exec_params(conn, &sql_null_parent, &params)?
@@ -12888,6 +13447,9 @@ impl DbRepo {
         let result = self.with_cached_connection(|conn| unsafe {
             let transaction_started = Instant::now();
             let result = transactional_replayable(conn, |conn| {
+                // Indexer/legacy import is unfenced. Hold the same file-level
+                // advisory lock as ordinary fenced writers through COMMIT.
+                self.reject_unfenced_write_during_active_lease_on_conn(conn, file_id)?;
                 self.persist_file_blocks_streaming_on_conn(
                     conn,
                     file_id,
@@ -13228,6 +13790,48 @@ impl DbRepo {
         ))
     }
 
+    // Legacy and FFI callers do not carry WritePersistenceFence. A legacy
+    // mutation is permitted only while no live file write lease exists.
+    // The same advisory xact lock serializes this check with new ownership
+    // acquisition and with fenced writes on all FOD clients.
+    unsafe fn reject_unfenced_write_during_active_lease_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+    ) -> Result<(), String> {
+        let resource_key = CString::new(format!("fod:write:file:{file_id}"))
+            .map_err(|_| "legacy write advisory resource contains NUL byte".to_string())?;
+        if !Self::try_advisory_xact_lock_text_on_conn(conn, &resource_key)? {
+            return Err(format!(
+                "{} file_id={} missing_fence advisory_busy",
+                WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX, file_id
+            ));
+        }
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "legacy write file id contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM file_write_leases
+                WHERE file_id = $1
+                  AND lease_expires_at > clock_timestamp()
+            )::text",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let res = exec_params(conn, &sql, &[&file_id_text])?;
+        let active = fetch_single_text(res)?;
+        if matches!(
+            active.trim().to_ascii_lowercase().as_str(),
+            "t" | "true" | "1" | "on"
+        ) {
+            return Err(format!(
+                "{} file_id={} missing_fence active_file_lease",
+                WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX, file_id
+            ));
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn persist_file_blocks_with_crc_flag_reservation_and_fence(
         &self,
@@ -13248,6 +13852,8 @@ impl DbRepo {
             let result = transactional_replayable(conn, |conn| {
                 if let Some(write_fence) = write_fence {
                     self.validate_write_persistence_fence_on_conn(conn, file_id, write_fence)?;
+                } else {
+                    self.reject_unfenced_write_during_active_lease_on_conn(conn, file_id)?;
                 }
                 if capacity_reservation_token.is_some() {
                     let quota_lock = self.lock_payload_quota_on_conn(conn)?;
@@ -13528,6 +14134,25 @@ impl DbRepo {
         src_file_id: u64,
         dst_file_id: u64,
     ) -> Result<bool, String> {
+        self.adopt_source_data_object_optional_fence(src_file_id, dst_file_id, None)
+    }
+
+    pub fn adopt_source_data_object_with_fence(
+        &self,
+        src_file_id: u64,
+        dst_file_id: u64,
+        write_fence: WritePersistenceFence,
+    ) -> Result<bool, String> {
+        self.adopt_source_data_object_optional_fence(src_file_id, dst_file_id, Some(write_fence))
+    }
+
+    fn adopt_source_data_object_optional_fence(
+        &self,
+        src_file_id: u64,
+        dst_file_id: u64,
+        write_fence: Option<WritePersistenceFence>,
+    ) -> Result<bool, String> {
+        let dst_file_id_for_fence = dst_file_id;
         let sql_file_info =
             CString::new("SELECT size, data_object_id FROM files WHERE id_file = $1")
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -13624,6 +14249,20 @@ impl DbRepo {
                     Ok(None)
                 },
                 |conn| {
+                    // Copy-on-write adoption modifies the destination file.
+                    // The ownership check and mutation share the transaction.
+                    if let Some(fence) = write_fence {
+                        self.validate_write_persistence_fence_on_conn(
+                            conn,
+                            dst_file_id_for_fence,
+                            fence,
+                        )?;
+                    } else {
+                        self.reject_unfenced_write_during_active_lease_on_conn(
+                            conn,
+                            dst_file_id_for_fence,
+                        )?;
+                    }
                     let src_info = fetch_file_info(conn, &src_file_id)?;
                     let (src_size, src_data_object_id) = match src_info {
                         Some(value) => value,
@@ -13678,6 +14317,7 @@ impl DbRepo {
     }
 
     pub fn set_file_size(&self, file_id: u64, file_size: u64) -> Result<(), String> {
+        let file_id_for_fence = file_id;
         let desired_file_size = file_size;
         let sql_update_file = CString::new(
             "UPDATE files SET size = $1, modification_date = NOW(), change_date = NOW() WHERE id_file = $2",
@@ -13712,12 +14352,128 @@ impl DbRepo {
                     }
                 },
                 |conn| {
+                    // A size-only legacy/FFI mutation must not bypass an active
+                    // file lease, including across hosts and shared PG pools.
+                    self.reject_unfenced_write_during_active_lease_on_conn(
+                        conn,
+                        file_id_for_fence,
+                    )?;
                     let params = [&file_size, &file_id];
                     exec_command_params(conn, &sql_update_file, &params)?;
                     Ok(())
                 },
             )
         })
+    }
+
+    pub fn defer_primary_file_unlink(
+        &self,
+        file_id: u64,
+        hidden_name: &str,
+        parent_id: Option<u64>,
+        old_name: &str,
+    ) -> Result<(), String> {
+        if hidden_name.is_empty() || old_name.is_empty() {
+            return Err("deferred unlink name is empty".to_string());
+        }
+
+        let file_id_param = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let hidden_name_param = CString::new(hidden_name)
+            .map_err(|_| "deferred unlink hidden name contains NUL byte".to_string())?;
+        let parent_key = CString::new(parent_id.unwrap_or(0).to_string())
+            .map_err(|_| "deferred unlink parent key contains NUL byte".to_string())?;
+        let old_name_param = CString::new(old_name)
+            .map_err(|_| "deferred unlink old name contains NUL byte".to_string())?;
+        let sql_inode_seed = CString::new("SELECT inode_seed FROM files WHERE id_file = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        let sql_rename = CString::new(
+            "UPDATE files SET name = $1, unlinked = TRUE, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_delete_destination = CString::new(
+            "DELETE FROM destination_write_leases WHERE parent_key = $1 AND name = $2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_control_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let inode_seed_params = [&file_id_param];
+                let inode_seed_res = exec_params(conn, &sql_inode_seed, &inode_seed_params)?;
+                let inode_seed = fetch_single_text(inode_seed_res)?;
+                if inode_seed.is_empty() {
+                    return Ok(());
+                }
+
+                let mut resource_keys = vec![
+                    format!("fod:open:file:{file_id}"),
+                    format!(
+                        "fod:write:destination:{}:{}:{}",
+                        parent_id.unwrap_or(0),
+                        old_name.len(),
+                        old_name
+                    ),
+                    format!("fod:inode-seed:{}:{inode_seed}", inode_seed.len()),
+                ];
+                resource_keys.sort_unstable();
+                resource_keys.dedup();
+                for resource_key in resource_keys {
+                    let resource_key = CString::new(resource_key).map_err(|_| {
+                        "deferred unlink advisory key contains NUL byte".to_string()
+                    })?;
+                    Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
+                }
+
+                let rename_params = [&hidden_name_param, &file_id_param];
+                exec_command_params(conn, &sql_rename, &rename_params)?;
+                let destination_params = [&parent_key, &old_name_param];
+                exec_command_params(conn, &sql_delete_destination, &destination_params)?;
+                Ok(())
+            })
+        })
+    }
+
+    pub fn purge_orphaned_unlinked_files(&self, limit: u64) -> Result<u64, String> {
+        if limit == 0 {
+            return Ok(0);
+        }
+        let sql = CString::new(
+            "
+            SELECT f.id_file
+            FROM files f
+            WHERE f.unlinked
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM file_open_leases l
+                    JOIN client_sessions s ON s.session_id = l.session_id
+                    WHERE l.file_id = f.id_file
+                      AND l.lease_expires_at > clock_timestamp()
+                      AND s.lease_expires_at > clock_timestamp()
+              )
+            ORDER BY f.id_file
+            LIMIT $1
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let limit_param = CString::new(limit.to_string())
+            .map_err(|_| "orphan cleanup limit contains NUL byte".to_string())?;
+        let file_ids = self.with_control_connection(|conn| unsafe {
+            let params = [&limit_param];
+            let res = exec_params(conn, &sql, &params)?;
+            fetch_first_column_texts(res)
+        })?;
+
+        let mut purged = 0_u64;
+        for file_id in file_ids {
+            let file_id = file_id
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid deferred unlink file id".to_string())?;
+            self.purge_primary_file(file_id)?;
+            purged = purged.saturating_add(1);
+        }
+        Ok(purged)
     }
 
     pub fn purge_primary_file(&self, file_id: u64) -> Result<(), String> {
@@ -13732,8 +14488,23 @@ impl DbRepo {
             "UPDATE data_objects SET reference_count = GREATEST(reference_count - 1, 0), modification_date = NOW() WHERE id_data_object = $1",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let resource_key = CString::new(format!("fod:open:file:{file_id}"))
+            .map_err(|_| "file purge advisory key contains NUL byte".to_string())?;
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
+        let sql_open = CString::new(
+            "
+            SELECT EXISTS (
+                SELECT 1
+                FROM file_open_leases l
+                JOIN client_sessions s ON s.session_id = l.session_id
+                WHERE l.file_id = $1
+                  AND l.lease_expires_at > clock_timestamp()
+                  AND s.lease_expires_at > clock_timestamp()
+            )::text
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         self.with_cached_connection(|conn| unsafe {
             // A committed purge is observable because the file row disappears,
@@ -13750,6 +14521,16 @@ impl DbRepo {
                     }
                 },
                 |conn| {
+                    Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
+                    let open_params = [&file_id];
+                    let open_res = exec_params(conn, &sql_open, &open_params)?;
+                    let open = fetch_single_text(open_res)?;
+                    if matches!(
+                        open.trim().to_ascii_lowercase().as_str(),
+                        "t" | "true" | "1" | "on"
+                    ) {
+                        return Err("file has active open leases".to_string());
+                    }
                     let data_object_id = {
                         let params = [&file_id];
                         let res = exec_params(conn, &sql_lookup, &params)?;
@@ -13866,7 +14647,7 @@ impl DbRepo {
             "
             SELECT 1
             FROM files
-            WHERE id_directory = $1
+            WHERE id_directory = $1 AND NOT unlinked
             UNION ALL
             SELECT 1
             FROM directories
@@ -13902,7 +14683,7 @@ impl DbRepo {
             "
             SELECT
                 (SELECT COUNT(*) FROM directories WHERE id_parent = $1)
-              + (SELECT COUNT(*) FROM files WHERE id_directory = $1)
+              + (SELECT COUNT(*) FROM files WHERE id_directory = $1 AND NOT unlinked)
               + (SELECT COUNT(*) FROM hardlinks WHERE id_directory = $1)
               + (SELECT COUNT(*) FROM symlinks WHERE id_parent = $1)
             ",
@@ -14475,13 +15256,13 @@ impl DbRepo {
                     SELECT f.name, 'file', f.id_file, f.inode_seed, COALESCE(sf.file_type, '')
                     FROM files f
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
-                    WHERE f.id_directory = $1
+                    WHERE f.id_directory = $1 AND NOT f.unlinked
                     UNION ALL
                     SELECT h.name, 'hardlink', h.id_hardlink, f.inode_seed, COALESCE(sf.file_type, '')
                     FROM hardlinks h
                     JOIN files f ON f.id_file = h.id_file
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
-                    WHERE h.id_directory = $1
+                    WHERE h.id_directory = $1 AND NOT f.unlinked
                     UNION ALL
                     SELECT d.name, 'dir', d.id_directory, d.inode_seed, ''
                     FROM directories d
@@ -14507,13 +15288,13 @@ impl DbRepo {
                     SELECT f.name, 'file', f.id_file, f.inode_seed, COALESCE(sf.file_type, '')
                     FROM files f
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
-                    WHERE f.id_directory IS NULL
+                    WHERE f.id_directory IS NULL AND NOT f.unlinked
                     UNION ALL
                     SELECT h.name, 'hardlink', h.id_hardlink, f.inode_seed, COALESCE(sf.file_type, '')
                     FROM hardlinks h
                     JOIN files f ON f.id_file = h.id_file
                     LEFT JOIN special_files sf ON sf.id_file = f.id_file
-                    WHERE h.id_directory IS NULL
+                    WHERE h.id_directory IS NULL AND NOT f.unlinked
                     UNION ALL
                     SELECT s.name, 'symlink', s.id_symlink, s.inode_seed, ''
                     FROM symlinks s
@@ -14539,7 +15320,7 @@ impl DbRepo {
             (
                 CString::new(
                     "
-                    SELECT name FROM files WHERE id_directory = $1
+                    SELECT name FROM files WHERE id_directory = $1 AND NOT unlinked
                     UNION ALL
                     SELECT name FROM hardlinks WHERE id_directory = $1
                     UNION ALL
@@ -14558,7 +15339,7 @@ impl DbRepo {
                     "
                     SELECT name FROM directories WHERE id_parent IS NULL AND name != '/'
                     UNION ALL
-                    SELECT name FROM files WHERE id_directory IS NULL
+                    SELECT name FROM files WHERE id_directory IS NULL AND NOT unlinked
                     UNION ALL
                     SELECT name FROM hardlinks WHERE id_directory IS NULL
                     UNION ALL
@@ -15086,11 +15867,16 @@ mod tests {
     }
 
     fn current_block_size(repo: &DbRepo) -> u64 {
-        repo.query_scalar_text("SELECT value FROM config WHERE key = 'block_size'")
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap()
+        let value = repo
+            .query_scalar_text("SELECT value FROM config WHERE key = 'block_size'")
+            .expect("query FOD block_size");
+        let parsed = value.trim().parse::<u64>().unwrap_or_else(|_| {
+            panic!(
+                "FOD test database is not initialized: config.block_size is missing or invalid ({value:?}); initialize an isolated test database with fod-rust-mkfs init"
+            )
+        });
+        assert!(parsed > 0, "FOD config.block_size must be positive");
+        parsed
     }
 
     fn wait_for_advisory_waiters(repo: &DbRepo, expected: u64) -> Result<u64, String> {

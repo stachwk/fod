@@ -151,7 +151,13 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
 
 #[test]
 fn write_noop() -> Result<(), String> {
-    let mounted = MountedFs::start("write-noop")?;
+    // Ten test porownuje timestampy bezposrednio przed i po identycznym write.
+    // Wylacz attr cache tylko tutaj, aby stary wpis kernela po pierwszym write
+    // nie wygladal jak zmiana metadanych spowodowana drugim, no-op write.
+    let mounted = MountedFs::start_with_env(
+        "write-noop",
+        &[("FOD_METADATA_CACHE_TTL_SECONDS", "0".to_string())],
+    )?;
     let suffix = unique_suffix();
     let file_path = mounted.mountpoint.join(format!("write_noop_{suffix}.txt"));
     let payload = b"payload\n";

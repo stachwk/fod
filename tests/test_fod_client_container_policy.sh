@@ -149,13 +149,20 @@ for pattern in \
     'make docker-fod-client-publish' \
     'FOD_CLIENT_VERSION' \
     'FOD_CLIENT_IMAGE_VERSION' \
-    "ghcr.io/stachwk/fod-client:${VERSION}" \
+    'FOD_CLIENT_RELEASE="$(cat fod_version.txt)"' \
+    'ghcr.io/stachwk/fod-client:${FOD_CLIENT_RELEASE}' \
     '3.4.1-fuse1' \
     'apparmor=unconfined' \
     'fod-container-preflight --runtime'; do
     grep -Fq -- "${pattern}" "${README}" || { echo "Missing normalized FOD client/FUSE command in README: ${pattern}" >&2; exit 1; }
 done
 
+# Release numbers in usage examples must come from fod_version.txt.
+# The historical 3.4.1-fuse1 tag is intentional and excluded by the suffix.
+if grep -Eq 'ghcr[.]io/stachwk/fod-client:[0-9]+[.][0-9]+[.][0-9]+([[:space:]`]|$)' "${README}"; then
+    echo 'FOD client README must derive exact source-release image tags from fod_version.txt' >&2
+    exit 1
+fi
 if grep -Eq 'make[[:space:]]+(fod-client-build|fod-client-publish|docker-fod-client-test-policy|test-fod-client-container-policy)([[:space:]]|$)' "${README}"; then
     echo 'FOD client README must not document obsolete Make targets' >&2
     exit 1

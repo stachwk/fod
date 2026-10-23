@@ -58,6 +58,13 @@ $(eval $(call FOD_FORWARD_TARGET,postgres-smoke,smoke))
 $(eval $(call FOD_FORWARD_TARGET,postgres-shell,db-shell))
 $(eval $(call FOD_FORWARD_TARGET,postgres-config-show,postgres-config-show))
 $(eval $(call FOD_FORWARD_TARGET,postgres-qnap-config-show,qnap-config-show))
+# The internal Makefile normalizes POSTGRES_DB from POSTGRES_DB_BASE.
+# Capture the caller's explicit audit database before that normalization.
+# No implicit default: a role audit must target an intentionally chosen DB.
+FOD_AUDIT_REQUESTED_DB := $(strip $(if $(FOD_AUDIT_DBNAME),$(FOD_AUDIT_DBNAME),$(if $(FOD_PG_DBNAME),$(FOD_PG_DBNAME),$(POSTGRES_DB))))
+.PHONY: audit-postgres-runtime-role
+audit-postgres-runtime-role:
+	@$(FOD_INTERNAL_MAKE) audit-postgres-runtime-role FOD_AUDIT_DBNAME="$(FOD_AUDIT_REQUESTED_DB)"
 $(eval $(call FOD_FORWARD_TARGET,postgres-enable-pg-stat-statements,enable-pg-stat-statements))
 
 # FOD schema and mount lifecycle.
@@ -218,6 +225,7 @@ help:
 		'  postgres-up | postgres-down | postgres-restart | postgres-logs' \
 		'  postgres-wait | postgres-wait-client | postgres-smoke | postgres-reset' \
 		'  postgres-shell | postgres-config-show | postgres-qnap-config-show' \
+		'  audit-postgres-runtime-role (read-only C10 security audit)' \
 		'' \
 		'FOD:' \
 		'  fod-init | fod-remote-init | fod-mount | fod-remote-mount' \
