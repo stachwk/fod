@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 26;
+const SCHEMA_VERSION: u64 = 27;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -244,6 +244,27 @@ fn assert_latest_payload_schema(conn: &DbConn) {
                       AND table_name = 'files'
                       AND column_name = 'unlinked'
                       AND is_nullable = 'NO'
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'fod'
+                      AND table_name = 'files'
+                      AND column_name = 'content_generation'
+                      AND is_nullable = 'NO'
+                      AND column_default = '1'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM pg_trigger
+                    WHERE tgrelid = 'fod.files'::regclass
+                      AND tgname = 'trg_fod_file_content_generation'
+                      AND NOT tgisinternal
+                )
+                AND EXISTS (
+                    SELECT 1 FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = 'fod'
+                      AND p.proname = 'fod_bump_file_content_generation'
                 )
                 AND EXISTS (
                     SELECT 1 FROM pg_indexes
@@ -612,6 +633,13 @@ fn schema_upgrade_non_destructive_password_protected() {
         schema_exists(&conn, "fod").expect("fod schema_exists after init"),
         "fod schema should be recreated by init"
     );
+    conn.exec(
+        "INSERT INTO fod.config (key, value) VALUES
+             ('block_size', 32768),
+             ('max_fs_size_bytes', 10737418240)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    )
+    .expect("restore filesystem config after init in schema upgrade fixture");
     assert_latest_payload_schema(&conn);
 
     let upgrade_after_clean = run_mkfs(
@@ -746,10 +774,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 26",
+        "FOD schema version: 27",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 26",
+        "Latest migration version: 27",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -779,6 +807,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0024: 0024_write_ownership_leases.sql",
         "0025: 0025_open_unlinked_files.sql",
         "0026: 0026_file_content_generation.sql",
+        "0027: 0027_explicit_file_content_generation.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -798,10 +827,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 26",
+        "Latest migration version: 27",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -946,7 +975,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 26"),
+        status_before_text.contains("Latest migration version: 27"),
         "{status_before_text}"
     );
     assert!(
@@ -958,7 +987,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Pending migrations: 0022, 0023, 0024, 0025, 0026"),
+        status_before_text.contains("Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027"),
         "{status_before_text}"
     );
 
@@ -1004,7 +1033,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 26"),
+        status_broken_text.contains("FOD schema version: 27"),
         "{status_broken_text}"
     );
     assert!(

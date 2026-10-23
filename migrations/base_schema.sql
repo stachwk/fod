@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS data_objects (
 CREATE TABLE IF NOT EXISTS files (
     id_file SERIAL PRIMARY KEY,
     data_object_id INTEGER NOT NULL REFERENCES data_objects(id_data_object),
+    content_generation BIGINT NOT NULL DEFAULT 1,
     id_directory INTEGER REFERENCES directories(id_directory),
     name VARCHAR(255) NOT NULL,
     size BIGINT NOT NULL,
@@ -41,6 +42,32 @@ CREATE TABLE IF NOT EXISTS files (
     change_date TIMESTAMP NOT NULL,
     creation_date TIMESTAMP NOT NULL
 );
+
+-- Keep fresh installs aligned with migrations 0026 and 0027: content changes
+-- advance this value explicitly in their PostgreSQL transaction, while
+-- metadata-only updates leave it unchanged.
+CREATE OR REPLACE FUNCTION fod_bump_file_content_generation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.content_generation IS DISTINCT FROM OLD.content_generation THEN
+        IF OLD.content_generation >= 9223372036854775807 THEN
+            RAISE EXCEPTION 'FOD content generation exhausted for file %', OLD.id_file;
+        END IF;
+        IF NEW.content_generation <> OLD.content_generation + 1 THEN
+            RAISE EXCEPTION 'FOD content generation must advance by exactly one for file %', OLD.id_file;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_fod_file_content_generation ON files;
+CREATE TRIGGER trg_fod_file_content_generation
+BEFORE UPDATE ON files
+FOR EACH ROW
+EXECUTE FUNCTION fod_bump_file_content_generation();
 
 CREATE TABLE IF NOT EXISTS special_files (
     id_file INTEGER PRIMARY KEY REFERENCES files(id_file) ON DELETE CASCADE,

@@ -14,6 +14,10 @@ const MIGRATION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0026_file_content_generation.sql"
 ));
+const MIGRATION_27: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../migrations/0027_explicit_file_content_generation.sql"
+));
 
 fn conninfo() -> String {
     fn value(primary: &str, fallback: &str, default: &str) -> String {
@@ -59,16 +63,20 @@ impl Fixture {
                  id_file BIGINT PRIMARY KEY,
                  data_object_id BIGINT NOT NULL,
                  size BIGINT NOT NULL,
+                 content_generation BIGINT NOT NULL DEFAULT 1,
                  modification_date TIMESTAMP NOT NULL DEFAULT NOW(),
                  change_date TIMESTAMP NOT NULL DEFAULT NOW()
              );
-             INSERT INTO {schema}.files(id_file, data_object_id, size)
-             VALUES (1, 101, 4096), (2, 201, 4096);
+             INSERT INTO {schema}.files(id_file, data_object_id, size, content_generation)
+             VALUES (1, 101, 4096, 1), (2, 201, 4096, 1),
+                    (3, 301, 4096, 9223372036854775807);
              SET search_path TO {schema}, public;"
         ))
         .expect("create isolated schema fixture");
         db.exec(MIGRATION)
             .expect("apply migration 26 against fixture");
+        db.exec(MIGRATION_27)
+            .expect("apply migration 27 against fixture");
         Self { db, schema }
     }
 
@@ -109,6 +117,10 @@ fn content_generation_atomic_rollback_and_file_isolation() {
         .db
         .exec("UPDATE files SET data_object_id = 102 WHERE id_file = 1")
         .unwrap();
+    fixture
+        .db
+        .exec("UPDATE files SET content_generation = content_generation + 1 WHERE id_file = 1")
+        .unwrap();
     assert_eq!(fixture.generation(1), 2);
     fixture.db.exec("ROLLBACK").unwrap();
     assert_eq!(fixture.generation(1), 1);
@@ -123,7 +135,7 @@ fn content_generation_atomic_rollback_and_file_isolation() {
     fixture.db.exec("BEGIN").unwrap();
     fixture
         .db
-        .exec("UPDATE files SET data_object_id = 102, size = 8192 WHERE id_file = 1")
+        .exec("UPDATE files SET data_object_id = 102, size = 8192, content_generation = content_generation + 1 WHERE id_file = 1")
         .unwrap();
     assert_eq!(fixture.generation(1), 2);
     fixture.db.exec("COMMIT").unwrap();
@@ -137,12 +149,21 @@ fn content_generation_atomic_rollback_and_file_isolation() {
         .unwrap();
     assert_eq!(fixture.generation(1), 2);
 
-    // A generic client cannot lower or forge the generation.
-    fixture
+    // A generic client cannot lower, skip, or overflow the generation.
+    assert!(fixture
         .db
         .exec("UPDATE files SET content_generation = 0 WHERE id_file = 1")
-        .unwrap();
+        .is_err());
+    assert!(fixture
+        .db
+        .exec("UPDATE files SET content_generation = content_generation + 2 WHERE id_file = 1")
+        .is_err());
     assert_eq!(fixture.generation(1), 2);
+
+    assert!(fixture
+        .db
+        .exec("UPDATE files SET content_generation = content_generation + 1 WHERE id_file = 3")
+        .is_err());
 }
 
 #[test]
@@ -155,7 +176,7 @@ fn content_generation_concurrent_commits_are_monotonic() {
     fixture.db.exec("BEGIN").unwrap();
     fixture
         .db
-        .exec("UPDATE files SET data_object_id = 102 WHERE id_file = 1")
+        .exec("UPDATE files SET data_object_id = 102, content_generation = content_generation + 1 WHERE id_file = 1")
         .unwrap();
 
     let worker = thread::spawn(move || {
@@ -165,7 +186,7 @@ fn content_generation_concurrent_commits_are_monotonic() {
         ))
         .unwrap();
         started_tx.send(()).unwrap();
-        db.exec("UPDATE files SET data_object_id = 103 WHERE id_file = 1")
+        db.exec("UPDATE files SET data_object_id = 103, content_generation = content_generation + 1 WHERE id_file = 1")
             .expect("second writer waits for first commit");
     });
     started_rx.recv().unwrap();

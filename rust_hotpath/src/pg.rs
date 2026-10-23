@@ -3068,7 +3068,10 @@ unsafe fn decode_generation_block_snapshot(
             let message = if message_ptr.is_null() {
                 "unknown PostgreSQL query error".to_string()
             } else {
-                CStr::from_ptr(message_ptr).to_string_lossy().trim().to_string()
+                CStr::from_ptr(message_ptr)
+                    .to_string_lossy()
+                    .trim()
+                    .to_string()
             };
             return Err(format!("generation block snapshot query failed: {message}"));
         }
@@ -3316,7 +3319,9 @@ fn sql_is_replayable_command(sql: &CString) -> bool {
             "UPDATE data_objects SET reference_count = 0, modification_date = NOW() WHERE id_data_object = $1",
         )
         || sql.starts_with("UPDATE files SET size = ")
+        || sql.starts_with("UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW(), content_generation = content_generation + 1 WHERE id_file = $3")
         || sql.starts_with("UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3")
+        || sql.starts_with("UPDATE files SET content_generation = content_generation + 1 WHERE id_file = $1 RETURNING content_generation")
         || sql.starts_with("UPDATE files SET modification_date = NOW(), change_date = NOW() WHERE id_file = $1")
         || sql.starts_with("UPDATE files SET name = $1, unlinked = TRUE, change_date = NOW(), modification_date = NOW() WHERE id_file = $2")
         || sql.starts_with("UPDATE directories SET modification_date = NOW(), change_date = NOW() WHERE id_directory = $1")
@@ -6589,18 +6594,43 @@ impl DbRepo {
         data_object_id: u64,
         file_size: u64,
     ) -> Result<(), String> {
-        let sql = CString::new(format!(
-            "
-            UPDATE data_objects
-            SET file_size = {file_size}, modification_date = NOW()
-            WHERE id_data_object = {data_object_id};
-            UPDATE files
-            SET size = {file_size}, modification_date = NOW(), change_date = NOW()
-            WHERE id_file = {file_id}
-            "
-        ))
+        let data_object_id = CString::new(data_object_id.to_string())
+            .map_err(|_| "data object id contains NUL byte".to_string())?;
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let file_size = CString::new(file_size.to_string())
+            .map_err(|_| "file size contains NUL byte".to_string())?;
+        let sql_object = CString::new(
+            "UPDATE data_objects SET file_size = $1, modification_date = NOW() WHERE id_data_object = $2",
+        )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        exec_command(conn, &sql)
+        let sql_file = CString::new(
+            "UPDATE files SET size = $1, modification_date = NOW(), change_date = NOW() WHERE id_file = $2",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        exec_command_params(conn, &sql_object, &[&file_size, &data_object_id])?;
+        exec_command_params(conn, &sql_file, &[&file_size, &file_id])
+    }
+
+    unsafe fn bump_file_content_generation_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+    ) -> Result<(), String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "UPDATE files SET content_generation = content_generation + 1 WHERE id_file = $1 RETURNING content_generation",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let result = exec_params(conn, &sql, &[&file_id])?;
+        let value = fetch_single_text_option(result)?
+            .ok_or_else(|| format!("content generation update found no file_id={file_id:?}"))?;
+        value
+            .trim()
+            .parse::<u64>()
+            .map(|_| ())
+            .map_err(|_| format!("invalid content generation for file_id={file_id:?}"))
     }
 
     unsafe fn create_data_object_on_conn(
@@ -6695,13 +6725,14 @@ impl DbRepo {
         file_id: u64,
         file_size: u64,
         target: DataObjectWriteTarget,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let Some(replaced) = target.replaced else {
-            return self.update_file_sizes_on_conn(conn, file_id, target.data_object_id, file_size);
+            self.update_file_sizes_on_conn(conn, file_id, target.data_object_id, file_size)?;
+            return Ok(false);
         };
 
         let sql_update_file = CString::new(
-            "UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3",
+            "UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW(), content_generation = content_generation + 1 WHERE id_file = $3 RETURNING id_file",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_delete_data_object =
@@ -6726,7 +6757,9 @@ impl DbRepo {
             .map_err(|_| "file size contains NUL byte".to_string())?;
 
         let params = [&new_data_object_id, &file_size, &file_id];
-        exec_command_params(conn, &sql_update_file, &params)?;
+        let result = exec_params(conn, &sql_update_file, &params)?;
+        fetch_single_text_option(result)?
+            .ok_or_else(|| format!("content write found no file_id={file_id:?}"))?;
 
         if replaced.old_reference_count <= 1 && self.data_object_swap_cleanup.is_deferred() {
             let params = [&old_data_object_id];
@@ -6739,7 +6772,7 @@ impl DbRepo {
             exec_command_params(conn, &sql_touch_old_object, &params)?;
         }
 
-        Ok(())
+        Ok(true)
     }
 
     fn detach_shared_data_object_on_conn(
@@ -12931,7 +12964,9 @@ impl DbRepo {
             self.record_persist_data_blocks_merge_elapsed(merge_started.elapsed());
         }
 
-        self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
+        if !self.finish_data_object_write_on_conn(conn, file_id, file_size, target)? {
+            self.bump_file_content_generation_on_conn(conn, file_id)?;
+        }
         Ok(())
     }
 
@@ -13068,7 +13103,9 @@ impl DbRepo {
             )?;
         }
 
-        self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
+        if !self.finish_data_object_write_on_conn(conn, file_id, file_size, target)? {
+            self.bump_file_content_generation_on_conn(conn, file_id)?;
+        }
         Ok(())
     }
 
@@ -13427,7 +13464,9 @@ impl DbRepo {
             }
         }
 
-        self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
+        if !self.finish_data_object_write_on_conn(conn, file_id, file_size, target)? {
+            self.bump_file_content_generation_on_conn(conn, file_id)?;
+        }
         Ok(())
     }
 
@@ -13651,7 +13690,9 @@ impl DbRepo {
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
                 exec_command(conn, &sql_clear_hash)?;
 
-                self.finish_data_object_write_on_conn(conn, file_id, file_size, target)?;
+                if !self.finish_data_object_write_on_conn(conn, file_id, file_size, target)? {
+                    self.bump_file_content_generation_on_conn(conn, file_id)?;
+                }
 
                 // Hole punching frees payload, but keep accounting serialized
                 // with the same quota lock used by ordinary writes.
@@ -14161,7 +14202,7 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_update_dst_file = CString::new(
-            "UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW() WHERE id_file = $3",
+            "UPDATE files SET data_object_id = $1, size = $2, change_date = NOW(), modification_date = NOW(), content_generation = content_generation + 1 WHERE id_file = $3",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_count_dst_references =
@@ -14320,7 +14361,7 @@ impl DbRepo {
         let file_id_for_fence = file_id;
         let desired_file_size = file_size;
         let sql_update_file = CString::new(
-            "UPDATE files SET size = $1, modification_date = NOW(), change_date = NOW() WHERE id_file = $2",
+            "UPDATE files SET size = $1, modification_date = NOW(), change_date = NOW(), content_generation = content_generation + 1 WHERE id_file = $2",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_lookup_size = CString::new("SELECT size FROM files WHERE id_file = $1")
@@ -16063,7 +16104,7 @@ mod tests {
         )
         .unwrap();
         let file_size_update_sql = std::ffi::CString::new(
-            "UPDATE files SET size = $1, modification_date = NOW(), change_date = NOW() WHERE id_file = $2",
+            "UPDATE files SET size = $1, modification_date = NOW(), change_date = NOW(), content_generation = content_generation + 1 WHERE id_file = $2",
         )
         .unwrap();
         let data_object_size_update_sql = std::ffi::CString::new(

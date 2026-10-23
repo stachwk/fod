@@ -1,4 +1,4 @@
-# TX03J — PostgreSQL content generation audit (2026-10-19)
+# TX03J — PostgreSQL content generation audit (2026-10-23)
 
 ## Authority and guarantees
 
@@ -9,64 +9,55 @@ remote event, and no SQL fill started before invalidation may publish later.
 
 ## Implemented (feature/forget-convergence-c1)
 
-- Schema v26 adds `files.content_generation` and a BEFORE UPDATE trigger.
-- Two isolated PG transaction tests cover rollback, concurrent updates and
-  independence across file IDs.
+- Schema v26 adds `files.content_generation`; migration 0027 changes its
+  trigger to accept only explicit, single-step increments. Metadata timestamps
+  no longer imply content changes, and overflow is rejected by PostgreSQL.
+- Persist, streaming persist, copy-on-write replacement, hole-punch, size
+  changes, and whole-object adoption advance only the affected file's
+  generation in the same PostgreSQL transaction as the content mutation.
+- The isolated generation fixture applies migrations 0026 and 0027 and covers
+  rollback, concurrent updates, file isolation, metadata-only updates, invalid
+  generation steps, and the BIGINT overflow boundary.
 - `DbRepo::fetch_block_range_with_generation_shared` retrieves size,
   generation and blocks in one PostgreSQL statement snapshot; legacy reads
   are unchanged.
 - `FileCacheGenerationGate` protects publication and now snapshots its
   generation before reading cached blocks.
 
-## Critical correctness gaps — do NOT enable default multi-host cache yet
+## Remaining correctness gates — do NOT enable default multi-host cache yet
 
-1. The v26 trigger increments on changes to `data_object_id`, `size`,
-   or `modification_date`. In-place `data_blocks` upserts do not inherently
-   update a `files` row. Verify **every** persist/copy/truncate/write path
-   increments the authoritative file generation in the committing transaction.
-2. `NOW()` in PostgreSQL is constant throughout a transaction. Multiple
-   touches in one transaction can leave `modification_date` unchanged.
-   A dedicated, explicit generation update protocol is needed; relying on
-   timestamps alone is insufficient.
-3. `touch_file_entry` advances generation through a timestamp change, which
-   can over-invalidate metadata-only changes.
-4. The generation-bearing read API is opt-in and is not called by the FUSE
+1. The generation-bearing read API is opt-in and is not called by the FUSE
    production path. It is not itself a cross-mount coherence mechanism.
-5. Cache coherence also requires selective Linux FUSE kernel page-cache
+2. Cache coherence also requires selective Linux FUSE kernel page-cache
    invalidation, and safe handling of open readers, local dirty buffers,
    and race ordering. Notifications are only hints; missing notifications
    require durable reconciliation.
-6. When reading from replicas, a generation/content snapshot may lag a
+3. When reading from replicas, a generation/content snapshot may lag a
    committed primary change; fencing reads or ensuring a sufficiently
    advanced replica snapshot is necessary.
-7. Any future migration that corrects generation semantics must be added
-   as a **new** numbered migration, rather than editing applied migration 26.
+4. Migration 0027, fresh bootstrap, generation transaction fixtures, the
+   generated-block snapshot, mkfs schema-upgrade flow, and hotpath unit tests
+   pass on the isolated PostgreSQL test database used on 2026-10-23. The full
+   `pg_query` suite and actual two-host FUSE cache invalidation race tests still
+   need to run before enabling default multi-host cache coherence.
 
-## Test gate on lt7300
+## Test results on 2026-10-23
 
-Run `cargo fmt --all -- --check` and
-`cargo check --workspace --locked` before database tests.
+The isolated PostgreSQL fixture passed generation transaction tests (2/2),
+the generated-block snapshot test, mkfs schema-upgrade and status tests, and
+hotpath unit tests (82/82). `cargo fmt --all -- --check`,
+`cargo check --workspace --locked`, and `git diff --check` also passed. The
+destructive mkfs tests ran only against a dedicated test database, which was
+removed after testing; the production database was not modified.
 
-Create an **isolated initialized test database** for destructive mkfs and
-quota tests. A database with schema_version=26 but no `config.block_size`
-is not a valid hotpath quota-test fixture. Confirm `fod.config` contains
-`block_size` and `max_fs_size_bytes` before starting tests.
-
-Run:
-
-```bash
-cargo test --locked -p fod-rust-fuse read_cache::tests
-cargo test --locked -p fod-rust-hotpath --test pg_query generated_block_snapshot_matches_committed_payload -- --exact --nocapture
-cargo test --locked -p fod-rust-hotpath --lib pg::tests::ordinary_persist_copy_merge_completes_before_final_quota_gate -- --exact --nocapture
-cargo test --locked -p fod-rust-mkfs --test content_generation
-```
-
-Only run PostgreSQL tests with `POSTGRES_DB` / `FOD_PG_DBNAME`
-pointing at properly initialized, dedicated test databases.
+The full `pg_query` integration suite and two-mount FUSE cache invalidation
+tests remain outstanding. PostgreSQL integration tests must use an isolated,
+initialized database with `fod.config.block_size` and
+`fod.config.max_fs_size_bytes` set.
 
 ## Next architectural gate
 
-Implement transactionally explicit generation bumps in all content commit
-paths, prove by write-path coverage tests, wire a per-file event/reconcile
-ledger and only then enable selective read-cache and kernel invalidation.
-Keep `FOD_CROSS_MOUNT_STRICT_READS=1` as the interim correctness path.
+Next, wire a per-file event/reconcile ledger and selective FUSE kernel
+invalidation. Then run two-mount tests for event loss, open readers, local dirty
+buffers, and publication races before enabling generation-aware reads by
+default. Keep `FOD_CROSS_MOUNT_STRICT_READS=1` as the interim correctness path.

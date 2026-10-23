@@ -25,9 +25,9 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 26;
+const SCHEMA_VERSION: u64 = 27;
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_FILES: [&str; 26] = [
+const MIGRATION_FILES: [&str; 27] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -54,9 +54,10 @@ const MIGRATION_FILES: [&str; 26] = [
     "0024_write_ownership_leases.sql",
     "0025_open_unlinked_files.sql",
     "0026_file_content_generation.sql",
+    "0027_explicit_file_content_generation.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 26] = [
+const MIGRATION_DESCRIPTIONS: [&str; 27] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -83,6 +84,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 26] = [
     "Add PostgreSQL-authoritative destination and file write ownership leases",
     "Preserve open file handles across unlink with global open leases",
     "Track transactional per-file content generations for cross-mount coherence",
+    "Use explicit transactional content generation updates",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -258,6 +260,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0026_file_content_generation.sql"
         )),
+        27 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0027_explicit_file_content_generation.sql"
+        )),
         _ => "",
     }
 }
@@ -290,6 +296,7 @@ fn migration_description(version: u64) -> &'static str {
         24 => MIGRATION_DESCRIPTIONS[23],
         25 => MIGRATION_DESCRIPTIONS[24],
         26 => MIGRATION_DESCRIPTIONS[25],
+        27 => MIGRATION_DESCRIPTIONS[26],
         _ => "Migration",
     }
 }
@@ -322,6 +329,7 @@ fn migration_filename(version: u64) -> &'static str {
         24 => MIGRATION_FILES[23],
         25 => MIGRATION_FILES[24],
         26 => MIGRATION_FILES[25],
+        27 => MIGRATION_FILES[26],
         _ => "unknown.sql",
     }
 }
@@ -470,6 +478,23 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                   AND column_name = 'unlinked'
                   AND is_nullable = 'NO'
             )
+            AND EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'fod'
+                  AND table_name = 'files'
+                  AND column_name = 'content_generation'
+                  AND is_nullable = 'NO'
+                  AND column_default = '1'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM pg_trigger
+                WHERE tgrelid = 'fod.files'::regclass
+                  AND tgname = 'trg_fod_file_content_generation'
+                  AND NOT tgisinternal
+            )
+            AND to_regprocedure('fod.fod_bump_file_content_generation()') IS NOT NULL
             AND EXISTS (
                 SELECT 1
                 FROM pg_indexes

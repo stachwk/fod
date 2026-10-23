@@ -141,9 +141,9 @@ fn fused_block_range_returns_file_size_and_payload() -> Result<(), String> {
 fn generated_block_snapshot_matches_committed_payload() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
-    // The generation-bearing query is intentionally v26-only.
-    if repo.startup_snapshot()?.schema_version != Some(26) {
-        return Err("TX03J generation snapshot test requires FOD schema 26".to_string());
+    // The generation-bearing query requires schema v26 or newer.
+    if !matches!(repo.startup_snapshot()?.schema_version, Some(26..)) {
+        return Err("TX03J generation snapshot test requires FOD schema 26 or newer".to_string());
     }
     let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
     let file_id = repo.create_file(
