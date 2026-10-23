@@ -3,6 +3,11 @@
 These rules apply to repository work performed by coding agents and automated
 assistants.
 
+## Language
+
+Write to the user in Polish. Write notes added to repository documentation in
+Polish or English.
+
 ## PostgreSQL-authoritative multi-host correctness
 
 FOD may be mounted and used concurrently from multiple hosts. PostgreSQL is the
