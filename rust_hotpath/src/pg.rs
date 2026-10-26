@@ -4058,6 +4058,13 @@ pub enum FileUnlinkOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectoryUnlinkOutcome {
+    Removed,
+    NotEmpty,
+    SourceChanged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PersistBlockRow<'a> {
     pub block_index: u64,
     pub data: &'a [u8],
@@ -10391,6 +10398,67 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe {
             let params = [&symlink_id];
             exec_command_params(conn, &sql, &params)
+        })
+    }
+
+    /// Remove an expected directory binding on the authority. The row lock
+    /// serializes the emptiness check with FK-backed child insertion and rename.
+    pub fn unlink_directory_entry(
+        &self,
+        directory_id: u64,
+        parent_id: Option<u64>,
+        name: &str,
+    ) -> Result<DirectoryUnlinkOutcome, String> {
+        if name.is_empty() || name == "/" || name == "." || name == ".." || name.contains('/') {
+            return Err("invalid directory unlink name".to_string());
+        }
+        let namespace_key = CString::new(format!(
+            "fod:write:destination:{}:{}:{name}",
+            parent_id.unwrap_or(0),
+            name.len()
+        ))
+        .map_err(|_| "directory namespace key contains NUL byte".to_string())?;
+        let id = CString::new(directory_id.to_string()).unwrap();
+        let parent = CString::new(parent_id.unwrap_or(0).to_string()).unwrap();
+        let name =
+            CString::new(name).map_err(|_| "directory name contains NUL byte".to_string())?;
+        let binding_sql = CString::new(
+            "SELECT id_directory FROM directories
+             WHERE id_directory = $1 AND COALESCE(id_parent, 0) = $2 AND name = $3
+             FOR UPDATE",
+        )
+        .unwrap();
+        let children_sql = CString::new(
+            "SELECT EXISTS (
+                SELECT 1 FROM files WHERE id_directory = $1 AND NOT unlinked
+                UNION ALL SELECT 1 FROM hardlinks WHERE id_directory = $1
+                UNION ALL SELECT 1 FROM directories WHERE id_parent = $1
+                UNION ALL SELECT 1 FROM symlinks WHERE id_parent = $1
+             )::text",
+        )
+        .unwrap();
+        let detach_sql = CString::new(
+            "UPDATE files SET id_directory = NULL WHERE id_directory = $1 AND unlinked",
+        )
+        .unwrap();
+        let delete_sql = CString::new("DELETE FROM directories WHERE id_directory = $1").unwrap();
+        self.with_transaction(|transaction| unsafe {
+            let conn = transaction.conn;
+            Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+            if fetch_single_text_option(exec_params(conn, &binding_sql, &[&id, &parent, &name])?)?
+                .is_none()
+            {
+                return Ok(DirectoryUnlinkOutcome::SourceChanged);
+            }
+            let children = fetch_single_text(exec_params(conn, &children_sql, &[&id])?)?;
+            if matches!(children.as_str(), "t" | "true") {
+                return Ok(DirectoryUnlinkOutcome::NotEmpty);
+            }
+            // Unlinked open inodes are not visible children. Detach their parent
+            // FK without changing file identity, content or open/write leases.
+            exec_command_params(conn, &detach_sql, &[&id])?;
+            exec_command_params(conn, &delete_sql, &[&id])?;
+            Ok(DirectoryUnlinkOutcome::Removed)
         })
     }
 

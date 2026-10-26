@@ -102,6 +102,34 @@ remain open. Keep replica read routing disabled for general writable mounts
 (`FOD_PG_REPLICA_READ_ROUTING_ENABLED=0`) until their preconditions are audited;
 the unlink result alone does not establish their correctness.
 
+## Current rmdir namespace transaction and validation
+
+FOD 3.4.50 makes `rmdir` resolve its initial binding and sticky-bit inputs on
+primary. `DbRepo::unlink_directory_entry` then locks the namespace key and the
+expected directory row in one primary transaction, rechecks the full
+`(directory_id, parent_id, name)` binding, checks all visible child kinds and
+removes the directory there. The directory row lock conflicts with the FK
+key-share locks used by child insertion, so the emptiness decision cannot race
+past a child transaction. Permission checks outside this transaction remain
+part of the permission review below.
+
+An open, unlinked file is not a visible namespace child. Its parent FK is set
+to NULL in the removal transaction, preserving file identity, payload and
+open/write leases; a remote open writer remains usable after parent removal.
+
+Before the repair, the new mounted test reproduced `EIO` instead of
+`ENOTEMPTY` when a child existed on primary but not on the paused replica:
+`artifacts/integration/unlink-primary-authority-20261026T193316Z/`.
+After the repair, the expanded primary/replica test passed all unlink scenarios
+plus authoritative non-empty checks, stale-directory rejection and parent
+removal with a remote open unlinked writer:
+`artifacts/integration/unlink-primary-authority-20261026T193731Z/`.
+Both runs used `release-lto` and `integration-test-hooks`.
+
+The full `pg_query` suite passed 29/29 tests. New backend regressions cover
+stale/renamed bindings and a child transaction held uncommitted: removal waits
+at the directory row lock, then sees the committed child and returns `NotEmpty`.
+
 ## Confirmed routing and enforcement
 
 | Operation family | Authority path | What was established |
@@ -110,7 +138,8 @@ the unlink result alone does not establish their correctness.
 | `fallocate` hole punching, clone/copy adoption | Primary persistence APIs with a write fence | Hole-punch fencing regression passed; adoption also validates its destination fence in the primary transaction |
 | Open/client sessions, ownership and heartbeat | `with_control_connection` -> the same primary targets; normal read-only mounts use a writable control repo | Remote open/unlink/recreate test passed with distinct inode generations and old-handle writes isolated from the replacement |
 | `rename` / replace | Primary transaction with destination/file locks and source/target revalidation | Source inspection confirms transaction guards; test details are recorded below |
-| `create`, mkdir, mknod, link, symlink, rmdir | Primary SQL through `with_cached_connection` | Routing is confirmed; this is not blanket proof of namespace conflict semantics |
+| `create`, mkdir, mknod, link, symlink | Primary SQL through `with_cached_connection` | Routing is confirmed; this is not blanket proof of namespace conflict semantics |
+| `rmdir` | Primary namespace advisory lock and directory row lock, check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
 | chmod/chown, timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Routing is confirmed; authorization and cached precondition checks require separate scrutiny |
 | Explicit degraded replica-only mount | Read-only FUSE mount with mutation guards | It deliberately does not acquire/renew primary-backed leases or grant write ownership |
 
@@ -218,9 +247,6 @@ families still require the remaining authority review.
   mutation's preconditions and partial-block read/modify/write input for
   primary validation in its commit transaction. The historical unlink failure
   establishes why read routing affects mutation correctness.
-- `rmdir` reads directory contents before its separate primary `DELETE`.
-  Foreign keys protect referenced children, but correct `ENOTEMPTY` mapping
-  and concurrent namespace ordering need a dedicated test.
 - Namespace uniqueness indexes in `base_schema.sql` are per table (`files`,
   `directories`, `hardlinks`, `symlinks`). They do not alone establish one
   cross-type `(parent, name)` conflict boundary. The audited create methods

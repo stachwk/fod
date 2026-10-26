@@ -2,8 +2,8 @@
 // Licensed under BSL 1.1
 
 use fod_rust_hotpath::pg::{
-    DbRepo, DirectoryEntryMetadata, FileUnlinkOutcome, PersistBlockRow, ResolvedPath,
-    STORAGE_QUOTA_EXCEEDED_PREFIX,
+    DbRepo, DirectoryEntryMetadata, DirectoryUnlinkOutcome, FileUnlinkOutcome, PersistBlockRow,
+    ResolvedPath, STORAGE_QUOTA_EXCEEDED_PREFIX,
 };
 use fod_rust_runtime::{DataObjectSwapCleanup, RuntimeConfig};
 use std::env;
@@ -267,6 +267,111 @@ fn namespace_statistics_count_entries_and_preserve_capacity() -> Result<(), Stri
     assert_eq!(repo.count_directories()?, before.1);
     assert_eq!(repo.count_symlinks()?, before.2);
     assert_eq!(repo.count_root_directory_children()?, roots_before);
+    Ok(())
+}
+
+#[test]
+fn directory_unlink_revalidates_binding_and_children() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let mut fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    assert_eq!(
+        repo.unlink_directory_entry(fixture.directory_id, None, &fixture.directory_name)?,
+        DirectoryUnlinkOutcome::NotEmpty
+    );
+    let child = repo.create_directory(
+        Some(fixture.directory_id),
+        "rmdir-child",
+        0o755,
+        1000,
+        1000,
+        &unique_name("rmdir_seed"),
+    )?;
+    fixture.child_directory_id = Some(child);
+    assert_eq!(
+        repo.unlink_directory_entry(child, None, "rmdir-child")?,
+        DirectoryUnlinkOutcome::SourceChanged
+    );
+    repo.exec(&format!(
+        "UPDATE directories SET name = 'rmdir-moved' WHERE id_directory = {child}"
+    ))?;
+    assert_eq!(
+        repo.unlink_directory_entry(child, Some(fixture.directory_id), "rmdir-child")?,
+        DirectoryUnlinkOutcome::SourceChanged
+    );
+    assert_eq!(
+        repo.get_dir_id(&format!("/{}/rmdir-moved", fixture.directory_name))?,
+        Some(child)
+    );
+    assert_eq!(
+        repo.unlink_directory_entry(child, Some(fixture.directory_id), "rmdir-moved")?,
+        DirectoryUnlinkOutcome::Removed
+    );
+    assert_eq!(
+        repo.unlink_directory_entry(child, Some(fixture.directory_id), "rmdir-moved")?,
+        DirectoryUnlinkOutcome::SourceChanged
+    );
+    Ok(())
+}
+
+#[test]
+fn directory_unlink_waits_for_child_transaction_and_sees_its_commit() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let mut fixture = NamespaceFixture::new()?;
+    let child = fixture.repo.create_directory(
+        Some(fixture.directory_id),
+        "rmdir-gate",
+        0o755,
+        1000,
+        1000,
+        &unique_name("rmdir_gate_seed"),
+    )?;
+    fixture.child_directory_id = Some(child);
+    let writer = repo_with_runtime()?;
+    let remover = repo_with_runtime()?;
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let parent = fixture.directory_id;
+    let writer_thread = std::thread::spawn(move || {
+        writer.with_transaction(|tx| {
+        tx.exec(&format!("INSERT INTO directories (id_parent,name,mode,uid,gid,inode_seed,modification_date,access_date,change_date,creation_date) VALUES ({child},'pending-child','755',1000,1000,'rmdir-pending',NOW(),NOW(),NOW(),NOW())"))?;
+        ready_tx.send(()).map_err(|err| err.to_string())?;
+        release_rx.recv_timeout(std::time::Duration::from_secs(30)).map_err(|err| err.to_string())?;
+        Ok(())
+    })
+    });
+    ready_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .map_err(|err| err.to_string())?;
+    let remove_thread = std::thread::spawn(move || {
+        remover.unlink_directory_entry(child, Some(parent), "rmdir-gate")
+    });
+    let observed_wait = (|| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let count = fixture.repo.query_scalar_text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%FROM directories%FOR UPDATE%'")?;
+            if count.trim() != "0" {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("rmdir did not wait for the child's FK lock".to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    })();
+    release_tx.send(()).map_err(|err| err.to_string())?;
+    writer_thread
+        .join()
+        .map_err(|_| "writer thread panicked".to_string())??;
+    let outcome = remove_thread
+        .join()
+        .map_err(|_| "rmdir thread panicked".to_string())??;
+    // Clean the committed test child before the fixture removes its parent.
+    fixture.repo.exec(&format!(
+        "DELETE FROM directories WHERE id_parent = {child}"
+    ))?;
+    observed_wait?;
+    assert_eq!(outcome, DirectoryUnlinkOutcome::NotEmpty);
     Ok(())
 }
 

@@ -121,6 +121,52 @@ def main():
         b = FODMount(str(ROOT)); mounts.append(b)
         b.start(str(mb))
 
+        # Empty on the paused replica must not override primary children.
+        (ma / "lag-rmdir").mkdir()
+        pause()
+        seed(ma / "lag-rmdir/child")
+        try:
+            (mb / "lag-rmdir").rmdir()
+        except OSError as exc:
+            assert exc.errno == errno.ENOTEMPTY, f"rmdir primary child: {exc}"
+        else:
+            raise AssertionError("rmdir removed a directory with a primary child")
+        assert (ma / "lag-rmdir/child").read_bytes() == PAYLOAD
+        results["rmdir_primary_children_override_lagged_empty_replica"] = True
+        resume()
+
+        # A stale replica binding must not make a second rmdir report success.
+        (ma / "already-removed-directory").mkdir()
+        pause()
+        (ma / "already-removed-directory").rmdir()
+        try:
+            (mb / "already-removed-directory").rmdir()
+        except OSError as exc:
+            assert exc.errno == errno.ENOENT, f"rmdir stale binding: {exc}"
+        else:
+            raise AssertionError("rmdir accepted an already removed primary binding")
+        results["rmdir_rejects_stale_replica_binding"] = True
+        resume()
+
+        # An open, unlinked inode is not a directory child in the namespace.
+        (ma / "unlinked-parent").mkdir()
+        seed(ma / "unlinked-parent/open")
+        fd = os.open(ma / "unlinked-parent/open", os.O_RDWR)
+        file_id = query(primary, "SELECT id_file FROM fod.files WHERE name='open'")[0][0]
+        try:
+            pause()
+            (mb / "unlinked-parent/open").unlink()
+            (mb / "unlinked-parent").rmdir()
+            os.pwrite(fd, b"REMOVED-PARENT", 0)
+            os.fsync(fd)
+            assert os.pread(fd, 14, 0) == b"REMOVED-PARENT"
+            assert os.fstat(fd).st_nlink == 0
+        finally:
+            os.close(fd)
+        wait_for(lambda: query(primary, "SELECT count(*) FROM fod.files WHERE id_file=%s", (file_id,))[0][0] == 0, "last close after parent rmdir")
+        results["rmdir_preserves_remote_open_unlinked_writer"] = True
+        resume()
+
         # Link committed on primary but deliberately absent from the replica.
         seed(ma / "lag-original")
         (ma / "nested").mkdir()

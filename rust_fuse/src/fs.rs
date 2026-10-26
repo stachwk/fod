@@ -20,10 +20,11 @@ use libc::{EIO, ENOENT, ENOSPC, ENOTDIR, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
-    prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
-    FileUnlinkOutcome, GeneratedSharedBlockRows, PersistBlockRow, RenameFileReplaceOutcome,
-    RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
-    STORAGE_QUOTA_EXCEEDED_PREFIX, WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+    prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot,
+    DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome, GeneratedSharedBlockRows,
+    PersistBlockRow, RenameFileReplaceOutcome, RenameNamespaceSource, RenameNamespaceTarget,
+    WriteOwnershipLease, WritePersistenceFence, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
@@ -8194,24 +8195,27 @@ impl Filesystem for FodFuse {
             "rmdir",
             format!("parent={} child={}", parent_path, child_path),
         );
-        let (kind, entry_id) = match self.resolved_entry_for_path(&child_path) {
+        let authority = self.repo.authoritative_view();
+        let resolved = match authority.resolve_path(&child_path) {
             Ok(value) => value,
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
+            Err(err) => {
+                warn!("FOD rmdir resolve failed path={} err={}", child_path, err);
+                fuse_reply_error!(reply, EIO);
                 return;
             }
         };
-        if kind.as_deref() != Some("dir") {
-            self.log_request_error(
-                req_id,
-                "rmdir",
-                libc::ENOTDIR,
-                format!("child={} kind={:?}", child_path, kind),
-            );
-            fuse_reply_error!(reply, libc::ENOTDIR);
-            return;
-        }
-        let entry_attrs = match self.lookup_path(&child_path) {
+        let directory_id = match (resolved.kind.as_deref(), resolved.entry_id) {
+            (Some("dir"), Some(id)) => id,
+            (None, _) => {
+                fuse_reply_error!(reply, ENOENT);
+                return;
+            }
+            _ => {
+                fuse_reply_error!(reply, libc::ENOTDIR);
+                return;
+            }
+        };
+        let entry_attrs = match self.attrs_for_path_from_repo(&authority, &child_path) {
             Ok(Some(attrs)) => attrs.file_attr,
             _ => {
                 self.log_request_error(
@@ -8224,7 +8228,9 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        if let Err(errno) = self.enforce_sticky_bit(&parent_path, &entry_attrs, &subject) {
+        if let Err(errno) =
+            self.enforce_sticky_bit_from_repo(&authority, &parent_path, &entry_attrs, &subject)
+        {
             self.log_request_error(
                 req_id,
                 "rmdir",
@@ -8234,66 +8240,36 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, errno);
             return;
         }
-        match self.repo.list_directory_entries_blob(&child_path) {
-            Ok(Some(blob)) if !blob.is_empty() => {
-                self.log_request_error(
-                    req_id,
+        match self.repo.unlink_directory_entry(
+            directory_id,
+            resolved.parent_id,
+            name.to_string_lossy().as_ref(),
+        ) {
+            Ok(DirectoryUnlinkOutcome::Removed) => {
+                let _ = self.append_journal_event(
+                    subject.uid,
                     "rmdir",
-                    libc::ENOTEMPTY,
-                    format!("child={} not empty", child_path),
+                    &child_path,
+                    None,
+                    Some(directory_id),
                 );
-                fuse_reply_error!(reply, libc::ENOTEMPTY);
-                return;
+                self.remove_cached_path(&child_path);
+                self.remove_cached_handle_paths(&child_path);
+                self.invalidate_statfs_cache();
+                debug!(
+                    "FOD req={} op=rmdir completed path={} directory_id={}",
+                    req_id, child_path, directory_id
+                );
+                reply.ok();
             }
-            Err(_) => {
-                self.log_request_error(
-                    req_id,
-                    "rmdir",
-                    EIO,
-                    format!("child={} list entries", child_path),
+            Ok(DirectoryUnlinkOutcome::NotEmpty) => fuse_reply_error!(reply, ENOTEMPTY),
+            Ok(DirectoryUnlinkOutcome::SourceChanged) => fuse_reply_error!(reply, ENOENT),
+            Err(err) => {
+                warn!(
+                    "FOD rmdir failed path={} directory_id={} err={}",
+                    child_path, directory_id, err
                 );
                 fuse_reply_error!(reply, EIO);
-                return;
-            }
-            _ => {}
-        }
-        match entry_id {
-            Some(directory_id) => match self.repo.delete_directory_entry(directory_id) {
-                Ok(_) => {
-                    let _ = self.append_journal_event(
-                        subject.uid,
-                        "rmdir",
-                        &child_path,
-                        None,
-                        Some(directory_id),
-                    );
-                    self.remove_cached_path(&child_path);
-                    self.remove_cached_handle_paths(&child_path);
-                    self.invalidate_statfs_cache();
-                    debug!(
-                        "FOD req={} op=rmdir completed path={} directory_id={}",
-                        req_id, child_path, directory_id
-                    );
-                    reply.ok();
-                }
-                Err(_) => {
-                    self.log_request_error(
-                        req_id,
-                        "rmdir",
-                        EIO,
-                        format!("child={} delete", child_path),
-                    );
-                    fuse_reply_error!(reply, EIO)
-                }
-            },
-            None => {
-                self.log_request_error(
-                    req_id,
-                    "rmdir",
-                    ENOENT,
-                    format!("child={} missing directory id", child_path),
-                );
-                fuse_reply_error!(reply, ENOENT)
             }
         }
     }
