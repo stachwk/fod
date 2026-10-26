@@ -364,34 +364,7 @@ impl ReadBlockCache {
 
     #[cfg(test)]
     fn insert(&mut self, file_id: u64, block_index: u64, data: Arc<[u8]>, limit_blocks: usize) {
-        let key = (file_id, block_index);
-        match &mut self.store {
-            ReadCacheStore::Fifo { entries, order } => {
-                if !entries.contains_key(&key) {
-                    order.push_back(key);
-                }
-                entries.insert(key, data);
-                while entries.len() > limit_blocks {
-                    if let Some(oldest) = order.pop_front() {
-                        entries.remove(&oldest);
-                    } else {
-                        break;
-                    }
-                }
-            }
-            ReadCacheStore::Lru { entries } => {
-                let existed = entries.contains_key(&key);
-                entries.insert(key, data);
-                if existed {
-                    let _ = entries.get_refresh(&key);
-                }
-                while entries.len() > limit_blocks {
-                    if entries.pop_front().is_none() {
-                        break;
-                    }
-                }
-            }
-        }
+        self.insert_many(file_id, &[(block_index, data)], limit_blocks);
     }
 
     fn insert_many(&mut self, file_id: u64, blocks: &[(u64, Arc<[u8]>)], limit_blocks: usize) {

@@ -39,6 +39,14 @@ valid replacement for filesystem operation ordering.
 
 See `docs/FOD_ARCHITECTURE_INVARIANTS.md`.
 
+## Selective refactoring
+
+Refactor only clear duplication, unnecessary complexity or mixed responsibilities
+when the change has a concrete benefit. File size alone does not justify splitting
+a module. Keep cohesive code together and avoid extra abstractions or wrappers
+without a demonstrated need. Stop the refactoring pass when the obvious,
+worthwhile candidates in the reviewed area have been addressed.
+
 ## Commit review
 
 After every completed, verified logical change, create a commit on `main`
