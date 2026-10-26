@@ -21,9 +21,9 @@ use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot, FileReadMetadata,
-    PersistBlockRow, RenameFileReplaceOutcome, RenameNamespaceSource, RenameNamespaceTarget,
-    WriteOwnershipLease, WritePersistenceFence, STORAGE_QUOTA_EXCEEDED_PREFIX,
-    WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+    FileUnlinkOutcome, GeneratedSharedBlockRows, PersistBlockRow, RenameFileReplaceOutcome,
+    RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
+    STORAGE_QUOTA_EXCEEDED_PREFIX, WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
@@ -1611,6 +1611,7 @@ pub struct FodFuse {
     pub atime_policy: AtimePolicy,
     reloadable_runtime: Arc<RwLock<RuntimeReloadableSettings>>,
     pub read_only: bool,
+    degraded_read_only: bool,
     pub use_fuse_context: bool,
     pub fopen_direct_io: bool,
     pub selinux_enabled: bool,
@@ -1661,6 +1662,40 @@ pub struct FodFuse {
     runtime_reload: Option<RuntimeReloadHandle>,
 }
 
+fn assemble_degraded_snapshot(
+    snapshot: GeneratedSharedBlockRows,
+    offset: u64,
+    size: u64,
+    block_size: u64,
+) -> Result<(Vec<u8>, u64), libc::c_int> {
+    if size == 0 {
+        return Ok((Vec::new(), 0));
+    }
+    let Some((file_size, generation, blocks)) = snapshot else {
+        return Err(libc::ESTALE);
+    };
+    if offset >= file_size {
+        return Ok((Vec::new(), generation));
+    }
+    let requested_end = offset.saturating_add(size);
+    let end_offset = requested_end.min(file_size);
+    let first_block = offset / block_size.max(1);
+    let last_block = end_offset.saturating_sub(1) / block_size.max(1);
+    let blocks = blocks
+        .into_iter()
+        .filter(|(block, _)| *block >= first_block && *block <= last_block)
+        .collect::<Vec<_>>();
+    let data = assemble_read_slice(
+        first_block,
+        last_block,
+        offset,
+        end_offset,
+        block_size,
+        &blocks,
+    );
+    Ok((data, generation))
+}
+
 impl FodFuse {
     pub fn new_with_task_settings(
         repo: DbRepo,
@@ -1677,6 +1712,7 @@ impl FodFuse {
             security,
             atime_policy,
             read_only,
+            degraded_read_only,
             use_fuse_context,
             fopen_direct_io,
         } = settings;
@@ -1729,6 +1765,7 @@ impl FodFuse {
             atime_policy,
             reloadable_runtime: Arc::new(RwLock::new(runtime.reloadable_settings())),
             read_only,
+            degraded_read_only,
             use_fuse_context,
             fopen_direct_io,
             selinux_enabled: security.selinux_enabled,
@@ -1807,11 +1844,19 @@ impl FodFuse {
     }
 
     pub(crate) fn metadata_cache_ttl_live(&self) -> Duration {
-        self.reloadable_runtime().metadata_cache_ttl
+        if self.degraded_read_only {
+            Duration::ZERO
+        } else {
+            self.reloadable_runtime().metadata_cache_ttl
+        }
     }
 
     pub(crate) fn statfs_cache_ttl_live(&self) -> Duration {
-        self.reloadable_runtime().statfs_cache_ttl
+        if self.degraded_read_only {
+            Duration::ZERO
+        } else {
+            self.reloadable_runtime().statfs_cache_ttl
+        }
     }
 
     fn start_fuse_read_profile(&self) -> FodFuseProfileTimer {
@@ -2877,11 +2922,21 @@ impl FodFuse {
         entry_attrs: &FileAttr,
         subject: &SubjectIdentity,
     ) -> Result<(), libc::c_int> {
+        self.enforce_sticky_bit_from_repo(&self.repo, parent_path, entry_attrs, subject)
+    }
+
+    fn enforce_sticky_bit_from_repo(
+        &self,
+        repo: &DbRepo,
+        parent_path: &str,
+        entry_attrs: &FileAttr,
+        subject: &SubjectIdentity,
+    ) -> Result<(), libc::c_int> {
         let parent_path = Self::normalize_path(parent_path);
         if parent_path == "/" {
             return Ok(());
         }
-        let parent_attrs = match self.lookup_path(&parent_path) {
+        let parent_attrs = match self.attrs_for_path_from_repo(repo, &parent_path) {
             Ok(Some(attrs)) => attrs.file_attr,
             Ok(None) => return Err(ENOENT),
             Err(errno) => return Err(errno),
@@ -3898,7 +3953,15 @@ impl FodFuse {
     }
 
     fn attrs_for_path(&self, path: &str) -> Result<Option<ParsedAttrs>, libc::c_int> {
-        let blob = self.repo.fetch_path_attrs_blob(path).map_err(|_| EIO)?;
+        self.attrs_for_path_from_repo(&self.repo, path)
+    }
+
+    fn attrs_for_path_from_repo(
+        &self,
+        repo: &DbRepo,
+        path: &str,
+    ) -> Result<Option<ParsedAttrs>, libc::c_int> {
+        let blob = repo.fetch_path_attrs_blob(path).map_err(|_| EIO)?;
         let Some(blob) = blob else {
             return Ok(None);
         };
@@ -3960,21 +4023,17 @@ impl FodFuse {
             let mut perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).unwrap_or(0o644);
             let mut rdev = 0;
             if obj_type == "hardlink" {
-                let file_id = self.repo.get_hardlink_file_id(raw_inode).map_err(|_| EIO)?;
+                let file_id = repo.get_hardlink_file_id(raw_inode).map_err(|_| EIO)?;
                 if let Some(file_id) = file_id {
-                    if let Some((special_type, major, minor)) = self
-                        .repo
-                        .get_special_file_metadata(file_id)
-                        .map_err(|_| EIO)?
+                    if let Some((special_type, major, minor)) =
+                        repo.get_special_file_metadata(file_id).map_err(|_| EIO)?
                     {
                         kind = Self::file_type_from_special(&special_type);
                         rdev = ((major as u64) << 8) | (minor as u64);
                     }
                 }
-            } else if let Some((special_type, major, minor)) = self
-                .repo
-                .get_special_file_metadata(raw_inode)
-                .map_err(|_| EIO)?
+            } else if let Some((special_type, major, minor)) =
+                repo.get_special_file_metadata(raw_inode).map_err(|_| EIO)?
             {
                 kind = Self::file_type_from_special(&special_type);
                 rdev = ((major as u64) << 8) | (minor as u64);
@@ -3985,17 +4044,12 @@ impl FodFuse {
             let inode = self.stable_inode(&obj_type, &inode_seed, raw_inode);
             let nlink = match obj_type.as_str() {
                 "hardlink" => {
-                    let file_id = self.repo.get_hardlink_file_id(raw_inode).map_err(|_| EIO)?;
+                    let file_id = repo.get_hardlink_file_id(raw_inode).map_err(|_| EIO)?;
                     let file_id = file_id.unwrap_or(raw_inode);
-                    self.repo.count_file_links(file_id).map_err(|_| EIO)?
+                    repo.count_file_links(file_id).map_err(|_| EIO)?
                 }
-                "file" => self.repo.count_file_links(raw_inode).map_err(|_| EIO)?,
-                "dir" => {
-                    2 + self
-                        .repo
-                        .count_directory_subdirs(raw_inode)
-                        .map_err(|_| EIO)?
-                }
+                "file" => repo.count_file_links(raw_inode).map_err(|_| EIO)?,
+                "dir" => 2 + repo.count_directory_subdirs(raw_inode).map_err(|_| EIO)?,
                 _ => 1,
             };
             FileAttr {
@@ -4463,6 +4517,46 @@ impl FodFuse {
         Ok(data)
     }
 
+    fn read_degraded_snapshot(
+        &self,
+        file_id: u64,
+        offset: u64,
+        size: u64,
+    ) -> Result<Vec<u8>, libc::c_int> {
+        if size == 0 {
+            return Ok(Vec::new());
+        }
+        let requested_end = offset.saturating_add(size);
+        let first_block = offset / self.block_size;
+        let requested_last_block = requested_end.saturating_sub(1) / self.block_size;
+        let started = Instant::now();
+        let snapshot = self
+            .repo
+            .fetch_block_range_with_generation_shared(
+                file_id,
+                first_block,
+                requested_last_block,
+                self.block_size,
+            )
+            .map_err(|err| {
+                warn!(
+                    "FOD degraded read snapshot failed file_id={} offset={} size={} err={}",
+                    file_id, offset, size, err
+                );
+                EIO
+            })?;
+        self.record_read_block_map_elapsed(started.elapsed());
+        let started = Instant::now();
+        let (data, content_generation) =
+            assemble_degraded_snapshot(snapshot, offset, size, self.block_size)?;
+        self.record_assemble_read_slice_elapsed(started.elapsed());
+        debug!(
+            "FOD degraded snapshot read file_id={} content_generation={} offset={} size={}",
+            file_id, content_generation, offset, size
+        );
+        Ok(data)
+    }
+
     fn strict_cross_mount_reads_enabled() -> bool {
         std::env::var("FOD_CROSS_MOUNT_STRICT_READS")
             .map(|value| {
@@ -4538,6 +4632,9 @@ impl FodFuse {
         fh: u64,
         file_id: u64,
     ) -> Result<(), libc::c_int> {
+        if self.degraded_read_only {
+            return Ok(());
+        }
         let Some(session_id) = self.session_id else {
             warn!(
                 "FOD file open lease unavailable fh={} file_id={} reason=no_client_session",
@@ -5158,66 +5255,55 @@ impl FodFuse {
             .unwrap_or(0)
     }
 
-    fn mark_deferred_unlink_destination_released(&self, file_id: u64) {
+    fn mark_unlink_destination_released(&self, file_id: u64, parent_id: Option<u64>, name: &str) {
         if let Ok(mut guard) = self.fh_table.lock() {
             for state in guard.values_mut() {
                 if state.file_id == Some(file_id) {
                     if let Some(ownership) = state.write_ownership.as_mut() {
-                        ownership.destination_released = true;
+                        if ownership.parent_id == parent_id && ownership.name == name {
+                            ownership.destination_released = true;
+                        }
                     }
                 }
             }
         }
     }
 
-    fn defer_open_primary_unlink(
+    fn unlink_file_with_primary_authority(
         &self,
         file_id: u64,
+        parent_id: Option<u64>,
         parent_path: &str,
         old_path: &str,
-        ino: u64,
+        old_name: &str,
         req_id: u64,
     ) -> Result<(), String> {
         let session_id = self.session_id.unwrap_or(0);
         let hidden_name = format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
-        let hidden_path = Self::join_path(parent_path, OsStr::new(&hidden_name));
-        let (parent_id, old_name) =
-            self.write_ownership_resource_for_path(old_path)
-                .map_err(|errno| {
-                    format!("deferred unlink namespace resolution failed errno={errno}")
-                })?;
-
-        self.repo
-            .defer_primary_file_unlink(file_id, &hidden_name, parent_id, &old_name)?;
-
-        self.mark_deferred_unlink_destination_released(file_id);
+        let outcome = self
+            .repo
+            .unlink_file_entry(file_id, &hidden_name, parent_id, old_name)?;
+        if outcome == FileUnlinkOutcome::SourceChanged {
+            return Err("FOD_UNLINK_SOURCE_CHANGED".to_string());
+        }
+        // This mirrors the committed primary result; it never decides whether
+        // another host may reclaim a file or keep writing an open inode.
+        self.mark_unlink_destination_released(file_id, parent_id, old_name);
         self.remove_cached_path(old_path);
-        if let Ok(mut guard) = self.fh_table.lock() {
-            for state in guard.values_mut() {
-                if state.file_id == Some(file_id) && state.path == old_path {
-                    state.path = hidden_path.clone();
+        if outcome == FileUnlinkOutcome::Deferred {
+            let hidden_path = Self::join_path(parent_path, OsStr::new(&hidden_name));
+            if let Ok(mut guard) = self.fh_table.lock() {
+                for state in guard.values_mut() {
+                    if state.file_id == Some(file_id) && state.path == old_path {
+                        state.path = hidden_path.clone();
+                    }
                 }
             }
         }
-
-        let active_open_leases = self.repo.has_active_file_open_leases(file_id)?;
-        if !active_open_leases {
-            self.repo.purge_primary_file(file_id)?;
-            self.invalidate_statfs_cache();
-            info!(
-                "FOD deferred unlink finalized immediately file_id={} ino={} old_path={}",
-                file_id, ino, old_path
-            );
-            return Ok(());
-        }
-
+        self.invalidate_statfs_cache();
         info!(
-            "FOD deferred unlink staged file_id={} ino={} old_path={} hidden_path={} local_open_handles={}",
-            file_id,
-            ino,
-            old_path,
-            hidden_path,
-            self.open_handle_count_for_file(file_id)
+            "FOD authoritative unlink file_id={} path={} outcome={:?}",
+            file_id, old_path, outcome
         );
         Ok(())
     }
@@ -6655,7 +6741,9 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EACCES);
             return;
         }
-        if self.read_only && (flags & libc::O_ACCMODE) != libc::O_RDONLY {
+        if self.read_only
+            && ((flags & libc::O_ACCMODE) != libc::O_RDONLY || (flags & libc::O_TRUNC) != 0)
+        {
             self.log_request_error(
                 req_id,
                 "open",
@@ -6778,6 +6866,10 @@ impl Filesystem for FodFuse {
         _pid: u32,
         reply: ReplyLock,
     ) {
+        if self.degraded_read_only {
+            fuse_reply_error!(reply, libc::EOPNOTSUPP);
+            return;
+        }
         let ino = ino.0;
         let lock_owner = lock_owner.0;
         let path = match self.entry_path_for_ino(ino) {
@@ -6859,6 +6951,10 @@ impl Filesystem for FodFuse {
         sleep_flag: bool,
         reply: ReplyEmpty,
     ) {
+        if self.degraded_read_only {
+            fuse_reply_error!(reply, libc::EOPNOTSUPP);
+            return;
+        }
         let ino = ino.0;
         let lock_owner = lock_owner.0;
         let path = match self.entry_path_for_ino(ino) {
@@ -7126,6 +7222,24 @@ impl Filesystem for FodFuse {
                 ino, fh, file_id, offset, size
             ),
         );
+        if self.degraded_read_only {
+            match self.read_degraded_snapshot(file_id, offset, u64::from(size)) {
+                Ok(data) => {
+                    read_task.complete(0, data.len() as u64);
+                    self.reply_data_profiled(reply, &data);
+                }
+                Err(errno) => {
+                    self.log_request_error(
+                        req_id,
+                        "read",
+                        errno,
+                        format!("file_id={} degraded_snapshot", file_id),
+                    );
+                    fuse_reply_error!(reply, errno);
+                }
+            }
+            return;
+        }
         if let Err(errno) = self.flush_pending_write_states_for_file_except(file_id, fh) {
             self.log_request_error(
                 req_id,
@@ -7887,16 +8001,25 @@ impl Filesystem for FodFuse {
             "unlink",
             format!("parent={} child={}", parent_path, child_path),
         );
-        let (kind, entry_id) = match self.resolved_entry_for_path(&child_path) {
+        let authority = self.repo.authoritative_view();
+        let resolved = match authority.resolve_path(&child_path).map_err(|_| EIO) {
             Ok(value) => value,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
+        let kind = resolved.kind;
+        let entry_id = resolved.entry_id;
+        let parent_id = resolved.parent_id;
+        if parent_path != "/" && parent_id.is_none() {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        }
         let result = match kind.as_deref() {
-            Some("file") => {
-                let file_id = match self.file_id_for_path(&child_path) {
+            Some("file") | Some("hardlink") => {
+                let file_id_result = authority.get_file_id(&child_path).map_err(|_| EIO);
+                let file_id = match file_id_result {
                     Ok(Some(value)) => value,
                     Ok(None) => {
                         self.log_request_error(
@@ -7919,7 +8042,7 @@ impl Filesystem for FodFuse {
                         return;
                     }
                 };
-                let entry_attrs = match self.lookup_path(&child_path) {
+                let entry_attrs = match self.attrs_for_path_from_repo(&authority, &child_path) {
                     Ok(Some(attrs)) => attrs.file_attr,
                     _ => {
                         self.log_request_error(
@@ -7932,7 +8055,12 @@ impl Filesystem for FodFuse {
                         return;
                     }
                 };
-                if let Err(errno) = self.enforce_sticky_bit(&parent_path, &entry_attrs, &subject) {
+                if let Err(errno) = self.enforce_sticky_bit_from_repo(
+                    &authority,
+                    &parent_path,
+                    &entry_attrs,
+                    &subject,
+                ) {
                     self.log_request_error(
                         req_id,
                         "unlink",
@@ -7942,49 +8070,17 @@ impl Filesystem for FodFuse {
                     fuse_reply_error!(reply, errno);
                     return;
                 }
-                match self.repo.count_file_links(file_id) {
-                    Ok(link_count) if link_count <= 1 => self.defer_open_primary_unlink(
-                        file_id,
-                        &parent_path,
-                        &child_path,
-                        entry_attrs.ino.0,
-                        req_id,
-                    ),
-                    Ok(_) => self.remove_primary_file_or_promote_hardlink(file_id),
-                    Err(err) => Err(err),
-                }
-            }
-            Some("hardlink") => {
-                let entry_attrs = match self.lookup_path(&child_path) {
-                    Ok(Some(attrs)) => attrs.file_attr,
-                    _ => {
-                        self.log_request_error(
-                            req_id,
-                            "unlink",
-                            EIO,
-                            format!("child={} lookup", child_path),
-                        );
-                        fuse_reply_error!(reply, EIO);
-                        return;
-                    }
-                };
-                if let Err(errno) = self.enforce_sticky_bit(&parent_path, &entry_attrs, &subject) {
-                    self.log_request_error(
-                        req_id,
-                        "unlink",
-                        errno,
-                        format!("child={} sticky bit", child_path),
-                    );
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
-                match entry_id {
-                    Some(hardlink_id) => self.repo.delete_hardlink_entry(hardlink_id),
-                    None => Err("missing hardlink id".to_string()),
-                }
+                self.unlink_file_with_primary_authority(
+                    file_id,
+                    parent_id,
+                    &parent_path,
+                    &child_path,
+                    name.to_string_lossy().as_ref(),
+                    req_id,
+                )
             }
             Some("symlink") => {
-                let entry_attrs = match self.lookup_path(&child_path) {
+                let entry_attrs = match self.attrs_for_path_from_repo(&authority, &child_path) {
                     Ok(Some(attrs)) => attrs.file_attr,
                     _ => {
                         self.log_request_error(
@@ -7997,7 +8093,12 @@ impl Filesystem for FodFuse {
                         return;
                     }
                 };
-                if let Err(errno) = self.enforce_sticky_bit(&parent_path, &entry_attrs, &subject) {
+                if let Err(errno) = self.enforce_sticky_bit_from_repo(
+                    &authority,
+                    &parent_path,
+                    &entry_attrs,
+                    &subject,
+                ) {
                     self.log_request_error(
                         req_id,
                         "unlink",
@@ -8048,14 +8149,19 @@ impl Filesystem for FodFuse {
                 debug!("FOD req={} op=unlink completed path={}", req_id, child_path);
                 reply.ok();
             }
-            Err(_) => {
+            Err(err) => {
+                let errno = if err == "FOD_UNLINK_SOURCE_CHANGED" {
+                    ENOENT
+                } else {
+                    EIO
+                };
                 self.log_request_error(
                     req_id,
                     "unlink",
-                    EIO,
-                    format!("child={} delete", child_path),
+                    errno,
+                    format!("child={} delete err={}", child_path, err),
                 );
-                fuse_reply_error!(reply, EIO)
+                fuse_reply_error!(reply, errno)
             }
         }
     }
@@ -10027,7 +10133,14 @@ impl Filesystem for FodFuse {
                 Ok(None) => fuse_reply_error!(reply, EIO),
                 Err(errno) => fuse_reply_error!(reply, errno),
             },
-            Err(_) => fuse_reply_error!(reply, EIO),
+            Err(err) => fuse_reply_error!(
+                reply,
+                if err == "FOD_LINK_SOURCE_UNAVAILABLE" {
+                    ENOENT
+                } else {
+                    EIO
+                }
+            ),
         }
     }
 }
@@ -10035,12 +10148,13 @@ impl Filesystem for FodFuse {
 #[cfg(test)]
 mod tests {
     use super::{
-        client_session_hostname, ioctl_is_mutating, should_update_atime, AtimePolicy,
-        SetattrMutationFlags, WriteState,
+        assemble_degraded_snapshot, client_session_hostname, ioctl_is_mutating,
+        should_update_atime, AtimePolicy, SetattrMutationFlags, WriteState,
     };
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
     use std::collections::{BTreeMap, HashMap};
+    use std::sync::Arc;
     use std::time::{Duration, SystemTime};
 
     fn file_attr(kind: FileType, atime_age_secs: u64, mtime_age_secs: u64) -> FileAttr {
@@ -10062,6 +10176,20 @@ mod tests {
             flags: 0,
             blksize: 4096,
         }
+    }
+
+    #[test]
+    fn degraded_snapshot_returns_estale_when_open_file_disappears() {
+        assert_eq!(assemble_degraded_snapshot(None, 0, 4, 4), Err(libc::ESTALE));
+    }
+
+    #[test]
+    fn degraded_snapshot_zero_fills_holes_only_for_existing_file() {
+        let snapshot = Some((8, 7, vec![(0, Arc::<[u8]>::from([1, 2, 3, 4]))]));
+        assert_eq!(
+            assemble_degraded_snapshot(snapshot, 4, 4, 4),
+            Ok((vec![0; 4], 7))
+        );
     }
 
     #[test]

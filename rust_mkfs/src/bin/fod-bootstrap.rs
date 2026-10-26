@@ -567,7 +567,15 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // This opt-in belongs to the FUSE frontend rather than the shared runtime
+    // config. Preserve it across apply_env(), which rewrites the runtime env
+    // from the loaded configuration before spawning that frontend.
+    let degraded_read_only =
+        env_var_truthy_with_legacy_alias("FOD_DEGRADED_READONLY_ENABLED", false);
     bootstrap_runtime.apply_env();
+    if degraded_read_only {
+        env::set_var("FOD_DEGRADED_READONLY_ENABLED", "1");
+    }
     let db_section = match config.section("database") {
         Some(section) => section.clone(),
         None => {

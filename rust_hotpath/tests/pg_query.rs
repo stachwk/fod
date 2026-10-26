@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use fod_rust_hotpath::pg::{DbRepo, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX};
+use fod_rust_hotpath::pg::{
+    DbRepo, FileUnlinkOutcome, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX,
+};
 use fod_rust_runtime::{DataObjectSwapCleanup, RuntimeConfig};
 use std::env;
 use std::sync::Mutex;
@@ -1008,6 +1010,72 @@ fn live_pg_query_helpers_work() {
     assert!(repo.count_files().unwrap() > 0);
     assert!(repo.count_directories().unwrap() > 0);
     let _ = repo.total_data_size().unwrap();
+}
+
+#[test]
+fn unlink_preserves_alias_and_rejects_stale_binding_and_unsafe_purge() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let name = unique_name("unlink_primary");
+    let alias = unique_name("unlink_alias");
+    let file_id = repo.create_file(None, &name, 0o644, 1000, 1000, &name)?;
+    repo.create_hardlink(file_id, None, &alias, 1000, 1000)?;
+    let purge = repo.purge_primary_file(file_id).unwrap_err();
+    assert!(purge.contains("surviving hardlinks"), "{purge}");
+    assert_eq!(
+        repo.unlink_file_entry(file_id, ".fod-unlinked-test", None, &name)?,
+        FileUnlinkOutcome::PromotedHardlink
+    );
+    assert_eq!(repo.get_file_id(&format!("/{alias}"))?, Some(file_id));
+    let replacement = repo.create_file(None, &name, 0o644, 1000, 1000, &name)?;
+    assert_ne!(replacement, file_id);
+    assert_eq!(
+        repo.unlink_file_entry(file_id, ".fod-unlinked-test", None, &name)?,
+        FileUnlinkOutcome::SourceChanged
+    );
+    assert_eq!(repo.get_file_id(&format!("/{name}"))?, Some(replacement));
+    assert_eq!(repo.get_file_id(&format!("/{alias}"))?, Some(file_id));
+    repo.purge_primary_file(file_id)?;
+    repo.purge_primary_file(replacement)
+}
+
+#[test]
+fn unlinked_open_inode_rejects_new_hardlinks_and_purge_until_last_close() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let name = unique_name("unlink_open_primary");
+    let alias = unique_name("unlink_open_alias");
+    let file_id = repo.create_file(None, &name, 0o644, 1000, 1000, &name)?;
+    let session = repo.register_client_session(
+        "unlink-test",
+        &unique_name("mount"),
+        "primary",
+        "postgres_lease",
+        u64::from(std::process::id()),
+        60,
+    )?;
+    repo.register_file_open_lease(file_id, session, 1, 60)?;
+    let result = (|| {
+        assert_eq!(
+            repo.unlink_file_entry(file_id, ".fod-unlinked-open-test", None, &name)?,
+            FileUnlinkOutcome::Deferred
+        );
+        assert!(repo
+            .create_hardlink(file_id, None, &alias, 1000, 1000)
+            .unwrap_err()
+            .contains("FOD_LINK_SOURCE_UNAVAILABLE"));
+        assert!(repo
+            .purge_primary_file(file_id)
+            .unwrap_err()
+            .contains("active open leases"));
+        Ok(())
+    })();
+    repo.release_file_open_lease(session, 1)?;
+    repo.purge_primary_file(file_id)?;
+    repo.exec(&format!(
+        "DELETE FROM client_sessions WHERE session_id = {session}"
+    ))?;
+    result
 }
 
 #[test]

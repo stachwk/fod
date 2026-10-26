@@ -40,7 +40,10 @@ fn main() {
     });
 
     let endpoint_routing_enabled = RuntimeEndpointRoutingSettings::from_env().enabled;
-    if env_var_truthy_with_legacy_alias(pg_lanes::PG_POOL_LANES_ENV, false)
+    let degraded_read_only =
+        env_var_truthy_with_legacy_alias("FOD_DEGRADED_READONLY_ENABLED", false);
+    if degraded_read_only
+        || env_var_truthy_with_legacy_alias(pg_lanes::PG_POOL_LANES_ENV, false)
         || endpoint_routing_enabled
     {
         if let Err(err) =

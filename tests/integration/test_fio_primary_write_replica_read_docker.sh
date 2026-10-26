@@ -28,6 +28,9 @@ BLOCK_SIZE="${FIO_BLOCK_SIZE:-4k}"
 PAYLOAD_MODE="${FIO_PAYLOAD_MODE:-pattern}"
 WAIT_SECONDS="${REPLICA_WAIT_SECONDS:-120}"
 LABEL="${REPLICA_READ_LABEL:-docker}"
+READ_MODE="${REPLICA_READ_MODE:-standalone}"
+READ_LOOPS="${FIO_READ_LOOPS:-1}"
+POOL_MAX_CONNECTIONS="${FOD_POOL_MAX_CONNECTIONS:-10}"
 
 READ_CACHE_BLOCKS="${FOD_READ_CACHE_BLOCKS:-0}"
 READ_AHEAD_BLOCKS="${FOD_READ_AHEAD_BLOCKS:-0}"
@@ -82,6 +85,11 @@ validate_nonnegative_integer FOD_READ_AHEAD_BLOCKS "${READ_AHEAD_BLOCKS}"
 validate_nonnegative_integer FOD_SEQUENTIAL_READ_AHEAD_BLOCKS "${SEQUENTIAL_READ_AHEAD_BLOCKS}"
 validate_nonnegative_integer FOD_DIRECT_IO_READ_PREFETCH_BLOCKS "${DIRECT_IO_READ_PREFETCH_BLOCKS}"
 validate_nonnegative_integer FOD_SMALL_FILE_READ_THRESHOLD_BLOCKS "${SMALL_FILE_READ_THRESHOLD_BLOCKS}"
+validate_nonnegative_integer FIO_READ_LOOPS "${READ_LOOPS}"
+if [[ "${READ_LOOPS}" -lt 1 ]]; then
+    echo "FIO_READ_LOOPS must be at least 1" >&2
+    exit 2
+fi
 if [[ ! "${METADATA_CACHE_TTL_SECONDS}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     echo "FOD_METADATA_CACHE_TTL_SECONDS must be a non-negative number" >&2
     exit 2
@@ -92,6 +100,11 @@ if [[ ! "${FOPEN_DIRECT_IO}" =~ ^[01]$ ]]; then
 fi
 if [[ ! "${READ_POLICY_LABEL}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
     echo "REPLICA_READ_POLICY_LABEL must match [A-Za-z0-9_.-]+" >&2
+    exit 2
+fi
+if [[ "${READ_MODE}" != standalone && "${READ_MODE}" != routed \
+    && "${READ_MODE}" != degraded ]]; then
+    echo "REPLICA_READ_MODE must be 'standalone', 'routed' or 'degraded', got '${READ_MODE}'" >&2
     exit 2
 fi
 
@@ -108,6 +121,8 @@ mkdir -p "${ARTIFACT_DIR}"
 
 cat >"${ARTIFACT_DIR}/read-policy.txt" <<EOF
 read_policy_label=${READ_POLICY_LABEL}
+read_loops=${READ_LOOPS}
+pool_max_connections=${POOL_MAX_CONNECTIONS}
 read_cache_blocks=${READ_CACHE_BLOCKS}
 read_ahead_blocks=${READ_AHEAD_BLOCKS}
 sequential_read_ahead_blocks=${SEQUENTIAL_READ_AHEAD_BLOCKS}
@@ -245,7 +260,10 @@ echo "primary=${PRIMARY_HOST}:${PRIMARY_PORT}"
 echo "replica=${REPLICA_HOST}:${REPLICA_PORT}"
 echo "database=${POSTGRES_DB:-foddbname} user=${POSTGRES_USER:-foduser}"
 echo "size=${FILE_SIZE} block_size=${BLOCK_SIZE} payload_mode=${PAYLOAD_MODE}"
+echo "read_loops=${READ_LOOPS}"
+echo "pool_max_connections=${POOL_MAX_CONNECTIONS}"
 echo "read_policy_label=${READ_POLICY_LABEL}"
+echo "replica_read_mode=${READ_MODE}"
 cat "${ARTIFACT_DIR}/read-policy.txt"
 echo "artifact_dir=${ARTIFACT_DIR}"
 
@@ -271,7 +289,12 @@ export FOD_PG_PRIMARY_HOSTS="${PRIMARY_HOST}:${PRIMARY_PORT}"
 export FOD_PG_REPLICA_HOSTS="${REPLICA_HOST}:${REPLICA_PORT}"
 export FOD_PG_ENDPOINT_ROUTING_ENABLED=1
 export FOD_PG_RUNTIME_FAILOVER_ENABLED=0
-export FOD_PG_REPLICA_READ_ROUTING_ENABLED=0
+if [[ "${READ_MODE}" == routed ]]; then
+    export FOD_PG_REPLICA_READ_ROUTING_ENABLED=1
+else
+    export FOD_PG_REPLICA_READ_ROUTING_ENABLED=0
+fi
+unset FOD_DEGRADED_READONLY_ENABLED || true
 
 export FOD_READ_CACHE_BLOCKS="${READ_CACHE_BLOCKS}"
 export FOD_READ_AHEAD_BLOCKS="${READ_AHEAD_BLOCKS}"
@@ -337,6 +360,24 @@ EXPECTED_SIZE="$(stat -c '%s' "${WRITE_FILE}")"
     echo "Written file size is invalid: ${EXPECTED_SIZE}" >&2
     exit 1
 }
+if [[ "${PAYLOAD_MODE}" == pattern ]]; then
+    EXPECTED_SHA256="$(python3 - "${EXPECTED_SIZE}" <<'PY'
+import hashlib
+import sys
+
+remaining = int(sys.argv[1])
+chunk = b"\x5a" * min(1024 * 1024, remaining)
+digest = hashlib.sha256()
+while remaining:
+    size = min(len(chunk), remaining)
+    digest.update(chunk[:size])
+    remaining -= size
+print(digest.hexdigest())
+PY
+    )"
+else
+    EXPECTED_SHA256=""
+fi
 
 PRIMARY_LSN="$(psql_primary -c "SELECT pg_current_wal_flush_lsn()::text")"
 PRIMARY_LSN="$(printf '%s' "${PRIMARY_LSN}" | tr -d '[:space:]')"
@@ -374,6 +415,7 @@ fio \
     --rw=read \
     --bs="${BLOCK_SIZE}" \
     --size="${FILE_SIZE}" \
+    --loops="${READ_LOOPS}" \
     --numjobs=1 \
     --group_reporting=1 \
     --direct=0 \
@@ -384,6 +426,12 @@ read -r PRIMARY_READ_MIB PRIMARY_READ_IOPS PRIMARY_READ_LAT_US < <(
     fio_metrics "${PRIMARY_READ_JSON}" read
 )
 echo "primary_read block_size=${BLOCK_SIZE} mib_s=${PRIMARY_READ_MIB} iops=${PRIMARY_READ_IOPS} lat_mean_us=${PRIMARY_READ_LAT_US}"
+PRIMARY_READ_SHA256="$(sha256sum "${PRIMARY_READ_FILE}" | awk '{print $1}')"
+if [[ -n "${EXPECTED_SHA256}" && "${PRIMARY_READ_SHA256}" != "${EXPECTED_SHA256}" ]]; then
+    echo "Primary read SHA-256 mismatch expected=${EXPECTED_SHA256} actual=${PRIMARY_READ_SHA256}" >&2
+    exit 1
+fi
+echo "primary_read_sha256=${PRIMARY_READ_SHA256}"
 
 fod_test_cleanup
 
@@ -393,20 +441,33 @@ echo "primary_after_read_flush_lsn=${PRIMARY_AFTER_READ_LSN}" \
     | tee -a "${ARTIFACT_DIR}/replication.txt"
 wait_for_replay_lsn "${PRIMARY_AFTER_READ_LSN}" "after_primary_read"
 
-echo "=== PHASE 4: STOP PRIMARY / RESTART REPLICA ==="
-compose stop primary
-if psql_primary -c "SELECT 1" >/dev/null 2>&1; then
-    echo "Primary is still reachable" >&2
-    exit 1
+echo "=== PHASE 4: PREPARE REPLICA READ ==="
+if [[ "${READ_MODE}" == standalone || "${READ_MODE}" == degraded ]]; then
+    compose stop primary
+    if psql_primary -c "SELECT 1" >/dev/null 2>&1; then
+        echo "Primary is still reachable" >&2
+        exit 1
+    fi
+    echo "primary_reachable_before_replica_read=0" \
+        | tee -a "${ARTIFACT_DIR}/replication.txt"
+else
+    echo "Primary remains online as writable lease and namespace authority"
+    echo "primary_reachable_before_replica_read=1" \
+        | tee -a "${ARTIFACT_DIR}/replication.txt"
 fi
-echo "primary_reachable_before_replica_read=0" \
-    | tee -a "${ARTIFACT_DIR}/replication.txt"
 
 compose restart replica
 wait_for_role "replica-after-restart" "true|on" replica
 
 echo "=== PHASE 5: FRESH REPLICA READ ==="
-FOD_ROLE=replica
+if [[ "${READ_MODE}" == routed ]]; then
+    export FOD_ROLE=primary
+else
+    export FOD_ROLE=replica
+fi
+if [[ "${READ_MODE}" == degraded ]]; then
+    export FOD_DEGRADED_READONLY_ENABLED=1
+fi
 fod_test_make_mountpoint "/tmp/fod-replica-read"
 FOD_TEST_LOG_ARCHIVE="${ARTIFACT_DIR}/replica-read-mount.log"
 fod_test_start_mount "${MOUNTPOINT}"
@@ -431,6 +492,7 @@ fio \
     --rw=read \
     --bs="${BLOCK_SIZE}" \
     --size="${FILE_SIZE}" \
+    --loops="${READ_LOOPS}" \
     --numjobs=1 \
     --group_reporting=1 \
     --direct=0 \
@@ -441,13 +503,40 @@ read -r REPLICA_READ_MIB REPLICA_READ_IOPS REPLICA_READ_LAT_US < <(
     fio_metrics "${REPLICA_READ_JSON}" read
 )
 echo "replica_read block_size=${BLOCK_SIZE} mib_s=${REPLICA_READ_MIB} iops=${REPLICA_READ_IOPS} lat_mean_us=${REPLICA_READ_LAT_US}"
-
-if touch "${MOUNTPOINT}/replica-write-must-fail-${RUN_ID}" \
-    2>"${ARTIFACT_DIR}/replica-write-rejection.txt"; then
-    echo "Replica unexpectedly accepted a filesystem write" >&2
+REPLICA_READ_SHA256="$(sha256sum "${READ_FILE}" | awk '{print $1}')"
+if [[ -n "${EXPECTED_SHA256}" && "${REPLICA_READ_SHA256}" != "${EXPECTED_SHA256}" ]]; then
+    echo "Replica read SHA-256 mismatch expected=${EXPECTED_SHA256} actual=${REPLICA_READ_SHA256}" >&2
     exit 1
 fi
-echo "replica_write_guard=read_only_rejected" \
+echo "replica_read_sha256=${REPLICA_READ_SHA256}"
+if [[ "${REPLICA_READ_SHA256}" != "${PRIMARY_READ_SHA256}" ]]; then
+    echo "Primary/replica SHA-256 mismatch primary=${PRIMARY_READ_SHA256} replica=${REPLICA_READ_SHA256}" >&2
+    exit 1
+fi
+
+REPLICA_WRITE_GUARD="read_only_rejected"
+if [[ "${READ_MODE}" == standalone || "${READ_MODE}" == degraded ]]; then
+    if touch "${MOUNTPOINT}/replica-write-must-fail-${RUN_ID}" \
+        2>"${ARTIFACT_DIR}/replica-write-rejection.txt"; then
+        echo "Replica unexpectedly accepted a filesystem write" >&2
+        exit 1
+    fi
+    if [[ "${READ_MODE}" == degraded ]]; then
+        REPLICA_WRITE_GUARD="degraded_read_only_rejected"
+    fi
+else
+    replica_role="$(psql_replica -c \
+        "SELECT pg_is_in_recovery()::text || '|' || current_setting('transaction_read_only')")"
+    replica_role="$(printf '%s' "${replica_role}" | tr -d '[:space:]')"
+    if [[ "${replica_role}" != "true|on" ]]; then
+        echo "Routed target is not a read-only physical replica: ${replica_role}" >&2
+        exit 1
+    fi
+    printf 'confirmed_replica_role=%s\n' "${replica_role}" \
+        >"${ARTIFACT_DIR}/replica-write-rejection.txt"
+    REPLICA_WRITE_GUARD="read_only_role_confirmed"
+fi
+echo "replica_write_guard=${REPLICA_WRITE_GUARD}" \
     | tee -a "${ARTIFACT_DIR}/replication.txt"
 
 fod_test_cleanup
@@ -489,6 +578,27 @@ if [[ "${FINAL_OPERATION_FAILURES}" != "0" ]]; then
     echo "Replica read DB operation failures: ${FINAL_OPERATION_FAILURES}" >&2
     exit 1
 fi
+FINAL_REPLICA_READS="$(printf '%s\n' "${FINAL_LANE_LINE}" \
+    | tr ' ' '\n' \
+    | sed -n 's/^replica_reads=//p')"
+if [[ -z "${FINAL_REPLICA_READS}" ]]; then
+    echo "Could not read replica_reads from replica observability" >&2
+    exit 1
+fi
+if [[ "${READ_MODE}" == routed && "${FINAL_REPLICA_READS}" == "0" ]]; then
+    echo "Routed benchmark did not execute any reads on the replica" >&2
+    exit 1
+fi
+FINAL_PRIMARY_READ_FALLBACKS="$(printf '%s\n' "${FINAL_LANE_LINE}" \
+    | tr ' ' '\n' \
+    | sed -n 's/^primary_read_fallbacks=//p')"
+FINAL_REPLICA_LAG_FALLBACKS="$(printf '%s\n' "${FINAL_LANE_LINE}" \
+    | tr ' ' '\n' \
+    | sed -n 's/^replica_lag_fallbacks=//p')"
+if [[ -z "${FINAL_PRIMARY_READ_FALLBACKS}" || -z "${FINAL_REPLICA_LAG_FALLBACKS}" ]]; then
+    echo "Could not read replica fallback counters from observability" >&2
+    exit 1
+fi
 
 fod_test_write_power_metadata "${ARTIFACT_DIR}/power-after.txt" "after"
 
@@ -510,7 +620,7 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t
     "${WRITE_MIB}" "${WRITE_IOPS}" \
     "${PRIMARY_READ_MIB}" "${PRIMARY_READ_IOPS}" \
     "${REPLICA_READ_MIB}" "${REPLICA_READ_IOPS}" \
-    "${FINAL_OPERATION_FAILURES}" "read_only_rejected" \
+    "${FINAL_OPERATION_FAILURES}" "${REPLICA_WRITE_GUARD}" \
     >>"${ARTIFACT_DIR}/result.tsv"
 
 echo "=== RESULT ==="
@@ -521,7 +631,11 @@ echo "--- read policy ---"
 cat "${ARTIFACT_DIR}/read-policy.txt"
 echo "--- replication ---"
 cat "${ARTIFACT_DIR}/replication.txt"
-echo "primary stopped before replica read: yes"
+if [[ "${READ_MODE}" == routed ]]; then
+    echo "primary stopped before replica read: no (primary retains lease authority)"
+else
+    echo "primary stopped before replica read: yes"
+fi
 echo "primary PostgreSQL restarted before primary read: yes"
 echo "replica PostgreSQL restarted before replica read: yes"
 echo "FOD read policy label: ${READ_POLICY_LABEL}"
@@ -532,5 +646,11 @@ else
 fi
 echo "host kernel page cache dropped: no"
 
-echo "PERF_RESULT block_size=${BLOCK_SIZE} storage_block_size_bytes=${STORAGE_BLOCK_SIZE_BYTES} file_size=${FILE_SIZE} payload_mode=${PAYLOAD_MODE} read_policy_label=${READ_POLICY_LABEL} read_cache_blocks=${READ_CACHE_BLOCKS} read_ahead_blocks=${READ_AHEAD_BLOCKS} sequential_read_ahead_blocks=${SEQUENTIAL_READ_AHEAD_BLOCKS} direct_io_read_prefetch_blocks=${DIRECT_IO_READ_PREFETCH_BLOCKS} small_file_read_threshold_blocks=${SMALL_FILE_READ_THRESHOLD_BLOCKS} metadata_cache_ttl_seconds=${METADATA_CACHE_TTL_SECONDS} fopen_direct_io=${FOPEN_DIRECT_IO} primary_write_mib_s=${WRITE_MIB} primary_write_iops=${WRITE_IOPS} primary_read_mib_s=${PRIMARY_READ_MIB} primary_read_iops=${PRIMARY_READ_IOPS} replica_read_mib_s=${REPLICA_READ_MIB} replica_read_iops=${REPLICA_READ_IOPS} replica_operation_failures=${FINAL_OPERATION_FAILURES} replica_write_guard=read_only_rejected"
-echo "OK: primary write/read -> WAL replay -> primary stopped -> replica read"
+echo "PERF_RESULT block_size=${BLOCK_SIZE} storage_block_size_bytes=${STORAGE_BLOCK_SIZE_BYTES} file_size=${FILE_SIZE} payload_mode=${PAYLOAD_MODE} read_loops=${READ_LOOPS} replica_read_mode=${READ_MODE} read_policy_label=${READ_POLICY_LABEL} read_cache_blocks=${READ_CACHE_BLOCKS} read_ahead_blocks=${READ_AHEAD_BLOCKS} sequential_read_ahead_blocks=${SEQUENTIAL_READ_AHEAD_BLOCKS} direct_io_read_prefetch_blocks=${DIRECT_IO_READ_PREFETCH_BLOCKS} small_file_read_threshold_blocks=${SMALL_FILE_READ_THRESHOLD_BLOCKS} metadata_cache_ttl_seconds=${METADATA_CACHE_TTL_SECONDS} fopen_direct_io=${FOPEN_DIRECT_IO} pool_max_connections=${POOL_MAX_CONNECTIONS} primary_write_mib_s=${WRITE_MIB} primary_write_iops=${WRITE_IOPS} primary_read_mib_s=${PRIMARY_READ_MIB} primary_read_iops=${PRIMARY_READ_IOPS} replica_read_mib_s=${REPLICA_READ_MIB} replica_read_iops=${REPLICA_READ_IOPS} replica_reads=${FINAL_REPLICA_READS} primary_read_fallbacks=${FINAL_PRIMARY_READ_FALLBACKS} replica_lag_fallbacks=${FINAL_REPLICA_LAG_FALLBACKS} replica_operation_failures=${FINAL_OPERATION_FAILURES} replica_write_guard=${REPLICA_WRITE_GUARD}"
+if [[ "${READ_MODE}" == routed ]]; then
+    echo "OK: primary write/read -> WAL replay -> replica-routed read with primary lease authority"
+elif [[ "${READ_MODE}" == degraded ]]; then
+    echo "OK: primary write/read -> WAL replay -> degraded read-only replica with primary stopped"
+else
+    echo "OK: primary write/read -> WAL replay -> primary stopped -> replica read"
+fi

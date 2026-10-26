@@ -4443,6 +4443,15 @@ pub enum RenameFileReplaceOutcome {
     TargetNotEmpty,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileUnlinkOutcome {
+    PromotedHardlink,
+    RemovedHardlink,
+    Deferred,
+    Purged,
+    SourceChanged,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileReadMetadata {
     pub size: u64,
@@ -5325,6 +5334,15 @@ pub struct WritePersistenceFence {
 }
 
 impl DbRepo {
+    /// Use the main authority pool for mutation preconditions instead of the
+    /// optional replica read pool. The configured authority itself is unchanged.
+    pub fn authoritative_view(&self) -> Self {
+        let mut repo = self.clone();
+        repo.replica_read_targets = None;
+        repo.replica_read_pool = None;
+        repo
+    }
+
     pub fn new(conninfo: &str) -> Result<Self, String> {
         let runtime = RuntimeConfig::from_env()?;
         Self::with_runtime(conninfo, &runtime)
@@ -10229,15 +10247,25 @@ impl DbRepo {
                     (file_id_param.as_ref(), file_token_param.as_ref())
                 {
                     if !destination_active {
-                        let unlinked_sql = CString::new(
-                            "SELECT COALESCE((SELECT unlinked::text FROM files WHERE id_file = $1), 'false')",
+                        let detached_sql = CString::new(
+                            "SELECT EXISTS (
+                                SELECT 1 FROM files f WHERE f.id_file = $1
+                                  AND NOT (NOT f.unlinked AND COALESCE(f.id_directory, 0) = $2 AND f.name = $3)
+                                  AND NOT EXISTS (
+                                      SELECT 1 FROM hardlinks h WHERE h.id_file = f.id_file
+                                        AND COALESCE(h.id_directory, 0) = $2 AND h.name = $3
+                                  )
+                            )::text",
                         )
                         .map_err(|_| "SQL contains NUL byte".to_string())?;
-                        let unlinked_params = [file_id_param];
-                        let unlinked_res = exec_params(conn, &unlinked_sql, &unlinked_params)?;
-                        let unlinked = fetch_single_text(unlinked_res)?;
+                        // Removing one name can leave the inode linked through
+                        // another alias. The live file token remains authority
+                        // for that open writer after its destination is gone.
+                        let detached_params = [file_id_param, &parent_key, &name_param];
+                        let detached_res = exec_params(conn, &detached_sql, &detached_params)?;
+                        let detached = fetch_single_text(detached_res)?;
                         if !matches!(
-                            unlinked.trim().to_ascii_lowercase().as_str(),
+                            detached.trim().to_ascii_lowercase().as_str(),
                             "t" | "true" | "1" | "on"
                         ) {
                             return Ok(false);
@@ -11459,6 +11487,7 @@ impl DbRepo {
     }
 
     pub fn promote_hardlink_to_primary(&self, file_id: u64) -> Result<bool, String> {
+        let file_id_value = file_id;
         let request_token_value = generate_request_token("promote-hardlink");
         let request_token = CString::new(request_token_value)
             .map_err(|_| "request token contains NUL byte".to_string())?;
@@ -11524,6 +11553,9 @@ impl DbRepo {
                     }
                 },
                 |conn| {
+                    if !Self::lock_file_lifecycle_on_conn(conn, file_id_value)? {
+                        return Ok(false);
+                    }
                     let params = [&file_id];
                     let res = exec_params(conn, &sql_choose, &params)?;
                     let chosen = match PQresultStatus(res) {
@@ -11650,11 +11682,62 @@ impl DbRepo {
         })
     }
 
+    // All link-count changes share the open/unlink/purge authority boundary.
+    // The row lock also excludes FK insertions and concurrent file updates.
+    unsafe fn lock_file_lifecycle_on_conn(conn: *mut PGconn, file_id: u64) -> Result<bool, String> {
+        let resource_key = CString::new(format!("fod:open:file:{file_id}"))
+            .map_err(|_| "file lifecycle advisory key contains NUL byte".to_string())?;
+        Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
+        let sql = CString::new("SELECT id_file FROM files WHERE id_file = $1 FOR UPDATE")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        Ok(fetch_single_text_option(exec_params(conn, &sql, &[&file_id])?)?.is_some())
+    }
+
+    unsafe fn purge_primary_file_on_conn(
+        &self,
+        conn: *mut PGconn,
+        file_id: u64,
+    ) -> Result<(), String> {
+        if !Self::lock_file_lifecycle_on_conn(conn, file_id)? {
+            return Ok(());
+        }
+        let sql = CString::new(
+            "SELECT
+                EXISTS (SELECT 1 FROM hardlinks WHERE id_file = $1)::text,
+                EXISTS (
+                    SELECT 1 FROM file_open_leases l
+                    JOIN client_sessions s ON s.session_id = l.session_id
+                    WHERE l.file_id = $1
+                      AND l.lease_expires_at > clock_timestamp()
+                      AND s.lease_expires_at > clock_timestamp()
+                )::text",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let file_id_param = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let state = fetch_first_row_texts(exec_params(conn, &sql, &[&file_id_param])?)?;
+        if state.len() != 2 {
+            return Err("file purge state returned incomplete row".to_string());
+        }
+        if state[0] == "true" || state[0] == "t" {
+            return Err("file has surviving hardlinks".to_string());
+        }
+        if state[1] == "true" || state[1] == "t" {
+            return Err("file has active open leases".to_string());
+        }
+        self.remove_primary_file_or_promote_hardlink_on_conn(conn, file_id)
+    }
+
     unsafe fn remove_primary_file_or_promote_hardlink_on_conn(
         &self,
         conn: *mut PGconn,
         file_id: u64,
     ) -> Result<(), String> {
+        if !Self::lock_file_lifecycle_on_conn(conn, file_id)? {
+            return Err("target file disappeared during namespace removal".to_string());
+        }
         let sql_choose = CString::new(
             "
             SELECT
@@ -11815,9 +11898,11 @@ impl DbRepo {
             ),
         ];
         if let Some(source_file_id) = source.file_id() {
+            resource_keys.push(format!("fod:open:file:{source_file_id}"));
             resource_keys.push(format!("fod:write:file:{source_file_id}"));
         }
         if let Some(target_file_id) = expected_target.and_then(|target| target.file_id()) {
+            resource_keys.push(format!("fod:open:file:{target_file_id}"));
             resource_keys.push(format!("fod:write:file:{target_file_id}"));
         }
         resource_keys.sort_unstable();
@@ -12202,13 +12287,26 @@ impl DbRepo {
     }
 
     pub fn delete_hardlink_entry(&self, hardlink_id: u64) -> Result<(), String> {
+        let sql_file = CString::new("SELECT id_file FROM hardlinks WHERE id_hardlink = $1")
+            .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql = CString::new("DELETE FROM hardlinks WHERE id_hardlink = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
         let hardlink_id = CString::new(hardlink_id.to_string())
             .map_err(|_| "hardlink id contains NUL byte".to_string())?;
         self.with_cached_connection(|conn| unsafe {
-            let params = [&hardlink_id];
-            exec_command_params(conn, &sql, &params)
+            transactional_replayable(conn, |conn| {
+                let params = [&hardlink_id];
+                let Some(file_id) =
+                    fetch_single_text_option(exec_params(conn, &sql_file, &params)?)?
+                else {
+                    return Ok(());
+                };
+                let file_id = file_id
+                    .parse::<u64>()
+                    .map_err(|_| "invalid hardlink file id".to_string())?;
+                Self::lock_file_lifecycle_on_conn(conn, file_id)?;
+                exec_command_params(conn, &sql, &params)
+            })
         })
     }
 
@@ -12275,6 +12373,17 @@ impl DbRepo {
 
         let result = self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
+                if !Self::lock_file_lifecycle_on_conn(conn, source_file_id_value)? {
+                    return Err("FOD_LINK_SOURCE_UNAVAILABLE".to_string());
+                }
+                let sql_source =
+                    CString::new("SELECT id_file FROM files WHERE id_file = $1 AND NOT unlinked")
+                        .map_err(|_| "SQL contains NUL byte".to_string())?;
+                if fetch_single_text_option(exec_params(conn, &sql_source, &[&source_file_id])?)?
+                    .is_none()
+                {
+                    return Err("FOD_LINK_SOURCE_UNAVAILABLE".to_string());
+                }
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -14407,71 +14516,113 @@ impl DbRepo {
         })
     }
 
-    pub fn defer_primary_file_unlink(
+    /// Remove one expected file/hardlink pathname. All decisions are made on
+    /// the primary while holding the file's shared lifecycle lock. Do not
+    /// replay an uncertain commit against a subsequently recreated pathname.
+    pub fn unlink_file_entry(
         &self,
         file_id: u64,
         hidden_name: &str,
         parent_id: Option<u64>,
         old_name: &str,
-    ) -> Result<(), String> {
+    ) -> Result<FileUnlinkOutcome, String> {
         if hidden_name.is_empty() || old_name.is_empty() {
-            return Err("deferred unlink name is empty".to_string());
+            return Err("unlink name is empty".to_string());
         }
-
         let file_id_param = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
         let hidden_name_param = CString::new(hidden_name)
-            .map_err(|_| "deferred unlink hidden name contains NUL byte".to_string())?;
+            .map_err(|_| "unlink hidden name contains NUL byte".to_string())?;
         let parent_key = CString::new(parent_id.unwrap_or(0).to_string())
-            .map_err(|_| "deferred unlink parent key contains NUL byte".to_string())?;
-        let old_name_param = CString::new(old_name)
-            .map_err(|_| "deferred unlink old name contains NUL byte".to_string())?;
-        let sql_inode_seed = CString::new("SELECT inode_seed FROM files WHERE id_file = $1")
+            .map_err(|_| "unlink parent key contains NUL byte".to_string())?;
+        let old_name_param =
+            CString::new(old_name).map_err(|_| "unlink name contains NUL byte".to_string())?;
+        let sql_inode = CString::new("SELECT inode_seed FROM files WHERE id_file = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
-
-        let sql_rename = CString::new(
-            "UPDATE files SET name = $1, unlinked = TRUE, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
+        let sql_primary = CString::new(
+            "SELECT id_file FROM files WHERE id_file = $1 AND NOT unlinked
+             AND COALESCE(id_directory, 0) = $2 AND name = $3",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_destination = CString::new(
+        let sql_hardlink = CString::new(
+            "DELETE FROM hardlinks WHERE id_file = $1
+             AND COALESCE(id_directory, 0) = $2 AND name = $3 RETURNING id_hardlink",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_links =
+            CString::new("SELECT EXISTS (SELECT 1 FROM hardlinks WHERE id_file = $1)::text")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_hide = CString::new(
+            "UPDATE files SET name = $1, unlinked = TRUE, change_date = NOW(), modification_date = NOW() WHERE id_file = $2",
+        ).map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_open = CString::new(
+            "SELECT EXISTS (
+                 SELECT 1 FROM file_open_leases l
+                 JOIN client_sessions s ON s.session_id = l.session_id
+                 WHERE l.file_id = $1
+                   AND l.lease_expires_at > clock_timestamp()
+                   AND s.lease_expires_at > clock_timestamp()
+             )::text",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_release_destination = CString::new(
             "DELETE FROM destination_write_leases WHERE parent_key = $1 AND name = $2",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
-        self.with_control_connection(|conn| unsafe {
-            transactional_replayable(conn, |conn| {
-                let inode_seed_params = [&file_id_param];
-                let inode_seed_res = exec_params(conn, &sql_inode_seed, &inode_seed_params)?;
-                let inode_seed = fetch_single_text(inode_seed_res)?;
-                if inode_seed.is_empty() {
-                    return Ok(());
+        self.with_transaction(|transaction| unsafe {
+            let conn = transaction.conn;
+            let Some(inode_seed) =
+                fetch_single_text_option(exec_params(conn, &sql_inode, &[&file_id_param])?)?
+            else {
+                return Ok(FileUnlinkOutcome::SourceChanged);
+            };
+            let mut keys = Self::file_create_serialization_keys(parent_id, old_name, &inode_seed)?;
+            keys.push(CString::new(format!("fod:open:file:{file_id}")).unwrap());
+            keys.sort_unstable();
+            keys.dedup();
+            for key in &keys {
+                Self::advisory_xact_lock_text_on_conn(conn, key)?;
+            }
+            if !Self::lock_file_lifecycle_on_conn(conn, file_id)? {
+                return Ok(FileUnlinkOutcome::SourceChanged);
+            }
+            let namespace_params = [&file_id_param, &parent_key, &old_name_param];
+            let primary =
+                fetch_single_text_option(exec_params(conn, &sql_primary, &namespace_params)?)?
+                    .is_some();
+            let outcome = if primary {
+                let links = fetch_single_text(exec_params(conn, &sql_links, &[&file_id_param])?)?;
+                if matches!(links.as_str(), "true" | "t") {
+                    self.remove_primary_file_or_promote_hardlink_on_conn(conn, file_id)?;
+                    FileUnlinkOutcome::PromotedHardlink
+                } else {
+                    exec_command_params(conn, &sql_hide, &[&hidden_name_param, &file_id_param])?;
+                    let open = fetch_single_text(exec_params(conn, &sql_open, &[&file_id_param])?)?;
+                    if matches!(open.as_str(), "true" | "t") {
+                        FileUnlinkOutcome::Deferred
+                    } else {
+                        self.purge_primary_file_on_conn(conn, file_id)?;
+                        FileUnlinkOutcome::Purged
+                    }
                 }
-
-                let mut resource_keys = vec![
-                    format!("fod:open:file:{file_id}"),
-                    format!(
-                        "fod:write:destination:{}:{}:{}",
-                        parent_id.unwrap_or(0),
-                        old_name.len(),
-                        old_name
-                    ),
-                    format!("fod:inode-seed:{}:{inode_seed}", inode_seed.len()),
-                ];
-                resource_keys.sort_unstable();
-                resource_keys.dedup();
-                for resource_key in resource_keys {
-                    let resource_key = CString::new(resource_key).map_err(|_| {
-                        "deferred unlink advisory key contains NUL byte".to_string()
-                    })?;
-                    Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
-                }
-
-                let rename_params = [&hidden_name_param, &file_id_param];
-                exec_command_params(conn, &sql_rename, &rename_params)?;
-                let destination_params = [&parent_key, &old_name_param];
-                exec_command_params(conn, &sql_delete_destination, &destination_params)?;
-                Ok(())
-            })
+            } else if fetch_single_text_option(exec_params(
+                conn,
+                &sql_hardlink,
+                &namespace_params,
+            )?)?
+            .is_some()
+            {
+                FileUnlinkOutcome::RemovedHardlink
+            } else {
+                return Ok(FileUnlinkOutcome::SourceChanged);
+            };
+            exec_command_params(
+                conn,
+                &sql_release_destination,
+                &[&parent_key, &old_name_param],
+            )?;
+            Ok(outcome)
         })
     }
 
@@ -14518,100 +14669,22 @@ impl DbRepo {
     }
 
     pub fn purge_primary_file(&self, file_id: u64) -> Result<(), String> {
-        let sql_lookup = CString::new("SELECT data_object_id FROM files WHERE id_file = $1")
+        let sql_lookup = CString::new("SELECT id_file FROM files WHERE id_file = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_file = CString::new("DELETE FROM files WHERE id_file = $1")
-            .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_delete_data_object =
-            CString::new("DELETE FROM data_objects WHERE id_data_object = $1")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_touch_data_object = CString::new(
-            "UPDATE data_objects SET reference_count = GREATEST(reference_count - 1, 0), modification_date = NOW() WHERE id_data_object = $1",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let resource_key = CString::new(format!("fod:open:file:{file_id}"))
-            .map_err(|_| "file purge advisory key contains NUL byte".to_string())?;
-        let file_id = CString::new(file_id.to_string())
+        let file_id_param = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
-        let sql_open = CString::new(
-            "
-            SELECT EXISTS (
-                SELECT 1
-                FROM file_open_leases l
-                JOIN client_sessions s ON s.session_id = l.session_id
-                WHERE l.file_id = $1
-                  AND l.lease_expires_at > clock_timestamp()
-                  AND s.lease_expires_at > clock_timestamp()
-            )::text
-            ",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-
         self.with_cached_connection(|conn| unsafe {
-            // A committed purge is observable because the file row disappears,
-            // so a lost COMMIT can be confirmed by the empty lookup before the
-            // body runs again.
             transactional_replay_confirmed(
                 conn,
-                |conn| {
-                    let params = [&file_id];
-                    let res = exec_params(conn, &sql_lookup, &params)?;
-                    match fetch_single_text_option(res)? {
-                        Some(_) => Ok(None),
-                        None => Ok(Some(())),
-                    }
+                |conn| match fetch_single_text_option(exec_params(
+                    conn,
+                    &sql_lookup,
+                    &[&file_id_param],
+                )?)? {
+                    Some(_) => Ok(None),
+                    None => Ok(Some(())),
                 },
-                |conn| {
-                    Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
-                    let open_params = [&file_id];
-                    let open_res = exec_params(conn, &sql_open, &open_params)?;
-                    let open = fetch_single_text(open_res)?;
-                    if matches!(
-                        open.trim().to_ascii_lowercase().as_str(),
-                        "t" | "true" | "1" | "on"
-                    ) {
-                        return Err("file has active open leases".to_string());
-                    }
-                    let data_object_id = {
-                        let params = [&file_id];
-                        let res = exec_params(conn, &sql_lookup, &params)?;
-                        let text = fetch_single_text(res)?;
-                        if text.is_empty() {
-                            None
-                        } else {
-                            Some(
-                                text.trim()
-                                    .parse::<u64>()
-                                    .map_err(|_| "invalid data_object_id value".to_string())?,
-                            )
-                        }
-                    };
-                    let data_object_id = match data_object_id {
-                        Some(value) => value,
-                        None => {
-                            let params = [&file_id];
-                            exec_command_params(conn, &sql_delete_file, &params)?;
-                            return Ok(());
-                        }
-                    };
-                    let reference_count = self
-                        .data_object_reference_count_on_conn(conn, data_object_id)?
-                        .unwrap_or(1);
-                    let data_object_id = CString::new(data_object_id.to_string())
-                        .map_err(|_| "data object id contains NUL byte".to_string())?;
-                    if reference_count <= 1 {
-                        let params = [&file_id];
-                        exec_command_params(conn, &sql_delete_file, &params)?;
-                        let params = [&data_object_id];
-                        exec_command_params(conn, &sql_delete_data_object, &params)?;
-                    } else {
-                        let params = [&data_object_id];
-                        exec_command_params(conn, &sql_touch_data_object, &params)?;
-                        let params = [&file_id];
-                        exec_command_params(conn, &sql_delete_file, &params)?;
-                    }
-                    Ok(())
-                },
+                |conn| self.purge_primary_file_on_conn(conn, file_id),
             )
         })
     }

@@ -80,6 +80,7 @@ pub struct FodFuseSettings {
     pub read_only: bool,
     pub use_fuse_context: bool,
     pub fopen_direct_io: bool,
+    pub degraded_read_only: bool,
 }
 
 impl FodFuseSettings {
@@ -88,7 +89,10 @@ impl FodFuseSettings {
         snapshot: &StartupSnapshot,
         requested_readonly: bool,
     ) -> Self {
-        let read_only = runtime.effective_read_only(requested_readonly, snapshot.is_in_recovery);
+        let degraded_read_only =
+            env_var_truthy_with_legacy_alias("FOD_DEGRADED_READONLY_ENABLED", false);
+        let read_only = degraded_read_only
+            || runtime.effective_read_only(requested_readonly, snapshot.is_in_recovery);
         let mount = runtime.mount_settings(read_only);
         let security = runtime.security_settings();
         let lock = runtime.lock_settings(read_only);
@@ -106,14 +110,42 @@ impl FodFuseSettings {
                 copy_dedupe_crc_table: storage.copy_dedupe_crc_table,
             },
             cache: FuseCacheSettings {
-                metadata_cache_ttl: cache.metadata_cache_ttl,
-                statfs_cache_ttl: cache.statfs_cache_ttl,
-                read_cache_blocks: cache.read_cache_blocks,
+                metadata_cache_ttl: if degraded_read_only {
+                    Duration::ZERO
+                } else {
+                    cache.metadata_cache_ttl
+                },
+                statfs_cache_ttl: if degraded_read_only {
+                    Duration::ZERO
+                } else {
+                    cache.statfs_cache_ttl
+                },
+                read_cache_blocks: if degraded_read_only {
+                    0
+                } else {
+                    cache.read_cache_blocks
+                },
                 read_cache_eviction_policy: cache.read_cache_eviction_policy.clone(),
-                read_ahead_blocks: cache.read_ahead_blocks,
-                sequential_read_ahead_blocks: cache.sequential_read_ahead_blocks,
-                direct_io_read_prefetch_blocks: cache.direct_io_read_prefetch_blocks,
-                small_file_read_threshold_blocks: cache.small_file_read_threshold_blocks,
+                read_ahead_blocks: if degraded_read_only {
+                    0
+                } else {
+                    cache.read_ahead_blocks
+                },
+                sequential_read_ahead_blocks: if degraded_read_only {
+                    0
+                } else {
+                    cache.sequential_read_ahead_blocks
+                },
+                direct_io_read_prefetch_blocks: if degraded_read_only {
+                    0
+                } else {
+                    cache.direct_io_read_prefetch_blocks
+                },
+                small_file_read_threshold_blocks: if degraded_read_only {
+                    0
+                } else {
+                    cache.small_file_read_threshold_blocks
+                },
             },
             workers: FuseWorkerSettings {
                 workers_read: storage.workers_read,
@@ -134,7 +166,8 @@ impl FodFuseSettings {
             atime_policy: mount.atime_policy,
             read_only: mount.read_only,
             use_fuse_context: mount.use_fuse_context,
-            fopen_direct_io: mount.fopen_direct_io,
+            fopen_direct_io: degraded_read_only || mount.fopen_direct_io,
+            degraded_read_only,
         }
     }
 }
@@ -203,6 +236,7 @@ fn fuse_event_loop_config() -> Result<(usize, bool), String> {
 fn mount_config(
     mount: &RuntimeMountSettings,
     security: &RuntimeSecuritySettings,
+    degraded_read_only: bool,
 ) -> Result<Config, String> {
     let mut options = vec![
         MountOption::FSName("fod".to_string()),
@@ -241,22 +275,28 @@ fn mount_config(
     if let Some(value) = security.selinux_rootcontext.as_ref() {
         options.push(MountOption::CUSTOM(format!("rootcontext={value}")));
     }
-    if let Some(value) = env_var_with_legacy_alias("FOD_ENTRY_TIMEOUT_SECONDS")
-        .filter(|value| !value.trim().is_empty())
-    {
-        options.push(MountOption::CUSTOM(format!("entry_timeout={value}")));
+    if !degraded_read_only {
+        if let Some(value) = env_var_with_legacy_alias("FOD_ENTRY_TIMEOUT_SECONDS")
+            .filter(|value| !value.trim().is_empty())
+        {
+            options.push(MountOption::CUSTOM(format!("entry_timeout={value}")));
+        }
     }
-    if let Some(value) = env_var_with_legacy_alias("FOD_ATTR_TIMEOUT_SECONDS")
-        .filter(|value| !value.trim().is_empty())
-    {
-        options.push(MountOption::CUSTOM(format!("attr_timeout={value}")));
+    if !degraded_read_only {
+        if let Some(value) = env_var_with_legacy_alias("FOD_ATTR_TIMEOUT_SECONDS")
+            .filter(|value| !value.trim().is_empty())
+        {
+            options.push(MountOption::CUSTOM(format!("attr_timeout={value}")));
+        }
     }
-    if let Some(value) = env_var_with_legacy_alias("FOD_NEGATIVE_TIMEOUT_SECONDS")
-        .filter(|value| !value.trim().is_empty())
-    {
-        options.push(MountOption::CUSTOM(format!("negative_timeout={value}")));
+    if !degraded_read_only {
+        if let Some(value) = env_var_with_legacy_alias("FOD_NEGATIVE_TIMEOUT_SECONDS")
+            .filter(|value| !value.trim().is_empty())
+        {
+            options.push(MountOption::CUSTOM(format!("negative_timeout={value}")));
+        }
     }
-    if mount.fuse_writeback_cache {
+    if mount.fuse_writeback_cache && !degraded_read_only {
         options.push(MountOption::CUSTOM("writeback_cache".to_string()));
     }
     let mut config = Config::default();
@@ -409,6 +449,18 @@ pub fn mount_fuse(
         );
     }
 
+    if settings.degraded_read_only {
+        if !snapshot.is_in_recovery {
+            return Err(
+                "degraded read-only mode requires PostgreSQL standby recovery state".to_string(),
+            );
+        }
+        log::warn!(
+            "FOD DEGRADED READ-ONLY mode active: PostgreSQL leases are disabled; reads may be stale, open handles may become ESTALE, and recovery requires a controlled remount"
+        );
+    }
+
+    let degraded_read_only = settings.degraded_read_only;
     let task_settings = RuntimeTaskSettings::from_env()
         .map_err(|err| format!("invalid logical task admission config: {err}"))?;
     let mut fs =
@@ -440,6 +492,10 @@ pub fn mount_fuse(
         if let Err(err) = fs.start_shared_monitor_publisher() {
             warn!("FOD shared monitor publisher unavailable: {}", err);
         }
+    } else if degraded_read_only {
+        // This explicitly weaker mode exposes the replayed standby snapshot.
+        // It cannot create/renew primary-backed open leases; reads fail with
+        // ESTALE if another host reclaims an opened file.
     } else {
         // Od schema v25 read-only mount takze uczestniczy w open-file
         // lifecycle. Bez writable PostgreSQL authority nie wolno uruchamiac
@@ -471,7 +527,7 @@ pub fn mount_fuse(
     fs.start_logical_task_observability()
         .map_err(|err| format!("failed to start logical task observability: {err}"))?;
 
-    let config = mount_config(&mount, &security)?;
+    let config = mount_config(&mount, &security, degraded_read_only)?;
     log_mount_status(MountStatusLogInput {
         mountpoint,
         core: &core,

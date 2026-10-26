@@ -21,8 +21,9 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 pub const PG_POOL_LANES_ENV: &str = "FOD_PG_POOL_LANES_ENABLED";
@@ -33,6 +34,143 @@ const MIN_PG_OBSERVABILITY_INTERVAL_MS: u64 = 100;
 const MAX_PG_OBSERVABILITY_INTERVAL_MS: u64 = 3_600_000;
 const CONNECTION_OK: c_int = 0;
 const PGRES_TUPLES_OK: c_int = 2;
+
+struct PgEndpointRoleMonitor {
+    stop: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl PgEndpointRoleMonitor {
+    fn spawn(base_conninfo: &str, interval: Duration) -> Result<Self, String> {
+        let config = resolve_pg_endpoint_config(&HashMap::new())?;
+        if config.mode == PgEndpointMode::LegacySingle {
+            return Err("role monitoring requires configured PostgreSQL endpoints".to_string());
+        }
+
+        let endpoints = config.endpoints;
+        let initial = probe_endpoint_roles(base_conninfo, &endpoints);
+        log_endpoint_role_states("initial", &initial);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let base_conninfo = base_conninfo.to_string();
+        let worker = thread::Builder::new()
+            .name("fod-pg-role-monitor".to_string())
+            .spawn(move || {
+                let mut previous = initial;
+                while !worker_stop.load(Ordering::Acquire) {
+                    let deadline = std::time::Instant::now() + interval;
+                    while !worker_stop.load(Ordering::Acquire)
+                        && std::time::Instant::now() < deadline
+                    {
+                        thread::sleep(Duration::from_millis(100).min(interval));
+                    }
+                    if worker_stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let current = probe_endpoint_roles(&base_conninfo, &endpoints);
+                    if current != previous {
+                        log_endpoint_role_states("changed", &current);
+                        previous = current;
+                    }
+                }
+            })
+            .map_err(|err| format!("failed to start PostgreSQL role monitor: {err}"))?;
+
+        Ok(Self {
+            stop,
+            worker: Some(worker),
+        })
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            if worker.join().is_err() {
+                log::warn!("FOD PostgreSQL role monitor thread panicked");
+            }
+        }
+    }
+}
+
+impl Drop for PgEndpointRoleMonitor {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+type EndpointRoleStates = Vec<(String, PgEndpointRole, Option<PgObservedEndpointRole>)>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointRoleMonitorAction {
+    ReportState,
+    ReportPromotedReplicaCandidate,
+    ReportUnavailable,
+}
+
+fn endpoint_role_monitor_action(
+    configured_role: PgEndpointRole,
+    observed_role: Option<PgObservedEndpointRole>,
+) -> EndpointRoleMonitorAction {
+    match (configured_role, observed_role) {
+        (PgEndpointRole::Replica, Some(PgObservedEndpointRole::PrimaryWritable)) => {
+            EndpointRoleMonitorAction::ReportPromotedReplicaCandidate
+        }
+        (_, Some(_)) => EndpointRoleMonitorAction::ReportState,
+        (_, None) => EndpointRoleMonitorAction::ReportUnavailable,
+    }
+}
+
+fn probe_endpoint_roles(base_conninfo: &str, endpoints: &[PgEndpoint]) -> EndpointRoleStates {
+    endpoints
+        .iter()
+        .map(|endpoint| {
+            let conninfo = format!(
+                "{} connect_timeout=2",
+                conninfo_for_endpoint(base_conninfo, endpoint)
+            );
+            let observed = postgres_endpoint_probe(&conninfo)
+                .map(|probe| probe.observed_role)
+                .map_err(|err| {
+                    log::debug!(
+                        "FOD PostgreSQL role monitor probe failed: authority={} error={}",
+                        endpoint.authority(),
+                        err
+                    );
+                })
+                .ok();
+            (endpoint.authority(), endpoint.role, observed)
+        })
+        .collect()
+}
+
+fn log_endpoint_role_states(event: &str, states: &EndpointRoleStates) {
+    for (authority, configured_role, observed_role) in states {
+        match endpoint_role_monitor_action(*configured_role, *observed_role) {
+            EndpointRoleMonitorAction::ReportPromotedReplicaCandidate => {
+                log::warn!(
+                    "FOD PostgreSQL endpoint role changed: event={} authority={} configured_role={} observed_role=primary-writable mode=read-only action=operator-controlled-remount-required",
+                    event,
+                    authority,
+                    configured_role.as_str()
+                );
+            }
+            EndpointRoleMonitorAction::ReportState => log::info!(
+                "FOD PostgreSQL endpoint role state: event={} authority={} configured_role={} observed_role={}",
+                event,
+                authority,
+                configured_role.as_str(),
+                observed_role.unwrap().as_str()
+            ),
+            EndpointRoleMonitorAction::ReportUnavailable => log::warn!(
+                "FOD PostgreSQL endpoint role state: event={} authority={} configured_role={} observed_role=unavailable mode=unchanged",
+                event,
+                authority,
+                configured_role.as_str()
+            ),
+        }
+    }
+}
 
 #[repr(C)]
 struct PGconn {
@@ -125,6 +263,33 @@ fn health_for_endpoint(
         .iter()
         .find(|snapshot| snapshot.authority == authority)
         .cloned()
+}
+
+fn validate_unique_writable_endpoint(snapshots: &[PgEndpointHealthSnapshot]) -> Result<(), String> {
+    let writable = snapshots
+        .iter()
+        .filter(|snapshot| snapshot.observed_role == Some(PgObservedEndpointRole::PrimaryWritable))
+        .collect::<Vec<_>>();
+    let authorities = writable
+        .iter()
+        .map(|snapshot| snapshot.authority.as_str())
+        .collect::<Vec<_>>();
+    if authorities.len() > 1 {
+        return Err(format!(
+            "multiple writable PostgreSQL endpoints detected ({}); refusing routing because a unique filesystem authority cannot be established",
+            authorities.join(",")
+        ));
+    }
+    if let Some(snapshot) = writable
+        .iter()
+        .find(|snapshot| snapshot.configured_role == PgEndpointRole::Replica)
+    {
+        return Err(format!(
+            "PostgreSQL endpoint {} is configured as a replica but reports a writable primary; refresh endpoint roles after promotion",
+            snapshot.authority
+        ));
+    }
+    Ok(())
 }
 
 fn choose_endpoint(
@@ -332,6 +497,8 @@ fn resolve_endpoint_routing(
             postgres_endpoint_probe(&endpoint_conninfo),
         )?);
     }
+
+    validate_unique_writable_endpoint(&snapshots)?;
 
     let mount_role = effective_mount_role(runtime)?;
     let selected = select_endpoint_for_mount(&config, mount_role, &snapshots)?;
@@ -716,6 +883,13 @@ pub fn mount_with_lanes(
     let lanes = DbRepoLanes::from_runtime(conninfo, runtime)
         .map_err(|err| format!("failed to create PostgreSQL repository lanes: {err}"))?;
     let diagnostics = lanes.diagnostics();
+    let degraded_read_only =
+        env_var_truthy_with_legacy_alias("FOD_DEGRADED_READONLY_ENABLED", false);
+    validate_degraded_route(
+        degraded_read_only,
+        diagnostics.routing_enabled,
+        diagnostics.selected_read_only,
+    )?;
     log::info!(
         "FOD PostgreSQL lanes: opt_in_enabled={} dedicated_lanes_active={} mode={} total={} read={} write={} control={} lease={} legacy_dsn_only={} routing_enabled={} endpoint_mode={} routing_candidate_count={} selected_authority={} startup_failovers={} selected_read_only={} runtime_failover_enabled={} runtime_failover_target_count={} replica_read_routing_enabled={} replica_read_target_count={}",
         diagnostics.opt_in_enabled,
@@ -832,6 +1006,18 @@ pub fn mount_with_lanes(
         "FOD PostgreSQL lane observability sampler: interval_ms={}",
         observability_interval.as_millis()
     );
+    let mut role_monitor = if degraded_read_only {
+        log::info!(
+            "FOD degraded mount PostgreSQL role monitor: interval_ms={}",
+            observability_interval.as_millis()
+        );
+        Some(PgEndpointRoleMonitor::spawn(
+            conninfo,
+            observability_interval,
+        )?)
+    } else {
+        None
+    };
     let mut observability_sampler = LaneObservabilitySampler::spawn(
         observability_repositories.clone(),
         Arc::clone(&process_rss_peak),
@@ -868,10 +1054,27 @@ pub fn mount_with_lanes(
         mountpoint,
         &snapshot,
     );
+    if let Some(monitor) = role_monitor.as_mut() {
+        monitor.stop();
+    }
     observability_sampler.stop();
     log_lane_observability("post-mount", &observability_repositories, &process_rss_peak);
     drop(keepalive);
     result
+}
+
+fn validate_degraded_route(
+    enabled: bool,
+    routing_enabled: bool,
+    selected_read_only: bool,
+) -> Result<(), String> {
+    if enabled && (!routing_enabled || !selected_read_only) {
+        return Err(
+            "FOD_DEGRADED_READONLY_ENABLED requires role-aware routing and a validated physical replica endpoint; configure FOD_ROLE=replica and replica_hosts"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn postgres_observability_interval() -> Result<Duration, String> {
@@ -1040,6 +1243,14 @@ mod tests {
     }
 
     #[test]
+    fn degraded_mode_requires_a_validated_replica_route() {
+        assert!(validate_degraded_route(true, true, true).is_ok());
+        assert!(validate_degraded_route(true, false, true).is_err());
+        assert!(validate_degraded_route(true, true, false).is_err());
+        assert!(validate_degraded_route(false, false, false).is_ok());
+    }
+
+    #[test]
     fn disabled_wrapper_preserves_single_repo_contract() {
         let runtime = runtime_with_pool_limit(10);
         let lanes = DbRepoLanes::with_opt_in("host=127.0.0.1", &runtime, false).unwrap();
@@ -1097,12 +1308,74 @@ mod tests {
 mod endpoint_routing_tests {
     use super::*;
 
+    #[test]
+    fn promoted_replica_is_reported_as_candidate_without_granting_write_mode() {
+        assert_eq!(
+            endpoint_role_monitor_action(
+                PgEndpointRole::Replica,
+                Some(PgObservedEndpointRole::PrimaryWritable)
+            ),
+            EndpointRoleMonitorAction::ReportPromotedReplicaCandidate
+        );
+    }
+
+    #[test]
+    fn role_monitor_preserves_read_only_when_endpoint_is_unavailable() {
+        assert_eq!(
+            endpoint_role_monitor_action(PgEndpointRole::Replica, None),
+            EndpointRoleMonitorAction::ReportUnavailable
+        );
+    }
+
     fn config(endpoints: Vec<PgEndpoint>) -> PgEndpointConfig {
         PgEndpointConfig {
             mode: PgEndpointMode::ExplicitRoles,
             role_discovery_required: false,
             endpoints,
         }
+    }
+
+    #[test]
+    fn rejects_multiple_observed_writable_authorities() {
+        let health = PgEndpointHealthRegistry::default();
+        let first = health
+            .record_probe_at(
+                "master:5432",
+                PgEndpointRole::Primary,
+                PgEndpointProbe::from_flags(false, false),
+                1,
+            )
+            .unwrap();
+        let second = health
+            .record_probe_at(
+                "slave1:5432",
+                PgEndpointRole::Primary,
+                PgEndpointProbe::from_flags(false, false),
+                2,
+            )
+            .unwrap();
+
+        let error = validate_unique_writable_endpoint(&[first, second]).unwrap_err();
+        assert!(error.contains("multiple writable PostgreSQL endpoints"));
+        assert!(error.contains("master:5432"));
+        assert!(error.contains("slave1:5432"));
+    }
+
+    #[test]
+    fn rejects_promoted_endpoint_still_configured_as_replica() {
+        let health = PgEndpointHealthRegistry::default();
+        let promoted = health
+            .record_probe_at(
+                "slave1:5432",
+                PgEndpointRole::Replica,
+                PgEndpointProbe::from_flags(false, false),
+                1,
+            )
+            .unwrap();
+
+        let error = validate_unique_writable_endpoint(&[promoted]).unwrap_err();
+        assert!(error.contains("configured as a replica"));
+        assert!(error.contains("refresh endpoint roles after promotion"));
     }
 
     #[test]

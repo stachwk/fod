@@ -4,11 +4,13 @@ set -eu
 : "${PGDATA:=/var/lib/postgresql/data/pgdata}"
 : "${FOD_REPLICATION_USER:=fod_repl}"
 : "${FOD_REPLICATION_PASSWORD:=fod_repl_pass}"
+: "${FOD_REPLICA_UPSTREAM_HOST:=primary}"
+: "${FOD_REPLICA_APPLICATION_NAME:=fod_replica_read_test}"
 
 mkdir -p "$PGDATA"
 
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
-    until pg_isready -h primary -p 5432 -U "$POSTGRES_USER" \
+    until pg_isready -h "$FOD_REPLICA_UPSTREAM_HOST" -p 5432 -U "$POSTGRES_USER" \
         -d "$POSTGRES_DB" >/dev/null 2>&1; do
         sleep 1
     done
@@ -17,7 +19,7 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
     export PGPASSWORD="$FOD_REPLICATION_PASSWORD"
 
     pg_basebackup \
-        -h primary \
+        -h "$FOD_REPLICA_UPSTREAM_HOST" \
         -p 5432 \
         -U "$FOD_REPLICATION_USER" \
         -D "$PGDATA" \
@@ -26,7 +28,7 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
         -P
 
     cat >> "$PGDATA/postgresql.auto.conf" <<EOF
-primary_conninfo = 'host=primary port=5432 user=${FOD_REPLICATION_USER} password=${FOD_REPLICATION_PASSWORD} application_name=fod_replica_read_test'
+    primary_conninfo = 'host=${FOD_REPLICA_UPSTREAM_HOST} port=5432 user=${FOD_REPLICATION_USER} password=${FOD_REPLICATION_PASSWORD} application_name=${FOD_REPLICA_APPLICATION_NAME}'
 EOF
     touch "$PGDATA/standby.signal"
 fi

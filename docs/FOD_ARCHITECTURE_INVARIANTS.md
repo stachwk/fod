@@ -146,3 +146,15 @@ after another mount's `fsync`, despite `direct_io=1`, read cache disabled,
 metadata TTL set to zero, and a two-second wait. The new writer and a fresh
 mount saw the correct data. TX03J remains OPEN until the production read path
 is corrected, tests enforce coherency, and performance/regression checks pass.
+
+### Known mutation-authority violation
+
+The 2026-10-25 primary authority audit reproduced loss of a surviving hardlink:
+a writable mount used a lagged replica's link count to select the primary-file
+unlink/purge path. Mutation SQL ran on the primary, but its deciding read was
+not authoritative. The primary-only control preserved the alias. This remains
+an open release blocker for replica read routing on writable mounts; keep
+`FOD_PG_REPLICA_READ_ROUTING_ENABLED=0` until the unlink transaction and related
+mutation preconditions are corrected and validated. See
+`docs/FOD_PRIMARY_AUTHORITY_AUDIT.md` for the mechanism, evidence and remaining
+review items.
