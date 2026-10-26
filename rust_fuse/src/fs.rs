@@ -1671,16 +1671,17 @@ fn assemble_degraded_snapshot(
     if size == 0 {
         return Ok((Vec::new(), 0));
     }
+    let requested_end = offset.checked_add(size).ok_or(libc::EINVAL)?;
     let Some((file_size, generation, blocks)) = snapshot else {
         return Err(libc::ESTALE);
     };
     if offset >= file_size {
         return Ok((Vec::new(), generation));
     }
-    let requested_end = offset.saturating_add(size);
     let end_offset = requested_end.min(file_size);
-    let first_block = offset / block_size.max(1);
-    let last_block = end_offset.saturating_sub(1) / block_size.max(1);
+    let block_size = block_size.max(1);
+    let first_block = offset / block_size;
+    let last_block = (end_offset - 1) / block_size;
     let blocks = blocks
         .into_iter()
         .filter(|(block, _)| *block >= first_block && *block <= last_block)
@@ -4477,7 +4478,7 @@ impl FodFuse {
         if size == 0 {
             return Ok(Vec::new());
         }
-        let requested_end = offset.saturating_add(size);
+        let requested_end = offset.checked_add(size).ok_or(libc::EINVAL)?;
         let first_block = offset / self.block_size;
         let requested_last_block = requested_end.saturating_sub(1) / self.block_size;
         let started = Instant::now();
@@ -10189,6 +10190,36 @@ mod tests {
         assert_eq!(
             assemble_degraded_snapshot(snapshot, 4, 4, 4),
             Ok((vec![0; 4], 7))
+        );
+    }
+
+    #[test]
+    fn degraded_snapshot_rejects_overflowing_read_range() {
+        let snapshot = Some((8, 3, Vec::new()));
+        assert_eq!(
+            assemble_degraded_snapshot(snapshot, u64::MAX - 1, 4, 4),
+            Err(libc::EINVAL)
+        );
+    }
+
+    #[test]
+    fn degraded_snapshot_empty_read_does_not_require_file_snapshot() {
+        assert_eq!(
+            assemble_degraded_snapshot(None, u64::MAX, 0, 4),
+            Ok((Vec::new(), 0))
+        );
+    }
+
+    #[test]
+    fn degraded_snapshot_returns_eof_for_offset_at_or_after_file_size() {
+        let snapshot = Some((8, 3, Vec::new()));
+        assert_eq!(
+            assemble_degraded_snapshot(snapshot.clone(), 8, 4, 4),
+            Ok((Vec::new(), 3))
+        );
+        assert_eq!(
+            assemble_degraded_snapshot(snapshot, 12, 4, 4),
+            Ok((Vec::new(), 3))
         );
     }
 

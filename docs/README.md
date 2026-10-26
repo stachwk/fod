@@ -9,7 +9,8 @@ Documentation is organized by task first, then by lifecycle class. Current task 
 | Current behavior | What FOD does now and how to operate it | [`CURRENT_STATE.md`](CURRENT_STATE.md) and the task guides below |
 | Durable contracts | Compatibility, security, schema/storage and architecture decisions expected to outlive one release | requirement/contract documents and [`adr/`](adr/) |
 | Historical evidence | Release-specific implementation notes, measurements, compatibility/toolchain baselines and completed project records | [`HISTORY.md`](HISTORY.md) and [`history/`](history/) |
-| Plans | Intended work that is not yet a statement of current capability | [`plans/`](plans/), `../ROADMAP.md`, `../TODO.md` |
+| Plans | One implementation queue, detailed workstreams, and future proposals | [`plans/CURRENT.md`](plans/CURRENT.md), [`plans/`](plans/), [`../ROADMAP.md`](../ROADMAP.md) |
+| Reviews | Dated findings and evidence supporting current work; not independent queues | Correctness reviews listed below |
 | Work journals | Execution logs and accumulated conclusions retained for traceability | `../commands.md`, `../conclusions.md` |
 
 When documents disagree about **current behavior**, use this order:
@@ -20,14 +21,56 @@ When documents disagree about **current behavior**, use this order:
 4. historical evidence and work journals,
 5. plans and proposals.
 
-Historical evidence is intentionally not rewritten to match later defaults. Update the current task documentation instead.
+Architecture and security requirements remain normative. A code/contract
+mismatch is a defect or an explicit design decision to resolve; the order above
+does not authorize weakening a contract to match an implementation.
+
+Historical evidence is intentionally not rewritten to match later defaults.
+Update the current task documentation instead.
+
+## Reading path and document ownership
+
+Read [CURRENT_STATE.md](CURRENT_STATE.md) for implemented behavior, then
+[architecture invariants](FOD_ARCHITECTURE_INVARIANTS.md) for required guarantees.
+Use [plans/CURRENT.md](plans/CURRENT.md) to select work and follow its topic links
+for detailed design, evidence and acceptance criteria.
+
+| Information | Single owning document | Other documents should contain |
+| --- | --- | --- |
+| Current capabilities and limitations | [CURRENT_STATE.md](CURRENT_STATE.md) | A link and topic-specific details |
+| Shared correctness requirements | [FOD_ARCHITECTURE_INVARIANTS.md](FOD_ARCHITECTURE_INVARIANTS.md) | References to the applicable invariant |
+| Implementation order and closure status | [plans/CURRENT.md](plans/CURRENT.md) | Evidence or detailed acceptance criteria, without a competing queue |
+| HA/recovery phases and cache matrix | [HA/cache workstream](plans/HA_READONLY_RECOVERY_AND_CACHE.md) | Links to this workstream and its contract review |
+| Future direction | [ROADMAP.md](../ROADMAP.md), [future ideas](plans/FOD_FUTURE_IDEAS.md) | Proposals, without presenting them as implemented |
+| Completed work and measurements | [HISTORY.md](HISTORY.md), [history/](history/) | Dated evidence and links to the current owner |
+
+When updating documentation, revise its existing owner first. Add a separate
+review only when it contributes distinct findings or evidence; link it from
+this index and the relevant workstream. Move completed plans to `history/`,
+update current links, and retain a short pointer where old paths need to work.
+`TODO.md`, `commands.md` and `conclusions.md` retain decisions and chronological
+records; they do not define the current implementation order.
+
+## Correctness reviews and evidence
+
+These documents support the queue in [plans/CURRENT.md](plans/CURRENT.md).
+Their dated findings are evidence; they do not by themselves certify that every
+reported gap is still present or that a proposed fix has passed acceptance.
+
+| Area | Contract/design | Review and evidence |
+| --- | --- | --- |
+| PostgreSQL authority and mutation ordering | [Architecture invariants](FOD_ARCHITECTURE_INVARIANTS.md) | [Primary authority audit](FOD_PRIMARY_AUTHORITY_AUDIT.md), [C6 write fencing](FOD_C6_WRITE_FENCING_AUDIT.md) |
+| Cross-mount content coherence | [TX03J contract and stages](TX03J_CROSS_MOUNT_CACHE_COHERENCE.md) | [Generation coverage and remaining gates](tx03j-generation-audit.md) |
+| Standby availability and recovery | [HA/cache plan](plans/HA_READONLY_RECOVERY_AND_CACHE.md) | [Degraded read-only contract review](FOD_DEGRADED_READONLY_CONTRACT_REVIEW.md) |
+| Transaction boundaries and privileges | [Security](SECURITY.md), [runtime privilege policy](FOD_RUNTIME_PRIVILEGE_POLICY.md) | [C10 privilege audit](FOD_C10_POSTGRES_PRIVILEGE_AUDIT.md), [C10-B SQL inventory](FOD_C10B_SQL_MUTATION_INVENTORY.md), [C10-B2 transaction review](FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md) |
+| Payload ownership | [Space accounting](space-accounting.md), [storage-format ADR](adr/storage-format-versioning.md) | [Payload ownership inventory](storage-payload-ownership-inventory.md) |
 
 ## 1. Understand the current system
 
 - [`CURRENT_STATE.md`](CURRENT_STATE.md) - compact current architecture, deployment model, I/O size layers and lifecycle guarantees.
 - [`../README.md`](../README.md) / [`../README.pl`](../README.pl) - project entry pages.
 - [`../ROADMAP.md`](../ROADMAP.md) - current direction.
-- [`../TODO.md`](../TODO.md) - decisions, follow-ups and regression notes.
+- [`../TODO.md`](../TODO.md) - historical decisions and follow-ups; the active queue is [`plans/CURRENT.md`](plans/CURRENT.md).
 
 ## 2. Install or deploy FOD
 
@@ -61,7 +104,7 @@ Current high-level defaults are summarized in [`CURRENT_STATE.md`](CURRENT_STATE
 - [`../BENCHMARKS.md`](../BENCHMARKS.md) - accepted benchmark baselines.
 - [`performance-baselines.md`](performance-baselines.md) - baseline details.
 - [`FOD_RANDOM_IO_POSTGRESQL_TUNING.md`](FOD_RANDOM_IO_POSTGRESQL_TUNING.md) - PostgreSQL random-I/O tuning background.
-- [`plans/CURRENT.md`](plans/CURRENT.md) - maintained next optimization target and acceptance boundary.
+- [`plans/CURRENT.md`](plans/CURRENT.md) - single queue for correctness and performance work.
 - [`HISTORY.md`](HISTORY.md) - dated, release-specific and completed performance-plan evidence.
 
 ## 6. Index or import external sources
@@ -99,9 +142,10 @@ Historical files remain as recorded and are not canonical sources for later defa
 ## 10. Plans and future work
 
 - [`plans/README.md`](plans/README.md) - plans index and lifecycle rule.
-- [`plans/CURRENT.md`](plans/CURRENT.md) - compact maintained current implementation order.
+- [`plans/CURRENT.md`](plans/CURRENT.md) - the single current implementation queue.
+- [HA/cache workstream](plans/HA_READONLY_RECOVERY_AND_CACHE.md) - detailed recovery phases and performance acceptance.
 - [`plans/FOD_FUTURE_IDEAS.md`](plans/FOD_FUTURE_IDEAS.md) - longer-term ideas and proposals.
 - [`../ROADMAP.md`](../ROADMAP.md) - long-term roadmap.
-- [`../TODO.md`](../TODO.md) - mixed follow-up/archive record.
+- [`../TODO.md`](../TODO.md) - historical follow-up/archive record; it is not the active queue.
 
 Completed plans and old execution roadmaps are retained under [`history/`](history/) rather than mixed with active/future plans.

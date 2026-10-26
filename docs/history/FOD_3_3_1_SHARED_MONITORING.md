@@ -114,7 +114,7 @@ nie zawiera maski CIDR z tekstowej reprezentacji adresu PostgreSQL.
 ## PostgreSQL
 
 Wymagane i sprawdzane ustawienia PostgreSQL sa opisane w
-[`POSTGRESQL_REQUIREMENTS.md`](POSTGRESQL_REQUIREMENTS.md).
+[`POSTGRESQL_REQUIREMENTS.md`](../POSTGRESQL_REQUIREMENTS.md).
 
 ## Ograniczenie 3.3.1
 

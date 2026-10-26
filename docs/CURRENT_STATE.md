@@ -17,6 +17,35 @@ FOD is Rust-backed end to end:
 
 PostgreSQL owns durable filesystem metadata, payload, shared lock/session state and replication.
 
+## Correctness boundaries and unfinished work
+
+[Architecture invariants](FOD_ARCHITECTURE_INVARIANTS.md) define the required
+PostgreSQL authority for namespace, ownership, leases, fencing and inode
+lifecycle. The [primary authority audit](FOD_PRIMARY_AUTHORITY_AUDIT.md)
+records a reproduced unlink/hardlink issue and further mutation-precondition
+review; its findings must be resolved and validated before claiming complete
+primary-authoritative mutation coverage.
+
+PostgreSQL schema 27 includes transactional per-file content generations.
+These primitives and the local cache publication gate do not establish default
+cross-mount cache coherence. The [TX03J generation audit](tx03j-generation-audit.md)
+tracks missing integration; strict opt-in reads are diagnostic coverage, not
+proof that ordinary cached reads satisfy the same contract.
+
+Explicit `FOD_DEGRADED_READONLY_ENABLED=1` mounts can read a configured physical
+standby without registering primary-backed session/open leases. They force
+read-only operation, bypass content caches and use one generation-bearing SQL
+snapshot per read. They may expose stale replayed data and return `ESTALE`
+after remote reclamation. Normal read-only mounts retain their authoritative
+lease requirement. Background role monitoring reports promotion candidates;
+live operator transition and source switching are unimplemented, so recovery
+requires controlled unmount/remount. See the
+[degraded contract review](FOD_DEGRADED_READONLY_CONTRACT_REVIEW.md).
+
+The single ordered queue is [plans/CURRENT.md](plans/CURRENT.md); the
+[HA/cache workstream](plans/HA_READONLY_RECOVERY_AND_CACHE.md) contains its
+recovery acceptance matrix and diagnostic benchmark evidence.
+
 ## Production Docker topology
 
 The supported reference topology is:
@@ -252,6 +281,18 @@ F1.2 punch-hole regression. PostgreSQL plans use
 sort. Release-lto ASM review confirmed the numeric SQL literals and absence of
 `_order::text`; release reproducibility and package payload integrity gates
 also pass.
+
+## Database schema and primary-authoritative mutations
+
+Current PostgreSQL schema version is 27; the migration manifest in
+`rust_mkfs/src/main.rs` is authoritative. Earlier schema numbers below identify
+the migrations that introduced particular contracts.
+
+Primary authority requirements are defined by
+[FOD_ARCHITECTURE_INVARIANTS.md](FOD_ARCHITECTURE_INVARIANTS.md). A dated audit
+reported one reproduced hardlink/unlink data-loss case and additional mutation
+review items; the implementation queue tracks their revalidation and closure.
+Do not treat an older audit's test result as proof of current behavior.
 
 ## Cross-mount write ownership and FUSE hang safety
 

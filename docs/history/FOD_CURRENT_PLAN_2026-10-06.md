@@ -1,0 +1,478 @@
+> Archived on 2026-10-26. Completed implementation evidence; current priorities
+> are maintained in [plans/CURRENT.md](../plans/CURRENT.md).
+
+# FOD current implementation plan
+
+Status: 2026-10-06.
+
+This file contains only work that is current enough to direct the next change.
+
+For current implemented behavior use [`../CURRENT_STATE.md`](../CURRENT_STATE.md).
+For long-term direction use [`../../ROADMAP.md`](../../ROADMAP.md).
+`TODO.md` is a mixed follow-up/archive record rather than the implementation
+queue.
+
+The completed FOD 3.4.16-3.4.20 read/write optimization sequence is archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-08_READ_WRITE_TUNING.md`](../history/FOD_CURRENT_PLAN_2026-09-08_READ_WRITE_TUNING.md).
+
+The completed FOD 3.4.23 cross-mount write ownership, stale-writer fencing and
+FUSE hang-guard sequence is archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-12_WRITE_OWNERSHIP.md`](../history/FOD_CURRENT_PLAN_2026-09-12_WRITE_OWNERSHIP.md).
+
+The completed P2 QNAP COPY-buffer repeatability follow-up is archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-12_QNAP_COPY_BUFFER.md`](../history/FOD_CURRENT_PLAN_2026-09-12_QNAP_COPY_BUFFER.md).
+It produced no runtime tuning change: the current
+`FOD_PERSIST_COPY_SEND_BUFFER_BYTES` default remains unchanged.
+
+The completed P3 external-unmount/session-teardown validation is archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-13_EXTERNAL_UNMOUNT.md`](../history/FOD_CURRENT_PLAN_2026-09-13_EXTERNAL_UNMOUNT.md).
+On the current `fuser 0.18.0` / libfuse3 stack the historical benign teardown
+`EINVAL` was not reproduced, so no runtime teardown change was made.
+
+The completed P4 compatibility-diagnostics aggregation sequence is archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-13_COMPATIBILITY_DIAGNOSTICS.md`](../history/FOD_CURRENT_PLAN_2026-09-13_COMPATIBILITY_DIAGNOSTICS.md).
+It completed in FOD 3.4.27 with versioned PostgreSQL/libpq/schema/storage
+status, versioned negotiated FUSE telemetry, aggregated `fod-monitor report
+--json` sources and an explicit coverage-only compatibility summary.
+
+The completed C2 same-destination rename/replace ownership sequence is archived
+in [`../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md`](../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md).
+FOD 3.4.31 now routes protected file, hardlink, symlink and directory
+rename/replace through one transactional ownership-guarded namespace mutation.
+
+The post-P4 roadmap review selected one concrete next correctness task rather
+than inventing a generic P5 sequence.
+
+## F1 — Mounted `fallocate` contract audit
+
+The current Rust FUSE frontend does not override the public
+`fuser::Filesystem::fallocate` callback. Older TODO/archive text containing
+legacy "already in place" wording must not be used as evidence of current
+mounted Rust behavior.
+
+### F1.1 — Baseline and semantic contract — completed
+
+The mounted diagnostic baseline was captured on FOD 3.4.27 with:
+
+```text
+kernel                    6.17.0-41-generic
+libfuse3 / fusermount3    3.17.4
+fuser                     0.18.0
+kernel FUSE protocol      7.44
+userspace protocol max    7.40
+negotiated protocol       7.40
+requested/enabled caps    POSIX_LOCKS, ATOMIC_O_TRUNC, FLOCK_LOCKS
+unsupported requested     none
+```
+
+The raw `libc.fallocate()` matrix used a fresh mount per mode so kernel caching
+of unsupported operations could not hide callback behavior. Results:
+
+- `mode=0` -> `ENOTSUP`, with the default fuser `fallocate` callback logged;
+- `KEEP_SIZE` -> `ENOTSUP`, with the default callback logged;
+- `PUNCH_HOLE|KEEP_SIZE` -> `ENOTSUP`, with the default callback logged;
+- `ZERO_RANGE` -> `ENOTSUP`, with the default callback logged;
+- `PUNCH_HOLE` without `KEEP_SIZE` -> `ENOTSUP` before the default callback;
+- failed raw calls did not mutate file contents, logical size, `st_blocks`,
+  `fod.data_blocks` or persisted payload bytes;
+- state was verified again after unmount/remount.
+
+The legacy `os.posix_fallocate()` control is not evidence of FOD preallocation.
+It returned success only through fallback behavior: a 64 KiB file grew
+logically to 128 KiB while `st_blocks` stayed at 128 512-byte units,
+`fod.data_blocks` stayed at two rows and PostgreSQL payload stayed at 64 KiB.
+The newly exposed range therefore read as zeroes but no durable payload/capacity
+was allocated for it.
+
+The source audit explains that result and fixes the semantic boundary for F1.2:
+
+- `assemble_read_slice()` initializes the requested output with zeroes, so a
+  missing canonical block is already a logical sparse zero range;
+- PostgreSQL persistence intentionally keeps fully zero blocks sparse;
+- `st_blocks` is derived from actually allocated payload bytes, not logical
+  file size;
+- existing truncate persistence can delete tail blocks and the direct block
+  path can delete individual block rows, but there is no current mounted
+  fallocate range contract;
+- canonical block-only storage has no durable state that distinguishes an
+  allocated all-zero block from a sparse/missing block.
+
+Consequences:
+
+- true `mode=0` preallocation cannot be represented faithfully by merely
+  extending `file_size` or materializing zeroes;
+- `KEEP_SIZE` preallocation has the same representation gap;
+- `ZERO_RANGE` would lose Linux allocated-zero/unwritten-range semantics if it
+  were approximated as ordinary sparse zeroes;
+- `PUNCH_HOLE|KEEP_SIZE` is the only currently selected implementation
+  candidate because deallocated full blocks map naturally to missing
+  `data_blocks` and partial boundary blocks can retain non-hole bytes while the
+  punched bytes become zero.
+
+No database schema, storage format or runtime version changed during F1.1.
+
+### F1.2 — `PUNCH_HOLE|KEEP_SIZE` implementation — complete
+
+> F1.2 fencing requirement: every supported `fallocate` request must validate
+> current write ownership/fencing before both mutating and logical no-op paths.
+> A stale writer cannot report a successful beyond-EOF punch after ownership
+> moves to another mount.
+
+Add an explicit mounted `fallocate` callback only for the exact
+`PUNCH_HOLE|KEEP_SIZE` mode. Keep `mode=0`, `KEEP_SIZE`, `ZERO_RANGE` and every
+other unsupported flag combination on an explicit `EOPNOTSUPP` path until FOD
+has a durable representation for allocation state distinct from payload data.
+
+The implementation must reuse the current write-safety model rather than add a
+parallel mutation path:
+
+1. return `EROFS` before mutation on read-only mounts;
+2. validate the file handle/file identity and range arithmetic without silent
+   saturation of invalid user ranges;
+3. preserve file size for every successful punch;
+4. serialize with pending writes for the same file and carry the existing
+   PostgreSQL-authoritative write ownership/fencing token through persistence;
+5. zero only the requested bytes of partial first/last blocks and remove fully
+   punched all-zero blocks from canonical storage;
+6. preserve hardlink/data-object copy-on-write isolation;
+7. keep payload-quota/statfs accounting based on real persisted blocks and
+   release capacity when complete blocks disappear;
+8. invalidate read/recent-write/metadata/statfs state so cross-handle and
+   cross-mount reads cannot expose stale payload;
+9. define and test `mtime`/`ctime` behavior as part of the mounted contract
+   rather than inheriting accidental timestamp side effects;
+10. preserve replay safety, persistence error mapping, stale-writer rejection
+    and remount durability.
+
+The first implementation tests must include:
+
+- a full-block aligned punch across one and multiple blocks;
+- unaligned start/end boundaries with surrounding bytes preserved;
+- a range extending beyond EOF while file size remains unchanged;
+- an entirely beyond-EOF no-op range;
+- already sparse/missing blocks;
+- hardlinks sharing the same data object before mutation;
+- another writable mount holding ownership (`EBUSY`/fencing behavior);
+- read-only mount (`EROFS`);
+- unsupported mode/flag combinations (`EOPNOTSUPP`);
+- `st_blocks`, `statfs`, PostgreSQL block rows/payload bytes and remount state.
+
+Do not add allocation metadata merely to make `mode=0` appear supported in this
+slice. A future preallocation design, if justified by a concrete workload,
+requires a separate storage-format decision and migration/compatibility plan.
+
+The FOD 3.4.28 candidate now uses an explicit FUSE callback and a transactional
+PostgreSQL range mutation. Full interior blocks are removed without
+materializing logical zero buffers; only partial boundary blocks are zeroed.
+The mutation reuses data-object COW, write fencing, quota serialization and
+cache invalidation. F1.2 validation is complete: the mounted contract,
+aligned/partial/sparse/remount/hardlink coverage, timestamp semantics,
+cross-mount stale-writer fencing, legacy stale-writer regression, deterministic
+`release-lto` ELF gate and package-payload integrity gate are green locally.
+
+### F1 acceptance
+
+
+Release validation for the 3.4.28 candidate separates compiled binary
+reproducibility from package-container metadata:
+
+- `test-release-elf-reproducibility` is blocking and uses two independent
+  `CARGO_TARGET_DIR` trees;
+- `test-package-payload-integrity` is blocking and requires packaged ELF/SO
+  bytes to match the gated `release-lto` artifacts exactly;
+- `test-fallocate-timestamps` requires in-range hole punching to advance
+  `mtime`/`ctime` while beyond-EOF no-op punching leaves them unchanged;
+- full DEB/RPM container reproducibility remains strict/manual until package
+  timestamp and host/tool metadata are normalized.
+
+
+- mounted integration coverage exists for every supported mode and for rejected
+  combinations;
+- `PUNCH_HOLE|KEEP_SIZE` changes only the requested byte range and never
+  changes logical file size;
+- block-only canonical storage remains the tested production path;
+- old Python/extent-era TODO statements are treated as historical evidence, not
+  as the runtime contract;
+- no unrelated FUSE capability is enabled in the same implementation change;
+- benchmark only after correctness tests pass, and keep the feature unchanged
+  if measurements do not justify additional optimization.
+
+## S1 — Mounted sparse `lseek` contract audit
+
+F1 is complete in FOD 3.4.28. The next selected correctness task is sparse-aware
+mounted `lseek(SEEK_DATA/SEEK_HOLE)` behavior.
+
+`fuser 0.18.0` exposes a public `Filesystem::lseek` callback, but FOD currently
+has no repository-visible override. The fuser default returns `ENOSYS`; generic
+`SEEK_SET`/`SEEK_CUR`/`SEEK_END` behavior must not be mistaken for implemented
+sparse-range discovery.
+
+### S1.1 — Baseline and semantic contract — completed
+
+Establish the actual mounted behavior before adding runtime code.
+
+The baseline uses fresh mounts for five layouts so kernel caching of an
+unsupported FUSE opcode cannot hide callback behavior:
+
+- fully dense file;
+- an aligned middle hole created through the supported
+  `PUNCH_HOLE|KEEP_SIZE` contract;
+- a file with an unwritten middle gap and data at both ends;
+- a file with a trailing sparse range up to EOF;
+- an empty file.
+
+For each layout record raw Linux `SEEK_DATA`/`SEEK_HOLE` results and errno,
+whether the default fuser callback was reached, visible `st_blocks`/content
+state and PostgreSQL block/payload state. The audit must prove that seek probes
+do not mutate file or database state.
+
+The semantic decision for S1.2 must be made only after this baseline. In
+particular, define exact handling for:
+
+- offsets in data, holes, at EOF and beyond EOF;
+- an empty file;
+- partial-block zero regions versus canonical missing blocks;
+- trailing holes and the implicit hole at EOF;
+- files whose all-zero canonical blocks are intentionally stored as holes;
+- pending same-mount writes and read-after-write visibility;
+- hardlinks/shared data objects;
+- invalid `whence` and negative offsets.
+
+Do not add storage metadata for this feature. If implemented, sparse discovery
+must derive from the existing block-only canonical representation and file size.
+
+The mounted FOD 3.4.28 baseline completed with storage block size 32 KiB and
+five fresh-mount layouts. The fuser default `lseek` callback was reached once
+per mount, but Linux cached `ENOSYS` and then supplied its generic fallback:
+
+- dense data behaved as data with the implicit hole at EOF;
+- an aligned block removed by `PUNCH_HOLE|KEEP_SIZE` was still reported as
+  data by `SEEK_DATA`, while `SEEK_HOLE` returned EOF;
+- an unwritten two-block middle gap was likewise reported as data;
+- a trailing three-block sparse range was likewise reported as data;
+- empty-file offset 0 and offsets at/beyond EOF returned `ENXIO`;
+- 26 probes succeeded and 8 returned `ENXIO`;
+- all probes left visible file state and PostgreSQL block/payload state
+  unchanged.
+
+Therefore the current mounted behavior is standards-permitted generic fallback,
+not sparse-aware FOD behavior. S1.2 is selected to implement an explicit
+block-granular contract from canonical `data_blocks` presence. A missing
+canonical block is a hole; any present block is data even when a partial
+`PUNCH_HOLE` has zeroed bytes inside that allocated block.
+
+### S1.2 — Explicit block-granular `SEEK_DATA`/`SEEK_HOLE` — completed
+
+FOD 3.4.29 adds an explicit mounted `lseek` callback for `SEEK_DATA` and
+`SEEK_HOLE`.
+
+The contract deliberately follows canonical block allocation rather than byte
+content:
+
+- a present `fod.data_blocks` row means data for that complete FOD storage
+  block;
+- a missing canonical block means a hole;
+- zero bytes inside a present partial block are still data;
+- `SEEK_DATA` returns the current offset when its block exists, otherwise the
+  start of the next present block, or `ENXIO` if no data exists before EOF;
+- `SEEK_HOLE` returns the current offset when its block is absent, otherwise the
+  first missing block boundary after the current contiguous data run, capped at
+  EOF;
+- offset at or beyond EOF returns `ENXIO`, including an empty file;
+- negative offsets and unsupported `whence` values return `EINVAL`.
+
+Before querying canonical block presence, the callback flushes pending
+same-mount write states for the file so sparse discovery is consistent with
+read-after-write behavior.
+
+The repository lookup uses indexed `_order` queries and never reads block
+payload bytes. It does not scan a missing range block by block. No database
+schema or storage-format change is required.
+
+Validation completed successfully:
+
+- dense, aligned-punched, middle-gap, trailing-hole and empty layouts;
+- partial-block punch remains data at block granularity;
+- multi-digit block ordering regression proves numeric order (`2` before `10`);
+- pending same-mount writes are visible to sparse seek;
+- remount preserves sparse seek semantics from durable `data_blocks`;
+- fuser's default `lseek` callback is not reached;
+- F1.2 `PUNCH_HOLE|KEEP_SIZE` regression remains green;
+- SQL plans use `idx_data_blocks_object_order` without an extra text sort;
+- release-lto ASM contains the numeric sparse-seek SQL and no `_order::text`;
+- release ELF reproducibility and package payload integrity gates are green.
+
+S1.2 is complete in FOD 3.4.29. No schema or storage-format change was needed.
+
+## C1 — Same-destination concurrent writable `create` race — completed
+
+FOD 3.4.30 closes the remaining cross-mount race where two clients could
+simultaneously copy to the same initially absent logical destination.
+
+Writable `create` now acquires destination-only ownership before namespace
+mutation, rechecks the namespace under that reservation and upgrades the same
+owner key to file ownership only after the file identity is known. Rollback
+removes namespace state only when the current request actually created it.
+A recovered existing file keeps normal non-`O_EXCL`/`O_TRUNC` semantics.
+
+The deterministic two-mount regression releases two GNU `cp` processes from one
+`SIGCONT` process-group barrier. Acceptance requires exactly one successful
+copy, exactly one `EBUSY` loser, identical final SHA-256 through both mounts and
+zero destination/file ownership leaks. A test-only pre-ownership barrier also
+forces the post-negative-lookup recovered-existing paths: `O_CREAT|O_TRUNC`
+must atomically truncate the recovered file, while `O_CREAT|O_EXCL` must return
+`EEXIST` without changing the existing file. Both paths must leave zero
+destination/file ownership leases. Existing path truncate, heartbeat and
+stale-writer fencing regressions remain green.
+
+No database schema or storage-format change was required.
+
+## C2 — Same-destination rename/replace ownership — completed
+
+FOD 3.4.31 closes the temporary-file plus `rename`/replace ownership and
+atomicity gap left after C1.
+
+Mounted rename/replace now delegates the protected namespace mutation to one
+PostgreSQL-authoritative transaction for file, hardlink, symlink and directory
+sources/targets. Live conflicting source-destination or target-file ownership
+fails promptly with `EBUSY`; target removal and source move commit or roll back
+together. The legacy FUSE fallback that removed a target and then called a
+separate `rename_*_entry` helper has been removed, together with the now-unused
+four `DbRepo::rename_*_entry()` helpers and their four FFI wrappers.
+
+Final validation on 2026-09-29 covered:
+
+- active destination and source writers, including hardlink aliases;
+- hardlink move/replace and same-file no-op behavior;
+- literal `rename(path, path)` no-op behavior;
+- injected failure rollback with source/target restoration and zero ownership
+  leaks;
+- simultaneous closed-temp renames to the same absent and existing destination,
+  with exactly one winner and a prompt `EBUSY` loser;
+- symlink source/target combinations;
+- directory move/replace, non-empty target, file/directory type errors,
+  descendant rejection and rollback;
+- root-conflict behavior.
+
+The final mounted gates reported `protected_cases=8` for write ownership,
+`protected_cases=4` for symlink transactional rename,
+`protected_cases=5` for directory transactional rename, and a green
+rename/root-conflict gate. Workspace check, pinned rustfmt, diff checks and the
+82-test `fod-rust-hotpath --lib` suite were also green.
+
+No database schema or storage-format change was required. Detailed C2 planning,
+baseline evidence and closure notes are archived in
+[`../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md`](../history/FOD_CURRENT_PLAN_2026-09-29_RENAME_OWNERSHIP.md).
+
+## C3-C6 — PostgreSQL-authoritative open-unlink crash convergence — completed
+
+Schema v25 extends the multi-host authority model to open-unlinked file
+generations through `files.unlinked` and `file_open_leases`. Validation on the
+current branch now covers the crash/liveness boundary rather than only normal
+close behavior:
+
+- C3 kills the authoritative `fod-rust-fuse` PID and verifies both forced and
+  natural session expiry. The PostgreSQL lease survives the crash, another live
+  mount performs session prune plus orphan purge, and a recreated pathname
+  remains a distinct file/inode generation.
+- C4 keeps two independent holders of the old generation. After holder A dies
+  and its lease expires, holder B's active lease keeps the unlinked generation
+  alive and readable. Closing B releases the last lease and allows reclamation.
+- C5 crashes A and B at different times. PostgreSQL removes A without reclaiming
+  the old generation while B is active, then reclaims only after B later dies
+  and its natural TTL expires.
+- C6 kills both holder FUSE processes in one crash episode. A single PostgreSQL
+  snapshot checks session rows, lease rows, active leases and the unlinked file
+  row together. The measured run observed the intermediate one-active-lease
+  state and then zero active leases before purge; reclamation happened only
+  after the authoritative active-lease count reached zero.
+
+The mounted gates also verify replacement payload/inode isolation, hidden-name
+non-leakage and dead-FUSE teardown. No manual lease expiry is used in C4-C6.
+
+The open-unlink convergence sequence is therefore closed unless a new
+correctness regression appears. The inode/path cache-retirement follow-up below
+is also complete on the current production profile.
+
+## Inode/path cache retirement follow-up — completed
+
+The historical large-tree profile retained 6063, 12123 and 24243 inode/path
+entries as file count increased. The current production profile no longer
+reproduces that retained-file-path growth: 60/120/240 directories with 100
+files each ended at 64/124/244 inode/path entries and RSS of
+14,721,024/14,737,408/15,208,448 bytes.
+
+All three tree-scale runs reported `forget_calls=0`, so the improvement comes
+from the production default `FOD_READDIR_REGISTER_PATHS=0`, not from relying
+on kernel FORGET traffic. Explicit `forget` remains independently validated,
+including active handles, hardlink aliases and the 500-cycle convergence gate.
+
+`fuser 0.18.0` exposes `Filesystem::batch_forget`, and its default
+implementation delegates each batch item to `forget`. However the
+`ForgetOne` parameter type is not publicly re-exported by the crate, so a
+downstream filesystem cannot name the type and provide its own batch override
+without patching/upgrading fuser. FOD keeps the public-API-compatible fallback;
+reopen this only for a new measured need, especially directory-dominated cache
+growth or measurable per-item batch-forget overhead.
+
+The `readdir` metadata fanout issue is closed: batched directory metadata is
+the production default after 14.45-20.30× median `find` speedups and parity
+coverage for regular files, directories, hardlinks, symlinks and special files.
+`FOD_READDIR_BATCH_METADATA=0` remains a diagnostic legacy fallback.
+
+## Deferred measured follow-ups
+
+These remain candidates, not parallel active implementation projects:
+
+- evaluate `readdirplus` only if a new measurement shows additional callback
+  or PostgreSQL work after the batched `readdir` change;
+- repeat QNAP COPY-buffer tuning only after a new measured regression or a
+  materially changed QNAP/network/Docker environment;
+- reopen external-unmount/session teardown only if a future fuser/libfuse3
+  stack reproduces a correctness or warning regression;
+- reopen broad read-path or compatibility-aggregation work only for a new
+  measured gap.
+
+## Architecture guardrails
+
+The broad role-aware PostgreSQL routing project is complete: startup role
+selection, runtime primary failover, WAL-gated replica reads, replica scoring,
+promotion validation and process-local generation fencing are implemented.
+
+Do not reopen that design as a generic project.
+
+Further multi-endpoint work requires a concrete measured or correctness gap,
+for example external/cross-process fencing with an explicit ownership and
+failure model.
+
+Independent writable PostgreSQL primaries must never be presented as one safe
+multi-primary FOD filesystem.
+
+The current production storage path is canonical block-only storage. Historical
+extent-engine notes in `TODO.md` and `docs/history/` are evidence of how the
+current architecture was reached, not alternate production runtime paths.
+
+## Delivery rule
+
+Each implementation change stays on `main`, updates the relevant
+documentation/tests and follows the repository versioning policy.
+
+After every commit compare it with its parent using `git diff HEAD~1..HEAD` or
+`git show`, inspect the complete file set and run `git diff --check`.
+
+When a defect cannot be assigned a single credible cause after source-level
+analysis, deterministic tests and normal runtime/log instrumentation, especially
+for timing-sensitive or Heisenbug-like behavior, escalate the diagnosis to the
+generated machine code. Inspect the ASM/disassembly and ELF metadata from the
+same build profile, toolchain and flags that reproduce the issue before changing
+behavior merely to make the symptom disappear. Compare relevant symbols,
+inlining/optimization decisions and control/data flow with the source-level
+expectation; retain the resulting evidence with the diagnosis.
+
+Do not add or modify GitHub Actions workflows.
+
+## Historical plans
+
+Completed execution plans and measurement records belong under
+[`../history/`](../history/). They explain how the current state was reached but
+must not compete with this file for current priority.

@@ -1,7 +1,13 @@
 # Degraded read-only contract review
 
-Status (2026-10-25): design analysis with phase-one implementation in the
-working tree and passing two-node and three-node Docker acceptance tests.
+Document role: topic review/specification supporting the
+[current implementation queue](plans/CURRENT.md). Implemented capabilities are
+summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
+[documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
+
+Status (2026-10-26): design analysis with the explicit degraded read path and
+background role monitoring implemented on main; two-node and three-node Docker
+acceptance evidence is recorded below.
 Automatic recovery/source switching and any change to the architecture
 invariants remain unimplemented and unapproved.
 
@@ -62,11 +68,11 @@ an observed physical replica and that startup sees PostgreSQL in recovery. The
 mount remains read-only even when the caller omitted `--readonly`. Normal
 read-only mounts keep their existing client/open-lease requirement.
 
-This phase does not probe for role changes or switch data sources. Once the
-primary returns or the mounted standby is promoted, this mount continues in
-its startup mode until an operator-controlled unmount/remount. Dynamic
-role-aware transition is a required follow-up; do not treat the current
-implementation as automatic HA failover.
+Background probes report configured endpoint role changes, including promotion
+candidates. They do not switch data sources or mount mode. Once the primary
+returns or the mounted standby is promoted, recovery still requires an
+operator-controlled unmount/remount. Dynamic role-aware transition remains
+unimplemented.
 
 Entry is explicitly opt-in through a dedicated degraded-read-only mount
 configuration. Ordinary mounts retain the current authoritative lease
@@ -323,8 +329,8 @@ The Docker acceptance script passed with a 32 MiB patterned file and 64 KiB
 fio blocks: primary write/read succeeded, the primary was stopped, replica
 read returned the same SHA-256, and a replica write was rejected. This does
 not establish safety for unlink/reclaim races, SQL cancellation, recovery
-transitions, fencing, or identity mismatches. The mount does not probe for a
-returning primary or switch sources. Use controlled unmount/remount after
+transitions, fencing, or identity mismatches. Background role monitoring reports
+endpoint role changes but does not switch sources. Use controlled unmount/remount after
 recovery; automatic rejoin remains unimplemented and must not be inferred from
 this acceptance result.
 

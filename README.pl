@@ -54,7 +54,7 @@ Glownym indeksem jest [`docs/README.md`](docs/README.md). Dokumentacja jest tam 
 | indeksowac/importowac zewnetrzne zrodla | [`docs/fod-indexer.md`](docs/fod-indexer.md) |
 | rozwijac FOD lub zmieniac schemat/kontrakty | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
 | przejrzec historie benchmarkow | [`BENCHMARKS.md`](BENCHMARKS.md), [`docs/HISTORY.md`](docs/HISTORY.md), [`docs/history/`](docs/history/) |
-| sprawdzic plan prac | [`ROADMAP.md`](ROADMAP.md), [`TODO.md`](TODO.md), [`docs/plans/`](docs/plans/) |
+| sprawdzic plan prac | [`docs/plans/CURRENT.md`](docs/plans/CURRENT.md) - aktywna kolejka; [`ROADMAP.md`](ROADMAP.md) - kierunki; [`TODO.md`](TODO.md) - archiwum |
 | wykonac procedury testowe | [`zasady_sprawdzen.md`](zasady_sprawdzen.md) |
 
 Pliki `docs/history/FOD_3_*` sa historycznymi zapisami implementacji i pomiarow. Nie nalezy traktowac ich jako glownego zrodla aktualnych defaultow. [`docs/HISTORY.md`](docs/HISTORY.md) grupuje te materialy wedlug tematu.

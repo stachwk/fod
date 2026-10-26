@@ -97,7 +97,7 @@ implements the corresponding callback.
 
 ## PostgreSQL storage
 
-- Current schema version: 21.
+- Current schema version: 27 (the migration manifest in `rust_mkfs/src/main.rs` is authoritative). Schema versions 20 and 21 introduced the legacy extent conversion and removal described below.
 - Fresh installs use `migrations/base_schema.sql`; numbered files preserve the
   upgrade path.
 - Payload rows are owned by `data_object_id`.
@@ -143,7 +143,7 @@ implements the corresponding callback.
 
 ## Storage-format evolution
 
-- Current physical layout is canonical `data_blocks` under schema version 21.
+- Current physical layout is canonical `data_blocks`; schema version 21 finalized the legacy extent removal.
   Legacy `data_extents` rows are migrated administratively and the table is
   dropped before normal writes.
 - Incompatible structure or interpretation changes require a schema migration.
@@ -160,6 +160,6 @@ implements the corresponding callback.
 | Rust | minimum 1.85, Edition 2021 |
 | Automation | no active GitHub Actions workflow |
 | Hotpath ABI | internal Rust interface; `libfod.so` is command-surface only; no supported hotpath C ABI |
-| Database schema | version 20 |
+| Database schema | version 27; authoritative manifest in `rust_mkfs/src/main.rs` |
 | Capacity | canonical DB quota, advisory-lock admission, expiring reservations |
 | Layout | canonical block payload; legacy extents only before migration 20 |

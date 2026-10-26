@@ -20,7 +20,9 @@ been applied. A storage-format boundary is narrower: it exists only when
 persisted payload cannot be interpreted safely by both sides of an upgrade
 without an explicit conversion or compatibility decision.
 
-Schema version 21 is the current database shape and migration gate. Payload
+At the time this decision was accepted, schema version 21 was the database
+shape and migration gate. The current version is maintained by the migration
+manifest in `rust_mkfs/src/main.rs`. At schema version 21, payload
 ownership is rooted in `data_objects`; `data_blocks` and `copy_block_crc` refer
 to the object; migration 20 converts remaining `data_extents` rows to canonical
 `data_blocks`; migration 21 drops the retired `data_extents` table;
@@ -74,6 +76,6 @@ on unsupported states.
 Future storage redesigns cannot add an ad hoc marker or schema column before
 updating this ADR or replacing it with a more specific accepted decision.
 
-The current schema version 21 requires no new storage-format marker because the
-ordered schema migrations fully define the legacy extent conversion and table
-removal.
+At schema version 21 no new storage-format marker was required because the
+ordered migrations fully defined the legacy extent conversion and table
+removal. This remains the decision unless a later accepted ADR supersedes it.

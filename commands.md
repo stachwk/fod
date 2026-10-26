@@ -1,5 +1,11 @@
 # Commands
 
+Chronological execution journal. Commands and outcomes describe their recorded
+checkout and date; they are not current instructions or validation of the
+present tree. For current procedures use [`zasady_sprawdzen.md`](zasady_sprawdzen.md),
+for implemented behavior use [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md),
+and for active work use [`docs/plans/CURRENT.md`](docs/plans/CURRENT.md).
+
 ## 2026-07-01
 
 Base commit at execution time: `f2e531b`

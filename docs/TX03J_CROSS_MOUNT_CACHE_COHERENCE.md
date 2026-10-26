@@ -1,5 +1,10 @@
 # TX03J — spojnosc odczytow miedzy montowaniami FOD
 
+Document role: topic review/specification supporting the
+[current implementation queue](plans/CURRENT.md). Implemented capabilities are
+summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
+[documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
+
 ## Punkt wyjscia (2026-10-16)
 
 TX03I.3 potwierdzil poprawne przejecie write ownership (stary token 3205,

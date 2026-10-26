@@ -1,5 +1,10 @@
 # Primary authority audit
 
+Document role: topic review/specification supporting the
+[current implementation queue](plans/CURRENT.md). Implemented capabilities are
+summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
+[documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
+
 Date: 2026-10-25. Scope: the current working tree, Rust FUSE runtime and its
 PostgreSQL repository. This is a correctness audit; the data-loss defect below
 has not been fixed by this audit.

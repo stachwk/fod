@@ -9,10 +9,10 @@ and the task guides from [`../README.md`](../README.md).
 
 ## Current implementation order
 
-- [`CURRENT.md`](CURRENT.md) - compact maintained next-step plan.
+- [`CURRENT.md`](CURRENT.md) - the single maintained implementation queue.
+- [`HA_READONLY_RECOVERY_AND_CACHE.md`](HA_READONLY_RECOVERY_AND_CACHE.md) - detailed HA recovery and cache measurement workstream, ordered by `CURRENT.md`.
 - [`../../ROADMAP.md`](../../ROADMAP.md) - long-term project direction.
-- [`../../TODO.md`](../../TODO.md) - mixed follow-up/archive record; use it as
-  supporting context rather than as the source of current defaults.
+- [`../../TODO.md`](../../TODO.md) - historical follow-up/archive record; it is supporting context, not the current queue.
 
 ## Future ideas
 

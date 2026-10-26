@@ -8,17 +8,17 @@ The physical-storage portion of the original ADR was superseded by
 FOD 3.2.71-3.2.73. The manifest remains deferred, but the old extent runtime
 model is no longer valid.
 
-Current storage authority:
+The current storage contract is summarized in:
 
-- [`../block-only-performance-plan.md`](../block-only-performance-plan.md)
+- [`../CURRENT_STATE.md`](../CURRENT_STATE.md#storage-payload-model)
 
-Current detailed performance subplan:
+Current performance workflow and evidence:
 
-- [`../mounted-fuse-write-profile-plan.md`](../mounted-fuse-write-profile-plan.md)
+- [`../performance.md`](../performance.md)
 
 Historical Storage Engine v2 context:
 
-- [`../storage-engine-v2-plan.md`](../storage-engine-v2-plan.md)
+- [`../history/storage-engine-v2-plan.md`](../history/storage-engine-v2-plan.md)
 
 ## Current decision
 
@@ -154,8 +154,8 @@ The sequence is now:
 
 Current implementation order is defined by:
 
-1. `docs/block-only-performance-plan.md`;
-2. `docs/mounted-fuse-write-profile-plan.md`;
+1. `docs/history/block-only-performance-plan.md`;
+2. `docs/history/mounted-fuse-write-profile-plan.md`;
 3. `docs/quota-lock-concurrency-plan.md` only as the completed quota redesign
    record and reservation follow-up boundary.
 

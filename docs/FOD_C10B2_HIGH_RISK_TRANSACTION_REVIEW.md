@@ -1,3 +1,5 @@
+> **Status:** transaction review snapshot dated 2026-10-13/14. Test-pending statements and source locations are historical evidence; they are not a current validation report. Use the current implementation queue for active work and rerun the relevant checks before relying on closure status.
+
 # C10-B2 — ręczny przegląd transakcji o najwyższym ryzyku
 
 Data przeglądu: 2026-10-13; aktualizacja TX-02B: 2026-10-14. Zakres: pierwsza transza z 1045 kandydatów skanera (149 plików).

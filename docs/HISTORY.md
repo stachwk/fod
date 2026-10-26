@@ -7,8 +7,13 @@ and work records that help explain how current FOD behavior was reached.
 Historical documents are stored physically under [`history/`](history/). For
 current behavior start from [`README.md`](README.md) and
 [`CURRENT_STATE.md`](CURRENT_STATE.md). For intended future work use
-[`plans/CURRENT.md`](plans/CURRENT.md), `../ROADMAP.md`, `../TODO.md` and the
-remaining documents under [`plans/`](plans/).
+[`plans/CURRENT.md`](plans/CURRENT.md), `../ROADMAP.md` and the remaining documents under [`plans/`](plans/). `../TODO.md`
+is a historical follow-up archive, not a plan.
+
+## Completed implementation queues
+
+- [2026-10-06 implementation plan](history/FOD_CURRENT_PLAN_2026-10-06.md): completed fallocate, sparse seek, create/rename, open/unlink and cache-retirement stages.
+- Current priorities are maintained only in [plans/CURRENT.md](plans/CURRENT.md).
 
 ## FUSE, storage and I/O evolution
 
@@ -158,5 +163,5 @@ When behavior changes:
   reasoning is useful on its own,
 - add new historical evidence to this index,
 - do not rewrite old evidence to make it appear to describe later defaults,
-- keep active/future plans under `plans/`, `ROADMAP.md` or `TODO.md` rather than
-  mixing them into this historical index.
+- keep scheduled work only in `plans/CURRENT.md`; keep proposals in `plans/`,
+  `ROADMAP.md` or `plans/FOD_FUTURE_IDEAS.md`; `TODO.md` is an older archive.

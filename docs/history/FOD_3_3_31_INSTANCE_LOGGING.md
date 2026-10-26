@@ -58,7 +58,7 @@ The supported operational model runs `mount.fod`, `fod-bootstrap` and `fod-rust-
 
 Running the daemon as `root` does not imply root-only access to mounted FOD data. Access to the mounted resource remains controlled by FOD UID/GID, mode bits, `default_permissions`, ACL and `allow_other` policy.
 
-The authoritative privilege and ownership policy is documented in [FOD_RUNTIME_PRIVILEGE_POLICY.md](FOD_RUNTIME_PRIVILEGE_POLICY.md).
+The authoritative privilege and ownership policy is documented in [FOD_RUNTIME_PRIVILEGE_POLICY.md](../FOD_RUNTIME_PRIVILEGE_POLICY.md).
 
 ## Packages
 

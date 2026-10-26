@@ -1,5 +1,10 @@
 # TX03J — PostgreSQL content generation audit (2026-10-23)
 
+Document role: topic review/specification supporting the
+[current implementation queue](plans/CURRENT.md). Implemented capabilities are
+summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
+[documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
+
 ## Authority and guarantees
 
 PostgreSQL is the authoritative owner of file mapping, content generation,
@@ -7,7 +12,7 @@ write leases and commit ordering. An invalidation is scoped to one `file_id`.
 A client may never drop local uncommitted write buffers in response to a
 remote event, and no SQL fill started before invalidation may publish later.
 
-## Implemented (feature/forget-convergence-c1)
+## Implemented (merged into main)
 
 - Schema v26 adds `files.content_generation`; migration 0027 changes its
   trigger to accept only explicit, single-step increments. Metadata timestamps
@@ -26,8 +31,9 @@ remote event, and no SQL fill started before invalidation may publish later.
 
 ## Remaining correctness gates — do NOT enable default multi-host cache yet
 
-1. The generation-bearing read API is opt-in and is not called by the FUSE
-   production path. It is not itself a cross-mount coherence mechanism.
+1. The generation-bearing read API is used by explicit degraded read-only
+   FUSE reads, but is not integrated into the ordinary cached read path. It
+   does not itself establish cross-mount cache coherence.
 2. Cache coherence also requires selective Linux FUSE kernel page-cache
    invalidation, and safe handling of open readers, local dirty buffers,
    and race ordering. Notifications are only hints; missing notifications

@@ -1,3 +1,5 @@
+> **Status:** this is a snapshot of the C6 review on the feature branch and only through C1–C5. It is retained as evidence, not as a verified inventory of current code. Revalidate open items against the current implementation queue and code before acting on them.
+
 # C6 — audyt powierzchni zapisu i fencing FOD
 
 Stan bazowy: FOD 3.4.43, gałąź `feature/forget-convergence-c1`, po testach C1–C5 (5 PASS, 0 FAIL, 2 ignored).

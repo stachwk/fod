@@ -1,15 +1,17 @@
 # FOD Decisions, Follow-ups & Archive
 
-This document records the small set of open follow-ups plus completed work, closed decisions, and regression notes for FOD. It is not an active implementation backlog.
-
-Active implementation sequence: [`docs/plans/CURRENT.md`](docs/plans/CURRENT.md). `docs/FOD_CURRENT_ACTION_PLAN.md` remains only a compatibility pointer for older references.
+This document is a historical decision, follow-up and regression archive. It is
+not an active implementation backlog. The only ordered queue is
+[`docs/plans/CURRENT.md`](docs/plans/CURRENT.md). The legacy path
+[`docs/FOD_CURRENT_ACTION_PLAN.md`](docs/FOD_CURRENT_ACTION_PLAN.md) is a
+compatibility pointer.
 
 Reading guide:
 - `Historical note:` means closed-item context, benchmark results, or archived implementation detail.
 - `Decision:` means durable guidance that still applies.
-- Plain bullets under `Extent Engine Direction` and `Target Architecture` are current architectural guidance, not open tasks.
+- The old extent-engine proposal is superseded; `Target Architecture` is historical context, not the current runtime design.
 
-## Current Follow-ups
+## Previously tracked follow-ups (closed or deferred)
 
 - [x] Protect one destination path against concurrent copies from independent FOD mounts or machines.
   - Closure note (2026-09-29, FOD 3.4.30-3.4.31): direct writable `create`/copy and temporary-file plus `rename`/replace are PostgreSQL-authoritative first-writer-wins paths.
@@ -114,16 +116,16 @@ Reading guide:
   - Historical note: the local 2026-07-04 matrix on commit `adeaa35` covered `default`, `262144`, `1048576`, and `4194304` send buffers with DML/WAL/top-io-wal/bloat captures. QNAP was not reachable from this host (`No route to host` for `192.168.1.11:2376` and `192.168.1.11:5432`), so repeat the same `QNAP=1` matrix after network/LAN connectivity is restored.
   - Implementation note: `profile-data-blocks-copy-buffer-matrix-compare` now runs the local matrix first and then runs the QNAP matrix when `PROFILE_COPY_BUFFER_INCLUDE_QNAP=1`, or when the QNAP smoke probe passes in the default `auto` mode. A local-only `64 KiB` target smoke on 2026-07-05 from commit `ef0e782` passed and recorded DML/WAL artifacts, but it is not a full baseline.
   - Historical note: the fresh 2026-07-05 local/QNAP matrix on commit `a3076e1` completed all eight runs. Local stayed in a narrow `18.01-18.38 MiB/s` band, while QNAP improved from `2.46 MiB/s` at default to `3.18 MiB/s` at `4194304`. All runs were insert-only for `data_blocks` (`32768` inserts, `0` updates/deletes/dead tuples), so the run does not point to non-HOT update churn.
-- [ ] Before changing the default `FOD_PERSIST_COPY_SEND_BUFFER_BYTES` for QNAP-like backends, repeat the QNAP COPY-buffer matrix enough times to distinguish a stable `4194304` benefit from network or Docker noise.
+- [x] QNAP COPY-buffer retuning deferred. The current default remains unchanged; repeat the matrix only after a new measured regression or a materially changed environment, as recorded in the current plan and benchmark evidence.
   - Historical note: the 2026-07-09 local repeat sample on commit `bad53cc` stayed mixed (`14.55/18.17`, `18.43/17.48`, `17.42/17.76` MiB/s for `default` vs `4194304`). The QNAP repetition still needs a clean run; in this session `192.168.1.11:5432` returned `No route to host`.
 - [x] Isolate the Cargo target directory used by `make test-locking` under `sudo`, then recheck the privileged test workflow.
   - Implementation note (2026-07-18): Cargo now compiles `lock_backend_smoke` as the invoking user in `target/test-locking`, records the exact executable from Cargo JSON output, and only runs that finished test binary through `sudo`. The privileged process no longer builds or writes Cargo artifacts.
-- [ ] Re-check the external-unmount/session-teardown warning on the current `fuser 0.18` / libfuse3 stack when its public session API can distinguish an already externally unmounted libfuse3 mount. The 2026-07-12 migration gate verified that `fusermount3 -u` succeeds and no mount remains, but session drop subsequently logs benign `EINVAL`; do not fork `fuser` or hide unrelated warnings only to remove this message.
+- [x] External-unmount/session teardown checked on the current fuser/libfuse3 stack and closed without a runtime change; historical evidence is indexed in `docs/HISTORY.md`. Reopen only if a future stack reproduces a correctness or warning regression.
 - [x] Implement and verify an explicit fuser `fsync` callback for per-file durability.
   - Implementation note (2026-07-28): `fsync` now reuses the existing write-state persistence path, treats `datasync` as the same PostgreSQL durability boundary because file data and metadata are committed together, and returns PostgreSQL persistence errors instead of relying on fuser's default `ENOSYS` path. `release` also stops hiding final flush failures in its FUSE reply, although close-time propagation still depends on kernel/FUSE behavior.
 - [x] Remove the stale per-crate `rust_*/Cargo.lock` files after confirming that every crate resolves the repository workspace root and all supported `--manifest-path` builds use the root `Cargo.lock`.
   - Historical note: the removed lockfiles described FOD 3.0.4 and, for `rust_fuse`, fuser 0.14.0. The retained workspace lockfile is `./Cargo.lock`; `rust_indexer` already had no nested lockfile.
-- [ ] Aggregate the remaining compatibility diagnostics after the individual FUSE, PostgreSQL, libpq, runtime and storage-format boundaries expose trustworthy machine-readable data.
+- [x] Compatibility diagnostics aggregation completed in FOD 3.4.27/P4; reopen only for a concrete missing consumer field, as recorded in `ROADMAP.md` and `docs/HISTORY.md`.
   - [x] Inventory current FUSE behavior, the Rust/C boundary, actual FFI consumers, direct `libpq` symbols, and the PostgreSQL storage contract in `docs/compatibility-contracts.md`; the refreshed contract now points at schema version 19, while the original migration evidence remains historical.
   - [x] Define and enforce Rust 1.85 as the verified minimum toolchain while retaining Edition 2021; workspace packages inherit the minimum, the SELinux/ACL image is pinned to `rust:1.85-bookworm`, and the stored CI definition selects the same version.
   - [x] Remove the intentionally inactive `.github/workflows/ci.yml_`; automated GitHub Actions coverage is not claimed until a new workflow is designed and enabled explicitly.
@@ -333,29 +335,14 @@ The PoC stays intentionally narrow:
 - [x] Do not add merge/split extent logic at the start.
 - [x] Benchmark the PoC on `4 KiB`, `64 KiB`, `1 MiB`, and `4 MiB`.
 
-## Extent Engine Direction
+## Superseded extent-engine proposal
 
-- Keep the logical filesystem model at 4 KiB blocks for now.
-- Make Rust the owner of the extent and overlay engine.
-- Move PostgreSQL away from storing thousands of 4 KiB blocks directly and toward dynamic extents.
-- SQL/query execution already lives in Rust for the runtime paths that remain.
-- Keep the non-runtime docs and tests separate from the Rust runtime; do not reintroduce Python as an execution layer.
-- Treat this as the next major direction rather than a hard rewrite backlog; when adjacent work touches `truncate`, `fallocate`, `write`, `copy`, `flush`, or `persist`, prefer carving out the corresponding extent/storage piece in Rust if it can be done safely and incrementally.
-- Capture the next architectural step explicitly:
-  - `logical_block_size = 4k`
-  - `persist model = extents`
-  - `persist extent classes = 4k..4MiB`
-  - `payload stores only used bytes`
-  - `Rust returns PersistPlan`
-  - `Rust executes transaction`
-  - extent support must stay opt-in behind an explicit boolean flag such as `enable_extents = true`; it must not become the default path until that flag is set
-- Next concrete step:
-  - keep the Rust repository/query boundary intact for the remaining runtime paths,
-  - narrow and isolate the existing extent-engine PoC instead of expanding it,
-  - keep sequential write/read as the only initial flow,
-  - keep merge/split extent logic out of the first pass,
-  - preserve the current block-storage path unless `enable_extents = true` is set,
-  - benchmark `4 KiB`, `64 KiB`, `1 MiB`, and `4 MiB` before broadening the scope.
+The extent-engine direction below was retired in FOD 3.2.71–3.2.73. Production
+payload is block-only in `fod.data_blocks`; do not use the following proposal
+as current architecture or implementation guidance. See
+[`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md#storage-payload-model) for the
+current model and [`docs/history/block-only-performance-plan.md`](docs/history/block-only-performance-plan.md)
+for the retirement evidence.
 
 ## Target Architecture
 

@@ -1,3 +1,5 @@
+> **Status:** static inventory snapshot dated 2026-10-13. Its scan and pending-review statements describe that snapshot, not necessarily the current checkout. Re-run the inventory and classify findings against current code before treating this as a live mutation map.
+
 # C10-B1 — inventory of SQL mutations and PostgreSQL authorization boundaries
 
 Status: **C10-B2 static candidate collection locally validated; manual authorization/transaction review pending** (2026-10-13). The first local run passed 4/4 offline tests and returned scan_rc=0. Subsequent fixes for Markdown SyntaxWarning and new grouped-summary CLI have not yet been locally revalidated. This remains a read-only audit. No DDL, GRANT, REVOKE, role changes or production write-path changes have been applied.

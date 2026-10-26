@@ -1,8 +1,12 @@
-- FOD 3.2.83 removes the retired experimental storage mode from the active runtime/config/test/schema-upgrade surface. Current FOD is block-only: payload rows live in `data_blocks`, sequential fio tests are block-only, and read regression tracks `FOD_FOPEN_DIRECT_IO=0` and `1` separately. Migration numbers 12/20 remain neutral schema-version slots and migration 21 only drops any leftover retired table, so the numeric migration sequence stays stable without preserving the old payload layout. Compatibility with databases that still depend on that experimental payload layout is intentionally unsupported; use a clean current-schema init.
-
 # Conclusions
 
-Use this file to record concise conclusions that matter for future work.
+Historical conclusions and design context retained for future reference. Entries
+are snapshots from their recorded dates and may be superseded by later code,
+contracts or decisions. Verify them before using them as current behavior.
+
+Current behavior: [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md). Active work:
+[`docs/plans/CURRENT.md`](docs/plans/CURRENT.md). Topic evidence:
+[`docs/HISTORY.md`](docs/HISTORY.md).
 
 ## 2026-08-17
 

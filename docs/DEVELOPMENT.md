@@ -66,8 +66,7 @@ Classify documentation before editing or adding it:
   [`history/`](history/) and add it to [`HISTORY.md`](HISTORY.md),
 - **active/future work** -> keep the maintained next-step plan in
   [`plans/CURRENT.md`](plans/CURRENT.md), longer-term ideas in
-  [`plans/`](plans/) / `../ROADMAP.md`, and supporting follow-ups in
-  `../TODO.md`,
+  [`plans/`](plans/) / `../ROADMAP.md`; `../TODO.md` is an archive,
 - **completed plan/project** -> move it to [`history/`](history/) and index it in
   [`HISTORY.md`](HISTORY.md),
 - **execution journal** -> keep it out of current task guides; `../commands.md`
@@ -179,8 +178,10 @@ current behavior:
 
 - [`plans/CURRENT.md`](plans/CURRENT.md),
 - [`../ROADMAP.md`](../ROADMAP.md),
-- [`plans/FOD_FUTURE_IDEAS.md`](plans/FOD_FUTURE_IDEAS.md),
-- [`../TODO.md`](../TODO.md).
+- [`plans/FOD_FUTURE_IDEAS.md`](plans/FOD_FUTURE_IDEAS.md).
+
+Older follow-up records remain in [`../TODO.md`](../TODO.md) for context; they
+do not define active work.
 
 Plans describe intended work. `CURRENT_STATE.md`, current configuration and the
 runtime/tests describe what exists now.

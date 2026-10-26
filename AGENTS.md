@@ -8,6 +8,16 @@ assistants.
 Write to the user in Polish. Write notes added to repository documentation in
 Polish or English.
 
+## Local project memory
+
+Use the local MemPalace installation at `~/.venv/bin/mempalace` when working
+in this repository. Before substantive work, read the FOD context with
+`~/.venv/bin/mempalace wake-up --wing fod` and search for relevant decisions,
+commands or prior findings with `~/.venv/bin/mempalace search --wing fod
+--results 5 "<topic>"`. Treat memory results as supporting context and verify
+current behavior against the repository's code, tests and maintained
+documentation.
+
 ## PostgreSQL-authoritative multi-host correctness
 
 FOD may be mounted and used concurrently from multiple hosts. PostgreSQL is the
@@ -30,6 +40,11 @@ valid replacement for filesystem operation ordering.
 See `docs/FOD_ARCHITECTURE_INVARIANTS.md`.
 
 ## Commit review
+
+When the user explicitly requests a commit and push, perform both on `main`
+without asking again. Follow `docs/versioning.md`, review the staged changes,
+then after committing inspect the complete `git diff HEAD~1..HEAD` before
+pushing. Verify that `main` and `origin/main` agree after the push.
 
 After every commit, compare the new commit with its parent using
 `git diff HEAD~1..HEAD`, `git show`, or an equivalent exact commit comparison.

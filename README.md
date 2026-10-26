@@ -54,7 +54,7 @@ Start with [`docs/README.md`](docs/README.md). It groups documentation by the jo
 | index/import external sources | [`docs/fod-indexer.md`](docs/fod-indexer.md) |
 | develop FOD or change schema/contracts | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) |
 | inspect benchmark/history evidence | [`BENCHMARKS.md`](BENCHMARKS.md), [`docs/HISTORY.md`](docs/HISTORY.md), [`docs/history/`](docs/history/) |
-| inspect planned work | [`ROADMAP.md`](ROADMAP.md), [`TODO.md`](TODO.md), [`docs/plans/`](docs/plans/) |
+| inspect planned work | [`docs/plans/CURRENT.md`](docs/plans/CURRENT.md) for the implementation queue; [`ROADMAP.md`](ROADMAP.md) for future direction |
 | follow validation procedures | [`zasady_sprawdzen.md`](zasady_sprawdzen.md) |
 
 Versioned documents such as `docs/history/FOD_3_*` are historical implementation and measurement records. They remain useful evidence, but they are not the canonical source for current defaults. [`docs/HISTORY.md`](docs/HISTORY.md) maps that evidence by topic.
