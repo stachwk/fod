@@ -5,7 +5,7 @@ Document role: topic review/specification supporting the
 summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
 [documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
 
-Date: 2026-10-25. Scope: the current working tree, Rust FUSE runtime and its
+Date: 2026-10-25. Updated: 2026-10-26. Scope: the current working tree, Rust FUSE runtime and its
 PostgreSQL repository. This is a correctness audit; the data-loss defect below
 has not been fixed by this audit.
 
@@ -128,6 +128,63 @@ protected scenarios, including hardlink conflicts, replacement rollback and
 same-destination races. It used a `release-lto` binary built with
 `integration-test-hooks`; the log is
 `artifacts/integration/primary-authority-audit-20261025T221954Z/test_rename_write_ownership.py.log`.
+
+## Reproduced partial directory-path lookup
+
+Status: repaired in FOD 3.4.45 on 2026-10-26.
+
+During the namespace lookup module extraction on 2026-10-26, an isolated
+PostgreSQL database initialized from the current schema reproduced a separate
+lookup defect: after creating `/existing`, `DbRepo::get_dir_id("/existing/missing")`
+returned the ID of `/existing`, rather than `None`. This observation does not
+depend on replica lag or concurrent mutations.
+
+The mechanism was in `PreparedStatement::GetDirId` in `rust_hotpath/src/pg.rs`:
+the recursive `walk` stopped at the first missing component, but its final
+`ORDER BY ord DESC LIMIT 1` returned the deepest successful prefix without
+requiring the final input component to match. The query now accepts only a
+row whose ordinal matches the final input component.
+
+The public `get_dir_id` API retains `None` for the logical root, whose children
+have SQL NULL parents. The namespace methods in
+`rust_hotpath/src/pg/namespace_lookup.rs` now explicitly distinguish root,
+resolved directory and missing directory before choosing a query. A missing
+directory cannot select an ancestor's children or fall back to root entries.
+ID/mode/attribute/xattr lookups return no entry, directory metadata listing
+returns an empty vector and the optional directory-name blob returns `None`.
+Connection routing and PostgreSQL mutation transactions are unchanged.
+
+The regression `directory_lookup_rejects_missing_path_components` in
+`rust_hotpath/tests/pg_query.rs` is enabled and passes for missing final and
+intermediate components, valid nested directories, relative directory names,
+trailing slashes and the root sentinel. The additional
+`missing_namespace_parents_never_alias_existing_entries` regression passes
+for path resolution, ID/mode queries, directory listings, attributes and
+xattrs. Existing namespace-identity and xattr tests also pass.
+
+Initial validation used a temporary database initialized by the current `fod-mkfs`;
+it was removed after testing. `cargo check --workspace --offline` passed.
+The full `pg_query` suite passed 24/25 tests, with none ignored. The remaining
+`unlinked_open_inode_rejects_new_hardlinks_and_purge_until_last_close` test
+failed with `unexpected PostgreSQL result status`. It also failed with the
+same error in an isolated checkout of unchanged commit `5008010`, against a
+separate freshly initialized database.
+
+The follow-up diagnosis on 2026-10-26 localized that failure to
+`register_client_session`, before the open/unlink assertions. Fresh `mkfs`
+creates `client_sessions` without its runtime `request_token` column; the
+session registration probe queries that column. The generic result decoder
+masked the PostgreSQL failure as `unexpected PostgreSQL result status`.
+Writable FUSE startup calls `ensure_client_session_schema` before registering
+a session, but this test omitted that initialization.
+
+The test now performs the same schema initialization and checks that the open
+lease exists before unlink and is released before final purge. An isolated
+fresh-database run confirmed zero matching `request_token` columns before the
+test and one afterward; the focused regression passed. The full `pg_query`
+suite subsequently passed 27/27 tests with no skipped or ignored cases.
+This closes the test-fixture failure; the unlink/primary-ordering audit remains
+open on its separately reproduced mounted data-loss case.
 
 ## Remaining source-level review items
 

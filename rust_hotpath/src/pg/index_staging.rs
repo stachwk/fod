@@ -1,0 +1,792 @@
+// Copyright (c) 2026 Wojciech Stach
+// Licensed under BSL 1.1
+
+//! Index catalog staging through COPY TEXT and transactional merges. Each batch
+//! keeps staging, COPY and merge on the same authority connection and transaction.
+
+use super::{
+    exec_command, hex_encode_bytes, query_rows_text_on_conn, transactional_replayable,
+    CopyInSession, DbRepo, PGconn,
+};
+use std::ffi::CString;
+
+const INDEX_SOURCES_STAGE_TABLE: &str = "index_sources_stage";
+const INDEX_SCAN_RUNS_STAGE_TABLE: &str = "index_scan_runs_stage";
+const INDEX_FILES_STAGE_TABLE: &str = "index_files_stage";
+const INDEX_FILE_HASHES_STAGE_TABLE: &str = "index_file_hashes_stage";
+const INDEX_IMPORT_PLANS_STAGE_TABLE: &str = "index_import_plans_stage";
+const INDEX_IMPORT_PLAN_ENTRIES_STAGE_TABLE: &str = "index_import_plan_entries_stage";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexSourceStageRow {
+    pub name: String,
+    pub kind: String,
+    pub root_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexScanRunStageRow {
+    pub id_index_source: u64,
+    pub status: String,
+    pub request_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexImportPlanStageRow {
+    pub status: String,
+    pub request_token: String,
+    pub dry_run: bool,
+    pub source_filter: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexFileStageRow {
+    pub id_index_source: u64,
+    pub id_scan_run: u64,
+    pub path: String,
+    pub size: u64,
+    pub mtime_ns: Option<i64>,
+    pub inode: Option<u64>,
+    pub device: Option<u64>,
+    pub file_kind: String,
+    pub scan_status: String,
+    pub source_changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexFileHashStageRow {
+    pub id_file: u64,
+    pub hash_algorithm: String,
+    pub partial_hash: Option<Vec<u8>>,
+    pub full_hash: Option<Vec<u8>>,
+    pub hash_status: String,
+    pub observed_size: u64,
+    pub observed_mtime_ns: Option<i64>,
+    pub observed_inode: Option<u64>,
+    pub observed_device: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexImportPlanEntryStageRow {
+    pub id_import_plan: u64,
+    pub id_file: u64,
+    pub id_duplicate_set: Option<u64>,
+    pub action: String,
+    pub canonical_file_id: Option<u64>,
+    pub logical_path: String,
+    pub source_path: String,
+    pub size: u64,
+    pub mtime_ns: Option<i64>,
+    pub source_changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateSetStageRow {
+    pub hash_algorithm: String,
+    pub full_hash: Vec<u8>,
+    pub file_size: u64,
+    pub file_count: u64,
+    pub total_bytes: u64,
+}
+
+fn escape_copy_text_field(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000c}' => out.push_str("\\f"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn append_copy_text_null_field(out: &mut String) {
+    out.push_str("\\N");
+}
+
+fn append_copy_text_string_field(out: &mut String, value: &str) {
+    out.push_str(&escape_copy_text_field(value));
+}
+
+fn append_copy_text_i64_field(out: &mut String, value: i64) {
+    out.push_str(&value.to_string());
+}
+
+fn append_copy_text_u64_field(out: &mut String, value: u64) {
+    out.push_str(&value.to_string());
+}
+
+fn append_copy_text_bool_field(out: &mut String, value: bool) {
+    out.push_str(if value { "t" } else { "f" });
+}
+
+fn append_copy_text_optional_i64_field(out: &mut String, value: Option<i64>) {
+    match value {
+        Some(value) => append_copy_text_i64_field(out, value),
+        None => append_copy_text_null_field(out),
+    }
+}
+
+fn append_copy_text_optional_u64_field(out: &mut String, value: Option<u64>) {
+    match value {
+        Some(value) => append_copy_text_u64_field(out, value),
+        None => append_copy_text_null_field(out),
+    }
+}
+
+fn append_copy_text_bytea_field(out: &mut String, value: &[u8]) {
+    out.push_str("\\\\x");
+    out.push_str(&hex_encode_bytes(value));
+}
+
+fn build_copy_text_payload<T, F>(rows: &[T], mut write_row: F) -> String
+where
+    F: FnMut(&T, &mut String),
+{
+    let mut out = String::new();
+    for row in rows {
+        write_row(row, &mut out);
+        out.push('\n');
+    }
+    out
+}
+
+unsafe fn copy_text_payload_on_conn(
+    conn: *mut PGconn,
+    copy_sql: &CString,
+    payload: &str,
+) -> Result<(), String> {
+    let mut copy = CopyInSession::start(conn, copy_sql)?;
+    if !payload.is_empty() {
+        copy.send(payload.as_bytes())?;
+    }
+    copy.finish()
+}
+
+unsafe fn create_or_reset_temp_table(conn: *mut PGconn, sql: &CString) -> Result<(), String> {
+    exec_command(conn, sql)
+}
+
+impl DbRepo {
+    pub fn upsert_index_source_staged(&self, row: &IndexSourceStageRow) -> Result<u64, String> {
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let stage_sql = CString::new(format!(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS {stage} (
+                        name TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        root_path TEXT NOT NULL
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE {stage}
+                    ",
+                    stage = INDEX_SOURCES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(std::slice::from_ref(row), |row, out| {
+                    append_copy_text_string_field(out, &row.name);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.kind);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.root_path);
+                });
+                let copy_sql = CString::new(format!(
+                    "COPY {stage} (name, kind, root_path) FROM STDIN",
+                    stage = INDEX_SOURCES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(format!(
+                    "
+                    INSERT INTO index_sources (
+                        name,
+                        kind,
+                        root_path,
+                        created_at,
+                        updated_at
+                    )
+                    SELECT
+                        name,
+                        kind,
+                        root_path,
+                        NOW(),
+                        NOW()
+                    FROM {stage}
+                    ON CONFLICT (name) DO UPDATE SET
+                        kind = EXCLUDED.kind,
+                        root_path = EXCLUDED.root_path,
+                        updated_at = NOW()
+                    RETURNING id_index_source
+                    ",
+                    stage = INDEX_SOURCES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let rows = query_rows_text_on_conn(conn, &merge_sql)?;
+                let row = rows
+                    .first()
+                    .ok_or_else(|| "source registration did not return a row".to_string())?;
+                row.first()
+                    .ok_or_else(|| "source registration returned no id".to_string())?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|err| format!("invalid source id: {err}"))
+            })
+        })
+    }
+
+    pub fn upsert_index_scan_run_staged(&self, row: &IndexScanRunStageRow) -> Result<u64, String> {
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let stage_sql = CString::new(format!(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS {stage} (
+                        id_index_source BIGINT NOT NULL,
+                        status TEXT NOT NULL,
+                        request_token TEXT NOT NULL
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE {stage}
+                    ",
+                    stage = INDEX_SCAN_RUNS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(std::slice::from_ref(row), |row, out| {
+                    append_copy_text_u64_field(out, row.id_index_source);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.status);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.request_token);
+                });
+                let copy_sql = CString::new(format!(
+                    "COPY {stage} (id_index_source, status, request_token) FROM STDIN",
+                    stage = INDEX_SCAN_RUNS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(format!(
+                    "
+                    INSERT INTO index_scan_runs (
+                        id_index_source,
+                        started_at,
+                        status,
+                        updated_at,
+                        request_token
+                    )
+                    SELECT
+                        id_index_source,
+                        NOW(),
+                        status,
+                        NOW(),
+                        request_token
+                    FROM {stage}
+                    ON CONFLICT (request_token) DO UPDATE SET
+                        id_index_source = EXCLUDED.id_index_source,
+                        status = EXCLUDED.status,
+                        updated_at = NOW()
+                    RETURNING id_scan_run
+                    ",
+                    stage = INDEX_SCAN_RUNS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let rows = query_rows_text_on_conn(conn, &merge_sql)?;
+                let row = rows
+                    .first()
+                    .ok_or_else(|| "scan run creation did not return a row".to_string())?;
+                row.first()
+                    .ok_or_else(|| "scan run creation returned no id".to_string())?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|err| format!("invalid scan run id: {err}"))
+            })
+        })
+    }
+
+    pub fn upsert_index_import_plan_staged(
+        &self,
+        row: &IndexImportPlanStageRow,
+    ) -> Result<u64, String> {
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let stage_sql = CString::new(format!(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS {stage} (
+                        status TEXT NOT NULL,
+                        request_token TEXT NOT NULL,
+                        dry_run BOOLEAN NOT NULL,
+                        source_filter TEXT
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE {stage}
+                    ",
+                    stage = INDEX_IMPORT_PLANS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(std::slice::from_ref(row), |row, out| {
+                    append_copy_text_string_field(out, &row.status);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.request_token);
+                    out.push('\t');
+                    append_copy_text_bool_field(out, row.dry_run);
+                    out.push('\t');
+                    match &row.source_filter {
+                        Some(value) => append_copy_text_string_field(out, value),
+                        None => append_copy_text_null_field(out),
+                    }
+                });
+                let copy_sql = CString::new(format!(
+                    "COPY {stage} (status, request_token, dry_run, source_filter) FROM STDIN",
+                    stage = INDEX_IMPORT_PLANS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(format!(
+                    "
+                    INSERT INTO index_import_plans (
+                        created_at,
+                        updated_at,
+                        status,
+                        request_token,
+                        dry_run,
+                        source_filter
+                    )
+                    SELECT
+                        NOW(),
+                        NOW(),
+                        status,
+                        request_token,
+                        dry_run,
+                        source_filter
+                    FROM {stage}
+                    ON CONFLICT (request_token) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        dry_run = EXCLUDED.dry_run,
+                        source_filter = EXCLUDED.source_filter,
+                        updated_at = NOW()
+                    RETURNING id_import_plan
+                    ",
+                    stage = INDEX_IMPORT_PLANS_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                let rows = query_rows_text_on_conn(conn, &merge_sql)?;
+                let row = rows
+                    .first()
+                    .ok_or_else(|| "import plan creation did not return a row".to_string())?;
+                row.first()
+                    .ok_or_else(|| "import plan creation returned no id".to_string())?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|err| format!("invalid import plan id: {err}"))
+            })
+        })
+    }
+
+    pub fn upsert_index_files_staged(&self, rows: &[IndexFileStageRow]) -> Result<(), String> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let stage_sql = CString::new(format!(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS {stage} (
+                        id_index_source BIGINT NOT NULL,
+                        id_scan_run BIGINT NOT NULL,
+                        path TEXT NOT NULL,
+                        size BIGINT NOT NULL,
+                        mtime_ns BIGINT,
+                        inode BIGINT,
+                        device BIGINT,
+                        file_kind TEXT NOT NULL,
+                        scan_status TEXT NOT NULL,
+                        source_changed BOOLEAN NOT NULL
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE {stage}
+                    ",
+                    stage = INDEX_FILES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(rows, |row, out| {
+                    append_copy_text_u64_field(out, row.id_index_source);
+                    out.push('\t');
+                    append_copy_text_u64_field(out, row.id_scan_run);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.path);
+                    out.push('\t');
+                    append_copy_text_u64_field(out, row.size);
+                    out.push('\t');
+                    append_copy_text_optional_i64_field(out, row.mtime_ns);
+                    out.push('\t');
+                    append_copy_text_optional_u64_field(out, row.inode);
+                    out.push('\t');
+                    append_copy_text_optional_u64_field(out, row.device);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.file_kind);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.scan_status);
+                    out.push('\t');
+                    append_copy_text_bool_field(out, row.source_changed);
+                });
+                let copy_sql = CString::new(format!(
+                    "COPY {stage} (id_index_source, id_scan_run, path, size, mtime_ns, inode, device, file_kind, scan_status, source_changed) FROM STDIN",
+                    stage = INDEX_FILES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(format!(
+                    "
+                    INSERT INTO index_files (
+                        id_index_source,
+                        id_scan_run,
+                        path,
+                        size,
+                        mtime_ns,
+                        inode,
+                        device,
+                        file_kind,
+                        scan_status,
+                        source_changed,
+                        created_at,
+                        updated_at
+                    )
+                    SELECT
+                        id_index_source,
+                        id_scan_run,
+                        path,
+                        size,
+                        mtime_ns,
+                        inode,
+                        device,
+                        file_kind,
+                        scan_status,
+                        source_changed,
+                        NOW(),
+                        NOW()
+                    FROM {stage}
+                    ON CONFLICT (id_index_source, path) DO UPDATE SET
+                        id_scan_run = EXCLUDED.id_scan_run,
+                        size = EXCLUDED.size,
+                        mtime_ns = EXCLUDED.mtime_ns,
+                        inode = EXCLUDED.inode,
+                        device = EXCLUDED.device,
+                        file_kind = EXCLUDED.file_kind,
+                        scan_status = EXCLUDED.scan_status,
+                        source_changed = EXCLUDED.source_changed,
+                        updated_at = NOW()
+                    ",
+                    stage = INDEX_FILES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                exec_command(conn, &merge_sql)?;
+                Ok(())
+            })
+        })
+    }
+
+    pub fn upsert_index_file_hashes_staged(
+        &self,
+        rows: &[IndexFileHashStageRow],
+    ) -> Result<(), String> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let stage_sql = CString::new(format!(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS {stage} (
+                        id_file BIGINT NOT NULL,
+                        hash_algorithm TEXT NOT NULL,
+                        partial_hash BYTEA,
+                        full_hash BYTEA,
+                        hash_status TEXT NOT NULL,
+                        observed_size BIGINT NOT NULL,
+                        observed_mtime_ns BIGINT,
+                        observed_inode BIGINT,
+                        observed_device BIGINT
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE {stage}
+                    ",
+                    stage = INDEX_FILE_HASHES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(rows, |row, out| {
+                    append_copy_text_u64_field(out, row.id_file);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.hash_algorithm);
+                    out.push('\t');
+                    match &row.partial_hash {
+                        Some(bytes) => append_copy_text_bytea_field(out, bytes),
+                        None => append_copy_text_null_field(out),
+                    }
+                    out.push('\t');
+                    match &row.full_hash {
+                        Some(bytes) => append_copy_text_bytea_field(out, bytes),
+                        None => append_copy_text_null_field(out),
+                    }
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.hash_status);
+                    out.push('\t');
+                    append_copy_text_u64_field(out, row.observed_size);
+                    out.push('\t');
+                    append_copy_text_optional_i64_field(out, row.observed_mtime_ns);
+                    out.push('\t');
+                    append_copy_text_optional_u64_field(out, row.observed_inode);
+                    out.push('\t');
+                    append_copy_text_optional_u64_field(out, row.observed_device);
+                });
+                let copy_sql = CString::new(format!(
+                    "COPY {stage} (id_file, hash_algorithm, partial_hash, full_hash, hash_status, observed_size, observed_mtime_ns, observed_inode, observed_device) FROM STDIN",
+                    stage = INDEX_FILE_HASHES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(format!(
+                    "
+                    INSERT INTO index_file_hashes (
+                        id_file,
+                        hash_algorithm,
+                        partial_hash,
+                        full_hash,
+                        hash_status,
+                        observed_size,
+                        observed_mtime_ns,
+                        observed_inode,
+                        observed_device,
+                        created_at,
+                        updated_at
+                    )
+                    SELECT
+                        id_file,
+                        hash_algorithm,
+                        partial_hash,
+                        full_hash,
+                        hash_status,
+                        observed_size,
+                        observed_mtime_ns,
+                        observed_inode,
+                        observed_device,
+                        NOW(),
+                        NOW()
+                    FROM {stage}
+                    ON CONFLICT (id_file) DO UPDATE SET
+                        hash_algorithm = EXCLUDED.hash_algorithm,
+                        partial_hash = EXCLUDED.partial_hash,
+                        full_hash = EXCLUDED.full_hash,
+                        hash_status = EXCLUDED.hash_status,
+                        observed_size = EXCLUDED.observed_size,
+                        observed_mtime_ns = EXCLUDED.observed_mtime_ns,
+                        observed_inode = EXCLUDED.observed_inode,
+                        observed_device = EXCLUDED.observed_device,
+                        updated_at = NOW()
+                    ",
+                    stage = INDEX_FILE_HASHES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                exec_command(conn, &merge_sql)?;
+                Ok(())
+            })
+        })
+    }
+
+    pub fn upsert_index_import_plan_entries_staged(
+        &self,
+        rows: &[IndexImportPlanEntryStageRow],
+    ) -> Result<(), String> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let stage_sql = CString::new(format!(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS {stage} (
+                        id_import_plan BIGINT NOT NULL,
+                        id_file BIGINT NOT NULL,
+                        id_duplicate_set BIGINT,
+                        action TEXT NOT NULL,
+                        canonical_file_id BIGINT,
+                        logical_path TEXT NOT NULL,
+                        source_path TEXT NOT NULL,
+                        size BIGINT NOT NULL,
+                        mtime_ns BIGINT,
+                        source_changed BOOLEAN NOT NULL
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE {stage}
+                    ",
+                    stage = INDEX_IMPORT_PLAN_ENTRIES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(rows, |row, out| {
+                    append_copy_text_u64_field(out, row.id_import_plan);
+                    out.push('\t');
+                    append_copy_text_u64_field(out, row.id_file);
+                    out.push('\t');
+                    append_copy_text_optional_u64_field(out, row.id_duplicate_set);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.action);
+                    out.push('\t');
+                    append_copy_text_optional_u64_field(out, row.canonical_file_id);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.logical_path);
+                    out.push('\t');
+                    append_copy_text_string_field(out, &row.source_path);
+                    out.push('\t');
+                    append_copy_text_u64_field(out, row.size);
+                    out.push('\t');
+                    append_copy_text_optional_i64_field(out, row.mtime_ns);
+                    out.push('\t');
+                    append_copy_text_bool_field(out, row.source_changed);
+                });
+                let copy_sql = CString::new(format!(
+                    "COPY {stage} (id_import_plan, id_file, id_duplicate_set, action, canonical_file_id, logical_path, source_path, size, mtime_ns, source_changed) FROM STDIN",
+                    stage = INDEX_IMPORT_PLAN_ENTRIES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(format!(
+                    "
+                    DELETE FROM index_import_plan_entries
+                    WHERE id_import_plan IN (
+                        SELECT DISTINCT id_import_plan FROM {stage}
+                    );
+                    INSERT INTO index_import_plan_entries (
+                        id_import_plan,
+                        id_file,
+                        id_duplicate_set,
+                        action,
+                        canonical_file_id,
+                        logical_path,
+                        source_path,
+                        size,
+                        mtime_ns,
+                        source_changed,
+                        created_at,
+                        updated_at
+                    )
+                    SELECT
+                        id_import_plan,
+                        id_file,
+                        id_duplicate_set,
+                        action,
+                        canonical_file_id,
+                        logical_path,
+                        source_path,
+                        size,
+                        mtime_ns,
+                        source_changed,
+                        NOW(),
+                        NOW()
+                    FROM {stage}
+                    ",
+                    stage = INDEX_IMPORT_PLAN_ENTRIES_STAGE_TABLE
+                ))
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                exec_command(conn, &merge_sql)?;
+                Ok(())
+            })
+        })
+    }
+
+    pub fn upsert_index_duplicate_sets_staged(
+        &self,
+        rows: &[DuplicateSetStageRow],
+    ) -> Result<u64, String> {
+        self.with_cached_connection(|conn| unsafe {
+            transactional_replayable(conn, |conn| {
+                let delete_sql = CString::new("DELETE FROM index_duplicate_sets")
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                exec_command(conn, &delete_sql)?;
+
+                if rows.is_empty() {
+                    return Ok(0);
+                }
+
+                let stage_sql = CString::new(
+                    "
+                    CREATE TEMP TABLE IF NOT EXISTS index_duplicate_sets_stage (
+                        hash_algorithm TEXT NOT NULL,
+                        full_hash BYTEA NOT NULL,
+                        file_size BIGINT NOT NULL,
+                        file_count INTEGER NOT NULL,
+                        total_bytes BIGINT NOT NULL
+                    ) ON COMMIT PRESERVE ROWS;
+                    TRUNCATE index_duplicate_sets_stage
+                    ",
+                )
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                create_or_reset_temp_table(conn, &stage_sql)?;
+
+                let payload = build_copy_text_payload(rows, |row, out| {
+                    append_copy_text_string_field(out, &row.hash_algorithm);
+                    out.push('\t');
+                    append_copy_text_bytea_field(out, &row.full_hash);
+                    out.push('\t');
+                    append_copy_text_u64_field(out, row.file_size);
+                    out.push('\t');
+                    append_copy_text_u64_field(out, row.file_count);
+                    out.push('\t');
+                    append_copy_text_u64_field(out, row.total_bytes);
+                });
+                let copy_sql = CString::new(
+                    "COPY index_duplicate_sets_stage (hash_algorithm, full_hash, file_size, file_count, total_bytes) FROM STDIN",
+                )
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                copy_text_payload_on_conn(conn, &copy_sql, &payload)?;
+
+                let merge_sql = CString::new(
+                    "
+                    INSERT INTO index_duplicate_sets (
+                        hash_algorithm,
+                        full_hash,
+                        file_size,
+                        file_count,
+                        total_bytes,
+                        created_at,
+                        updated_at
+                    )
+                    SELECT
+                        hash_algorithm,
+                        full_hash,
+                        file_size,
+                        file_count,
+                        total_bytes,
+                        NOW(),
+                        NOW()
+                    FROM index_duplicate_sets_stage
+                    ON CONFLICT (hash_algorithm, full_hash, file_size) DO UPDATE SET
+                        file_count = EXCLUDED.file_count,
+                        total_bytes = EXCLUDED.total_bytes,
+                        updated_at = NOW()
+                    ",
+                )
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+                exec_command(conn, &merge_sql)?;
+                Ok(rows.len() as u64)
+            })
+        })
+    }
+}

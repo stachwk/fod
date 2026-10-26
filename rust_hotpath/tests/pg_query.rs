@@ -2,7 +2,8 @@
 // Licensed under BSL 1.1
 
 use fod_rust_hotpath::pg::{
-    DbRepo, FileUnlinkOutcome, PersistBlockRow, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    DbRepo, DirectoryEntryMetadata, FileUnlinkOutcome, PersistBlockRow, ResolvedPath,
+    STORAGE_QUOTA_EXCEEDED_PREFIX,
 };
 use fod_rust_runtime::{DataObjectSwapCleanup, RuntimeConfig};
 use std::env;
@@ -64,6 +65,483 @@ fn connection_value_prefers_fod_endpoint_over_legacy_postgres_env() {
         "localhost"
     );
     assert_eq!(prefer_connection_value(None, None, "fallback"), "fallback");
+}
+
+struct NamespaceFixture {
+    repo: DbRepo,
+    directory_name: String,
+    directory_id: u64,
+    file_id: Option<u64>,
+    hardlink_id: Option<u64>,
+    symlink_id: Option<u64>,
+    child_directory_id: Option<u64>,
+}
+
+impl Drop for NamespaceFixture {
+    fn drop(&mut self) {
+        let mut cleanup = Vec::new();
+        if let Some(id) = self.hardlink_id {
+            cleanup.push(self.repo.delete_hardlink_entry(id));
+        }
+        if let Some(id) = self.symlink_id {
+            cleanup.push(self.repo.delete_owner_xattrs("symlink", id));
+            cleanup.push(self.repo.delete_symlink_entry(id));
+        }
+        if let Some(id) = self.file_id {
+            cleanup.push(self.repo.delete_owner_xattrs("file", id));
+            cleanup.push(self.repo.purge_primary_file(id));
+        }
+        cleanup.push(self.repo.delete_owner_xattrs("dir", self.directory_id));
+        if let Some(id) = self.child_directory_id {
+            cleanup.push(self.repo.delete_directory_entry(id));
+        }
+        cleanup.push(self.repo.delete_directory_entry(self.directory_id));
+        for result in cleanup {
+            if let Err(error) = result {
+                eprintln!("namespace fixture cleanup failed: {error}");
+            }
+        }
+    }
+}
+
+impl NamespaceFixture {
+    fn new() -> Result<Self, String> {
+        let repo = repo_with_runtime()?;
+        let directory_name = unique_name("rust_pg_namespace");
+        let directory_id =
+            repo.create_directory(None, &directory_name, 0o755, 1000, 1000, &directory_name)?;
+        let mut fixture = Self {
+            repo,
+            directory_name,
+            directory_id,
+            file_id: None,
+            hardlink_id: None,
+            symlink_id: None,
+            child_directory_id: None,
+        };
+        let file_id = fixture.repo.create_file(
+            Some(directory_id),
+            "file",
+            0o644,
+            1000,
+            1000,
+            &unique_name("namespace_file_seed"),
+        )?;
+        fixture.file_id = Some(file_id);
+        fixture.hardlink_id = Some(fixture.repo.create_hardlink(
+            file_id,
+            Some(directory_id),
+            "hardlink",
+            1000,
+            1000,
+        )?);
+        let symlink_id = fixture.repo.create_symlink(
+            Some(directory_id),
+            "symlink",
+            "file",
+            1000,
+            1000,
+            &unique_name("namespace_symlink_seed"),
+        )?;
+        fixture.symlink_id = Some(symlink_id);
+        Ok(fixture)
+    }
+}
+
+#[test]
+fn metadata_updates_preserve_content_and_hardlink_identity() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let file_id = fixture.file_id.unwrap();
+    let directory_id = fixture.directory_id;
+    let symlink_id = fixture.symlink_id.unwrap();
+    let bs = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(32768));
+    let payload = vec![0x5a; bs as usize];
+    let rows = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: bs,
+    }];
+    repo.persist_file_blocks_with_crc_flag(file_id, bs, bs, 1, false, &rows, false)?;
+    let identity_sql = format!(
+        "SELECT data_object_id::text, size::text, content_generation::text FROM files WHERE id_file = {file_id}"
+    );
+    let identity_before = repo.query_rows_text(&identity_sql)?;
+    let alias_path = format!("/{}/hardlink", fixture.directory_name);
+
+    repo.update_file_mode(file_id, "600")?;
+    assert_eq!(
+        repo.get_file_mode_value(&alias_path)?.as_deref(),
+        Some("600")
+    );
+    repo.update_directory_mode(directory_id, "700")?;
+    assert_eq!(
+        repo.query_scalar_text(&format!(
+            "SELECT mode FROM directories WHERE id_directory = {directory_id}"
+        ))?,
+        "700"
+    );
+    repo.update_file_owner(file_id, 2001, 2002, "640")?;
+    repo.update_directory_owner(directory_id, 3001, 3002, "750")?;
+    repo.update_symlink_owner(symlink_id, 4001, 4002)?;
+
+    repo.touch_file_times(file_id, "2000-01-01 01:02:03", "2000-01-02 01:02:03")?;
+    repo.touch_directory_times(directory_id, "2000-01-01 01:02:03", "2000-01-02 01:02:03")?;
+    for (table, key, id) in [
+        ("files", "id_file", file_id),
+        ("directories", "id_directory", directory_id),
+    ] {
+        assert_eq!(repo.query_scalar_text(&format!(
+            "SELECT (access_date = TIMESTAMP '2000-01-01 01:02:03' AND modification_date = TIMESTAMP '2000-01-02 01:02:03')::text FROM {table} WHERE {key} = {id}"
+        ))?, "true");
+    }
+    repo.update_file_access_date(file_id, "2001-02-03 04:05:06")?;
+    repo.update_directory_access_date(directory_id, "2001-02-03 04:05:06")?;
+    repo.update_symlink_access_date(symlink_id, "2001-02-03 04:05:06")?;
+    repo.touch_file_entry(file_id)?;
+    repo.touch_directory_entry(directory_id)?;
+    repo.touch_symlink_entry(symlink_id)?;
+
+    for (table, key, id, uid, gid) in [
+        ("files", "id_file", file_id, 2001, 2002),
+        ("directories", "id_directory", directory_id, 3001, 3002),
+        ("symlinks", "id_symlink", symlink_id, 4001, 4002),
+    ] {
+        assert_eq!(repo.query_scalar_text(&format!(
+            "SELECT (uid = {uid} AND gid = {gid} AND access_date = TIMESTAMP '2001-02-03 04:05:06' AND modification_date > TIMESTAMP '2000-01-02 01:02:03')::text FROM {table} WHERE {key} = {id}"
+        ))?, "true", "table={table}");
+    }
+    assert_eq!(
+        repo.get_file_mode_value(&alias_path)?.as_deref(),
+        Some("640")
+    );
+    assert_eq!(
+        repo.query_scalar_text(&format!(
+            "SELECT mode FROM directories WHERE id_directory = {directory_id}"
+        ))?,
+        "750"
+    );
+    assert_eq!(repo.get_file_id(&alias_path)?, Some(file_id));
+    assert_eq!(
+        repo.load_symlink_target(symlink_id)?.as_deref(),
+        Some("file")
+    );
+    assert_eq!(repo.query_rows_text(&identity_sql)?, identity_before);
+    let (size, blocks) = repo
+        .fetch_block_range_with_size_shared(file_id, 0, 0, bs)?
+        .expect("persisted payload");
+    assert_eq!(size, bs);
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].0, 0);
+    assert_eq!(blocks[0].1.as_ref(), payload.as_slice());
+    Ok(())
+}
+
+#[test]
+fn namespace_statistics_count_entries_and_preserve_capacity() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let before = repo.statfs_snapshot()?;
+    let roots_before = repo.count_root_directory_children()?;
+    let payload_before = repo.total_data_size()?;
+    let fixture = NamespaceFixture::new()?;
+    let after = repo.statfs_snapshot()?;
+    assert_eq!(
+        (after.0, after.1, after.2),
+        (before.0 + 1, before.1 + 1, before.2 + 1)
+    );
+    assert_eq!((after.3, after.5), (before.3, before.5));
+    assert_eq!(repo.count_files()?, after.0);
+    assert_eq!(repo.count_directories()?, after.1);
+    assert_eq!(repo.count_symlinks()?, after.2);
+    assert_eq!(repo.count_root_directory_children()?, roots_before + 1);
+    assert_eq!(repo.total_data_size()?, payload_before);
+    assert!(repo.path_has_children(fixture.directory_id)?);
+    assert_eq!(repo.count_directory_children(fixture.directory_id)?, 3);
+    assert_eq!(repo.count_directory_subdirs(fixture.directory_id)?, 0);
+    assert_eq!(repo.count_file_links(fixture.file_id.unwrap())?, 2);
+    assert_eq!(repo.count_file_blocks(fixture.file_id.unwrap())?, 0);
+    drop(fixture);
+    assert_eq!(repo.count_files()?, before.0);
+    assert_eq!(repo.count_directories()?, before.1);
+    assert_eq!(repo.count_symlinks()?, before.2);
+    assert_eq!(repo.count_root_directory_children()?, roots_before);
+    Ok(())
+}
+
+#[test]
+fn namespace_lookups_preserve_entry_identity_and_metadata() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let directory_path = format!("/{}", fixture.directory_name);
+    let file_id = fixture.file_id.unwrap();
+    let hardlink_id = fixture.hardlink_id.unwrap();
+    let symlink_id = fixture.symlink_id.unwrap();
+
+    assert_eq!(
+        repo.get_dir_id(&directory_path)?,
+        Some(fixture.directory_id)
+    );
+    assert_eq!(repo.resolve_path("/")?.kind.as_deref(), Some("dir"));
+    let root_entries: Vec<DirectoryEntryMetadata> = repo.list_directory_entry_metadata("/")?;
+    assert!(root_entries.iter().any(|entry| {
+        entry.name == fixture.directory_name
+            && entry.kind == "dir"
+            && entry.entry_id == fixture.directory_id
+    }));
+
+    let entries: Vec<DirectoryEntryMetadata> =
+        repo.list_directory_entry_metadata(&directory_path)?;
+    assert_eq!(entries.len(), 3);
+    for (name, kind, entry_id) in [
+        ("file", "file", file_id),
+        ("hardlink", "hardlink", hardlink_id),
+        ("symlink", "symlink", symlink_id),
+    ] {
+        let path = format!("{directory_path}/{name}");
+        assert_eq!(
+            repo.resolve_path(&path)?,
+            ResolvedPath {
+                parent_id: Some(fixture.directory_id),
+                kind: Some(kind.to_string()),
+                entry_id: Some(entry_id),
+            }
+        );
+        let metadata = entries.iter().find(|entry| entry.name == name).unwrap();
+        assert_eq!(metadata.kind, kind);
+        assert_eq!(metadata.entry_id, entry_id);
+        assert!(!metadata.inode_seed.is_empty());
+        assert_eq!(metadata.special_type, None);
+        let attrs = repo
+            .fetch_path_attrs_blob(&path)?
+            .expect("entry attributes");
+        assert_eq!(attrs.split(|byte| *byte == 0).next(), Some(kind.as_bytes()));
+    }
+    assert_eq!(
+        entries
+            .iter()
+            .find(|entry| entry.kind == "file")
+            .unwrap()
+            .inode_seed,
+        entries
+            .iter()
+            .find(|entry| entry.kind == "hardlink")
+            .unwrap()
+            .inode_seed
+    );
+
+    let blob = repo
+        .list_directory_entries_blob(&directory_path)?
+        .expect("directory entries");
+    let mut names: Vec<_> = blob
+        .split(|byte| *byte == 0)
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            b"file".as_slice(),
+            b"hardlink".as_slice(),
+            b"symlink".as_slice()
+        ]
+    );
+    assert_eq!(
+        repo.get_file_id(&format!("{directory_path}/file"))?,
+        Some(file_id)
+    );
+    assert_eq!(
+        repo.get_file_id(&format!("{directory_path}/hardlink"))?,
+        Some(file_id)
+    );
+    assert_eq!(
+        repo.get_file_mode_value(&format!("{directory_path}/file"))?
+            .as_deref(),
+        Some("644")
+    );
+    assert_eq!(
+        repo.get_hardlink_id(&format!("{directory_path}/hardlink"))?,
+        Some(hardlink_id)
+    );
+    assert_eq!(repo.get_hardlink_file_id(hardlink_id)?, Some(file_id));
+    assert_eq!(
+        repo.get_symlink_id(&format!("{directory_path}/symlink"))?,
+        Some(symlink_id)
+    );
+    assert_eq!(
+        repo.load_symlink_target(symlink_id)?.as_deref(),
+        Some("file")
+    );
+    assert_eq!(repo.get_special_file_metadata(file_id)?, None);
+
+    let missing = format!("{directory_path}/missing");
+    assert_eq!(repo.resolve_path(&missing)?.kind, None);
+    assert_eq!(repo.fetch_path_attrs_blob(&missing)?, None);
+    assert_eq!(repo.get_file_id(&missing)?, None);
+    assert_eq!(repo.get_hardlink_id(&missing)?, None);
+    assert_eq!(repo.get_symlink_id(&missing)?, None);
+    Ok(())
+}
+
+#[test]
+fn directory_lookup_rejects_missing_path_components() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let mut fixture = NamespaceFixture::new()?;
+    let child_path = format!("/{}/child", fixture.directory_name);
+    assert_eq!(fixture.repo.get_dir_id(&child_path)?, None);
+    let child_id = fixture.repo.create_directory(
+        Some(fixture.directory_id),
+        "child",
+        0o755,
+        1000,
+        1000,
+        &unique_name("lookup_child_seed"),
+    )?;
+    fixture.child_directory_id = Some(child_id);
+    assert_eq!(fixture.repo.get_dir_id(&child_path)?, Some(child_id));
+    assert_eq!(
+        fixture.repo.get_dir_id(&format!("{child_path}/"))?,
+        Some(child_id)
+    );
+    assert_eq!(
+        fixture.repo.get_dir_id(&fixture.directory_name)?,
+        Some(fixture.directory_id)
+    );
+    // The public API keeps SQL NULL as the parent of entries in the logical root.
+    assert_eq!(fixture.repo.get_dir_id("/")?, None);
+    assert_eq!(fixture.repo.get_dir_id("")?, None);
+    for suffix in [
+        "missing",
+        "missing/child",
+        "child/missing",
+        "child/missing/grandchild",
+    ] {
+        let path = format!("/{}/{suffix}", fixture.directory_name);
+        assert_eq!(fixture.repo.get_dir_id(&path)?, None, "path={path}");
+    }
+    Ok(())
+}
+
+#[test]
+fn missing_namespace_parents_never_alias_existing_entries() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    repo.store_xattr_value_for_owner("dir", fixture.directory_id, "user.lookup_guard", b"canary")?;
+    repo.store_xattr_value_for_owner(
+        "file",
+        fixture.file_id.unwrap(),
+        "user.lookup_guard",
+        b"canary",
+    )?;
+
+    // A missing component must not select either the existing ancestor's
+    // children or the same-named directory at the logical root.
+    for parent in [
+        format!("/{}/missing", fixture.directory_name),
+        format!("/{}_missing", fixture.directory_name),
+    ] {
+        assert!(
+            repo.list_directory_entry_metadata(&parent)?.is_empty(),
+            "path={parent}"
+        );
+        assert_eq!(
+            repo.list_directory_entries_blob(&parent)?,
+            None,
+            "path={parent}"
+        );
+        for name in [
+            "file",
+            "hardlink",
+            "symlink",
+            fixture.directory_name.as_str(),
+        ] {
+            let path = format!("{parent}/{name}");
+            assert_eq!(repo.resolve_path(&path)?.kind, None, "path={path}");
+            assert_eq!(repo.fetch_path_attrs_blob(&path)?, None, "path={path}");
+            assert_eq!(repo.get_file_id(&path)?, None, "path={path}");
+            assert_eq!(repo.get_file_mode_value(&path)?, None, "path={path}");
+            assert_eq!(repo.get_hardlink_id(&path)?, None, "path={path}");
+            assert_eq!(repo.get_symlink_id(&path)?, None, "path={path}");
+            assert_eq!(
+                repo.fetch_xattr_value(&path, "user.lookup_guard")?,
+                None,
+                "path={path}"
+            );
+            assert_eq!(repo.list_xattr_names(&path)?, None, "path={path}");
+        }
+    }
+    assert_eq!(
+        repo.fetch_xattr_value(&format!("/{}", fixture.directory_name), "user.lookup_guard")?,
+        Some(b"canary".to_vec())
+    );
+    assert_eq!(repo.resolve_path("/")?.kind.as_deref(), Some("dir"));
+    assert!(repo.list_directory_entries_blob("/")?.is_some());
+    Ok(())
+}
+
+#[test]
+fn xattrs_share_path_and_owner_semantics_across_entry_kinds() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let directory_name = &fixture.directory_name;
+    let directory_id = fixture.directory_id;
+    let file_id = fixture.file_id.unwrap();
+    let symlink_id = fixture.symlink_id.unwrap();
+    let repo = &fixture.repo;
+
+    for (kind, id, path) in [
+        ("file", file_id, format!("/{directory_name}/file")),
+        ("dir", directory_id, format!("/{directory_name}")),
+        ("symlink", symlink_id, format!("/{directory_name}/symlink")),
+    ] {
+        assert_eq!(repo.list_xattr_names(&path)?, Some(vec![]));
+        assert_eq!(repo.fetch_xattr_value(&path, "user.absent")?, None);
+        repo.store_xattr_value_for_owner(kind, id, "user.z", &[0, 255, 128, 10])?;
+        repo.store_xattr_value_for_owner(kind, id, "user.a", b"")?;
+        let names = vec!["user.a".to_string(), "user.z".to_string()];
+        assert_eq!(repo.list_xattr_names_for_owner(kind, id)?, names);
+        assert_eq!(repo.list_xattr_names(&path)?, Some(names));
+        assert_eq!(repo.fetch_xattr_value(&path, "user.a")?, Some(vec![]));
+        assert_eq!(
+            repo.fetch_xattr_value(&path, "user.z")?,
+            Some(vec![0, 255, 128, 10])
+        );
+        repo.store_xattr_value_for_owner(kind, id, "user.z", b"updated")?;
+        assert_eq!(
+            repo.fetch_xattr_value(&path, "user.z")?,
+            Some(b"updated".to_vec())
+        );
+
+        if kind == "file" {
+            let alias = format!("/{directory_name}/hardlink");
+            assert_eq!(
+                repo.list_xattr_names(&alias)?,
+                repo.list_xattr_names(&path)?
+            );
+            assert_eq!(
+                repo.fetch_xattr_value(&alias, "user.z")?,
+                Some(b"updated".to_vec())
+            );
+        }
+
+        assert_eq!(repo.remove_xattr_for_owner(kind, id, "user.absent")?, 0);
+        assert_eq!(repo.remove_xattr_for_owner(kind, id, "user.a")?, 1);
+        assert_eq!(repo.fetch_xattr_value(&path, "user.a")?, None);
+        repo.delete_owner_xattrs(kind, id)?;
+        assert_eq!(repo.list_xattr_names(&path)?, Some(vec![]));
+    }
+
+    let missing = format!("/{directory_name}/missing");
+    assert_eq!(repo.list_xattr_names(&missing)?, None);
+    assert_eq!(repo.fetch_xattr_value(&missing, "user.z")?, None);
+    assert_eq!(
+        repo.list_xattr_names("/")?,
+        Some(repo.list_xattr_names_for_owner("dir", 0)?)
+    );
+    Ok(())
 }
 
 #[test]
@@ -1043,21 +1521,30 @@ fn unlink_preserves_alias_and_rejects_stale_binding_and_unsafe_purge() -> Result
 fn unlinked_open_inode_rejects_new_hardlinks_and_purge_until_last_close() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
+    // Match writable FUSE startup: mkfs alone does not initialize runtime
+    // session replay tokens and the complete session/lock schema.
+    repo.ensure_client_session_schema()
+        .map_err(|err| format!("initialize client session schema: {err}"))?;
     let name = unique_name("unlink_open_primary");
     let alias = unique_name("unlink_open_alias");
     let file_id = repo.create_file(None, &name, 0o644, 1000, 1000, &name)?;
-    let session = repo.register_client_session(
-        "unlink-test",
-        &unique_name("mount"),
-        "primary",
-        "postgres_lease",
-        u64::from(std::process::id()),
-        60,
-    )?;
-    repo.register_file_open_lease(file_id, session, 1, 60)?;
+    let session = repo
+        .register_client_session(
+            "unlink-test",
+            &unique_name("mount"),
+            "primary",
+            "postgres_lease",
+            u64::from(std::process::id()),
+            60,
+        )
+        .map_err(|err| format!("register client session: {err}"))?;
+    repo.register_file_open_lease(file_id, session, 1, 60)
+        .map_err(|err| format!("register file open lease: {err}"))?;
+    assert!(repo.has_active_file_open_leases(file_id)?);
     let result = (|| {
         assert_eq!(
-            repo.unlink_file_entry(file_id, ".fod-unlinked-open-test", None, &name)?,
+            repo.unlink_file_entry(file_id, ".fod-unlinked-open-test", None, &name)
+                .map_err(|err| format!("unlink leased file: {err}"))?,
             FileUnlinkOutcome::Deferred
         );
         assert!(repo
@@ -1070,8 +1557,11 @@ fn unlinked_open_inode_rejects_new_hardlinks_and_purge_until_last_close() -> Res
             .contains("active open leases"));
         Ok(())
     })();
-    repo.release_file_open_lease(session, 1)?;
-    repo.purge_primary_file(file_id)?;
+    repo.release_file_open_lease(session, 1)
+        .map_err(|err| format!("release file open lease: {err}"))?;
+    assert!(!repo.has_active_file_open_leases(file_id)?);
+    repo.purge_primary_file(file_id)
+        .map_err(|err| format!("purge file after last close: {err}"))?;
     repo.exec(&format!(
         "DELETE FROM client_sessions WHERE session_id = {session}"
     ))?;

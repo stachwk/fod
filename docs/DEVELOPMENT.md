@@ -34,6 +34,26 @@ relevant packaging/deployment paths require it.
 
 The current architecture summary is in [`CURRENT_STATE.md`](CURRENT_STATE.md).
 
+### PostgreSQL repository modules
+
+The public repository API remains `fod_rust_hotpath::pg::DbRepo`. Its methods are
+grouped by responsibility:
+
+| Source | Responsibility |
+| --- | --- |
+| [`pg.rs`](../rust_hotpath/src/pg.rs) | connections, routing, SQL execution, transaction primitives, leases, namespace mutations and payload persistence |
+| [`pg/index_staging.rs`](../rust_hotpath/src/pg/index_staging.rs) | index catalog row types, COPY TEXT encoding and transactional batch merges |
+| [`pg/namespace_lookup.rs`](../rust_hotpath/src/pg/namespace_lookup.rs) | complete path resolution, entry IDs, directory listings and attribute decoding |
+| [`pg/metadata_updates.rs`](../rust_hotpath/src/pg/metadata_updates.rs) | mode, ownership and timestamp updates |
+| [`pg/namespace_stats.rs`](../rust_hotpath/src/pg/namespace_stats.rs) | namespace counts, payload-size queries and `statfs` snapshots |
+| [`pg/startup.rs`](../rust_hotpath/src/pg/startup.rs) | startup configuration/schema probes and PostgreSQL diagnostics; startup snapshots keep one connection |
+| [`pg/xattrs.rs`](../rust_hotpath/src/pg/xattrs.rs) | extended attributes and their file/directory/symlink owners |
+
+The domain modules reuse connection and SQL helpers from `pg.rs`. Moving a
+method between modules must preserve its connection routing, SQL and transaction
+scope. Mutation decisions still require PostgreSQL serialization under the
+[architecture invariants](FOD_ARCHITECTURE_INVARIANTS.md).
+
 ## Versioning and commits
 
 `../fod_version.txt` is the authoritative FOD release version. Every commit
@@ -92,6 +112,12 @@ Main regression gates:
 make test-all
 make test-all-full
 ```
+
+PostgreSQL integration tests need an isolated, initialized database. Tests
+registering client sessions must call `DbRepo::ensure_client_session_schema`
+first, matching writable FUSE startup. Fresh `mkfs` initialization alone does
+not add the runtime session replay-token column/index. Each test must establish
+its own prerequisites instead of depending on another test's runtime setup.
 
 Release/policy checks commonly used for versioned deployment changes:
 

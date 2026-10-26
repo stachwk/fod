@@ -21,6 +21,21 @@ The design keeps these concepts separate:
 
 Duplicate detection must be content-based. A matching filename is never enough.
 
+### Source-path identity
+
+On POSIX filesystems, UTF-8 source-relative filenames retain literal backslashes
+in the catalogue. `a\b.txt` and `a/b.txt` identify distinct files. Scan and clean
+use the same source-relative representation; hashing, file reads and import
+planning reconstruct the physical path with the source root and `Path::join`.
+Catalogue path identity must not apply logical separator normalization.
+
+Earlier scans converted backslashes into `/`, which could merge distinct
+entries or make hashing fail with `No such file or directory`. For a catalogue
+populated by that behavior, scan the affected source again, review
+`clean --source <name> --dry-run`, then run `clean` to remove stale paths.
+Rehash the source and build new import plans from the corrected catalogue;
+existing stored paths and plans are not rewritten automatically.
+
 ## MVP scope
 
 The current implementation supports filesystem-backed source adapters. The adapter kind carries an explicit policy and capability profile so the shared path-backed flow stays separate from future direct crawlers. The indexed root is still a local filesystem path today.

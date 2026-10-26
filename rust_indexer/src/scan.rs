@@ -54,11 +54,13 @@ fn file_kind_label(file_type: &FileType) -> &'static str {
 }
 
 pub(crate) fn relative_source_path(root_path: &Path, entry_path: &Path) -> String {
+    // POSIX backslashes belong to filename components. Replacing them with
+    // slashes aliases distinct files and makes root.join(path) reopen a different path.
     entry_path
         .strip_prefix(root_path)
         .unwrap_or(entry_path)
         .to_string_lossy()
-        .replace('\\', "/")
+        .into_owned()
 }
 
 pub fn scan_source(repo: &DbRepo, name: &str) -> Result<ScanSummary, String> {
@@ -318,4 +320,54 @@ pub fn load_indexed_files(
     rows.iter()
         .map(|row| IndexedFile::from_row(row))
         .collect::<Result<Vec<_>, _>>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relative_source_path;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct SourceTree(PathBuf);
+
+    impl Drop for SourceTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn relative_paths_preserve_posix_filename_identity() -> std::io::Result<()> {
+        let serial = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tree = SourceTree(
+            std::env::temp_dir().join(format!("fod-indexer-paths-{}-{serial}", std::process::id())),
+        );
+        let root = tree.0.join(r"source\root");
+        let names = [
+            r"a\b.txt",
+            "a/b.txt",
+            "dir\\name/nested\\file\t\nż.txt",
+            r"\N.txt",
+        ];
+        for (index, name) in names.iter().enumerate() {
+            let path = root.join(name);
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(&path, [index as u8, 0, 255])?;
+        }
+        let mut stored_paths = std::collections::BTreeSet::new();
+        for (index, name) in names.iter().enumerate() {
+            let stored = relative_source_path(&root, &root.join(name));
+            assert_eq!(stored, *name);
+            assert!(
+                stored_paths.insert(stored.clone()),
+                "distinct filenames must not collide"
+            );
+            assert_eq!(fs::read(root.join(stored))?, [index as u8, 0, 255]);
+        }
+        Ok(())
+    }
 }

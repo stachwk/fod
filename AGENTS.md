@@ -41,6 +41,11 @@ See `docs/FOD_ARCHITECTURE_INVARIANTS.md`.
 
 ## Commit review
 
+After every completed, verified logical change, create a commit on `main`
+without waiting for a separate user request. Keep coordinated edits in one
+coherent commit. Apply `docs/versioning.md`, review the staged changes before
+committing, and inspect the complete parent-to-commit diff afterward.
+
 When the user explicitly requests a commit and push, perform both on `main`
 without asking again. Follow `docs/versioning.md`, review the staged changes,
 then after committing inspect the complete `git diff HEAD~1..HEAD` before
