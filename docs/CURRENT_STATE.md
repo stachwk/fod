@@ -22,8 +22,8 @@ PostgreSQL owns durable filesystem metadata, payload, shared lock/session state 
 [Architecture invariants](FOD_ARCHITECTURE_INVARIANTS.md) define the required
 PostgreSQL authority for namespace, ownership, leases, fencing and inode
 lifecycle. The [primary authority audit](FOD_PRIMARY_AUTHORITY_AUDIT.md)
-records a reproduced unlink/hardlink issue and further mutation-precondition
-review; its findings must be resolved and validated before claiming complete
+records the repaired unlink/hardlink issue, passing mounted regressions and
+further mutation-precondition review; its findings must be resolved and validated before claiming complete
 primary-authoritative mutation coverage.
 
 PostgreSQL schema 27 includes transactional per-file content generations.

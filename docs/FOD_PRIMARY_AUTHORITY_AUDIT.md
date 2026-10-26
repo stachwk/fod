@@ -6,18 +6,20 @@ summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
 [documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
 
 Date: 2026-10-25. Updated: 2026-10-26. Scope: the current working tree, Rust FUSE runtime and its
-PostgreSQL repository. This is a correctness audit; the data-loss defect below
-has not been fixed by this audit.
+PostgreSQL repository. The historical unlink data-loss case below is repaired
+and its mounted regression was verified on 2026-10-26. Other mutation families
+still require the reviews listed at the end.
 
 ## Result
 
 Mutation SQL and authoritative session/ownership operations use the primary
-connection targets in a role-routed writable mount. However, this is not enough
-to claim that all mutation decisions are controlled by the primary. Some FUSE
-mutation preconditions use replica-routed reads. A reproducible `unlink` case
-loses a surviving hardlink when the replica is behind another mount's commit.
+connection targets in a role-routed writable mount. Unlink now revalidates the
+namespace and decides link/open/unlink/purge outcomes in one primary transaction.
+The full mounted unlink regression passes with replica replay paused. Other
+FUSE mutation preconditions still use replica-routed or cached reads, so this
+does not close the remaining authority review.
 
-## P1: replica-based unlink decision can delete a surviving hardlink
+## Historical P1: replica-based unlink decision deleted a surviving hardlink
 
 The failure was reproduced with two independent FOD mounts, PostgreSQL 16, the
 `release-lto` runtime, direct I/O, metadata TTL zero and FOD read cache disabled.
@@ -41,7 +43,7 @@ promoted to the main `files` row and the visible alias count was one. A moved
 entry in `files` is a valid surviving hardlink, so counting only rows in
 `hardlinks` would be an incorrect test oracle.
 
-The source mechanism is explicit:
+The source mechanism in the failing build was:
 
 - `rust_fuse/src/fs.rs::unlink` branches on `repo.count_file_links(file_id)`:
   the last-link branch calls `defer_open_primary_unlink`, while the other
@@ -68,15 +70,37 @@ The first diagnostic's alias-count oracle was corrected to include both
 `files` and `hardlinks`; use the control above rather than the earlier
 `20261025T221806Z` diagnostic.
 
-The required repair is an authoritative unlink transaction that re-resolves
+The repair requires an authoritative unlink transaction that re-resolves
 the expected namespace entry, serializes link/open/unlink/purge decisions with
 all relevant competing operations, rechecks hardlinks and open leases on the
 primary, and chooses promotion/deferred deletion/purge there. Merely changing
 the initial link-count read to primary still leaves a check-then-act race.
 
-Until that repair is validated, keep replica read routing disabled for writable
-mounts (`FOD_PG_REPLICA_READ_ROUTING_ENABLED=0`). This control is not proof that
-every primary-only concurrent namespace race is already resolved.
+## Current unlink implementation and validation
+
+`FodFuse::unlink` uses `DbRepo::authoritative_view` for initial resolution and
+permission inputs. `DbRepo::unlink_file_entry` then acquires namespace and file
+lifecycle advisory locks in one primary transaction, revalidates the expected
+binding, and chooses hardlink promotion, deferred removal or purge there.
+`purge_primary_file_on_conn` rejects surviving hardlinks and active open leases.
+
+On 2026-10-26, `test_unlink_primary_authority_docker.py` passed on source commit
+`9ccf9e4` (FOD 3.4.48), using `release-lto` and `integration-test-hooks`, two
+independent FUSE mounts and an isolated PostgreSQL primary/replica stack:
+
+- a lagged replica preserved both root and nested hardlink aliases;
+- a remote writer heartbeat and write survived primary-name removal/promotion;
+- removing an alias preserved another pathname's destination ownership;
+- an open unlinked writer remained usable and last close purged the old inode;
+- ordered link/unlink contention preserved the alias when link won, while
+  unlink-first made the later link fail with `ENOENT` instead of `EIO`.
+
+Complete results and mount logs are under
+`artifacts/integration/unlink-primary-authority-20261026T192523Z/`.
+This closes the historical unlink data-loss case. Other mutation families below
+remain open. Keep replica read routing disabled for general writable mounts
+(`FOD_PG_REPLICA_READ_ROUTING_ENABLED=0`) until their preconditions are audited;
+the unlink result alone does not establish their correctness.
 
 ## Confirmed routing and enforcement
 
@@ -183,16 +207,17 @@ lease exists before unlink and is released before final purge. An isolated
 fresh-database run confirmed zero matching `request_token` columns before the
 test and one afterward; the focused regression passed. The full `pg_query`
 suite subsequently passed 27/27 tests with no skipped or ignored cases.
-This closes the test-fixture failure; the unlink/primary-ordering audit remains
-open on its separately reproduced mounted data-loss case.
+This closes the test-fixture failure. The later full mounted regression is
+recorded in the current unlink validation section above; other mutation
+families still require the remaining authority review.
 
 ## Remaining source-level review items
 
 - Mutation path resolution, hardlink counts, file sizes and attributes have
   replica-routed APIs that are also used by writable callbacks. Audit each
   mutation's preconditions and partial-block read/modify/write input for
-  primary validation in its commit transaction. The unlink case above proves
-  this is a real correctness boundary, not just a read-performance concern.
+  primary validation in its commit transaction. The historical unlink failure
+  establishes why read routing affects mutation correctness.
 - `rmdir` reads directory contents before its separate primary `DELETE`.
   Foreign keys protect referenced children, but correct `ENOTEMPTY` mapping
   and concurrent namespace ordering need a dedicated test.
