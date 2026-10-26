@@ -2645,3 +2645,149 @@ fn namespace_creation_rejects_missing_parent_and_special_file_replay() -> Result
         .starts_with(fod_rust_hotpath::pg::NAMESPACE_PARENT_MISSING_PREFIX));
     Ok(())
 }
+
+#[test]
+fn inode_permission_changes_authorize_locked_owner_and_preserve_fields() -> Result<(), String> {
+    use fod_rust_hotpath::pg::{InodePermissionChange, InodePermissionOutcome};
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    for (kind, table, key, id) in [
+        ("file", "files", "id_file", fixture.file_id.unwrap()),
+        ("dir", "directories", "id_directory", fixture.directory_id),
+        (
+            "symlink",
+            "symlinks",
+            "id_symlink",
+            fixture.symlink_id.unwrap(),
+        ),
+    ] {
+        let seed =
+            repo.query_scalar_text(&format!("SELECT inode_seed FROM {table} WHERE {key}={id}"))?;
+        let mut change = InodePermissionChange {
+            actor_uid: 1000,
+            actor_groups: &[1000, 2000],
+            mode: Some(0o6755),
+            uid: None,
+            gid: Some(2000),
+        };
+        assert_eq!(
+            repo.change_inode_permissions(kind, id, "wrong-seed", &change)?,
+            InodePermissionOutcome::Missing
+        );
+        assert_eq!(
+            repo.change_inode_permissions(kind, id, &seed, &change)?,
+            InodePermissionOutcome::Changed
+        );
+        assert_eq!(
+            repo.query_rows_text(&format!("SELECT uid,gid FROM {table} WHERE {key}={id}"))?,
+            vec![vec!["1000".to_string(), "2000".to_string()]]
+        );
+        if kind != "symlink" {
+            let mode =
+                repo.query_scalar_text(&format!("SELECT mode FROM {table} WHERE {key}={id}"))?;
+            assert_eq!(mode, if kind == "file" { "755" } else { "6755" });
+        }
+        change.actor_uid = 0;
+        change.uid = Some(3000);
+        change.mode = None;
+        change.gid = None;
+        assert_eq!(
+            repo.change_inode_permissions(kind, id, &seed, &change)?,
+            InodePermissionOutcome::Changed
+        );
+        change.actor_uid = 1000;
+        change.uid = None;
+        change.mode = Some(0o777);
+        assert_eq!(
+            repo.change_inode_permissions(kind, id, &seed, &change)?,
+            InodePermissionOutcome::Denied
+        );
+        change.actor_uid = 3000;
+        change.uid = Some(4000);
+        // A rejected combined chmod/chown must not partially change mode or owner.
+        let before = repo.query_rows_text(&format!("SELECT * FROM {table} WHERE {key}={id}"))?;
+        assert_eq!(
+            repo.change_inode_permissions(kind, id, &seed, &change)?,
+            InodePermissionOutcome::Denied
+        );
+        assert_eq!(
+            repo.query_rows_text(&format!("SELECT * FROM {table} WHERE {key}={id}"))?,
+            before
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn chmod_waits_for_concurrent_chown_and_rejects_previous_owner() -> Result<(), String> {
+    use fod_rust_hotpath::pg::{InodePermissionChange, InodePermissionOutcome};
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let file_id = fixture.file_id.unwrap();
+    let seed = fixture.repo.query_scalar_text(&format!(
+        "SELECT inode_seed FROM files WHERE id_file={file_id}"
+    ))?;
+    let writer = repo_with_runtime()?;
+    let changer = repo_with_runtime()?;
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let owner_thread = std::thread::spawn(move || {
+        writer.with_transaction(|tx| {
+            tx.exec(&format!(
+                "UPDATE files SET uid=2000 WHERE id_file={file_id}"
+            ))?;
+            ready_tx.send(()).map_err(|err| err.to_string())?;
+            release_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .map_err(|err| err.to_string())?;
+            Ok(())
+        })
+    });
+    ready_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .map_err(|err| err.to_string())?;
+    let chmod_thread = std::thread::spawn(move || {
+        changer.change_inode_permissions(
+            "file",
+            file_id,
+            &seed,
+            &InodePermissionChange {
+                actor_uid: 1000,
+                actor_groups: &[1000],
+                mode: Some(0o777),
+                uid: None,
+                gid: None,
+            },
+        )
+    });
+    let observed_wait = (|| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let count = fixture.repo.query_scalar_text("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT uid, gid,%FOR UPDATE'")?;
+            if count.trim() != "0" {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("chmod did not wait for concurrent chown".to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    })();
+    release_tx.send(()).map_err(|err| err.to_string())?;
+    owner_thread
+        .join()
+        .map_err(|_| "owner thread panicked".to_string())??;
+    let outcome = chmod_thread
+        .join()
+        .map_err(|_| "chmod thread panicked".to_string())??;
+    observed_wait?;
+    assert_eq!(outcome, InodePermissionOutcome::Denied);
+    assert_eq!(
+        fixture
+            .repo
+            .query_scalar_text(&format!("SELECT mode FROM files WHERE id_file={file_id}"))?,
+        "644"
+    );
+    Ok(())
+}

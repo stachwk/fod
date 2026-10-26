@@ -166,6 +166,41 @@ Permission authorization, other mutation inputs and cross-host cache coherence
 remain separate unfinished work. General writable replica read routing stays
 disabled pending those reviews.
 
+## Current chmod/chown authorization and validation
+
+FOD 3.4.52 routes `setattr` metadata resolution and its reply through primary.
+The mode/owner portion uses `change_inode_permissions`: it locks the expected
+inode row with `FOR UPDATE`, validates its seed, reads current UID/GID/mode,
+authorizes the caller and applies all requested mode/owner fields in the same
+transaction. Hardlinks use their backing file inode. Missing/stale targets
+return `ENOENT`, rejected ownership or group changes return `EPERM`.
+
+Unspecified UID/GID fields retain the locked database values, rather than the
+requester's identity. A rejected combined chmod/chown leaves both unchanged.
+File chown clears privilege bits; directory chown preserves them. Non-root
+chmod cannot set SGID for a group outside the caller's group set. Existing
+low-level metadata APIs remain available for internal operations; this is not
+an authorization boundary for arbitrary direct SQL clients.
+
+The full backend suite passed 34/34 tests, including a concurrent chown held
+uncommitted while chmod waits at the row lock. After the ownership change
+commits, the previous owner's chmod is denied and the original mode survives.
+Other cases cover expected-seed rejection, partial owner updates, files,
+directories and symlinks, and rejected combined updates without partial writes.
+FUSE unit tests passed 69/69.
+
+The two-mount `release-lto` / `integration-test-hooks` suite passed with replica
+replay paused: a primary ownership change prevents the replica's previous owner
+from chmod/chown of files, hardlinks, directories and symlinks. The same run
+passed the existing permission/sticky/chown compatibility test and all earlier
+namespace/unlink/rmdir regressions:
+`artifacts/integration/unlink-primary-authority-20261026T200613Z/`.
+The compatibility test does not establish transactional sticky-bit or ACL
+ordering. Parent access checks, sticky-bit authorization during namespace
+mutations, ACL/mode atomicity and truncate/timestamp authorization still need
+their own transactional coverage. This change does not make every `setattr`
+field part of one transaction.
+
 ## Confirmed routing and enforcement
 
 | Operation family | Authority path | What was established |
@@ -176,7 +211,8 @@ disabled pending those reviews.
 | `rename` / replace | Primary transaction with destination/file locks and source/target revalidation | Source inspection confirms transaction guards; test details are recorded below |
 | `create`, mkdir, mknod, link, symlink | Shared destination advisory lock and cross-table vacancy check in the primary insertion transaction | All 40 root/nested cross-type conflicts, concurrent creators and directory/FIFO ID separation passed; permission checks remain open |
 | `rmdir` | Primary namespace advisory lock and directory row lock, check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
-| chmod/chown, timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Routing is confirmed; authorization and cached precondition checks require separate scrutiny |
+| chmod/chown | Locked primary inode, seed check and authorization in the same update transaction | Concurrent chown and stale-replica owner rejection passed; partial owner fields preserved |
+| Timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Authorization, ACL/mode atomicity and other precondition checks still require scrutiny |
 | Explicit degraded replica-only mount | Read-only FUSE mount with mutation guards | It deliberately does not acquire/renew primary-backed leases or grant write ownership |
 
 `DbRepoLanes` gives the write repository primary connection targets and a
@@ -283,10 +319,10 @@ families still require the remaining authority review.
   mutation's preconditions and partial-block read/modify/write input for
   primary validation in its commit transaction. The historical unlink failure
   establishes why read routing affects mutation correctness.
-- chmod/chown and sticky-bit checks use FUSE-side attributes before a separate
-  primary update. The shared database credentials do not make those user-level
-  authorization decisions transactional. Stale permissions and concurrent
-  owner/mode changes need targeted validation.
+- Chmod/chown authorization now uses the locked primary inode row as described
+  above. Sticky-bit and parent-access checks during namespace mutations,
+  ACL/mode updates and truncate/timestamp authorization still require review;
+  shared database credentials do not replace those user-level decisions.
 - An explicit telemetry/control DSN is validated as writable but is not
   compared with the data source's cluster/filesystem identity before normal
   read-only mount leases are registered. Configuration and identity validation

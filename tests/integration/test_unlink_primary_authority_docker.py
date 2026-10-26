@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -121,6 +122,34 @@ def main():
         os.environ["FOD_PG_REPLICA_READ_ROUTING_ENABLED"] = "1"
         b = FODMount(str(ROOT)); mounts.append(b)
         b.start(str(mb))
+
+        # Ownership on a paused replica cannot authorize chmod/chown on primary.
+        seed(ma / "permission-file")
+        os.link(ma / "permission-file", ma / "permission-alias")
+        (ma / "permission-directory").mkdir()
+        os.symlink("permission-file", ma / "permission-symlink")
+        permission_file_mode = query(primary, "SELECT mode FROM fod.files WHERE name='permission-file'")[0][0]
+        permission_directory_mode = query(primary, "SELECT mode FROM fod.directories WHERE name='permission-directory'")[0][0]
+        pause()
+        original_uid = os.getuid()
+        foreign_uid = original_uid + 10001
+        with primary.cursor() as cursor:
+            for table in ("files", "directories", "symlinks"):
+                cursor.execute(f"UPDATE fod.{table} SET uid=%s WHERE name IN ('permission-file','permission-directory','permission-symlink')", (foreign_uid,))
+        for name in ("permission-file", "permission-alias", "permission-directory", "permission-symlink"):
+            try:
+                if name == "permission-symlink":
+                    os.chown(mb / name, -1, os.getgid(), follow_symlinks=False)
+                else:
+                    os.chmod(mb / name, 0o777)
+            except OSError as exc:
+                assert exc.errno == errno.EPERM, f"stale owner mutation {name}: {exc}"
+            else:
+                raise AssertionError(f"replica owner authorized mutation: {name}")
+        assert query(primary, "SELECT mode FROM fod.files WHERE name='permission-file'")[0][0] == permission_file_mode
+        assert query(primary, "SELECT mode FROM fod.directories WHERE name='permission-directory'")[0][0] == permission_directory_mode
+        results["chmod_chown_reject_stale_replica_owner"] = True
+        resume()
 
         # Every creator must share one primary namespace across entry tables.
         seed(ma / "namespace-source")
@@ -319,6 +348,14 @@ def main():
             assert visible(original) == 0
             results[f"serialized_{tag}"] = outcomes
             resume()
+
+        permissions = subprocess.run(
+            [sys.executable, str(ROOT / "tests/integration/test_permissions.py")],
+            cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        (artifacts / "permissions.log").write_text(permissions.stdout)
+        assert permissions.returncode == 0, f"permission compatibility regression: {permissions.stdout}"
+        results["permission_compatibility_suite"] = True
 
         print(json.dumps(results, sort_keys=True), flush=True)
     finally:

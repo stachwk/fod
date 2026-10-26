@@ -23,7 +23,8 @@ PostgreSQL owns durable filesystem metadata, payload, shared lock/session state 
 PostgreSQL authority for namespace, ownership, leases, fencing and inode
 lifecycle. The [primary authority audit](FOD_PRIMARY_AUTHORITY_AUDIT.md)
 records verified unlink/rmdir decisions and cross-type namespace creation
-protection, passing mounted regressions and further mutation-precondition review.
+protection, transactional inode chmod/chown authorization, passing mounted
+regressions and further mutation-precondition review.
 Its findings must be resolved and validated before claiming complete
 primary-authoritative mutation coverage.
 

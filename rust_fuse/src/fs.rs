@@ -22,9 +22,9 @@ use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot,
     DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome, GeneratedSharedBlockRows,
-    PersistBlockRow, RenameFileReplaceOutcome, RenameNamespaceSource, RenameNamespaceTarget,
-    WriteOwnershipLease, WritePersistenceFence, NAMESPACE_ENTRY_EXISTS_PREFIX,
-    NAMESPACE_PARENT_MISSING_PREFIX, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    InodePermissionChange, InodePermissionOutcome, PersistBlockRow, RenameFileReplaceOutcome,
+    RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
+    NAMESPACE_ENTRY_EXISTS_PREFIX, NAMESPACE_PARENT_MISSING_PREFIX, STORAGE_QUOTA_EXCEEDED_PREFIX,
     WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
@@ -177,6 +177,7 @@ macro_rules! fuse_reply_error {
 #[derive(Debug, Clone)]
 struct ParsedAttrs {
     file_attr: FileAttr,
+    inode_seed: String,
 }
 
 #[derive(Debug, Clone)]
@@ -2586,18 +2587,6 @@ impl FodFuse {
         Ok((resolved.kind, resolved.entry_id))
     }
 
-    fn raw_mode_for_path(&self, path: &str) -> Result<Option<String>, libc::c_int> {
-        let blob = self.repo.fetch_path_attrs_blob(path).map_err(|_| EIO)?;
-        let Some(blob) = blob else {
-            return Ok(None);
-        };
-        let fields = Self::decode_nul_fields(&blob);
-        if fields.len() < 4 {
-            return Ok(None);
-        }
-        Ok(Some(fields[3].clone()))
-    }
-
     fn current_group_ids() -> HashSet<u32> {
         let mut group_ids = HashSet::new();
         unsafe {
@@ -2954,35 +2943,6 @@ impl FodFuse {
             return Ok(());
         }
         Err(libc::EPERM)
-    }
-
-    fn can_modify_mode(subject: &SubjectIdentity, attrs: &FileAttr) -> bool {
-        subject.is_root() || subject.uid == attrs.uid
-    }
-
-    fn can_change_owner(
-        subject: &SubjectIdentity,
-        attrs: &FileAttr,
-        uid: Option<u32>,
-        gid: Option<u32>,
-    ) -> bool {
-        if subject.is_root() {
-            return true;
-        }
-        if subject.uid != attrs.uid {
-            return false;
-        }
-        if let Some(new_uid) = uid {
-            if new_uid != attrs.uid {
-                return false;
-            }
-        }
-        if let Some(new_gid) = gid {
-            if new_gid != attrs.gid && !subject.groups.contains(&new_gid) {
-                return false;
-            }
-        }
-        true
     }
 
     fn append_journal_event(
@@ -4075,7 +4035,10 @@ impl FodFuse {
                 blksize: self.block_size as u32,
             }
         };
-        Ok(Some(ParsedAttrs { file_attr }))
+        Ok(Some(ParsedAttrs {
+            file_attr,
+            inode_seed: fields[if obj_type == "symlink" { 8 } else { 9 }].clone(),
+        }))
     }
 
     fn attrs_for_open_file_id(&self, file_id: u64) -> Result<Option<ParsedAttrs>, libc::c_int> {
@@ -4119,6 +4082,7 @@ impl FodFuse {
             .unwrap_or(0);
         let inode = self.stable_inode("file", &inode_seed, raw_inode);
         Ok(Some(ParsedAttrs {
+            inode_seed,
             file_attr: FileAttr {
                 ino: INodeNo(inode),
                 size,
@@ -4184,6 +4148,7 @@ impl FodFuse {
         let child_dirs = self.repo.count_root_directory_children().unwrap_or(0);
         let process_identity = Self::process_identity();
         ParsedAttrs {
+            inode_seed: String::new(),
             file_attr: FileAttr {
                 ino: INodeNo::ROOT,
                 size: 0,
@@ -7641,20 +7606,38 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
-        let (path, current_attrs) = match self.entry_attrs_for_ino(ino) {
-            Ok(value) => value,
+        let authority = self.repo.authoritative_view();
+        let path = match self.entry_path_for_ino(ino) {
+            Ok(path) => path,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        let (kind, entry_id) = match self.resolved_entry_for_path(&path) {
-            Ok(value) => value,
+        let current_attrs = match if ino == ROOT_INO {
+            Ok(Some(self.root_attr()))
+        } else {
+            self.attrs_for_path_from_repo(&authority, &path)
+        } {
+            Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => attrs,
+            Ok(_) => {
+                fuse_reply_error!(reply, ENOENT);
+                return;
+            }
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
+        let resolved = match authority.resolve_path(&path) {
+            Ok(value) => value,
+            Err(_) => {
+                fuse_reply_error!(reply, EIO);
+                return;
+            }
+        };
+        let (kind, entry_id) = (resolved.kind, resolved.entry_id);
+        let expected_seed = current_attrs.inode_seed.clone();
         let kind = kind.unwrap_or_default();
         let current_attrs = current_attrs.file_attr;
 
@@ -7748,86 +7731,49 @@ impl Filesystem for FodFuse {
             }
         }
 
-        if let Some(new_mode) = mode {
-            if !Self::can_modify_mode(&subject, &current_attrs) {
-                fuse_reply_error!(reply, libc::EPERM);
-                return;
-            }
-            let mode_text = format!("{:o}", new_mode & 0o7777);
-            let result = match kind.as_str() {
-                "file" | "hardlink" => {
-                    let file_id = match self.file_id_for_path(&path) {
-                        Ok(Some(value)) => value,
-                        Ok(None) => {
-                            fuse_reply_error!(reply, ENOENT);
-                            return;
-                        }
-                        Err(errno) => {
-                            fuse_reply_error!(reply, errno);
-                            return;
-                        }
-                    };
-                    self.repo.update_file_mode(file_id, &mode_text)
-                }
-                "dir" => match entry_id {
-                    Some(directory_id) => self.repo.update_directory_mode(directory_id, &mode_text),
-                    None => Err("missing directory id".to_string()),
-                },
-                "symlink" => Ok(()),
-                _ => Ok(()),
-            };
-            if result.is_err() {
-                fuse_reply_error!(reply, EIO);
-                return;
-            }
-        }
-
-        if uid.is_some() || gid.is_some() {
-            if !Self::can_change_owner(&subject, &current_attrs, uid, gid) {
-                fuse_reply_error!(reply, libc::EPERM);
-                return;
-            }
-            let new_uid = uid.unwrap_or(subject.uid);
-            let new_gid = gid.unwrap_or(subject.gid);
-            let default_mode = if kind == "dir" { 0o755 } else { 0o644 };
-            let mode_text = match self.raw_mode_for_path(&path) {
-                Ok(Some(value)) => value,
-                _ => format!("{:o}", mode.unwrap_or(default_mode) & 0o7777),
-            };
-            let result = match kind.as_str() {
-                "file" | "hardlink" => {
-                    let file_id = match self.file_id_for_path(&path) {
-                        Ok(Some(value)) => value,
-                        Ok(None) => {
-                            fuse_reply_error!(reply, ENOENT);
-                            return;
-                        }
-                        Err(errno) => {
-                            fuse_reply_error!(reply, errno);
-                            return;
-                        }
-                    };
-                    self.repo
-                        .update_file_owner(file_id, new_uid, new_gid, &mode_text)
-                }
-                "dir" => match entry_id {
-                    Some(directory_id) => {
-                        self.repo
-                            .update_directory_owner(directory_id, new_uid, new_gid, &mode_text)
+        if mode.is_some() || uid.is_some() || gid.is_some() {
+            let permission_owner = if kind == "hardlink" {
+                match entry_id
+                    .map(|id| authority.get_hardlink_file_id(id))
+                    .transpose()
+                {
+                    Ok(Some(Some(id))) => Some(("file", id)),
+                    Ok(_) => None,
+                    Err(_) => {
+                        fuse_reply_error!(reply, EIO);
+                        return;
                     }
-                    None => Err("missing directory id".to_string()),
-                },
-                "symlink" => match entry_id {
-                    Some(symlink_id) => {
-                        self.repo.update_symlink_owner(symlink_id, new_uid, new_gid)
-                    }
-                    None => Err("missing symlink id".to_string()),
-                },
-                _ => Ok(()),
+                }
+            } else {
+                entry_id.map(|id| (kind.as_str(), id))
             };
-            if result.is_err() {
-                fuse_reply_error!(reply, EIO);
+            let Some((owner_kind, owner_id)) = permission_owner else {
+                fuse_reply_error!(reply, ENOENT);
                 return;
+            };
+            let groups: Vec<u32> = subject.groups.iter().copied().collect();
+            let change = InodePermissionChange {
+                actor_uid: subject.uid,
+                actor_groups: &groups,
+                mode,
+                uid,
+                gid,
+            };
+            match authority.change_inode_permissions(owner_kind, owner_id, &expected_seed, &change)
+            {
+                Ok(InodePermissionOutcome::Changed) => {}
+                Ok(InodePermissionOutcome::Denied) => {
+                    fuse_reply_error!(reply, libc::EPERM);
+                    return;
+                }
+                Ok(InodePermissionOutcome::Missing) => {
+                    fuse_reply_error!(reply, ENOENT);
+                    return;
+                }
+                Err(_) => {
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
             }
         }
 
@@ -7843,7 +7789,11 @@ impl Filesystem for FodFuse {
                 None => false,
             };
             if !atime_needs_update && !mtime_needs_update {
-                match self.lookup_path(&path) {
+                match if ino == ROOT_INO {
+                    Ok(Some(self.root_attr()))
+                } else {
+                    self.attrs_for_path_from_repo(&authority, &path)
+                } {
                     Ok(Some(attrs)) => {
                         reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr)
                     }
@@ -7891,7 +7841,11 @@ impl Filesystem for FodFuse {
             }
         }
 
-        match self.lookup_path(&path) {
+        match if ino == ROOT_INO {
+            Ok(Some(self.root_attr()))
+        } else {
+            self.attrs_for_path_from_repo(&authority, &path)
+        } {
             Ok(Some(attrs)) => reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr),
             Ok(None) => fuse_reply_error!(reply, ENOENT),
             Err(errno) => fuse_reply_error!(reply, errno),

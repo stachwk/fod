@@ -7,7 +7,82 @@
 use super::{exec_command_params, DbRepo};
 use std::ffi::CString;
 
+/// Caller identity and requested fields for one authoritative chmod/chown.
+pub struct InodePermissionChange<'a> {
+    pub actor_uid: u32,
+    pub actor_groups: &'a [u32],
+    pub mode: Option<u32>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InodePermissionOutcome {
+    Changed,
+    Missing,
+    Denied,
+}
+
 impl DbRepo {
+    /// Lock the inode row before authorization and preserve unspecified fields.
+    /// A stale namespace resolution cannot authorize a different inode seed.
+    pub fn change_inode_permissions(
+        &self,
+        kind: &str,
+        id: u64,
+        expected_seed: &str,
+        change: &InodePermissionChange<'_>,
+    ) -> Result<InodePermissionOutcome, String> {
+        let (table, key) = match kind {
+            "file" => ("files", "id_file"),
+            "dir" => ("directories", "id_directory"),
+            "symlink" => ("symlinks", "id_symlink"),
+            _ => return Err("invalid permission owner kind".to_string()),
+        };
+        self.with_transaction(|tx| {
+            let mode_column = if kind == "symlink" { "'777'" } else { "mode" };
+            let rows = tx.query_rows_text(&format!(
+                "SELECT uid, gid, {mode_column}, inode_seed FROM {table} WHERE {key}={id} FOR UPDATE"
+            ))?;
+            let Some(row) = rows.first() else {
+                return Ok(InodePermissionOutcome::Missing);
+            };
+            if row.len() != 4 || row[3] != expected_seed {
+                return Ok(InodePermissionOutcome::Missing);
+            }
+            let uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
+            let gid = row[1].parse::<u32>().map_err(|err| err.to_string())?;
+            let current_mode = u32::from_str_radix(&row[2], 8).map_err(|err| err.to_string())?;
+            if change.actor_uid != 0 {
+                if change.actor_uid != uid
+                    || change.uid.is_some_and(|new_uid| new_uid != uid)
+                    || change.gid.is_some_and(|new_gid| new_gid != gid && !change.actor_groups.contains(&new_gid))
+                {
+                    return Ok(InodePermissionOutcome::Denied);
+                }
+            }
+            let new_uid = change.uid.unwrap_or(uid);
+            let new_gid = change.gid.unwrap_or(gid);
+            let mut mode = change.mode.map(|mode| mode & 0o7777).unwrap_or(current_mode);
+            if change.mode.is_some() && change.actor_uid != 0 && !change.actor_groups.contains(&new_gid) {
+                mode &= !0o2000;
+            }
+            // Linux clears privilege bits on file chown; directories retain them.
+            if kind == "file" && (change.uid.is_some() || change.gid.is_some()) {
+                mode &= !0o6000;
+            }
+            let mode_update = if kind == "symlink" {
+                String::new()
+            } else {
+                format!(", mode='{:o}'", mode)
+            };
+            tx.exec(&format!(
+                "UPDATE {table} SET uid={new_uid}, gid={new_gid}{mode_update}, change_date=NOW(), modification_date=NOW() WHERE {key}={id}"
+            ))?;
+            Ok(InodePermissionOutcome::Changed)
+        })
+    }
+
     pub fn touch_file_entry(&self, file_id: u64) -> Result<(), String> {
         let sql = CString::new(
             "UPDATE files SET modification_date = NOW(), change_date = NOW() WHERE id_file = $1",
