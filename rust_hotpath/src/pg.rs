@@ -64,6 +64,8 @@ const DEFAULT_PERSIST_COPY_SEND_BUFFER_BYTES: usize = 1024 * 1024;
 const PERSIST_BLOCK_STAGE_TABLE: &str = "fod_persist_block_stage";
 const REPLAYABLE_SQL_ERROR_PREFIX: &str = "__FOD_REPLAYABLE_SQL_ERROR__: ";
 const UNIQUE_VIOLATION_ERROR_PREFIX: &str = "SQLSTATE 23505:";
+pub const NAMESPACE_ENTRY_EXISTS_PREFIX: &str = "SQLSTATE 23505: FOD_NAMESPACE_ENTRY_EXISTS:";
+pub const NAMESPACE_PARENT_MISSING_PREFIX: &str = "FOD_NAMESPACE_PARENT_MISSING:";
 const REPLICA_SCORE_UNKNOWN_LATENCY_MICROS: u64 = 5_000;
 const REPLICA_SCORE_LATENCY_DIVISOR: u64 = 100;
 const REPLICA_SCORE_LAG_DIVISOR_BYTES: u64 = 4_096;
@@ -5806,19 +5808,59 @@ impl DbRepo {
         name: &str,
         inode_seed: &str,
     ) -> Result<Vec<CString>, String> {
-        let parent_key = parent_id.unwrap_or(0);
         let mut keys = vec![
-            format!("fod:write:destination:{parent_key}:{}:{name}", name.len()),
-            format!("fod:inode-seed:{}:{inode_seed}", inode_seed.len()),
+            Self::namespace_serialization_key(parent_id, name)?,
+            CString::new(format!("fod:inode-seed:{}:{inode_seed}", inode_seed.len()))
+                .map_err(|_| "file create serialization key contains NUL byte".to_string())?,
         ];
         keys.sort_unstable();
         keys.dedup();
-        keys.into_iter()
-            .map(|key| {
-                CString::new(key)
-                    .map_err(|_| "file create serialization key contains NUL byte".to_string())
-            })
-            .collect()
+        Ok(keys)
+    }
+
+    fn namespace_serialization_key(parent_id: Option<u64>, name: &str) -> Result<CString, String> {
+        CString::new(format!(
+            "fod:write:destination:{}:{}:{name}",
+            parent_id.unwrap_or(0),
+            name.len()
+        ))
+        .map_err(|_| "namespace key contains NUL byte".to_string())
+    }
+
+    /// Called only while the destination advisory lock is held in the mutation
+    /// transaction. Parent FK locking also serializes creation with rmdir.
+    unsafe fn require_namespace_vacant_on_conn(
+        conn: *mut PGconn,
+        parent_id: Option<u64>,
+        name: &str,
+    ) -> Result<(), String> {
+        if let Some(id) = parent_id {
+            let id = CString::new(id.to_string()).unwrap();
+            let sql = CString::new(
+                "SELECT id_directory FROM directories WHERE id_directory = $1 FOR KEY SHARE",
+            )
+            .unwrap();
+            if fetch_single_text_option(exec_params(conn, &sql, &[&id])?)?.is_none() {
+                return Err(format!(
+                    "{NAMESPACE_PARENT_MISSING_PREFIX} parent directory is absent"
+                ));
+            }
+        }
+        let sql = CString::new(
+            "SELECT kind FROM (
+                SELECT 'file' AS kind FROM files WHERE COALESCE(id_directory, 0) = $1 AND name = $2 AND NOT unlinked
+                UNION ALL SELECT 'directory' FROM directories WHERE COALESCE(id_parent, 0) = $1 AND name = $2
+                UNION ALL SELECT 'hardlink' FROM hardlinks WHERE COALESCE(id_directory, 0) = $1 AND name = $2
+                UNION ALL SELECT 'symlink' FROM symlinks WHERE COALESCE(id_parent, 0) = $1 AND name = $2
+             ) entries LIMIT 1",
+        ).unwrap();
+        let parent = CString::new(parent_id.unwrap_or(0).to_string()).unwrap();
+        let name =
+            CString::new(name).map_err(|_| "namespace name contains NUL byte".to_string())?;
+        if let Some(kind) = fetch_single_text_option(exec_params(conn, &sql, &[&parent, &name])?)? {
+            return Err(format!("{NAMESPACE_ENTRY_EXISTS_PREFIX}{kind}"));
+        }
+        Ok(())
     }
 
     unsafe fn effective_file_inode_seed_on_conn(
@@ -5857,7 +5899,7 @@ impl DbRepo {
             None => "id_directory IS NULL".to_string(),
         };
         let sql = format!(
-            "SELECT id_file, size, mode, uid, gid, inode_seed FROM files WHERE {parent_clause} AND name = {} LIMIT 1",
+            "SELECT id_file, size, mode, uid, gid, inode_seed FROM files WHERE {parent_clause} AND name = {} AND NOT unlinked AND NOT EXISTS (SELECT 1 FROM special_files WHERE special_files.id_file = files.id_file) LIMIT 1",
             Self::quote_literal(target_name)
         );
         let rows = self.query_rows_text(&sql)?;
@@ -5899,7 +5941,7 @@ impl DbRepo {
             None => "files.id_directory IS NULL".to_string(),
         };
         let sql = format!(
-            "SELECT files.id_file, files.size, files.mode, files.uid, files.gid, files.inode_seed, special_files.file_type, special_files.rdev_major, special_files.rdev_minor FROM files JOIN special_files ON special_files.id_file = files.id_file WHERE {parent_clause} AND files.name = {} LIMIT 1",
+            "SELECT files.id_file, files.size, files.mode, files.uid, files.gid, files.inode_seed, special_files.file_type, special_files.rdev_major, special_files.rdev_minor FROM files JOIN special_files ON special_files.id_file = files.id_file WHERE {parent_clause} AND files.name = {} AND NOT files.unlinked LIMIT 1",
             Self::quote_literal(target_name)
         );
         let rows = self.query_rows_text(&sql)?;
@@ -10412,12 +10454,7 @@ impl DbRepo {
         if name.is_empty() || name == "/" || name == "." || name == ".." || name.contains('/') {
             return Err("invalid directory unlink name".to_string());
         }
-        let namespace_key = CString::new(format!(
-            "fod:write:destination:{}:{}:{name}",
-            parent_id.unwrap_or(0),
-            name.len()
-        ))
-        .map_err(|_| "directory namespace key contains NUL byte".to_string())?;
+        let namespace_key = Self::namespace_serialization_key(parent_id, name)?;
         let id = CString::new(directory_id.to_string()).unwrap();
         let parent = CString::new(parent_id.unwrap_or(0).to_string()).unwrap();
         let name =
@@ -10512,6 +10549,7 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
+        let namespace_key = Self::namespace_serialization_key(target_parent_id, &target_name_text)?;
         let result = self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 if !Self::lock_file_lifecycle_on_conn(conn, source_file_id_value)? {
@@ -10525,6 +10563,8 @@ impl DbRepo {
                 {
                     return Err("FOD_LINK_SOURCE_UNAVAILABLE".to_string());
                 }
+                Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -10627,8 +10667,11 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
+        let namespace_key = Self::namespace_serialization_key(target_parent_id, &target_name_text)?;
         let result = self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
+                Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -10732,8 +10775,11 @@ impl DbRepo {
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
+        let namespace_key = Self::namespace_serialization_key(target_parent_id, &target_name_text)?;
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
+                Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -10850,6 +10896,7 @@ impl DbRepo {
                 for serialization_key in &serialization_keys {
                     Self::advisory_xact_lock_text_on_conn(conn, serialization_key)?;
                 }
+                Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let effective_inode_seed =
                     Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;
@@ -11010,6 +11057,7 @@ impl DbRepo {
                 for serialization_key in &serialization_keys {
                     Self::advisory_xact_lock_text_on_conn(conn, serialization_key)?;
                 }
+                Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let effective_inode_seed =
                     Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
                 let data_object_res = exec_params(conn, &sql_data_object, &[])?;

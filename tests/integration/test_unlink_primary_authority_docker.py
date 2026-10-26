@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Wojciech Stach
 # Licensed under BSL 1.1
-"""Unlink must preserve primary state despite replica lag and concurrent link."""
+"""Namespace mutations must preserve primary authority despite replica lag."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -120,6 +121,59 @@ def main():
         os.environ["FOD_PG_REPLICA_READ_ROUTING_ENABLED"] = "1"
         b = FODMount(str(ROOT)); mounts.append(b)
         b.start(str(mb))
+
+        # Every creator must share one primary namespace across entry tables.
+        seed(ma / "namespace-source")
+        (ma / "namespace-nested").mkdir()
+
+        def create_kind(root, relative, kind):
+            path = root / relative
+            if kind == "directory":
+                path.mkdir()
+            elif kind == "symlink":
+                os.symlink("missing-target", path)
+            elif kind == "hardlink":
+                os.link(root / "namespace-source", path)
+            elif kind == "fifo":
+                os.mkfifo(path)
+            else:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                try:
+                    os.write(fd, PAYLOAD)
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+
+        kinds = ("directory", "symlink", "hardlink", "file", "fifo")
+        namespace_cases = 0
+        for nested in (False, True):
+            for winner in kinds:
+                for loser in kinds:
+                    if winner == loser:
+                        continue
+                    name = f"namespace-{int(nested)}-{winner}-{loser}"
+                    relative = Path("namespace-nested") / name if nested else Path(name)
+                    pause()
+                    create_kind(ma, relative, winner)
+                    if winner == "directory":
+                        assert stat.S_ISDIR(os.lstat(ma / relative).st_mode)
+                    loser_errno = 0
+                    try:
+                        create_kind(mb, relative, loser)
+                    except OSError as exc:
+                        loser_errno = exc.errno
+                    count = query(primary, "SELECT (SELECT count(*) FROM fod.files WHERE name=%s AND NOT unlinked) + (SELECT count(*) FROM fod.directories WHERE name=%s) + (SELECT count(*) FROM fod.symlinks WHERE name=%s) + (SELECT count(*) FROM fod.hardlinks WHERE name=%s)", (name,) * 4)[0][0]
+                    assert count == 1, f"cross-type namespace duplicated: winner={winner} loser={loser} count={count} errno={loser_errno}"
+                    assert loser_errno == errno.EEXIST, f"cross-type create: winner={winner} loser={loser} errno={loser_errno}"
+                    namespace_cases += 1
+                    resume()
+        results["cross_type_namespace_cases"] = namespace_cases
+        # IDs are independent across tables: a FIFO must never change directory type.
+        collisions = query(primary, "SELECT d.name FROM fod.directories d JOIN fod.special_files s ON s.id_file=d.id_directory WHERE d.id_parent=(SELECT id_directory FROM fod.directories WHERE name='namespace-nested' AND id_parent IS NULL)")
+        assert collisions, "test did not exercise a directory/FIFO numeric ID collision"
+        for (name,) in collisions:
+            assert stat.S_ISDIR(os.lstat(ma / "namespace-nested" / name).st_mode)
+        results["directory_special_file_id_collision_preserves_type"] = True
 
         # Empty on the paused replica must not override primary children.
         (ma / "lag-rmdir").mkdir()

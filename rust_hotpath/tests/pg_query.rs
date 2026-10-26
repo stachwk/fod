@@ -2462,3 +2462,186 @@ fn shared_data_object_detaches_on_source_write() -> Result<(), String> {
 
     Ok(())
 }
+
+#[test]
+fn namespace_creation_rejects_every_cross_type_collision() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let create = |kind, parent, name: &str| {
+        let seed = unique_name("cross_type_seed");
+        match kind {
+            0 => repo.create_directory(parent, name, 0o755, 1000, 1000, &seed),
+            1 => repo.create_symlink(parent, name, "missing", 1000, 1000, &seed),
+            2 => repo.create_hardlink(fixture.file_id.unwrap(), parent, name, 1000, 1000),
+            3 => repo.create_file(parent, name, 0o644, 1000, 1000, &seed),
+            _ => repo.create_special_file(parent, name, 0o600, 1000, 1000, &seed, "fifo", 0, 0),
+        }
+    };
+    for parent in [None, Some(fixture.directory_id)] {
+        for winner in 0..5 {
+            for loser in 0..5 {
+                if winner == loser {
+                    continue;
+                }
+                let name = unique_name("cross_type_name");
+                let id = create(winner, parent, &name)?;
+                let result = create(loser, parent, &name);
+                let cleanup = match winner {
+                    0 => repo.delete_directory_entry(id),
+                    1 => repo.delete_symlink_entry(id),
+                    2 => repo.delete_hardlink_entry(id),
+                    _ => repo.purge_primary_file(id),
+                };
+                cleanup?;
+                assert!(
+                    result.as_ref().err().is_some_and(|error| error
+                        .starts_with(fod_rust_hotpath::pg::NAMESPACE_ENTRY_EXISTS_PREFIX)),
+                    "winner={winner} loser={loser} parent={parent:?}: {result:?}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn namespace_creators_serialize_on_the_same_postgres_lock() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let gate = repo_with_runtime()?;
+    let directory_repo = repo_with_runtime()?;
+    let symlink_repo = repo_with_runtime()?;
+    let parent = fixture.directory_id;
+    let name = unique_name("namespace_race");
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let key = format!("fod:write:destination:{parent}:{}:{name}", name.len());
+    let gate_thread = std::thread::spawn(move || {
+        gate.with_transaction(|tx| {
+            tx.query_scalar_text(&format!(
+                "SELECT pg_advisory_xact_lock(hashtextextended('{key}', 0))"
+            ))?;
+            ready_tx.send(()).map_err(|err| err.to_string())?;
+            release_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .map_err(|err| err.to_string())?;
+            Ok(())
+        })
+    });
+    ready_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .map_err(|err| err.to_string())?;
+    let directory_name = name.clone();
+    let directory_thread = std::thread::spawn(move || {
+        directory_repo.create_directory(
+            Some(parent),
+            &directory_name,
+            0o755,
+            1000,
+            1000,
+            &unique_name("race_dir_seed"),
+        )
+    });
+    let symlink_name = name.clone();
+    let symlink_thread = std::thread::spawn(move || {
+        symlink_repo.create_symlink(
+            Some(parent),
+            &symlink_name,
+            "missing",
+            1000,
+            1000,
+            &unique_name("race_link_seed"),
+        )
+    });
+    let observed_wait = (|| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let count = fixture.repo.query_scalar_text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND wait_event = 'advisory'")?;
+            if count.trim() == "2" {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(
+                    "both namespace creators did not wait for the shared advisory lock".to_string(),
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    })();
+    release_tx.send(()).map_err(|err| err.to_string())?;
+    gate_thread
+        .join()
+        .map_err(|_| "gate panicked".to_string())??;
+    let directory = directory_thread
+        .join()
+        .map_err(|_| "directory creator panicked".to_string())?;
+    let symlink = symlink_thread
+        .join()
+        .map_err(|_| "symlink creator panicked".to_string())?;
+    if let Ok(id) = directory.as_ref() {
+        fixture.repo.delete_directory_entry(*id)?;
+    }
+    if let Ok(id) = symlink.as_ref() {
+        fixture.repo.delete_symlink_entry(*id)?;
+    }
+    observed_wait?;
+    assert_ne!(
+        directory.is_ok(),
+        symlink.is_ok(),
+        "exactly one creator must win: {directory:?}, {symlink:?}"
+    );
+    let error = directory.err().or_else(|| symlink.err()).unwrap();
+    assert!(
+        error.starts_with(fod_rust_hotpath::pg::NAMESPACE_ENTRY_EXISTS_PREFIX),
+        "{error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn namespace_creation_rejects_missing_parent_and_special_file_replay() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let repo = &fixture.repo;
+    let name = unique_name("fifo_replay_guard");
+    let seed = unique_name("fifo_replay_seed");
+    let id = repo.create_special_file(
+        Some(fixture.directory_id),
+        &name,
+        0o600,
+        1000,
+        1000,
+        &seed,
+        "fifo",
+        0,
+        0,
+    )?;
+    // Identical file metadata cannot confirm a regular-file replay over a FIFO.
+    let result = repo.create_file(Some(fixture.directory_id), &name, 0o600, 1000, 1000, &seed);
+    repo.purge_primary_file(id)?;
+    assert!(result
+        .unwrap_err()
+        .starts_with(fod_rust_hotpath::pg::NAMESPACE_ENTRY_EXISTS_PREFIX));
+    let parent = repo.create_directory(
+        Some(fixture.directory_id),
+        "removed-parent",
+        0o755,
+        1000,
+        1000,
+        &unique_name("removed_parent_seed"),
+    )?;
+    repo.delete_directory_entry(parent)?;
+    let result = repo.create_directory(
+        Some(parent),
+        "child",
+        0o755,
+        1000,
+        1000,
+        &unique_name("missing_parent_child"),
+    );
+    assert!(result
+        .unwrap_err()
+        .starts_with(fod_rust_hotpath::pg::NAMESPACE_PARENT_MISSING_PREFIX));
+    Ok(())
+}

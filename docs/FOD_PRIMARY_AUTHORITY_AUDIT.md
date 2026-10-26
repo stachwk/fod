@@ -130,6 +130,42 @@ The full `pg_query` suite passed 29/29 tests. New backend regressions cover
 stale/renamed bindings and a child transaction held uncommitted: removal waits
 at the directory row lock, then sees the committed child and returns `NotEmpty`.
 
+## Current cross-type namespace protection and validation
+
+FOD 3.4.51 makes regular-file, special-file, directory, symlink and hardlink
+creation take the same PostgreSQL destination advisory lock as rename and
+file unlink. Each creator checks all four namespace tables on primary inside its
+insertion transaction. An occupied destination returns `EEXIST` through FUSE.
+The transaction locks an existing parent with `FOR KEY SHARE`, serializing
+creation with directory removal; an absent parent returns `ENOENT`.
+Writable create also rechecks the destination and backing hardlink on an
+`authoritative_view` after acquiring destination ownership.
+
+Existing bounded replay confirmation is preserved. Regular-file confirmation
+now excludes special files and unlinked generations, and special-file
+confirmation excludes unlinked generations. This prevents identical mode,
+owner and seed metadata from confirming a FIFO as a regular-file creation.
+This does not establish exactly-once semantics for every same-type request.
+
+The mounted matrix exposed a separate deterministic type-decoding defect:
+`attrs_for_path_from_repo` queried `special_files` for directory IDs, although
+file and directory IDs come from independent sequences. When a directory ID
+matched a FIFO file ID, FUSE returned FIFO attributes for a committed directory
+and Linux rejected the mkdir reply with `EIO`. Special-file decoding now applies
+only to files and hardlink backing files. The mounted regression requires an
+actual directory/special-file numeric ID collision and verifies directory type.
+
+The full `pg_query` suite passed 32/32 tests. New cases cover all 40 ordered
+cross-type pairs at root and under a directory, missing parents, FIFO replay
+misidentification and two independent creators observed waiting on the same
+PostgreSQL advisory lock; exactly one creator commits after releasing it.
+The complete two-mount `release-lto` / `integration-test-hooks` regression passed
+all 40 paused-replica pairs plus the unlink/rmdir scenarios above:
+`artifacts/integration/unlink-primary-authority-20261026T200044Z/`.
+Permission authorization, other mutation inputs and cross-host cache coherence
+remain separate unfinished work. General writable replica read routing stays
+disabled pending those reviews.
+
 ## Confirmed routing and enforcement
 
 | Operation family | Authority path | What was established |
@@ -138,7 +174,7 @@ at the directory row lock, then sees the committed child and returns `NotEmpty`.
 | `fallocate` hole punching, clone/copy adoption | Primary persistence APIs with a write fence | Hole-punch fencing regression passed; adoption also validates its destination fence in the primary transaction |
 | Open/client sessions, ownership and heartbeat | `with_control_connection` -> the same primary targets; normal read-only mounts use a writable control repo | Remote open/unlink/recreate test passed with distinct inode generations and old-handle writes isolated from the replacement |
 | `rename` / replace | Primary transaction with destination/file locks and source/target revalidation | Source inspection confirms transaction guards; test details are recorded below |
-| `create`, mkdir, mknod, link, symlink | Primary SQL through `with_cached_connection` | Routing is confirmed; this is not blanket proof of namespace conflict semantics |
+| `create`, mkdir, mknod, link, symlink | Shared destination advisory lock and cross-table vacancy check in the primary insertion transaction | All 40 root/nested cross-type conflicts, concurrent creators and directory/FIFO ID separation passed; permission checks remain open |
 | `rmdir` | Primary namespace advisory lock and directory row lock, check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
 | chmod/chown, timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Routing is confirmed; authorization and cached precondition checks require separate scrutiny |
 | Explicit degraded replica-only mount | Read-only FUSE mount with mutation guards | It deliberately does not acquire/renew primary-backed leases or grant write ownership |
@@ -247,10 +283,6 @@ families still require the remaining authority review.
   mutation's preconditions and partial-block read/modify/write input for
   primary validation in its commit transaction. The historical unlink failure
   establishes why read routing affects mutation correctness.
-- Namespace uniqueness indexes in `base_schema.sql` are per table (`files`,
-  `directories`, `hardlinks`, `symlinks`). They do not alone establish one
-  cross-type `(parent, name)` conflict boundary. The audited create methods
-  need explicit concurrent cross-type coverage.
 - chmod/chown and sticky-bit checks use FUSE-side attributes before a separate
   primary update. The shared database credentials do not make those user-level
   authorization decisions transactional. Stale permissions and concurrent

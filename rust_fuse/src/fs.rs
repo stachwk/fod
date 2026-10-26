@@ -23,7 +23,8 @@ use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot,
     DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome, GeneratedSharedBlockRows,
     PersistBlockRow, RenameFileReplaceOutcome, RenameNamespaceSource, RenameNamespaceTarget,
-    WriteOwnershipLease, WritePersistenceFence, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    WriteOwnershipLease, WritePersistenceFence, NAMESPACE_ENTRY_EXISTS_PREFIX,
+    NAMESPACE_PARENT_MISSING_PREFIX, STORAGE_QUOTA_EXCEEDED_PREFIX,
     WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
@@ -4034,11 +4035,13 @@ impl FodFuse {
                         rdev = ((major as u64) << 8) | (minor as u64);
                     }
                 }
-            } else if let Some((special_type, major, minor)) =
-                repo.get_special_file_metadata(raw_inode).map_err(|_| EIO)?
-            {
-                kind = Self::file_type_from_special(&special_type);
-                rdev = ((major as u64) << 8) | (minor as u64);
+            } else if obj_type == "file" {
+                if let Some((special_type, major, minor)) =
+                    repo.get_special_file_metadata(raw_inode).map_err(|_| EIO)?
+                {
+                    kind = Self::file_type_from_special(&special_type);
+                    rdev = ((major as u64) << 8) | (minor as u64);
+                }
             }
             if obj_type == "dir" && perm == 0o644 {
                 perm = 0o755;
@@ -4913,6 +4916,16 @@ impl FodFuse {
         Ok(())
     }
 
+    fn namespace_create_errno(error: &str) -> libc::c_int {
+        if error.starts_with(NAMESPACE_ENTRY_EXISTS_PREFIX) {
+            libc::EEXIST
+        } else if error.starts_with(NAMESPACE_PARENT_MISSING_PREFIX) {
+            ENOENT
+        } else {
+            EIO
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn create_writable_file_with_destination_ownership(
         &self,
@@ -4976,7 +4989,8 @@ impl FodFuse {
 
         // Re-check the namespace only after destination ownership is ours.
         // This closes the cross-mount negative-lookup/create race.
-        let resolved = match self.repo.resolve_path(&path) {
+        let authority = self.repo.authoritative_view();
+        let resolved = match authority.resolve_path(&path) {
             Ok(value) => value,
             Err(err) => {
                 warn!(
@@ -5011,7 +5025,7 @@ impl FodFuse {
                     release_destination("existing_hardlink_missing_id");
                     return Err(EIO);
                 };
-                match self.repo.get_hardlink_file_id(hardlink_id) {
+                match authority.get_hardlink_file_id(hardlink_id) {
                     Ok(Some(file_id)) => (file_id, false),
                     Ok(None) => {
                         release_destination("existing_hardlink_missing_file");
@@ -5042,7 +5056,7 @@ impl FodFuse {
                         path, owner_key, err
                     );
                     release_destination("create_file");
-                    return Err(EIO);
+                    return Err(Self::namespace_create_errno(&err));
                 }
             },
         };
@@ -7972,7 +7986,7 @@ impl Filesystem for FodFuse {
                     Err(errno) => fuse_reply_error!(reply, errno),
                 }
             }
-            Err(_) => fuse_reply_error!(reply, EIO),
+            Err(err) => fuse_reply_error!(reply, Self::namespace_create_errno(&err)),
         }
     }
 
@@ -9910,7 +9924,7 @@ impl Filesystem for FodFuse {
                     Ok(None) => fuse_reply_error!(reply, EIO),
                     Err(errno) => fuse_reply_error!(reply, errno),
                 },
-                Err(_) => fuse_reply_error!(reply, EIO),
+                Err(err) => fuse_reply_error!(reply, Self::namespace_create_errno(&err)),
             }
             return;
         }
@@ -9959,8 +9973,8 @@ impl Filesystem for FodFuse {
             libc::minor(rdev as libc::dev_t) as u32,
         ) {
             Ok(_) => {}
-            Err(_) => {
-                fuse_reply_error!(reply, EIO);
+            Err(err) => {
+                fuse_reply_error!(reply, Self::namespace_create_errno(&err));
                 return;
             }
         };
@@ -10034,7 +10048,7 @@ impl Filesystem for FodFuse {
                 Ok(None) => fuse_reply_error!(reply, EIO),
                 Err(errno) => fuse_reply_error!(reply, errno),
             },
-            Err(_) => fuse_reply_error!(reply, EIO),
+            Err(err) => fuse_reply_error!(reply, Self::namespace_create_errno(&err)),
         }
     }
 
@@ -10115,7 +10129,7 @@ impl Filesystem for FodFuse {
                 if err == "FOD_LINK_SOURCE_UNAVAILABLE" {
                     ENOENT
                 } else {
-                    EIO
+                    Self::namespace_create_errno(&err)
                 }
             ),
         }
