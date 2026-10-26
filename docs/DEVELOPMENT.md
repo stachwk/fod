@@ -136,6 +136,13 @@ Detailed test profiles and ordering rules are documented in
 
 ## Runtime configuration changes
 
+Shared validation rules live in
+[`rust_runtime/src/validation.rs`](../rust_runtime/src/validation.rs).
+`RuntimeConfig` construction, precedence and environment application remain in
+[`rust_runtime/src/lib.rs`](../rust_runtime/src/lib.rs). Public entry points
+are exported from the crate root. Keep validation rule order and the distinction
+between tuning keys and runtime environment overrides when changing these rules.
+
 Before adding a new `FOD_*` variable or INI key, read
 [`runtime-configuration.md`](runtime-configuration.md) and the generated
 [`runtime-env-ini-audit.md`](runtime-env-ini-audit.md).
