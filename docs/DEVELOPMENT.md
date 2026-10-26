@@ -42,6 +42,7 @@ grouped by responsibility:
 | Source | Responsibility |
 | --- | --- |
 | [`pg.rs`](../rust_hotpath/src/pg.rs) | connections, routing, SQL execution, transaction primitives, leases, namespace mutations and payload persistence |
+| [`pg/file_reads.rs`](../rust_hotpath/src/pg/file_reads.rs) | file metadata, block/range reads, sparse seeks and binary result decoding |
 | [`pg/index_staging.rs`](../rust_hotpath/src/pg/index_staging.rs) | index catalog row types, COPY TEXT encoding and transactional batch merges |
 | [`pg/namespace_lookup.rs`](../rust_hotpath/src/pg/namespace_lookup.rs) | complete path resolution, entry IDs, directory listings and attribute decoding |
 | [`pg/metadata_updates.rs`](../rust_hotpath/src/pg/metadata_updates.rs) | mode, ownership and timestamp updates |
