@@ -416,6 +416,29 @@ impl DbRepo {
         })
     }
 
+    /// Reads file size from the write authority for mutation planning.
+    /// Replica-routed size reads must not determine the extent persisted by a
+    /// write or copy operation.
+    pub fn file_size_authoritative(&self, file_id: u64) -> Result<Option<u64>, String> {
+        let file_id = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        self.with_connection(super::ConnectionLane::Write, |conn| unsafe {
+            let sql = CString::new("SELECT size FROM files WHERE id_file = $1")
+                .map_err(|_| "SQL contains NUL byte".to_string())?;
+            let res = exec_params(conn, &sql, &[&file_id])?;
+            let text = fetch_single_text(res)?;
+            if text.is_empty() {
+                Ok(None)
+            } else {
+                let value = text
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|err| format!("invalid authoritative file size: {err}"))?;
+                Ok(Some(value))
+            }
+        })
+    }
+
     pub fn file_read_metadata(&self, file_id: u64) -> Result<Option<FileReadMetadata>, String> {
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
@@ -524,6 +547,38 @@ impl DbRepo {
         })
     }
 
+    /// Loads block rows from the primary for operations that copy bytes into a
+    /// mutation. Ordinary reads may use replicas, but copy input must not.
+    pub fn fetch_block_range_authoritative_shared(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        block_size: u64,
+    ) -> Result<SharedBlockRows, String> {
+        if last_block < first_block {
+            return Ok(Vec::new());
+        }
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let first_block_text = CString::new(first_block.to_string())
+            .map_err(|_| "block index contains NUL byte".to_string())?;
+        let last_block_text = CString::new(last_block.to_string())
+            .map_err(|_| "block index contains NUL byte".to_string())?;
+        let block_size = block_size.max(1) as usize;
+
+        self.with_connection(super::ConnectionLane::Write, |conn| unsafe {
+            let params = [&file_id_text, &first_block_text, &last_block_text];
+            let res = exec_prepared_params_with_result_format(
+                conn,
+                PreparedStatement::FetchBlockRange,
+                &params,
+                1,
+            )?;
+            fetch_block_range_rows_shared(res, block_size)
+        })
+    }
+
     /// Reads size, committed content generation and blocks from one MVCC
     /// statement snapshot. Requires schema v26; opt-in until all mounts upgrade.
     pub fn fetch_block_range_with_generation_shared(
@@ -619,6 +674,31 @@ impl DbRepo {
         block_size: u64,
     ) -> Result<Vec<u8>, String> {
         let blocks = self.fetch_block_range(file_id, first_block, last_block, block_size)?;
+        Ok(crate::assemble_read_slice(
+            first_block,
+            last_block,
+            offset,
+            end_offset,
+            block_size,
+            &blocks,
+        ))
+    }
+
+    pub fn assemble_file_slice_authoritative(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        offset: u64,
+        end_offset: u64,
+        block_size: u64,
+    ) -> Result<Vec<u8>, String> {
+        let blocks = self.fetch_block_range_authoritative_shared(
+            file_id,
+            first_block,
+            last_block,
+            block_size,
+        )?;
         Ok(crate::assemble_read_slice(
             first_block,
             last_block,

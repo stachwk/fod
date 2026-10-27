@@ -641,7 +641,7 @@ impl FodFuse {
             None if dst_offset >= current_size => Vec::new(),
             None => {
                 let end_offset = dst_offset.saturating_add(size).min(current_size);
-                self.assemble_file_slice_profiled(
+                self.assemble_file_slice_for_update_profiled(
                     dst_file_id,
                     dst_first_block,
                     dst_last_block,

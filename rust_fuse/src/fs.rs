@@ -2098,6 +2098,28 @@ impl FodFuse {
         result
     }
 
+    pub(crate) fn assemble_file_slice_for_update_profiled(
+        &self,
+        file_id: u64,
+        first_block: u64,
+        last_block: u64,
+        offset: u64,
+        end_offset: u64,
+        block_size: u64,
+    ) -> Result<Vec<u8>, String> {
+        let started = Instant::now();
+        let result = self.repo.assemble_file_slice_authoritative(
+            file_id,
+            first_block,
+            last_block,
+            offset,
+            end_offset,
+            block_size,
+        );
+        self.record_repo_assemble_file_slice_elapsed(started.elapsed());
+        result
+    }
+
     pub(crate) fn persist_file_blocks_profiled<'rows, 'data>(
         &self,
         input: PersistFileBlocksProfileInput<'rows, 'data>,
@@ -3311,6 +3333,14 @@ impl FodFuse {
         }
     }
 
+    fn file_size_for_update_file_id_or_errno(&self, file_id: u64) -> Result<u64, libc::c_int> {
+        match self.repo.file_size_authoritative(file_id) {
+            Ok(Some(size)) => Ok(size),
+            Ok(None) => Err(ENOENT),
+            Err(_) => Err(EIO),
+        }
+    }
+
     fn ioctl_ficlone_source_fd(in_data: &[u8]) -> Result<i64, libc::c_int> {
         match in_data.len() {
             4 => {
@@ -3385,7 +3415,7 @@ impl FodFuse {
         let dst_size = if let Some(state) = dst_state.as_ref() {
             state.file_size
         } else {
-            match self.file_size_for_file_id_or_errno(dst_file_id) {
+            match self.file_size_for_update_file_id_or_errno(dst_file_id) {
                 Ok(value) => value,
                 Err(errno) => {
                     self.log_request_error(
@@ -3401,7 +3431,7 @@ impl FodFuse {
         let src_size = if let Some(state) = src_state.as_ref() {
             state.file_size
         } else {
-            match self.file_size_for_file_id_or_errno(src_file_id) {
+            match self.file_size_for_update_file_id_or_errno(src_file_id) {
                 Ok(value) => value,
                 Err(errno) => {
                     self.log_request_error(
@@ -3538,7 +3568,7 @@ impl FodFuse {
                 }
             }
         } else {
-            match self.repo.assemble_file_slice(
+            match self.repo.assemble_file_slice_authoritative(
                 src_file_id,
                 src_first_block,
                 src_last_block,
@@ -6497,7 +6527,7 @@ impl Filesystem for FodFuse {
                     return;
                 }
                 let dst_state = self.write_state_for_handle(fh);
-                let src_size = match self.file_size_for_file_id_or_errno(src_file_id) {
+                let src_size = match self.file_size_for_update_file_id_or_errno(src_file_id) {
                     Ok(value) => value,
                     Err(errno) => {
                         fuse_reply_error!(reply, errno);
@@ -6587,7 +6617,7 @@ impl Filesystem for FodFuse {
                     return;
                 }
                 let dst_state = self.write_state_for_handle(fh);
-                let src_size = match self.file_size_for_file_id_or_errno(src_file_id) {
+                let src_size = match self.file_size_for_update_file_id_or_errno(src_file_id) {
                     Ok(value) => value,
                     Err(errno) => {
                         fuse_reply_error!(reply, errno);
@@ -8968,7 +8998,7 @@ impl Filesystem for FodFuse {
             state.file_size
         } else {
             let size_started = Instant::now();
-            let size_result = self.file_size_for_file_id_or_errno(file_id);
+            let size_result = self.file_size_for_update_file_id_or_errno(file_id);
             self.record_write_existing_size_lookup_elapsed(size_started.elapsed());
             match size_result {
                 Ok(size) => size,
@@ -9485,7 +9515,7 @@ impl Filesystem for FodFuse {
         let dst_size = if let Some(state) = dst_state.as_ref() {
             state.file_size
         } else {
-            match self.file_size_for_file_id_or_errno(dst_file_id) {
+            match self.file_size_for_update_file_id_or_errno(dst_file_id) {
                 Ok(value) => value,
                 Err(errno) => {
                     self.log_request_error(
@@ -9502,7 +9532,7 @@ impl Filesystem for FodFuse {
         let src_size = if let Some(state) = src_state.as_ref() {
             state.file_size
         } else {
-            match self.file_size_for_file_id_or_errno(src_file_id) {
+            match self.file_size_for_update_file_id_or_errno(src_file_id) {
                 Ok(value) => value,
                 Err(errno) => {
                     self.log_request_error(
