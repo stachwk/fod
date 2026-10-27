@@ -2660,6 +2660,28 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
         &unique_name("mkdir_parent_access_seed"),
     )?;
 
+    let denied_rmdir_name = unique_name("rmdir_parent_access_denied");
+    let denied_rmdir_id = repo.create_directory(
+        Some(parent_id),
+        &denied_rmdir_name,
+        0o700,
+        1000,
+        3000,
+        &unique_name("rmdir_parent_access_denied_seed"),
+    )?;
+    assert_eq!(
+        repo.unlink_directory_entry_for_subject(
+            denied_rmdir_id,
+            Some(parent_id),
+            &denied_rmdir_name,
+            2000,
+            2000,
+            &[2000],
+        )
+        .unwrap_err(),
+        fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
+    );
+
     let denied = repo.create_directory_for_subject(
         Some(parent_id),
         "denied-child",
@@ -2673,7 +2695,7 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
         denied.unwrap_err(),
         fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
     );
-    assert_eq!(repo.count_directory_children(parent_id)?, 0);
+    assert_eq!(repo.count_directory_children(parent_id)?, 1);
     let unlink_file_name = unique_name("unlink_parent_access_file");
     let unlink_file = repo.create_file(
         Some(parent_id),
@@ -2795,6 +2817,17 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
     assert_eq!(repo.count_files()?, files_after_hardlink_source);
 
     repo.update_directory_mode(parent_id, "730")?;
+    assert_eq!(
+        repo.unlink_directory_entry_for_subject(
+            denied_rmdir_id,
+            Some(parent_id),
+            &denied_rmdir_name,
+            2000,
+            2000,
+            &[2000, 3000],
+        )?,
+        fod_rust_hotpath::pg::DirectoryUnlinkOutcome::Removed
+    );
     repo.unlink_symlink_entry_for_subject(
         unlink_symlink,
         Some(parent_id),

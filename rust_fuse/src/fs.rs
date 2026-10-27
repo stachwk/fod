@@ -8166,11 +8166,13 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        match self.repo.unlink_directory_entry(
+        match self.repo.unlink_directory_entry_for_subject(
             directory_id,
             resolved.parent_id,
             name.to_string_lossy().as_ref(),
             subject.uid,
+            subject.gid,
+            &subject.groups.iter().copied().collect::<Vec<_>>(),
         ) {
             Ok(DirectoryUnlinkOutcome::Removed) => {
                 let _ = self.append_journal_event(

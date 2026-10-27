@@ -373,7 +373,7 @@ families still require the remaining authority review.
 - Chmod/chown and sticky-bit authorization use locked primary rows as described
   above. Transactional parent write/search checks cover regular-file,
   directory, special-file, symlink, and hardlink creation, plus file and
-  symlink unlink. Rmdir and rename still need coverage; root
+  symlink unlink, and `rmdir`. Rename still needs coverage; root
   metadata and ACL-enabled authorization also remain open. ACL/mode
   synchronization and truncate/timestamp authorization require review as well.
   Shared database credentials do not replace these decisions.

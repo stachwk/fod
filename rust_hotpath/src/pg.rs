@@ -10643,6 +10643,35 @@ impl DbRepo {
         name: &str,
         actor_uid: u32,
     ) -> Result<DirectoryUnlinkOutcome, String> {
+        self.unlink_directory_entry_internal(directory_id, parent_id, name, actor_uid, None)
+    }
+
+    pub fn unlink_directory_entry_for_subject(
+        &self,
+        directory_id: u64,
+        parent_id: Option<u64>,
+        name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<DirectoryUnlinkOutcome, String> {
+        self.unlink_directory_entry_internal(
+            directory_id,
+            parent_id,
+            name,
+            actor_uid,
+            Some((actor_uid, actor_gid, supplementary_groups)),
+        )
+    }
+
+    fn unlink_directory_entry_internal(
+        &self,
+        directory_id: u64,
+        parent_id: Option<u64>,
+        name: &str,
+        actor_uid: u32,
+        parent_actor: Option<(u32, u32, &[u32])>,
+    ) -> Result<DirectoryUnlinkOutcome, String> {
         if name.is_empty() || name == "/" || name == "." || name == ".." || name.contains('/') {
             return Err("invalid directory unlink name".to_string());
         }
@@ -10684,6 +10713,15 @@ impl DbRepo {
                 .is_none()
             {
                 return Ok(DirectoryUnlinkOutcome::SourceChanged);
+            }
+            if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
+                Self::require_parent_write_search_on_conn(
+                    conn,
+                    parent_id,
+                    actor_uid,
+                    actor_gid,
+                    actor_groups,
+                )?;
             }
             Self::require_sticky_removal_on_conn(conn, parent_id, "dir", directory_id, actor_uid)?;
             let children = fetch_single_text(exec_params(conn, &children_sql, &[&id])?)?;
