@@ -404,8 +404,9 @@ reproduction is claimed.
 
 Path-based `setattr(size=...)` previously acquired write ownership and persisted
 the new size without checking the requester's write access. It now checks the
-resolved file's ACL/mode before acquiring ownership. A request carrying `fh`
-now also requires a live handle for the same file opened with write access;
+resolved file's primary ACL/mode before acquiring ownership. A request
+carrying `fh` now also requires a live handle for the same file opened with
+write access;
 otherwise it returns `EBADF`. Truncating the logical root now returns
 `EISDIR`. These FUSE-side checks close the direct omissions, but are not yet an
 atomic PostgreSQL authorization decision: ACL reads and truncate persistence

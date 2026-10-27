@@ -2852,6 +2852,7 @@ impl FodFuse {
         }
         let acl_value = self
             .repo
+            .authoritative_view()
             .fetch_xattr_value(path, "system.posix_acl_access")
             .map_err(|_| EIO)?;
         if let Some(value) = acl_value {
