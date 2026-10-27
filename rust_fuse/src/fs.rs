@@ -4354,7 +4354,7 @@ impl FodFuse {
                     _ => Ok(()),
                 }
             }
-            FileType::Symlink => match self.repo.resolve_path(path) {
+            FileType::Symlink => match self.repo.authoritative_view().resolve_path(path) {
                 Ok(resolved) if resolved.kind.as_deref() == Some("symlink") => match resolved
                     .entry_id
                 {
@@ -4652,6 +4652,7 @@ impl FodFuse {
         } else {
             let resolved = self
                 .repo
+                .authoritative_view()
                 .resolve_path(parent_text.as_ref())
                 .map_err(|err| {
                     warn!(
