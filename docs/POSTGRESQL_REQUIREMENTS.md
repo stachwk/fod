@@ -84,10 +84,13 @@ znacznikow czasu i operacji, w ktorych klient jawnie przekazuje czas.
 Precyzja czasu nie wyznacza kolejnosci lokalnej kolejki FIFO. Bramki zadan FOD
 przydzielaja bilety monotoniczne pod mutexem, a czasu monotonicznego uzywaja do
 pomiaru czasu oczekiwania. Sa to kolejki procesu, nie wspolna kolejka klastra.
-Kolejnosc operacji miedzy hostami wynika z serializacji PostgreSQL. Sortowanie
-logow po wall-clock, nawet z Chrony, nie dowodzi samo w sobie kolejnosci dwoch
-zdarzen z roznych hostow; do tego potrzebna jest wspolna sekwencja albo zapis
-zdarzen w tej samej transakcyjnej kolejnosci.
+Testy weryfikuja FIFO po biletach, ale produkcyjna telemetria pokazuje glownie
+liczniki i nie zapisuje identyfikatora zadania wraz z biletem. Kolejnosc
+konfliktujacych operacji miedzy hostami rozstrzygaja transakcje i blokady
+PostgreSQL, nie istnieje jednak jedna wspolna kolejka przyjec dla wszystkich
+hostow. Sortowanie logow po wall-clock, nawet z Chrony, nie dowodzi samo w sobie
+kolejnosci dwoch zdarzen z roznych hostow; do tego potrzebna jest wspolna
+sekwencja albo zapis zdarzen w tej samej transakcyjnej kolejnosci.
 
 Wymagania operacyjne:
 
