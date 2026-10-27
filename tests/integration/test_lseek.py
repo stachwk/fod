@@ -34,6 +34,34 @@ def main() -> None:
             dir_path.mkdir()
             file_path.write_bytes(payload)
 
+            overwrite_path = dir_path / "seek-overwrite.txt"
+            original = b"0123456789abcdef"
+            overwrite_at = 5
+            replacement = b"XYZ"
+            overwrite_path.write_bytes(original)
+            fd = os.open(overwrite_path, os.O_RDWR)
+            try:
+                read_offset = os.lseek(fd, overwrite_at, os.SEEK_SET)
+                assert read_offset == overwrite_at, read_offset
+                before = os.read(fd, len(replacement))
+                expected_before = original[overwrite_at : overwrite_at + len(replacement)]
+                assert before == expected_before, before
+
+                write_offset = os.lseek(fd, overwrite_at, os.SEEK_SET)
+                assert write_offset == overwrite_at, write_offset
+                written = os.write(fd, replacement)
+                assert written == len(replacement), written
+            finally:
+                os.close(fd)
+
+            expected = (
+                original[:overwrite_at]
+                + replacement
+                + original[overwrite_at + len(replacement) :]
+            )
+            actual = overwrite_path.read_bytes()
+            assert actual == expected, (actual, expected)
+
             fd = os.open(file_path, os.O_RDONLY)
             try:
                 end_offset = os.lseek(fd, 0, os.SEEK_END)
