@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 27;
+const SCHEMA_VERSION: u64 = 28;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -774,10 +774,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 27",
+        "FOD schema version: 28",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 27",
+        "Latest migration version: 28",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -808,6 +808,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0025: 0025_open_unlinked_files.sql",
         "0026: 0026_file_content_generation.sql",
         "0027: 0027_explicit_file_content_generation.sql",
+        "0028: 0028_namespace_parent_timestamps.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -827,10 +828,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 27",
+        "Latest migration version: 28",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -975,7 +976,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 27"),
+        status_before_text.contains("Latest migration version: 28"),
         "{status_before_text}"
     );
     assert!(
@@ -987,7 +988,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027"),
+        status_before_text.contains("Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028"),
         "{status_before_text}"
     );
 
@@ -1033,7 +1034,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 27"),
+        status_broken_text.contains("FOD schema version: 28"),
         "{status_broken_text}"
     );
     assert!(

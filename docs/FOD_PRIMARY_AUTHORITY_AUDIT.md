@@ -390,14 +390,14 @@ reads its metadata through the authoritative PostgreSQL view, keeps the kernel
 inode fixed at `ROOT_INO`, and propagates root child-count errors instead of
 silently reporting zero. This makes stored mode, uid/gid and atime/mtime visible
 to `getattr` across mounts. Root-level namespace operations still use a null
-parent id and do not update the durable root row's mtime/ctime when children
-change.
+parent id. Migration 0028 adds PostgreSQL triggers that update the parent
+directory mtime/ctime in the same transaction as namespace entry creation,
+deletion, rename and movement. A null namespace parent maps to the durable root
+row, so root directory changes are included.
 
-The remaining correction is to update root directory timestamps transactionally
-with root-level namespace changes and ensure root mutations use the same
-transactional authorization as other inode metadata updates. The database
-record already exists; namespace change ordering and mutation authorization
-remain open. No data-loss reproduction is claimed.
+Root metadata mutation authorization remains open. The database record already
+exists; root reads and namespace timestamp ordering are now handled through
+PostgreSQL. No data-loss reproduction is claimed.
 
 ### Truncate and timestamp authorization
 
@@ -417,8 +417,7 @@ transaction. The file and directory methods also replace both atime and mtime
 even when the request supplied only one field, while symlink requests ignore
 the supplied times and merely set mtime/ctime to database `NOW()`. Correctness
 requires field-preserving updates and POSIX authorization serialized with the
-primary metadata row; root timestamp updates need the root metadata record
-described above.
+primary metadata row.
 
 - Mutation path resolution, hardlink counts, file sizes and attributes have
   replica-routed APIs that are also used by writable callbacks. Audit each
@@ -431,7 +430,7 @@ described above.
   symlink unlink, `rmdir`, and rename. POSIX ACL xattr writes now check inode
   ownership under the write transaction; default ACL inheritance now shares
   the child creation transaction (mounted validation pending). Root metadata
-  root-directory change updates and authorization remain open. Path truncate now has an ACL/mode
+  authorization remains open. Path truncate now has an ACL/mode
   check and `fh` truncate validates a writable handle, but primary-transaction
   authorization remains open. Timestamp authorization and partial-field
   semantics also remain open.
