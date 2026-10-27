@@ -23,6 +23,7 @@ Primary references:
 - [POSIX.1-2024 `write()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/write.html)
 - [POSIX.1-2024 `lseek()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/lseek.html)
 - [POSIX.1-2024 `stat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/stat.html)
+- [POSIX.1-2024 `utimensat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/utimensat.html)
 - [POSIX.1-2024 `rename()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html)
 
 This is a filesystem compatibility audit, not a claim that FOD implements a
@@ -99,6 +100,17 @@ the kernel handles `SEEK_SET`, `SEEK_CUR` and `SEEK_END`. That division is
 verified by the mounted standard-offset and sparse-offset tests. The finding
 closes these listed sparse-seek requirements; it does not audit every
 `lseek()` error case for every supported file type.
+
+### Timestamp authorization finding
+
+Issue 8 `utimensat()` permits a non-owner with write access to set both times to
+the current time (or to omit both); setting specific times requires ownership or
+appropriate privilege. The mounted ACL regression grants a named user write
+access, changes the file owner to `nobody`, verifies the named user can set
+current times, and verifies a specific-time update fails with `EPERM` without
+changing mtime. `make test-acl-mount-option` passed on FOD 3.4.108. This records
+those authorization cases only; the broader metadata and timestamp row remains
+Pending.
 
 ## Audit procedure
 

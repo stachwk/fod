@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import errno
+import grp
 import os
+import pwd
 import shutil
 import stat
 import struct
@@ -30,6 +32,16 @@ def build_posix_acl(user_perm: int, group_perm: int, other_perm: int) -> bytes:
     acl.extend(struct.pack("<HHI", 0x0004, group_perm & 0o7, 0xFFFFFFFF))
     acl.extend(struct.pack("<HHI", 0x0010, group_perm & 0o7, 0xFFFFFFFF))
     acl.extend(struct.pack("<HHI", 0x0020, other_perm & 0o7, 0xFFFFFFFF))
+    return bytes(acl)
+
+
+def build_named_user_acl(uid: int, permissions: int) -> bytes:
+    acl = bytearray(struct.pack("<I", 0x0002))
+    acl.extend(struct.pack("<HHI", 0x0001, 0o0, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0002, permissions & 0o7, uid))
+    acl.extend(struct.pack("<HHI", 0x0004, 0o0, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0010, permissions & 0o7, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0020, 0o0, 0xFFFFFFFF))
     return bytes(acl)
 
 
@@ -120,6 +132,43 @@ def assert_mutations_denied_to_nobody(path: Path) -> None:
     after = path.stat()
     assert after.st_size == expected_size, (expected_size, after.st_size)
     assert after.st_mtime_ns == before.st_mtime_ns, (before.st_mtime_ns, after.st_mtime_ns)
+
+
+def assert_non_owner_timestamp_rules(path: Path) -> None:
+    root_probe = subprocess.run(
+        ["sudo", "-n", "true"], check=False, capture_output=True, text=True
+    )
+    if root_probe.returncode != 0:
+        print("SKIP acl-utimens-owner-rules (sudo cannot change test file owner)")
+        return
+
+    actor_uid = os.getuid()
+    nobody = pwd.getpwnam("nobody")
+    nobody_group = grp.getgrgid(nobody.pw_gid)
+    os.setxattr(path, "system.posix_acl_access", build_named_user_acl(actor_uid, 0o2))
+    chown_result = subprocess.run(
+        ["sudo", "-n", "chown", f"{nobody.pw_uid}:{nobody_group.gr_gid}", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert chown_result.returncode == 0, chown_result.stderr
+    assert path.stat().st_uid == nobody.pw_uid
+    assert os.access(path, os.W_OK), "named ACL write permission was not honored"
+
+    before_now = path.stat().st_mtime_ns
+    os.utime(path, None)
+    after_now = path.stat().st_mtime_ns
+    assert after_now >= before_now, (before_now, after_now)
+
+    explicit_ns = 1_234_567_890_000_000_000
+    try:
+        os.utime(path, ns=(explicit_ns, explicit_ns))
+    except PermissionError as exc:
+        assert exc.errno == errno.EPERM, exc.errno
+    else:
+        raise AssertionError("non-owner with ACL write access set explicit timestamps")
+    assert path.stat().st_mtime_ns == after_now, (after_now, path.stat().st_mtime_ns)
 
 
 def expected_optional_selinux_errno(err_no: int | None) -> bool:
@@ -227,6 +276,10 @@ def main() -> None:
                     assert not os.access(file_path, os.R_OK)
                 assert_permission_denied(file_path)
                 assert_mutations_denied_to_nobody(file_path)
+
+                timestamp_path = mountpoint / f"acl-timestamp-{suffix}.txt"
+                timestamp_path.write_bytes(b"timestamp payload\n")
+                assert_non_owner_timestamp_rules(timestamp_path)
 
                 print("OK acl-mount-option")
             finally:
