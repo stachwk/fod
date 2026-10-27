@@ -62,7 +62,7 @@ its status can move from Pending.
 | Area | Normative interfaces / clauses to review | Existing FOD evidence to inspect | Status |
 | --- | --- | --- | --- |
 | Path resolution and name syntax | XSH `open`, `stat`, `mkdir`, `link`, `symlink`, `rename`, `unlink`; XBD pathname resolution | `rust_fuse/src/fs.rs`; `tests/integration/test_mount_suite.py`, `test_symlink.sh`, `test_rename_directory_transactional.py` | Pending |
-| Directory operations and iteration | XSH `opendir`, `readdir`, `closedir`, `mkdir`, `rmdir`; XBD directory stream rules | FUSE callbacks in `rust_fuse/src/fs.rs`; `test_mount_suite.py`, `test_directories.sh`, `test_tree_scale.py` | Pending |
+| Directory operations and iteration | XSH `opendir`, `readdir`, `closedir`, `mkdir`, `rmdir`; XBD directory stream rules | FUSE callbacks in `rust_fuse/src/fs.rs`; `test_mount_suite.py`, `test_directories.sh`, `test_tree_scale.py`, `test_readdir_small_buffers.py` | Pending |
 | Open and descriptor semantics | XSH `open`, `close`, `fcntl`, `dup`; access modes, append and create flags | `open`, `create`, `release`, `flush` callbacks; `test_mount_suite.py`, `test_create_write_ownership.py` | Pending |
 | Read and write | XSH `read`, `write`, `pread`, `pwrite`; short I/O, EOF and offset rules | `test_lseek.py`, `test_mount_suite.py` | Pending |
 | Standard file-offset positioning | XSH `lseek`, `SEEK_SET`, `SEEK_CUR`, `SEEK_END`; negative result, offset beyond EOF and no size change from seeking | Mounted `test_lseek.py` | Pass (listed cases) |
@@ -131,6 +131,20 @@ and observes both timestamps through another with the metadata TTL set to zero;
 `make test-root-directory-metadata-multimount` passed on FOD 3.4.112. The second
 mount therefore re-fetches root attributes after each namespace mutation. This
 does not cover every root metadata field, so the metadata row remains Pending.
+
+### Directory iteration cookie finding
+
+The FUSE `readdir` callback assigns cookies 1 and 2 to `.` and `..`, then
+`index + 3` to each child. Linux resumes iteration using the cookie returned
+for the last entry. Earlier code treated that cookie as a count of child rows
+to skip, which omitted entries when `getdents64()` continued after filling a
+small userspace buffer. It also failed to return `..` if iteration resumed at
+cookie 1. Both batch-metadata and blob-backed paths now resume children after
+`offset - 2`, and emit dot entries only when their cookies are beyond the
+incoming offset. The mounted small-buffer regression uses 64-byte
+`getdents64()` buffers and checks for missing or duplicate names. The broader
+directory-iteration row remains Pending until its normative requirements and
+other error and mutation cases are reviewed.
 
 ## Audit procedure
 

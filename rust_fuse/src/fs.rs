@@ -122,6 +122,10 @@ fn fod_fuse_readdir_register_paths_enabled() -> bool {
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_REGISTER_PATHS", false))
 }
 
+fn readdir_child_entries_to_skip(offset: u64) -> usize {
+    offset.saturating_sub(2) as usize
+}
+
 pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
         ENOSPC
@@ -5815,9 +5819,11 @@ impl Filesystem for FodFuse {
             }
         };
         let batch_metadata_enabled = fod_fuse_readdir_batch_metadata_enabled();
-        let mut next_offset = 1i64;
-        if offset == 0 {
-            let _ = reply.add(INodeNo(ino), 1, FileType::Directory, ".");
+        if offset < 1 && reply.add(INodeNo(ino), 1, FileType::Directory, ".") {
+            reply.ok();
+            return;
+        }
+        if offset < 2 {
             let parent_ino = if ino == ROOT_INO {
                 ROOT_INO
             } else {
@@ -5827,8 +5833,10 @@ impl Filesystem for FodFuse {
                     .unwrap_or("/");
                 self.inode_for_path(parent_path).unwrap_or(ROOT_INO)
             };
-            let _ = reply.add(INodeNo(parent_ino), 2, FileType::Directory, "..");
-            next_offset = 2;
+            if reply.add(INodeNo(parent_ino), 2, FileType::Directory, "..") {
+                reply.ok();
+                return;
+            }
         }
 
         if batch_metadata_enabled {
@@ -5850,7 +5858,11 @@ impl Filesystem for FodFuse {
                 path,
                 entries.len()
             );
-            for (index, entry) in entries.into_iter().enumerate().skip(offset as usize) {
+            for (index, entry) in entries
+                .into_iter()
+                .enumerate()
+                .skip(readdir_child_entries_to_skip(offset))
+            {
                 readdir_entries = readdir_entries.saturating_add(1);
                 let kind = match entry.kind.as_str() {
                     "dir" => FileType::Directory,
@@ -5876,7 +5888,6 @@ impl Filesystem for FodFuse {
                 if added {
                     break;
                 }
-                next_offset = (index + 3) as i64;
             }
         } else {
             let list_started = metadata_profile_enabled.then(Instant::now);
@@ -5902,7 +5913,11 @@ impl Filesystem for FodFuse {
             };
             let entries = Self::decode_nul_fields(&blob);
             debug!("FOD readdir path={} entries={}", path, entries.len());
-            for (index, name) in entries.into_iter().enumerate().skip(offset as usize) {
+            for (index, name) in entries
+                .into_iter()
+                .enumerate()
+                .skip(readdir_child_entries_to_skip(offset))
+            {
                 let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
                 readdir_entries = readdir_entries.saturating_add(1);
                 let lookup_started = metadata_profile_enabled.then(Instant::now);
@@ -5929,11 +5944,9 @@ impl Filesystem for FodFuse {
                     }
                     _ => continue,
                 }
-                next_offset = (index + 3) as i64;
             }
         }
 
-        let _ = next_offset;
         if metadata_profile_enabled {
             self.metadata_profile_readdir_calls
                 .fetch_add(1, Ordering::Relaxed);
@@ -10454,13 +10467,27 @@ impl Filesystem for FodFuse {
 mod tests {
     use super::{
         assemble_degraded_snapshot, client_session_hostname, ioctl_is_mutating,
-        should_update_atime, AtimePolicy, FodFuse, SetattrMutationFlags, WriteState,
+        readdir_child_entries_to_skip, should_update_atime, AtimePolicy, FodFuse,
+        SetattrMutationFlags, WriteState,
     };
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn readdir_offsets_resume_after_the_last_cookie() {
+        assert_eq!(readdir_child_entries_to_skip(0), 0);
+        assert_eq!(readdir_child_entries_to_skip(1), 0);
+        assert_eq!(readdir_child_entries_to_skip(2), 0);
+        assert_eq!(readdir_child_entries_to_skip(3), 1);
+        assert_eq!(readdir_child_entries_to_skip(4), 2);
+        assert_eq!(
+            readdir_child_entries_to_skip(u64::MAX),
+            (u64::MAX - 2) as usize
+        );
+    }
 
     #[test]
     fn parent_access_denial_maps_to_eacces() {
@@ -10765,7 +10792,7 @@ mod tests {
                     blocks.into()
                 },
             }),
-            ..clean
+            ..clean.clone()
         };
 
         assert!(!super::FodFuse::write_state_has_pending_changes(&clean));
