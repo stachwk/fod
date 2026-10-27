@@ -105,17 +105,23 @@ the unlink result alone does not establish their correctness.
 ## Current rmdir namespace transaction and validation
 
 FOD 3.4.50 makes `rmdir` resolve its initial binding and sticky-bit inputs on
-primary. `DbRepo::unlink_directory_entry` then locks the namespace key and the
-expected directory row in one primary transaction, rechecks the full
-`(directory_id, parent_id, name)` binding, checks all visible child kinds and
-removes the directory there. The directory row lock conflicts with the FK
-key-share locks used by child insertion, so the emptiness decision cannot race
-past a child transaction. Permission checks outside this transaction remain
-part of the permission review below.
+primary. `DbRepo::unlink_directory_entry` serializes the namespace key and
+rechecks the full `(directory_id, parent_id, name)` binding in one primary
+transaction. It checks children, detaches unlinked open files, then locks the
+directory row and checks children again before deletion. The final row lock
+conflicts with FK key-share locks used by child insertion, so emptiness cannot
+race past a child transaction. Permission checks outside this transaction
+remain part of the permission review below.
 
 An open, unlinked file is not a visible namespace child. Its parent FK is set
 to NULL in the removal transaction, preserving file identity, payload and
 open/write leases; a remote open writer remains usable after parent removal.
+The detach occurs before locking the directory because content updates also
+check the file's directory FK. Locking directory then file inverted the
+writer's file-then-directory order and produced a PostgreSQL deadlock during
+recursive removal. The mounted regression modifies an open file while another
+mount runs `rm -rf`; it verifies successful tree removal, post-removal access
+through the open handle, and inode purge after the last close.
 
 Before the repair, the new mounted test reproduced `EIO` instead of
 `ENOTEMPTY` when a child existed on primary but not on the paused replica:
@@ -129,6 +135,9 @@ Both runs used `release-lto` and `integration-test-hooks`.
 The full `pg_query` suite passed 29/29 tests. New backend regressions cover
 stale/renamed bindings and a child transaction held uncommitted: removal waits
 at the directory row lock, then sees the committed child and returns `NotEmpty`.
+The recursive upload/removal integration scenario passed with the deadlock
+lock-order fix in FOD 3.4.54:
+`artifacts/integration/unlink-primary-authority-20261027T071251Z/`.
 
 ## Current cross-type namespace protection and validation
 

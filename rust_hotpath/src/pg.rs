@@ -10571,6 +10571,11 @@ impl DbRepo {
             CString::new(name).map_err(|_| "directory name contains NUL byte".to_string())?;
         let binding_sql = CString::new(
             "SELECT id_directory FROM directories
+             WHERE id_directory = $1 AND COALESCE(id_parent, 0) = $2 AND name = $3",
+        )
+        .unwrap();
+        let lock_binding_sql = CString::new(
+            "SELECT id_directory FROM directories
              WHERE id_directory = $1 AND COALESCE(id_parent, 0) = $2 AND name = $3
              FOR UPDATE",
         )
@@ -10589,7 +10594,8 @@ impl DbRepo {
         )
         .unwrap();
         let delete_sql = CString::new("DELETE FROM directories WHERE id_directory = $1").unwrap();
-        self.with_transaction(|transaction| unsafe {
+        const DIRECTORY_NOT_EMPTY: &str = "FOD_DIRECTORY_NOT_EMPTY";
+        let result = self.with_transaction(|transaction| unsafe {
             let conn = transaction.conn;
             Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
             if fetch_single_text_option(exec_params(conn, &binding_sql, &[&id, &parent, &name])?)?
@@ -10602,12 +10608,31 @@ impl DbRepo {
             if matches!(children.as_str(), "t" | "true") {
                 return Ok(DirectoryUnlinkOutcome::NotEmpty);
             }
-            // Unlinked open inodes are not visible children. Detach their parent
-            // FK without changing file identity, content or open/write leases.
+            // Detach unlinked open files before locking the directory row.
+            // A content update holds the file row and its FK check takes
+            // KEY SHARE on the directory; taking the locks in the opposite
+            // order here deadlocks with that writer.
             exec_command_params(conn, &detach_sql, &[&id])?;
+            if fetch_single_text_option(exec_params(
+                conn,
+                &lock_binding_sql,
+                &[&id, &parent, &name],
+            )?)?
+            .is_none()
+            {
+                return Err(NAMESPACE_SOURCE_CHANGED.to_string());
+            }
+            let children = fetch_single_text(exec_params(conn, &children_sql, &[&id])?)?;
+            if matches!(children.as_str(), "t" | "true") {
+                return Err(DIRECTORY_NOT_EMPTY.to_string());
+            }
             exec_command_params(conn, &delete_sql, &[&id])?;
             Ok(DirectoryUnlinkOutcome::Removed)
-        })
+        });
+        match result {
+            Err(err) if err == DIRECTORY_NOT_EMPTY => Ok(DirectoryUnlinkOutcome::NotEmpty),
+            other => other,
+        }
     }
 
     pub fn delete_directory_entry(&self, directory_id: u64) -> Result<(), String> {

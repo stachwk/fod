@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Wojciech Stach
 # Licensed under BSL 1.1
-"""Namespace mutations must preserve primary authority despite replica lag."""
+"""Namespace mutations and recursive removal must preserve primary authority."""
 
 from __future__ import annotations
 
@@ -90,6 +90,14 @@ def main():
     try:
         started = compose("up", "-d", "--wait", "--wait-timeout", "90")
         (artifacts / "compose-start.log").write_text(started.stdout)
+        compose(
+            "exec", "-T", "--user", "postgres", "primary", "psql", "-U", "foduser",
+            "-d", os.environ["POSTGRES_DB"], "-c", "ALTER SYSTEM SET log_lock_waits = on",
+        )
+        compose(
+            "exec", "-T", "--user", "postgres", "primary", "psql", "-U", "foduser",
+            "-d", os.environ["POSTGRES_DB"], "-c", "SELECT pg_reload_conf()",
+        )
         FODMount(str(ROOT)).init_schema()
         primary, replica = connect(primary_port), connect(replica_port)
         connections.extend([primary, replica])
@@ -286,6 +294,94 @@ def main():
         results["rmdir_preserves_remote_open_unlinked_writer"] = True
         resume()
 
+        # Keep modifying an uploaded file through its open handle while a
+        # second mount recursively removes the containing tree.
+        recursive_tree = ma / "recursive-rm-upload-race"
+        recursive_tree.mkdir()
+        live_upload = recursive_tree / "000-live-upload.bin"
+        seed(live_upload)
+        upload_fd = os.open(live_upload, os.O_RDWR)
+        os.pwrite(upload_fd, b"BEFORE-RM", 0)
+        os.fsync(upload_fd)
+        upload_file_id = query(
+            primary,
+            "SELECT id_file FROM fod.files WHERE name=%s AND NOT unlinked",
+            (live_upload.name,),
+        )[0][0]
+        pause()
+        recursive_rm = subprocess.Popen(
+            ["rm", "-rf", str(mb / recursive_tree.name)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        upload_progress = {
+            "writes": 0,
+            "writes_after_unlink": 0,
+            "unlink_seen": False,
+            "errors": [],
+        }
+        upload_db = connect(primary_port)
+        connections.append(upload_db)
+
+        def continue_upload_during_rm():
+            saw_unlink = False
+            sequence = 0
+            try:
+                while recursive_rm.poll() is None:
+                    block = bytes([sequence % 251]) * 4096
+                    os.pwrite(upload_fd, block, (sequence * len(block)) % 32768)
+                    os.fsync(upload_fd)
+                    upload_progress["writes"] += 1
+                    if not saw_unlink:
+                        saw_unlink = query(
+                            upload_db,
+                            "SELECT unlinked FROM fod.files WHERE id_file=%s",
+                            (upload_file_id,),
+                        )[0][0]
+                        upload_progress["unlink_seen"] = saw_unlink
+                    elif recursive_rm.poll() is None:
+                        upload_progress["writes_after_unlink"] += 1
+                    sequence += 1
+            except Exception as exc:
+                upload_progress["errors"].append(repr(exc))
+
+        upload_thread = threading.Thread(
+            target=continue_upload_during_rm,
+            name="recursive-rm-live-upload",
+        )
+        upload_thread.start()
+        try:
+            rm_stdout, rm_stderr = recursive_rm.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            recursive_rm.kill()
+            recursive_rm.communicate()
+            raise AssertionError("recursive rm did not finish")
+        upload_thread.join(timeout=30)
+        if upload_thread.is_alive():
+            raise AssertionError("concurrent upload did not stop after rm")
+        assert recursive_rm.returncode == 0, f"recursive rm failed: {rm_stdout}\n{rm_stderr}"
+        assert not upload_progress["errors"], upload_progress["errors"]
+        assert upload_progress["writes"] > 0, "upload did not run alongside recursive rm"
+        assert upload_progress["unlink_seen"], "recursive rm did not unlink the open upload"
+        assert os.fstat(upload_fd).st_nlink == 0
+        os.pwrite(upload_fd, b"AFTER-RM!", 0)
+        os.fsync(upload_fd)
+        assert os.pread(upload_fd, 9, 0) == b"AFTER-RM!"
+        os.close(upload_fd)
+        wait_for(
+            lambda: query(
+                primary,
+                "SELECT count(*) FROM fod.files WHERE id_file=%s",
+                (upload_file_id,),
+            )[0][0]
+            == 0,
+            "last close after recursive rm upload",
+        )
+        results["recursive_rm_preserves_concurrent_open_upload"] = True
+        results["recursive_rm_upload_writes_after_unlink"] = upload_progress["writes_after_unlink"]
+        resume()
+
         # Link committed on primary but deliberately absent from the replica.
         seed(ma / "lag-original")
         (ma / "nested").mkdir()
@@ -411,6 +507,8 @@ def main():
             connection.close()
         shutil.rmtree(temp)
         (artifacts / "results.json").write_text(json.dumps(results, indent=2))
+        logs = compose("logs", "--no-color", "primary", "replica", check=False)
+        (artifacts / "compose-postgres.log").write_text(logs.stdout)
         stopped = compose("down", "-v", "--remove-orphans", check=False)
         (artifacts / "compose-stop.log").write_text(stopped.stdout)
         print(f"artifacts={artifacts}", flush=True)
