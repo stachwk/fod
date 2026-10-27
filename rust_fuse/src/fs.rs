@@ -9623,6 +9623,26 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
+        let src_handle = match self.file_handle_state_for_handle(fh_in) {
+            Some(handle) => handle,
+            None => {
+                fuse_reply_error!(reply, libc::EBADF);
+                return;
+            }
+        };
+        let dst_handle = match self.file_handle_state_for_handle(fh_out) {
+            Some(handle) => handle,
+            None => {
+                fuse_reply_error!(reply, libc::EBADF);
+                return;
+            }
+        };
+        if src_handle.flags & libc::O_ACCMODE == libc::O_WRONLY
+            || dst_handle.flags & libc::O_ACCMODE == libc::O_RDONLY
+        {
+            fuse_reply_error!(reply, libc::EBADF);
+            return;
+        }
         if len == 0 {
             copy_task.complete(0, 0);
             self.reply_written_profiled(reply, 0);
