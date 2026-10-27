@@ -467,6 +467,33 @@ impl DbRepo {
         })
     }
 
+    /// Loads a block from the write authority for read-modify-write operations.
+    /// Replica-routed reads are suitable for ordinary reads, but must not seed
+    /// a mutation with potentially stale bytes.
+    pub fn load_block_authoritative(
+        &self,
+        file_id: u64,
+        block_index: u64,
+        block_size: u64,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let file_id_text = CString::new(file_id.to_string())
+            .map_err(|_| "file id contains NUL byte".to_string())?;
+        let block_index_text = CString::new(block_index.to_string())
+            .map_err(|_| "block index contains NUL byte".to_string())?;
+        let block_size = block_size.max(1) as usize;
+
+        self.with_connection(super::ConnectionLane::Write, |conn| unsafe {
+            let params = [&file_id_text, &block_index_text];
+            let res = exec_prepared_params_with_result_format(
+                conn,
+                PreparedStatement::LoadBlock,
+                &params,
+                1,
+            )?;
+            fetch_single_block_binary(res, block_size)
+        })
+    }
+
     pub fn fetch_block_range_shared(
         &self,
         file_id: u64,

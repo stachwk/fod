@@ -414,6 +414,13 @@ updates lock the same row, so whichever transaction obtains the lock first
 determines the operation order. Truncation through `fh` uses the validated
 writable handle's open-time access, consistent with descriptor semantics.
 
+Partial writes and truncate-boundary updates now load their read-modify-write
+input blocks from the write authority. Ordinary block reads may use a replica;
+using those results as mutation input could overwrite newer bytes after a
+replica lagged behind a committed writer. Existing write ownership and fencing
+serialize competing writers, while the authoritative read supplies the newest
+committed block before local edits are persisted.
+
 Timestamp `setattr` now resolves the inode seed and applies POSIX time-setting
 authorization and timestamp writes in one primary transaction under the inode
 row lock. Owners and uid 0 may set specific times; other users may request only
@@ -424,10 +431,11 @@ symlink times are no longer ignored. Direct low-level repository touch helpers
 remain available for internal callers and do not carry a request identity.
 
 - Mutation path resolution, hardlink counts, file sizes and attributes have
-  replica-routed APIs that are also used by writable callbacks. Audit each
-  mutation's preconditions and partial-block read/modify/write input for
-  primary validation in its commit transaction. The historical unlink failure
-  establishes why read routing affects mutation correctness.
+  replica-routed APIs that are also used by writable callbacks. Partial-block
+  read/modify/write input now comes from the primary, but continue auditing
+  mutation preconditions and inputs for primary validation in their commit
+  transactions. The historical unlink failure establishes why read routing
+  affects mutation correctness.
 - Chmod/chown and sticky-bit authorization use locked primary rows as described
   above. Transactional parent write/search checks cover regular-file,
   directory, special-file, symlink, and hardlink creation, plus file and

@@ -2062,14 +2062,16 @@ impl FodFuse {
         })
     }
 
-    pub(crate) fn load_block_profiled(
+    pub(crate) fn load_block_for_update_profiled(
         &self,
         file_id: u64,
         block_index: u64,
         block_size: u64,
     ) -> Result<Option<Vec<u8>>, String> {
         let started = Instant::now();
-        let result = self.repo.load_block(file_id, block_index, block_size);
+        let result = self
+            .repo
+            .load_block_authoritative(file_id, block_index, block_size);
         self.record_repo_fetch_block_range_elapsed(started.elapsed());
         result
     }

@@ -90,7 +90,7 @@ impl FodFuse {
             state.file_id,
             block_index,
             self.block_size as usize,
-            self.load_block_profiled(state.file_id, block_index, self.block_size),
+            self.load_block_for_update_profiled(state.file_id, block_index, self.block_size),
         )
     }
 
@@ -216,7 +216,7 @@ impl FodFuse {
         if let Some(block) = self.recent_write_block(state.file_id, block_index) {
             return Ok(Some(block.as_ref().to_vec()));
         }
-        self.load_block_profiled(state.file_id, block_index, block_size)
+        self.load_block_for_update_profiled(state.file_id, block_index, block_size)
             .map_err(|err| {
                 warn!(
                     "FOD truncate boundary load failed file_id={} block_index={} err={}",
