@@ -4854,10 +4854,17 @@ impl FodFuse {
         supplementary_groups: &[u32],
     ) -> Result<u64, String> {
         if self.acl_enabled {
-            // Kernel/FUSE enforces parent ACL access; PostgreSQL applies
-            // inherited ACL data atomically with the new inode.
-            self.repo
-                .create_file_with_default_acl(parent_id, name, mode, uid, gid, inode_seed)
+            // PostgreSQL checks parent access and applies inherited ACL data
+            // in the same transaction as the new inode.
+            self.repo.create_file_with_default_acl(
+                parent_id,
+                name,
+                mode,
+                uid,
+                gid,
+                inode_seed,
+                supplementary_groups,
+            )
         } else {
             self.repo.create_file_for_subject(
                 parent_id,
@@ -8003,6 +8010,7 @@ impl Filesystem for FodFuse {
             ),
         );
         let target_name = name.to_string_lossy();
+        let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
         let create_result = if self.acl_enabled {
             self.repo.create_directory_with_default_acl(
                 parent_id,
@@ -8011,9 +8019,9 @@ impl Filesystem for FodFuse {
                 subject.uid,
                 subject.gid,
                 &child_path,
+                &supplementary_groups,
             )
         } else {
-            let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
             self.repo.create_directory_for_subject(
                 parent_id,
                 target_name.as_ref(),
@@ -9944,6 +9952,7 @@ impl Filesystem for FodFuse {
                 file_kind,
                 libc::major(rdev as libc::dev_t) as u32,
                 libc::minor(rdev as libc::dev_t) as u32,
+                &supplementary_groups,
             )
         } else {
             self.repo.create_special_file_for_subject(
@@ -10016,15 +10025,28 @@ impl Filesystem for FodFuse {
         };
         let inode_seed = child_path.as_str();
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
-        match self.repo.create_symlink_for_subject(
-            parent_id,
-            link_name.to_string_lossy().as_ref(),
-            &target.to_string_lossy(),
-            subject.uid,
-            subject.gid,
-            inode_seed,
-            &supplementary_groups,
-        ) {
+        let create_result = if self.acl_enabled {
+            self.repo.create_symlink_for_subject_with_acl(
+                parent_id,
+                link_name.to_string_lossy().as_ref(),
+                &target.to_string_lossy(),
+                subject.uid,
+                subject.gid,
+                inode_seed,
+                &supplementary_groups,
+            )
+        } else {
+            self.repo.create_symlink_for_subject(
+                parent_id,
+                link_name.to_string_lossy().as_ref(),
+                &target.to_string_lossy(),
+                subject.uid,
+                subject.gid,
+                inode_seed,
+                &supplementary_groups,
+            )
+        };
+        match create_result {
             Ok(_) => match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {
                     self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
@@ -10095,14 +10117,26 @@ impl Filesystem for FodFuse {
             }
         };
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
-        match self.repo.create_hardlink_for_subject(
-            source_file_id,
-            new_parent_id,
-            newname.to_string_lossy().as_ref(),
-            subject.uid,
-            subject.gid,
-            &supplementary_groups,
-        ) {
+        let create_result = if self.acl_enabled {
+            self.repo.create_hardlink_for_subject_with_acl(
+                source_file_id,
+                new_parent_id,
+                newname.to_string_lossy().as_ref(),
+                subject.uid,
+                subject.gid,
+                &supplementary_groups,
+            )
+        } else {
+            self.repo.create_hardlink_for_subject(
+                source_file_id,
+                new_parent_id,
+                newname.to_string_lossy().as_ref(),
+                subject.uid,
+                subject.gid,
+                &supplementary_groups,
+            )
+        };
+        match create_result {
             Ok(_) => match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {
                     self.register_lookup_path(&child_path, attrs.file_attr.ino.0);

@@ -5921,6 +5921,74 @@ impl DbRepo {
         Ok(())
     }
 
+    /// Check parent write+search permission through its access ACL when ACL
+    /// support is active, otherwise through mode bits. The parent row remains
+    /// locked until the namespace transaction commits, serializing this check
+    /// with ACL/mode changes. `None` denotes the stored logical root row.
+    unsafe fn require_parent_write_search_acl_on_conn(
+        conn: *mut PGconn,
+        parent_id: Option<u64>,
+        actor_uid: u32,
+        actor_gid: u32,
+        actor_groups: &[u32],
+    ) -> Result<(), String> {
+        if actor_uid == 0 {
+            return Ok(());
+        }
+        let (sql, params): (CString, Vec<CString>) = if let Some(parent_id) = parent_id {
+            (
+                CString::new(
+                    "SELECT id_directory, uid, gid, mode FROM directories WHERE id_directory=$1 FOR NO KEY UPDATE",
+                )
+                .unwrap(),
+                vec![CString::new(parent_id.to_string()).unwrap()],
+            )
+        } else {
+            (
+                CString::new(
+                    "SELECT id_directory, uid, gid, mode FROM directories WHERE id_parent IS NULL AND name='/' FOR NO KEY UPDATE",
+                )
+                .unwrap(),
+                Vec::new(),
+            )
+        };
+        let param_refs = params.iter().collect::<Vec<_>>();
+        let rows = fetch_first_row_texts(exec_params(conn, &sql, &param_refs)?)?;
+        if rows.len() != 4 {
+            return Err(format!(
+                "{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared"
+            ));
+        }
+        let directory_id = rows[0].parse::<u64>().map_err(|err| err.to_string())?;
+        let owner_uid = rows[1].parse::<u32>().map_err(|err| err.to_string())?;
+        let owner_gid = rows[2].parse::<u32>().map_err(|err| err.to_string())?;
+        let mode = u32::from_str_radix(&rows[3], 8).map_err(|err| err.to_string())?;
+        let acl_allowed = metadata_updates::directory_acl_allows_on_conn(
+            conn,
+            directory_id,
+            actor_uid,
+            actor_groups,
+            owner_uid,
+            owner_gid,
+            0o3,
+        )?;
+        let allowed = acl_allowed.unwrap_or_else(|| {
+            let bits = if actor_uid == owner_uid {
+                (mode >> 6) & 0o7
+            } else if actor_gid == owner_gid || actor_groups.contains(&owner_gid) {
+                (mode >> 3) & 0o7
+            } else {
+                mode & 0o7
+            };
+            bits & 0o3 == 0o3
+        });
+        if allowed {
+            Ok(())
+        } else {
+            Err(PARENT_ACCESS_DENIED.to_string())
+        }
+    }
+
     fn namespace_serialization_key(parent_id: Option<u64>, name: &str) -> Result<CString, String> {
         CString::new(format!(
             "fod:write:destination:{}:{}:{name}",
@@ -10853,6 +10921,7 @@ impl DbRepo {
             uid,
             gid,
             None,
+            false,
         )
     }
 
@@ -10872,6 +10941,27 @@ impl DbRepo {
             uid,
             gid,
             Some((uid, gid, supplementary_groups)),
+            false,
+        )
+    }
+
+    pub fn create_hardlink_for_subject_with_acl(
+        &self,
+        source_file_id: u64,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        uid: u32,
+        gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_hardlink_internal(
+            source_file_id,
+            target_parent_id,
+            target_name,
+            uid,
+            gid,
+            Some((uid, gid, supplementary_groups)),
+            true,
         )
     }
 
@@ -10883,6 +10973,7 @@ impl DbRepo {
         uid: u32,
         gid: u32,
         parent_actor: Option<(u32, u32, &[u32])>,
+        use_posix_acl: bool,
     ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
         let source_file_id_value = source_file_id;
@@ -10931,13 +11022,23 @@ impl DbRepo {
                 }
                 Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
                 if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
-                    Self::require_parent_write_search_on_conn(
-                        conn,
-                        target_parent_id,
-                        actor_uid,
-                        actor_gid,
-                        actor_groups,
-                    )?;
+                    if use_posix_acl {
+                        Self::require_parent_write_search_acl_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    } else {
+                        Self::require_parent_write_search_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    }
                 }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let res = if let Some(parent_id) = target_parent_id {
@@ -11016,6 +11117,7 @@ impl DbRepo {
             gid,
             inode_seed,
             None,
+            false,
         )
     }
 
@@ -11037,6 +11139,29 @@ impl DbRepo {
             gid,
             inode_seed,
             Some((uid, gid, supplementary_groups)),
+            false,
+        )
+    }
+
+    pub fn create_symlink_for_subject_with_acl(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        target: &str,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_symlink_internal(
+            target_parent_id,
+            target_name,
+            target,
+            uid,
+            gid,
+            inode_seed,
+            Some((uid, gid, supplementary_groups)),
+            true,
         )
     }
 
@@ -11049,6 +11174,7 @@ impl DbRepo {
         gid: u32,
         inode_seed: &str,
         parent_actor: Option<(u32, u32, &[u32])>,
+        use_posix_acl: bool,
     ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
         let target_text = target.to_string();
@@ -11089,13 +11215,23 @@ impl DbRepo {
             transactional_replayable(conn, |conn| {
                 Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
                 if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
-                    Self::require_parent_write_search_on_conn(
-                        conn,
-                        target_parent_id,
-                        actor_uid,
-                        actor_gid,
-                        actor_groups,
-                    )?;
+                    if use_posix_acl {
+                        Self::require_parent_write_search_acl_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    } else {
+                        Self::require_parent_write_search_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    }
                 }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let res = if let Some(parent_id) = target_parent_id {
@@ -11187,6 +11323,7 @@ impl DbRepo {
         uid: u32,
         gid: u32,
         inode_seed: &str,
+        actor_groups: &[u32],
     ) -> Result<u64, String> {
         self.create_directory_internal(
             target_parent_id,
@@ -11195,7 +11332,7 @@ impl DbRepo {
             uid,
             gid,
             inode_seed,
-            None,
+            Some((uid, gid, actor_groups)),
             true,
         )
     }
@@ -11271,13 +11408,23 @@ impl DbRepo {
             let result = transactional_replayable(conn, |conn| {
                 Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
                 if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
-                    Self::require_parent_write_search_on_conn(
-                        conn,
-                        target_parent_id,
-                        actor_uid,
-                        actor_gid,
-                        actor_groups,
-                    )?;
+                    if inherit_default_acl {
+                        Self::require_parent_write_search_acl_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    } else {
+                        Self::require_parent_write_search_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    }
                 }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let inherited_acl = if inherit_default_acl {
@@ -11389,6 +11536,7 @@ impl DbRepo {
         uid: u32,
         gid: u32,
         inode_seed: &str,
+        actor_groups: &[u32],
     ) -> Result<u64, String> {
         self.create_file_internal(
             target_parent_id,
@@ -11397,7 +11545,7 @@ impl DbRepo {
             uid,
             gid,
             inode_seed,
-            None,
+            Some((uid, gid, actor_groups)),
             true,
         )
     }
@@ -11481,13 +11629,23 @@ impl DbRepo {
                     Self::advisory_xact_lock_text_on_conn(conn, serialization_key)?;
                 }
                 if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
-                    Self::require_parent_write_search_on_conn(
-                        conn,
-                        target_parent_id,
-                        actor_uid,
-                        actor_gid,
-                        actor_groups,
-                    )?;
+                    if inherit_default_acl {
+                        Self::require_parent_write_search_acl_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    } else {
+                        Self::require_parent_write_search_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    }
                 }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let inherited_acl = if inherit_default_acl {
@@ -11639,6 +11797,7 @@ impl DbRepo {
         file_kind: &str,
         rdev_major: u32,
         rdev_minor: u32,
+        actor_groups: &[u32],
     ) -> Result<u64, String> {
         self.create_special_file_internal(
             target_parent_id,
@@ -11650,7 +11809,7 @@ impl DbRepo {
             file_kind,
             rdev_major,
             rdev_minor,
-            None,
+            Some((uid, gid, actor_groups)),
             true,
         )
     }
@@ -11761,13 +11920,23 @@ impl DbRepo {
                     Self::advisory_xact_lock_text_on_conn(conn, serialization_key)?;
                 }
                 if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
-                    Self::require_parent_write_search_on_conn(
-                        conn,
-                        target_parent_id,
-                        actor_uid,
-                        actor_gid,
-                        actor_groups,
-                    )?;
+                    if inherit_default_acl {
+                        Self::require_parent_write_search_acl_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    } else {
+                        Self::require_parent_write_search_on_conn(
+                            conn,
+                            target_parent_id,
+                            actor_uid,
+                            actor_gid,
+                            actor_groups,
+                        )?;
+                    }
                 }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let inherited_acl = if inherit_default_acl {

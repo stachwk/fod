@@ -365,7 +365,7 @@ families still require the remaining authority review.
 
 ## Remaining source-level review items
 
-### POSIX default ACL inheritance
+### POSIX default ACL inheritance and create authorization
 
 Source review found that the former `FodFuse::copy_default_acl_to_child`
 inherited ACLs after inode creation, through separate reads and generic xattr
@@ -375,12 +375,17 @@ directory row, reads its default ACL on the primary, filters the inherited
 access ACL against the requested mode, writes child mode and ACL xattrs, and
 commits them with the new inode. Directories also inherit the unmodified default
 ACL. A malformed inherited ACL or any SQL failure aborts inode creation.
+The same create transaction now checks the caller's write+search permission on
+the parent using its access ACL (or mode bits when no ACL exists), while holding
+the parent row lock. This applies to regular files, directories, special files,
+symlinks and hardlinks; root-level creates check the stored logical root row.
+ACL and mode changes therefore serialize against creation authorization.
 
 `cargo check --workspace --offline` and rustfmt validation passed. The mounted
 ACL integration scenario has not yet been rerun against this implementation;
-keep that behavioral validation open. This was a source-level finding, not a
-reproduced data-loss case. Parent ACL permission evaluation during create still
-uses the kernel/FUSE path and requires separate review.
+keep that behavioral validation open. Parent ACL checks for unlink, rmdir and
+rename still need the same transaction-level review. This was a source-level
+finding, not a reproduced data-loss case.
 
 ### Logical root metadata
 

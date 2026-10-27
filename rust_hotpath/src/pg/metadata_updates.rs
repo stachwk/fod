@@ -39,12 +39,13 @@ pub enum InodeTimesOutcome {
     WriteDenied,
 }
 
-fn acl_write_access(
+fn acl_has_permissions(
     acl: &[u8],
     actor_uid: u32,
     actor_groups: &[u32],
     owner_uid: u32,
     owner_gid: u32,
+    requested: u16,
 ) -> Result<bool, String> {
     if acl.len() < 4 || (acl.len() - 4) % 8 != 0 {
         return Err("invalid POSIX ACL xattr length".to_string());
@@ -97,10 +98,10 @@ fn acl_write_access(
         return Err("incomplete POSIX ACL xattr".to_string());
     }
     if actor_uid == owner_uid {
-        return Ok(user_obj.unwrap_or(0) & 0o2 != 0);
+        return Ok(user_obj.unwrap_or(0) & requested == requested);
     }
     if let Some(permissions) = named_user {
-        return Ok(permissions & mask.unwrap_or(0o7) & 0o2 != 0);
+        return Ok(permissions & mask.unwrap_or(0o7) & requested == requested);
     }
     if matched_group {
         let permissions = if actor_groups.contains(&owner_gid) {
@@ -108,9 +109,53 @@ fn acl_write_access(
         } else {
             group_permissions
         };
-        return Ok(permissions & mask.unwrap_or(0o7) & 0o2 != 0);
+        return Ok(permissions & mask.unwrap_or(0o7) & requested == requested);
     }
-    Ok(other.unwrap_or(0) & 0o2 != 0)
+    Ok(other.unwrap_or(0) & requested == requested)
+}
+
+fn acl_write_access(
+    acl: &[u8],
+    actor_uid: u32,
+    actor_groups: &[u32],
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<bool, String> {
+    acl_has_permissions(acl, actor_uid, actor_groups, owner_uid, owner_gid, 0o2)
+}
+
+pub(super) unsafe fn directory_acl_allows_on_conn(
+    conn: *mut PGconn,
+    directory_id: u64,
+    actor_uid: u32,
+    actor_groups: &[u32],
+    owner_uid: u32,
+    owner_gid: u32,
+    requested: u16,
+) -> Result<Option<bool>, String> {
+    let rows = fetch_first_row_texts(exec_params(
+        conn,
+        &CString::new(
+            "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='dir' AND owner_id=$1 AND name='system.posix_acl_access'",
+        )
+        .unwrap(),
+        &[&CString::new(directory_id.to_string()).unwrap()],
+    )?)?;
+    let Some(encoded) = rows.first() else {
+        return Ok(None);
+    };
+    let acl = BASE64_STANDARD
+        .decode(encoded.trim())
+        .map_err(|err| format!("invalid POSIX ACL payload: {err}"))?;
+    acl_has_permissions(
+        &acl,
+        actor_uid,
+        actor_groups,
+        owner_uid,
+        owner_gid,
+        requested,
+    )
+    .map(Some)
 }
 
 fn time_sql_value(value: InodeTimeValue<'_>) -> String {
