@@ -264,7 +264,7 @@ parent ACL checks for creation and namespace removal/movement.
 | `rmdir` | Primary namespace/row locks, sticky-bit check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
 | Sticky bit on unlink/rmdir/rename | Parent/victim owner row locks inside the primary mutation transaction | Concurrent parent permission commit and nine stale-replica cases passed |
 | chmod/chown | Locked primary inode, seed check and authorization in the same update transaction | Concurrent chown and stale-replica owner rejection passed; partial owner fields preserved |
-| Timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Timestamp and xattr authorization use locked primary inode rows; mutating ioctl preconditions still require scrutiny |
+| Timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Timestamp and xattr authorization use locked primary inode rows; clone ioctls validate source/destination open modes before writing |
 | Explicit degraded replica-only mount | Read-only FUSE mount with mutation guards | It deliberately does not acquire/renew primary-backed leases or grant write ownership |
 
 `DbRepoLanes` gives the write repository primary connection targets and a
@@ -466,6 +466,9 @@ remain available for internal callers and do not carry a request identity.
   ACL/mode check and repeats authorization under the file row lock in its
   content transaction. Timestamp `setattr` authorization and field-preserving
   updates also share one primary transaction.
+  `FICLONE` and `FICLONERANGE` require a writable destination FUSE handle and a
+  readable source descriptor; invalid open modes return `EBADF` before copy
+  planning. Mounted ioctl behavior remains unvalidated.
   Shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is now compared with the data source's
   PostgreSQL cluster system identifier and database OID before the mount

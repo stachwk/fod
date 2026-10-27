@@ -3213,6 +3213,14 @@ impl FodFuse {
         self.file_id_for_handle(fh, ino)?.ok_or(ENOENT)
     }
 
+    fn writable_file_id_for_ioctl(&self, fh: u64) -> Result<u64, libc::c_int> {
+        let state = self.file_handle_state_for_handle(fh).ok_or(libc::EBADF)?;
+        if state.flags & libc::O_ACCMODE == libc::O_RDONLY {
+            return Err(libc::EBADF);
+        }
+        state.file_id.ok_or(libc::EBADF)
+    }
+
     fn should_cache_file_read_metadata(
         read_only: bool,
         fopen_direct_io: bool,
@@ -3392,6 +3400,20 @@ impl FodFuse {
     fn ioctl_clone_source_path(req: &Request, src_fd: i64) -> Result<String, libc::c_int> {
         if src_fd < 0 {
             return Err(libc::EINVAL);
+        }
+        let fd_info_path = PathBuf::from(format!("/proc/{}/fdinfo/{}", req.pid(), src_fd));
+        let fd_info = fs::read_to_string(fd_info_path).map_err(|_| libc::EBADF)?;
+        let flags = fd_info
+            .lines()
+            .find_map(|line| line.strip_prefix("flags:").map(str::trim))
+            .ok_or(libc::EBADF)?;
+        let flags = u32::from_str_radix(flags, 8).map_err(|_| libc::EBADF)?;
+        let access_mode = flags & libc::O_ACCMODE as u32;
+        if access_mode == libc::O_WRONLY as u32
+            || access_mode == libc::O_ACCMODE as u32
+            || flags & libc::O_PATH as u32 != 0
+        {
+            return Err(libc::EBADF);
         }
         let fd_path = PathBuf::from(format!("/proc/{}/fd/{}", req.pid(), src_fd));
         let resolved = fs::read_link(&fd_path).map_err(|_| libc::EBADF)?;
@@ -6569,12 +6591,8 @@ impl Filesystem for FodFuse {
                         return;
                     }
                 };
-                let dst_file_id = match self.file_id_for_handle(fh, ino) {
-                    Ok(Some(value)) => value,
-                    Ok(None) => {
-                        fuse_reply_error!(reply, ENOENT);
-                        return;
-                    }
+                let dst_file_id = match self.writable_file_id_for_ioctl(fh) {
+                    Ok(value) => value,
                     Err(errno) => {
                         fuse_reply_error!(reply, errno);
                         return;
@@ -6659,12 +6677,8 @@ impl Filesystem for FodFuse {
                         return;
                     }
                 };
-                let dst_file_id = match self.file_id_for_handle(fh, ino) {
-                    Ok(Some(value)) => value,
-                    Ok(None) => {
-                        fuse_reply_error!(reply, ENOENT);
-                        return;
-                    }
+                let dst_file_id = match self.writable_file_id_for_ioctl(fh) {
+                    Ok(value) => value,
                     Err(errno) => {
                         fuse_reply_error!(reply, errno);
                         return;
