@@ -72,6 +72,39 @@ def assert_permission_denied(path: Path) -> None:
     raise AssertionError("ACL deny entry did not block file read")
 
 
+def assert_mutations_denied_to_nobody(path: Path) -> None:
+    nobody_probe = subprocess.run(
+        ["sudo", "-n", "-u", "nobody", "true"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if nobody_probe.returncode != 0:
+        print("SKIP acl-mutation-denial (sudo cannot run commands as nobody)")
+        return
+
+    before = path.stat()
+    expected_size = len(b"acl payload\n")
+    truncate_result = subprocess.run(
+        ["sudo", "-n", "-u", "nobody", "truncate", "-s", "0", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert truncate_result.returncode != 0, "ACL-denied truncate unexpectedly succeeded"
+
+    timestamp_result = subprocess.run(
+        ["sudo", "-n", "-u", "nobody", "touch", "-d", "@1234567890", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert timestamp_result.returncode != 0, "ACL-denied timestamp update unexpectedly succeeded"
+    after = path.stat()
+    assert after.st_size == expected_size, (expected_size, after.st_size)
+    assert after.st_mtime_ns == before.st_mtime_ns, (before.st_mtime_ns, after.st_mtime_ns)
+
+
 def expected_optional_selinux_errno(err_no: int | None) -> bool:
     expected_errno = {
         errno.EPERM,
@@ -100,6 +133,7 @@ def main() -> None:
     suffix = uuid.uuid4().hex[:8]
     with tempfile.TemporaryDirectory(prefix=f"/tmp/fod-acl-mount-option-{suffix}.") as tmpdir:
         tmp_path = Path(tmpdir)
+        os.chmod(tmp_path, 0o755)
         mountpoint = tmp_path / "mnt"
         mountpoint.mkdir()
         log_path = tmp_path / "mount.log"
@@ -175,6 +209,7 @@ def main() -> None:
                 if os.geteuid() != 0:
                     assert not os.access(file_path, os.R_OK)
                 assert_permission_denied(file_path)
+                assert_mutations_denied_to_nobody(file_path)
 
                 print("OK acl-mount-option")
             finally:
