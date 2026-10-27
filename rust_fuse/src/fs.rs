@@ -10314,9 +10314,34 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let source_file_id = match self.file_id_for_path(&source_path) {
-            Ok(Some(value)) => value,
-            Ok(None) => {
+        let authority = self.repo.authoritative_view();
+        let source_entry = match authority.resolve_path(&source_path) {
+            Ok(resolved) => resolved,
+            Err(_) => {
+                fuse_reply_error!(reply, EIO);
+                return;
+            }
+        };
+        let source_file_id = match (source_entry.kind.as_deref(), source_entry.entry_id) {
+            (Some("file"), Some(file_id)) => Some(file_id),
+            (Some("hardlink"), Some(hardlink_id)) => {
+                match authority.get_hardlink_file_id(hardlink_id) {
+                    Ok(file_id) => file_id,
+                    Err(_) => {
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                }
+            }
+            _ => None,
+        };
+        let Some(source_file_id) = source_file_id else {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        };
+        match self.attrs_for_open_file_id(source_file_id) {
+            Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => {}
+            Ok(_) => {
                 fuse_reply_error!(reply, ENOENT);
                 return;
             }
@@ -10324,7 +10349,7 @@ impl Filesystem for FodFuse {
                 fuse_reply_error!(reply, errno);
                 return;
             }
-        };
+        }
         let new_parent_path = match self.entry_path_for_ino(newparent) {
             Ok(path) => path,
             Err(errno) => {
