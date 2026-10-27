@@ -10565,6 +10565,35 @@ impl DbRepo {
         name: &str,
         actor_uid: u32,
     ) -> Result<(), String> {
+        self.unlink_symlink_entry_internal(symlink_id, parent_id, name, actor_uid, None)
+    }
+
+    pub fn unlink_symlink_entry_for_subject(
+        &self,
+        symlink_id: u64,
+        parent_id: Option<u64>,
+        name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<(), String> {
+        self.unlink_symlink_entry_internal(
+            symlink_id,
+            parent_id,
+            name,
+            actor_uid,
+            Some((actor_uid, actor_gid, supplementary_groups)),
+        )
+    }
+
+    fn unlink_symlink_entry_internal(
+        &self,
+        symlink_id: u64,
+        parent_id: Option<u64>,
+        name: &str,
+        actor_uid: u32,
+        parent_actor: Option<(u32, u32, &[u32])>,
+    ) -> Result<(), String> {
         let namespace_key = Self::namespace_serialization_key(parent_id, name)?;
         let id = CString::new(symlink_id.to_string()).unwrap();
         let parent = CString::new(parent_id.unwrap_or(0).to_string()).unwrap();
@@ -10577,6 +10606,15 @@ impl DbRepo {
                 .is_none()
             {
                 return Err(NAMESPACE_SOURCE_CHANGED.to_string());
+            }
+            if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
+                Self::require_parent_write_search_on_conn(
+                    tx.conn,
+                    parent_id,
+                    actor_uid,
+                    actor_gid,
+                    actor_groups,
+                )?;
             }
             Self::require_sticky_removal_on_conn(
                 tx.conn, parent_id, "symlink", symlink_id, actor_uid,
@@ -13161,6 +13199,38 @@ impl DbRepo {
         old_name: &str,
         actor_uid: u32,
     ) -> Result<FileUnlinkOutcome, String> {
+        self.unlink_file_entry_internal(file_id, hidden_name, parent_id, old_name, actor_uid, None)
+    }
+
+    pub fn unlink_file_entry_for_subject(
+        &self,
+        file_id: u64,
+        hidden_name: &str,
+        parent_id: Option<u64>,
+        old_name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<FileUnlinkOutcome, String> {
+        self.unlink_file_entry_internal(
+            file_id,
+            hidden_name,
+            parent_id,
+            old_name,
+            actor_uid,
+            Some((actor_uid, actor_gid, supplementary_groups)),
+        )
+    }
+
+    fn unlink_file_entry_internal(
+        &self,
+        file_id: u64,
+        hidden_name: &str,
+        parent_id: Option<u64>,
+        old_name: &str,
+        actor_uid: u32,
+        parent_actor: Option<(u32, u32, &[u32])>,
+    ) -> Result<FileUnlinkOutcome, String> {
         if hidden_name.is_empty() || old_name.is_empty() {
             return Err("unlink name is empty".to_string());
         }
@@ -13226,6 +13296,15 @@ impl DbRepo {
             let primary =
                 fetch_single_text_option(exec_params(conn, &sql_primary, &namespace_params)?)?
                     .is_some();
+            if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
+                Self::require_parent_write_search_on_conn(
+                    conn,
+                    parent_id,
+                    actor_uid,
+                    actor_gid,
+                    actor_groups,
+                )?;
+            }
             Self::require_sticky_removal_on_conn(conn, parent_id, "file", file_id, actor_uid)?;
             let outcome = if primary {
                 let links = fetch_single_text(exec_params(conn, &sql_links, &[&file_id_param])?)?;

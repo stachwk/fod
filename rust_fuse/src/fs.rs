@@ -5267,13 +5267,19 @@ impl FodFuse {
         old_path: &str,
         old_name: &str,
         req_id: u64,
-        actor_uid: u32,
+        subject: &SubjectIdentity,
     ) -> Result<(), String> {
         let session_id = self.session_id.unwrap_or(0);
         let hidden_name = format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
-        let outcome =
-            self.repo
-                .unlink_file_entry(file_id, &hidden_name, parent_id, old_name, actor_uid)?;
+        let outcome = self.repo.unlink_file_entry_for_subject(
+            file_id,
+            &hidden_name,
+            parent_id,
+            old_name,
+            subject.uid,
+            subject.gid,
+            &subject.groups.iter().copied().collect::<Vec<_>>(),
+        )?;
         if outcome == FileUnlinkOutcome::SourceChanged {
             return Err("FOD_UNLINK_SOURCE_CHANGED".to_string());
         }
@@ -8046,15 +8052,17 @@ impl Filesystem for FodFuse {
                     &child_path,
                     name.to_string_lossy().as_ref(),
                     req_id,
-                    subject.uid,
+                    &subject,
                 )
             }
             Some("symlink") => match entry_id {
-                Some(symlink_id) => self.repo.unlink_symlink_entry(
+                Some(symlink_id) => self.repo.unlink_symlink_entry_for_subject(
                     symlink_id,
                     parent_id,
                     name.to_string_lossy().as_ref(),
                     subject.uid,
+                    subject.gid,
+                    &subject.groups.iter().copied().collect::<Vec<_>>(),
                 ),
                 None => Err("missing symlink id".to_string()),
             },

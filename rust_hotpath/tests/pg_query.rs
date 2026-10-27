@@ -2674,7 +2674,53 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
         fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
     );
     assert_eq!(repo.count_directory_children(parent_id)?, 0);
+    let unlink_file_name = unique_name("unlink_parent_access_file");
+    let unlink_file = repo.create_file(
+        Some(parent_id),
+        &unlink_file_name,
+        0o600,
+        1000,
+        3000,
+        &unique_name("unlink_parent_access_file_seed"),
+    )?;
+    let denied_file_unlink = repo.unlink_file_entry_for_subject(
+        unlink_file,
+        &unique_name("unlink_hidden_denied"),
+        Some(parent_id),
+        &unlink_file_name,
+        2000,
+        2000,
+        &[2000],
+    );
+    assert_eq!(
+        denied_file_unlink.unwrap_err(),
+        fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
+    );
+    assert_eq!(repo.count_file_links(unlink_file)?, 1);
+
+    let unlink_symlink_name = unique_name("unlink_parent_access_symlink");
+    let unlink_symlink = repo.create_symlink(
+        Some(parent_id),
+        &unlink_symlink_name,
+        "target",
+        1000,
+        3000,
+        &unique_name("unlink_parent_access_symlink_seed"),
+    )?;
     let files_before = repo.count_files()?;
+    let denied_symlink_unlink = repo.unlink_symlink_entry_for_subject(
+        unlink_symlink,
+        Some(parent_id),
+        &unlink_symlink_name,
+        2000,
+        2000,
+        &[2000],
+    );
+    assert_eq!(
+        denied_symlink_unlink.unwrap_err(),
+        fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
+    );
+
     let denied_file = repo.create_file_for_subject(
         Some(parent_id),
         "denied-file",
@@ -2749,6 +2795,23 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
     assert_eq!(repo.count_files()?, files_after_hardlink_source);
 
     repo.update_directory_mode(parent_id, "730")?;
+    repo.unlink_symlink_entry_for_subject(
+        unlink_symlink,
+        Some(parent_id),
+        &unlink_symlink_name,
+        2000,
+        2000,
+        &[2000, 3000],
+    )?;
+    repo.unlink_file_entry_for_subject(
+        unlink_file,
+        &unique_name("unlink_hidden_allowed"),
+        Some(parent_id),
+        &unlink_file_name,
+        2000,
+        2000,
+        &[2000, 3000],
+    )?;
     let allowed_child = repo.create_directory_for_subject(
         Some(parent_id),
         "supplementary-group-child",
@@ -2802,6 +2865,7 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
     )?;
     repo.delete_hardlink_entry(allowed_hardlink)?;
     repo.purge_primary_file(hardlink_source)?;
+    repo.purge_primary_file(unlink_file)?;
     repo.purge_primary_file(allowed_file)?;
     repo.delete_directory_entry(allowed_child)?;
     repo.delete_directory_entry(parent_id)?;
