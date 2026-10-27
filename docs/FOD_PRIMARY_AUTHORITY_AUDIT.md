@@ -367,21 +367,20 @@ families still require the remaining authority review.
 
 ### POSIX default ACL inheritance
 
-Source review of `FodFuse::copy_default_acl_to_child` found that inheritance is
-currently performed after the file or directory creation transaction commits.
-The helper fetches the parent's `system.posix_acl_default` through the ordinary
-read path, then writes the child's access ACL and (for directories) default ACL
-through separate generic xattr writes. The create callbacks ignore errors from
-this helper. This leaves a visibility window with no inherited ACL, can use a
-replica-routed parent ACL as input, and can report successful creation even if
-the ACL writes fail. The copied access ACL is not filtered by the requested
-creation mode as required by [Linux ACL creation semantics](https://man7.org/linux/man-pages/man5/acl.5.html).
+Source review found that the former `FodFuse::copy_default_acl_to_child`
+inherited ACLs after inode creation, through separate reads and generic xattr
+writes whose failures were ignored. FOD 3.4.73 replaces that path for regular
+files, directories and special files: the create transaction locks the parent
+directory row, reads its default ACL on the primary, filters the inherited
+access ACL against the requested mode, writes child mode and ACL xattrs, and
+commits them with the new inode. Directories also inherit the unmodified default
+ACL. A malformed inherited ACL or any SQL failure aborts inode creation.
 
-The correction must read and lock the authoritative parent ACL and create the
-child, filtered access ACL, child mode and (for a directory) inherited default
-ACL in one PostgreSQL transaction. A failure must abort the creation rather
-than leave a partially initialized inode. No data-loss reproduction is claimed
-for this source-level finding.
+`cargo check --workspace --offline` and rustfmt validation passed. The mounted
+ACL integration scenario has not yet been rerun against this implementation;
+keep that behavioral validation open. This was a source-level finding, not a
+reproduced data-loss case. Parent ACL permission evaluation during create still
+uses the kernel/FUSE path and requires separate review.
 
 - Mutation path resolution, hardlink counts, file sizes and attributes have
   replica-routed APIs that are also used by writable callbacks. Audit each
@@ -392,8 +391,9 @@ for this source-level finding.
   above. Transactional parent write/search checks cover regular-file,
   directory, special-file, symlink, and hardlink creation, plus file and
   symlink unlink, `rmdir`, and rename. POSIX ACL xattr writes now check inode
-  ownership under the write transaction; ACL inheritance and root metadata
-  still need review. Access ACL payload and mode-bit updates share one
+  ownership under the write transaction; default ACL inheritance now shares
+  the child creation transaction (mounted validation pending). Root metadata
+  still needs review. Access ACL payload and mode-bit updates share one
   transaction; truncate and timestamp authorization also remain open.
   Shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is validated as writable but is not

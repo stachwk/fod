@@ -2861,44 +2861,6 @@ impl FodFuse {
         }
     }
 
-    fn copy_default_acl_to_child(
-        &self,
-        parent_path: &str,
-        owner_kind: &str,
-        owner_id: u64,
-        child_is_dir: bool,
-    ) -> Result<(), libc::c_int> {
-        if !self.acl_enabled {
-            return Ok(());
-        }
-        let default_acl = self
-            .repo
-            .fetch_xattr_value(parent_path, "system.posix_acl_default")
-            .map_err(|_| EIO)?;
-        let Some(default_acl) = default_acl else {
-            return Ok(());
-        };
-        self.repo
-            .store_xattr_value_for_owner(
-                owner_kind,
-                owner_id,
-                "system.posix_acl_access",
-                &default_acl,
-            )
-            .map_err(|_| EIO)?;
-        if child_is_dir {
-            self.repo
-                .store_xattr_value_for_owner(
-                    owner_kind,
-                    owner_id,
-                    "system.posix_acl_default",
-                    &default_acl,
-                )
-                .map_err(|_| EIO)?;
-        }
-        Ok(())
-    }
-
     fn append_journal_event(
         &self,
         uid: u32,
@@ -4866,10 +4828,10 @@ impl FodFuse {
         supplementary_groups: &[u32],
     ) -> Result<u64, String> {
         if self.acl_enabled {
-            // ACL checks stay on the existing kernel/FUSE ACL path until the
-            // ACL entries can be evaluated under the PostgreSQL parent lock.
+            // Kernel/FUSE enforces parent ACL access; PostgreSQL applies
+            // inherited ACL data atomically with the new inode.
             self.repo
-                .create_file(parent_id, name, mode, uid, gid, inode_seed)
+                .create_file_with_default_acl(parent_id, name, mode, uid, gid, inode_seed)
         } else {
             self.repo.create_file_for_subject(
                 parent_id,
@@ -7958,9 +7920,7 @@ impl Filesystem for FodFuse {
         );
         let target_name = name.to_string_lossy();
         let create_result = if self.acl_enabled {
-            // ACL evaluation uses the kernel/FUSE ACL path until ACL entries
-            // are checked under the same PostgreSQL parent-row lock.
-            self.repo.create_directory(
+            self.repo.create_directory_with_default_acl(
                 parent_id,
                 target_name.as_ref(),
                 mode,
@@ -7982,7 +7942,6 @@ impl Filesystem for FodFuse {
         };
         match create_result {
             Ok(directory_id) => {
-                let _ = self.copy_default_acl_to_child(&parent_path, "dir", directory_id, true);
                 let _ = self.append_journal_event(
                     subject.uid,
                     "mkdir",
@@ -8777,12 +8736,6 @@ impl Filesystem for FodFuse {
                 "FOD req={} op=create recovered_existing_atomic_truncate path={} file_id={} fh={}",
                 req_id, child_path, file_id, fh
             );
-        }
-
-        // ACL kopiujemy dopiero po uzyskaniu ownership dla uchwytu zapisywalnego.
-        // Ogranicza to skutki uboczne w sciezce rollbacku po EBUSY/EIO.
-        if created_new {
-            let _ = self.copy_default_acl_to_child(&parent_path, "file", file_id, false);
         }
 
         match self.lookup_path(&child_path) {
@@ -9896,18 +9849,33 @@ impl Filesystem for FodFuse {
             return;
         };
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
-        match self.repo.create_special_file_for_subject(
-            parent_id,
-            name.to_string_lossy().as_ref(),
-            mode,
-            subject.uid,
-            subject.gid,
-            &child_path,
-            file_kind,
-            libc::major(rdev as libc::dev_t) as u32,
-            libc::minor(rdev as libc::dev_t) as u32,
-            &supplementary_groups,
-        ) {
+        let create_result = if self.acl_enabled {
+            self.repo.create_special_file_with_default_acl(
+                parent_id,
+                name.to_string_lossy().as_ref(),
+                mode,
+                subject.uid,
+                subject.gid,
+                &child_path,
+                file_kind,
+                libc::major(rdev as libc::dev_t) as u32,
+                libc::minor(rdev as libc::dev_t) as u32,
+            )
+        } else {
+            self.repo.create_special_file_for_subject(
+                parent_id,
+                name.to_string_lossy().as_ref(),
+                mode,
+                subject.uid,
+                subject.gid,
+                &child_path,
+                file_kind,
+                libc::major(rdev as libc::dev_t) as u32,
+                libc::minor(rdev as libc::dev_t) as u32,
+                &supplementary_groups,
+            )
+        };
+        match create_result {
             Ok(_) => {}
             Err(err) => {
                 fuse_reply_error!(reply, Self::namespace_mutation_errno(&err));

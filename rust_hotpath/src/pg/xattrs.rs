@@ -13,6 +13,149 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use std::ffi::{CStr, CString};
 
+pub(super) struct InheritedPosixAcl {
+    pub(super) access_acl: Vec<u8>,
+    pub(super) default_acl: Option<Vec<u8>>,
+    pub(super) mode: u32,
+}
+
+fn constrain_default_acl_to_mode(value: &[u8], mode: u32) -> Result<(Vec<u8>, u32), String> {
+    if value.len() < 4 || (value.len() - 4) % 8 != 0 {
+        return Err("invalid POSIX default ACL xattr length".to_string());
+    }
+    if u32::from_le_bytes(value[..4].try_into().unwrap()) != 2 {
+        return Err("unsupported POSIX ACL xattr version".to_string());
+    }
+
+    let owner_mask = ((mode >> 6) & 0o7) as u16;
+    let group_mask = ((mode >> 3) & 0o7) as u16;
+    let other_mask = (mode & 0o7) as u16;
+    let mut access_acl = value.to_vec();
+    let mut has_mask = false;
+    let mut has_named_entry = false;
+    let mut user_obj = None;
+    let mut group_obj = None;
+    let mut acl_mask = None;
+    let mut other = None;
+
+    for entry in access_acl[4..].chunks_exact_mut(8) {
+        let tag = u16::from_le_bytes(entry[0..2].try_into().unwrap());
+        let mut perm = u16::from_le_bytes(entry[2..4].try_into().unwrap());
+        match tag {
+            0x0001 => {
+                perm &= owner_mask;
+                user_obj = Some(perm);
+            }
+            0x0002 | 0x0008 => has_named_entry = true,
+            0x0004 => group_obj = Some(perm),
+            0x0010 => {
+                has_mask = true;
+                perm &= group_mask;
+                acl_mask = Some(perm);
+            }
+            0x0020 => {
+                perm &= other_mask;
+                other = Some(perm);
+            }
+            _ => return Err("invalid POSIX ACL entry tag".to_string()),
+        }
+        entry[2..4].copy_from_slice(&perm.to_le_bytes());
+    }
+
+    if has_named_entry && !has_mask {
+        return Err("POSIX ACL with named entries is missing ACL_MASK".to_string());
+    }
+    let owner_perm = user_obj.ok_or_else(|| "POSIX ACL is missing ACL_USER_OBJ".to_string())?;
+    let group_perm = acl_mask
+        .or(group_obj)
+        .ok_or_else(|| "POSIX ACL is missing ACL_GROUP_OBJ".to_string())?;
+    let other_perm = other.ok_or_else(|| "POSIX ACL is missing ACL_OTHER".to_string())?;
+    let mode = (mode & !0o777)
+        | (u32::from(owner_perm) << 6)
+        | (u32::from(group_perm) << 3)
+        | u32::from(other_perm);
+    Ok((access_acl, mode))
+}
+
+pub(super) fn prepare_default_acl_inheritance_on_conn(
+    conn: *mut super::PGconn,
+    parent_id: Option<u64>,
+    requested_mode: u32,
+    child_is_directory: bool,
+) -> Result<Option<InheritedPosixAcl>, String> {
+    let Some(parent_id) = parent_id else {
+        return Ok(None);
+    };
+    let parent_id = CString::new(parent_id.to_string())
+        .map_err(|_| "parent id contains NUL byte".to_string())?;
+    let lock_parent =
+        CString::new("SELECT id_directory FROM directories WHERE id_directory = $1 FOR SHARE")
+            .unwrap();
+    let parent_row = unsafe { exec_params(conn, &lock_parent, &[&parent_id])? };
+    if unsafe { fetch_first_row_texts(parent_row) }?.is_empty() {
+        return Err("FOD_NAMESPACE_PARENT_MISSING".to_string());
+    }
+
+    let fetch_acl = CString::new(
+        "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind = 'dir' AND owner_id = $1 AND name = 'system.posix_acl_default'",
+    )
+    .unwrap();
+    let encoded = unsafe { fetch_first_row_texts(exec_params(conn, &fetch_acl, &[&parent_id])?)? }
+        .first()
+        .cloned();
+    let Some(encoded) = encoded else {
+        return Ok(None);
+    };
+    let default_acl = BASE64_STANDARD
+        .decode(encoded.trim())
+        .map_err(|err| format!("invalid parent POSIX ACL payload: {err}"))?;
+    let (access_acl, mode) = constrain_default_acl_to_mode(&default_acl, requested_mode)?;
+    Ok(Some(InheritedPosixAcl {
+        access_acl,
+        default_acl: child_is_directory.then_some(default_acl),
+        mode,
+    }))
+}
+
+pub(super) fn store_inherited_default_acl_on_conn(
+    conn: *mut super::PGconn,
+    owner_kind: &str,
+    owner_id: u64,
+    inherited: &InheritedPosixAcl,
+) -> Result<(), String> {
+    let store_acl = CString::new(
+        "INSERT INTO xattrs (owner_kind, owner_id, name, value) VALUES ($1, $2, $3, decode($4, 'base64')) ON CONFLICT (owner_kind, owner_id, name) DO UPDATE SET value = EXCLUDED.value",
+    )
+    .unwrap();
+    let owner_kind =
+        CString::new(owner_kind).map_err(|_| "xattr owner kind contains NUL byte".to_string())?;
+    let owner_id = CString::new(owner_id.to_string())
+        .map_err(|_| "xattr owner id contains NUL byte".to_string())?;
+    let access_name = CString::new("system.posix_acl_access").unwrap();
+    let access_value = CString::new(BASE64_STANDARD.encode(&inherited.access_acl))
+        .map_err(|_| "inherited access ACL contains NUL byte".to_string())?;
+    unsafe {
+        exec_command_params(
+            conn,
+            &store_acl,
+            &[&owner_kind, &owner_id, &access_name, &access_value],
+        )?;
+    }
+    if let Some(default_acl) = inherited.default_acl.as_deref() {
+        let default_name = CString::new("system.posix_acl_default").unwrap();
+        let default_value = CString::new(BASE64_STANDARD.encode(default_acl))
+            .map_err(|_| "inherited default ACL contains NUL byte".to_string())?;
+        unsafe {
+            exec_command_params(
+                conn,
+                &store_acl,
+                &[&owner_kind, &owner_id, &default_name, &default_value],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 impl DbRepo {
     fn xattr_owner_for_path(&self, path: &str) -> Result<Option<(&'static str, u64)>, String> {
         let resolved = self.resolve_path(path)?;
