@@ -10178,15 +10178,29 @@ impl DbRepo {
         actor_gid: u32,
         supplementary_groups: &[u32],
     ) -> Result<RenameFileReplaceOutcome, String> {
+        self.rename_namespace_replace_with_ownership_guard_for_subject_acl(
+            source, old_parent_id, old_name, new_parent_id, new_name, expected_target,
+            actor_uid, actor_gid, supplementary_groups, false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn rename_namespace_replace_with_ownership_guard_for_subject_acl(
+        &self,
+        source: RenameNamespaceSource,
+        old_parent_id: Option<u64>,
+        old_name: &str,
+        new_parent_id: Option<u64>,
+        new_name: &str,
+        expected_target: Option<RenameNamespaceTarget>,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+        use_posix_acl: bool,
+    ) -> Result<RenameFileReplaceOutcome, String> {
         self.rename_namespace_replace_with_ownership_guard_internal(
-            source,
-            old_parent_id,
-            old_name,
-            new_parent_id,
-            new_name,
-            expected_target,
-            actor_uid,
-            Some((actor_uid, actor_gid, supplementary_groups)),
+            source, old_parent_id, old_name, new_parent_id, new_name, expected_target,
+            actor_uid, Some((actor_uid, actor_gid, supplementary_groups, use_posix_acl)),
         )
     }
 
@@ -10200,7 +10214,7 @@ impl DbRepo {
         new_name: &str,
         expected_target: Option<RenameNamespaceTarget>,
         actor_uid: u32,
-        parent_actor: Option<(u32, u32, &[u32])>,
+        parent_actor: Option<(u32, u32, &[u32], bool)>,
     ) -> Result<RenameFileReplaceOutcome, String> {
         if old_name.is_empty() || new_name.is_empty() {
             return Err("rename destination name is empty".to_string());
@@ -10489,21 +10503,17 @@ impl DbRepo {
                         return Ok(RenameFileReplaceOutcome::Busy);
                     }
 
-                    if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
-                        let mut parent_ids = [old_parent_id, new_parent_id]
-                            .into_iter()
-                            .flatten()
-                            .collect::<Vec<_>>();
+                    if let Some((actor_uid, actor_gid, actor_groups, use_posix_acl)) = parent_actor {
+                        let mut parent_ids = vec![old_parent_id, new_parent_id];
                         parent_ids.sort_unstable();
                         parent_ids.dedup();
                         for parent_id in parent_ids {
-                            Self::require_parent_write_search_on_conn(
-                                conn,
-                                Some(parent_id),
-                                actor_uid,
-                                actor_gid,
-                                actor_groups,
-                            )?;
+                            let check = if use_posix_acl {
+                                Self::require_parent_write_search_acl_on_conn
+                            } else {
+                                Self::require_parent_write_search_on_conn
+                            };
+                            check(conn, parent_id, actor_uid, actor_gid, actor_groups)?;
                         }
                     }
 
@@ -10717,12 +10727,33 @@ impl DbRepo {
         actor_gid: u32,
         supplementary_groups: &[u32],
     ) -> Result<(), String> {
+        self.unlink_symlink_entry_for_subject_acl(
+            symlink_id,
+            parent_id,
+            name,
+            actor_uid,
+            actor_gid,
+            supplementary_groups,
+            false,
+        )
+    }
+
+    pub fn unlink_symlink_entry_for_subject_acl(
+        &self,
+        symlink_id: u64,
+        parent_id: Option<u64>,
+        name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+        use_posix_acl: bool,
+    ) -> Result<(), String> {
         self.unlink_symlink_entry_internal(
             symlink_id,
             parent_id,
             name,
             actor_uid,
-            Some((actor_uid, actor_gid, supplementary_groups)),
+            Some((actor_uid, actor_gid, supplementary_groups, use_posix_acl)),
         )
     }
 
@@ -10732,7 +10763,7 @@ impl DbRepo {
         parent_id: Option<u64>,
         name: &str,
         actor_uid: u32,
-        parent_actor: Option<(u32, u32, &[u32])>,
+        parent_actor: Option<(u32, u32, &[u32], bool)>,
     ) -> Result<(), String> {
         let namespace_key = Self::namespace_serialization_key(parent_id, name)?;
         let id = CString::new(symlink_id.to_string()).unwrap();
@@ -10747,14 +10778,13 @@ impl DbRepo {
             {
                 return Err(NAMESPACE_SOURCE_CHANGED.to_string());
             }
-            if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
-                Self::require_parent_write_search_on_conn(
-                    tx.conn,
-                    parent_id,
-                    actor_uid,
-                    actor_gid,
-                    actor_groups,
-                )?;
+            if let Some((actor_uid, actor_gid, actor_groups, use_posix_acl)) = parent_actor {
+                let check = if use_posix_acl {
+                    Self::require_parent_write_search_acl_on_conn
+                } else {
+                    Self::require_parent_write_search_on_conn
+                };
+                check(tx.conn, parent_id, actor_uid, actor_gid, actor_groups)?;
             }
             Self::require_sticky_removal_on_conn(
                 tx.conn, parent_id, "symlink", symlink_id, actor_uid,
@@ -10795,12 +10825,33 @@ impl DbRepo {
         actor_gid: u32,
         supplementary_groups: &[u32],
     ) -> Result<DirectoryUnlinkOutcome, String> {
+        self.unlink_directory_entry_for_subject_acl(
+            directory_id,
+            parent_id,
+            name,
+            actor_uid,
+            actor_gid,
+            supplementary_groups,
+            false,
+        )
+    }
+
+    pub fn unlink_directory_entry_for_subject_acl(
+        &self,
+        directory_id: u64,
+        parent_id: Option<u64>,
+        name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+        use_posix_acl: bool,
+    ) -> Result<DirectoryUnlinkOutcome, String> {
         self.unlink_directory_entry_internal(
             directory_id,
             parent_id,
             name,
             actor_uid,
-            Some((actor_uid, actor_gid, supplementary_groups)),
+            Some((actor_uid, actor_gid, supplementary_groups, use_posix_acl)),
         )
     }
 
@@ -10810,7 +10861,7 @@ impl DbRepo {
         parent_id: Option<u64>,
         name: &str,
         actor_uid: u32,
-        parent_actor: Option<(u32, u32, &[u32])>,
+        parent_actor: Option<(u32, u32, &[u32], bool)>,
     ) -> Result<DirectoryUnlinkOutcome, String> {
         if name.is_empty() || name == "/" || name == "." || name == ".." || name.contains('/') {
             return Err("invalid directory unlink name".to_string());
@@ -10854,14 +10905,13 @@ impl DbRepo {
             {
                 return Ok(DirectoryUnlinkOutcome::SourceChanged);
             }
-            if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
-                Self::require_parent_write_search_on_conn(
-                    conn,
-                    parent_id,
-                    actor_uid,
-                    actor_gid,
-                    actor_groups,
-                )?;
+            if let Some((actor_uid, actor_gid, actor_groups, use_posix_acl)) = parent_actor {
+                let check = if use_posix_acl {
+                    Self::require_parent_write_search_acl_on_conn
+                } else {
+                    Self::require_parent_write_search_on_conn
+                };
+                check(conn, parent_id, actor_uid, actor_gid, actor_groups)?;
             }
             Self::require_sticky_removal_on_conn(conn, parent_id, "dir", directory_id, actor_uid)?;
             let children = fetch_single_text(exec_params(conn, &children_sql, &[&id])?)?;
@@ -13673,13 +13723,36 @@ impl DbRepo {
         actor_gid: u32,
         supplementary_groups: &[u32],
     ) -> Result<FileUnlinkOutcome, String> {
+        self.unlink_file_entry_for_subject_acl(
+            file_id,
+            hidden_name,
+            parent_id,
+            old_name,
+            actor_uid,
+            actor_gid,
+            supplementary_groups,
+            false,
+        )
+    }
+
+    pub fn unlink_file_entry_for_subject_acl(
+        &self,
+        file_id: u64,
+        hidden_name: &str,
+        parent_id: Option<u64>,
+        old_name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+        use_posix_acl: bool,
+    ) -> Result<FileUnlinkOutcome, String> {
         self.unlink_file_entry_internal(
             file_id,
             hidden_name,
             parent_id,
             old_name,
             actor_uid,
-            Some((actor_uid, actor_gid, supplementary_groups)),
+            Some((actor_uid, actor_gid, supplementary_groups, use_posix_acl)),
         )
     }
 
@@ -13690,7 +13763,7 @@ impl DbRepo {
         parent_id: Option<u64>,
         old_name: &str,
         actor_uid: u32,
-        parent_actor: Option<(u32, u32, &[u32])>,
+        parent_actor: Option<(u32, u32, &[u32], bool)>,
     ) -> Result<FileUnlinkOutcome, String> {
         if hidden_name.is_empty() || old_name.is_empty() {
             return Err("unlink name is empty".to_string());
@@ -13757,14 +13830,13 @@ impl DbRepo {
             let primary =
                 fetch_single_text_option(exec_params(conn, &sql_primary, &namespace_params)?)?
                     .is_some();
-            if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
-                Self::require_parent_write_search_on_conn(
-                    conn,
-                    parent_id,
-                    actor_uid,
-                    actor_gid,
-                    actor_groups,
-                )?;
+            if let Some((actor_uid, actor_gid, actor_groups, use_posix_acl)) = parent_actor {
+                let check = if use_posix_acl {
+                    Self::require_parent_write_search_acl_on_conn
+                } else {
+                    Self::require_parent_write_search_on_conn
+                };
+                check(conn, parent_id, actor_uid, actor_gid, actor_groups)?;
             }
             Self::require_sticky_removal_on_conn(conn, parent_id, "file", file_id, actor_uid)?;
             let outcome = if primary {

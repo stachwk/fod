@@ -384,9 +384,12 @@ ACL and mode changes therefore serialize against creation authorization.
 
 `cargo check --workspace --offline` and rustfmt validation passed. The mounted
 ACL integration scenario has not yet been rerun against this implementation;
-keep that behavioral validation open. Parent ACL checks for unlink, rmdir and
-rename still need the same transaction-level review. This was a source-level
-finding, not a reproduced data-loss case.
+keep that behavioral validation open. `unlink`, `rmdir` and both parents of
+`rename` now perform the write+search check through the parent access ACL (or
+mode bits when no ACL exists) inside the namespace mutation transaction. The
+parent row lock serializes each check with ACL and mode changes, including for
+the durable logical root. Mounted ACL behavior still needs validation. This
+was a source-level finding, not a reproduced data-loss case.
 
 ### Logical root metadata
 
@@ -449,7 +452,9 @@ remain available for internal callers and do not carry a request identity.
 - Chmod/chown and sticky-bit authorization use locked primary rows as described
   above. Transactional parent write/search checks cover regular-file,
   directory, special-file, symlink, and hardlink creation, plus file and
-  symlink unlink, `rmdir`, and rename. POSIX ACL xattr writes now check inode
+  symlink unlink, `rmdir`, and rename. ACL-enabled mounts use the parent access
+  ACL for namespace removal and movement, with the same checks and row locks
+  inside each PostgreSQL transaction. POSIX ACL xattr writes now check inode
   ownership under the write transaction; default ACL inheritance now shares the
   child creation transaction (mounted validation pending). Root `setattr`
   authorization uses the locked inode metadata paths. Path truncate now has an

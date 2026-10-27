@@ -5256,7 +5256,7 @@ impl FodFuse {
     ) -> Result<(), String> {
         let session_id = self.session_id.unwrap_or(0);
         let hidden_name = format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
-        let outcome = self.repo.unlink_file_entry_for_subject(
+        let outcome = self.repo.unlink_file_entry_for_subject_acl(
             file_id,
             &hidden_name,
             parent_id,
@@ -5264,6 +5264,7 @@ impl FodFuse {
             subject.uid,
             subject.gid,
             &subject.groups.iter().copied().collect::<Vec<_>>(),
+            self.acl_enabled,
         )?;
         if outcome == FileUnlinkOutcome::SourceChanged {
             return Err("FOD_UNLINK_SOURCE_CHANGED".to_string());
@@ -8142,13 +8143,14 @@ impl Filesystem for FodFuse {
                 )
             }
             Some("symlink") => match entry_id {
-                Some(symlink_id) => self.repo.unlink_symlink_entry_for_subject(
+                Some(symlink_id) => self.repo.unlink_symlink_entry_for_subject_acl(
                     symlink_id,
                     parent_id,
                     name.to_string_lossy().as_ref(),
                     subject.uid,
                     subject.gid,
                     &subject.groups.iter().copied().collect::<Vec<_>>(),
+                    self.acl_enabled,
                 ),
                 None => Err("missing symlink id".to_string()),
             },
@@ -8252,13 +8254,14 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        match self.repo.unlink_directory_entry_for_subject(
+        match self.repo.unlink_directory_entry_for_subject_acl(
             directory_id,
             resolved.parent_id,
             name.to_string_lossy().as_ref(),
             subject.uid,
             subject.gid,
             &subject.groups.iter().copied().collect::<Vec<_>>(),
+            self.acl_enabled,
         ) {
             Ok(DirectoryUnlinkOutcome::Removed) => {
                 let _ = self.append_journal_event(
@@ -8580,7 +8583,7 @@ impl Filesystem for FodFuse {
 
                 match self
                     .repo
-                    .rename_namespace_replace_with_ownership_guard_for_subject(
+                    .rename_namespace_replace_with_ownership_guard_for_subject_acl(
                         source,
                         old_parent_id,
                         &old_name,
@@ -8590,6 +8593,7 @@ impl Filesystem for FodFuse {
                         subject.uid,
                         subject.gid,
                         &subject.groups.iter().copied().collect::<Vec<_>>(),
+                        self.acl_enabled,
                     ) {
                     Ok(RenameFileReplaceOutcome::Applied) => {
                         if expected_target.is_some() {
