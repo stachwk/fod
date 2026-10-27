@@ -629,6 +629,10 @@ Status: active design direction, but the main decisions below are already taken.
 - No known open `file_metadata` gaps remain beyond the already-covered `change_date`/ctime tracking, `read`-driven `atime`, write/truncate/touch coverage, explicit `touch -a` / `touch -m` semantics, zero-length `write` handling, `truncate` no-op handling for unchanged sizes, and `utimens` no-op handling for unchanged timestamps on files and directories. Keep the regression tests in place.
 - No known open permission gaps remain beyond the already-covered sticky-bit enforcement, owner/root checks, supplementary-group-aware `chown`, symlink metadata handling, special-bit clearing on ownership changes, unchanged-ownership `chown`/`chmod` no-op behavior on files and directories, and directory `setgid`/`setuid` inheritance semantics. Keep the regression tests in place.
 
+### POSIX Conformance Audit
+
+- [ ] Audit every POSIX requirement that applies to FOD's declared filesystem API and supported operation set. First identify the applicable POSIX editions, normative sections, and optional/XSI interfaces; classify Linux-specific behavior, FOD extensions, and out-of-scope requirements explicitly. Build a requirement matrix mapping each item to implementation evidence and a regression test or `pjdfstest` case, with status `pass`, `fail`, `not implemented`, or `not applicable`. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
+
 ### pjdfstest Observations
 
 - FOD keeps directory `setgid` bits on ownership changes to match Linux-like behavior observed in `pjdfstest`, while still clearing special bits on regular files.
