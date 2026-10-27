@@ -133,6 +133,49 @@ def assert_mutations_denied_to_nobody(path: Path) -> None:
     assert after.st_size == expected_size, (expected_size, after.st_size)
     assert after.st_mtime_ns == before.st_mtime_ns, (before.st_mtime_ns, after.st_mtime_ns)
 
+    omit_times = subprocess.run(
+        [
+            "sudo",
+            "-n",
+            "-u",
+            "nobody",
+            "python3",
+            "-c",
+            """
+import ctypes
+import os
+import sys
+
+class Timespec(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_long), ("tv_nsec", ctypes.c_long)]
+
+omit = (1 << 30) - 2
+times = (Timespec * 2)(Timespec(0, omit), Timespec(0, omit))
+libc = ctypes.CDLL(None, use_errno=True)
+libc.utimensat.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(Timespec), ctypes.c_int]
+libc.utimensat.restype = ctypes.c_int
+result = libc.utimensat(-100, os.fsencode(sys.argv[1]), times, 0)
+if result != 0:
+    error = ctypes.get_errno()
+    raise OSError(error, os.strerror(error), sys.argv[1])
+""",
+            str(path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert omit_times.returncode == 0, omit_times.stderr
+    after_omit = path.stat()
+    assert after_omit.st_atime_ns == after.st_atime_ns, (
+        after.st_atime_ns,
+        after_omit.st_atime_ns,
+    )
+    assert after_omit.st_mtime_ns == after.st_mtime_ns, (
+        after.st_mtime_ns,
+        after_omit.st_mtime_ns,
+    )
+
 
 def assert_non_owner_timestamp_rules(path: Path) -> None:
     root_probe = subprocess.run(

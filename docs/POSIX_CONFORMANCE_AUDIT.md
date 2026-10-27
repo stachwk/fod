@@ -108,9 +108,11 @@ the current time (or to omit both); setting specific times requires ownership or
 appropriate privilege. The mounted ACL regression grants a named user write
 access, changes the file owner to `nobody`, verifies the named user can set
 current times, and verifies a specific-time update fails with `EPERM` without
-changing mtime. `make test-acl-mount-option` passed on FOD 3.4.108. This records
-those authorization cases only; the broader metadata and timestamp row remains
-Pending.
+changing mtime. The regression also calls `utimensat()` as
+`nobody` with both times set to `UTIME_OMIT` on a file whose ACL denies access;
+the call succeeds and leaves atime and mtime unchanged. All cases passed in
+`make test-acl-mount-option` on FOD 3.4.109. The broader metadata and timestamp
+row remains Pending.
 
 ## Audit procedure
 
