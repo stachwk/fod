@@ -240,10 +240,15 @@ passed nine sticky-bit cases with replica replay paused, alongside earlier
 FUSE unit tests passed 69/69; version checks passed 10/10.
 
 This closes the sticky-bit check/act gap for stored parents in those mutation
-transactions. It does not establish transactional parent write/search access
-checks or ACL/mode synchronization. The logical root still has synthesized
-mode/owner attributes, with no stored root inode or configurable sticky mode;
-persisted root metadata is part of the remaining parent-permission work.
+transactions.
+
+FOD 3.4.56 adds a primary transaction check for `mkdir` under stored parents
+when ACL support is disabled. It locks the parent row while checking the
+requester's write+search mode bits and supplementary groups, so a concurrent
+`chmod` is ordered with directory creation. The backend regression verifies
+both denial and supplementary-group access. The logical root still has
+synthesized mode/owner attributes; ACL-enabled `mkdir` and other namespace
+mutations remain outside this first increment.
 
 ## Confirmed routing and enforcement
 
@@ -364,10 +369,12 @@ families still require the remaining authority review.
   mutation's preconditions and partial-block read/modify/write input for
   primary validation in its commit transaction. The historical unlink failure
   establishes why read routing affects mutation correctness.
-- Chmod/chown and sticky-bit authorization now use locked primary rows as
-  described above. Parent write/search access (including persisted root
-  metadata), ACL/mode updates and truncate/timestamp authorization still
-  require review; shared database credentials do not replace these decisions.
+- Chmod/chown and sticky-bit authorization use locked primary rows as described
+  above. Transactional parent write/search checks still need to cover file,
+  special-file, symlink and hardlink creation, unlink, rmdir and rename;
+  root metadata and ACL-enabled authorization also remain open. ACL/mode
+  synchronization and truncate/timestamp authorization require review as well.
+  Shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is validated as writable but is not
   compared with the data source's cluster/filesystem identity before normal
   read-only mount leases are registered. Configuration and identity validation

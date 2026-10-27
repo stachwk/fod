@@ -2647,6 +2647,51 @@ fn namespace_creation_rejects_missing_parent_and_special_file_replay() -> Result
 }
 
 #[test]
+fn create_directory_checks_locked_parent_write_and_search_permissions() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let parent_name = unique_name("mkdir_parent_access");
+    let parent_id = repo.create_directory(
+        None,
+        &parent_name,
+        0o700,
+        1000,
+        3000,
+        &unique_name("mkdir_parent_access_seed"),
+    )?;
+
+    let denied = repo.create_directory_for_subject(
+        Some(parent_id),
+        "denied-child",
+        0o700,
+        2000,
+        2000,
+        &unique_name("mkdir_denied_child_seed"),
+        &[2000],
+    );
+    assert_eq!(
+        denied.unwrap_err(),
+        fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
+    );
+    assert_eq!(repo.count_directory_children(parent_id)?, 0);
+
+    repo.update_directory_mode(parent_id, "730")?;
+    let allowed_child = repo.create_directory_for_subject(
+        Some(parent_id),
+        "supplementary-group-child",
+        0o700,
+        2000,
+        2000,
+        &unique_name("mkdir_allowed_child_seed"),
+        &[2000, 3000],
+    )?;
+    assert_eq!(repo.count_directory_children(parent_id)?, 1);
+    repo.delete_directory_entry(allowed_child)?;
+    repo.delete_directory_entry(parent_id)?;
+    Ok(())
+}
+
+#[test]
 fn inode_permission_changes_authorize_locked_owner_and_preserve_fields() -> Result<(), String> {
     use fod_rust_hotpath::pg::{InodePermissionChange, InodePermissionOutcome};
     let _guard = ENV_LOCK.lock().unwrap();

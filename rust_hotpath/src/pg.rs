@@ -67,6 +67,7 @@ const REPLAYABLE_SQL_ERROR_PREFIX: &str = "__FOD_REPLAYABLE_SQL_ERROR__: ";
 const UNIQUE_VIOLATION_ERROR_PREFIX: &str = "SQLSTATE 23505:";
 pub const NAMESPACE_ENTRY_EXISTS_PREFIX: &str = "SQLSTATE 23505: FOD_NAMESPACE_ENTRY_EXISTS:";
 pub const STICKY_PERMISSION_DENIED: &str = "FOD_STICKY_PERMISSION_DENIED";
+pub const PARENT_ACCESS_DENIED: &str = "FOD_PARENT_ACCESS_DENIED";
 pub const NAMESPACE_SOURCE_CHANGED: &str = "FOD_NAMESPACE_SOURCE_CHANGED";
 pub const NAMESPACE_PARENT_MISSING_PREFIX: &str = "FOD_NAMESPACE_PARENT_MISSING:";
 const REPLICA_SCORE_UNKNOWN_LATENCY_MICROS: u64 = 5_000;
@@ -5872,6 +5873,49 @@ impl DbRepo {
         Ok(())
     }
 
+    /// Check write+search access on a stored parent while holding the row lock
+    /// through the namespace mutation. The synthetic root has no stored row;
+    /// FUSE's fixed root attributes and kernel permission check cover it.
+    unsafe fn require_parent_write_search_on_conn(
+        conn: *mut PGconn,
+        parent_id: Option<u64>,
+        actor_uid: u32,
+        actor_gid: u32,
+        actor_groups: &[u32],
+    ) -> Result<(), String> {
+        if actor_uid == 0 {
+            return Ok(());
+        }
+        let Some(parent_id) = parent_id else {
+            return Ok(());
+        };
+        let sql = CString::new(
+            "SELECT uid, gid, mode FROM directories WHERE id_directory = $1 FOR NO KEY UPDATE",
+        )
+        .unwrap();
+        let parent = CString::new(parent_id.to_string()).unwrap();
+        let row = fetch_first_row_texts(exec_params(conn, &sql, &[&parent])?)?;
+        if row.len() != 3 {
+            return Err(format!(
+                "{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared"
+            ));
+        }
+        let owner_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
+        let owner_gid = row[1].parse::<u32>().map_err(|err| err.to_string())?;
+        let mode = u32::from_str_radix(&row[2], 8).map_err(|err| err.to_string())?;
+        let allowed = if actor_uid == owner_uid {
+            (mode >> 6) & 0o7
+        } else if actor_gid == owner_gid || actor_groups.contains(&owner_gid) {
+            (mode >> 3) & 0o7
+        } else {
+            mode & 0o7
+        };
+        if allowed & 0o3 != 0o3 {
+            return Err(PARENT_ACCESS_DENIED.to_string());
+        }
+        Ok(())
+    }
+
     fn namespace_serialization_key(parent_id: Option<u64>, name: &str) -> Result<CString, String> {
         CString::new(format!(
             "fod:write:destination:{}:{}:{name}",
@@ -10877,6 +10921,48 @@ impl DbRepo {
         gid: u32,
         inode_seed: &str,
     ) -> Result<u64, String> {
+        self.create_directory_internal(
+            target_parent_id,
+            target_name,
+            mode,
+            uid,
+            gid,
+            inode_seed,
+            None,
+        )
+    }
+
+    pub fn create_directory_for_subject(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_directory_internal(
+            target_parent_id,
+            target_name,
+            mode,
+            uid,
+            gid,
+            inode_seed,
+            Some((uid, gid, supplementary_groups)),
+        )
+    }
+
+    fn create_directory_internal(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+        parent_actor: Option<(u32, u32, &[u32])>,
+    ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
         let inode_seed_text = inode_seed.to_string();
         let mode_text = format!("{:o}", mode);
@@ -10915,6 +11001,15 @@ impl DbRepo {
         let result = self.with_cached_connection(|conn| unsafe {
             let result = transactional_replayable(conn, |conn| {
                 Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
+                    Self::require_parent_write_search_on_conn(
+                        conn,
+                        target_parent_id,
+                        actor_uid,
+                        actor_gid,
+                        actor_groups,
+                    )?;
+                }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())

@@ -25,7 +25,8 @@ use rust_hotpath::pg::{
     InodePermissionChange, InodePermissionOutcome, PersistBlockRow, RenameFileReplaceOutcome,
     RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
     NAMESPACE_ENTRY_EXISTS_PREFIX, NAMESPACE_PARENT_MISSING_PREFIX, NAMESPACE_SOURCE_CHANGED,
-    STICKY_PERMISSION_DENIED, STORAGE_QUOTA_EXCEEDED_PREFIX, WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+    PARENT_ACCESS_DENIED, STICKY_PERMISSION_DENIED, STORAGE_QUOTA_EXCEEDED_PREFIX,
+    WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
@@ -4849,7 +4850,9 @@ impl FodFuse {
     }
 
     fn namespace_mutation_errno(error: &str) -> libc::c_int {
-        if error.starts_with(NAMESPACE_ENTRY_EXISTS_PREFIX) {
+        if error == PARENT_ACCESS_DENIED {
+            libc::EACCES
+        } else if error.starts_with(NAMESPACE_ENTRY_EXISTS_PREFIX) {
             libc::EEXIST
         } else if error == STICKY_PERMISSION_DENIED {
             libc::EPERM
@@ -7878,14 +7881,31 @@ impl Filesystem for FodFuse {
                 parent_path, child_path, mode, subject.uid, subject.gid
             ),
         );
-        match self.repo.create_directory(
-            parent_id,
-            name.to_string_lossy().as_ref(),
-            mode,
-            subject.uid,
-            subject.gid,
-            &child_path,
-        ) {
+        let target_name = name.to_string_lossy();
+        let create_result = if self.acl_enabled {
+            // ACL evaluation uses the kernel/FUSE ACL path until ACL entries
+            // are checked under the same PostgreSQL parent-row lock.
+            self.repo.create_directory(
+                parent_id,
+                target_name.as_ref(),
+                mode,
+                subject.uid,
+                subject.gid,
+                &child_path,
+            )
+        } else {
+            let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
+            self.repo.create_directory_for_subject(
+                parent_id,
+                target_name.as_ref(),
+                mode,
+                subject.uid,
+                subject.gid,
+                &child_path,
+                &supplementary_groups,
+            )
+        };
+        match create_result {
             Ok(directory_id) => {
                 let _ = self.copy_default_acl_to_child(&parent_path, "dir", directory_id, true);
                 let _ = self.append_journal_event(
@@ -9966,13 +9986,21 @@ impl Filesystem for FodFuse {
 mod tests {
     use super::{
         assemble_degraded_snapshot, client_session_hostname, ioctl_is_mutating,
-        should_update_atime, AtimePolicy, SetattrMutationFlags, WriteState,
+        should_update_atime, AtimePolicy, FodFuse, SetattrMutationFlags, WriteState,
     };
     use crate::write_payload::{BlockWriteState, WritePayloadState};
     use fuser::{FileAttr, FileType, INodeNo};
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn parent_access_denial_maps_to_eacces() {
+        assert_eq!(
+            FodFuse::namespace_mutation_errno(super::PARENT_ACCESS_DENIED),
+            libc::EACCES
+        );
+    }
 
     fn file_attr(kind: FileType, atime_age_secs: u64, mtime_age_secs: u64) -> FileAttr {
         let now = SystemTime::now();
