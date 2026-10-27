@@ -126,9 +126,11 @@ remains Pending.
 The mounted root-permissions regression records root `st_mtime_ns` and
 `st_ctime_ns` before and after creating and removing a direct child. Both values
 must advance after each namespace mutation. `make test-mount-root-permissions`
-passed on FOD 3.4.111. This verifies visible single-mount root timestamp
-behavior; it does not yet verify concurrent cross-mount cache visibility or all
-root metadata fields, so the metadata row remains Pending.
+passed on FOD 3.4.111. A second regression mutates the root through one mount
+and observes both timestamps through another with the metadata TTL set to zero;
+`make test-root-directory-metadata-multimount` passed on FOD 3.4.112. The second
+mount therefore re-fetches root attributes after each namespace mutation. This
+does not cover every root metadata field, so the metadata row remains Pending.
 
 ## Audit procedure
 

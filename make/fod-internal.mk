@@ -781,6 +781,7 @@ help:
 		'  make test-metadata - metadata: stat/chmod/chown/access' \
 		'  make test-mount-workflow - mount + dd + stat + ls + rename + chown + chmod + access' \
 		'  make test-mount-root-permissions - fresh mount + directory chmod/chown/write smoke' \
+		'  make test-root-directory-metadata-multimount - verify logical root timestamps across two mounts' \
 		'  make test-mount-wrapper-options - verify mount.fod wrapper option parsing and PATH/ro handling' \
 		'  make test-fuse-context-identity - verify FUSE uid/gid context handling' \
 		'  make test-symlink - mount + ln -s + readlink + rename symlink + orphaned symlink ls on the symlink path' \
@@ -1704,6 +1705,10 @@ test-mount-workflow: build-runtime venv up
 
 test-mount-root-permissions: reset
 	@ADMP_TRACE_ENV="$(ADMP_TRACE_ENV)" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_mount_root_permissions.sh
+
+.PHONY: test-root-directory-metadata-multimount
+test-root-directory-metadata-multimount: build-runtime venv init
+	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_root_directory_metadata_multimount.py
 
 test-mount-wrapper-options:
 	bash tests/integration/test_mount_wrapper_options.sh
