@@ -5,7 +5,7 @@ Document role: topic review/specification supporting the
 summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
 [documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
 
-Date: 2026-10-25. Updated: 2026-10-26. Scope: the current working tree, Rust FUSE runtime and its
+Date: 2026-10-25. Updated: 2026-10-27. Scope: the current working tree, Rust FUSE runtime and its
 PostgreSQL repository. The historical unlink data-loss case below is repaired
 and its mounted regression was verified on 2026-10-26. Other mutation families
 still require the reviews listed at the end.
@@ -195,11 +195,46 @@ from chmod/chown of files, hardlinks, directories and symlinks. The same run
 passed the existing permission/sticky/chown compatibility test and all earlier
 namespace/unlink/rmdir regressions:
 `artifacts/integration/unlink-primary-authority-20261026T200613Z/`.
-The compatibility test does not establish transactional sticky-bit or ACL
-ordering. Parent access checks, sticky-bit authorization during namespace
-mutations, ACL/mode atomicity and truncate/timestamp authorization still need
-their own transactional coverage. This change does not make every `setattr`
-field part of one transaction.
+That compatibility test alone did not establish transactional sticky-bit or
+ACL ordering. FOD 3.4.53 adds sticky-bit transactions and regressions below.
+Parent access checks, ACL/mode atomicity and truncate/timestamp authorization
+still need their own transactional coverage. This change does not make every
+`setattr` field part of one transaction.
+
+## Current transactional sticky-bit checks
+
+FOD 3.4.53 moves sticky-bit authorization from pre-transaction FUSE attribute
+reads into the primary transactions for file/hardlink unlink, symlink unlink,
+rmdir and rename. Each guarded operation holds a `FOR SHARE` lock on its
+stored parent directory while checking its current mode and owner. If sticky
+mode requires checking the victim owner, that inode owner is also read under
+a row lock held through commit. Hardlinks use the backing file's owner rather
+than the alias row's UID. Root UID, directory owner and victim owner retain
+their sticky-bit exemptions. Denials return `EPERM` and roll back the mutation.
+
+Rename checks both the removed source and any replaced target after binding
+revalidation, before changing either entry. FUSE rename resolution, backing
+hardlink lookup and mutation parent-ID lookup now use primary. Symlink unlink
+additionally locks and validates its full expected `(id, parent, name)` binding
+before deletion, instead of deleting a previously resolved ID alone.
+
+The full backend suite passed 37/37 tests. New regressions cover all removal
+kinds, all source and target kinds for rename, permitted root/owner exemptions,
+wrong symlink bindings, and five mutations blocked by an uncommitted parent
+mode/owner change. The test observes the actual PostgreSQL lock wait; after
+the permission transaction commits, each mutation rejects the former owner.
+
+The complete two-mount `release-lto` / `integration-test-hooks` regression
+passed nine sticky-bit cases with replica replay paused, alongside earlier
+40 cross-type cases, chmod/chown, unlink, rmdir and permission compatibility:
+`artifacts/integration/unlink-primary-authority-20261027T065500Z/`.
+FUSE unit tests passed 69/69; version checks passed 10/10.
+
+This closes the sticky-bit check/act gap for stored parents in those mutation
+transactions. It does not establish transactional parent write/search access
+checks or ACL/mode synchronization. The logical root still has synthesized
+mode/owner attributes, with no stored root inode or configurable sticky mode;
+persisted root metadata is part of the remaining parent-permission work.
 
 ## Confirmed routing and enforcement
 
@@ -210,7 +245,8 @@ field part of one transaction.
 | Open/client sessions, ownership and heartbeat | `with_control_connection` -> the same primary targets; normal read-only mounts use a writable control repo | Remote open/unlink/recreate test passed with distinct inode generations and old-handle writes isolated from the replacement |
 | `rename` / replace | Primary transaction with destination/file locks and source/target revalidation | Source inspection confirms transaction guards; test details are recorded below |
 | `create`, mkdir, mknod, link, symlink | Shared destination advisory lock and cross-table vacancy check in the primary insertion transaction | All 40 root/nested cross-type conflicts, concurrent creators and directory/FIFO ID separation passed; permission checks remain open |
-| `rmdir` | Primary namespace advisory lock and directory row lock, check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
+| `rmdir` | Primary namespace/row locks, sticky-bit check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
+| Sticky bit on unlink/rmdir/rename | Parent/victim owner row locks inside the primary mutation transaction | Concurrent parent permission commit and nine stale-replica cases passed |
 | chmod/chown | Locked primary inode, seed check and authorization in the same update transaction | Concurrent chown and stale-replica owner rejection passed; partial owner fields preserved |
 | Timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Authorization, ACL/mode atomicity and other precondition checks still require scrutiny |
 | Explicit degraded replica-only mount | Read-only FUSE mount with mutation guards | It deliberately does not acquire/renew primary-backed leases or grant write ownership |
@@ -319,10 +355,10 @@ families still require the remaining authority review.
   mutation's preconditions and partial-block read/modify/write input for
   primary validation in its commit transaction. The historical unlink failure
   establishes why read routing affects mutation correctness.
-- Chmod/chown authorization now uses the locked primary inode row as described
-  above. Sticky-bit and parent-access checks during namespace mutations,
-  ACL/mode updates and truncate/timestamp authorization still require review;
-  shared database credentials do not replace those user-level decisions.
+- Chmod/chown and sticky-bit authorization now use locked primary rows as
+  described above. Parent write/search access (including persisted root
+  metadata), ACL/mode updates and truncate/timestamp authorization still
+  require review; shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is validated as writable but is not
   compared with the data source's cluster/filesystem identity before normal
   read-only mount leases are registered. Configuration and identity validation

@@ -66,6 +66,8 @@ const PERSIST_BLOCK_STAGE_TABLE: &str = "fod_persist_block_stage";
 const REPLAYABLE_SQL_ERROR_PREFIX: &str = "__FOD_REPLAYABLE_SQL_ERROR__: ";
 const UNIQUE_VIOLATION_ERROR_PREFIX: &str = "SQLSTATE 23505:";
 pub const NAMESPACE_ENTRY_EXISTS_PREFIX: &str = "SQLSTATE 23505: FOD_NAMESPACE_ENTRY_EXISTS:";
+pub const STICKY_PERMISSION_DENIED: &str = "FOD_STICKY_PERMISSION_DENIED";
+pub const NAMESPACE_SOURCE_CHANGED: &str = "FOD_NAMESPACE_SOURCE_CHANGED";
 pub const NAMESPACE_PARENT_MISSING_PREFIX: &str = "FOD_NAMESPACE_PARENT_MISSING:";
 const REPLICA_SCORE_UNKNOWN_LATENCY_MICROS: u64 = 5_000;
 const REPLICA_SCORE_LATENCY_DIVISOR: u64 = 100;
@@ -5819,6 +5821,57 @@ impl DbRepo {
         Ok(keys)
     }
 
+    /// Keep the parent mode/owner and (when needed) victim owner locked until
+    /// the namespace mutation commits. Root has no stored sticky mode yet.
+    unsafe fn require_sticky_removal_on_conn(
+        conn: *mut PGconn,
+        parent_id: Option<u64>,
+        owner_kind: &str,
+        owner_id: u64,
+        actor_uid: u32,
+    ) -> Result<(), String> {
+        if actor_uid == 0 {
+            return Ok(());
+        }
+        let Some(parent_id) = parent_id else {
+            return Ok(());
+        };
+        let sql =
+            CString::new("SELECT uid, mode FROM directories WHERE id_directory = $1 FOR SHARE")
+                .unwrap();
+        let parent = CString::new(parent_id.to_string()).unwrap();
+        let row = fetch_first_row_texts(exec_params(conn, &sql, &[&parent])?)?;
+        if row.len() != 2 {
+            return Err(format!(
+                "{NAMESPACE_PARENT_MISSING_PREFIX} sticky parent disappeared"
+            ));
+        }
+        let parent_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
+        let mode = u32::from_str_radix(&row[1], 8).map_err(|err| err.to_string())?;
+        if mode & 0o1000 == 0 || actor_uid == parent_uid {
+            return Ok(());
+        }
+        let (table, key) = match owner_kind {
+            "file" => ("files", "id_file"),
+            "dir" => ("directories", "id_directory"),
+            "symlink" => ("symlinks", "id_symlink"),
+            _ => return Err("invalid sticky owner kind".to_string()),
+        };
+        let sql = CString::new(format!(
+            "SELECT uid FROM {table} WHERE {key} = $1 FOR SHARE"
+        ))
+        .unwrap();
+        let id = CString::new(owner_id.to_string()).unwrap();
+        let uid = fetch_single_text_option(exec_params(conn, &sql, &[&id])?)?
+            .ok_or_else(|| NAMESPACE_SOURCE_CHANGED.to_string())?
+            .parse::<u32>()
+            .map_err(|err| err.to_string())?;
+        if actor_uid != uid {
+            return Err(STICKY_PERMISSION_DENIED.to_string());
+        }
+        Ok(())
+    }
+
     fn namespace_serialization_key(parent_id: Option<u64>, name: &str) -> Result<CString, String> {
         CString::new(format!(
             "fod:write:destination:{}:{}:{name}",
@@ -9972,6 +10025,7 @@ impl DbRepo {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn rename_namespace_replace_with_ownership_guard(
         &self,
         source: RenameNamespaceSource,
@@ -9980,6 +10034,7 @@ impl DbRepo {
         new_parent_id: Option<u64>,
         new_name: &str,
         expected_target: Option<RenameNamespaceTarget>,
+        actor_uid: u32,
     ) -> Result<RenameFileReplaceOutcome, String> {
         if old_name.is_empty() || new_name.is_empty() {
             return Err("rename destination name is empty".to_string());
@@ -10268,6 +10323,31 @@ impl DbRepo {
                         return Ok(RenameFileReplaceOutcome::Busy);
                     }
 
+                    Self::require_sticky_removal_on_conn(
+                        conn,
+                        old_parent_id,
+                        if source.file_id().is_some() {
+                            "file"
+                        } else {
+                            source.entry_kind()
+                        },
+                        source.file_id().unwrap_or(source.entry_id()),
+                        actor_uid,
+                    )?;
+                    if let Some(target) = expected_target {
+                        Self::require_sticky_removal_on_conn(
+                            conn,
+                            new_parent_id,
+                            if target.file_id().is_some() {
+                                "file"
+                            } else {
+                                target.entry_kind()
+                            },
+                            target.file_id().unwrap_or(target.entry_id()),
+                            actor_uid,
+                        )?;
+                    }
+
                     if let Some(target) = expected_target {
                         if let (Some(source_file_id), Some(target_file_id)) =
                             (source.file_id(), target.file_id())
@@ -10433,6 +10513,34 @@ impl DbRepo {
         })
     }
 
+    /// Remove only the expected binding, with sticky authorization in the same transaction.
+    pub fn unlink_symlink_entry(
+        &self,
+        symlink_id: u64,
+        parent_id: Option<u64>,
+        name: &str,
+        actor_uid: u32,
+    ) -> Result<(), String> {
+        let namespace_key = Self::namespace_serialization_key(parent_id, name)?;
+        let id = CString::new(symlink_id.to_string()).unwrap();
+        let parent = CString::new(parent_id.unwrap_or(0).to_string()).unwrap();
+        let name = CString::new(name).map_err(|_| "symlink name contains NUL byte".to_string())?;
+        let binding = CString::new("SELECT id_symlink FROM symlinks WHERE id_symlink=$1 AND COALESCE(id_parent,0)=$2 AND name=$3 FOR UPDATE").unwrap();
+        let delete = CString::new("DELETE FROM symlinks WHERE id_symlink=$1").unwrap();
+        self.with_transaction(|tx| unsafe {
+            Self::advisory_xact_lock_text_on_conn(tx.conn, &namespace_key)?;
+            if fetch_single_text_option(exec_params(tx.conn, &binding, &[&id, &parent, &name])?)?
+                .is_none()
+            {
+                return Err(NAMESPACE_SOURCE_CHANGED.to_string());
+            }
+            Self::require_sticky_removal_on_conn(
+                tx.conn, parent_id, "symlink", symlink_id, actor_uid,
+            )?;
+            exec_command_params(tx.conn, &delete, &[&id])
+        })
+    }
+
     pub fn delete_symlink_entry(&self, symlink_id: u64) -> Result<(), String> {
         let sql = CString::new("DELETE FROM symlinks WHERE id_symlink = $1")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -10451,6 +10559,7 @@ impl DbRepo {
         directory_id: u64,
         parent_id: Option<u64>,
         name: &str,
+        actor_uid: u32,
     ) -> Result<DirectoryUnlinkOutcome, String> {
         if name.is_empty() || name == "/" || name == "." || name == ".." || name.contains('/') {
             return Err("invalid directory unlink name".to_string());
@@ -10488,6 +10597,7 @@ impl DbRepo {
             {
                 return Ok(DirectoryUnlinkOutcome::SourceChanged);
             }
+            Self::require_sticky_removal_on_conn(conn, parent_id, "dir", directory_id, actor_uid)?;
             let children = fetch_single_text(exec_params(conn, &children_sql, &[&id])?)?;
             if matches!(children.as_str(), "t" | "true") {
                 return Ok(DirectoryUnlinkOutcome::NotEmpty);
@@ -12715,6 +12825,7 @@ impl DbRepo {
         hidden_name: &str,
         parent_id: Option<u64>,
         old_name: &str,
+        actor_uid: u32,
     ) -> Result<FileUnlinkOutcome, String> {
         if hidden_name.is_empty() || old_name.is_empty() {
             return Err("unlink name is empty".to_string());
@@ -12781,6 +12892,7 @@ impl DbRepo {
             let primary =
                 fetch_single_text_option(exec_params(conn, &sql_primary, &namespace_params)?)?
                     .is_some();
+            Self::require_sticky_removal_on_conn(conn, parent_id, "file", file_id, actor_uid)?;
             let outcome = if primary {
                 let links = fetch_single_text(exec_params(conn, &sql_links, &[&file_id_param])?)?;
                 if matches!(links.as_str(), "true" | "t") {

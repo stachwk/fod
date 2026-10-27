@@ -151,6 +151,42 @@ def main():
         results["chmod_chown_reject_stale_replica_owner"] = True
         resume()
 
+        # Parent permissions change only on primary while B retains the old owner.
+        (ma / "sticky-authority").mkdir()
+        seed(ma / "sticky-authority/file")
+        os.link(ma / "sticky-authority/file", ma / "sticky-authority/alias")
+        os.symlink("file", ma / "sticky-authority/symlink")
+        (ma / "sticky-authority/directory").mkdir()
+        seed(ma / "sticky-source-file")
+        os.link(ma / "sticky-source-file", ma / "sticky-source-alias")
+        os.symlink("missing", ma / "sticky-source-symlink")
+        (ma / "sticky-source-directory").mkdir()
+        pause()
+        with primary.cursor() as cursor:
+            cursor.execute("UPDATE fod.directories SET uid=%s,mode='1777' WHERE name='sticky-authority' AND id_parent IS NULL", (foreign_uid,))
+            cursor.execute("UPDATE fod.files SET uid=%s WHERE id_directory=(SELECT id_directory FROM fod.directories WHERE name='sticky-authority' AND id_parent IS NULL)", (foreign_uid + 1,))
+            cursor.execute("UPDATE fod.symlinks SET uid=%s WHERE id_parent=(SELECT id_directory FROM fod.directories WHERE name='sticky-authority' AND id_parent IS NULL)", (foreign_uid + 1,))
+            cursor.execute("UPDATE fod.directories SET uid=%s WHERE id_parent=(SELECT id_directory FROM fod.directories WHERE name='sticky-authority' AND id_parent IS NULL)", (foreign_uid + 1,))
+        sticky_operations = [
+            lambda: (mb / "sticky-authority/file").unlink(),
+            lambda: (mb / "sticky-authority/alias").unlink(),
+            lambda: (mb / "sticky-authority/symlink").unlink(),
+            lambda: (mb / "sticky-authority/directory").rmdir(),
+            lambda: os.rename(mb / "sticky-authority/file", mb / "sticky-authority/moved"),
+        ]
+        for source, target in (("file", "file"), ("alias", "alias"), ("symlink", "symlink"), ("directory", "directory")):
+            sticky_operations.append(lambda source=source, target=target: os.rename(mb / f"sticky-source-{source}", mb / "sticky-authority" / target))
+        for index, operation in enumerate(sticky_operations):
+            try:
+                operation()
+            except OSError as exc:
+                assert exc.errno == errno.EPERM, f"sticky authority operation {index}: {exc}"
+            else:
+                raise AssertionError(f"stale parent permissions authorized operation {index}")
+        assert query(primary, "SELECT count(*) FROM fod.files WHERE name='file' AND NOT unlinked AND id_directory=(SELECT id_directory FROM fod.directories WHERE name='sticky-authority' AND id_parent IS NULL)")[0][0] == 1
+        results["sticky_primary_authority_cases"] = len(sticky_operations)
+        resume()
+
         # Every creator must share one primary namespace across entry tables.
         seed(ma / "namespace-source")
         (ma / "namespace-nested").mkdir()

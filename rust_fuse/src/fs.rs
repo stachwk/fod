@@ -24,8 +24,8 @@ use rust_hotpath::pg::{
     DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome, GeneratedSharedBlockRows,
     InodePermissionChange, InodePermissionOutcome, PersistBlockRow, RenameFileReplaceOutcome,
     RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
-    NAMESPACE_ENTRY_EXISTS_PREFIX, NAMESPACE_PARENT_MISSING_PREFIX, STORAGE_QUOTA_EXCEEDED_PREFIX,
-    WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+    NAMESPACE_ENTRY_EXISTS_PREFIX, NAMESPACE_PARENT_MISSING_PREFIX, NAMESPACE_SOURCE_CHANGED,
+    STICKY_PERMISSION_DENIED, STORAGE_QUOTA_EXCEEDED_PREFIX, WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
@@ -2908,43 +2908,6 @@ impl FodFuse {
         Ok(())
     }
 
-    fn enforce_sticky_bit(
-        &self,
-        parent_path: &str,
-        entry_attrs: &FileAttr,
-        subject: &SubjectIdentity,
-    ) -> Result<(), libc::c_int> {
-        self.enforce_sticky_bit_from_repo(&self.repo, parent_path, entry_attrs, subject)
-    }
-
-    fn enforce_sticky_bit_from_repo(
-        &self,
-        repo: &DbRepo,
-        parent_path: &str,
-        entry_attrs: &FileAttr,
-        subject: &SubjectIdentity,
-    ) -> Result<(), libc::c_int> {
-        let parent_path = Self::normalize_path(parent_path);
-        if parent_path == "/" {
-            return Ok(());
-        }
-        let parent_attrs = match self.attrs_for_path_from_repo(repo, &parent_path) {
-            Ok(Some(attrs)) => attrs.file_attr,
-            Ok(None) => return Err(ENOENT),
-            Err(errno) => return Err(errno),
-        };
-        if (parent_attrs.perm & libc::S_ISVTX as u16) == 0 {
-            return Ok(());
-        }
-        if subject.is_root() {
-            return Ok(());
-        }
-        if subject.uid == entry_attrs.uid || subject.uid == parent_attrs.uid {
-            return Ok(());
-        }
-        Err(libc::EPERM)
-    }
-
     fn append_journal_event(
         &self,
         uid: u32,
@@ -3867,7 +3830,11 @@ impl FodFuse {
             return Ok(None);
         }
         let path = self.entry_path_for_ino(ino)?;
-        let resolved = self.repo.resolve_path(&path).map_err(|_| EIO)?;
+        let resolved = self
+            .repo
+            .authoritative_view()
+            .resolve_path(&path)
+            .map_err(|_| EIO)?;
         match (resolved.kind.as_deref(), resolved.entry_id) {
             (Some("dir"), entry_id) => Ok(entry_id),
             _ => Err(ENOENT),
@@ -4881,10 +4848,14 @@ impl FodFuse {
         Ok(())
     }
 
-    fn namespace_create_errno(error: &str) -> libc::c_int {
+    fn namespace_mutation_errno(error: &str) -> libc::c_int {
         if error.starts_with(NAMESPACE_ENTRY_EXISTS_PREFIX) {
             libc::EEXIST
-        } else if error.starts_with(NAMESPACE_PARENT_MISSING_PREFIX) {
+        } else if error == STICKY_PERMISSION_DENIED {
+            libc::EPERM
+        } else if error.starts_with(NAMESPACE_PARENT_MISSING_PREFIX)
+            || error == NAMESPACE_SOURCE_CHANGED
+        {
             ENOENT
         } else {
             EIO
@@ -5021,7 +4992,7 @@ impl FodFuse {
                         path, owner_key, err
                     );
                     release_destination("create_file");
-                    return Err(Self::namespace_create_errno(&err));
+                    return Err(Self::namespace_mutation_errno(&err));
                 }
             },
         };
@@ -5250,6 +5221,7 @@ impl FodFuse {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn unlink_file_with_primary_authority(
         &self,
         file_id: u64,
@@ -5258,12 +5230,13 @@ impl FodFuse {
         old_path: &str,
         old_name: &str,
         req_id: u64,
+        actor_uid: u32,
     ) -> Result<(), String> {
         let session_id = self.session_id.unwrap_or(0);
         let hidden_name = format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
-        let outcome = self
-            .repo
-            .unlink_file_entry(file_id, &hidden_name, parent_id, old_name)?;
+        let outcome =
+            self.repo
+                .unlink_file_entry(file_id, &hidden_name, parent_id, old_name, actor_uid)?;
         if outcome == FileUnlinkOutcome::SourceChanged {
             return Err("FOD_UNLINK_SOURCE_CHANGED".to_string());
         }
@@ -7940,7 +7913,7 @@ impl Filesystem for FodFuse {
                     Err(errno) => fuse_reply_error!(reply, errno),
                 }
             }
-            Err(err) => fuse_reply_error!(reply, Self::namespace_create_errno(&err)),
+            Err(err) => fuse_reply_error!(reply, Self::namespace_mutation_errno(&err)),
         }
     }
 
@@ -8012,34 +7985,6 @@ impl Filesystem for FodFuse {
                         return;
                     }
                 };
-                let entry_attrs = match self.attrs_for_path_from_repo(&authority, &child_path) {
-                    Ok(Some(attrs)) => attrs.file_attr,
-                    _ => {
-                        self.log_request_error(
-                            req_id,
-                            "unlink",
-                            EIO,
-                            format!("child={} lookup", child_path),
-                        );
-                        fuse_reply_error!(reply, EIO);
-                        return;
-                    }
-                };
-                if let Err(errno) = self.enforce_sticky_bit_from_repo(
-                    &authority,
-                    &parent_path,
-                    &entry_attrs,
-                    &subject,
-                ) {
-                    self.log_request_error(
-                        req_id,
-                        "unlink",
-                        errno,
-                        format!("child={} sticky bit", child_path),
-                    );
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
                 self.unlink_file_with_primary_authority(
                     file_id,
                     parent_id,
@@ -8047,42 +7992,18 @@ impl Filesystem for FodFuse {
                     &child_path,
                     name.to_string_lossy().as_ref(),
                     req_id,
+                    subject.uid,
                 )
             }
-            Some("symlink") => {
-                let entry_attrs = match self.attrs_for_path_from_repo(&authority, &child_path) {
-                    Ok(Some(attrs)) => attrs.file_attr,
-                    _ => {
-                        self.log_request_error(
-                            req_id,
-                            "unlink",
-                            EIO,
-                            format!("child={} lookup", child_path),
-                        );
-                        fuse_reply_error!(reply, EIO);
-                        return;
-                    }
-                };
-                if let Err(errno) = self.enforce_sticky_bit_from_repo(
-                    &authority,
-                    &parent_path,
-                    &entry_attrs,
-                    &subject,
-                ) {
-                    self.log_request_error(
-                        req_id,
-                        "unlink",
-                        errno,
-                        format!("child={} sticky bit", child_path),
-                    );
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
-                match entry_id {
-                    Some(symlink_id) => self.repo.delete_symlink_entry(symlink_id),
-                    None => Err("missing symlink id".to_string()),
-                }
-            }
+            Some("symlink") => match entry_id {
+                Some(symlink_id) => self.repo.unlink_symlink_entry(
+                    symlink_id,
+                    parent_id,
+                    name.to_string_lossy().as_ref(),
+                    subject.uid,
+                ),
+                None => Err("missing symlink id".to_string()),
+            },
             Some("dir") => {
                 self.log_request_error(
                     req_id,
@@ -8123,7 +8044,7 @@ impl Filesystem for FodFuse {
                 let errno = if err == "FOD_UNLINK_SOURCE_CHANGED" {
                     ENOENT
                 } else {
-                    EIO
+                    Self::namespace_mutation_errno(&err)
                 };
                 self.log_request_error(
                     req_id,
@@ -8183,35 +8104,11 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let entry_attrs = match self.attrs_for_path_from_repo(&authority, &child_path) {
-            Ok(Some(attrs)) => attrs.file_attr,
-            _ => {
-                self.log_request_error(
-                    req_id,
-                    "rmdir",
-                    EIO,
-                    format!("child={} lookup", child_path),
-                );
-                fuse_reply_error!(reply, EIO);
-                return;
-            }
-        };
-        if let Err(errno) =
-            self.enforce_sticky_bit_from_repo(&authority, &parent_path, &entry_attrs, &subject)
-        {
-            self.log_request_error(
-                req_id,
-                "rmdir",
-                errno,
-                format!("child={} sticky bit", child_path),
-            );
-            fuse_reply_error!(reply, errno);
-            return;
-        }
         match self.repo.unlink_directory_entry(
             directory_id,
             resolved.parent_id,
             name.to_string_lossy().as_ref(),
+            subject.uid,
         ) {
             Ok(DirectoryUnlinkOutcome::Removed) => {
                 let _ = self.append_journal_event(
@@ -8237,7 +8134,7 @@ impl Filesystem for FodFuse {
                     "FOD rmdir failed path={} directory_id={} err={}",
                     child_path, directory_id, err
                 );
-                fuse_reply_error!(reply, EIO);
+                fuse_reply_error!(reply, Self::namespace_mutation_errno(&err));
             }
         }
     }
@@ -8300,7 +8197,14 @@ impl Filesystem for FodFuse {
                 old_parent_path, old_path, new_parent_path, new_path
             ),
         );
-        let (kind, entry_id) = match self.resolved_entry_for_path(&old_path) {
+        let authority = self.repo.authoritative_view();
+        let resolve = |path: &str| {
+            authority
+                .resolve_path(path)
+                .map(|value| (value.kind, value.entry_id))
+                .map_err(|_| EIO)
+        };
+        let (kind, entry_id) = match resolve(&old_path) {
             Ok(value) => value,
             Err(errno) => {
                 self.log_request_error(
@@ -8328,27 +8232,16 @@ impl Filesystem for FodFuse {
         };
         let old_name = name.to_string_lossy().to_string();
         let new_name = newname.to_string_lossy().to_string();
-        let source_attrs = self.lookup_path(&old_path).ok().flatten();
+        let source_attrs = self
+            .attrs_for_path_from_repo(&authority, &old_path)
+            .ok()
+            .flatten();
         let old_ino = source_attrs
             .as_ref()
             .map(|attrs| attrs.file_attr.ino.0)
             .unwrap_or(ROOT_INO);
-        if let Some(source_attrs) = source_attrs.as_ref() {
-            if let Err(errno) =
-                self.enforce_sticky_bit(&old_parent_path, &source_attrs.file_attr, &subject)
-            {
-                self.log_request_error(
-                    req_id,
-                    "rename",
-                    errno,
-                    format!("old_path={} sticky bit", old_path),
-                );
-                fuse_reply_error!(reply, errno);
-                return;
-            }
-        }
         if old_path != new_path {
-            let existing = match self.resolved_entry_for_path(&new_path) {
+            let existing = match resolve(&new_path) {
                 Ok(value) => value,
                 Err(errno) => {
                     self.log_request_error(
@@ -8361,28 +8254,6 @@ impl Filesystem for FodFuse {
                     return;
                 }
             };
-
-            if let Some(existing_kind) = existing.0.as_deref() {
-                let existing_attrs = self.lookup_path(&new_path).ok().flatten();
-                if matches!(existing_kind, "file" | "hardlink" | "symlink" | "dir") {
-                    if let Some(existing_attrs) = existing_attrs.as_ref() {
-                        if let Err(errno) = self.enforce_sticky_bit(
-                            &new_parent_path,
-                            &existing_attrs.file_attr,
-                            &subject,
-                        ) {
-                            self.log_request_error(
-                                req_id,
-                                "rename",
-                                errno,
-                                format!("new_path={} sticky bit", new_path),
-                            );
-                            fuse_reply_error!(reply, errno);
-                            return;
-                        }
-                    }
-                }
-            }
 
             let source_is_directory = matches!(kind.as_deref(), Some("dir"));
             let target_is_directory = matches!(existing.0.as_deref(), Some("dir"));
@@ -8447,7 +8318,7 @@ impl Filesystem for FodFuse {
                 let source = match (kind.as_deref(), entry_id) {
                     (Some("file"), Some(file_id)) => RenameNamespaceSource::File { file_id },
                     (Some("hardlink"), Some(hardlink_id)) => {
-                        let file_id = match self.repo.get_hardlink_file_id(hardlink_id) {
+                        let file_id = match authority.get_hardlink_file_id(hardlink_id) {
                             Ok(Some(file_id)) => file_id,
                             Ok(None) => {
                                 self.log_request_error(
@@ -8498,7 +8369,7 @@ impl Filesystem for FodFuse {
                     (None, _) => None,
                     (Some("file"), Some(file_id)) => Some(RenameNamespaceTarget::File { file_id }),
                     (Some("hardlink"), Some(hardlink_id)) => {
-                        let file_id = match self.repo.get_hardlink_file_id(hardlink_id) {
+                        let file_id = match authority.get_hardlink_file_id(hardlink_id) {
                             Ok(Some(file_id)) => file_id,
                             Ok(None) => {
                                 self.log_request_error(
@@ -8564,6 +8435,7 @@ impl Filesystem for FodFuse {
                     new_parent_id,
                     &new_name,
                     expected_target,
+                    subject.uid,
                 ) {
                     Ok(RenameFileReplaceOutcome::Applied) => {
                         if expected_target.is_some() {
@@ -8632,7 +8504,7 @@ impl Filesystem for FodFuse {
                             "FOD req={} op=rename protected namespace replace failed old_path={} new_path={} err={}",
                             req_id, old_path, new_path, err
                         );
-                        fuse_reply_error!(reply, EIO);
+                        fuse_reply_error!(reply, Self::namespace_mutation_errno(&err));
                         return;
                     }
                 }
@@ -9878,7 +9750,7 @@ impl Filesystem for FodFuse {
                     Ok(None) => fuse_reply_error!(reply, EIO),
                     Err(errno) => fuse_reply_error!(reply, errno),
                 },
-                Err(err) => fuse_reply_error!(reply, Self::namespace_create_errno(&err)),
+                Err(err) => fuse_reply_error!(reply, Self::namespace_mutation_errno(&err)),
             }
             return;
         }
@@ -9928,7 +9800,7 @@ impl Filesystem for FodFuse {
         ) {
             Ok(_) => {}
             Err(err) => {
-                fuse_reply_error!(reply, Self::namespace_create_errno(&err));
+                fuse_reply_error!(reply, Self::namespace_mutation_errno(&err));
                 return;
             }
         };
@@ -10002,7 +9874,7 @@ impl Filesystem for FodFuse {
                 Ok(None) => fuse_reply_error!(reply, EIO),
                 Err(errno) => fuse_reply_error!(reply, errno),
             },
-            Err(err) => fuse_reply_error!(reply, Self::namespace_create_errno(&err)),
+            Err(err) => fuse_reply_error!(reply, Self::namespace_mutation_errno(&err)),
         }
     }
 
@@ -10083,7 +9955,7 @@ impl Filesystem for FodFuse {
                 if err == "FOD_LINK_SOURCE_UNAVAILABLE" {
                     ENOENT
                 } else {
-                    Self::namespace_create_errno(&err)
+                    Self::namespace_mutation_errno(&err)
                 }
             ),
         }

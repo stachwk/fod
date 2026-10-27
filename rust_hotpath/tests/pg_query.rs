@@ -276,7 +276,7 @@ fn directory_unlink_revalidates_binding_and_children() -> Result<(), String> {
     let mut fixture = NamespaceFixture::new()?;
     let repo = &fixture.repo;
     assert_eq!(
-        repo.unlink_directory_entry(fixture.directory_id, None, &fixture.directory_name)?,
+        repo.unlink_directory_entry(fixture.directory_id, None, &fixture.directory_name, 1000)?,
         DirectoryUnlinkOutcome::NotEmpty
     );
     let child = repo.create_directory(
@@ -289,14 +289,14 @@ fn directory_unlink_revalidates_binding_and_children() -> Result<(), String> {
     )?;
     fixture.child_directory_id = Some(child);
     assert_eq!(
-        repo.unlink_directory_entry(child, None, "rmdir-child")?,
+        repo.unlink_directory_entry(child, None, "rmdir-child", 1000)?,
         DirectoryUnlinkOutcome::SourceChanged
     );
     repo.exec(&format!(
         "UPDATE directories SET name = 'rmdir-moved' WHERE id_directory = {child}"
     ))?;
     assert_eq!(
-        repo.unlink_directory_entry(child, Some(fixture.directory_id), "rmdir-child")?,
+        repo.unlink_directory_entry(child, Some(fixture.directory_id), "rmdir-child", 1000)?,
         DirectoryUnlinkOutcome::SourceChanged
     );
     assert_eq!(
@@ -304,11 +304,11 @@ fn directory_unlink_revalidates_binding_and_children() -> Result<(), String> {
         Some(child)
     );
     assert_eq!(
-        repo.unlink_directory_entry(child, Some(fixture.directory_id), "rmdir-moved")?,
+        repo.unlink_directory_entry(child, Some(fixture.directory_id), "rmdir-moved", 1000)?,
         DirectoryUnlinkOutcome::Removed
     );
     assert_eq!(
-        repo.unlink_directory_entry(child, Some(fixture.directory_id), "rmdir-moved")?,
+        repo.unlink_directory_entry(child, Some(fixture.directory_id), "rmdir-moved", 1000)?,
         DirectoryUnlinkOutcome::SourceChanged
     );
     Ok(())
@@ -344,7 +344,7 @@ fn directory_unlink_waits_for_child_transaction_and_sees_its_commit() -> Result<
         .recv_timeout(std::time::Duration::from_secs(30))
         .map_err(|err| err.to_string())?;
     let remove_thread = std::thread::spawn(move || {
-        remover.unlink_directory_entry(child, Some(parent), "rmdir-gate")
+        remover.unlink_directory_entry(child, Some(parent), "rmdir-gate", 1000)
     });
     let observed_wait = (|| {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -1606,14 +1606,14 @@ fn unlink_preserves_alias_and_rejects_stale_binding_and_unsafe_purge() -> Result
     let purge = repo.purge_primary_file(file_id).unwrap_err();
     assert!(purge.contains("surviving hardlinks"), "{purge}");
     assert_eq!(
-        repo.unlink_file_entry(file_id, ".fod-unlinked-test", None, &name)?,
+        repo.unlink_file_entry(file_id, ".fod-unlinked-test", None, &name, 1000)?,
         FileUnlinkOutcome::PromotedHardlink
     );
     assert_eq!(repo.get_file_id(&format!("/{alias}"))?, Some(file_id));
     let replacement = repo.create_file(None, &name, 0o644, 1000, 1000, &name)?;
     assert_ne!(replacement, file_id);
     assert_eq!(
-        repo.unlink_file_entry(file_id, ".fod-unlinked-test", None, &name)?,
+        repo.unlink_file_entry(file_id, ".fod-unlinked-test", None, &name, 1000)?,
         FileUnlinkOutcome::SourceChanged
     );
     assert_eq!(repo.get_file_id(&format!("/{name}"))?, Some(replacement));
@@ -1648,7 +1648,7 @@ fn unlinked_open_inode_rejects_new_hardlinks_and_purge_until_last_close() -> Res
     assert!(repo.has_active_file_open_leases(file_id)?);
     let result = (|| {
         assert_eq!(
-            repo.unlink_file_entry(file_id, ".fod-unlinked-open-test", None, &name)
+            repo.unlink_file_entry(file_id, ".fod-unlinked-open-test", None, &name, 1000)
                 .map_err(|err| format!("unlink leased file: {err}"))?,
             FileUnlinkOutcome::Deferred
         );
@@ -2789,5 +2789,282 @@ fn chmod_waits_for_concurrent_chown_and_rejects_previous_owner() -> Result<(), S
             .query_scalar_text(&format!("SELECT mode FROM files WHERE id_file={file_id}"))?,
         "644"
     );
+    Ok(())
+}
+
+fn sticky_fixture() -> Result<NamespaceFixture, String> {
+    let mut fixture = NamespaceFixture::new()?;
+    fixture.child_directory_id = Some(fixture.repo.create_directory(
+        Some(fixture.directory_id),
+        "child",
+        0o755,
+        1000,
+        1000,
+        &unique_name("sticky_child"),
+    )?);
+    fixture.repo.exec(&format!(
+        "UPDATE hardlinks SET uid=3000 WHERE id_hardlink={}",
+        fixture.hardlink_id.unwrap()
+    ))?;
+    fixture.repo.ensure_client_session_schema()?;
+    Ok(fixture)
+}
+
+fn sticky_remove(
+    repo: &DbRepo,
+    operation: usize,
+    parent: u64,
+    file: u64,
+    symlink: u64,
+    child: u64,
+    actor: u32,
+) -> Result<(), String> {
+    use fod_rust_hotpath::pg::{RenameFileReplaceOutcome, RenameNamespaceSource};
+    match operation {
+        0 => repo
+            .unlink_file_entry(file, ".sticky-hidden", Some(parent), "file", actor)
+            .map(|outcome| assert_eq!(outcome, FileUnlinkOutcome::PromotedHardlink)),
+        1 => repo
+            .unlink_file_entry(file, ".sticky-hidden", Some(parent), "hardlink", actor)
+            .map(|outcome| assert_eq!(outcome, FileUnlinkOutcome::RemovedHardlink)),
+        2 => repo.unlink_symlink_entry(symlink, Some(parent), "symlink", actor),
+        3 => repo
+            .unlink_directory_entry(child, Some(parent), "child", actor)
+            .map(|outcome| assert_eq!(outcome, DirectoryUnlinkOutcome::Removed)),
+        _ => repo
+            .rename_namespace_replace_with_ownership_guard(
+                RenameNamespaceSource::File { file_id: file },
+                Some(parent),
+                "file",
+                Some(parent),
+                "renamed",
+                None,
+                actor,
+            )
+            .map(|outcome| assert_eq!(outcome, RenameFileReplaceOutcome::Applied)),
+    }
+}
+
+#[test]
+fn sticky_removal_checks_all_kinds_and_parent_owner_exemption() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    for operation in 0..5 {
+        for allowed_actor in [0, 1000, 2000] {
+            let fixture = sticky_fixture()?;
+            let parent = fixture.directory_id;
+            fixture.repo.exec(&format!(
+                "UPDATE directories SET uid=2000,mode='1777' WHERE id_directory={parent}"
+            ))?;
+            let file = fixture.file_id.unwrap();
+            let symlink = fixture.symlink_id.unwrap();
+            let child = fixture.child_directory_id.unwrap();
+            assert_eq!(
+                sticky_remove(&fixture.repo, operation, parent, file, symlink, child, 3000)
+                    .unwrap_err(),
+                fod_rust_hotpath::pg::STICKY_PERMISSION_DENIED
+            );
+            if operation == 2 {
+                assert_eq!(
+                    fixture
+                        .repo
+                        .unlink_symlink_entry(symlink, Some(parent), "wrong-binding", allowed_actor)
+                        .unwrap_err(),
+                    fod_rust_hotpath::pg::NAMESPACE_SOURCE_CHANGED
+                );
+            }
+            // Root, victim owner and directory owner are all valid exemptions.
+            sticky_remove(
+                &fixture.repo,
+                operation,
+                parent,
+                file,
+                symlink,
+                child,
+                allowed_actor,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn sticky_rename_checks_replaced_target_owner_for_every_kind() -> Result<(), String> {
+    use fod_rust_hotpath::pg::{RenameNamespaceSource as Source, RenameNamespaceTarget as Target};
+    let _guard = ENV_LOCK.lock().unwrap();
+    for kind in 0..4 {
+        let source = sticky_fixture()?;
+        let target = sticky_fixture()?;
+        let parent = target.directory_id;
+        target.repo.exec(&format!(
+            "UPDATE directories SET uid=2000,mode='1777' WHERE id_directory={parent}"
+        ))?;
+        target.repo.exec(&format!(
+            "UPDATE files SET uid=3000 WHERE id_file={}",
+            target.file_id.unwrap()
+        ))?;
+        target.repo.exec(&format!(
+            "UPDATE symlinks SET uid=3000 WHERE id_symlink={}",
+            target.symlink_id.unwrap()
+        ))?;
+        target.repo.exec(&format!(
+            "UPDATE directories SET uid=3000 WHERE id_directory={}",
+            target.child_directory_id.unwrap()
+        ))?;
+        let (source_entry, target_entry, name) = match kind {
+            0 => (
+                Source::File {
+                    file_id: source.file_id.unwrap(),
+                },
+                Target::File {
+                    file_id: target.file_id.unwrap(),
+                },
+                "file",
+            ),
+            1 => (
+                Source::Hardlink {
+                    hardlink_id: source.hardlink_id.unwrap(),
+                    file_id: source.file_id.unwrap(),
+                },
+                Target::Hardlink {
+                    hardlink_id: target.hardlink_id.unwrap(),
+                    file_id: target.file_id.unwrap(),
+                },
+                "hardlink",
+            ),
+            2 => (
+                Source::Symlink {
+                    symlink_id: source.symlink_id.unwrap(),
+                },
+                Target::Symlink {
+                    symlink_id: target.symlink_id.unwrap(),
+                },
+                "symlink",
+            ),
+            _ => (
+                Source::Directory {
+                    directory_id: source.child_directory_id.unwrap(),
+                },
+                Target::Directory {
+                    directory_id: target.child_directory_id.unwrap(),
+                },
+                "child",
+            ),
+        };
+        source.repo.exec(&format!(
+            "UPDATE directories SET uid=2000,mode='1777' WHERE id_directory={}",
+            source.directory_id
+        ))?;
+        let denied_source = source.repo.rename_namespace_replace_with_ownership_guard(
+            source_entry,
+            Some(source.directory_id),
+            name,
+            Some(source.directory_id),
+            "source-moved",
+            None,
+            3000,
+        );
+        assert_eq!(
+            denied_source.unwrap_err(),
+            fod_rust_hotpath::pg::STICKY_PERMISSION_DENIED
+        );
+        source.repo.exec(&format!(
+            "UPDATE directories SET uid=1000,mode='755' WHERE id_directory={}",
+            source.directory_id
+        ))?;
+        let result = source.repo.rename_namespace_replace_with_ownership_guard(
+            source_entry,
+            Some(source.directory_id),
+            name,
+            Some(parent),
+            name,
+            Some(target_entry),
+            1000,
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            fod_rust_hotpath::pg::STICKY_PERMISSION_DENIED
+        );
+        assert!(source
+            .repo
+            .resolve_path(&format!("/{}/{name}", source.directory_name))?
+            .entry_id
+            .is_some());
+        assert!(target
+            .repo
+            .resolve_path(&format!("/{}/{name}", target.directory_name))?
+            .entry_id
+            .is_some());
+    }
+    Ok(())
+}
+
+#[test]
+fn sticky_mutations_wait_for_parent_permission_commit_and_reject() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    for operation in 0..5 {
+        let fixture = sticky_fixture()?;
+        let parent = fixture.directory_id;
+        let file = fixture.file_id.unwrap();
+        let symlink = fixture.symlink_id.unwrap();
+        let child = fixture.child_directory_id.unwrap();
+        fixture
+            .repo
+            .exec(&format!("UPDATE files SET uid=3000 WHERE id_file={file}"))?;
+        fixture.repo.exec(&format!(
+            "UPDATE symlinks SET uid=3000 WHERE id_symlink={symlink}"
+        ))?;
+        fixture.repo.exec(&format!(
+            "UPDATE directories SET uid=3000 WHERE id_directory={child}"
+        ))?;
+        let writer = repo_with_runtime()?;
+        let remover = repo_with_runtime()?;
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let writer_thread = std::thread::spawn(move || {
+            writer.with_transaction(|tx| {
+                tx.exec(&format!(
+                    "UPDATE directories SET uid=2000,mode='1777' WHERE id_directory={parent}"
+                ))?;
+                ready_tx.send(()).map_err(|err| err.to_string())?;
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(30))
+                    .map_err(|err| err.to_string())?;
+                Ok(())
+            })
+        });
+        ready_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .map_err(|err| err.to_string())?;
+        let remove_thread = std::thread::spawn(move || {
+            sticky_remove(&remover, operation, parent, file, symlink, child, 1000)
+        });
+        let observed_wait = (|| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let count = fixture.repo.query_scalar_text("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM directories%FOR SHARE'")?;
+                if count.trim() != "0" {
+                    return Ok(());
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "sticky operation {operation} did not wait on parent permissions"
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        })();
+        release_tx.send(()).map_err(|err| err.to_string())?;
+        writer_thread
+            .join()
+            .map_err(|_| "parent writer panicked".to_string())??;
+        let outcome = remove_thread
+            .join()
+            .map_err(|_| "sticky remover panicked".to_string())?;
+        observed_wait?;
+        assert_eq!(
+            outcome.unwrap_err(),
+            fod_rust_hotpath::pg::STICKY_PERMISSION_DENIED
+        );
+    }
     Ok(())
 }
