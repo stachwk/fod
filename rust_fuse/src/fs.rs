@@ -2878,12 +2878,18 @@ impl FodFuse {
         mode: i32,
         subject: &SubjectIdentity,
     ) -> Result<bool, libc::c_int> {
+        let authority = self.repo.authoritative_view();
+        let current_attrs = self
+            .attrs_for_path_from_repo(&authority, path)?
+            .ok_or(ENOENT)?;
+        if current_attrs.file_attr.ino != attrs.ino {
+            return Ok(false);
+        }
+        let attrs = &current_attrs.file_attr;
         if !self.acl_enabled {
             return Ok(self.can_access(subject, attrs, mode));
         }
-        let acl_value = self
-            .repo
-            .authoritative_view()
+        let acl_value = authority
             .fetch_xattr_value(path, "system.posix_acl_access")
             .map_err(|_| EIO)?;
         if let Some(value) = acl_value {
@@ -3917,7 +3923,7 @@ impl FodFuse {
         }
         let obj_type = fields[0].clone();
         let process_identity = Self::process_identity();
-        let file_attr = if obj_type == "symlink" {
+        let mut file_attr = if obj_type == "symlink" {
             if fields.len() < 9 {
                 return Err(EIO);
             }
@@ -4018,6 +4024,9 @@ impl FodFuse {
                 blksize: self.block_size as u32,
             }
         };
+        if Self::normalize_path(path) == "/" {
+            file_attr.ino = INodeNo::ROOT;
+        }
         Ok(Some(ParsedAttrs {
             file_attr,
             inode_seed: fields[if obj_type == "symlink" { 8 } else { 9 }].clone(),
