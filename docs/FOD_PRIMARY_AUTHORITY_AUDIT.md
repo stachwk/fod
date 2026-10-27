@@ -365,6 +365,24 @@ families still require the remaining authority review.
 
 ## Remaining source-level review items
 
+### POSIX default ACL inheritance
+
+Source review of `FodFuse::copy_default_acl_to_child` found that inheritance is
+currently performed after the file or directory creation transaction commits.
+The helper fetches the parent's `system.posix_acl_default` through the ordinary
+read path, then writes the child's access ACL and (for directories) default ACL
+through separate generic xattr writes. The create callbacks ignore errors from
+this helper. This leaves a visibility window with no inherited ACL, can use a
+replica-routed parent ACL as input, and can report successful creation even if
+the ACL writes fail. The copied access ACL is not filtered by the requested
+creation mode as required by [Linux ACL creation semantics](https://man7.org/linux/man-pages/man5/acl.5.html).
+
+The correction must read and lock the authoritative parent ACL and create the
+child, filtered access ACL, child mode and (for a directory) inherited default
+ACL in one PostgreSQL transaction. A failure must abort the creation rather
+than leave a partially initialized inode. No data-loss reproduction is claimed
+for this source-level finding.
+
 - Mutation path resolution, hardlink counts, file sizes and attributes have
   replica-routed APIs that are also used by writable callbacks. Audit each
   mutation's preconditions and partial-block read/modify/write input for
