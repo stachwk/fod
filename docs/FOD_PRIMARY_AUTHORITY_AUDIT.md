@@ -400,6 +400,27 @@ uids. The correction needs one PostgreSQL-authoritative root metadata record,
 including mode, owner, timestamps and root-directory change updates, plus
 transactional authorization and mutation. No data-loss reproduction is claimed.
 
+### Truncate and timestamp authorization
+
+Path-based `setattr(size=...)` previously acquired write ownership and persisted
+the new size without checking the requester's write access. It now checks the
+resolved file's ACL/mode before acquiring ownership. A request carrying `fh`
+now also requires a live handle for the same file opened with write access;
+otherwise it returns `EBADF`. Truncating the logical root now returns
+`EISDIR`. These FUSE-side checks close the direct omissions, but are not yet an
+atomic PostgreSQL authorization decision: ACL reads and truncate persistence
+are separate operations, so concurrent permission changes still need a
+transactional primary-authoritative design.
+
+Timestamp `setattr` remains unauthenticated: the FUSE callback calls generic
+touch methods that update rows without checking owner/write permissions in the
+transaction. The file and directory methods also replace both atime and mtime
+even when the request supplied only one field, while symlink requests ignore
+the supplied times and merely set mtime/ctime to database `NOW()`. Correctness
+requires field-preserving updates and POSIX authorization serialized with the
+primary metadata row; root timestamp updates need the root metadata record
+described above.
+
 - Mutation path resolution, hardlink counts, file sizes and attributes have
   replica-routed APIs that are also used by writable callbacks. Audit each
   mutation's preconditions and partial-block read/modify/write input for
@@ -411,9 +432,10 @@ transactional authorization and mutation. No data-loss reproduction is claimed.
   symlink unlink, `rmdir`, and rename. POSIX ACL xattr writes now check inode
   ownership under the write transaction; default ACL inheritance now shares
   the child creation transaction (mounted validation pending). Root metadata
-  still needs a PostgreSQL-backed contract. Access ACL payload and mode-bit
-  updates share one transaction; truncate and timestamp authorization also
-  remain open.
+  still needs a PostgreSQL-backed contract. Path truncate now has an ACL/mode
+  check and `fh` truncate validates a writable handle, but primary-transaction
+  authorization remains open. Timestamp authorization and partial-field
+  semantics also remain open.
   Shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is validated as writable but is not
   compared with the data source's cluster/filesystem identity before normal

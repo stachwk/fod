@@ -7655,7 +7655,7 @@ impl Filesystem for FodFuse {
         let current_attrs = current_attrs.file_attr;
 
         if let Some(new_size) = size {
-            if kind == "dir" {
+            if ino == ROOT_INO || kind == "dir" {
                 fuse_reply_error!(reply, libc::EISDIR);
                 return;
             }
@@ -7671,6 +7671,16 @@ impl Filesystem for FodFuse {
                 }
             };
             if let Some(fh) = fh {
+                let Some(handle_state) = self.file_handle_state_for_handle(fh) else {
+                    fuse_reply_error!(reply, libc::EBADF);
+                    return;
+                };
+                if handle_state.file_id != Some(file_id)
+                    || (handle_state.flags & libc::O_ACCMODE) == libc::O_RDONLY
+                {
+                    fuse_reply_error!(reply, libc::EBADF);
+                    return;
+                }
                 let mut state = self
                     .write_state_for_handle(fh)
                     .unwrap_or_else(|| Self::new_write_state(file_id, new_size, true));
@@ -7691,6 +7701,13 @@ impl Filesystem for FodFuse {
                     self.remove_write_state(fh);
                 }
             } else {
+                if !self
+                    .acl_allows(&path, &current_attrs, libc::W_OK, &subject)
+                    .unwrap_or(false)
+                {
+                    fuse_reply_error!(reply, libc::EACCES);
+                    return;
+                }
                 // Path-based truncate (setattr size bez fh) musi wejsc w ten sam
                 // first-writer-wins co zapis przez otwarty uchwyt. Wczesniej
                 // flush_write_state() byl wywolywany bez write ownership i bez
