@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import grp
 import os
@@ -23,6 +24,30 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tests.integration.fod_mount import FODMount
+
+# Linux UAPI values, used here to exercise the mounted Linux FUSE path directly.
+UTIME_NOW = (1 << 30) - 1
+UTIME_OMIT = (1 << 30) - 2
+
+
+class Timespec(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_long), ("tv_nsec", ctypes.c_long)]
+
+
+def call_utimensat(path: Path, atime_nsec: int, mtime_nsec: int) -> None:
+    times = (Timespec * 2)(Timespec(0, atime_nsec), Timespec(0, mtime_nsec))
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.utimensat.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.POINTER(Timespec),
+        ctypes.c_int,
+    ]
+    libc.utimensat.restype = ctypes.c_int
+    result = libc.utimensat(-100, os.fsencode(path), times, 0)
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(path))
 
 
 def build_posix_acl(user_perm: int, group_perm: int, other_perm: int) -> bytes:
@@ -158,6 +183,11 @@ result = libc.utimensat(-100, os.fsencode(sys.argv[1]), times, 0)
 if result != 0:
     error = ctypes.get_errno()
     raise OSError(error, os.strerror(error), sys.argv[1])
+missing = os.fsencode(sys.argv[1] + ".utime-omit-missing")
+result = libc.utimensat(-100, missing, times, 0)
+if result != 0:
+    error = ctypes.get_errno()
+    raise OSError(error, os.strerror(error), os.fsdecode(missing))
 """,
             str(path),
         ],
@@ -166,6 +196,7 @@ if result != 0:
         text=True,
     )
     assert omit_times.returncode == 0, omit_times.stderr
+    assert not Path(f"{path}.utime-omit-missing").exists()
     after_omit = path.stat()
     assert after_omit.st_atime_ns == after.st_atime_ns, (
         after.st_atime_ns,
@@ -212,6 +243,20 @@ def assert_non_owner_timestamp_rules(path: Path) -> None:
     else:
         raise AssertionError("non-owner with ACL write access set explicit timestamps")
     assert path.stat().st_mtime_ns == after_now, (after_now, path.stat().st_mtime_ns)
+
+
+def assert_partial_omit_preserves_atime(path: Path) -> None:
+    before = path.stat()
+    call_utimensat(path, UTIME_OMIT, UTIME_NOW)
+    after = path.stat()
+    assert after.st_atime_ns == before.st_atime_ns, (
+        before.st_atime_ns,
+        after.st_atime_ns,
+    )
+    assert after.st_mtime_ns >= before.st_mtime_ns, (
+        before.st_mtime_ns,
+        after.st_mtime_ns,
+    )
 
 
 def expected_optional_selinux_errno(err_no: int | None) -> bool:
@@ -322,6 +367,7 @@ def main() -> None:
 
                 timestamp_path = mountpoint / f"acl-timestamp-{suffix}.txt"
                 timestamp_path.write_bytes(b"timestamp payload\n")
+                assert_partial_omit_preserves_atime(timestamp_path)
                 assert_non_owner_timestamp_rules(timestamp_path)
 
                 print("OK acl-mount-option")

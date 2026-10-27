@@ -24,6 +24,7 @@ Primary references:
 - [POSIX.1-2024 `lseek()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/lseek.html)
 - [POSIX.1-2024 `stat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/stat.html)
 - [POSIX.1-2024 `utimensat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/utimensat.html)
+- [Linux kernel `fs/utimes.c`](https://github.com/torvalds/linux/blob/master/fs/utimes.c)
 - [POSIX.1-2024 `rename()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html)
 
 This is a filesystem compatibility audit, not a claim that FOD implements a
@@ -110,9 +111,15 @@ access, changes the file owner to `nobody`, verifies the named user can set
 current times, and verifies a specific-time update fails with `EPERM` without
 changing mtime. The regression also calls `utimensat()` as
 `nobody` with both times set to `UTIME_OMIT` on a file whose ACL denies access;
-the call succeeds and leaves atime and mtime unchanged. All cases passed in
-`make test-acl-mount-option` on FOD 3.4.109. The broader metadata and timestamp
-row remains Pending.
+the call succeeds and leaves atime and mtime unchanged. It also succeeds for a
+nonexistent path on the mounted FOD directory. Linux `fs/utimes.c` returns from
+the `utimensat` syscall before pathname lookup when both fields are
+`UTIME_OMIT`, so those two checks verify Linux VFS behavior and do not exercise a
+FOD callback. A separate owner test sends `UTIME_OMIT` for atime and `UTIME_NOW`
+for mtime; mtime advances while atime stays unchanged, exercising the mounted
+filesystem path. All cases passed in `make test-acl-mount-option` on FOD
+3.4.110 and kernel `6.17.0-41-generic`. The broader metadata and timestamp row
+remains Pending.
 
 ## Audit procedure
 
