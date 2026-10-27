@@ -2966,14 +2966,34 @@ fn access_acl_xattr_and_mode_are_updated_together() -> Result<(), String> {
     let acl = b"valid-acl-payload";
 
     assert_eq!(
-        repo.store_access_acl_and_mode_for_owner(
+        repo.store_posix_acl_for_owner(
             "file",
             file_id,
             "system.posix_acl_access",
             acl,
-            0o640,
+            Some(0o640),
+            false,
+            false,
+            2000,
+        )
+        .unwrap_err(),
+        "FOD_XATTR_PERMISSION_DENIED"
+    );
+    assert_eq!(
+        repo.fetch_xattr_value_for_owner("file", file_id, "system.posix_acl_access")?,
+        None
+    );
+
+    assert_eq!(
+        repo.store_posix_acl_for_owner(
+            "file",
+            file_id,
+            "system.posix_acl_access",
+            acl,
+            Some(0o640),
             false,
             true,
+            1000,
         )
         .unwrap_err(),
         "FOD_XATTR_MISSING"
@@ -2982,14 +3002,15 @@ fn access_acl_xattr_and_mode_are_updated_together() -> Result<(), String> {
         repo.get_file_mode_value(&format!("/{name}"))?.as_deref(),
         Some("6755")
     );
-    repo.store_access_acl_and_mode_for_owner(
+    repo.store_posix_acl_for_owner(
         "file",
         file_id,
         "system.posix_acl_access",
         acl,
-        0o640,
+        Some(0o640),
         true,
         false,
+        1000,
     )?;
 
     assert_eq!(
@@ -3001,14 +3022,15 @@ fn access_acl_xattr_and_mode_are_updated_together() -> Result<(), String> {
         Some("6640")
     );
     assert_eq!(
-        repo.store_access_acl_and_mode_for_owner(
+        repo.store_posix_acl_for_owner(
             "file",
             file_id,
             "system.posix_acl_access",
             b"conflicting-acl",
-            0o600,
+            Some(0o600),
             true,
             false,
+            1000,
         )
         .unwrap_err(),
         "FOD_XATTR_EXISTS"
@@ -3017,19 +3039,60 @@ fn access_acl_xattr_and_mode_are_updated_together() -> Result<(), String> {
         repo.get_file_mode_value(&format!("/{name}"))?.as_deref(),
         Some("6640")
     );
-    repo.store_access_acl_and_mode_for_owner(
+    repo.store_posix_acl_for_owner(
         "file",
         file_id,
         "system.posix_acl_access",
         b"replacement-acl",
-        0o600,
+        Some(0o600),
         false,
         true,
+        1000,
     )?;
     assert_eq!(
         repo.get_file_mode_value(&format!("/{name}"))?.as_deref(),
         Some("6600")
     );
+
+    let directory_name = unique_name("default_acl_owner");
+    let directory_id = repo.create_directory(
+        None,
+        &directory_name,
+        0o750,
+        1000,
+        1000,
+        &unique_name("default_acl_owner_seed"),
+    )?;
+    assert_eq!(
+        repo.store_posix_acl_for_owner(
+            "dir",
+            directory_id,
+            "system.posix_acl_default",
+            acl,
+            None,
+            false,
+            false,
+            2000,
+        )
+        .unwrap_err(),
+        "FOD_XATTR_PERMISSION_DENIED"
+    );
+    repo.store_posix_acl_for_owner(
+        "dir",
+        directory_id,
+        "system.posix_acl_default",
+        acl,
+        None,
+        false,
+        false,
+        1000,
+    )?;
+    assert_eq!(
+        repo.fetch_xattr_value_for_owner("dir", directory_id, "system.posix_acl_default")?,
+        Some(acl.to_vec())
+    );
+    repo.delete_owner_xattrs("dir", directory_id)?;
+    repo.delete_directory_entry(directory_id)?;
     repo.purge_primary_file(file_id)?;
     Ok(())
 }

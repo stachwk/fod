@@ -129,23 +129,30 @@ impl DbRepo {
         })
     }
 
-    /// Store an access ACL and synchronize its basic permission bits atomically.
-    /// The inode row lock serializes this update with chmod/chown.
-    pub fn store_access_acl_and_mode_for_owner(
+    /// Store a POSIX ACL with inode ownership checks in one primary transaction.
+    /// Access ACL mode bits are synchronized under the same inode row lock.
+    pub fn store_posix_acl_for_owner(
         &self,
         owner_kind: &str,
         owner_id: u64,
         name: &str,
         value: &[u8],
-        permission_bits: u16,
+        permission_bits: Option<u16>,
         create_only: bool,
         replace_only: bool,
+        actor_uid: u32,
     ) -> Result<(), String> {
         let (table, key) = match owner_kind {
             "file" => ("files", "id_file"),
             "dir" => ("directories", "id_directory"),
             _ => return Err("access ACL mode sync requires a file or directory".to_string()),
         };
+        if (name == "system.posix_acl_access") != permission_bits.is_some()
+            || (name == "system.posix_acl_default" && owner_kind != "dir")
+            || !matches!(name, "system.posix_acl_access" | "system.posix_acl_default")
+        {
+            return Err("invalid POSIX ACL owner/name/mode combination".to_string());
+        }
         let owner_kind = CString::new(owner_kind)
             .map_err(|_| "xattr owner kind contains NUL byte".to_string())?;
         let owner_id_text = owner_id.to_string();
@@ -155,7 +162,7 @@ impl DbRepo {
         let value_b64 = CString::new(BASE64_STANDARD.encode(value))
             .map_err(|_| "xattr value contains NUL byte".to_string())?;
         let select_mode = CString::new(format!(
-            "SELECT mode FROM {table} WHERE {key} = $1 FOR UPDATE"
+            "SELECT uid, mode FROM {table} WHERE {key} = $1 FOR UPDATE"
         ))
         .unwrap();
         let store_acl = CString::new(
@@ -178,9 +185,18 @@ impl DbRepo {
                 &select_mode,
                 &[&owner_id_param],
             )?)?;
-            let Some(mode_text) = mode_row.first() else {
+            let Some(owner_uid_text) = mode_row.first() else {
                 return Err("FOD_XATTR_OWNER_MISSING".to_string());
             };
+            let owner_uid = owner_uid_text
+                .parse::<u32>()
+                .map_err(|err| format!("invalid inode owner: {err}"))?;
+            if actor_uid != 0 && actor_uid != owner_uid {
+                return Err("FOD_XATTR_PERMISSION_DENIED".to_string());
+            }
+            let mode_text = mode_row
+                .get(1)
+                .ok_or_else(|| "inode mode missing from locked row".to_string())?;
             let current_mode = u32::from_str_radix(mode_text, 8)
                 .map_err(|err| format!("invalid inode mode: {err}"))?;
             let acl_exists = fetch_first_row_texts(exec_params(
@@ -196,19 +212,24 @@ impl DbRepo {
             if replace_only && !acl_exists {
                 return Err("FOD_XATTR_MISSING".to_string());
             }
-            let synchronized_mode = (current_mode & !0o777) | (u32::from(permission_bits) & 0o777);
-            let mode_param = CString::new(format!("{synchronized_mode:o}"))
-                .map_err(|_| "mode contains NUL byte".to_string())?;
             exec_command_params(
                 tx.conn,
                 &store_acl,
                 &[&owner_kind, &owner_id_param, &name, &value_b64],
             )?;
-            let update_mode = CString::new(format!(
-                "UPDATE {table} SET mode = $1, change_date = NOW(), modification_date = NOW() WHERE {key} = $2"
-            ))
-            .unwrap();
-            exec_command_params(tx.conn, &update_mode, &[&mode_param, &owner_id_param])
+            if let Some(permission_bits) = permission_bits {
+                let synchronized_mode =
+                    (current_mode & !0o777) | (u32::from(permission_bits) & 0o777);
+                let mode_param = CString::new(format!("{synchronized_mode:o}"))
+                    .map_err(|_| "mode contains NUL byte".to_string())?;
+                let update_mode = CString::new(format!(
+                    "UPDATE {table} SET mode = $1, change_date = NOW(), modification_date = NOW() WHERE {key} = $2"
+                ))
+                .unwrap();
+                exec_command_params(tx.conn, &update_mode, &[&mode_param, &owner_id_param])
+            } else {
+                Ok(())
+            }
         })
     }
 

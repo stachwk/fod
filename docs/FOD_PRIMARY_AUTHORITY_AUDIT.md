@@ -373,9 +373,10 @@ families still require the remaining authority review.
 - Chmod/chown and sticky-bit authorization use locked primary rows as described
   above. Transactional parent write/search checks cover regular-file,
   directory, special-file, symlink, and hardlink creation, plus file and
-  symlink unlink, `rmdir`, and rename. Root metadata and ACL-enabled
-  authorization remain open. Access ACL payload and mode-bit updates now share
-  one transaction; truncate and timestamp authorization still require review.
+  symlink unlink, `rmdir`, and rename. POSIX ACL xattr writes now check inode
+  ownership under the write transaction; ACL inheritance and root metadata
+  still need review. Access ACL payload and mode-bit updates share one
+  transaction; truncate and timestamp authorization also remain open.
   Shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is validated as writable but is not
   compared with the data source's cluster/filesystem identity before normal

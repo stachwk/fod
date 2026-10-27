@@ -6023,7 +6023,7 @@ impl Filesystem for FodFuse {
 
     fn setxattr(
         &self,
-        _req: &Request,
+        req: &Request,
         ino: INodeNo,
         name: &OsStr,
         value: &[u8],
@@ -6082,10 +6082,10 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let acl_access_transaction = self.acl_enabled
-            && name == "system.posix_acl_access"
-            && matches!(owner.0.as_str(), "file" | "dir");
-        if !acl_access_transaction
+        let posix_acl_transaction = self.acl_enabled
+            && ((name == "system.posix_acl_access" && matches!(owner.0.as_str(), "file" | "dir"))
+                || (name == "system.posix_acl_default" && owner.0 == "dir"));
+        if !posix_acl_transaction
             && flags & libc::XATTR_CREATE != 0
             && self
                 .repo
@@ -6097,7 +6097,7 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EEXIST);
             return;
         }
-        if !acl_access_transaction
+        if !posix_acl_transaction
             && flags & libc::XATTR_REPLACE != 0
             && self
                 .repo
@@ -6109,29 +6109,41 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::ENODATA);
             return;
         }
-        let acl_mode_bits = if self.acl_enabled && name == "system.posix_acl_access" {
-            match Self::acl_access_mode_bits(value) {
-                Ok(value) => Some(value),
-                Err(errno) => {
-                    fuse_reply_error!(reply, errno);
-                    return;
+        let acl_mode_bits = if posix_acl_transaction {
+            if name == "system.posix_acl_access" {
+                match Self::acl_access_mode_bits(value) {
+                    Ok(value) => Some(value),
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                }
+            } else {
+                match Self::parse_posix_acl_xattr(value)
+                    .and_then(|entries| Self::mode_from_acl_entries(&entries, 0))
+                {
+                    Ok(_) => None,
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
                 }
             }
         } else {
             None
         };
 
-        if let (Some(permission_bits), true) =
-            (acl_mode_bits, matches!(owner.0.as_str(), "file" | "dir"))
-        {
-            match self.repo.store_access_acl_and_mode_for_owner(
+        if posix_acl_transaction {
+            let subject = self.request_identity(req);
+            match self.repo.store_posix_acl_for_owner(
                 &owner.0,
                 owner.1,
                 &name,
                 value,
-                permission_bits,
+                acl_mode_bits,
                 flags & libc::XATTR_CREATE != 0,
                 flags & libc::XATTR_REPLACE != 0,
+                subject.uid,
             ) {
                 Ok(()) => {
                     debug!(
@@ -6148,6 +6160,9 @@ impl Filesystem for FodFuse {
                 }
                 Err(err) if err == "FOD_XATTR_MISSING" => {
                     fuse_reply_error!(reply, libc::ENODATA);
+                }
+                Err(err) if err == "FOD_XATTR_PERMISSION_DENIED" => {
+                    fuse_reply_error!(reply, libc::EPERM);
                 }
                 Err(err) => {
                     warn!(
