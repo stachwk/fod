@@ -385,8 +385,14 @@ symlinks and hardlinks; root-level creates check the stored logical root row.
 ACL and mode changes therefore serialize against creation authorization.
 
 `cargo check --workspace --offline` and rustfmt validation passed. The mounted
-ACL integration scenario has not yet been rerun against this implementation;
-keep that behavioral validation open. `unlink`, `rmdir` and both parents of
+`make test-acl-mount-option` regression now passes against this implementation:
+it sets and reads a POSIX access ACL, checks the resulting mode and access
+decisions, validates default ACL inheritance, and confirms denied access.
+`make test-xattr` and `make test-ioctl` also pass on the mounted filesystem;
+the xattr test uses its documented compatibility fallback for namespaces that
+the host denies, and ioctl coverage exercises `FIONREAD` plus `FICLONE` when
+available (or the documented unsupported errors). This does not validate SELinux
+MAC enforcement or every ioctl/xattr namespace. `unlink`, `rmdir` and both parents of
 `rename` now perform the write+search check through the parent access ACL (or
 mode bits when no ACL exists) inside the namespace mutation transaction. The
 parent row lock serializes each check with ACL and mode changes, including for
@@ -462,16 +468,16 @@ remain available for internal callers and do not carry a request identity.
   Generic xattr `CREATE`/`REPLACE` flags are serialized with the value update.
   `user.*` reads check ACL/mode read access, while non-root `listxattr` filters
   `trusted.*` names; denied `user.*`/`trusted.*` reads return `ENODATA`.
-  Default ACL
-  inheritance now shares the child creation transaction (mounted validation
-  pending). Root `setattr`
+  Default ACL inheritance now shares the child creation transaction (mounted
+  access-ACL and inheritance checks passed). Root `setattr`
   authorization uses the locked inode metadata paths. Path truncate now has an
   ACL/mode check and repeats authorization under the file row lock in its
   content transaction. Timestamp `setattr` authorization and field-preserving
   updates also share one primary transaction.
   `FICLONE` and `FICLONERANGE` require a writable destination FUSE handle and a
   readable source descriptor; invalid open modes return `EBADF` before copy
-  planning. Mounted ioctl behavior remains unvalidated.
+  planning. Mounted `FIONREAD` and `FICLONE` behavior passed; range clone and
+  invalid-handle/access-mode cases still need mounted validation.
   FUSE `access` and `open` also evaluate owner/group/mode from primary and
   reject a stale inode-to-path mapping before deciding access.
   Shared database credentials do not replace these decisions.
