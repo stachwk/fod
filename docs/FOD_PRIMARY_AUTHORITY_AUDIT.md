@@ -382,6 +382,24 @@ keep that behavioral validation open. This was a source-level finding, not a
 reproduced data-loss case. Parent ACL permission evaluation during create still
 uses the kernel/FUSE path and requires separate review.
 
+### Logical root metadata
+
+`FodFuse::root_attr` synthesizes root attributes instead of reading shared
+metadata: mode is fixed at `0755`, uid/gid come from the mounting process, and
+atime/mtime/ctime/crtime are set to the local current time on every lookup.
+Root-level namespace operations have no parent row to update, so root directory
+mtime/ctime are not stored when children are added or removed. The root child
+count is read from PostgreSQL but query errors are silently converted to zero.
+
+`setattr` also resolves `/` through ordinary namespace lookup, which represents
+the logical root as no directory entry. Size/mode/uid/gid requests consequently
+fail with `ENOENT`, while atime/mtime requests fall through as successful no-ops
+and return another freshly synthesized timestamp. This is not a coherent POSIX
+metadata contract and can differ between mounts running under different service
+uids. The correction needs one PostgreSQL-authoritative root metadata record,
+including mode, owner, timestamps and root-directory change updates, plus
+transactional authorization and mutation. No data-loss reproduction is claimed.
+
 - Mutation path resolution, hardlink counts, file sizes and attributes have
   replica-routed APIs that are also used by writable callbacks. Audit each
   mutation's preconditions and partial-block read/modify/write input for
@@ -393,8 +411,9 @@ uses the kernel/FUSE path and requires separate review.
   symlink unlink, `rmdir`, and rename. POSIX ACL xattr writes now check inode
   ownership under the write transaction; default ACL inheritance now shares
   the child creation transaction (mounted validation pending). Root metadata
-  still needs review. Access ACL payload and mode-bit updates share one
-  transaction; truncate and timestamp authorization also remain open.
+  still needs a PostgreSQL-backed contract. Access ACL payload and mode-bit
+  updates share one transaction; truncate and timestamp authorization also
+  remain open.
   Shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is validated as writable but is not
   compared with the data source's cluster/filesystem identity before normal
