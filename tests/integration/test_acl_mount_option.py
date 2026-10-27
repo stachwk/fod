@@ -72,7 +72,7 @@ def assert_permission_denied(path: Path) -> None:
     raise AssertionError("ACL deny entry did not block file read")
 
 
-def assert_mutations_denied_to_nobody(path: Path) -> None:
+def can_run_as_nobody() -> bool:
     nobody_probe = subprocess.run(
         ["sudo", "-n", "-u", "nobody", "true"],
         check=False,
@@ -81,7 +81,24 @@ def assert_mutations_denied_to_nobody(path: Path) -> None:
     )
     if nobody_probe.returncode != 0:
         print("SKIP acl-mutation-denial (sudo cannot run commands as nobody)")
+        return False
+    return True
+
+
+def assert_mutations_denied_to_nobody(path: Path) -> None:
+    if not can_run_as_nobody():
         return
+
+    stat_result = subprocess.run(
+        ["sudo", "-n", "-u", "nobody", "stat", "--format=%s", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert stat_result.returncode == 0, (
+        "nobody could not reach the ACL test file through the mount: "
+        + stat_result.stderr
+    )
 
     before = path.stat()
     expected_size = len(b"acl payload\n")
@@ -149,7 +166,7 @@ def main() -> None:
         selinux_mode = os.environ.get("FOD_TEST_ACL_MOUNT_SELINUX", "off")
         options = (
             f"ini={launcher._config_path()},role=auto,acl=on,"
-            f"selinux={selinux_mode},default_permissions"
+            f"selinux={selinux_mode},default_permissions,allow_other"
         )
         with log_path.open("w", encoding="utf-8") as log_handle:
             process = subprocess.Popen(
