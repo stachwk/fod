@@ -4,7 +4,7 @@
 //! Mode, ownership and timestamp updates through the repository's authority pool.
 //! File content generation belongs to content mutations, not metadata updates.
 
-use super::{exec_command_params, DbRepo};
+use super::{exec_command_params, exec_params, fetch_first_row_texts, DbRepo, PGconn};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use std::ffi::CString;
@@ -18,8 +18,17 @@ pub enum InodeTimeValue<'a> {
 pub struct InodeTimesChange<'a> {
     pub actor_uid: u32,
     pub actor_groups: &'a [u32],
+    pub use_posix_acl: bool,
     pub atime: Option<InodeTimeValue<'a>>,
     pub mtime: Option<InodeTimeValue<'a>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileWriteAuthorization {
+    pub actor_uid: u32,
+    pub actor_groups: Vec<u32>,
+    pub expected_inode_seed: String,
+    pub use_posix_acl: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +122,66 @@ fn time_sql_value(value: InodeTimeValue<'_>) -> String {
     }
 }
 
+pub(super) unsafe fn validate_file_write_authorization_on_conn(
+    conn: *mut PGconn,
+    file_id: u64,
+    authorization: &FileWriteAuthorization,
+) -> Result<(), String> {
+    let rows = fetch_first_row_texts(exec_params(
+        conn,
+        &CString::new("SELECT uid, gid, mode, inode_seed FROM files WHERE id_file = $1 FOR UPDATE")
+            .unwrap(),
+        &[&CString::new(file_id.to_string()).unwrap()],
+    )?)?;
+    if rows.len() < 4 || rows[3] != authorization.expected_inode_seed {
+        return Err("FOD_TRUNCATE_TARGET_MISSING".to_string());
+    }
+    let owner_uid = rows[0].parse::<u32>().map_err(|err| err.to_string())?;
+    let owner_gid = rows[1].parse::<u32>().map_err(|err| err.to_string())?;
+    if authorization.actor_uid == 0 {
+        return Ok(());
+    }
+    let mode = u32::from_str_radix(&rows[2], 8).map_err(|err| err.to_string())?;
+    let acl_rows = if authorization.use_posix_acl {
+        fetch_first_row_texts(exec_params(
+            conn,
+            &CString::new(
+                "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='file' AND owner_id=$1 AND name='system.posix_acl_access'",
+            )
+            .unwrap(),
+            &[&CString::new(file_id.to_string()).unwrap()],
+        )?)?
+    } else {
+        Vec::new()
+    };
+    let has_write = if let Some(encoded) = acl_rows.first() {
+        let acl = BASE64_STANDARD
+            .decode(encoded.trim())
+            .map_err(|err| format!("invalid POSIX ACL payload: {err}"))?;
+        acl_write_access(
+            &acl,
+            authorization.actor_uid,
+            &authorization.actor_groups,
+            owner_uid,
+            owner_gid,
+        )?
+    } else {
+        let allowed = if authorization.actor_uid == owner_uid {
+            (mode >> 6) & 0o7
+        } else if authorization.actor_groups.contains(&owner_gid) {
+            (mode >> 3) & 0o7
+        } else {
+            mode & 0o7
+        };
+        allowed & 0o2 != 0
+    };
+    if has_write {
+        Ok(())
+    } else {
+        Err("FOD_TRUNCATE_WRITE_DENIED".to_string())
+    }
+}
+
 /// Caller identity and requested fields for one authoritative chmod/chown.
 pub struct InodePermissionChange<'a> {
     pub actor_uid: u32,
@@ -175,10 +244,14 @@ impl DbRepo {
                         InodeTimesOutcome::Denied
                     });
                 }
-                let acl_rows = tx.query_rows_text(&format!(
-                    "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='{}' AND owner_id={id} AND name='system.posix_acl_access'",
-                    acl_kind.unwrap()
-                ))?;
+                let acl_rows = if change.use_posix_acl {
+                    tx.query_rows_text(&format!(
+                        "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='{}' AND owner_id={id} AND name='system.posix_acl_access'",
+                        acl_kind.unwrap()
+                    ))?
+                } else {
+                    Vec::new()
+                };
                 let has_write = if let Some(encoded) = acl_rows.first().and_then(|row| row.first()) {
                     let acl = BASE64_STANDARD
                         .decode(encoded.trim())

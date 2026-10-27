@@ -5,7 +5,7 @@ use crate::fs::{persist_error_errno, FodFuse, PersistFileBlocksProfileInput};
 use crate::write_payload::WritePayloadState;
 use libc::EIO;
 use log::{debug, warn};
-use rust_hotpath::pg::{PersistBlockRow, WritePersistenceFence};
+use rust_hotpath::pg::{FileWriteAuthorization, PersistBlockRow, WritePersistenceFence};
 use rust_hotpath::{
     choose_persist_execution_plan, PersistBlockPlanEntry, PersistExecutionPlan, PersistPayloadPlan,
     PersistPlanInput,
@@ -22,6 +22,7 @@ pub(crate) struct WriteState {
     pub(crate) load_error: bool,
     pub(crate) payload: WritePayloadState,
     pub(crate) persistence_fence: Option<WritePersistenceFence>,
+    pub(crate) write_authorization: Option<FileWriteAuthorization>,
 }
 
 pub(crate) struct ReadCopyDestinationSlice<'a> {
@@ -70,6 +71,7 @@ impl FodFuse {
             load_error: false,
             payload: WritePayloadState::default(),
             persistence_fence: None,
+            write_authorization: None,
         }
     }
 
@@ -484,6 +486,7 @@ impl FodFuse {
             maintain_copy_crc_table: live.copy_dedupe_crc_table,
             capacity_reservation_token,
             write_fence: state.persistence_fence,
+            write_authorization: state.write_authorization.clone(),
         })
         .map_err(|err| {
             let errno = persist_error_errno(&err);

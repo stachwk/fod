@@ -406,12 +406,13 @@ Path-based `setattr(size=...)` previously acquired write ownership and persisted
 the new size without checking the requester's write access. It now checks the
 resolved file's primary ACL/mode before acquiring ownership. A request
 carrying `fh` now also requires a live handle for the same file opened with
-write access;
-otherwise it returns `EBADF`. Truncating the logical root now returns
-`EISDIR`. These FUSE-side checks close the direct omissions, but are not yet an
-atomic PostgreSQL authorization decision: ACL reads and truncate persistence
-are separate operations, so concurrent permission changes still need a
-transactional primary-authoritative design.
+write access; otherwise it returns `EBADF`. Truncating the logical root now
+returns `EISDIR`. Path truncation repeats the write-access check in the content
+persistence transaction while holding the file row lock. When POSIX ACL support
+is enabled, the transaction checks the ACL; otherwise it checks mode bits. ACL
+updates lock the same row, so whichever transaction obtains the lock first
+determines the operation order. Truncation through `fh` uses the validated
+writable handle's open-time access, consistent with descriptor semantics.
 
 Timestamp `setattr` now resolves the inode seed and applies POSIX time-setting
 authorization and timestamp writes in one primary transaction under the inode
@@ -434,10 +435,9 @@ remain available for internal callers and do not carry a request identity.
   ownership under the write transaction; default ACL inheritance now shares the
   child creation transaction (mounted validation pending). Root `setattr`
   authorization uses the locked inode metadata paths. Path truncate now has an
-  ACL/mode check and `fh` truncate validates a writable handle, but
-  primary-transaction authorization remains open. Timestamp `setattr`
-  authorization and field-preserving updates
-  now share one primary transaction.
+  ACL/mode check and repeats authorization under the file row lock in its
+  content transaction. Timestamp `setattr` authorization and field-preserving
+  updates also share one primary transaction.
   Shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is validated as writable but is not
   compared with the data source's cluster/filesystem identity before normal

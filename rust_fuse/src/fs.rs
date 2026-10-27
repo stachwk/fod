@@ -21,13 +21,13 @@ use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot,
-    DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome, GeneratedSharedBlockRows,
-    InodePermissionChange, InodePermissionOutcome, InodeTimeValue, InodeTimesChange,
-    InodeTimesOutcome, PersistBlockRow, RenameFileReplaceOutcome, RenameNamespaceSource,
-    RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
-    NAMESPACE_ENTRY_EXISTS_PREFIX, NAMESPACE_PARENT_MISSING_PREFIX, NAMESPACE_SOURCE_CHANGED,
-    PARENT_ACCESS_DENIED, STICKY_PERMISSION_DENIED, STORAGE_QUOTA_EXCEEDED_PREFIX,
-    WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
+    DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome, FileWriteAuthorization,
+    GeneratedSharedBlockRows, InodePermissionChange, InodePermissionOutcome, InodeTimeValue,
+    InodeTimesChange, InodeTimesOutcome, PersistBlockRow, RenameFileReplaceOutcome,
+    RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
+    FILE_WRITE_ACCESS_DENIED, FILE_WRITE_TARGET_MISSING, NAMESPACE_ENTRY_EXISTS_PREFIX,
+    NAMESPACE_PARENT_MISSING_PREFIX, NAMESPACE_SOURCE_CHANGED, PARENT_ACCESS_DENIED,
+    STICKY_PERMISSION_DENIED, STORAGE_QUOTA_EXCEEDED_PREFIX, WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
@@ -85,6 +85,7 @@ pub(crate) struct PersistFileBlocksProfileInput<'rows, 'data> {
     pub(crate) maintain_copy_crc_table: bool,
     pub(crate) capacity_reservation_token: Option<&'rows str>,
     pub(crate) write_fence: Option<WritePersistenceFence>,
+    pub(crate) write_authorization: Option<FileWriteAuthorization>,
 }
 
 struct CopyRangeFromStatesInput {
@@ -124,6 +125,10 @@ fn fod_fuse_readdir_register_paths_enabled() -> bool {
 pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
     if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
         ENOSPC
+    } else if error.starts_with(FILE_WRITE_ACCESS_DENIED) {
+        libc::EACCES
+    } else if error.starts_with(FILE_WRITE_TARGET_MISSING) {
+        ENOENT
     } else if error.starts_with(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) {
         libc::EBUSY
     } else {
@@ -2105,11 +2110,12 @@ impl FodFuse {
             maintain_copy_crc_table,
             capacity_reservation_token,
             write_fence,
+            write_authorization,
         } = input;
         let started = Instant::now();
         let result = self
             .repo
-            .persist_file_blocks_with_crc_flag_reservation_and_fence(
+            .persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
                 file_id,
                 file_size,
                 block_size,
@@ -2119,6 +2125,7 @@ impl FodFuse {
                 maintain_copy_crc_table,
                 capacity_reservation_token,
                 write_fence,
+                write_authorization.as_ref(),
             );
         self.record_repo_persist_blocks_elapsed(started.elapsed());
         result
@@ -7646,16 +7653,24 @@ impl Filesystem for FodFuse {
                 fuse_reply_error!(reply, libc::EISDIR);
                 return;
             }
-            let file_id = match self.file_id_for_path(&path) {
-                Ok(Some(value)) => value,
-                Ok(None) => {
-                    fuse_reply_error!(reply, ENOENT);
-                    return;
-                }
-                Err(errno) => {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
+            let file_id = match kind.as_str() {
+                "file" => entry_id,
+                "hardlink" => match entry_id
+                    .map(|id| authority.get_hardlink_file_id(id))
+                    .transpose()
+                {
+                    Ok(Some(Some(id))) => Some(id),
+                    Ok(_) => None,
+                    Err(_) => {
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                },
+                _ => None,
+            };
+            let Some(file_id) = file_id else {
+                fuse_reply_error!(reply, ENOENT);
+                return;
             };
             if let Some(fh) = fh {
                 let Some(handle_state) = self.file_handle_state_for_handle(fh) else {
@@ -7688,12 +7703,16 @@ impl Filesystem for FodFuse {
                     self.remove_write_state(fh);
                 }
             } else {
-                if !self
-                    .acl_allows(&path, &current_attrs, libc::W_OK, &subject)
-                    .unwrap_or(false)
-                {
-                    fuse_reply_error!(reply, libc::EACCES);
-                    return;
+                match self.acl_allows(&path, &current_attrs, libc::W_OK, &subject) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        fuse_reply_error!(reply, libc::EACCES);
+                        return;
+                    }
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
                 }
                 // Path-based truncate (setattr size bez fh) musi wejsc w ten sam
                 // first-writer-wins co zapis przez otwarty uchwyt. Wczesniej
@@ -7713,6 +7732,12 @@ impl Filesystem for FodFuse {
                 };
 
                 let mut state = Self::new_write_state(file_id, new_size, true);
+                state.write_authorization = Some(FileWriteAuthorization {
+                    actor_uid: subject.uid,
+                    actor_groups: subject.groups.iter().copied().collect(),
+                    expected_inode_seed: expected_seed.clone(),
+                    use_posix_acl: self.acl_enabled,
+                });
 
                 // Tymczasowy writable handle przenosi fencing token do WriteState.
                 // Bez tego sam lease blokowalby konkurenta przy acquire, ale stale
@@ -7856,6 +7881,7 @@ impl Filesystem for FodFuse {
             let change = InodeTimesChange {
                 actor_uid: subject.uid,
                 actor_groups: &groups,
+                use_posix_acl: self.acl_enabled,
                 atime: atime_value,
                 mtime: mtime_value,
             };
@@ -10367,6 +10393,7 @@ mod tests {
             load_error: false,
             payload: WritePayloadState::default(),
             persistence_fence: None,
+            write_authorization: None,
         };
         let buffered = WriteState {
             buffered_bytes: 16,

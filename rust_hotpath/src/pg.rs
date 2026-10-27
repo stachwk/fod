@@ -15,8 +15,8 @@ pub use index_staging::{
     IndexImportPlanStageRow, IndexScanRunStageRow, IndexSourceStageRow,
 };
 pub use metadata_updates::{
-    InodePermissionChange, InodePermissionOutcome, InodeTimeValue, InodeTimesChange,
-    InodeTimesOutcome,
+    FileWriteAuthorization, InodePermissionChange, InodePermissionOutcome, InodeTimeValue,
+    InodeTimesChange, InodeTimesOutcome,
 };
 pub use namespace_lookup::{DirectoryEntryMetadata, ResolvedPath};
 pub use startup::StartupSnapshot;
@@ -71,6 +71,8 @@ const UNIQUE_VIOLATION_ERROR_PREFIX: &str = "SQLSTATE 23505:";
 pub const NAMESPACE_ENTRY_EXISTS_PREFIX: &str = "SQLSTATE 23505: FOD_NAMESPACE_ENTRY_EXISTS:";
 pub const STICKY_PERMISSION_DENIED: &str = "FOD_STICKY_PERMISSION_DENIED";
 pub const PARENT_ACCESS_DENIED: &str = "FOD_PARENT_ACCESS_DENIED";
+pub const FILE_WRITE_ACCESS_DENIED: &str = "FOD_TRUNCATE_WRITE_DENIED";
+pub const FILE_WRITE_TARGET_MISSING: &str = "FOD_TRUNCATE_TARGET_MISSING";
 pub const NAMESPACE_SOURCE_CHANGED: &str = "FOD_NAMESPACE_SOURCE_CHANGED";
 pub const NAMESPACE_PARENT_MISSING_PREFIX: &str = "FOD_NAMESPACE_PARENT_MISSING:";
 const REPLICA_SCORE_UNKNOWN_LATENCY_MICROS: u64 = 5_000;
@@ -12919,6 +12921,34 @@ impl DbRepo {
         capacity_reservation_token: Option<&str>,
         write_fence: Option<WritePersistenceFence>,
     ) -> Result<(), String> {
+        self.persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+            file_id,
+            file_size,
+            block_size,
+            total_blocks,
+            truncate_pending,
+            blocks,
+            maintain_copy_crc_table,
+            capacity_reservation_token,
+            write_fence,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn persist_file_blocks_with_crc_flag_reservation_fence_and_authorization(
+        &self,
+        file_id: u64,
+        file_size: u64,
+        block_size: u64,
+        total_blocks: u64,
+        truncate_pending: bool,
+        blocks: &[PersistBlockRow],
+        maintain_copy_crc_table: bool,
+        capacity_reservation_token: Option<&str>,
+        write_fence: Option<WritePersistenceFence>,
+        write_authorization: Option<&FileWriteAuthorization>,
+    ) -> Result<(), String> {
         let mut payload_guard =
             self.payload_persist_guard(persist_block_input_bytes(blocks), blocks.len() as u64);
         let result = self.with_cached_connection(|conn| unsafe {
@@ -12928,6 +12958,16 @@ impl DbRepo {
                     self.validate_write_persistence_fence_on_conn(conn, file_id, write_fence)?;
                 } else {
                     self.reject_unfenced_write_during_active_lease_on_conn(conn, file_id)?;
+                }
+                if let Some(authorization) = write_authorization {
+                    if !truncate_pending {
+                        return Err("truncate authorization requires truncate_pending".to_string());
+                    }
+                    metadata_updates::validate_file_write_authorization_on_conn(
+                        conn,
+                        file_id,
+                        authorization,
+                    )?;
                 }
                 if capacity_reservation_token.is_some() {
                     let quota_lock = self.lock_payload_quota_on_conn(conn)?;
