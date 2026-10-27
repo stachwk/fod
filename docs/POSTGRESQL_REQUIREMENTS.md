@@ -81,6 +81,14 @@ rozjazd zegarow wezlow PostgreSQL moze wtedy przedwczesnie wygasic lease albo
 wydluzyc jego waznosc. Zegary hostow FOD maja ponadto znaczenie dla lokalnych
 znacznikow czasu i operacji, w ktorych klient jawnie przekazuje czas.
 
+Precyzja czasu nie wyznacza kolejnosci lokalnej kolejki FIFO. Bramki zadan FOD
+przydzielaja bilety monotoniczne pod mutexem, a czasu monotonicznego uzywaja do
+pomiaru czasu oczekiwania. Sa to kolejki procesu, nie wspolna kolejka klastra.
+Kolejnosc operacji miedzy hostami wynika z serializacji PostgreSQL. Sortowanie
+logow po wall-clock, nawet z Chrony, nie dowodzi samo w sobie kolejnosci dwoch
+zdarzen z roznych hostow; do tego potrzebna jest wspolna sekwencja albo zapis
+zdarzen w tej samej transakcyjnej kolejnosci.
+
 Wymagania operacyjne:
 
 - skonfiguruj usluge NTP na kazdym z tych hostow i zapewnij synchronizacje po
