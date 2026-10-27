@@ -3851,11 +3851,14 @@ impl FodFuse {
             return Ok(None);
         }
         let path = self.entry_path_for_ino(ino)?;
-        let resolved = self
-            .repo
-            .authoritative_view()
-            .resolve_path(&path)
-            .map_err(|_| EIO)?;
+        let authority = self.repo.authoritative_view();
+        let attrs = self
+            .attrs_for_path_from_repo(&authority, &path)?
+            .ok_or(ENOENT)?;
+        if attrs.file_attr.ino.0 != ino {
+            return Err(ENOENT);
+        }
+        let resolved = authority.resolve_path(&path).map_err(|_| EIO)?;
         match (resolved.kind.as_deref(), resolved.entry_id) {
             (Some("dir"), entry_id) => Ok(entry_id),
             _ => Err(ENOENT),
@@ -5646,6 +5649,10 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, ENOENT);
             return;
         };
+        if let Err(errno) = self.parent_entry_id_for_inode(parent) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         let child_path = Self::join_path(&parent_path, name);
         self.log_request_start(
             req_id,
@@ -5766,6 +5773,12 @@ impl Filesystem for FodFuse {
                 }
             }
         };
+        if ino != ROOT_INO {
+            if let Err(errno) = self.parent_entry_id_for_inode(ino) {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        }
         self.log_request_start(
             req_id,
             "readdir",
@@ -8276,6 +8289,13 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        let expected_parent_id = match self.parent_entry_id_for_inode(parent) {
+            Ok(parent_id) => parent_id,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let child_path = Self::join_path(&parent_path, name);
         self.log_request_start(
             req_id,
@@ -8293,6 +8313,10 @@ impl Filesystem for FodFuse {
         let kind = resolved.kind;
         let entry_id = resolved.entry_id;
         let parent_id = resolved.parent_id;
+        if parent_id != expected_parent_id {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        }
         if parent_path != "/" && parent_id.is_none() {
             fuse_reply_error!(reply, ENOENT);
             return;
@@ -8419,6 +8443,13 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        let expected_parent_id = match self.parent_entry_id_for_inode(parent) {
+            Ok(parent_id) => parent_id,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let child_path = Self::join_path(&parent_path, name);
         self.log_request_start(
             req_id,
@@ -8434,6 +8465,10 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        if resolved.parent_id != expected_parent_id {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        }
         let directory_id = match (resolved.kind.as_deref(), resolved.entry_id) {
             (Some("dir"), Some(id)) => id,
             (None, _) => {
