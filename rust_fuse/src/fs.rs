@@ -7789,38 +7789,58 @@ impl Filesystem for FodFuse {
             return;
         }
         let authority = self.repo.authoritative_view();
-        let path = match self.entry_path_for_ino(ino) {
-            Ok(path) => path,
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
-            }
+        let handle_state = fh.and_then(|handle| self.file_handle_state_for_handle(handle));
+        let handle_file_id = handle_state.as_ref().and_then(|state| state.file_id);
+        let path = match handle_state.as_ref() {
+            Some(state) if handle_file_id.is_some() => state.path.clone(),
+            _ => match self.entry_path_for_ino(ino) {
+                Ok(path) => path,
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            },
         };
-        let current_attrs = match if ino == ROOT_INO {
-            self.root_attr().map(Some)
+        let (current_attrs, kind, entry_id) = if let Some(file_id) = handle_file_id {
+            match self.attrs_for_open_file_id(file_id) {
+                Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => {
+                    (attrs, "file".to_string(), Some(file_id))
+                }
+                Ok(_) => {
+                    fuse_reply_error!(reply, ENOENT);
+                    return;
+                }
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
         } else {
-            self.attrs_for_path_from_repo(&authority, &path)
-        } {
-            Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => attrs,
-            Ok(_) => {
-                fuse_reply_error!(reply, ENOENT);
-                return;
-            }
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
-            }
+            let current_attrs = match if ino == ROOT_INO {
+                self.root_attr().map(Some)
+            } else {
+                self.attrs_for_path_from_repo(&authority, &path)
+            } {
+                Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => attrs,
+                Ok(_) => {
+                    fuse_reply_error!(reply, ENOENT);
+                    return;
+                }
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            };
+            let resolved = match authority.resolve_path(&path) {
+                Ok(value) => value,
+                Err(_) => {
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
+            };
+            (current_attrs, resolved.kind.unwrap_or_default(), resolved.entry_id)
         };
-        let resolved = match authority.resolve_path(&path) {
-            Ok(value) => value,
-            Err(_) => {
-                fuse_reply_error!(reply, EIO);
-                return;
-            }
-        };
-        let (kind, entry_id) = (resolved.kind, resolved.entry_id);
         let expected_seed = current_attrs.inode_seed.clone();
-        let kind = kind.unwrap_or_default();
         let current_attrs = current_attrs.file_attr;
 
         if let Some(new_size) = size {
@@ -8081,12 +8101,17 @@ impl Filesystem for FodFuse {
             }
         }
 
-        match if ino == ROOT_INO {
+        match if let Some(file_id) = handle_file_id {
+            self.attrs_for_open_file_id(file_id)
+        } else if ino == ROOT_INO {
             self.root_attr().map(Some)
         } else {
             self.attrs_for_path_from_repo(&authority, &path)
         } {
-            Ok(Some(attrs)) => reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr),
+            Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => {
+                reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr)
+            }
+            Ok(Some(_)) => fuse_reply_error!(reply, ENOENT),
             Ok(None) => fuse_reply_error!(reply, ENOENT),
             Err(errno) => fuse_reply_error!(reply, errno),
         }
