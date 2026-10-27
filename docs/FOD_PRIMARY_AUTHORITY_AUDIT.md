@@ -447,10 +447,11 @@ remain available for internal callers and do not carry a request identity.
   content transaction. Timestamp `setattr` authorization and field-preserving
   updates also share one primary transaction.
   Shared database credentials do not replace these decisions.
-- An explicit telemetry/control DSN is validated as writable but is not
-  compared with the data source's cluster/filesystem identity before normal
-  read-only mount leases are registered. Configuration and identity validation
-  must keep those leases in the same logical filesystem authority.
+- An explicit telemetry/control DSN is now compared with the data source's
+  PostgreSQL cluster system identifier and database OID before the mount
+  registers client sessions or open-file leases. A mismatch or inability to
+  read either identity fails mount startup, keeping lifecycle state in the same
+  logical database authority as filesystem data.
 
 These items are source-review findings and test gaps; do not describe them as
 additional reproduced data-loss cases.

@@ -209,6 +209,28 @@ pub fn telemetry_repo_from_env(runtime: &RuntimeConfig) -> Option<Result<DbRepo,
     None
 }
 
+pub fn validate_telemetry_repo_identity(
+    data_repo: &DbRepo,
+    telemetry_repo: &DbRepo,
+) -> Result<(), String> {
+    // The cluster system identifier allows the same logical PostgreSQL
+    // authority to be reached through a primary or replica endpoint. The
+    // database OID additionally rejects another database in that cluster.
+    let identity_sql = "SELECT jsonb_build_array(system_identifier::text, current_database(), (SELECT oid::text FROM pg_database WHERE datname = current_database()))::text FROM pg_control_system()";
+    let data_identity = data_repo
+        .query_scalar_text(identity_sql)
+        .map_err(|err| format!("failed to read data database identity: {err}"))?;
+    let telemetry_identity = telemetry_repo
+        .query_scalar_text(identity_sql)
+        .map_err(|err| format!("failed to read telemetry database identity: {err}"))?;
+    if data_identity != telemetry_identity {
+        return Err(format!(
+            "telemetry/control DSN points to a different PostgreSQL database authority (data identity {data_identity}, telemetry identity {telemetry_identity})"
+        ));
+    }
+    Ok(())
+}
+
 fn fuse_event_loop_config() -> Result<(usize, bool), String> {
     let event_threads = match env_var_with_legacy_alias("FOD_FUSE_EVENT_THREADS") {
         Some(value) => value.parse::<usize>().map_err(|err| {
@@ -458,6 +480,10 @@ pub fn mount_fuse(
         log::warn!(
             "FOD DEGRADED READ-ONLY mode active: PostgreSQL leases are disabled; reads may be stale, open handles may become ESTALE, and recovery requires a controlled remount"
         );
+    }
+
+    if let Some(telemetry_repo) = telemetry_repo.as_ref() {
+        validate_telemetry_repo_identity(&repo, telemetry_repo)?;
     }
 
     let degraded_read_only = settings.degraded_read_only;

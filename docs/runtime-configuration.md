@@ -411,7 +411,10 @@ FOD_TELEMETRY_DSN="host=pg-primary dbname=fod user=fod_monitor ..." fod-rust-fus
 
 `FOD_TELEMETRY_DSN` ma pierwszenstwo przed kompatybilnym fallbackiem
 `FOD_MONITOR_DSN`. Oba DSN-y musza wskazywac writable primary; FOD wymusza role
-`WritablePrimary` przy polaczeniu telemetrycznym.
+`WritablePrimary` przy polaczeniu telemetrycznym. Przed rejestracja sesji FOD
+porownuje identyfikator klastra PostgreSQL oraz OID bazy danych telemetrycznej
+z data source. Niezgodnosc lub brak mozliwosci odczytu tych identyfikatorow
+przerywa start montowania.
 
 Od schema v25 writable control sink jest rowniez authority dla
 `client_sessions` i `file_open_leases`, wiec read-only mount nie moze dzialac
