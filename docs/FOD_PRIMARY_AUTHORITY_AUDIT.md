@@ -372,7 +372,7 @@ families still require the remaining authority review.
   establishes why read routing affects mutation correctness.
 - Chmod/chown and sticky-bit authorization use locked primary rows as described
   above. Transactional parent write/search checks cover regular-file,
-  directory, and special-file creation. Symlink and hardlink creation, unlink,
+  directory, special-file, and symlink creation. Hardlink creation, unlink,
   rmdir and rename still need coverage; root
   metadata and ACL-enabled authorization also remain open. ACL/mode
   synchronization and truncate/timestamp authorization require review as well.

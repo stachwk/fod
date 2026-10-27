@@ -10813,6 +10813,48 @@ impl DbRepo {
         gid: u32,
         inode_seed: &str,
     ) -> Result<u64, String> {
+        self.create_symlink_internal(
+            target_parent_id,
+            target_name,
+            target,
+            uid,
+            gid,
+            inode_seed,
+            None,
+        )
+    }
+
+    pub fn create_symlink_for_subject(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        target: &str,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_symlink_internal(
+            target_parent_id,
+            target_name,
+            target,
+            uid,
+            gid,
+            inode_seed,
+            Some((uid, gid, supplementary_groups)),
+        )
+    }
+
+    fn create_symlink_internal(
+        &self,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        target: &str,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+        parent_actor: Option<(u32, u32, &[u32])>,
+    ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
         let target_text = target.to_string();
         let inode_seed_text = inode_seed.to_string();
@@ -10851,6 +10893,15 @@ impl DbRepo {
         let result = self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
                 Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
+                    Self::require_parent_write_search_on_conn(
+                        conn,
+                        target_parent_id,
+                        actor_uid,
+                        actor_gid,
+                        actor_groups,
+                    )?;
+                }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())

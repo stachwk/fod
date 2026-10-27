@@ -9914,13 +9914,15 @@ impl Filesystem for FodFuse {
             }
         };
         let inode_seed = child_path.as_str();
-        match self.repo.create_symlink(
+        let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
+        match self.repo.create_symlink_for_subject(
             parent_id,
             link_name.to_string_lossy().as_ref(),
             &target.to_string_lossy(),
             subject.uid,
             subject.gid,
             inode_seed,
+            &supplementary_groups,
         ) {
             Ok(_) => match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {

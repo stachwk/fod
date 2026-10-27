@@ -2690,6 +2690,22 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
     );
     assert_eq!(repo.count_files()?, files_before);
 
+    let symlinks_before = repo.count_symlinks()?;
+    let denied_symlink = repo.create_symlink_for_subject(
+        Some(parent_id),
+        "denied-symlink",
+        "target",
+        2000,
+        2000,
+        &unique_name("symlink_denied_seed"),
+        &[2000],
+    );
+    assert_eq!(
+        denied_symlink.unwrap_err(),
+        fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
+    );
+    assert_eq!(repo.count_symlinks()?, symlinks_before);
+
     let denied_special = repo.create_special_file_for_subject(
         Some(parent_id),
         "denied-fifo",
@@ -2742,6 +2758,16 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
     )?;
     assert!(allowed_special > 0);
     repo.purge_primary_file(allowed_special)?;
+    let allowed_symlink = repo.create_symlink_for_subject(
+        Some(parent_id),
+        "supplementary-group-symlink",
+        "target",
+        2000,
+        2000,
+        &unique_name("symlink_allowed_seed"),
+        &[2000, 3000],
+    )?;
+    repo.delete_symlink_entry(allowed_symlink)?;
     repo.purge_primary_file(allowed_file)?;
     repo.delete_directory_entry(allowed_child)?;
     repo.delete_directory_entry(parent_id)?;
