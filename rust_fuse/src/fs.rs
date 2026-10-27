@@ -9846,7 +9846,8 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EINVAL);
             return;
         };
-        match self.repo.create_special_file(
+        let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
+        match self.repo.create_special_file_for_subject(
             parent_id,
             name.to_string_lossy().as_ref(),
             mode,
@@ -9856,6 +9857,7 @@ impl Filesystem for FodFuse {
             file_kind,
             libc::major(rdev as libc::dev_t) as u32,
             libc::minor(rdev as libc::dev_t) as u32,
+            &supplementary_groups,
         ) {
             Ok(_) => {}
             Err(err) => {

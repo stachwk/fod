@@ -2690,6 +2690,24 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
     );
     assert_eq!(repo.count_files()?, files_before);
 
+    let denied_special = repo.create_special_file_for_subject(
+        Some(parent_id),
+        "denied-fifo",
+        0o600,
+        2000,
+        2000,
+        &unique_name("mknod_denied_fifo_seed"),
+        "fifo",
+        0,
+        0,
+        &[2000],
+    );
+    assert_eq!(
+        denied_special.unwrap_err(),
+        fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
+    );
+    assert_eq!(repo.count_files()?, files_before);
+
     repo.update_directory_mode(parent_id, "730")?;
     let allowed_child = repo.create_directory_for_subject(
         Some(parent_id),
@@ -2710,6 +2728,20 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
         &unique_name("create_allowed_file_seed"),
         &[2000, 3000],
     )?;
+    let allowed_special = repo.create_special_file_for_subject(
+        Some(parent_id),
+        "supplementary-group-fifo",
+        0o600,
+        2000,
+        2000,
+        &unique_name("mknod_allowed_fifo_seed"),
+        "fifo",
+        0,
+        0,
+        &[2000, 3000],
+    )?;
+    assert!(allowed_special > 0);
+    repo.purge_primary_file(allowed_special)?;
     repo.purge_primary_file(allowed_file)?;
     repo.delete_directory_entry(allowed_child)?;
     repo.delete_directory_entry(parent_id)?;
