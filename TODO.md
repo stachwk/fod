@@ -631,7 +631,7 @@ Status: active design direction, but the main decisions below are already taken.
 
 ### POSIX Conformance Audit
 
-- [ ] Audit every POSIX requirement that applies to FOD's declared filesystem API and supported operation set. First identify the applicable POSIX editions, normative sections, and optional/XSI interfaces; classify Linux-specific behavior, FOD extensions, and out-of-scope requirements explicitly. Build a requirement matrix mapping each item to implementation evidence and a regression test or `pjdfstest` case, with status `pass`, `fail`, `not implemented`, or `not applicable`. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
+- [ ] Complete the [POSIX conformance audit](docs/POSIX_CONFORMANCE_AUDIT.md) for FOD's declared filesystem API. The audit defines POSIX.1-2024 Issue 8 as its baseline, identifies Linux/FUSE extensions separately, and starts a requirement matrix. Review exact normative sections and optional/XSI applicability; classify each requirement as pending, pass, fail, not implemented, or not applicable; map it to implementation evidence and a regression or `pjdfstest` case. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
 
 ### pjdfstest Observations
 
