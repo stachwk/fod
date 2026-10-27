@@ -8492,15 +8492,19 @@ impl Filesystem for FodFuse {
                     return;
                 }
 
-                match self.repo.rename_namespace_replace_with_ownership_guard(
-                    source,
-                    old_parent_id,
-                    &old_name,
-                    new_parent_id,
-                    &new_name,
-                    expected_target,
-                    subject.uid,
-                ) {
+                match self
+                    .repo
+                    .rename_namespace_replace_with_ownership_guard_for_subject(
+                        source,
+                        old_parent_id,
+                        &old_name,
+                        new_parent_id,
+                        &new_name,
+                        expected_target,
+                        subject.uid,
+                        subject.gid,
+                        &subject.groups.iter().copied().collect::<Vec<_>>(),
+                    ) {
                     Ok(RenameFileReplaceOutcome::Applied) => {
                         if expected_target.is_some() {
                             self.remove_cached_path(&new_path);

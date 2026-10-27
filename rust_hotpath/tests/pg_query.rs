@@ -2816,6 +2816,34 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
     );
     assert_eq!(repo.count_files()?, files_after_hardlink_source);
 
+    let rename_source_name = unique_name("rename_parent_access_source");
+    let rename_source_id = repo.create_file(
+        None,
+        &rename_source_name,
+        0o600,
+        2000,
+        2000,
+        &unique_name("rename_parent_access_source_seed"),
+    )?;
+    let rename_target_name = unique_name("rename_parent_access_target");
+    let denied_rename = repo.rename_namespace_replace_with_ownership_guard_for_subject(
+        fod_rust_hotpath::pg::RenameNamespaceSource::File {
+            file_id: rename_source_id,
+        },
+        None,
+        &rename_source_name,
+        Some(parent_id),
+        &rename_target_name,
+        None,
+        2000,
+        2000,
+        &[2000],
+    );
+    assert_eq!(
+        denied_rename.unwrap_err(),
+        fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
+    );
+
     repo.update_directory_mode(parent_id, "730")?;
     assert_eq!(
         repo.unlink_directory_entry_for_subject(
@@ -2845,6 +2873,22 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
         2000,
         &[2000, 3000],
     )?;
+    assert_eq!(
+        repo.rename_namespace_replace_with_ownership_guard_for_subject(
+            fod_rust_hotpath::pg::RenameNamespaceSource::File {
+                file_id: rename_source_id,
+            },
+            None,
+            &rename_source_name,
+            Some(parent_id),
+            &rename_target_name,
+            None,
+            2000,
+            2000,
+            &[2000, 3000],
+        )?,
+        fod_rust_hotpath::pg::RenameFileReplaceOutcome::Applied
+    );
     let allowed_child = repo.create_directory_for_subject(
         Some(parent_id),
         "supplementary-group-child",
@@ -2854,7 +2898,7 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
         &unique_name("mkdir_allowed_child_seed"),
         &[2000, 3000],
     )?;
-    assert_eq!(repo.count_directory_children(parent_id)?, 1);
+    assert_eq!(repo.count_directory_children(parent_id)?, 2);
     let allowed_file = repo.create_file_for_subject(
         Some(parent_id),
         "supplementary-group-file",
@@ -2900,6 +2944,7 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
     repo.purge_primary_file(hardlink_source)?;
     repo.purge_primary_file(unlink_file)?;
     repo.purge_primary_file(allowed_file)?;
+    repo.purge_primary_file(rename_source_id)?;
     repo.delete_directory_entry(allowed_child)?;
     repo.delete_directory_entry(parent_id)?;
     Ok(())

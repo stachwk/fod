@@ -10080,6 +10080,55 @@ impl DbRepo {
         expected_target: Option<RenameNamespaceTarget>,
         actor_uid: u32,
     ) -> Result<RenameFileReplaceOutcome, String> {
+        self.rename_namespace_replace_with_ownership_guard_internal(
+            source,
+            old_parent_id,
+            old_name,
+            new_parent_id,
+            new_name,
+            expected_target,
+            actor_uid,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn rename_namespace_replace_with_ownership_guard_for_subject(
+        &self,
+        source: RenameNamespaceSource,
+        old_parent_id: Option<u64>,
+        old_name: &str,
+        new_parent_id: Option<u64>,
+        new_name: &str,
+        expected_target: Option<RenameNamespaceTarget>,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<RenameFileReplaceOutcome, String> {
+        self.rename_namespace_replace_with_ownership_guard_internal(
+            source,
+            old_parent_id,
+            old_name,
+            new_parent_id,
+            new_name,
+            expected_target,
+            actor_uid,
+            Some((actor_uid, actor_gid, supplementary_groups)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn rename_namespace_replace_with_ownership_guard_internal(
+        &self,
+        source: RenameNamespaceSource,
+        old_parent_id: Option<u64>,
+        old_name: &str,
+        new_parent_id: Option<u64>,
+        new_name: &str,
+        expected_target: Option<RenameNamespaceTarget>,
+        actor_uid: u32,
+        parent_actor: Option<(u32, u32, &[u32])>,
+    ) -> Result<RenameFileReplaceOutcome, String> {
         if old_name.is_empty() || new_name.is_empty() {
             return Err("rename destination name is empty".to_string());
         }
@@ -10365,6 +10414,24 @@ impl DbRepo {
                     };
                     if !matches_target(current_target.as_ref()) {
                         return Ok(RenameFileReplaceOutcome::Busy);
+                    }
+
+                    if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
+                        let mut parent_ids = [old_parent_id, new_parent_id]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>();
+                        parent_ids.sort_unstable();
+                        parent_ids.dedup();
+                        for parent_id in parent_ids {
+                            Self::require_parent_write_search_on_conn(
+                                conn,
+                                Some(parent_id),
+                                actor_uid,
+                                actor_gid,
+                                actor_groups,
+                            )?;
+                        }
                     }
 
                     Self::require_sticky_removal_on_conn(
