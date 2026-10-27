@@ -6507,12 +6507,32 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
-        let (path, attrs) = match self.entry_attrs_for_ino(ino) {
-            Ok(path) => path,
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
+        let handle = match self.file_handle_state_for_handle(fh) {
+            Some(handle) => handle,
+            None => {
+                fuse_reply_error!(reply, libc::EBADF);
                 return;
             }
+        };
+        let (path, attrs) = match handle.file_id {
+            Some(file_id) => match self.attrs_for_open_file_id(file_id) {
+                Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => (handle.path, attrs),
+                Ok(_) => {
+                    fuse_reply_error!(reply, ENOENT);
+                    return;
+                }
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            },
+            None => match self.entry_attrs_for_ino(ino) {
+                Ok(value) => value,
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            },
         };
         match cmd {
             value if value == IOCTL_FIGETBSZ => {
@@ -7272,6 +7292,10 @@ impl Filesystem for FodFuse {
         let fh = fh.0;
         let lock_owner = lock_owner.0;
         let _write_profile = self.start_fuse_write_profile();
+        if self.file_handle_state_for_handle(fh).is_none() {
+            fuse_reply_error!(reply, libc::EBADF);
+            return;
+        }
         debug!(
             "FOD flush fh={} lock_owner={} read_only={}",
             fh, lock_owner, self.read_only
@@ -7318,6 +7342,10 @@ impl Filesystem for FodFuse {
     ) {
         let fh = fh.0;
         let _write_profile = self.start_fuse_write_profile();
+        if self.file_handle_state_for_handle(fh).is_none() {
+            fuse_reply_error!(reply, libc::EBADF);
+            return;
+        }
         debug!(
             "FOD fsync fh={} datasync={} read_only={}",
             fh, datasync, self.read_only
