@@ -351,15 +351,25 @@ fn multi_open_unique_handles() -> Result<(), String> {
 }
 
 #[test]
-fn mkdir_parent_missing() -> Result<(), String> {
-    let mounted = MountedFs::start_without_init("mkdir-parent-missing")?;
+fn create_file_and_directory_parent_missing() -> Result<(), String> {
+    let mounted = MountedFs::start_without_init("create-parent-missing")?;
     let suffix = unique_suffix();
     let missing_parent = mounted.mountpoint.join(format!("missing-parent-{suffix}"));
+    let nested_file = missing_parent.join("file");
     let nested_dir = missing_parent.join("child");
+
+    let err = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&nested_file)
+        .expect_err("file create unexpectedly created a missing parent");
+    if err.kind() != std::io::ErrorKind::NotFound {
+        return Err(format!("expected file create ENOENT/NotFound, got {err}"));
+    }
 
     let err = fs::create_dir(&nested_dir).expect_err("mkdir unexpectedly created missing parents");
     if err.kind() != std::io::ErrorKind::NotFound {
-        return Err(format!("expected ENOENT/NotFound, got {err}"));
+        return Err(format!("expected mkdir ENOENT/NotFound, got {err}"));
     }
 
     if missing_parent.exists() {
