@@ -4058,35 +4058,20 @@ impl FodFuse {
     fn lookup_path(&self, path: &str) -> Result<Option<ParsedAttrs>, libc::c_int> {
         let path = Self::normalize_path(path);
         if path == "/" {
-            return Ok(Some(self.root_attr()));
+            return self.root_attr().map(Some);
         }
         self.attrs_for_path(&path)
     }
 
-    fn root_attr(&self) -> ParsedAttrs {
-        let now = SystemTime::now();
-        let child_dirs = self.repo.count_root_directory_children().unwrap_or(0);
-        let process_identity = Self::process_identity();
-        ParsedAttrs {
-            inode_seed: String::new(),
-            file_attr: FileAttr {
-                ino: INodeNo::ROOT,
-                size: 0,
-                blocks: self.block_count(0, "dir"),
-                atime: now,
-                mtime: now,
-                ctime: now,
-                crtime: now,
-                kind: FileType::Directory,
-                perm: 0o755,
-                nlink: (2 + child_dirs).try_into().unwrap_or(u32::MAX),
-                uid: process_identity.uid,
-                gid: process_identity.gid,
-                rdev: 0,
-                flags: 0,
-                blksize: self.block_size as u32,
-            },
-        }
+    fn root_attr(&self) -> Result<ParsedAttrs, libc::c_int> {
+        let authority = self.repo.authoritative_view();
+        let mut attrs = self
+            .attrs_for_path_from_repo(&authority, "/")?
+            .ok_or(ENOENT)?;
+        let child_dirs = authority.count_root_directory_children().map_err(|_| EIO)?;
+        attrs.file_attr.ino = INodeNo::ROOT;
+        attrs.file_attr.nlink = (2 + child_dirs).try_into().unwrap_or(u32::MAX);
+        Ok(attrs)
     }
 
     fn inode_for_path(&self, path: &str) -> Option<u64> {
@@ -7628,7 +7613,7 @@ impl Filesystem for FodFuse {
             }
         };
         let current_attrs = match if ino == ROOT_INO {
-            Ok(Some(self.root_attr()))
+            self.root_attr().map(Some)
         } else {
             self.attrs_for_path_from_repo(&authority, &path)
         } {
@@ -7820,7 +7805,7 @@ impl Filesystem for FodFuse {
             };
             if !atime_needs_update && !mtime_needs_update {
                 match if ino == ROOT_INO {
-                    Ok(Some(self.root_attr()))
+                    self.root_attr().map(Some)
                 } else {
                     self.attrs_for_path_from_repo(&authority, &path)
                 } {
@@ -7872,7 +7857,7 @@ impl Filesystem for FodFuse {
         }
 
         match if ino == ROOT_INO {
-            Ok(Some(self.root_attr()))
+            self.root_attr().map(Some)
         } else {
             self.attrs_for_path_from_repo(&authority, &path)
         } {

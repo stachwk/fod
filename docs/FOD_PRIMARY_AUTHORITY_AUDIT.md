@@ -385,22 +385,19 @@ uses the kernel/FUSE path and requires separate review.
 ### Logical root metadata
 
 The base schema has a durable `/` row in `directories` (`id_parent IS NULL`,
-`name='/'`), and `resolve_path("/")` returns that row. `setattr` can therefore
-write mode/owner and atime/mtime to this row. However, `FodFuse::root_attr`
-ignores it and synthesizes mode `0755`, uid/gid from the mounting process, and
-atime/mtime/ctime/crtime from local current time on every lookup. Successful
-root metadata writes are consequently invisible to `getattr` and can appear
-different between mounts. Root-level namespace operations use a null parent id
-and do not update the durable root row's mtime/ctime when children change. Root
-child-count query errors are silently converted to zero.
+`name='/'`), and `resolve_path("/")` returns that row. `FodFuse::root_attr` now
+reads its metadata through the authoritative PostgreSQL view, keeps the kernel
+inode fixed at `ROOT_INO`, and propagates root child-count errors instead of
+silently reporting zero. This makes stored mode, uid/gid and atime/mtime visible
+to `getattr` across mounts. Root-level namespace operations still use a null
+parent id and do not update the durable root row's mtime/ctime when children
+change.
 
-The correction should use the existing PostgreSQL root row as the authoritative
-source for root mode, owner and timestamps, keep the kernel inode fixed at
-`ROOT_INO`, and update root directory timestamps transactionally with
-root-level namespace changes. Root mutations also need the same transactional
-authorization as other inode metadata updates. The database record already
-exists; this is a FUSE projection and mutation-ordering gap, not a missing-table
-problem. No data-loss reproduction is claimed.
+The remaining correction is to update root directory timestamps transactionally
+with root-level namespace changes and ensure root mutations use the same
+transactional authorization as other inode metadata updates. The database
+record already exists; namespace change ordering and mutation authorization
+remain open. No data-loss reproduction is claimed.
 
 ### Truncate and timestamp authorization
 
@@ -434,7 +431,7 @@ described above.
   symlink unlink, `rmdir`, and rename. POSIX ACL xattr writes now check inode
   ownership under the write transaction; default ACL inheritance now shares
   the child creation transaction (mounted validation pending). Root metadata
-  projection and root-directory change updates remain open. Path truncate now has an ACL/mode
+  root-directory change updates and authorization remain open. Path truncate now has an ACL/mode
   check and `fh` truncate validates a writable handle, but primary-transaction
   authorization remains open. Timestamp authorization and partial-field
   semantics also remain open.
