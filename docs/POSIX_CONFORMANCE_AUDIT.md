@@ -121,6 +121,15 @@ filesystem path. All cases passed in `make test-acl-mount-option` on FOD
 3.4.110 and kernel `6.17.0-41-generic`. The broader metadata and timestamp row
 remains Pending.
 
+### Logical root directory metadata finding
+
+The mounted root-permissions regression records root `st_mtime_ns` and
+`st_ctime_ns` before and after creating and removing a direct child. Both values
+must advance after each namespace mutation. `make test-mount-root-permissions`
+passed on FOD 3.4.111. This verifies visible single-mount root timestamp
+behavior; it does not yet verify concurrent cross-mount cache visibility or all
+root metadata fields, so the metadata row remains Pending.
+
 ## Audit procedure
 
 1. For each row, list exact Issue 8 section and option-group applicability.
