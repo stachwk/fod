@@ -2690,6 +2690,30 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
     );
     assert_eq!(repo.count_files()?, files_before);
 
+    let hardlink_source = repo.create_file(
+        None,
+        &unique_name("hardlink_parent_access_source"),
+        0o600,
+        2000,
+        2000,
+        &unique_name("hardlink_parent_access_source_seed"),
+    )?;
+    let files_after_hardlink_source = repo.count_files()?;
+    let hardlinks_before = repo.count_file_links(hardlink_source)?;
+    let denied_hardlink = repo.create_hardlink_for_subject(
+        hardlink_source,
+        Some(parent_id),
+        "denied-hardlink",
+        2000,
+        2000,
+        &[2000],
+    );
+    assert_eq!(
+        denied_hardlink.unwrap_err(),
+        fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
+    );
+    assert_eq!(repo.count_file_links(hardlink_source)?, hardlinks_before);
+
     let symlinks_before = repo.count_symlinks()?;
     let denied_symlink = repo.create_symlink_for_subject(
         Some(parent_id),
@@ -2722,7 +2746,7 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
         denied_special.unwrap_err(),
         fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
     );
-    assert_eq!(repo.count_files()?, files_before);
+    assert_eq!(repo.count_files()?, files_after_hardlink_source);
 
     repo.update_directory_mode(parent_id, "730")?;
     let allowed_child = repo.create_directory_for_subject(
@@ -2768,6 +2792,16 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
         &[2000, 3000],
     )?;
     repo.delete_symlink_entry(allowed_symlink)?;
+    let allowed_hardlink = repo.create_hardlink_for_subject(
+        hardlink_source,
+        Some(parent_id),
+        "supplementary-group-hardlink",
+        2000,
+        2000,
+        &[2000, 3000],
+    )?;
+    repo.delete_hardlink_entry(allowed_hardlink)?;
+    repo.purge_primary_file(hardlink_source)?;
     repo.purge_primary_file(allowed_file)?;
     repo.delete_directory_entry(allowed_child)?;
     repo.delete_directory_entry(parent_id)?;

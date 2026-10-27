@@ -9993,12 +9993,14 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        match self.repo.create_hardlink(
+        let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
+        match self.repo.create_hardlink_for_subject(
             source_file_id,
             new_parent_id,
             newname.to_string_lossy().as_ref(),
             subject.uid,
             subject.gid,
+            &supplementary_groups,
         ) {
             Ok(_) => match self.lookup_path(&child_path) {
                 Ok(Some(attrs)) => {

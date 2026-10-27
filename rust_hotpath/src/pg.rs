@@ -10698,6 +10698,44 @@ impl DbRepo {
         uid: u32,
         gid: u32,
     ) -> Result<u64, String> {
+        self.create_hardlink_internal(
+            source_file_id,
+            target_parent_id,
+            target_name,
+            uid,
+            gid,
+            None,
+        )
+    }
+
+    pub fn create_hardlink_for_subject(
+        &self,
+        source_file_id: u64,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        uid: u32,
+        gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_hardlink_internal(
+            source_file_id,
+            target_parent_id,
+            target_name,
+            uid,
+            gid,
+            Some((uid, gid, supplementary_groups)),
+        )
+    }
+
+    fn create_hardlink_internal(
+        &self,
+        source_file_id: u64,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        uid: u32,
+        gid: u32,
+        parent_actor: Option<(u32, u32, &[u32])>,
+    ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
         let source_file_id_value = source_file_id;
         let uid_value = uid;
@@ -10744,6 +10782,15 @@ impl DbRepo {
                     return Err("FOD_LINK_SOURCE_UNAVAILABLE".to_string());
                 }
                 Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
+                    Self::require_parent_write_search_on_conn(
+                        conn,
+                        target_parent_id,
+                        actor_uid,
+                        actor_gid,
+                        actor_groups,
+                    )?;
+                }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
