@@ -2951,6 +2951,90 @@ fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(
 }
 
 #[test]
+fn access_acl_xattr_and_mode_are_updated_together() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let name = unique_name("access_acl_atomic");
+    let file_id = repo.create_file(
+        None,
+        &name,
+        0o6755,
+        1000,
+        1000,
+        &unique_name("access_acl_atomic_seed"),
+    )?;
+    let acl = b"valid-acl-payload";
+
+    assert_eq!(
+        repo.store_access_acl_and_mode_for_owner(
+            "file",
+            file_id,
+            "system.posix_acl_access",
+            acl,
+            0o640,
+            false,
+            true,
+        )
+        .unwrap_err(),
+        "FOD_XATTR_MISSING"
+    );
+    assert_eq!(
+        repo.get_file_mode_value(&format!("/{name}"))?.as_deref(),
+        Some("6755")
+    );
+    repo.store_access_acl_and_mode_for_owner(
+        "file",
+        file_id,
+        "system.posix_acl_access",
+        acl,
+        0o640,
+        true,
+        false,
+    )?;
+
+    assert_eq!(
+        repo.fetch_xattr_value_for_owner("file", file_id, "system.posix_acl_access")?,
+        Some(acl.to_vec())
+    );
+    assert_eq!(
+        repo.get_file_mode_value(&format!("/{name}"))?.as_deref(),
+        Some("6640")
+    );
+    assert_eq!(
+        repo.store_access_acl_and_mode_for_owner(
+            "file",
+            file_id,
+            "system.posix_acl_access",
+            b"conflicting-acl",
+            0o600,
+            true,
+            false,
+        )
+        .unwrap_err(),
+        "FOD_XATTR_EXISTS"
+    );
+    assert_eq!(
+        repo.get_file_mode_value(&format!("/{name}"))?.as_deref(),
+        Some("6640")
+    );
+    repo.store_access_acl_and_mode_for_owner(
+        "file",
+        file_id,
+        "system.posix_acl_access",
+        b"replacement-acl",
+        0o600,
+        false,
+        true,
+    )?;
+    assert_eq!(
+        repo.get_file_mode_value(&format!("/{name}"))?.as_deref(),
+        Some("6600")
+    );
+    repo.purge_primary_file(file_id)?;
+    Ok(())
+}
+
+#[test]
 fn inode_permission_changes_authorize_locked_owner_and_preserve_fields() -> Result<(), String> {
     use fod_rust_hotpath::pg::{InodePermissionChange, InodePermissionOutcome};
     let _guard = ENV_LOCK.lock().unwrap();

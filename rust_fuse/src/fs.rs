@@ -2834,19 +2834,9 @@ impl FodFuse {
         Ok((current_perm & !0o777) | (user_bits << 6) | (group_bits << 3) | other_bits)
     }
 
-    fn acl_access_mode_text(
-        &self,
-        path: &str,
-        value: &[u8],
-    ) -> Result<Option<String>, libc::c_int> {
+    fn acl_access_mode_bits(value: &[u8]) -> Result<u16, libc::c_int> {
         let entries = Self::parse_posix_acl_xattr(value)?;
-        let attrs = self.lookup_path(path)?.ok_or(ENOENT)?.file_attr;
-        let new_perm = Self::mode_from_acl_entries(&entries, attrs.perm)?;
-        if new_perm == attrs.perm {
-            Ok(None)
-        } else {
-            Ok(Some(format!("{:o}", new_perm & 0o7777)))
-        }
+        Ok(Self::mode_from_acl_entries(&entries, 0)? & 0o777)
     }
 
     fn acl_allows(
@@ -6092,7 +6082,11 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        if flags & libc::XATTR_CREATE != 0
+        let acl_access_transaction = self.acl_enabled
+            && name == "system.posix_acl_access"
+            && matches!(owner.0.as_str(), "file" | "dir");
+        if !acl_access_transaction
+            && flags & libc::XATTR_CREATE != 0
             && self
                 .repo
                 .fetch_xattr_value(&path, &name)
@@ -6103,7 +6097,8 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EEXIST);
             return;
         }
-        if flags & libc::XATTR_REPLACE != 0
+        if !acl_access_transaction
+            && flags & libc::XATTR_REPLACE != 0
             && self
                 .repo
                 .fetch_xattr_value(&path, &name)
@@ -6114,9 +6109,9 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::ENODATA);
             return;
         }
-        let acl_mode_text = if self.acl_enabled && name == "system.posix_acl_access" {
-            match self.acl_access_mode_text(&path, value) {
-                Ok(value) => value,
+        let acl_mode_bits = if self.acl_enabled && name == "system.posix_acl_access" {
+            match Self::acl_access_mode_bits(value) {
+                Ok(value) => Some(value),
                 Err(errno) => {
                     fuse_reply_error!(reply, errno);
                     return;
@@ -6125,26 +6120,51 @@ impl Filesystem for FodFuse {
         } else {
             None
         };
+
+        if let (Some(permission_bits), true) =
+            (acl_mode_bits, matches!(owner.0.as_str(), "file" | "dir"))
+        {
+            match self.repo.store_access_acl_and_mode_for_owner(
+                &owner.0,
+                owner.1,
+                &name,
+                value,
+                permission_bits,
+                flags & libc::XATTR_CREATE != 0,
+                flags & libc::XATTR_REPLACE != 0,
+            ) {
+                Ok(()) => {
+                    debug!(
+                        "FOD setxattr stored ACL and synchronized mode path={}",
+                        path
+                    );
+                    reply.ok();
+                }
+                Err(err) if err == "FOD_XATTR_OWNER_MISSING" => {
+                    fuse_reply_error!(reply, ENOENT);
+                }
+                Err(err) if err == "FOD_XATTR_EXISTS" => {
+                    fuse_reply_error!(reply, libc::EEXIST);
+                }
+                Err(err) if err == "FOD_XATTR_MISSING" => {
+                    fuse_reply_error!(reply, libc::ENODATA);
+                }
+                Err(err) => {
+                    warn!(
+                        "FOD setxattr ACL transaction failed path={} err={}",
+                        path, err
+                    );
+                    fuse_reply_error!(reply, EIO);
+                }
+            }
+            return;
+        }
+
         let result = self
             .repo
             .store_xattr_value_for_owner(&owner.0, owner.1, &name, value);
         match result {
             Ok(_) => {
-                if let Some(mode_text) = acl_mode_text {
-                    let mode_result = match owner.0.as_str() {
-                        "file" => self.repo.update_file_mode(owner.1, &mode_text),
-                        "dir" => self.repo.update_directory_mode(owner.1, &mode_text),
-                        _ => Ok(()),
-                    };
-                    if mode_result.is_err() {
-                        warn!(
-                            "FOD setxattr stored ACL but failed to sync mode path={} name={}",
-                            path, name
-                        );
-                        fuse_reply_error!(reply, EIO);
-                        return;
-                    }
-                }
                 debug!("FOD setxattr stored path={} name={}", path, name);
                 reply.ok()
             }

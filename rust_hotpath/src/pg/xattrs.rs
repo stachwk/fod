@@ -5,9 +5,9 @@
 //! Keep path resolution here; connection routing and SQL execution stay in `pg`.
 
 use super::{
-    exec_command_params, exec_params, is_retryable_connection_error, replayable_sql_error,
-    result_error, sql_is_replayable_command, DbRepo, PQclear, PQgetvalue, PQnfields, PQntuples,
-    PQresultStatus, PGRES_TUPLES_OK,
+    exec_command_params, exec_params, fetch_first_row_texts, is_retryable_connection_error,
+    replayable_sql_error, result_error, sql_is_replayable_command, DbRepo, PQclear, PQgetvalue,
+    PQnfields, PQntuples, PQresultStatus, PGRES_TUPLES_OK,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -126,6 +126,89 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id, &name, &value_b64];
             exec_command_params(conn, &sql, &params)
+        })
+    }
+
+    /// Store an access ACL and synchronize its basic permission bits atomically.
+    /// The inode row lock serializes this update with chmod/chown.
+    pub fn store_access_acl_and_mode_for_owner(
+        &self,
+        owner_kind: &str,
+        owner_id: u64,
+        name: &str,
+        value: &[u8],
+        permission_bits: u16,
+        create_only: bool,
+        replace_only: bool,
+    ) -> Result<(), String> {
+        let (table, key) = match owner_kind {
+            "file" => ("files", "id_file"),
+            "dir" => ("directories", "id_directory"),
+            _ => return Err("access ACL mode sync requires a file or directory".to_string()),
+        };
+        let owner_kind = CString::new(owner_kind)
+            .map_err(|_| "xattr owner kind contains NUL byte".to_string())?;
+        let owner_id_text = owner_id.to_string();
+        let owner_id_param = CString::new(owner_id_text.clone())
+            .map_err(|_| "xattr owner id contains NUL byte".to_string())?;
+        let name = CString::new(name).map_err(|_| "xattr name contains NUL byte".to_string())?;
+        let value_b64 = CString::new(BASE64_STANDARD.encode(value))
+            .map_err(|_| "xattr value contains NUL byte".to_string())?;
+        let select_mode = CString::new(format!(
+            "SELECT mode FROM {table} WHERE {key} = $1 FOR UPDATE"
+        ))
+        .unwrap();
+        let store_acl = CString::new(
+            "INSERT INTO xattrs (owner_kind, owner_id, name, value)
+             VALUES ($1, $2, $3, decode($4, 'base64'))
+             ON CONFLICT (owner_kind, owner_id, name) DO UPDATE
+             SET value = EXCLUDED.value",
+        )
+        .unwrap();
+        let check_acl = CString::new(
+            "SELECT EXISTS (
+                SELECT 1 FROM xattrs WHERE owner_kind = $1 AND owner_id = $2 AND name = $3
+             )::text",
+        )
+        .unwrap();
+
+        self.with_transaction(|tx| unsafe {
+            let mode_row = fetch_first_row_texts(exec_params(
+                tx.conn,
+                &select_mode,
+                &[&owner_id_param],
+            )?)?;
+            let Some(mode_text) = mode_row.first() else {
+                return Err("FOD_XATTR_OWNER_MISSING".to_string());
+            };
+            let current_mode = u32::from_str_radix(mode_text, 8)
+                .map_err(|err| format!("invalid inode mode: {err}"))?;
+            let acl_exists = fetch_first_row_texts(exec_params(
+                tx.conn,
+                &check_acl,
+                &[&owner_kind, &owner_id_param, &name],
+            )?)?
+            .first()
+            .is_some_and(|value| matches!(value.as_str(), "t" | "true"));
+            if create_only && acl_exists {
+                return Err("FOD_XATTR_EXISTS".to_string());
+            }
+            if replace_only && !acl_exists {
+                return Err("FOD_XATTR_MISSING".to_string());
+            }
+            let synchronized_mode = (current_mode & !0o777) | (u32::from(permission_bits) & 0o777);
+            let mode_param = CString::new(format!("{synchronized_mode:o}"))
+                .map_err(|_| "mode contains NUL byte".to_string())?;
+            exec_command_params(
+                tx.conn,
+                &store_acl,
+                &[&owner_kind, &owner_id_param, &name, &value_b64],
+            )?;
+            let update_mode = CString::new(format!(
+                "UPDATE {table} SET mode = $1, change_date = NOW(), modification_date = NOW() WHERE {key} = $2"
+            ))
+            .unwrap();
+            exec_command_params(tx.conn, &update_mode, &[&mode_param, &owner_id_param])
         })
     }
 
