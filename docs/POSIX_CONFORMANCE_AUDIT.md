@@ -17,6 +17,7 @@ Primary references:
 
 - [POSIX.1-2024 / Issue 8](https://pubs.opengroup.org/onlinepubs/9799919799/)
 - [IEEE active standard record](https://standards.ieee.org/ieee/9945/12489/)
+- [Austin Group Issue 415: accepted `SEEK_HOLE`/`SEEK_DATA` text](https://austingroupbugs.net/view.php?id=415#c862)
 - [POSIX.1-2024 `open()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html)
 - [POSIX.1-2024 `read()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/read.html)
 - [POSIX.1-2024 `write()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/write.html)
@@ -63,7 +64,7 @@ its status can move from Pending.
 | Open and descriptor semantics | XSH `open`, `close`, `fcntl`, `dup`; access modes, append and create flags | `open`, `create`, `release`, `flush` callbacks; `test_mount_suite.py`, `test_create_write_ownership.py` | Pending |
 | Read and write | XSH `read`, `write`, `pread`, `pwrite`; short I/O, EOF and offset rules | `test_lseek.py`, `test_mount_suite.py` | Pending |
 | Standard file-offset positioning | XSH `lseek`, `SEEK_SET`, `SEEK_CUR`, `SEEK_END`; negative result, offset beyond EOF and no size change from seeking | Mounted `test_lseek.py` | Pass (listed cases) |
-| Sparse file-offset positioning | POSIX.1-2024 XSH `lseek`, `SEEK_DATA` and `SEEK_HOLE`; distinguish Issue 8 requirements from their pre-Issue-8 Linux/BSD history and Linux FUSE callback details | `test_lseek_sparse_runtime.py`, `test_lseek_sparse_contract.py`; callback `FodFuse::lseek` | Pending |
+| Sparse file-offset positioning | Optional POSIX.1-2024 XSH `lseek` `SEEK_DATA` and `SEEK_HOLE` behavior; distinguish Issue 8 requirements from their pre-Issue-8 Linux/BSD history and Linux FUSE callback details | `test_lseek_sparse_runtime.py`, `test_lseek_sparse_contract.py`; callback `FodFuse::lseek` | Pass |
 | Truncation and file length | XSH `truncate`, `ftruncate`, `open(O_TRUNC)` | `test_truncate_shrink_block_boundary.py`, `test_mount_suite.py`, Rust `mount_smoke` | Pending |
 | Metadata and timestamps | XSH `stat`, `fstat`, `chmod`, `fchmod`, `chown`, `utimensat`; XBD file status fields | `test_mount_suite.py`, `test_permissions.py`, `test_timestamp_touch_once.py`, `test_utimens_noop` | Pending |
 | Permissions and identity | XSH `access`, `umask`, `chmod`, `chown`; XBD file access permission rules | `test_permissions.py`, `test_access_groups.py`, `test_ownership_inheritance.py`, `test_root_owned_permissions.py` | Pending |
@@ -73,6 +74,31 @@ its status can move from Pending.
 | Filesystem capacity and status | XSH `statvfs`; XBD `statvfs` fields and units | `statfs`; `test_df.sh`, two-mount quota tests, `docs/space-accounting.md` | Pending |
 | Error behavior | XSH per-interface `ERRORS` and `RATIONALE`; errno precedence for supported operations | Targeted integration tests and `pjdfstest` subsets; map each error assertion to clause | Pending |
 | Linux/FUSE extensions | Not POSIX base requirements; use Linux and FUSE references | `test_xattr.py`, `test_acl_mount_option.py`, `test_ioctl.py`, compatibility contracts | Separate extension audit |
+
+### Sparse `lseek` finding
+
+Austin Group Issue 415's accepted text makes `SEEK_DATA` and `SEEK_HOLE` an
+optional Issue 8 feature. It requires `ENXIO` when `offset >= EOF`; `SEEK_DATA`
+also returns `ENXIO` when no non-hole byte remains. A hole is a contiguous run
+of zero bytes, but an implementation need not classify every zero byte as a
+hole. Every seekable file has a virtual hole beginning at EOF. The accepted
+proposal did not add `_PC_MIN_HOLE_SIZE` to `fpathconf()`.
+
+FOD implements the feature at storage-block granularity: absent payload blocks
+read as zeroes and are reported as holes; persisted blocks are reported as
+data, including blocks whose bytes may all be zero. This is permitted because
+zero bytes need not be reported as holes. The mounted runtime matrix covers
+dense files, punched and sparse gaps, trailing and empty files, EOF and
+beyond-EOF errors, pending writes and remount. It also verifies `ENXIO` leaves
+the open-file offset unchanged for both whence values and that the calls do not
+mutate visible or PostgreSQL file state. `make test-lseek-sparse-runtime`
+passed on FOD 3.4.104.
+
+On Linux, the FUSE `lseek` callback is used for `SEEK_DATA` and `SEEK_HOLE`;
+the kernel handles `SEEK_SET`, `SEEK_CUR` and `SEEK_END`. That division is
+verified by the mounted standard-offset and sparse-offset tests. The finding
+closes these listed sparse-seek requirements; it does not audit every
+`lseek()` error case for every supported file type.
 
 ## Audit procedure
 

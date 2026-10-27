@@ -70,8 +70,6 @@ cover both the kernel-handled positioning cases and its sparse-seek callback.
 - connect selected `fallocate` modes to existing resize and sparse-storage
   machinery and reject unsupported combinations;
 - benchmark `readdirplus` before enabling it;
-- verify the sparse-seek error and file-offset rules against POSIX.1-2024
-  Issue 8, beyond the existing mounted layout and remount cases;
 - repeat the callback/capability inventory after every `fuser` upgrade.
 
 ## Rust and C boundary
