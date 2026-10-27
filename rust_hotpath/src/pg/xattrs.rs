@@ -19,6 +19,86 @@ pub(super) struct InheritedPosixAcl {
     pub(super) mode: u32,
 }
 
+fn xattr_owner_table(owner_kind: &str) -> Result<(&'static str, &'static str), String> {
+    match owner_kind {
+        "file" => Ok(("files", "id_file")),
+        "dir" => Ok(("directories", "id_directory")),
+        "symlink" => Ok(("symlinks", "id_symlink")),
+        _ => Err("unsupported xattr owner kind".to_string()),
+    }
+}
+
+unsafe fn authorize_xattr_mutation_on_conn(
+    conn: *mut super::PGconn,
+    owner_kind: &str,
+    owner_id: u64,
+    name: &str,
+    actor_uid: u32,
+    actor_gid: u32,
+    actor_groups: &[u32],
+    use_posix_acl: bool,
+) -> Result<(), String> {
+    let (table, key) = xattr_owner_table(owner_kind)?;
+    let sql = CString::new(format!("SELECT uid, gid, mode FROM {table} WHERE {key}=$1")).unwrap();
+    let row = fetch_first_row_texts(exec_params(
+        conn,
+        &sql,
+        &[&CString::new(owner_id.to_string()).unwrap()],
+    )?)?;
+    if row.len() != 3 {
+        return Err("FOD_XATTR_OWNER_MISSING".to_string());
+    }
+    let owner_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
+    let owner_gid = row[1].parse::<u32>().map_err(|err| err.to_string())?;
+    let mode = u32::from_str_radix(&row[2], 8).map_err(|err| err.to_string())?;
+
+    if name.starts_with("trusted.") && actor_uid != 0 {
+        return Err("FOD_XATTR_PERMISSION_DENIED".to_string());
+    }
+    if name.starts_with("user.") {
+        if !matches!(owner_kind, "file" | "dir") {
+            return Err("FOD_XATTR_NOT_SUPPORTED".to_string());
+        }
+        if owner_kind == "dir" && mode & 0o1000 != 0 && actor_uid != 0 && actor_uid != owner_uid {
+            return Err("FOD_XATTR_PERMISSION_DENIED".to_string());
+        }
+        if actor_uid != 0 {
+            let acl_allowed = if use_posix_acl {
+                super::metadata_updates::inode_acl_allows_on_conn(
+                    conn,
+                    owner_kind,
+                    owner_id,
+                    actor_uid,
+                    actor_groups,
+                    owner_uid,
+                    owner_gid,
+                    0o2,
+                )?
+            } else {
+                None
+            };
+            let allowed = acl_allowed.unwrap_or_else(|| {
+                let bits = if actor_uid == owner_uid {
+                    (mode >> 6) & 0o7
+                } else if actor_gid == owner_gid || actor_groups.contains(&owner_gid) {
+                    (mode >> 3) & 0o7
+                } else {
+                    mode & 0o7
+                };
+                bits & 0o2 != 0
+            });
+            if !allowed {
+                return Err("FOD_XATTR_ACCESS_DENIED".to_string());
+            }
+        }
+        return Ok(());
+    }
+    if actor_uid != 0 && actor_uid != owner_uid {
+        return Err("FOD_XATTR_PERMISSION_DENIED".to_string());
+    }
+    Ok(())
+}
+
 fn constrain_default_acl_to_mode(value: &[u8], mode: u32) -> Result<(Vec<u8>, u32), String> {
     if value.len() < 4 || (value.len() - 4) % 8 != 0 {
         return Err("invalid POSIX default ACL xattr length".to_string());
@@ -278,6 +358,127 @@ impl DbRepo {
         self.with_cached_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id, &name, &value_b64];
             exec_command_params(conn, &sql, &params)
+        })
+    }
+
+    /// Set an xattr after authorizing its inode owner in the same transaction.
+    /// The inode lock also makes CREATE/REPLACE atomic with concurrent writers.
+    pub fn store_xattr_value_for_owner_as(
+        &self,
+        owner_kind: &str,
+        owner_id: u64,
+        name: &str,
+        value: &[u8],
+        create_only: bool,
+        replace_only: bool,
+        actor_uid: u32,
+        actor_gid: u32,
+        actor_groups: &[u32],
+        use_posix_acl: bool,
+    ) -> Result<(), String> {
+        let (table, key) = xattr_owner_table(owner_kind)?;
+        let owner_id_value = owner_id;
+        let owner_id = CString::new(owner_id_value.to_string())
+            .map_err(|_| "xattr owner id contains NUL byte".to_string())?;
+        let name = CString::new(name).map_err(|_| "xattr name contains NUL byte".to_string())?;
+        let value = CString::new(BASE64_STANDARD.encode(value))
+            .map_err(|_| "xattr value contains NUL byte".to_string())?;
+        let select_owner =
+            CString::new(format!("SELECT 1 FROM {table} WHERE {key} = $1 FOR UPDATE")).unwrap();
+        let exists = CString::new(
+            "SELECT EXISTS (SELECT 1 FROM xattrs WHERE owner_kind=$1 AND owner_id=$2 AND name=$3)::text",
+        )
+        .unwrap();
+        let upsert = CString::new(
+            "INSERT INTO xattrs (owner_kind, owner_id, name, value)
+             VALUES ($1, $2, $3, decode($4, 'base64'))
+             ON CONFLICT (owner_kind, owner_id, name) DO UPDATE SET value=EXCLUDED.value",
+        )
+        .unwrap();
+        let owner_kind = CString::new(owner_kind)
+            .map_err(|_| "xattr owner kind contains NUL byte".to_string())?;
+
+        self.with_transaction(|tx| unsafe {
+            let row = fetch_first_row_texts(exec_params(tx.conn, &select_owner, &[&owner_id])?)?;
+            if row.is_empty() {
+                return Err("FOD_XATTR_OWNER_MISSING".to_string());
+            }
+            authorize_xattr_mutation_on_conn(
+                tx.conn,
+                owner_kind.to_str().map_err(|err| err.to_string())?,
+                owner_id_value,
+                name.to_str().map_err(|err| err.to_string())?,
+                actor_uid,
+                actor_gid,
+                actor_groups,
+                use_posix_acl,
+            )?;
+            let present = fetch_first_row_texts(exec_params(
+                tx.conn,
+                &exists,
+                &[&owner_kind, &owner_id, &name],
+            )?)?
+            .first()
+            .is_some_and(|value| matches!(value.as_str(), "t" | "true"));
+            if create_only && present {
+                return Err("FOD_XATTR_EXISTS".to_string());
+            }
+            if replace_only && !present {
+                return Err("FOD_XATTR_MISSING".to_string());
+            }
+            exec_command_params(tx.conn, &upsert, &[&owner_kind, &owner_id, &name, &value])
+        })
+    }
+
+    /// Remove an xattr only after authorizing against the locked inode row.
+    pub fn remove_xattr_for_owner_as(
+        &self,
+        owner_kind: &str,
+        owner_id: u64,
+        name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        actor_groups: &[u32],
+        use_posix_acl: bool,
+    ) -> Result<u64, String> {
+        let (table, key) = xattr_owner_table(owner_kind)?;
+        let owner_id_value = owner_id;
+        let owner_id = CString::new(owner_id_value.to_string())
+            .map_err(|_| "xattr owner id contains NUL byte".to_string())?;
+        let name = CString::new(name).map_err(|_| "xattr name contains NUL byte".to_string())?;
+        let select_owner =
+            CString::new(format!("SELECT 1 FROM {table} WHERE {key} = $1 FOR UPDATE")).unwrap();
+        let delete = CString::new(
+            "DELETE FROM xattrs WHERE owner_kind=$1 AND owner_id=$2 AND name=$3 RETURNING 1",
+        )
+        .unwrap();
+        let owner_kind = CString::new(owner_kind)
+            .map_err(|_| "xattr owner kind contains NUL byte".to_string())?;
+
+        self.with_transaction(|tx| unsafe {
+            let row = fetch_first_row_texts(exec_params(tx.conn, &select_owner, &[&owner_id])?)?;
+            if row.is_empty() {
+                return Err("FOD_XATTR_OWNER_MISSING".to_string());
+            }
+            authorize_xattr_mutation_on_conn(
+                tx.conn,
+                owner_kind.to_str().map_err(|err| err.to_string())?,
+                owner_id_value,
+                name.to_str().map_err(|err| err.to_string())?,
+                actor_uid,
+                actor_gid,
+                actor_groups,
+                use_posix_acl,
+            )?;
+            let result = exec_params(tx.conn, &delete, &[&owner_kind, &owner_id, &name])?;
+            if PQresultStatus(result) != PGRES_TUPLES_OK {
+                let error = result_error(result);
+                PQclear(result);
+                return Err(error);
+            }
+            let rows = PQntuples(result);
+            PQclear(result);
+            Ok(rows as u64)
         })
     }
 

@@ -6036,6 +6036,12 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EOPNOTSUPP);
             return;
         }
+        if flags & !(libc::XATTR_CREATE | libc::XATTR_REPLACE) != 0
+            || flags & libc::XATTR_CREATE != 0 && flags & libc::XATTR_REPLACE != 0
+        {
+            fuse_reply_error!(reply, libc::EINVAL);
+            return;
+        }
         let path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
@@ -6081,28 +6087,15 @@ impl Filesystem for FodFuse {
         let posix_acl_transaction = self.acl_enabled
             && ((name == "system.posix_acl_access" && matches!(owner.0.as_str(), "file" | "dir"))
                 || (name == "system.posix_acl_default" && owner.0 == "dir"));
-        if !posix_acl_transaction
-            && flags & libc::XATTR_CREATE != 0
-            && self
-                .repo
-                .fetch_xattr_value(&path, &name)
-                .ok()
-                .flatten()
-                .is_some()
-        {
-            fuse_reply_error!(reply, libc::EEXIST);
-            return;
-        }
-        if !posix_acl_transaction
-            && flags & libc::XATTR_REPLACE != 0
-            && self
-                .repo
-                .fetch_xattr_value(&path, &name)
-                .ok()
-                .flatten()
-                .is_none()
-        {
-            fuse_reply_error!(reply, libc::ENODATA);
+        if name.starts_with("system.posix_acl_") && !posix_acl_transaction {
+            fuse_reply_error!(
+                reply,
+                if self.acl_enabled {
+                    libc::EINVAL
+                } else {
+                    libc::EOPNOTSUPP
+                }
+            );
             return;
         }
         let acl_mode_bits = if posix_acl_transaction {
@@ -6171,13 +6164,41 @@ impl Filesystem for FodFuse {
             return;
         }
 
-        let result = self
-            .repo
-            .store_xattr_value_for_owner(&owner.0, owner.1, &name, value);
+        let subject = self.request_identity(req);
+        let result = self.repo.store_xattr_value_for_owner_as(
+            &owner.0,
+            owner.1,
+            &name,
+            value,
+            flags & libc::XATTR_CREATE != 0,
+            flags & libc::XATTR_REPLACE != 0,
+            subject.uid,
+            subject.gid,
+            &subject.groups.iter().copied().collect::<Vec<_>>(),
+            self.acl_enabled,
+        );
         match result {
             Ok(_) => {
                 debug!("FOD setxattr stored path={} name={}", path, name);
                 reply.ok()
+            }
+            Err(err) if err == "FOD_XATTR_OWNER_MISSING" => {
+                fuse_reply_error!(reply, ENOENT)
+            }
+            Err(err) if err == "FOD_XATTR_EXISTS" => {
+                fuse_reply_error!(reply, libc::EEXIST)
+            }
+            Err(err) if err == "FOD_XATTR_MISSING" => {
+                fuse_reply_error!(reply, libc::ENODATA)
+            }
+            Err(err) if err == "FOD_XATTR_PERMISSION_DENIED" => {
+                fuse_reply_error!(reply, libc::EPERM)
+            }
+            Err(err) if err == "FOD_XATTR_ACCESS_DENIED" => {
+                fuse_reply_error!(reply, libc::EACCES)
+            }
+            Err(err) if err == "FOD_XATTR_NOT_SUPPORTED" => {
+                fuse_reply_error!(reply, libc::EOPNOTSUPP)
             }
             Err(_) => {
                 warn!("FOD setxattr failed path={} name={}", path, name);
@@ -6282,7 +6303,7 @@ impl Filesystem for FodFuse {
         }
     }
 
-    fn removexattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+    fn removexattr(&self, req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         let ino = ino.0;
         if self.read_only {
             fuse_reply_error!(reply, libc::EROFS);
@@ -6307,8 +6328,36 @@ impl Filesystem for FodFuse {
             }
         };
         let name = name.to_string_lossy().to_string();
+        if name.starts_with("system.posix_acl_")
+            && (!self.acl_enabled
+                || (name == "system.posix_acl_default" && owner.0 != "dir")
+                || (name == "system.posix_acl_access"
+                    && !matches!(owner.0.as_str(), "file" | "dir")))
+        {
+            fuse_reply_error!(
+                reply,
+                if self.acl_enabled {
+                    libc::EINVAL
+                } else {
+                    libc::EOPNOTSUPP
+                }
+            );
+            return;
+        }
         debug!("FOD removexattr path={} name={}", path, name);
-        match self.repo.remove_xattr_for_owner(&owner.0, owner.1, &name) {
+        let subject = self.request_identity(req);
+        match self
+            .repo
+            .remove_xattr_for_owner_as(
+                &owner.0,
+                owner.1,
+                &name,
+                subject.uid,
+                subject.gid,
+                &subject.groups.iter().copied().collect::<Vec<_>>(),
+                self.acl_enabled,
+            )
+        {
             Ok(deleted) if deleted > 0 => {
                 debug!("FOD removexattr removed path={} name={}", path, name);
                 reply.ok()
@@ -6316,6 +6365,18 @@ impl Filesystem for FodFuse {
             Ok(_) => {
                 debug!("FOD removexattr missing path={} name={}", path, name);
                 fuse_reply_error!(reply, libc::ENODATA)
+            }
+            Err(err) if err == "FOD_XATTR_OWNER_MISSING" => {
+                fuse_reply_error!(reply, ENOENT)
+            }
+            Err(err) if err == "FOD_XATTR_PERMISSION_DENIED" => {
+                fuse_reply_error!(reply, libc::EPERM)
+            }
+            Err(err) if err == "FOD_XATTR_ACCESS_DENIED" => {
+                fuse_reply_error!(reply, libc::EACCES)
+            }
+            Err(err) if err == "FOD_XATTR_NOT_SUPPORTED" => {
+                fuse_reply_error!(reply, libc::EOPNOTSUPP)
             }
             Err(_) => {
                 warn!("FOD removexattr failed path={} name={}", path, name);

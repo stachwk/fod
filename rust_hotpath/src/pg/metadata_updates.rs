@@ -133,13 +133,38 @@ pub(super) unsafe fn directory_acl_allows_on_conn(
     owner_gid: u32,
     requested: u16,
 ) -> Result<Option<bool>, String> {
+    inode_acl_allows_on_conn(
+        conn,
+        "dir",
+        directory_id,
+        actor_uid,
+        actor_groups,
+        owner_uid,
+        owner_gid,
+        requested,
+    )
+}
+
+pub(super) unsafe fn inode_acl_allows_on_conn(
+    conn: *mut PGconn,
+    owner_kind: &str,
+    inode_id: u64,
+    actor_uid: u32,
+    actor_groups: &[u32],
+    owner_uid: u32,
+    owner_gid: u32,
+    requested: u16,
+) -> Result<Option<bool>, String> {
     let rows = fetch_first_row_texts(exec_params(
         conn,
         &CString::new(
-            "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='dir' AND owner_id=$1 AND name='system.posix_acl_access'",
+            "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind=$1 AND owner_id=$2 AND name='system.posix_acl_access'",
         )
         .unwrap(),
-        &[&CString::new(directory_id.to_string()).unwrap()],
+        &[
+            &CString::new(owner_kind).map_err(|err| err.to_string())?,
+            &CString::new(inode_id.to_string()).unwrap(),
+        ],
     )?)?;
     let Some(encoded) = rows.first() else {
         return Ok(None);

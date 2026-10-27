@@ -249,7 +249,8 @@ checking the requester's write+search mode bits and supplementary groups, so a
 concurrent `chmod` is ordered with creation. Backend regressions verify denial
 without a created entry and supplementary-group access. The logical root still
 has synthesized mode/owner attributes; ACL-enabled creation and other namespace
-mutations remain outside this increment.
+mutations remained outside this increment. Later changes added transactional
+parent ACL checks for creation and namespace removal/movement.
 
 ## Confirmed routing and enforcement
 
@@ -259,11 +260,11 @@ mutations remain outside this increment.
 | `fallocate` hole punching, clone/copy adoption | Primary persistence APIs with a write fence | Hole-punch fencing regression passed; adoption also validates its destination fence in the primary transaction |
 | Open/client sessions, ownership and heartbeat | `with_control_connection` -> the same primary targets; normal read-only mounts use a writable control repo | Remote open/unlink/recreate test passed with distinct inode generations and old-handle writes isolated from the replacement |
 | `rename` / replace | Primary transaction with destination/file locks and source/target revalidation | Source inspection confirms transaction guards; test details are recorded below |
-| `create`, mkdir, mknod, link, symlink | Shared destination advisory lock and cross-table vacancy check in the primary insertion transaction | All 40 root/nested cross-type conflicts, concurrent creators and directory/FIFO ID separation passed; permission checks remain open |
+| `create`, mkdir, mknod, link, symlink | Shared destination advisory lock, cross-table vacancy check and parent write/search authorization in the primary insertion transaction | All 40 root/nested cross-type conflicts, concurrent creators and directory/FIFO ID separation passed; parent authorization is checked against ACL or mode |
 | `rmdir` | Primary namespace/row locks, sticky-bit check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
 | Sticky bit on unlink/rmdir/rename | Parent/victim owner row locks inside the primary mutation transaction | Concurrent parent permission commit and nine stale-replica cases passed |
 | chmod/chown | Locked primary inode, seed check and authorization in the same update transaction | Concurrent chown and stale-replica owner rejection passed; partial owner fields preserved |
-| Timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Authorization, ACL/mode atomicity and other precondition checks still require scrutiny |
+| Timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Timestamp and xattr authorization use locked primary inode rows; mutating ioctl preconditions still require scrutiny |
 | Explicit degraded replica-only mount | Read-only FUSE mount with mutation guards | It deliberately does not acquire/renew primary-backed leases or grant write ownership |
 
 `DbRepoLanes` gives the write repository primary connection targets and a
@@ -454,9 +455,13 @@ remain available for internal callers and do not carry a request identity.
   directory, special-file, symlink, and hardlink creation, plus file and
   symlink unlink, `rmdir`, and rename. ACL-enabled mounts use the parent access
   ACL for namespace removal and movement, with the same checks and row locks
-  inside each PostgreSQL transaction. POSIX ACL xattr writes now check inode
-  ownership under the write transaction; default ACL inheritance now shares the
-  child creation transaction (mounted validation pending). Root `setattr`
+  inside each PostgreSQL transaction. POSIX ACL writes and non-`user.*` generic
+  xattr writes/removal check inode ownership in the transaction; `user.*`
+  writes use locked ACL/mode write permission, and `trusted.*` requires uid 0.
+  Generic xattr `CREATE`/`REPLACE` flags are serialized with the value update.
+  Default ACL
+  inheritance now shares the child creation transaction (mounted validation
+  pending). Root `setattr`
   authorization uses the locked inode metadata paths. Path truncate now has an
   ACL/mode check and repeats authorization under the file row lock in its
   content transaction. Timestamp `setattr` authorization and field-preserving
