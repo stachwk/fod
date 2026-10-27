@@ -6229,7 +6229,7 @@ impl Filesystem for FodFuse {
         }
     }
 
-    fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
+    fn getxattr(&self, req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
         let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
         self.profile.record_getxattr();
@@ -6242,6 +6242,45 @@ impl Filesystem for FodFuse {
         };
         let name = name.to_string_lossy().to_string();
         debug!("FOD getxattr path={} name={} size={}", path, name, size);
+        let subject = self.request_identity(req);
+        if name.starts_with("trusted.") && subject.uid != 0 {
+            fuse_reply_error!(reply, libc::ENODATA);
+            return;
+        }
+        if name.starts_with("user.") {
+            let attrs = match self
+                .attrs_for_path_from_repo(&self.repo.authoritative_view(), &path)
+            {
+                Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => attrs,
+                Ok(Some(_)) => {
+                    fuse_reply_error!(reply, ENOENT);
+                    return;
+                }
+                Ok(None) => {
+                    fuse_reply_error!(reply, ENOENT);
+                    return;
+                }
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            };
+            if !matches!(attrs.file_attr.kind, FileType::RegularFile | FileType::Directory) {
+                fuse_reply_error!(reply, libc::ENODATA);
+                return;
+            }
+            match self.acl_allows(&path, &attrs.file_attr, libc::R_OK, &subject) {
+                Ok(true) => {}
+                Ok(false) => {
+                    fuse_reply_error!(reply, libc::ENODATA);
+                    return;
+                }
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
+        }
 
         // Linux probes security.capability repeatedly while writing. For an
         // already-open regular file/hardlink the handle table already contains
@@ -6278,7 +6317,7 @@ impl Filesystem for FodFuse {
         }
     }
 
-    fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+    fn listxattr(&self, req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
         let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
         let path = match self.entry_path_for_ino(ino) {
@@ -6299,6 +6338,7 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        let actor_uid = self.request_identity(req).uid;
         debug!(
             "FOD listxattr path={} owner_kind={} owner_id={}",
             path, owner.0, owner.1
@@ -6306,7 +6346,10 @@ impl Filesystem for FodFuse {
         match self.repo.list_xattr_names_for_owner(&owner.0, owner.1) {
             Ok(names) => {
                 let mut payload = Vec::new();
-                for name in names {
+                for name in names
+                    .into_iter()
+                    .filter(|name| actor_uid == 0 || !name.starts_with("trusted."))
+                {
                     payload.extend_from_slice(name.as_bytes());
                     payload.push(0);
                 }

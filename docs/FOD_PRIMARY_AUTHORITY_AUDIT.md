@@ -264,7 +264,7 @@ parent ACL checks for creation and namespace removal/movement.
 | `rmdir` | Primary namespace/row locks, sticky-bit check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
 | Sticky bit on unlink/rmdir/rename | Parent/victim owner row locks inside the primary mutation transaction | Concurrent parent permission commit and nine stale-replica cases passed |
 | chmod/chown | Locked primary inode, seed check and authorization in the same update transaction | Concurrent chown and stale-replica owner rejection passed; partial owner fields preserved |
-| Timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Timestamp and xattr authorization use locked primary inode rows; clone ioctls validate source/destination open modes before writing |
+| Timestamps, xattrs, mutating ioctl | Primary update/persistence APIs; read-only callbacks reject mutations | Xattr writes check ACL/mode or owner in the transaction; `user.*` reads check read permission and unprivileged lists hide `trusted.*`; clone ioctls validate source/destination open modes |
 | Explicit degraded replica-only mount | Read-only FUSE mount with mutation guards | It deliberately does not acquire/renew primary-backed leases or grant write ownership |
 
 `DbRepoLanes` gives the write repository primary connection targets and a
@@ -459,6 +459,8 @@ remain available for internal callers and do not carry a request identity.
   xattr writes/removal check inode ownership in the transaction; `user.*`
   writes use locked ACL/mode write permission, and `trusted.*` requires uid 0.
   Generic xattr `CREATE`/`REPLACE` flags are serialized with the value update.
+  `user.*` reads check ACL/mode read access, while non-root `listxattr` filters
+  `trusted.*` names; denied `user.*`/`trusted.*` reads return `ENODATA`.
   Default ACL
   inheritance now shares the child creation transaction (mounted validation
   pending). Root `setattr`
