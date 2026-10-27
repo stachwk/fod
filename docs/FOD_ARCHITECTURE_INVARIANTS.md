@@ -58,6 +58,20 @@ rename("/a", "/b") <-> create/unlink/rename of /a or /b
 writer ownership <-> another writer on another host
 ```
 
+## Clock requirements for leases and failover
+
+PostgreSQL remains the authority for lease creation and expiry checks; a FOD
+client's local clock must not decide whether a shared lease is valid. The
+PostgreSQL nodes that can become primary still need synchronized system clocks:
+after failover, expiry decisions use the new primary's clock, so clock skew can
+make leases expire early or late. FOD hosts also need synchronized clocks for
+timestamps and operations carrying an explicit client time.
+
+Keep NTP synchronization active and monitored on FOD and PostgreSQL hosts. The
+repository currently has no enforced numerical maximum clock offset; establish
+one only after validating the shortest supported lease and failover behavior.
+See [PostgreSQL and host time requirements](POSTGRESQL_REQUIREMENTS.md#3-synchronizacja-czasu-hostów).
+
 ## PostgreSQL HA topology
 
 The requirement is a single **logical** write authority, not necessarily one

@@ -67,7 +67,57 @@ Ostatnie polecenie dotyczy PostgreSQL 9.6 i nowszych.
 Niespelnienie tych wartosci po konfiguracji sesji jest traktowane jako blad
 startowy FOD.
 
-## 3. `max_connections`
+## 3. Synchronizacja czasu hostów
+
+Wszystkie hosty uruchamiajace FOD oraz wszystkie wezly PostgreSQL, ktore moga
+przejac role primary, musza utrzymywac poprawny, synchronizowany zegar systemowy.
+Dotyczy to rowniez hosta `fod-monitor`. Ustawienie PostgreSQL `TimeZone = UTC`
+ujednolica interpretacje czasu w sesji, ale nie synchronizuje zegarow maszyn.
+
+FOD opiera terminy lease i sesji na czasie serwera PostgreSQL. W normalnej pracy
+decyzje o waznosci lease sa wiec porownywane z zegarem aktualnego primary, a nie
+z zegarem lokalnym procesu FOD. Po failoverze nowy primary moze miec inny czas;
+rozjazd zegarow wezlow PostgreSQL moze wtedy przedwczesnie wygasic lease albo
+wydluzyc jego waznosc. Zegary hostow FOD maja ponadto znaczenie dla lokalnych
+znacznikow czasu i operacji, w ktorych klient jawnie przekazuje czas.
+
+Wymagania operacyjne:
+
+- skonfiguruj usluge NTP na kazdym z tych hostow i zapewnij synchronizacje po
+  starcie oraz po odzyskaniu lacznosci;
+- monitoruj stan synchronizacji i estymowany offset, a alert ustaw tak, by
+  wykrywac utrate synchronizacji i rozjazdy istotne wobec najkrotszych lease;
+- unikaj skokowych korekt zegara podczas normalnej pracy; korekty poczatkowe
+  przed uruchomieniem FOD sa preferowane;
+- przed wlaczeniem failoveru sprawdz offset czasu pomiedzy kandydatami na
+  primary.
+
+Chrony (`chronyd`) jest zalecana, praktyczna implementacja NTP, szczegolnie dla
+maszyn wirtualnych, hostow o zmiennej dostepnosci sieci i srodowisk wymagajacych
+monitorowania offsetu. Nie jest jednak gwarancja wiekszej dokladnosci niz kazda
+konfiguracja `ntpd`: wynik zalezy m.in. od zrodel czasu, opoznien i asymetrii
+sieci, obciazenia oraz zegara sprzetowego. Chrony udostepnia estymaty bledow w
+`chronyc tracking`; ich wartosci nalezy monitorowac, a nie traktowac jako
+gwarantowany pomiar prawdziwego czasu. Zobacz [opis Chrony i typowej
+dokladnosci](https://chrony-project.org/) oraz [FAQ o estymacji bledu
+zegara](https://chrony-project.org/faq.html#7.2).
+
+Przyklad kontroli Chrony:
+
+```bash
+chronyc tracking
+chronyc sources -v
+timedatectl status
+```
+
+Obecnie FOD nie wymusza obecnosci konkretnego demona synchronizacji ani nie
+definiuje liczbowego limitu offsetu. Limit bezpieczny dla calego zakresu lease i
+scenariuszy failover wymaga osobnej walidacji minimalnych TTL i tolerancji
+przelaczenia; do tego czasu synchronizacja wszystkich wymienionych wezlow jest
+wymogiem operacyjnym, a utrata synchronizacji powinna byc traktowana jako
+problem infrastruktury.
+
+## 4. `max_connections`
 
 FOD wymaga odpowiedniego budzetu polaczen:
 
@@ -109,7 +159,7 @@ SHOW max_connections;
 
 Zmiana `max_connections` zwykle wymaga restartu PostgreSQL.
 
-## 4. Trwalosc danych: `fsync` i `full_page_writes`
+## 5. Trwalosc danych: `fsync` i `full_page_writes`
 
 Dla bezpiecznej pracy FOD powinny byc wlaczone:
 
@@ -144,7 +194,7 @@ SHOW fsync;
 SHOW full_page_writes;
 ```
 
-## 5. Primary i replica
+## 6. Primary i replica
 
 ### Writable FOD
 
@@ -198,7 +248,7 @@ Centralna telemetria `fod-monitor` zapisuje snapshoty do primary PostgreSQL.
 Mount dzialajacy wylacznie na fizycznej read-only replice nie moze sam zapisac
 rekordu telemetrii do tej repliki.
 
-## 6. Ustawienia, ktorych nie nalezy narzucac globalnie
+## 7. Ustawienia, ktorych nie nalezy narzucac globalnie
 
 FOD zarzadza transakcjami i timeoutami na poziomie swoich polaczen. Nie nalezy
 zmieniac globalnych parametrow tylko dlatego, ze FOD wymaga okreslonej wartosci

@@ -12,6 +12,7 @@ long-term proposals belong in [ROADMAP.md](../../ROADMAP.md).
 | 2 | TX03J cross-mount read coherence | The [coherence specification](../TX03J_CROSS_MOUNT_CACHE_COHERENCE.md) defines the contract; the [generation audit](../tx03j-generation-audit.md) distinguishes implemented PostgreSQL generation primitives from missing cross-host integration. A strict opt-in read path and local cache gate do not close default multi-host coherence. |
 | 3 | Degraded read-only recovery | The [HA implementation plan](HA_READONLY_RECOVERY_AND_CACHE.md) owns the detailed phases and acceptance matrix. Explicit standby reads and role monitoring exist; live source switching, fencing proof validation and rejoin barriers remain open. Use controlled remount until those barriers are complete. |
 | 4 | Controlled cache performance comparison | Follow the performance workstream in the [HA/cache plan](HA_READONLY_RECOVERY_AND_CACHE.md#workstream-b-cache-and-historical-performance-comparison), after the relevant correctness gates. Existing five-run pilot measurements are diagnostic evidence, not a release baseline. |
+| 5 | Quantify clock-skew tolerance | The [time requirements](../POSTGRESQL_REQUIREMENTS.md#3-synchronizacja-czasu-hostów) now require monitored NTP synchronization on FOD and PostgreSQL hosts. Audit the shortest lease TTLs and failover behavior before setting an enforceable numeric offset limit. |
 
 These priorities do not imply a diagnosed root cause beyond the evidence in
 the linked reviews. Recheck source and existing regressions before choosing a
