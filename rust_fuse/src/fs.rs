@@ -2601,11 +2601,14 @@ impl FodFuse {
     }
 
     fn file_id_for_path(&self, path: &str) -> Result<Option<u64>, libc::c_int> {
-        let resolved = self.repo.resolve_path(path).map_err(|_| EIO)?;
+        let authority = self.repo.authoritative_view();
+        let resolved = authority.resolve_path(path).map_err(|_| EIO)?;
         match resolved.kind.as_deref() {
             Some("hardlink") => {
                 let hardlink_id = resolved.entry_id.ok_or(EIO)?;
-                self.repo.get_hardlink_file_id(hardlink_id).map_err(|_| EIO)
+                authority
+                    .get_hardlink_file_id(hardlink_id)
+                    .map_err(|_| EIO)
             }
             Some("file") => Ok(resolved.entry_id),
             _ => Ok(None),
@@ -2616,7 +2619,11 @@ impl FodFuse {
         &self,
         path: &str,
     ) -> Result<(Option<String>, Option<u64>), libc::c_int> {
-        let resolved = self.repo.resolve_path(path).map_err(|_| EIO)?;
+        let resolved = self
+            .repo
+            .authoritative_view()
+            .resolve_path(path)
+            .map_err(|_| EIO)?;
         Ok((resolved.kind, resolved.entry_id))
     }
 
@@ -2956,7 +2963,8 @@ impl FodFuse {
     }
 
     fn resource_key_for_lock(&self, path: &str) -> Result<String, libc::c_int> {
-        let resolved = self.repo.resolve_path(path).map_err(|_| EIO)?;
+        let authority = self.repo.authoritative_view();
+        let resolved = authority.resolve_path(path).map_err(|_| EIO)?;
         match resolved.kind.as_deref() {
             Some("file") => {
                 let file_id = resolved.entry_id.ok_or(EIO)?;
@@ -2964,8 +2972,7 @@ impl FodFuse {
             }
             Some("hardlink") => {
                 let hardlink_id = resolved.entry_id.ok_or(EIO)?;
-                let file_id = self
-                    .repo
+                let file_id = authority
                     .get_hardlink_file_id(hardlink_id)
                     .map_err(|_| EIO)?
                     .ok_or(EIO)?;
@@ -3177,12 +3184,12 @@ impl FodFuse {
         if path == "/" {
             return Ok(Some(("dir".to_string(), 0)));
         }
-        let resolved = self.repo.resolve_path(path).map_err(|_| EIO)?;
+        let authority = self.repo.authoritative_view();
+        let resolved = authority.resolve_path(path).map_err(|_| EIO)?;
         let owner = match resolved.kind.as_deref() {
             Some("file") => resolved.entry_id.map(|id| ("file".to_string(), id)),
             Some("hardlink") => match resolved.entry_id {
-                Some(hardlink_id) => self
-                    .repo
+                Some(hardlink_id) => authority
                     .get_hardlink_file_id(hardlink_id)
                     .map_err(|_| EIO)?
                     .map(|file_id| ("file".to_string(), file_id)),
@@ -7034,7 +7041,7 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let kind = match self.repo.resolve_path(&path) {
+        let kind = match self.repo.authoritative_view().resolve_path(&path) {
             Ok(resolved) => resolved.kind.unwrap_or_default(),
             Err(_) => {
                 fuse_reply_error!(reply, EIO);
@@ -7119,7 +7126,7 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let kind = match self.repo.resolve_path(&path) {
+        let kind = match self.repo.authoritative_view().resolve_path(&path) {
             Ok(resolved) => resolved.kind.unwrap_or_default(),
             Err(err) => {
                 warn!("FOD setlk resolve_path failed path={} err={}", path, err);
