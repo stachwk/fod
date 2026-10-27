@@ -2647,7 +2647,7 @@ fn namespace_creation_rejects_missing_parent_and_special_file_replay() -> Result
 }
 
 #[test]
-fn create_directory_checks_locked_parent_write_and_search_permissions() -> Result<(), String> {
+fn create_entries_check_locked_parent_write_and_search_permissions() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
     let parent_name = unique_name("mkdir_parent_access");
@@ -2674,6 +2674,21 @@ fn create_directory_checks_locked_parent_write_and_search_permissions() -> Resul
         fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
     );
     assert_eq!(repo.count_directory_children(parent_id)?, 0);
+    let files_before = repo.count_files()?;
+    let denied_file = repo.create_file_for_subject(
+        Some(parent_id),
+        "denied-file",
+        0o600,
+        2000,
+        2000,
+        &unique_name("create_denied_file_seed"),
+        &[2000],
+    );
+    assert_eq!(
+        denied_file.unwrap_err(),
+        fod_rust_hotpath::pg::PARENT_ACCESS_DENIED
+    );
+    assert_eq!(repo.count_files()?, files_before);
 
     repo.update_directory_mode(parent_id, "730")?;
     let allowed_child = repo.create_directory_for_subject(
@@ -2686,6 +2701,16 @@ fn create_directory_checks_locked_parent_write_and_search_permissions() -> Resul
         &[2000, 3000],
     )?;
     assert_eq!(repo.count_directory_children(parent_id)?, 1);
+    let allowed_file = repo.create_file_for_subject(
+        Some(parent_id),
+        "supplementary-group-file",
+        0o600,
+        2000,
+        2000,
+        &unique_name("create_allowed_file_seed"),
+        &[2000, 3000],
+    )?;
+    repo.purge_primary_file(allowed_file)?;
     repo.delete_directory_entry(allowed_child)?;
     repo.delete_directory_entry(parent_id)?;
     Ok(())

@@ -242,13 +242,14 @@ FUSE unit tests passed 69/69; version checks passed 10/10.
 This closes the sticky-bit check/act gap for stored parents in those mutation
 transactions.
 
-FOD 3.4.56 adds a primary transaction check for `mkdir` under stored parents
-when ACL support is disabled. It locks the parent row while checking the
-requester's write+search mode bits and supplementary groups, so a concurrent
-`chmod` is ordered with directory creation. The backend regression verifies
-both denial and supplementary-group access. The logical root still has
-synthesized mode/owner attributes; ACL-enabled `mkdir` and other namespace
-mutations remain outside this first increment.
+FOD 3.4.56 adds a primary transaction check for `mkdir` under stored parents;
+FOD 3.4.57 extends it to regular-file creation (`create`/`O_CREAT` and regular
+`mknod`). When ACL support is disabled, both paths lock the parent row while
+checking the requester's write+search mode bits and supplementary groups, so a
+concurrent `chmod` is ordered with creation. Backend regressions verify denial
+without a created entry and supplementary-group access. The logical root still
+has synthesized mode/owner attributes; ACL-enabled creation and other namespace
+mutations remain outside this increment.
 
 ## Confirmed routing and enforcement
 
@@ -370,9 +371,9 @@ families still require the remaining authority review.
   primary validation in its commit transaction. The historical unlink failure
   establishes why read routing affects mutation correctness.
 - Chmod/chown and sticky-bit authorization use locked primary rows as described
-  above. Transactional parent write/search checks still need to cover file,
-  special-file, symlink and hardlink creation, unlink, rmdir and rename;
-  root metadata and ACL-enabled authorization also remain open. ACL/mode
+  above. Transactional parent write/search checks still need to cover
+  special-file, symlink and hardlink creation, unlink, rmdir and rename; root
+  metadata and ACL-enabled authorization also remain open. ACL/mode
   synchronization and truncate/timestamp authorization require review as well.
   Shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is validated as writable but is not

@@ -4865,6 +4865,34 @@ impl FodFuse {
         }
     }
 
+    fn create_file_for_subject(
+        &self,
+        parent_id: Option<u64>,
+        name: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+        inode_seed: &str,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        if self.acl_enabled {
+            // ACL checks stay on the existing kernel/FUSE ACL path until the
+            // ACL entries can be evaluated under the PostgreSQL parent lock.
+            self.repo
+                .create_file(parent_id, name, mode, uid, gid, inode_seed)
+        } else {
+            self.repo.create_file_for_subject(
+                parent_id,
+                name,
+                mode,
+                uid,
+                gid,
+                inode_seed,
+                supplementary_groups,
+            )
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn create_writable_file_with_destination_ownership(
         &self,
@@ -4874,6 +4902,7 @@ impl FodFuse {
         mode: u32,
         uid: u32,
         gid: u32,
+        supplementary_groups: &[u32],
         flags: i32,
     ) -> Result<(u64, u64, bool), libc::c_int> {
         let _gate = self.write_ownership_gate.lock().map_err(|_| EIO)?;
@@ -4984,10 +5013,15 @@ impl FodFuse {
                 release_destination("existing_non_file");
                 return Err(libc::EEXIST);
             }
-            None => match self
-                .repo
-                .create_file(parent_id, name, mode, uid, gid, &path)
-            {
+            None => match self.create_file_for_subject(
+                parent_id,
+                name,
+                mode,
+                uid,
+                gid,
+                &path,
+                supplementary_groups,
+            ) {
                 Ok(file_id) => (file_id, true),
                 Err(err) => {
                     warn!(
@@ -8608,6 +8642,7 @@ impl Filesystem for FodFuse {
             mode &= !(libc::S_ISUID | libc::S_ISGID);
         }
         let writable = matches!(flags & libc::O_ACCMODE, libc::O_WRONLY | libc::O_RDWR);
+        let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
 
         let (file_id, fh, created_new) = if writable {
             match self.create_writable_file_with_destination_ownership(
@@ -8617,6 +8652,7 @@ impl Filesystem for FodFuse {
                 mode,
                 subject.uid,
                 subject.gid,
+                &supplementary_groups,
                 flags,
             ) {
                 Ok(value) => value,
@@ -8628,17 +8664,18 @@ impl Filesystem for FodFuse {
                 }
             }
         } else {
-            let file_id = match self.repo.create_file(
+            let file_id = match self.create_file_for_subject(
                 parent_id,
                 name.to_string_lossy().as_ref(),
                 mode,
                 subject.uid,
                 subject.gid,
                 &child_path,
+                &supplementary_groups,
             ) {
                 Ok(file_id) => file_id,
-                Err(_) => {
-                    fuse_reply_error!(reply, EIO);
+                Err(err) => {
+                    fuse_reply_error!(reply, Self::namespace_mutation_errno(&err));
                     return;
                 }
             };
@@ -9749,13 +9786,15 @@ impl Filesystem for FodFuse {
             if !subject.is_root() {
                 mode &= !(libc::S_ISUID | libc::S_ISGID);
             }
-            match self.repo.create_file(
+            let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
+            match self.create_file_for_subject(
                 parent_id,
                 name.to_string_lossy().as_ref(),
                 mode,
                 subject.uid,
                 subject.gid,
                 &child_path,
+                &supplementary_groups,
             ) {
                 Ok(_) => match self.lookup_path(&child_path) {
                     Ok(Some(attrs)) => {
