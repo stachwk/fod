@@ -4041,7 +4041,8 @@ impl FodFuse {
     }
 
     fn attrs_for_open_file_id(&self, file_id: u64) -> Result<Option<ParsedAttrs>, libc::c_int> {
-        let blob = self.repo.fetch_file_attrs_blob(file_id).map_err(|_| EIO)?;
+        let authority = self.repo.authoritative_view();
+        let blob = authority.fetch_file_attrs_blob(file_id).map_err(|_| EIO)?;
         let Some(blob) = blob else {
             return Ok(None);
         };
@@ -4065,8 +4066,7 @@ impl FodFuse {
         let mut kind = FileType::RegularFile;
         let perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).unwrap_or(0o644);
         let mut rdev = 0_u64;
-        if let Some((special_type, major, minor)) = self
-            .repo
+        if let Some((special_type, major, minor)) = authority
             .get_special_file_metadata(raw_inode)
             .map_err(|_| EIO)?
         {
@@ -4074,8 +4074,7 @@ impl FodFuse {
             rdev = ((major as u64) << 8) | (minor as u64);
         }
 
-        let nlink = self
-            .repo
+        let nlink = authority
             .file_link_count_for_stat(raw_inode)
             .map_err(|_| EIO)?
             .unwrap_or(0);
