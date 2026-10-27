@@ -3209,17 +3209,9 @@ impl FodFuse {
             .and_then(|guard| guard.get(&fh).cloned())
     }
 
-    fn file_id_for_handle(&self, fh: u64, ino: u64) -> Result<Option<u64>, libc::c_int> {
-        if let Some(state) = self.file_handle_state_for_handle(fh) {
-            if let Some(file_id) = state.file_id {
-                return Ok(Some(file_id));
-            }
-            return self.file_id_for_path(&state.path);
-        }
-        if let Some(path) = self.path_for_inode(ino) {
-            return self.file_id_for_path(&path);
-        }
-        Ok(None)
+    fn file_id_for_handle(&self, fh: u64, _ino: u64) -> Result<Option<u64>, libc::c_int> {
+        let state = self.file_handle_state_for_handle(fh).ok_or(libc::EBADF)?;
+        Ok(state.file_id)
     }
 
     fn file_id_for_handle_or_errno(&self, fh: u64, ino: u64) -> Result<u64, libc::c_int> {
@@ -7364,6 +7356,17 @@ impl Filesystem for FodFuse {
         let (_read_permit, read_task) =
             self.logical_read_gate
                 .observe_task(&self.logical_read_tasks, u64::from(size), false);
+        let handle = match self.file_handle_state_for_handle(fh) {
+            Some(handle) => handle,
+            None => {
+                fuse_reply_error!(reply, libc::EBADF);
+                return;
+            }
+        };
+        if handle.flags & libc::O_ACCMODE == libc::O_WRONLY {
+            fuse_reply_error!(reply, libc::EBADF);
+            return;
+        }
         let file_id = match self.file_id_for_handle_or_errno(fh, ino) {
             Ok(value) => value,
             Err(errno) => {
@@ -9104,6 +9107,19 @@ impl Filesystem for FodFuse {
         if self.read_only {
             self.record_write_preflight_elapsed(preflight_started.elapsed());
             fuse_reply_error!(reply, libc::EROFS);
+            return;
+        }
+        let handle = match self.file_handle_state_for_handle(fh) {
+            Some(handle) => handle,
+            None => {
+                self.record_write_preflight_elapsed(preflight_started.elapsed());
+                fuse_reply_error!(reply, libc::EBADF);
+                return;
+            }
+        };
+        if handle.flags & libc::O_ACCMODE == libc::O_RDONLY {
+            self.record_write_preflight_elapsed(preflight_started.elapsed());
+            fuse_reply_error!(reply, libc::EBADF);
             return;
         }
         let handle_lookup_started = Instant::now();
