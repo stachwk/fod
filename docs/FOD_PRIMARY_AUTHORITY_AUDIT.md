@@ -374,7 +374,8 @@ files, directories and special files: the create transaction locks the parent
 directory row, reads its default ACL on the primary, filters the inherited
 access ACL against the requested mode, writes child mode and ACL xattrs, and
 commits them with the new inode. Directories also inherit the unmodified default
-ACL. A malformed inherited ACL or any SQL failure aborts inode creation.
+ACL. Root-level creates resolve the durable `/` row and inherit its default ACL
+as well. A malformed inherited ACL or any SQL failure aborts inode creation.
 The same create transaction now checks the caller's write+search permission on
 the parent using its access ACL (or mode bits when no ACL exists), while holding
 the parent row lock. This applies to regular files, directories, special files,

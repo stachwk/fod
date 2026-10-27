@@ -83,11 +83,20 @@ pub(super) fn prepare_default_acl_inheritance_on_conn(
     requested_mode: u32,
     child_is_directory: bool,
 ) -> Result<Option<InheritedPosixAcl>, String> {
-    let Some(parent_id) = parent_id else {
-        return Ok(None);
+    let parent_id = if let Some(parent_id) = parent_id {
+        CString::new(parent_id.to_string())
+            .map_err(|_| "parent id contains NUL byte".to_string())?
+    } else {
+        let root_sql = CString::new(
+            "SELECT id_directory FROM directories WHERE id_parent IS NULL AND name='/'",
+        )
+        .unwrap();
+        let root_id = unsafe { fetch_first_row_texts(exec_params(conn, &root_sql, &[])?)? }
+            .into_iter()
+            .next()
+            .ok_or_else(|| "FOD_NAMESPACE_PARENT_MISSING: logical root is missing".to_string())?;
+        CString::new(root_id).map_err(|_| "root id contains NUL byte".to_string())?
     };
-    let parent_id = CString::new(parent_id.to_string())
-        .map_err(|_| "parent id contains NUL byte".to_string())?;
     let lock_parent =
         CString::new("SELECT id_directory FROM directories WHERE id_directory = $1 FOR SHARE")
             .unwrap();
