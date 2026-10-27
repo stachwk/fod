@@ -5964,7 +5964,8 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        match self.repo.resolve_path(&path) {
+        let authority = self.repo.authoritative_view();
+        match authority.resolve_path(&path) {
             Ok(resolved) => {
                 if let Some("symlink") = resolved.kind.as_deref() {
                     let symlink_id = match resolved.entry_id {
@@ -5974,7 +5975,7 @@ impl Filesystem for FodFuse {
                             return;
                         }
                     };
-                    match self.repo.load_symlink_target(symlink_id) {
+                    match authority.load_symlink_target(symlink_id) {
                         Ok(Some(target)) => {
                             if let Ok(Some(attrs)) = self.lookup_path(&path) {
                                 self.touch_access_time(&path, &attrs.file_attr);
