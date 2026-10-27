@@ -123,7 +123,12 @@ definiuje liczbowego limitu offsetu. Limit bezpieczny dla calego zakresu lease i
 scenariuszy failover wymaga osobnej walidacji minimalnych TTL i tolerancji
 przelaczenia; do tego czasu synchronizacja wszystkich wymienionych wezlow jest
 wymogiem operacyjnym, a utrata synchronizacji powinna byc traktowana jako
-problem infrastruktury.
+problem infrastruktury. Z audytu kodu wynika, ze `lock_lease_ttl_seconds` moze
+byc dowolnym dodatnim czasem, ale przed przekazaniem do PostgreSQL jest
+zaokraglany w gore do pelnych sekund, z minimum 1 s; wartosc domyslna to 30 s.
+Lease sesji klienta ma osobne minimum 30 s. Warto przetestowac 100 ms jako
+kandydata na maksymalny rozjazd miedzy wezlami PostgreSQL: to 10% najkrotszego
+efektywnego lock lease, nie zatwierdzony jeszcze limit ani gwarancja poprawnosci.
 
 ## 4. `max_connections`
 
