@@ -14,7 +14,10 @@ pub use index_staging::{
     DuplicateSetStageRow, IndexFileHashStageRow, IndexFileStageRow, IndexImportPlanEntryStageRow,
     IndexImportPlanStageRow, IndexScanRunStageRow, IndexSourceStageRow,
 };
-pub use metadata_updates::{InodePermissionChange, InodePermissionOutcome};
+pub use metadata_updates::{
+    InodePermissionChange, InodePermissionOutcome, InodeTimeValue, InodeTimesChange,
+    InodeTimesOutcome,
+};
 pub use namespace_lookup::{DirectoryEntryMetadata, ResolvedPath};
 pub use startup::StartupSnapshot;
 

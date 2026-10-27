@@ -22,8 +22,9 @@ use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot,
     DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome, GeneratedSharedBlockRows,
-    InodePermissionChange, InodePermissionOutcome, PersistBlockRow, RenameFileReplaceOutcome,
-    RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
+    InodePermissionChange, InodePermissionOutcome, InodeTimeValue, InodeTimesChange,
+    InodeTimesOutcome, PersistBlockRow, RenameFileReplaceOutcome, RenameNamespaceSource,
+    RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
     NAMESPACE_ENTRY_EXISTS_PREFIX, NAMESPACE_PARENT_MISSING_PREFIX, NAMESPACE_SOURCE_CHANGED,
     PARENT_ACCESS_DENIED, STICKY_PERMISSION_DENIED, STORAGE_QUOTA_EXCEEDED_PREFIX,
     WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
@@ -7793,66 +7794,88 @@ impl Filesystem for FodFuse {
         }
 
         if atime.is_some() || mtime.is_some() {
-            let atime_needs_update = match atime {
-                Some(TimeOrNow::SpecificTime(time)) => time != current_attrs.atime,
-                Some(TimeOrNow::Now) => true,
-                None => false,
+            let atime_text = Self::time_or_now_to_db_string(atime);
+            let mtime_text = Self::time_or_now_to_db_string(mtime);
+            let atime_value = match atime {
+                Some(TimeOrNow::Now) => Some(InodeTimeValue::Now),
+                Some(TimeOrNow::SpecificTime(_)) => {
+                    atime_text.as_deref().map(InodeTimeValue::Specific)
+                }
+                None => None,
             };
-            let mtime_needs_update = match mtime {
-                Some(TimeOrNow::SpecificTime(time)) => time != current_attrs.mtime,
-                Some(TimeOrNow::Now) => true,
-                None => false,
+            let mtime_value = match mtime {
+                Some(TimeOrNow::Now) => Some(InodeTimeValue::Now),
+                Some(TimeOrNow::SpecificTime(_)) => {
+                    mtime_text.as_deref().map(InodeTimeValue::Specific)
+                }
+                None => None,
             };
-            if !atime_needs_update && !mtime_needs_update {
-                match if ino == ROOT_INO {
-                    self.root_attr().map(Some)
-                } else {
-                    self.attrs_for_path_from_repo(&authority, &path)
-                } {
-                    Ok(Some(attrs)) => {
-                        reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr)
+            let (owner_kind, owner_id) = match kind.as_str() {
+                "file" => match entry_id {
+                    Some(id) => ("file", id),
+                    None => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
                     }
-                    Ok(None) => fuse_reply_error!(reply, ENOENT),
-                    Err(errno) => fuse_reply_error!(reply, errno),
-                }
-                return;
-            }
-            let atime_text = Self::time_or_now_to_db_string(atime)
-                .unwrap_or_else(|| Self::system_time_to_db_string(Self::current_time()));
-            let mtime_text = Self::time_or_now_to_db_string(mtime)
-                .unwrap_or_else(|| Self::system_time_to_db_string(Self::current_time()));
-            let result = match kind.as_str() {
-                "file" | "hardlink" => {
-                    let file_id = match self.file_id_for_path(&path) {
-                        Ok(Some(value)) => value,
-                        Ok(None) => {
-                            fuse_reply_error!(reply, ENOENT);
-                            return;
-                        }
-                        Err(errno) => {
-                            fuse_reply_error!(reply, errno);
-                            return;
-                        }
-                    };
-                    self.repo
-                        .touch_file_times(file_id, &atime_text, &mtime_text)
-                }
+                },
+                "hardlink" => match entry_id
+                    .map(|id| authority.get_hardlink_file_id(id))
+                    .transpose()
+                {
+                    Ok(Some(Some(id))) => ("file", id),
+                    Ok(_) => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                    Err(_) => {
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                },
                 "dir" => match entry_id {
-                    Some(directory_id) => {
-                        self.repo
-                            .touch_directory_times(directory_id, &atime_text, &mtime_text)
+                    Some(id) => ("dir", id),
+                    None => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
                     }
-                    None => Err("missing directory id".to_string()),
                 },
                 "symlink" => match entry_id {
-                    Some(symlink_id) => self.repo.touch_symlink_entry(symlink_id),
-                    None => Err("missing symlink id".to_string()),
+                    Some(id) => ("symlink", id),
+                    None => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
                 },
-                _ => Ok(()),
+                _ => {
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
             };
-            if result.is_err() {
-                fuse_reply_error!(reply, EIO);
-                return;
+            let groups: Vec<u32> = subject.groups.iter().copied().collect();
+            let change = InodeTimesChange {
+                actor_uid: subject.uid,
+                actor_groups: &groups,
+                atime: atime_value,
+                mtime: mtime_value,
+            };
+            match authority.change_inode_times(owner_kind, owner_id, &expected_seed, &change) {
+                Ok(InodeTimesOutcome::Changed) => {}
+                Ok(InodeTimesOutcome::Denied) => {
+                    fuse_reply_error!(reply, libc::EPERM);
+                    return;
+                }
+                Ok(InodeTimesOutcome::WriteDenied) => {
+                    fuse_reply_error!(reply, libc::EACCES);
+                    return;
+                }
+                Ok(InodeTimesOutcome::Missing) => {
+                    fuse_reply_error!(reply, ENOENT);
+                    return;
+                }
+                Err(_) => {
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
             }
         }
 

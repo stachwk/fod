@@ -5,7 +5,113 @@
 //! File content generation belongs to content mutations, not metadata updates.
 
 use super::{exec_command_params, DbRepo};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use std::ffi::CString;
+
+#[derive(Clone, Copy)]
+pub enum InodeTimeValue<'a> {
+    Now,
+    Specific(&'a str),
+}
+
+pub struct InodeTimesChange<'a> {
+    pub actor_uid: u32,
+    pub actor_groups: &'a [u32],
+    pub atime: Option<InodeTimeValue<'a>>,
+    pub mtime: Option<InodeTimeValue<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InodeTimesOutcome {
+    Changed,
+    Missing,
+    Denied,
+    WriteDenied,
+}
+
+fn acl_write_access(
+    acl: &[u8],
+    actor_uid: u32,
+    actor_groups: &[u32],
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<bool, String> {
+    if acl.len() < 4 || (acl.len() - 4) % 8 != 0 {
+        return Err("invalid POSIX ACL xattr length".to_string());
+    }
+    if u32::from_le_bytes(acl[..4].try_into().unwrap()) != 2 {
+        return Err("unsupported POSIX ACL xattr version".to_string());
+    }
+    let mut user_obj = None;
+    let mut group_obj = None;
+    let mut mask = None;
+    let mut other = None;
+    let mut named_user = None;
+    let mut has_named_entry = false;
+    let mut matched_group = false;
+    let mut group_permissions = 0u16;
+    for entry in acl[4..].chunks_exact(8) {
+        let tag = u16::from_le_bytes(entry[0..2].try_into().unwrap());
+        let permissions = u16::from_le_bytes(entry[2..4].try_into().unwrap()) & 0o7;
+        let id = i32::from_le_bytes(entry[4..8].try_into().unwrap());
+        match tag {
+            0x0001 => user_obj = Some(permissions),
+            0x0002 if id >= 0 && id as u32 == actor_uid => {
+                has_named_entry = true;
+                named_user = Some(permissions);
+            }
+            0x0002 => has_named_entry = true,
+            0x0004 => {
+                if actor_groups.contains(&owner_gid) {
+                    matched_group = true;
+                    group_permissions |= permissions;
+                }
+                group_obj = Some(permissions);
+            }
+            0x0008 if id >= 0 && actor_groups.contains(&(id as u32)) => {
+                has_named_entry = true;
+                matched_group = true;
+                group_permissions |= permissions;
+            }
+            0x0008 => has_named_entry = true,
+            0x0010 => mask = Some(permissions),
+            0x0020 => other = Some(permissions),
+            _ => return Err("invalid POSIX ACL entry".to_string()),
+        }
+    }
+    if user_obj.is_none()
+        || group_obj.is_none()
+        || other.is_none()
+        || (has_named_entry && mask.is_none())
+    {
+        return Err("incomplete POSIX ACL xattr".to_string());
+    }
+    if actor_uid == owner_uid {
+        return Ok(user_obj.unwrap_or(0) & 0o2 != 0);
+    }
+    if let Some(permissions) = named_user {
+        return Ok(permissions & mask.unwrap_or(0o7) & 0o2 != 0);
+    }
+    if matched_group {
+        let permissions = if actor_groups.contains(&owner_gid) {
+            group_permissions | group_obj.unwrap_or(0)
+        } else {
+            group_permissions
+        };
+        return Ok(permissions & mask.unwrap_or(0o7) & 0o2 != 0);
+    }
+    Ok(other.unwrap_or(0) & 0o2 != 0)
+}
+
+fn time_sql_value(value: InodeTimeValue<'_>) -> String {
+    match value {
+        InodeTimeValue::Now => "clock_timestamp()".to_string(),
+        InodeTimeValue::Specific(value) => {
+            format!("'{}'::timestamp", value.replace('\'', "''"))
+        }
+    }
+}
 
 /// Caller identity and requested fields for one authoritative chmod/chown.
 pub struct InodePermissionChange<'a> {
@@ -24,6 +130,98 @@ pub enum InodePermissionOutcome {
 }
 
 impl DbRepo {
+    /// Authorize utimens semantics and update only requested fields under the
+    /// inode row lock. ACL writers take the same row lock, so permission
+    /// evaluation is serialized with access ACL changes on the primary.
+    pub fn change_inode_times(
+        &self,
+        kind: &str,
+        id: u64,
+        expected_seed: &str,
+        change: &InodeTimesChange<'_>,
+    ) -> Result<InodeTimesOutcome, String> {
+        if change.atime.is_none() && change.mtime.is_none() {
+            return Ok(InodeTimesOutcome::Changed);
+        }
+        let (table, key, acl_kind) = match kind {
+            "file" => ("files", "id_file", Some("file")),
+            "dir" => ("directories", "id_directory", Some("dir")),
+            "symlink" => ("symlinks", "id_symlink", None),
+            _ => return Err("invalid timestamp owner kind".to_string()),
+        };
+        self.with_transaction(|tx| {
+            let mode_column = if kind == "symlink" { "'777'" } else { "mode" };
+            let rows = tx.query_rows_text(&format!(
+                "SELECT uid, gid, {mode_column}, inode_seed FROM {table} WHERE {key}={id} FOR UPDATE"
+            ))?;
+            let Some(row) = rows.first() else {
+                return Ok(InodeTimesOutcome::Missing);
+            };
+            if row.len() != 4 || row[3] != expected_seed {
+                return Ok(InodeTimesOutcome::Missing);
+            }
+            let owner_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
+            let owner_gid = row[1].parse::<u32>().map_err(|err| err.to_string())?;
+            let mode = u32::from_str_radix(&row[2], 8).map_err(|err| err.to_string())?;
+            if change.actor_uid != 0 && change.actor_uid != owner_uid {
+                let only_now_or_omit = [change.atime, change.mtime]
+                    .into_iter()
+                    .flatten()
+                    .all(|value| matches!(value, InodeTimeValue::Now));
+                if !only_now_or_omit || acl_kind.is_none() {
+                    return Ok(if only_now_or_omit {
+                        InodeTimesOutcome::WriteDenied
+                    } else {
+                        InodeTimesOutcome::Denied
+                    });
+                }
+                let acl_rows = tx.query_rows_text(&format!(
+                    "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='{}' AND owner_id={id} AND name='system.posix_acl_access'",
+                    acl_kind.unwrap()
+                ))?;
+                let has_write = if let Some(encoded) = acl_rows.first().and_then(|row| row.first()) {
+                    let acl = BASE64_STANDARD
+                        .decode(encoded.trim())
+                        .map_err(|err| format!("invalid POSIX ACL payload: {err}"))?;
+                    acl_write_access(
+                        &acl,
+                        change.actor_uid,
+                        change.actor_groups,
+                        owner_uid,
+                        owner_gid,
+                    )?
+                } else {
+                    let allowed = if change.actor_groups.contains(&owner_gid) {
+                        (mode >> 3) & 0o7
+                    } else {
+                        mode & 0o7
+                    };
+                    allowed & 0o2 != 0
+                };
+                if !has_write {
+                    return Ok(InodeTimesOutcome::WriteDenied);
+                }
+            }
+
+            let mut assignments = Vec::new();
+            if let Some(atime) = change.atime {
+                assignments.push(format!("access_date={}", time_sql_value(atime)));
+            }
+            if let Some(mtime) = change.mtime {
+                assignments.push(format!(
+                    "modification_date={}",
+                    time_sql_value(mtime)
+                ));
+            }
+            assignments.push("change_date=clock_timestamp()".to_string());
+            tx.exec(&format!(
+                "UPDATE {table} SET {} WHERE {key}={id}",
+                assignments.join(",")
+            ))?;
+            Ok(InodeTimesOutcome::Changed)
+        })
+    }
+
     /// Lock the inode row before authorization and preserve unspecified fields.
     /// A stale namespace resolution cannot authorize a different inode seed.
     pub fn change_inode_permissions(

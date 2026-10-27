@@ -395,9 +395,10 @@ directory mtime/ctime in the same transaction as namespace entry creation,
 deletion, rename and movement. A null namespace parent maps to the durable root
 row, so root directory changes are included.
 
-Root metadata mutation authorization remains open. The database record already
-exists; root reads and namespace timestamp ordering are now handled through
-PostgreSQL. No data-loss reproduction is claimed.
+The database record already exists; root reads and namespace timestamp
+ordering are now handled through PostgreSQL, and root `setattr` mutations use
+the locked inode authorization paths described below. No data-loss
+reproduction is claimed.
 
 ### Truncate and timestamp authorization
 
@@ -411,13 +412,14 @@ atomic PostgreSQL authorization decision: ACL reads and truncate persistence
 are separate operations, so concurrent permission changes still need a
 transactional primary-authoritative design.
 
-Timestamp `setattr` remains unauthenticated: the FUSE callback calls generic
-touch methods that update rows without checking owner/write permissions in the
-transaction. The file and directory methods also replace both atime and mtime
-even when the request supplied only one field, while symlink requests ignore
-the supplied times and merely set mtime/ctime to database `NOW()`. Correctness
-requires field-preserving updates and POSIX authorization serialized with the
-primary metadata row.
+Timestamp `setattr` now resolves the inode seed and applies POSIX time-setting
+authorization and timestamp writes in one primary transaction under the inode
+row lock. Owners and uid 0 may set specific times; other users may request only
+`NOW`/omitted fields and must have write permission through the access ACL or
+mode bits. ACL updates lock the same inode row, which serializes authorization
+against concurrent ACL changes. Only requested atime/mtime fields are updated;
+symlink times are no longer ignored. Direct low-level repository touch helpers
+remain available for internal callers and do not carry a request identity.
 
 - Mutation path resolution, hardlink counts, file sizes and attributes have
   replica-routed APIs that are also used by writable callbacks. Audit each
@@ -428,12 +430,13 @@ primary metadata row.
   above. Transactional parent write/search checks cover regular-file,
   directory, special-file, symlink, and hardlink creation, plus file and
   symlink unlink, `rmdir`, and rename. POSIX ACL xattr writes now check inode
-  ownership under the write transaction; default ACL inheritance now shares
-  the child creation transaction (mounted validation pending). Root metadata
-  authorization remains open. Path truncate now has an ACL/mode
-  check and `fh` truncate validates a writable handle, but primary-transaction
-  authorization remains open. Timestamp authorization and partial-field
-  semantics also remain open.
+  ownership under the write transaction; default ACL inheritance now shares the
+  child creation transaction (mounted validation pending). Root `setattr`
+  authorization uses the locked inode metadata paths. Path truncate now has an
+  ACL/mode check and `fh` truncate validates a writable handle, but
+  primary-transaction authorization remains open. Timestamp `setattr`
+  authorization and field-preserving updates
+  now share one primary transaction.
   Shared database credentials do not replace these decisions.
 - An explicit telemetry/control DSN is validated as writable but is not
   compared with the data source's cluster/filesystem identity before normal
