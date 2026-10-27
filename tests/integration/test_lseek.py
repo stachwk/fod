@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import tempfile
 import uuid
@@ -61,6 +62,34 @@ def main() -> None:
             )
             actual = overwrite_path.read_bytes()
             assert actual == expected, (actual, expected)
+
+            beyond_eof_path = dir_path / "seek-beyond-eof.txt"
+            initial = b"abc"
+            beyond_eof_path.write_bytes(initial)
+            fd = os.open(beyond_eof_path, os.O_RDWR)
+            try:
+                beyond_eof = len(initial) + 5
+                result = os.lseek(fd, beyond_eof, os.SEEK_SET)
+                assert result == beyond_eof, result
+                assert os.fstat(fd).st_size == len(initial)
+                assert os.write(fd, b"Z") == 1
+            finally:
+                os.close(fd)
+            expected_beyond_eof = initial + (b"\0" * 5) + b"Z"
+            assert beyond_eof_path.read_bytes() == expected_beyond_eof
+
+            fd = os.open(file_path, os.O_RDONLY)
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                try:
+                    os.lseek(fd, -1, os.SEEK_CUR)
+                except OSError as error:
+                    assert error.errno == errno.EINVAL, error.errno
+                else:
+                    raise AssertionError("negative resulting offset was accepted")
+                assert os.read(fd, 1) == payload[:1]
+            finally:
+                os.close(fd)
 
             fd = os.open(file_path, os.O_RDONLY)
             try:

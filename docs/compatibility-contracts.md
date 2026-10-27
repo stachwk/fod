@@ -47,13 +47,19 @@ from `fod_version.txt`.
 
 | Status | Operations |
 | --- | --- |
-| Explicit and exercised | init, lookup, getattr, readdir, readlink, statfs, xattr operations, access, poll, open, POSIX/flock locking, flush, fsync, read, release, setattr, namespace operations, write, copy_file_range, mknod, symlink, link |
-| Explicit but not comprehensively exercised | ioctl, bmap |
-| Not explicitly implemented | destroy, forget, batch_forget, opendir, readdirplus, releasedir, fsyncdir, fallocate, lseek |
+| Explicit and exercised | init, lookup, forget, getattr, readdir, readlink, statfs, xattr operations, access, poll, open, POSIX/flock locking, flush, fsync, read, release, setattr, namespace operations, write, copy_file_range, mknod, symlink, link |
+| Explicit but not comprehensively exercised | ioctl, bmap, fallocate (supported mode subset), lseek (`SEEK_DATA`/`SEEK_HOLE`) |
+| Not explicitly implemented | destroy, batch_forget, opendir, readdirplus, releasedir, fsyncdir |
 | Not exposed by the inspected high-level API | native SYNCFS, TMPFILE, STATX callbacks |
 
 Syscall success through a kernel or library fallback is not proof that FOD
 implements the corresponding callback.
+
+Linux FUSE sends the `lseek` callback for `SEEK_DATA` and `SEEK_HOLE`; the
+kernel handles ordinary `SEEK_SET`, `SEEK_CUR` and `SEEK_END` positioning.
+POSIX.1-2024 now specifies `SEEK_DATA` and `SEEK_HOLE` in Issue 8, although
+they were Linux/BSD-style extensions in earlier editions. FOD's mounted tests
+cover both the kernel-handled positioning cases and its sparse-seek callback.
 
 ### Priority follow-ups
 
@@ -64,7 +70,8 @@ implements the corresponding callback.
 - connect selected `fallocate` modes to existing resize and sparse-storage
   machinery and reject unsupported combinations;
 - benchmark `readdirplus` before enabling it;
-- implement `SEEK_DATA` and `SEEK_HOLE` over block and extent maps;
+- verify the sparse-seek error and file-offset rules against POSIX.1-2024
+  Issue 8, beyond the existing mounted layout and remount cases;
 - repeat the callback/capability inventory after every `fuser` upgrade.
 
 ## Rust and C boundary

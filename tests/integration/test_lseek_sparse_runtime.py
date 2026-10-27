@@ -115,6 +115,33 @@ def assert_layout(path: Path, layout: str, block_size: int) -> None:
         assert_seek(path, offset, whence, expected)
 
 
+def failed_sparse_seek_preserves_offset(path: Path, eof: int) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        for whence in (SEEK_DATA, SEEK_HOLE):
+            start = 1
+            assert os.lseek(fd, start, os.SEEK_SET) == start
+            try:
+                os.lseek(fd, eof, whence)
+            except OSError as error:
+                if error.errno != errno.ENXIO:
+                    raise AssertionError(
+                        f"failed sparse seek expected ENXIO, got {error.errno}"
+                    ) from error
+            else:
+                raise AssertionError(
+                    f"seek at EOF unexpectedly succeeded for whence={whence}"
+                )
+
+            current = os.lseek(fd, 0, os.SEEK_CUR)
+            if current != start:
+                raise AssertionError(
+                    f"failed sparse seek changed file offset: {current} != {start}"
+                )
+    finally:
+        os.close(fd)
+
+
 def partial_block_case(path: Path, block_size: int) -> None:
     payload = b"".join(
         deterministic_block(block_size, seed)
@@ -275,6 +302,8 @@ def main() -> int:
                 path = mountpoint / f"s1-runtime-{layout}-{suffix}.bin"
                 prepare_layout(path, block_size, layout)
                 assert_layout(path, layout, block_size)
+                if layout == "dense":
+                    failed_sparse_seek_preserves_offset(path, 4 * block_size)
                 path.unlink()
 
             partial_path = mountpoint / f"s1-runtime-partial-{suffix}.bin"
