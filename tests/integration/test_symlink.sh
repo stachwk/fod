@@ -18,6 +18,8 @@ payload="${MOUNTPOINT}/payload-${suffix}.txt"
 link_path="${MOUNTPOINT}/payload-link-${suffix}"
 link_renamed="${MOUNTPOINT}/payload-link-renamed-${suffix}"
 orphaned_link="${MOUNTPOINT}/payload-orphaned-${suffix}"
+create_target="${MOUNTPOINT}/payload-created-through-link-${suffix}"
+create_link="${MOUNTPOINT}/payload-create-link-${suffix}"
 loop_a="${MOUNTPOINT}/symlink-loop-a-${suffix}"
 loop_b="${MOUNTPOINT}/symlink-loop-b-${suffix}"
 payload_value="symlink smoke payload"
@@ -41,6 +43,16 @@ followed_stat = os.stat(link)
 assert stat.S_ISLNK(link_stat.st_mode)
 assert followed_stat.st_ino == target_stat.st_ino
 assert link_stat.st_ino != target_stat.st_ino
+
+fd = os.open(link, os.O_WRONLY | os.O_TRUNC)
+try:
+    assert os.fstat(fd).st_ino == target_stat.st_ino
+    os.write(fd, b"symlink smoke payload\n")
+finally:
+    os.close(fd)
+with open(target, "rb") as target_file:
+    assert target_file.read() == b"symlink smoke payload\n"
+assert stat.S_ISLNK(os.lstat(link).st_mode)
 
 try:
     os.readlink(target)
@@ -73,15 +85,16 @@ grep -F "${orphaned_link} -> ${payload}" <<<"${ls_orphaned_output}" >/dev/null
 
 ln -s "${loop_b}" "${loop_a}"
 ln -s "${loop_a}" "${loop_b}"
+ln -s "${create_target}" "${create_link}"
 rm -f "${payload}"
-python3 - "${orphaned_link}" "${loop_a}" "${loop_b}" <<'PY'
+python3 - "${orphaned_link}" "${loop_a}" "${loop_b}" "${create_link}" "${create_target}" <<'PY'
 import ctypes
 import errno
 import os
 import stat
 import sys
 
-orphaned, loop_a, loop_b = sys.argv[1:]
+orphaned, loop_a, loop_b, create_link, create_target = sys.argv[1:]
 orphaned_stat = os.lstat(orphaned)
 target = os.fsencode(os.readlink(orphaned))
 assert stat.S_ISLNK(orphaned_stat.st_mode)
@@ -113,6 +126,18 @@ else:
     raise AssertionError("O_CREAT|O_EXCL followed dangling symlink")
 assert stat.S_ISLNK(os.lstat(orphaned).st_mode)
 
+assert not os.path.lexists(create_target)
+fd = os.open(create_link, os.O_CREAT | os.O_WRONLY, 0o600)
+try:
+    os.write(fd, b"created through dangling symlink\n")
+finally:
+    os.close(fd)
+assert stat.S_ISLNK(os.lstat(create_link).st_mode)
+assert os.readlink(create_link) == create_target
+assert os.stat(create_link).st_ino == os.stat(create_target).st_ino
+with open(create_target, "rb") as created_file:
+    assert created_file.read() == b"created through dangling symlink\n"
+
 for path in (loop_a, loop_b):
     assert stat.S_ISLNK(os.lstat(path).st_mode)
     try:
@@ -123,4 +148,4 @@ for path in (loop_a, loop_b):
         raise AssertionError("resolving symlink loop unexpectedly succeeded")
 PY
 
-echo "OK symlink/readlink regular_path=EINVAL stat_lstat_follow=1 unlink_preserves_target=1 readlink_shortbuf=1 dangling_lstat_size=1 dangling_stat_loop=1 dangling_excl=EEXIST"
+echo "OK symlink/readlink regular_path=EINVAL stat_lstat_follow=1 open_trunc_follows=1 dangling_create_follows=1 unlink_preserves_target=1 readlink_shortbuf=1 dangling_lstat_size=1 dangling_stat_loop=1 dangling_excl=EEXIST"
