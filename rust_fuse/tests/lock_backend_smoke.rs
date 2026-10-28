@@ -417,6 +417,18 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
             primary_b_query.l_type
         ));
     }
+    let adjacent_query = query_lock_range(
+        fd_b.as_raw_fd(),
+        libc::F_WRLCK as i16,
+        range_start + range_len,
+        1,
+    )?;
+    if adjacent_query.l_type != libc::F_UNLCK as i16 {
+        return Err(format!(
+            "lock must not include the byte immediately after its range, got l_type={}",
+            adjacent_query.l_type
+        ));
+    }
 
     // Zakresowy read lock jest legalny na O_RDONLY i nadal musi widziec
     // centralny write-lock lease pierwszego primary.
@@ -447,6 +459,23 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
                 "partial unlock at offset 4 length 2: offset {offset} expected lock type {expected_type}, got {}; stored ranges: {}",
                 observed.l_type,
                 String::from_utf8_lossy(&ranges)
+            ));
+        }
+    }
+
+    let mut middle_read_lock = flock(libc::F_RDLCK as i16, 4, 2);
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut middle_read_lock)
+        .map_err(|err| format!("primary A middle range read lock failed: {err}"))?;
+    for (offset, expected_type) in [
+        (2, libc::F_WRLCK as i16),
+        (4, libc::F_RDLCK as i16),
+        (8, libc::F_WRLCK as i16),
+    ] {
+        let observed = query_lock_range(fd_b.as_raw_fd(), libc::F_WRLCK as i16, offset, 1)?;
+        if observed.l_type != expected_type {
+            return Err(format!(
+                "replacing middle range with read lock: offset {offset} expected lock type {expected_type}, got {}",
+                observed.l_type
             ));
         }
     }
