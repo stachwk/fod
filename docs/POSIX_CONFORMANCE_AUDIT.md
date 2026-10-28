@@ -26,6 +26,11 @@ Primary references:
 - [POSIX.1-2024 `utimensat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/utimensat.html)
 - [Linux kernel `fs/utimes.c`](https://github.com/torvalds/linux/blob/master/fs/utimes.c)
 - [POSIX.1-2024 `rename()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/rename.html)
+- [POSIX.1-2024 `readdir()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/readdir.html)
+- [POSIX.1-2024 `truncate()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/truncate.html)
+- [POSIX.1-2024 `fcntl()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fcntl.html)
+- [POSIX.1-2024 `mkfifo()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/mkfifo.html)
+- [POSIX.1-2024 `statvfs()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/statvfs.html)
 
 This is a filesystem compatibility audit, not a claim that FOD implements a
 complete POSIX operating system. Shell and utility requirements, process and
@@ -76,6 +81,27 @@ its status can move from Pending.
 | Filesystem capacity and status | XSH `statvfs`; XBD `statvfs` fields, units, and availability semantics | Linux FUSE `statfs` callback in `rust_fuse/src/fs.rs`; `test_df.sh` checks matching block and fragment sizes, available bytes capped by the backing filesystem, `f_namemax` 255, non-exhausted virtual inode counts and symlink inode-count updates; its accounting checks compare used blocks with PostgreSQL payload plus active reservations before and after remount. `test_two_mount_quota.py` covers shared quota admission. `docs/space-accounting.md` documents the reported model. POSIX field-by-field requirements and error cases are not yet mapped | Pending |
 | Error behavior | XSH per-interface `ERRORS` and `RATIONALE`; errno precedence for supported operations | Targeted integration tests and `pjdfstest` subsets; map each error assertion to clause | Pending |
 | Linux/FUSE extensions | Not POSIX base requirements; use Linux and FUSE references | `test_xattr.py`, `test_acl_mount_option.py`, `test_ioctl.py`, path-search xattr cases in `test_path_search_permissions.py`, compatibility contracts | Separate extension audit |
+
+## Pending requirement ledger
+
+The matrix remains deliberately conservative. The following ledger gives every
+Pending row a bounded next step; completing one item closes only the stated gap,
+not the whole row unless all of its normative conditions and errors are mapped.
+
+| ID | Area | Verified baseline | Remaining closure evidence |
+| --- | --- | --- | --- |
+| P01 | Path resolution and name syntax | Trailing slash, symlink following, dangling links and loops have mounted regressions | Map XBD pathname-resolution rules for empty components, `.`/`..`, repeated separators, `NAME_MAX`/`PATH_MAX`, and per-operation final-component following; add mounted boundary and errno cases |
+| P02 | Directory operations and iteration | Create/remove errors, permissions, link counts and small-buffer cookies are covered | Verify `readdir()` end-of-directory, rewind/resume and mutation rules, directory descriptor errors, and all required `mkdir()`/`rmdir()` errors against Issue 8 |
+| P03 | Open and descriptor semantics | Access modes, append-after-seek, shared duplicated offset, create conflicts and symlink create/truncate are covered | Map all supported `open()` flags and errors; test descriptor flags, lowest available descriptor behavior where applicable, interrupted close boundary, and concurrent `O_APPEND` atomicity across mounts |
+| P04 | Read and write | EOF short reads, zero-length write, access-mode errors and positioned-I/O offset preservation are covered | Add zero-length read, write/pwrite beyond EOF zero-fill, partial-I/O/error boundaries, and cross-mount append serialization evidence |
+| P05 | Truncation and file length | Shrink/extend zero-fill, block boundaries, descriptor offset preservation and read-only descriptor rejection are covered | Map `truncate()`/`ftruncate()` authorization and all required errors; verify timestamp effects and concurrent truncate/write serialization across mounts |
+| P06 | Metadata and timestamps | Root metadata, common stat fields, chmod/chown, timestamp authorization and symlink-follow behavior are covered | Verify descriptor-based `fstat()`/`fchmod()` and timestamp updates, remaining file-status fields and type-specific values, timestamp precision contract, and required errors |
+| P07 | Permissions and identity | Mode checks, supplementary groups, umask, ownership inheritance, ACL authorization and inaccessible-parent search are covered | Map effective/real-ID semantics for `access()`, privilege rules for ownership/mode changes, set-ID bit clearing, and default ACL inheritance separately from base POSIX modes |
+| P08 | Links and namespace mutation | Hardlink identity/counts, common link errors, transactional rename cases, symlink behavior and unlink lifecycle are covered | Map atomic replacement and error precedence for every file-type pairing, same-object rename, cross-directory parent link counts, and cross-mount observation after committed namespace mutations |
+| P09 | Special files and FIFOs | Regular `mknod()` is required by the test; FIFO and device-node probes currently allow documented skips | Decide the declared FIFO support boundary, then require `mkfifo()` creation plus blocking/nonblocking open/read/write semantics or mark it Not implemented; keep Linux device nodes outside the POSIX FIFO claim |
+| P10 | File locks | PostgreSQL-backed conflicts, ranges, blocking handoff, expiry and close-triggered release are covered | Verify `F_SETLKW` signal interruption and deadlock behavior, `F_GETLK` returned PID semantics, negative/relative ranges, descriptor access-mode errors, and fork/exec lifecycle |
+| P11 | Filesystem capacity and status | Block sizes, capacity cap, inode headroom, PostgreSQL accounting, reservations and shared quota admission are covered | Map every `statvfs()` field and unit, compare path and descriptor forms, verify read-only flags where exposed, overflow behavior, and required errors |
+| P12 | Error behavior | Many targeted regressions assert exact errno values | Build an interface-to-`ERRORS` table from Issue 8, distinguish mandatory and optional errors, record Linux VFS short-circuits, and run the applicable `pjdfstest` subset with explicit skips |
 
 ### Sparse `lseek` finding
 
