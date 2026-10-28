@@ -57,11 +57,33 @@ def main() -> None:
             )
             assert file_path.read_bytes() == b"not a directory"
 
+            file_link = directory / "regular-file-link"
+            os.symlink(file_path.name, file_link)
+            expect_errno(
+                lambda: os.stat(f"{file_link}/"),
+                errno.ENOTDIR,
+                "stat symlink to regular file/",
+            )
+            expect_errno(
+                lambda: os.open(f"{file_link}/", os.O_RDONLY),
+                errno.ENOTDIR,
+                "open symlink to regular file/",
+            )
+
             trailing_directory = directory / "created-with-slash"
             os.mkdir(f"{trailing_directory}/")
             assert trailing_directory.is_dir()
             assert os.stat(f"{trailing_directory}/").st_mode & 0o170000 == 0o040000
-            print("OK pathname trailing slash file=ENOTDIR directory=accepted")
+
+            directory_link = directory / "directory-link"
+            os.symlink(trailing_directory.name, directory_link)
+            linked_directory_stat = os.stat(f"{directory_link}/")
+            assert linked_directory_stat.st_ino == trailing_directory.stat().st_ino
+            assert linked_directory_stat.st_mode & 0o170000 == 0o040000
+            print(
+                "OK pathname trailing slash file=ENOTDIR "
+                "symlink_file=ENOTDIR symlink_directory=accepted"
+            )
         finally:
             launcher.stop()
 
