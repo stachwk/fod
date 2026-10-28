@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,7 +56,7 @@ def main() -> None:
         mountpoint = Path(tmpdir)
         launcher.start(str(mountpoint))
         try:
-            dir_path = mountpoint / "truncate_block"
+            dir_path = mountpoint / f"truncate_block_{uuid.uuid4().hex[:8]}"
             file_path = dir_path / "payload.bin"
 
             dir_path.mkdir()
@@ -69,6 +71,37 @@ def main() -> None:
             data = file_path.read_bytes()
             assert len(data) == block_size * 2, len(data)
             assert data == expected, data[block_size : block_size + 64]
+
+            descriptor_path = dir_path / "ftruncate-descriptor.bin"
+            descriptor_payload = b"ftruncate keeps the current offset"
+            descriptor_path.write_bytes(descriptor_payload)
+            fd = os.open(descriptor_path, os.O_RDWR)
+            try:
+                seek_offset = 12
+                assert os.lseek(fd, seek_offset, os.SEEK_SET) == seek_offset
+                os.ftruncate(fd, 5)
+                assert os.lseek(fd, 0, os.SEEK_CUR) == seek_offset
+                assert os.fstat(fd).st_size == 5
+                assert os.read(fd, 1) == b""
+
+                os.ftruncate(fd, 9)
+                assert os.lseek(fd, 0, os.SEEK_CUR) == seek_offset
+                assert os.fstat(fd).st_size == 9
+                assert os.pread(fd, 9, 0) == descriptor_payload[:5] + (b"\x00" * 4)
+            finally:
+                os.close(fd)
+
+            readonly_fd = os.open(descriptor_path, os.O_RDONLY)
+            try:
+                try:
+                    os.ftruncate(readonly_fd, 0)
+                except OSError as error:
+                    assert error.errno in (errno.EBADF, errno.EINVAL), error.errno
+                else:
+                    raise AssertionError("ftruncate on read-only fd succeeded")
+            finally:
+                os.close(readonly_fd)
+            assert descriptor_path.stat().st_size == 9
 
             cross_block_path = dir_path / "off-boundary-cross-block.bin"
             cross_block_payload = (
@@ -94,6 +127,7 @@ def main() -> None:
 
             print("OK truncate shrink block boundary")
             print("OK truncate off-boundary extend zero fill")
+            print("OK ftruncate descriptor offset and access mode")
         finally:
             launcher.stop()
 
