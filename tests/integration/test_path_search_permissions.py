@@ -19,7 +19,9 @@ if str(ROOT) not in sys.path:
 from tests.integration.fod_mount import FODMount
 
 
-def run_as_nobody(script: str, path: Path) -> subprocess.CompletedProcess[str]:
+def run_as_nobody(
+    script: str, *paths: Path
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "sudo",
@@ -29,7 +31,7 @@ def run_as_nobody(script: str, path: Path) -> subprocess.CompletedProcess[str]:
             "python3",
             "-c",
             script,
-            str(path),
+            *(str(path) for path in paths),
         ],
         capture_output=True,
         text=True,
@@ -86,6 +88,15 @@ def main() -> None:
                     "nobody could not create the owner-permission test file in mode-777 directory: "
                     f"stdout={owner_create.stdout!r} stderr={owner_create.stderr!r}"
                 )
+            owner_dir = directory / "nobody-owned-dir"
+            owner_mkdir = run_as_nobody(
+                "import pathlib, sys; pathlib.Path(sys.argv[1]).mkdir()", owner_dir
+            )
+            if owner_mkdir.returncode != 0:
+                raise AssertionError(
+                    "nobody could not create the directory test entry in mode-777 directory: "
+                    f"stdout={owner_mkdir.stdout!r} stderr={owner_mkdir.stderr!r}"
+                )
             directory.chmod(0)
 
             assert_permission_error(
@@ -125,9 +136,28 @@ def main() -> None:
             )
             assert_permission_error(
                 run_as_nobody(
+                    "import pathlib, sys; pathlib.Path(sys.argv[1]).mkdir()",
+                    directory / "new-directory",
+                ),
+                "mkdir in mode-000 directory",
+            )
+            assert_permission_error(
+                run_as_nobody(
                     "import os, sys; os.unlink(sys.argv[1])", directory / "secret-name"
                 ),
                 "unlink in mode-000 directory",
+            )
+            assert_permission_error(
+                run_as_nobody(
+                    "import os, sys; os.rename(sys.argv[1], sys.argv[2])",
+                    directory / "secret-name",
+                    directory / "renamed-name",
+                ),
+                "rename in mode-000 directory",
+            )
+            assert_permission_error(
+                run_as_nobody("import os, sys; os.rmdir(sys.argv[1])", owner_dir),
+                "rmdir in mode-000 directory",
             )
             assert_permission_error(
                 run_as_nobody(
@@ -142,7 +172,8 @@ def main() -> None:
             print(
                 "OK path-search-permissions default_permissions=0 "
                 "readdir_denied=1 stat_denied=1 open_denied=1 access_denied=1 "
-                "create_denied=1 unlink_denied=1 chmod_denied=1 utimens_denied=1"
+                "create_denied=1 mkdir_denied=1 unlink_denied=1 rename_denied=1 "
+                "rmdir_denied=1 chmod_denied=1 utimens_denied=1"
             )
         except Exception:
             launcher._dump_log()
