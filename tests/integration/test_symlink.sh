@@ -54,6 +54,7 @@ ln -s "${loop_b}" "${loop_a}"
 ln -s "${loop_a}" "${loop_b}"
 rm -f "${payload}"
 python3 - "${orphaned_link}" "${loop_a}" "${loop_b}" <<'PY'
+import ctypes
 import errno
 import os
 import stat
@@ -61,6 +62,18 @@ import sys
 
 orphaned, loop_a, loop_b = sys.argv[1:]
 assert stat.S_ISLNK(os.lstat(orphaned).st_mode)
+
+libc = ctypes.CDLL(None, use_errno=True)
+libc.readlink.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t]
+libc.readlink.restype = ctypes.c_ssize_t
+target = os.fsencode(os.readlink(orphaned))
+assert len(target) > 8
+buffer = ctypes.create_string_buffer(b"\xa5" * 9, 9)
+read_count = libc.readlink(os.fsencode(orphaned), buffer, 8)
+assert read_count == 8, read_count
+assert buffer.raw[:8] == target[:8], (buffer.raw[:8], target[:8])
+assert buffer.raw[8] == 0xA5, "readlink unexpectedly NUL-terminated the buffer"
+
 for operation in (lambda: os.stat(orphaned), lambda: os.open(orphaned, os.O_RDONLY)):
     try:
         operation()
@@ -87,4 +100,4 @@ for path in (loop_a, loop_b):
         raise AssertionError("resolving symlink loop unexpectedly succeeded")
 PY
 
-echo "OK symlink/readlink unlink_preserves_target=1 dangling_stat_lstat_loop=1 dangling_excl=EEXIST"
+echo "OK symlink/readlink unlink_preserves_target=1 readlink_shortbuf=1 dangling_stat_lstat_loop=1 dangling_excl=EEXIST"
