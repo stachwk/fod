@@ -80,9 +80,26 @@ def main() -> None:
             linked_directory_stat = os.stat(f"{directory_link}/")
             assert linked_directory_stat.st_ino == trailing_directory.stat().st_ino
             assert linked_directory_stat.st_mode & 0o170000 == 0o040000
+
+            normalized = f"{directory}//./created-with-slash/../regular-file"
+            assert os.stat(normalized).st_ino == file_path.stat().st_ino
+            with open(normalized, "rb") as normalized_file:
+                assert normalized_file.read() == b"not a directory"
+
+            name_max = os.pathconf(directory, "PC_NAME_MAX")
+            assert name_max >= 255, name_max
+            max_name = directory / ("n" * name_max)
+            max_name.write_bytes(b"name boundary")
+            assert max_name.read_bytes() == b"name boundary"
+            expect_errno(
+                lambda: os.open(directory / ("n" * (name_max + 1)), os.O_CREAT),
+                errno.ENAMETOOLONG,
+                "open name longer than NAME_MAX",
+            )
             print(
                 "OK pathname trailing slash file=ENOTDIR "
-                "symlink_file=ENOTDIR symlink_directory=accepted"
+                "symlink_file=ENOTDIR symlink_directory=accepted "
+                "dotdot_repeated_separator=1 name_max_boundary=1"
             )
         finally:
             launcher.stop()

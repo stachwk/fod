@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import errno
 import os
+import stat
 import tempfile
+import time
 import uuid
 from pathlib import Path
 import sys
@@ -87,10 +89,21 @@ def main() -> None:
             fd = os.open(positioned_io_path, os.O_RDWR)
             try:
                 assert os.lseek(fd, 3, os.SEEK_SET) == 3
+                assert os.read(fd, 0) == b""
+                assert os.lseek(fd, 0, os.SEEK_CUR) == 3
                 assert os.pread(fd, 3, 6) == b"678"
                 assert os.lseek(fd, 0, os.SEEK_CUR) == 3
                 assert os.pwrite(fd, b"XY", 1) == 2
                 assert os.lseek(fd, 0, os.SEEK_CUR) == 3
+
+                os.fchmod(fd, 0o640)
+                assert stat.S_IMODE(os.fstat(fd).st_mode) == 0o640
+                atime_ns = (time.time_ns() - 31_000_000_000) // 1000 * 1000
+                mtime_ns = (time.time_ns() - 30_000_000_000) // 1000 * 1000
+                os.utime(fd, ns=(atime_ns, mtime_ns))
+                descriptor_stat = os.fstat(fd)
+                assert descriptor_stat.st_atime_ns == atime_ns
+                assert descriptor_stat.st_mtime_ns == mtime_ns
             finally:
                 os.close(fd)
             expected_positioned_io = b"0XY3456789"
@@ -179,6 +192,17 @@ def main() -> None:
             expected_beyond_eof = initial + (b"\0" * 5) + b"Z"
             assert beyond_eof_path.read_bytes() == expected_beyond_eof
 
+            pwrite_beyond_eof_path = dir_path / "pwrite-beyond-eof.txt"
+            pwrite_beyond_eof_path.write_bytes(initial)
+            fd = os.open(pwrite_beyond_eof_path, os.O_RDWR)
+            try:
+                assert os.lseek(fd, 1, os.SEEK_SET) == 1
+                assert os.pwrite(fd, b"Q", len(initial) + 4) == 1
+                assert os.lseek(fd, 0, os.SEEK_CUR) == 1
+            finally:
+                os.close(fd)
+            assert pwrite_beyond_eof_path.read_bytes() == initial + (b"\0" * 4) + b"Q"
+
             fd = os.open(file_path, os.O_RDONLY)
             try:
                 os.lseek(fd, 0, os.SEEK_SET)
@@ -223,6 +247,7 @@ def main() -> None:
             print(
                 "OK lseek/mount append_after_seek=1 pread_pwrite_offset=1 "
                 "dup_shared_offset=1 eof_short_read=1 zero_write=1 "
+                "zero_read=1 pwrite_beyond_eof=1 descriptor_metadata=1 "
                 "access_mode_errors=1"
             )
         finally:

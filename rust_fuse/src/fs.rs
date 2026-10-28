@@ -2510,6 +2510,15 @@ impl FodFuse {
         }
     }
 
+    fn validate_component_name(name: &OsStr) -> Result<(), libc::c_int> {
+        const NAME_MAX: usize = 255;
+        if name.as_bytes().len() > NAME_MAX {
+            Err(libc::ENAMETOOLONG)
+        } else {
+            Ok(())
+        }
+    }
+
     fn copy_dedupe_enabled_for_len(&self, len: u64) -> bool {
         let live = self.reloadable_runtime();
         if !live.copy_dedupe_enabled || len == 0 {
@@ -5784,6 +5793,10 @@ impl Filesystem for FodFuse {
     fn lookup(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let parent = parent.0;
         let req_id = self.next_request_id();
+        if let Err(errno) = Self::validate_component_name(name) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -8449,6 +8462,10 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
+        if let Err(errno) = Self::validate_component_name(name) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -8546,6 +8563,10 @@ impl Filesystem for FodFuse {
         let subject = self.request_identity(req);
         if self.read_only {
             fuse_reply_error!(reply, libc::EROFS);
+            return;
+        }
+        if let Err(errno) = Self::validate_component_name(name) {
+            fuse_reply_error!(reply, errno);
             return;
         }
         let parent_path = match self.entry_path_for_ino(parent) {
@@ -8702,6 +8723,10 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
+        if let Err(errno) = Self::validate_component_name(name) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -8806,6 +8831,14 @@ impl Filesystem for FodFuse {
         let subject = self.request_identity(req);
         if self.read_only {
             fuse_reply_error!(reply, libc::EROFS);
+            return;
+        }
+        if let Err(errno) = Self::validate_component_name(name) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
+        if let Err(errno) = Self::validate_component_name(newname) {
+            fuse_reply_error!(reply, errno);
             return;
         }
         let old_parent_path = match self.entry_path_for_ino(parent) {
@@ -9204,6 +9237,10 @@ impl Filesystem for FodFuse {
         let subject = self.request_identity(req);
         if self.read_only {
             fuse_reply_error!(reply, libc::EROFS);
+            return;
+        }
+        if let Err(errno) = Self::validate_component_name(name) {
+            fuse_reply_error!(reply, errno);
             return;
         }
         let parent_path = match self.entry_path_for_ino(parent) {
@@ -10390,6 +10427,10 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
+        if let Err(errno) = Self::validate_component_name(name) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         let file_type = mode & libc::S_IFMT;
         if file_type == libc::S_IFREG {
             let parent_path = match self.entry_path_for_ino(parent) {
@@ -10539,6 +10580,10 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, libc::EROFS);
             return;
         }
+        if let Err(errno) = Self::validate_component_name(link_name) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -10612,6 +10657,10 @@ impl Filesystem for FodFuse {
         let subject = self.request_identity(req);
         if self.read_only {
             fuse_reply_error!(reply, libc::EROFS);
+            return;
+        }
+        if let Err(errno) = Self::validate_component_name(newname) {
+            fuse_reply_error!(reply, errno);
             return;
         }
         let source_path = match self.entry_path_for_ino(ino) {

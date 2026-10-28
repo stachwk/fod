@@ -63,6 +63,16 @@ assert os.stat(source).st_ino == os.stat(existing_target).st_ino
 with open(existing_target, "rb") as linked_file:
     assert linked_file.read() == b"hardlink payload\n"
 assert not os.path.lexists(directory_target)
+
+before_source = os.lstat(source)
+before_target = os.lstat(existing_target)
+os.rename(source, existing_target)
+after_source = os.lstat(source)
+after_target = os.lstat(existing_target)
+assert after_source.st_ino == before_source.st_ino
+assert after_target.st_ino == before_target.st_ino
+assert after_source.st_ino == after_target.st_ino
+assert after_source.st_nlink == after_target.st_nlink == 2
 PY
 
 if [[ -z "$(ls -A "${dir_path}")" ]]; then
@@ -143,4 +153,4 @@ fod_assert_eq "$(cat "${renamed_path_mv}")" "${payload}" "mv renamed hardlink pa
 rm -f "${renamed_path_mv}"
 rmdir "${dir_path_mv}"
 
-echo "OK hardlink/backend errno=EEXIST,ENOENT,EPERM"
+echo "OK hardlink/backend errno=EEXIST,ENOENT,EPERM rename_same_inode=noop"

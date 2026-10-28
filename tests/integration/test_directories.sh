@@ -69,8 +69,31 @@ for path, expected, label in (
         assert error.errno == expected, (label, error.errno, expected)
     else:
         raise AssertionError(f"{label} unexpectedly succeeded")
+
+file_fd = os.open(file_path, os.O_RDONLY)
+try:
+    try:
+        os.listdir(file_fd)
+    except OSError as error:
+        assert error.errno == errno.ENOTDIR, ("listdir regular fd", error.errno)
+    else:
+        raise AssertionError("listdir on regular-file descriptor unexpectedly succeeded")
+finally:
+    os.close(file_fd)
+
+directory_fd = os.open(nonempty_dir, os.O_RDONLY | os.O_DIRECTORY)
+first_listing = sorted(os.listdir(directory_fd))
+second_listing = sorted(os.listdir(directory_fd))
+assert first_listing == second_listing == [os.path.basename(file_path)]
+os.close(directory_fd)
+try:
+    os.listdir(directory_fd)
+except OSError as error:
+    assert error.errno == errno.EBADF, ("listdir closed fd", error.errno)
+else:
+    raise AssertionError("listdir on closed descriptor unexpectedly succeeded")
 PY
 rm -f "${not_a_directory}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY directory_fd_repeat=1"

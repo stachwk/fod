@@ -288,6 +288,38 @@ if [[ "${fs_free_inodes}" -le 0 || "${fs_inodes}" -le "${fs_free_inodes}" ]]; th
   exit 1
 fi
 
+python3 - "${MOUNTPOINT}" <<'PY'
+import os
+import sys
+
+mountpoint = sys.argv[1]
+path_stats = os.statvfs(mountpoint)
+fd = os.open(mountpoint, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    fd_stats = os.fstatvfs(fd)
+finally:
+    os.close(fd)
+
+fields = (
+    "f_bsize",
+    "f_frsize",
+    "f_blocks",
+    "f_bfree",
+    "f_bavail",
+    "f_files",
+    "f_ffree",
+    "f_favail",
+    "f_flag",
+    "f_namemax",
+)
+for field in fields:
+    assert getattr(path_stats, field) == getattr(fd_stats, field), field
+assert path_stats.f_bsize > 0
+assert path_stats.f_frsize > 0
+assert 0 <= path_stats.f_bavail <= path_stats.f_bfree <= path_stats.f_blocks
+assert 0 <= path_stats.f_favail <= path_stats.f_ffree <= path_stats.f_files
+PY
+
 ln -s accounting-small.bin "${MOUNTPOINT}/accounting-link"
 read -r symlink_fs_inodes symlink_fs_free_inodes < <(
   stat -f -c '%c %d' "${MOUNTPOINT}"
