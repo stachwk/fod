@@ -458,6 +458,67 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
 }
 
 #[test]
+fn closing_another_descriptor_releases_process_record_locks() -> Result<(), String> {
+    if skip_without_root() {
+        return Ok(());
+    }
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let primary_a = MountedFs::start_with_role("lock-close-primary-a", "primary", &[])?;
+    let suffix = unique_suffix();
+    let relative = format!("lock-close-{suffix}/payload.txt");
+    let file_path = primary_a.mountpoint.join(&relative);
+    fs::create_dir(file_path.parent().expect("file parent"))
+        .map_err(|err| format!("create lock directory failed: {err}"))?;
+    fs::write(&file_path, b"close releases process locks")
+        .map_err(|err| format!("write lock file failed: {err}"))?;
+
+    let lock_fd = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&file_path)
+        .map_err(|err| format!("open lock descriptor failed: {err}"))?;
+    let close_fd = OpenOptions::new()
+        .read(true)
+        .open(&file_path)
+        .map_err(|err| format!("open descriptor to close failed: {err}"))?;
+    let mut write_lock = flock(libc::F_WRLCK as i16, 0, 0);
+    fcntl_lock(lock_fd.as_raw_fd(), libc::F_SETLK, &mut write_lock)
+        .map_err(|err| format!("set process write lock failed: {err}"))?;
+
+    let primary_b = MountedFs::start_with_role("lock-close-primary-b", "primary", &[])?;
+    let observer = OpenOptions::new()
+        .read(true)
+        .open(primary_b.mountpoint.join(&relative))
+        .map_err(|err| format!("open observer descriptor failed: {err}"))?;
+    let before_close = query_lock(observer.as_raw_fd(), libc::F_WRLCK as i16)?;
+    if before_close.l_type != libc::F_WRLCK as i16 {
+        return Err(format!(
+            "observer should see process write lock before close, got l_type={}",
+            before_close.l_type
+        ));
+    }
+
+    drop(close_fd);
+    let after_close = query_lock(observer.as_raw_fd(), libc::F_WRLCK as i16)?;
+    if after_close.l_type != libc::F_UNLCK as i16 {
+        return Err(format!(
+            "closing another descriptor should release process locks, got l_type={}",
+            after_close.l_type
+        ));
+    }
+
+    drop(observer);
+    drop(lock_fd);
+    drop(primary_b);
+    drop(primary_a);
+    Ok(())
+}
+
+#[test]
 fn primary_uses_pg_range_leases_and_replica_stays_memory_backed() -> Result<(), String> {
     if skip_without_root() {
         return Ok(());
