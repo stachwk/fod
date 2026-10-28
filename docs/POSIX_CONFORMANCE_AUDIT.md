@@ -160,7 +160,9 @@ mode `000`, and verifies the unrelated `nobody` user receives `EACCES` both
 when listing it, statting a child through it and reading a child file. The
 listing and stat failures were reproduced before their fixes; the read case is
 covered by the targeted regression. The full targeted test passes after the
-path-search checks. Other path-resolution requirements remain under review.
+path-search checks. The same test now checks that PostgreSQL-authoritative
+parent write/search authorization rejects `create` and `unlink` in the mode-000
+directory. Other path-resolution requirements remain under review.
 
 ## Audit procedure
 

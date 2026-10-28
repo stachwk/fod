@@ -19,6 +19,36 @@ if str(ROOT) not in sys.path:
 from tests.integration.fod_mount import FODMount
 
 
+def run_as_nobody(script: str, path: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "sudo",
+            "-n",
+            "-u",
+            "nobody",
+            "python3",
+            "-c",
+            script,
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def assert_permission_error(
+    result: subprocess.CompletedProcess[str], operation: str
+) -> None:
+    if result.returncode == 0:
+        raise AssertionError(f"nobody unexpectedly completed {operation}")
+    if "PermissionError" not in result.stderr:
+        raise AssertionError(
+            f"{operation} failed for a reason other than denied access: "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+
 def main() -> None:
     nobody_probe = subprocess.run(
         ["sudo", "-n", "-u", "nobody", "true"],
@@ -36,119 +66,63 @@ def main() -> None:
     launcher = FODMount(str(ROOT))
     launcher.init_schema()
 
-    with tempfile.TemporaryDirectory(prefix="fod-readdir-permissions-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="fod-path-search-permissions-") as temp_dir:
         os.chmod(temp_dir, 0o755)
         mountpoint = Path(temp_dir) / "mount"
         started = False
         try:
-            launcher.start(str(mountpoint), log_prefix="/tmp/fod-readdir-permissions")
+            launcher.start(str(mountpoint), log_prefix="/tmp/fod-path-search-permissions")
             started = True
             directory = mountpoint / f"private-{uuid.uuid4().hex}"
             directory.mkdir(mode=0o700)
             (directory / "secret-name").touch()
             directory.chmod(0)
 
-            result = subprocess.run(
-                [
-                    "sudo",
-                    "-n",
-                    "-u",
-                    "nobody",
-                    "python3",
-                    "-c",
-                    "import os, sys; os.listdir(sys.argv[1])",
-                    str(directory),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
+            assert_permission_error(
+                run_as_nobody("import os, sys; os.listdir(sys.argv[1])", directory),
+                "readdir in mode-000 directory",
             )
-            if result.returncode == 0:
-                raise AssertionError(
-                    "nobody listed names in a mode-000 directory with "
-                    "FOD_DEFAULT_PERMISSIONS=0"
-                )
-            if "PermissionError" not in result.stderr:
-                raise AssertionError(
-                    "directory listing failed for a reason other than denied read access: "
-                    f"stdout={result.stdout!r} stderr={result.stderr!r}"
-                )
-
-            stat_result = subprocess.run(
-                [
-                    "sudo",
-                    "-n",
-                    "-u",
-                    "nobody",
-                    "python3",
-                    "-c",
-                    "import os, sys; os.stat(sys.argv[1])",
-                    str(directory / "secret-name"),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
+            assert_permission_error(
+                run_as_nobody(
+                    "import os, sys; os.stat(sys.argv[1])", directory / "secret-name"
+                ),
+                "stat through mode-000 directory",
             )
-            if stat_result.returncode == 0:
-                raise AssertionError(
-                    "nobody resolved a child through a mode-000 directory with "
-                    "FOD_DEFAULT_PERMISSIONS=0"
-                )
-            if "PermissionError" not in stat_result.stderr:
-                raise AssertionError(
-                    "path lookup failed for a reason other than denied search access: "
-                    f"stdout={stat_result.stdout!r} stderr={stat_result.stderr!r}"
-                )
-
-            read_result = subprocess.run(
-                [
-                    "sudo",
-                    "-n",
-                    "-u",
-                    "nobody",
-                    "python3",
-                    "-c",
+            assert_permission_error(
+                run_as_nobody(
                     "import pathlib, sys; pathlib.Path(sys.argv[1]).read_bytes()",
-                    str(directory / "secret-name"),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
+                    directory / "secret-name",
+                ),
+                "open/read through mode-000 directory",
             )
-            if read_result.returncode == 0:
-                raise AssertionError(
-                    "nobody read a file through a mode-000 directory with "
-                    "FOD_DEFAULT_PERMISSIONS=0"
-                )
-            if "PermissionError" not in read_result.stderr:
-                raise AssertionError(
-                    "file read failed for a reason other than denied search access: "
-                    f"stdout={read_result.stdout!r} stderr={read_result.stderr!r}"
-                )
 
-            access_result = subprocess.run(
-                [
-                    "sudo",
-                    "-n",
-                    "-u",
-                    "nobody",
-                    "python3",
-                    "-c",
-                    "import os, sys; sys.exit(0 if not os.access(sys.argv[1], os.R_OK) else 1)",
-                    str(directory / "secret-name"),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
+            access_result = run_as_nobody(
+                "import os, sys; sys.exit(0 if not os.access(sys.argv[1], os.R_OK) else 1)",
+                directory / "secret-name",
             )
             if access_result.returncode != 0:
                 raise AssertionError(
                     "os.access reported read access through a mode-000 directory: "
                     f"stdout={access_result.stdout!r} stderr={access_result.stderr!r}"
                 )
+
+            assert_permission_error(
+                run_as_nobody(
+                    "import pathlib, sys; pathlib.Path(sys.argv[1]).touch()",
+                    directory / "new-name",
+                ),
+                "create in mode-000 directory",
+            )
+            assert_permission_error(
+                run_as_nobody(
+                    "import os, sys; os.unlink(sys.argv[1])", directory / "secret-name"
+                ),
+                "unlink in mode-000 directory",
+            )
             print(
                 "OK path-search-permissions default_permissions=0 "
-                "readdir_denied=1 stat_denied=1 open_denied=1 access_denied=1"
+                "readdir_denied=1 stat_denied=1 open_denied=1 access_denied=1 "
+                "create_denied=1 unlink_denied=1"
             )
         except Exception:
             launcher._dump_log()
