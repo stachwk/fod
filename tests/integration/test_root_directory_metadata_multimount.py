@@ -33,6 +33,19 @@ def assert_root_times_advance(
         )
 
 
+def assert_root_identity_stable(
+    before: os.stat_result, after: os.stat_result, operation: str
+) -> None:
+    fields = ("st_ino", "st_mode", "st_uid", "st_gid")
+    changed = {
+        field: (getattr(before, field), getattr(after, field))
+        for field in fields
+        if getattr(before, field) != getattr(after, field)
+    }
+    if changed:
+        raise AssertionError(f"root identity changed after {operation}: {changed}")
+
+
 def main() -> None:
     # Zero the metadata TTL returned to the kernel and used by FOD's own cache,
     # so mount B must fetch root attributes again after mount A mutates it.
@@ -59,19 +72,35 @@ def main() -> None:
                 raise AssertionError(
                     f"logical root inode differs across mounts: {root_a.st_ino} vs {root_b.st_ino}"
                 )
+            if root_a.st_nlink != root_b.st_nlink:
+                raise AssertionError(
+                    f"logical root link count differs across mounts: {root_a.st_nlink} vs {root_b.st_nlink}"
+                )
 
             child = mount_a / f"root-metadata-{uuid.uuid4().hex}"
             child.mkdir()
             after_create = mount_b.stat()
             assert_root_times_advance(root_b, after_create, "root child creation")
+            assert_root_identity_stable(root_b, after_create, "root child creation")
+            if after_create.st_nlink != root_b.st_nlink + 1:
+                raise AssertionError(
+                    "root st_nlink did not increase for a child directory: "
+                    f"before={root_b.st_nlink} after={after_create.st_nlink}"
+                )
 
             child.rmdir()
             after_remove = mount_b.stat()
             assert_root_times_advance(after_create, after_remove, "root child removal")
+            assert_root_identity_stable(after_create, after_remove, "root child removal")
+            if after_remove.st_nlink != after_create.st_nlink - 1:
+                raise AssertionError(
+                    "root st_nlink did not decrease after child directory removal: "
+                    f"before={after_create.st_nlink} after={after_remove.st_nlink}"
+                )
 
             print(
                 "OK root-directory-metadata-multimount "
-                "create=1 remove=1 mtime=1 ctime=1"
+                "create=1 remove=1 mtime=1 ctime=1 nlink=1 identity=1"
             )
         except Exception:
             launcher_a._dump_log()
