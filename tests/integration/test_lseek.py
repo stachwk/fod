@@ -63,6 +63,25 @@ def main() -> None:
             actual = overwrite_path.read_bytes()
             assert actual == expected, (actual, expected)
 
+            append_path = dir_path / "seek-append.txt"
+            append_path.write_bytes(b"prefix")
+            fd = os.open(append_path, os.O_WRONLY | os.O_APPEND)
+            try:
+                assert os.lseek(fd, 0, os.SEEK_SET) == 0
+                assert os.write(fd, b"-one") == 4
+                expected_append = b"prefix-one"
+                assert os.lseek(fd, 1, os.SEEK_SET) == 1
+                assert os.write(fd, b"-two") == 4
+                expected_append += b"-two"
+                assert os.lseek(fd, 0, os.SEEK_CUR) == len(expected_append)
+            finally:
+                os.close(fd)
+            actual_append = append_path.read_bytes()
+            assert actual_append == expected_append, (
+                actual_append,
+                expected_append,
+            )
+
             beyond_eof_path = dir_path / "seek-beyond-eof.txt"
             initial = b"abc"
             beyond_eof_path.write_bytes(initial)
@@ -104,7 +123,7 @@ def main() -> None:
             finally:
                 os.close(fd)
 
-            print("OK lseek/mount")
+            print("OK lseek/mount append_after_seek=1")
         finally:
             launcher.stop()
 
