@@ -46,10 +46,31 @@ def assert_root_identity_stable(
         raise AssertionError(f"root identity changed after {operation}: {changed}")
 
 
+def assert_root_atime_advances_after_readdir(mount_a: Path, mount_b: Path) -> None:
+    old_atime_ns = 1_000_000_000
+    root = mount_a.stat()
+    os.utime(mount_a, ns=(old_atime_ns, root.st_mtime_ns))
+    before = mount_b.stat()
+    if before.st_atime_ns != old_atime_ns:
+        raise AssertionError(
+            f"could not seed old root atime: expected={old_atime_ns} "
+            f"actual={before.st_atime_ns}"
+        )
+
+    list(mount_a.iterdir())
+    after = mount_b.stat()
+    if after.st_atime_ns <= old_atime_ns:
+        raise AssertionError(
+            f"root atime did not advance after readdir: "
+            f"before={old_atime_ns} after={after.st_atime_ns}"
+        )
+
+
 def main() -> None:
     # Zero the metadata TTL returned to the kernel and used by FOD's own cache,
     # so mount B must fetch root attributes again after mount A mutates it.
     os.environ["FOD_METADATA_CACHE_TTL_SECONDS"] = "0"
+    os.environ["FOD_ATIME_POLICY"] = "strictatime"
 
     launcher_a = FODMount(str(ROOT))
     launcher_b = FODMount(str(ROOT))
@@ -76,6 +97,7 @@ def main() -> None:
                 raise AssertionError(
                     f"logical root link count differs across mounts: {root_a.st_nlink} vs {root_b.st_nlink}"
                 )
+            assert_root_atime_advances_after_readdir(mount_a, mount_b)
 
             child = mount_a / f"root-metadata-{uuid.uuid4().hex}"
             child.mkdir()
@@ -100,7 +122,8 @@ def main() -> None:
 
             print(
                 "OK root-directory-metadata-multimount "
-                "create=1 remove=1 mtime=1 ctime=1 nlink=1 identity=1"
+                "create=1 remove=1 readdir_atime=1 mtime=1 ctime=1 "
+                "nlink=1 identity=1"
             )
         except Exception:
             launcher_a._dump_log()

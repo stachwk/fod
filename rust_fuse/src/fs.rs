@@ -4386,7 +4386,6 @@ impl FodFuse {
                     (Some("dir"), Some(directory_id)) => {
                         self.repo.update_directory_access_date(directory_id, &atime)
                     }
-                    _ if path == "/" => Ok(()),
                     _ => Ok(()),
                 }
             }
@@ -6070,6 +6069,17 @@ impl Filesystem for FodFuse {
         }
         if let Some(attrs) = current_attrs.as_ref() {
             self.touch_access_time(&path, attrs);
+        } else if path == "/"
+            && !matches!(self.atime_policy, AtimePolicy::NoAtime | AtimePolicy::Nodiratime)
+        {
+            // Root attributes are otherwise skipped here to avoid counting
+            // child directories just for readdir. Atime policy needs the
+            // stored root timestamp, but not its synthesized link count.
+            match self.attrs_for_path(&path) {
+                Ok(Some(attrs)) => self.touch_access_time(&path, &attrs.file_attr),
+                Ok(None) => {}
+                Err(errno) => warn!("FOD root atime lookup skipped errno={}", errno),
+            }
         }
         reply.ok();
     }

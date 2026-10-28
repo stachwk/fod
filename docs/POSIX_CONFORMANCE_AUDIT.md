@@ -127,12 +127,16 @@ The mounted root-permissions regression records root `st_mtime_ns` and
 `st_ctime_ns` before and after creating and removing a direct child. Both values
 must advance after each namespace mutation. `make test-mount-root-permissions`
 passed on FOD 3.4.111. A second regression mutates the root through one mount
-and observes both timestamps through another with the metadata TTL set to zero.
-It also verifies that `st_nlink` increases and decreases with direct child
-directories and that root inode, mode, UID and GID stay stable. The test passed
-on FOD 3.4.120. The second mount therefore re-fetches root attributes after
-each namespace mutation. This does not cover every root metadata field, so the
-metadata row remains Pending.
+and observes root metadata through another with the metadata TTL set to zero.
+It verifies that `st_nlink` increases and decreases with direct child
+directories, root inode, mode, UID and GID stay stable, and root `atime`
+advances after `readdir` under `strictatime`. The earlier test passed on FOD
+3.4.120 for namespace timestamps, link count and identity. The atime extension
+reproduced a bug: `readdir` skipped root attributes, so the final atime update
+was skipped too. The fix fetches root attributes without its synthesized link
+count and updates the stored PostgreSQL directory record. The expanded test
+passed on FOD 3.4.122. This still does not cover every root metadata field, so
+the metadata row remains Pending.
 
 ### Directory iteration cookie finding
 
