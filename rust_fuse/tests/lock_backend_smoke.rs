@@ -13,9 +13,13 @@ use std::time::{Duration, Instant};
 use support::{db_repo, resolve_file_id, unique_suffix, MountedFs};
 
 fn flock(lock_type: i16, start: i64, len: i64) -> libc::flock {
+    flock_with_whence(lock_type, libc::SEEK_SET as i16, start, len)
+}
+
+fn flock_with_whence(lock_type: i16, whence: i16, start: i64, len: i64) -> libc::flock {
     libc::flock {
         l_type: lock_type,
-        l_whence: libc::SEEK_SET as i16,
+        l_whence: whence,
         l_start: start,
         l_len: len,
         l_pid: 0,
@@ -396,6 +400,24 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
         .write(true)
         .open(&file_path)
         .map_err(|err| format!("open primary A failed: {err}"))?;
+    let write_only = OpenOptions::new()
+        .write(true)
+        .open(&file_path)
+        .map_err(|err| format!("open primary A write-only failed: {err}"))?;
+    let mut invalid_read_lock = flock(libc::F_RDLCK as i16, 0, 1);
+    let invalid_read_result = unsafe {
+        libc::fcntl(
+            write_only.as_raw_fd(),
+            libc::F_SETLK,
+            &mut invalid_read_lock,
+        )
+    };
+    if invalid_read_result != -1
+        || std::io::Error::last_os_error().raw_os_error() != Some(libc::EBADF)
+    {
+        return Err("F_RDLCK on O_WRONLY descriptor should fail with EBADF".to_string());
+    }
+    drop(write_only);
     let range_start = 2;
     let range_len = 8;
     let mut write_lock = flock(libc::F_WRLCK as i16, range_start, range_len);
@@ -415,6 +437,14 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
                 .join(format!("lock-range-{suffix}/payload.txt")),
         )
         .map_err(|err| format!("open primary B failed: {err}\n{}", primary_b.log_tail(200)))?;
+    let mut invalid_write_lock = flock(libc::F_WRLCK as i16, 0, 1);
+    let invalid_write_result =
+        unsafe { libc::fcntl(fd_b.as_raw_fd(), libc::F_SETLK, &mut invalid_write_lock) };
+    if invalid_write_result != -1
+        || std::io::Error::last_os_error().raw_os_error() != Some(libc::EBADF)
+    {
+        return Err("F_WRLCK on O_RDONLY descriptor should fail with EBADF".to_string());
+    }
     let primary_b_query = query_lock_range(
         fd_b.as_raw_fd(),
         libc::F_WRLCK as i16,
@@ -509,6 +539,39 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
             primary_b_after_unlock.l_type
         ));
     }
+
+    let file_len = fs::metadata(&file_path)
+        .map_err(|err| format!("stat lock file failed: {err}"))?
+        .len() as i64;
+    let relative_start = file_len - 4;
+    let mut relative_lock = flock_with_whence(libc::F_WRLCK as i16, libc::SEEK_END as i16, -4, 2);
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut relative_lock)
+        .map_err(|err| format!("SEEK_END relative range lock failed: {err}"))?;
+    let relative_observed =
+        query_lock_range(fd_b.as_raw_fd(), libc::F_WRLCK as i16, relative_start, 2)?;
+    if relative_observed.l_type != libc::F_WRLCK as i16 {
+        return Err(format!(
+            "SEEK_END relative lock was not normalized to absolute range, got l_type={}",
+            relative_observed.l_type
+        ));
+    }
+    relative_lock.l_type = libc::F_UNLCK as i16;
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut relative_lock)
+        .map_err(|err| format!("SEEK_END relative range unlock failed: {err}"))?;
+
+    let mut negative_length_lock = flock(libc::F_WRLCK as i16, 10, -4);
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut negative_length_lock)
+        .map_err(|err| format!("negative-length range lock failed: {err}"))?;
+    let negative_length_observed = query_lock_range(fd_b.as_raw_fd(), libc::F_WRLCK as i16, 6, 4)?;
+    if negative_length_observed.l_type != libc::F_WRLCK as i16 {
+        return Err(format!(
+            "negative-length lock was not normalized to bytes 6..9, got l_type={}",
+            negative_length_observed.l_type
+        ));
+    }
+    negative_length_lock.l_type = libc::F_UNLCK as i16;
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut negative_length_lock)
+        .map_err(|err| format!("negative-length range unlock failed: {err}"))?;
 
     drop(fd_b);
     drop(fd_a);
