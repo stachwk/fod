@@ -18,6 +18,8 @@ payload="${MOUNTPOINT}/payload-${suffix}.txt"
 link_path="${MOUNTPOINT}/payload-link-${suffix}"
 link_renamed="${MOUNTPOINT}/payload-link-renamed-${suffix}"
 orphaned_link="${MOUNTPOINT}/payload-orphaned-${suffix}"
+loop_a="${MOUNTPOINT}/symlink-loop-a-${suffix}"
+loop_b="${MOUNTPOINT}/symlink-loop-b-${suffix}"
 payload_value="symlink smoke payload"
 
 printf '%s\n' "${payload_value}" >"${payload}"
@@ -45,4 +47,33 @@ fod_assert_eq "$(cat "${orphaned_link}" 2>/dev/null || true)" "" "orphaned symli
 ls_orphaned_output="$(ls -al "${orphaned_link}")"
 grep -F "${orphaned_link} -> ${payload}" <<<"${ls_orphaned_output}" >/dev/null
 
-echo "OK symlink/readlink"
+ln -s "${loop_b}" "${loop_a}"
+ln -s "${loop_a}" "${loop_b}"
+rm -f "${payload}"
+python3 - "${orphaned_link}" "${loop_a}" "${loop_b}" <<'PY'
+import errno
+import os
+import stat
+import sys
+
+orphaned, loop_a, loop_b = sys.argv[1:]
+assert stat.S_ISLNK(os.lstat(orphaned).st_mode)
+for operation in (lambda: os.stat(orphaned), lambda: os.open(orphaned, os.O_RDONLY)):
+    try:
+        operation()
+    except OSError as error:
+        assert error.errno == errno.ENOENT, error.errno
+    else:
+        raise AssertionError("following dangling symlink unexpectedly succeeded")
+
+for path in (loop_a, loop_b):
+    assert stat.S_ISLNK(os.lstat(path).st_mode)
+    try:
+        os.stat(path)
+    except OSError as error:
+        assert error.errno == errno.ELOOP, error.errno
+    else:
+        raise AssertionError("resolving symlink loop unexpectedly succeeded")
+PY
+
+echo "OK symlink/readlink dangling_stat_lstat_loop=1"
