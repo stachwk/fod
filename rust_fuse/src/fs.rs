@@ -5752,7 +5752,7 @@ impl Filesystem for FodFuse {
 
     fn readdir(
         &self,
-        _req: &Request,
+        req: &Request,
         ino: INodeNo,
         _fh: FileHandle,
         offset: u64,
@@ -5760,25 +5760,45 @@ impl Filesystem for FodFuse {
     ) {
         let ino = ino.0;
         let req_id = self.next_request_id();
-        let path = if ino == ROOT_INO {
-            "/".to_string()
-        } else {
-            match self.path_for_inode(ino) {
-                Some(path) => path,
-                None => {
-                    self.log_request_error(
-                        req_id,
-                        "readdir",
-                        ENOENT,
-                        format!("ino={} offset={}", ino, offset),
-                    );
-                    fuse_reply_error!(reply, ENOENT);
-                    return;
-                }
+        let metadata_profile_enabled = fod_fuse_profile_metadata_cache_enabled();
+        let readdir_started = metadata_profile_enabled.then(Instant::now);
+        let mut readdir_parent_lookup_us = 0u64;
+        let mut readdir_list_us = 0u64;
+        let mut readdir_child_lookup_us = 0u64;
+        let mut readdir_register_us = 0u64;
+        let mut readdir_entries = 0u64;
+        let attrs_lookup_started = metadata_profile_enabled.then(Instant::now);
+        let (path, current_attrs) = match self.entry_attrs_for_ino(ino) {
+            Ok(value) => value,
+            Err(errno) => {
+                self.log_request_error(
+                    req_id,
+                    "readdir",
+                    errno,
+                    format!("ino={} offset={}", ino, offset),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
             }
         };
+        if let Some(started) = attrs_lookup_started {
+            readdir_parent_lookup_us =
+                readdir_parent_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
+        }
         if ino != ROOT_INO {
             if let Err(errno) = self.parent_entry_id_for_inode(ino) {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        }
+        let subject = self.request_identity(req);
+        match self.acl_allows(&path, &current_attrs.file_attr, libc::R_OK, &subject) {
+            Ok(true) => {}
+            Ok(false) => {
+                fuse_reply_error!(reply, libc::EACCES);
+                return;
+            }
+            Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
@@ -5788,36 +5808,6 @@ impl Filesystem for FodFuse {
             "readdir",
             format!("path={} ino={} offset={}", path, ino, offset),
         );
-        let metadata_profile_enabled = fod_fuse_profile_metadata_cache_enabled();
-        let readdir_started = metadata_profile_enabled.then(Instant::now);
-        let mut readdir_parent_lookup_us = 0u64;
-        let mut readdir_list_us = 0u64;
-        let mut readdir_child_lookup_us = 0u64;
-        let mut readdir_register_us = 0u64;
-        let mut readdir_entries = 0u64;
-        let current_attrs = if path == "/" {
-            None
-        } else {
-            let lookup_started = metadata_profile_enabled.then(Instant::now);
-            let result = self.lookup_path(&path);
-            if let Some(started) = lookup_started {
-                readdir_parent_lookup_us =
-                    readdir_parent_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
-            }
-            match result {
-                Ok(Some(attrs)) => Some(attrs.file_attr),
-                Err(errno) => {
-                    self.log_request_error(
-                        req_id,
-                        "readdir",
-                        errno,
-                        format!("path={} attrs skipped", path),
-                    );
-                    None
-                }
-                Ok(None) => None,
-            }
-        };
         let batch_metadata_enabled = fod_fuse_readdir_batch_metadata_enabled();
         if offset < 1 && reply.add(INodeNo(ino), 1, FileType::Directory, ".") {
             reply.ok();
@@ -5900,9 +5890,7 @@ impl Filesystem for FodFuse {
                 Ok(Some(blob)) => blob,
                 Ok(None) => {
                     debug!("FOD readdir path={} empty", path);
-                    if let Some(attrs) = current_attrs.as_ref() {
-                        self.touch_access_time(&path, attrs);
-                    }
+                    self.touch_access_time(&path, &current_attrs.file_attr);
                     reply.ok();
                     return;
                 }
@@ -5965,9 +5953,7 @@ impl Filesystem for FodFuse {
                     .fetch_add(duration_to_micros(started.elapsed()), Ordering::Relaxed);
             }
         }
-        if let Some(attrs) = current_attrs.as_ref() {
-            self.touch_access_time(&path, attrs);
-        }
+        self.touch_access_time(&path, &current_attrs.file_attr);
         reply.ok();
     }
 
