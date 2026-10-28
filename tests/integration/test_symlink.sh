@@ -35,6 +35,7 @@ import errno
 import os
 import stat
 import sys
+import time
 
 link, target = sys.argv[1:]
 link_stat = os.lstat(link)
@@ -43,6 +44,17 @@ followed_stat = os.stat(link)
 assert stat.S_ISLNK(link_stat.st_mode)
 assert followed_stat.st_ino == target_stat.st_ino
 assert link_stat.st_ino != target_stat.st_ino
+
+link_mtime_before = link_stat.st_mtime_ns
+os.chmod(link, 0o640)
+assert stat.S_IMODE(os.stat(target).st_mode) == 0o640
+target_atime_ns = (time.time_ns() - 21_000_000_000) // 1000 * 1000
+target_mtime_ns = (time.time_ns() - 20_000_000_000) // 1000 * 1000
+os.utime(link, ns=(target_atime_ns, target_mtime_ns))
+updated_target_stat = os.stat(target)
+assert updated_target_stat.st_atime_ns == target_atime_ns, (updated_target_stat.st_atime_ns, target_atime_ns)
+assert updated_target_stat.st_mtime_ns == target_mtime_ns, (updated_target_stat.st_mtime_ns, target_mtime_ns)
+assert os.lstat(link).st_mtime_ns == link_mtime_before
 
 fd = os.open(link, os.O_WRONLY | os.O_TRUNC)
 try:
@@ -148,4 +160,4 @@ for path in (loop_a, loop_b):
         raise AssertionError("resolving symlink loop unexpectedly succeeded")
 PY
 
-echo "OK symlink/readlink regular_path=EINVAL stat_lstat_follow=1 open_trunc_follows=1 dangling_create_follows=1 unlink_preserves_target=1 readlink_shortbuf=1 dangling_lstat_size=1 dangling_stat_loop=1 dangling_excl=EEXIST"
+echo "OK symlink/readlink regular_path=EINVAL stat_lstat_follow=1 chmod_utimens_follow=1 open_trunc_follows=1 dangling_create_follows=1 unlink_preserves_target=1 readlink_shortbuf=1 dangling_lstat_size=1 dangling_stat_loop=1 dangling_excl=EEXIST"
