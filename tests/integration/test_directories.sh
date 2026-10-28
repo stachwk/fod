@@ -50,6 +50,9 @@ import sys
 
 file_path, nonempty_dir = sys.argv[1:]
 for path, expected, label in (
+    (nonempty_dir, errno.EISDIR, "unlink directory"),
+    (os.path.join(nonempty_dir, "missing-unlink-target"), errno.ENOENT, "unlink missing path"),
+    (os.path.join(nonempty_dir, "missing-rmdir-target"), errno.ENOENT, "rmdir missing path"),
     (file_path, errno.ENOTDIR, "rmdir regular file"),
     (nonempty_dir, errno.ENOTEMPTY, "rmdir non-empty directory"),
     (nonempty_dir, errno.EEXIST, "mkdir existing directory"),
@@ -58,6 +61,8 @@ for path, expected, label in (
     try:
         if label.startswith("mkdir"):
             os.mkdir(path)
+        elif label.startswith("unlink"):
+            os.unlink(path)
         else:
             os.rmdir(path)
     except OSError as error:
@@ -68,4 +73,4 @@ PY
 rm -f "${not_a_directory}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EEXIST,ENOTDIR,ENOTEMPTY"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY"
