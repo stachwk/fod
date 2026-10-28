@@ -39,6 +39,32 @@ linked_nlink="$(fod_stat "${linked_path}" '%h')"
 fod_assert_eq "${linked_inode}" "${source_inode}" "hardlink inode mismatch"
 fod_assert_eq "${linked_nlink}" 2 "hardlink count after link"
 
+python3 - "${source_path}" "${linked_path}" "${dir_path}" <<'PY'
+import errno
+import os
+import sys
+
+source, existing_target, directory = sys.argv[1:]
+missing_source = os.path.join(directory, "missing-hardlink-source")
+directory_target = os.path.join(directory, "directory-hardlink")
+for operation, expected, label in (
+    (lambda: os.link(source, existing_target), errno.EEXIST, "existing target"),
+    (lambda: os.link(missing_source, existing_target + ".missing"), errno.ENOENT, "missing source"),
+    (lambda: os.link(directory, directory_target), errno.EPERM, "directory source"),
+):
+    try:
+        operation()
+    except OSError as error:
+        assert error.errno == expected, (label, error.errno, expected)
+    else:
+        raise AssertionError(f"hardlink with {label} unexpectedly succeeded")
+
+assert os.stat(source).st_ino == os.stat(existing_target).st_ino
+with open(existing_target, "rb") as linked_file:
+    assert linked_file.read() == b"hardlink payload\n"
+assert not os.path.lexists(directory_target)
+PY
+
 if [[ -z "$(ls -A "${dir_path}")" ]]; then
   echo "directory unexpectedly empty after hardlink creation"
   exit 1
@@ -117,4 +143,4 @@ fod_assert_eq "$(cat "${renamed_path_mv}")" "${payload}" "mv renamed hardlink pa
 rm -f "${renamed_path_mv}"
 rmdir "${dir_path_mv}"
 
-echo "OK hardlink/backend"
+echo "OK hardlink/backend errno=EEXIST,ENOENT,EPERM"
