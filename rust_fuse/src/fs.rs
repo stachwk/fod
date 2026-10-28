@@ -3200,6 +3200,67 @@ impl FodFuse {
         Ok(())
     }
 
+    fn update_pg_lock_range(
+        &self,
+        resource_key: &str,
+        owner: u64,
+        start: u64,
+        end: u64,
+        typ: i32,
+        pid: u32,
+    ) -> Result<bool, libc::c_int> {
+        let (resource_kind, resource_id) = Self::lock_resource_kind_id(resource_key)?;
+        let lease_ttl_seconds = self.lock_lease_ttl.as_secs_f64().ceil().max(1.0) as u64;
+        let updated = self
+            .repo
+            .update_lock_range_state_blob_for_owner(
+                &resource_kind,
+                resource_id,
+                owner,
+                lease_ttl_seconds,
+                |state| {
+                    let records = Self::lock_records_from_blob(state)
+                        .map_err(|errno| format!("invalid lock state errno={errno}"))?;
+                    if typ != libc::F_UNLCK
+                        && Self::lock_conflict(&records, owner, typ, start, end).is_some()
+                    {
+                        return Ok(None);
+                    }
+                    let records = Self::update_owner_lock_range(
+                        &records,
+                        owner,
+                        start,
+                        end,
+                        (typ != libc::F_UNLCK).then_some(PosixLockRecord {
+                            owner,
+                            typ,
+                            start,
+                            end: Some(end),
+                            pid,
+                        }),
+                    );
+                    let owner_records = records
+                        .iter()
+                        .filter(|record| record.owner == owner)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    Ok(Some(Self::lock_records_to_blob(&owner_records)))
+                },
+            )
+            .map_err(|err| {
+                warn!(
+                    "FOD atomic lock range update failed resource_key={} owner={} err={}",
+                    resource_key, owner, err
+                );
+                EIO
+            })?;
+
+        if updated {
+            self.load_lock_records_for_key(resource_key)?;
+        }
+        Ok(updated)
+    }
+
     fn register_local_lock_owner(&self, owner: u64) {
         if let Ok(mut guard) = self.local_lock_owners.lock() {
             guard.insert(owner);
@@ -5510,13 +5571,19 @@ impl FodFuse {
         self.register_local_lock_owner(owner);
         let changed = self.clear_locks_for_owner(owner);
         for resource_key in changed {
-            let records = self
-                .posix_locks
-                .lock()
-                .ok()
-                .and_then(|guard| guard.get(&resource_key).cloned())
-                .unwrap_or_default();
-            if let Err(errno) = self.persist_lock_records_for_key(&resource_key, owner, &records) {
+            let result = if self.lock_backend_is_pg() {
+                self.update_pg_lock_range(&resource_key, owner, 0, u64::MAX, libc::F_UNLCK, 0)
+                    .map(|_| ())
+            } else {
+                let records = self
+                    .posix_locks
+                    .lock()
+                    .ok()
+                    .and_then(|guard| guard.get(&resource_key).cloned())
+                    .unwrap_or_default();
+                self.persist_lock_records_for_key(&resource_key, owner, &records)
+            };
+            if let Err(errno) = result {
                 warn!(
                     "FOD {} lock sync failed fh={} resource_key={} errno={}",
                     context, fh, resource_key, errno
@@ -7364,17 +7431,28 @@ impl Filesystem for FodFuse {
             path, owner, start, end, typ, pid, sleep_flag
         );
         if typ == libc::F_UNLCK {
-            let records = match self.load_lock_records_for_key(&resource_key) {
-                Ok(records) => records,
-                Err(errno) => {
+            if self.lock_backend_is_pg() {
+                if let Err(errno) =
+                    self.update_pg_lock_range(&resource_key, owner, start, end, typ, pid)
+                {
                     fuse_reply_error!(reply, errno);
                     return;
                 }
-            };
-            let records = Self::update_owner_lock_range(&records, owner, start, end, None);
-            if let Err(errno) = self.persist_lock_records_for_key(&resource_key, owner, &records) {
-                fuse_reply_error!(reply, errno);
-                return;
+            } else {
+                let records = match self.load_lock_records_for_key(&resource_key) {
+                    Ok(records) => records,
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                };
+                let records = Self::update_owner_lock_range(&records, owner, start, end, None);
+                if let Err(errno) =
+                    self.persist_lock_records_for_key(&resource_key, owner, &records)
+                {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
             }
             self.refresh_local_lock_owner_state(owner);
             debug!("FOD setlk unlock path={} owner={}", path, owner);
@@ -7391,33 +7469,48 @@ impl Filesystem for FodFuse {
         }
 
         loop {
-            let records = match self.load_lock_records_for_key(&resource_key) {
-                Ok(records) => records,
-                Err(errno) => {
-                    fuse_reply_error!(reply, errno);
-                    return;
+            let acquired = if self.lock_backend_is_pg() {
+                match self.update_pg_lock_range(&resource_key, owner, start, end, typ, pid) {
+                    Ok(acquired) => acquired,
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                }
+            } else {
+                let records = match self.load_lock_records_for_key(&resource_key) {
+                    Ok(records) => records,
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                };
+                if Self::lock_conflict(&records, owner, typ, start, end).is_some() {
+                    false
+                } else {
+                    let records = Self::update_owner_lock_range(
+                        &records,
+                        owner,
+                        start,
+                        end,
+                        (typ != libc::F_UNLCK).then_some(PosixLockRecord {
+                            owner,
+                            typ,
+                            start,
+                            end: Some(end),
+                            pid,
+                        }),
+                    );
+                    if let Err(errno) =
+                        self.persist_lock_records_for_key(&resource_key, owner, &records)
+                    {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                    true
                 }
             };
-            if Self::lock_conflict(&records, owner, typ, start, end).is_none() {
-                let records = Self::update_owner_lock_range(
-                    &records,
-                    owner,
-                    start,
-                    end,
-                    (typ != libc::F_UNLCK).then_some(PosixLockRecord {
-                        owner,
-                        typ,
-                        start,
-                        end: Some(end),
-                        pid,
-                    }),
-                );
-                if let Err(errno) =
-                    self.persist_lock_records_for_key(&resource_key, owner, &records)
-                {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
+            if acquired {
                 self.refresh_local_lock_owner_state(owner);
                 debug!(
                     "FOD setlk granted path={} owner={} typ={}",

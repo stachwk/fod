@@ -9754,6 +9754,110 @@ impl DbRepo {
         })
     }
 
+    /// Serialize a lock conflict check and this owner's range replacement in
+    /// one PostgreSQL transaction. Returning `None` from `update` leaves the
+    /// stored ranges unchanged and reports a conflict to the caller.
+    pub fn update_lock_range_state_blob_for_owner<F>(
+        &self,
+        resource_kind: &str,
+        resource_id: u64,
+        owner_key: u64,
+        lease_ttl_seconds: u64,
+        mut update: F,
+    ) -> Result<bool, String>
+    where
+        F: FnMut(&[u8]) -> Result<Option<String>, String>,
+    {
+        self.ensure_lock_schema_ready()?;
+        let session_id = self.session_id_for_owner_key_text(owner_key)?;
+        let session_id_text = session_id.to_string_lossy().into_owned();
+        let owner_key_text = owner_key.to_string();
+        self.with_transaction(|tx| {
+            let lock_key = format!("posix-lock-range:{resource_kind}:{resource_id}");
+            let advisory_lock_sql = format!(
+                "SELECT pg_advisory_xact_lock(hashtextextended({}, 0))",
+                Self::quote_literal(&lock_key)
+            );
+            tx.query_scalar_text(&advisory_lock_sql)?;
+
+            let load_sql = format!(
+                "SELECT owner_key::text, lock_type::text, range_start::text, COALESCE(range_end::text, '') \
+                 FROM lock_range_leases \
+                 WHERE resource_kind = {} AND resource_id = {} AND lease_expires_at > NOW() \
+                 ORDER BY owner_key, range_start, COALESCE(range_end, 9223372036854775807)",
+                Self::quote_literal(resource_kind),
+                resource_id
+            );
+            let rows = tx.query_rows_text(&load_sql)?;
+            let mut state = Vec::new();
+            for (index, row) in rows.iter().enumerate() {
+                if row.len() != 4 {
+                    return Err("invalid lock range row returned by PostgreSQL".to_string());
+                }
+                if index > 0 {
+                    state.push(b'\n');
+                }
+                for (field_index, field) in row.iter().enumerate() {
+                    if field_index > 0 {
+                        state.push(b'\t');
+                    }
+                    state.extend_from_slice(field.as_bytes());
+                }
+            }
+
+            let Some(owner_payload) = update(&state)? else {
+                return Ok(false);
+            };
+            let delete_sql = format!(
+                "DELETE FROM lock_range_leases WHERE resource_kind = {} AND resource_id = {} AND session_id = {} AND owner_key = {}",
+                Self::quote_literal(resource_kind),
+                resource_id,
+                Self::quote_literal(&session_id_text),
+                owner_key
+            );
+            tx.exec(&delete_sql)?;
+            for line in owner_payload.lines() {
+                let mut fields = line.split('\t');
+                let line_owner = fields.next().unwrap_or_default();
+                let lock_type = fields
+                    .next()
+                    .unwrap_or_default()
+                    .parse::<i32>()
+                    .map_err(|_| "invalid lock type in owner payload".to_string())?;
+                let range_start = fields
+                    .next()
+                    .unwrap_or_default()
+                    .parse::<u64>()
+                    .map_err(|_| "invalid range start in owner payload".to_string())?;
+                let range_end = fields.next().unwrap_or_default();
+                if line_owner != owner_key_text || fields.next().is_some() {
+                    return Err("invalid owner in lock range payload".to_string());
+                }
+                let range_end_sql = if range_end.is_empty() {
+                    "NULL".to_string()
+                } else {
+                    range_end
+                        .parse::<u64>()
+                        .map_err(|_| "invalid range end in owner payload".to_string())?
+                        .to_string()
+                };
+                let insert_sql = format!(
+                    "INSERT INTO lock_range_leases (resource_kind, resource_id, session_id, owner_key, lock_type, range_start, range_end, lease_expires_at, heartbeat_at, created_at, updated_at) VALUES ({}, {}, {}, {}, {}, {}, {}, NOW() + INTERVAL '{} seconds', NOW(), NOW(), NOW())",
+                    Self::quote_literal(resource_kind),
+                    resource_id,
+                    Self::quote_literal(&session_id_text),
+                    owner_key,
+                    lock_type,
+                    range_start,
+                    range_end_sql,
+                    lease_ttl_seconds.max(1)
+                );
+                tx.exec(&insert_sql)?;
+            }
+            Ok(true)
+        })
+    }
+
     pub fn choose_primary_hardlink(
         &self,
         file_id: u64,

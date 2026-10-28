@@ -2,7 +2,7 @@
 // Licensed under BSL 1.1
 
 use std::env;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Barrier, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fod_rust_hotpath::pg::DbRepo;
@@ -197,6 +197,93 @@ fn range_leases_roundtrip_and_cleanup() {
         .load_lock_range_state_blob("file", rid)
         .expect("load after prune");
     assert!(after_prune.is_empty(), "{after_prune:?}");
+}
+
+#[test]
+fn concurrent_range_lock_mutations_serialize_conflict_check_with_write() {
+    let _guard = test_guard();
+    let repo_a = repo();
+    let repo_b = repo();
+    ensure_lock_schema(&repo_a);
+    repo_a
+        .ensure_client_session_schema()
+        .expect("create client session schema");
+    let rid = resource_id();
+    let owner_a = rid.saturating_add(1);
+    let owner_b = rid.saturating_add(2);
+    let session_a = repo_a
+        .register_client_session(
+            "lock-a",
+            "/mnt/lock-a",
+            "primary",
+            "postgres_lease",
+            101,
+            60,
+        )
+        .expect("register session a");
+    let session_b = repo_b
+        .register_client_session(
+            "lock-b",
+            "/mnt/lock-b",
+            "primary",
+            "postgres_lease",
+            102,
+            60,
+        )
+        .expect("register session b");
+    repo_a
+        .touch_client_session_owner_key(session_a, owner_a)
+        .expect("track owner a");
+    repo_b
+        .touch_client_session_owner_key(session_b, owner_b)
+        .expect("track owner b");
+
+    let barrier = std::sync::Arc::new(Barrier::new(3));
+    let barrier_a = std::sync::Arc::clone(&barrier);
+    let repo_a_thread = repo_a.clone();
+    let thread_a = std::thread::spawn(move || {
+        barrier_a.wait();
+        repo_a_thread
+            .update_lock_range_state_blob_for_owner("file", rid, owner_a, 60, |state| {
+                if !state.is_empty() {
+                    return Ok(None);
+                }
+                Ok(Some(format!("{owner_a}\t1\t4\t12")))
+            })
+            .expect("atomic update from session a")
+    });
+    let barrier_b = std::sync::Arc::clone(&barrier);
+    let repo_b_thread = repo_b.clone();
+    let thread_b = std::thread::spawn(move || {
+        barrier_b.wait();
+        repo_b_thread
+            .update_lock_range_state_blob_for_owner("file", rid, owner_b, 60, |state| {
+                if !state.is_empty() {
+                    return Ok(None);
+                }
+                Ok(Some(format!("{owner_b}\t1\t4\t12")))
+            })
+            .expect("atomic update from session b")
+    });
+    barrier.wait();
+
+    let acquired_a = thread_a.join().expect("join lock session a");
+    let acquired_b = thread_b.join().expect("join lock session b");
+    assert_ne!(
+        acquired_a, acquired_b,
+        "exactly one overlapping writer wins"
+    );
+    let state = repo_a
+        .load_lock_range_state_blob("file", rid)
+        .expect("load serialized lock state");
+    assert_eq!(state.iter().filter(|byte| **byte == b'\n').count(), 0);
+    assert!(!state.is_empty(), "winning lock must be persisted");
+    repo_a
+        .delete_range_leases("file", rid, Some(owner_a))
+        .expect("clean up owner a range leases");
+    repo_b
+        .delete_range_leases("file", rid, Some(owner_b))
+        .expect("clean up owner b range leases");
 }
 
 #[test]
