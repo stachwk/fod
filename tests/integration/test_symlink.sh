@@ -61,12 +61,14 @@ import stat
 import sys
 
 orphaned, loop_a, loop_b = sys.argv[1:]
-assert stat.S_ISLNK(os.lstat(orphaned).st_mode)
+orphaned_stat = os.lstat(orphaned)
+target = os.fsencode(os.readlink(orphaned))
+assert stat.S_ISLNK(orphaned_stat.st_mode)
+assert orphaned_stat.st_size == len(target), (orphaned_stat.st_size, len(target))
 
 libc = ctypes.CDLL(None, use_errno=True)
 libc.readlink.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t]
 libc.readlink.restype = ctypes.c_ssize_t
-target = os.fsencode(os.readlink(orphaned))
 assert len(target) > 8
 buffer = ctypes.create_string_buffer(b"\xa5" * 9, 9)
 read_count = libc.readlink(os.fsencode(orphaned), buffer, 8)
@@ -100,4 +102,4 @@ for path in (loop_a, loop_b):
         raise AssertionError("resolving symlink loop unexpectedly succeeded")
 PY
 
-echo "OK symlink/readlink unlink_preserves_target=1 readlink_shortbuf=1 dangling_stat_lstat_loop=1 dangling_excl=EEXIST"
+echo "OK symlink/readlink unlink_preserves_target=1 readlink_shortbuf=1 dangling_lstat_size=1 dangling_stat_loop=1 dangling_excl=EEXIST"
