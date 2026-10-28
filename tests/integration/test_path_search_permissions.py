@@ -74,8 +74,18 @@ def main() -> None:
             launcher.start(str(mountpoint), log_prefix="/tmp/fod-path-search-permissions")
             started = True
             directory = mountpoint / f"private-{uuid.uuid4().hex}"
-            directory.mkdir(mode=0o700)
+            directory.mkdir(mode=0o777)
+            directory.chmod(0o777)
             (directory / "secret-name").touch()
+            owner_file = directory / "nobody-owned"
+            owner_create = run_as_nobody(
+                "import pathlib, sys; pathlib.Path(sys.argv[1]).touch()", owner_file
+            )
+            if owner_create.returncode != 0:
+                raise AssertionError(
+                    "nobody could not create the owner-permission test file in mode-777 directory: "
+                    f"stdout={owner_create.stdout!r} stderr={owner_create.stderr!r}"
+                )
             directory.chmod(0)
 
             assert_permission_error(
@@ -119,10 +129,20 @@ def main() -> None:
                 ),
                 "unlink in mode-000 directory",
             )
+            assert_permission_error(
+                run_as_nobody(
+                    "import os, sys; os.chmod(sys.argv[1], 0o600)", owner_file
+                ),
+                "chmod of an owned file through mode-000 directory",
+            )
+            assert_permission_error(
+                run_as_nobody("import os, sys; os.utime(sys.argv[1], None)", owner_file),
+                "utimens of an owned file through mode-000 directory",
+            )
             print(
                 "OK path-search-permissions default_permissions=0 "
                 "readdir_denied=1 stat_denied=1 open_denied=1 access_denied=1 "
-                "create_denied=1 unlink_denied=1"
+                "create_denied=1 unlink_denied=1 chmod_denied=1 utimens_denied=1"
             )
         except Exception:
             launcher._dump_log()
