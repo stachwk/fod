@@ -92,7 +92,22 @@ def main() -> None:
             assert_current_fod_gid(dir_stat, "dir")
             assert moved_stat.st_gid == current_gid, moved_stat
             assert not (moved_stat.st_mode & 0o2000), moved_stat
-            print("OK ownership/inheritance")
+
+            umask_file = parent_dir / "umask-file"
+            umask_dir = parent_dir / "umask-dir"
+            previous_umask = os.umask(0o027)
+            try:
+                fd = os.open(umask_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+                os.close(fd)
+                umask_dir.mkdir(mode=0o777)
+            finally:
+                os.umask(previous_umask)
+
+            umask_file_mode = umask_file.stat().st_mode & 0o777
+            umask_dir_mode = umask_dir.stat().st_mode & 0o777
+            assert umask_file_mode == 0o640, oct(umask_file_mode)
+            assert umask_dir_mode == 0o750, oct(umask_dir_mode)
+            print("OK ownership/inheritance umask_file=640 umask_dir=750")
         finally:
             launcher.stop()
 
