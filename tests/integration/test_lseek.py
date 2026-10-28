@@ -141,7 +141,25 @@ def main() -> None:
             finally:
                 os.close(fd)
 
-            print("OK lseek/mount append_after_seek=1 pread_pwrite_offset=1")
+            dup_path = dir_path / "dup-shared-offset.txt"
+            dup_payload = b"shared offset"
+            dup_path.write_bytes(dup_payload)
+            fd = os.open(dup_path, os.O_RDONLY)
+            dup_fd = os.dup(fd)
+            try:
+                assert os.lseek(fd, 2, os.SEEK_SET) == 2
+                assert os.read(fd, 1) == dup_payload[2:3]
+                assert os.read(dup_fd, 1) == dup_payload[3:4]
+                assert os.lseek(dup_fd, 5, os.SEEK_SET) == 5
+                assert os.read(fd, 1) == dup_payload[5:6]
+            finally:
+                os.close(dup_fd)
+                os.close(fd)
+
+            print(
+                "OK lseek/mount append_after_seek=1 pread_pwrite_offset=1 "
+                "dup_shared_offset=1"
+            )
         finally:
             launcher.stop()
 
