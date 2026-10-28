@@ -97,6 +97,18 @@ def main() -> None:
                     "nobody could not create the xattr test value in mode-777 directory: "
                     f"stdout={xattr_setup.stdout!r} stderr={xattr_setup.stderr!r}"
                 )
+            readonly_file = directory / "nobody-readonly"
+            readonly_setup = run_as_nobody(
+                "import os, pathlib, sys; "
+                "pathlib.Path(sys.argv[1]).touch(); "
+                "os.chmod(sys.argv[1], 0o444)",
+                readonly_file,
+            )
+            if readonly_setup.returncode != 0:
+                raise AssertionError(
+                    "nobody could not create the read-only truncate test file: "
+                    f"stdout={readonly_setup.stdout!r} stderr={readonly_setup.stderr!r}"
+                )
             owner_dir = directory / "nobody-owned-dir"
             owner_mkdir = run_as_nobody(
                 "import pathlib, sys; pathlib.Path(sys.argv[1]).mkdir()", owner_dir
@@ -106,6 +118,18 @@ def main() -> None:
                     "nobody could not create the directory test entry in mode-777 directory: "
                     f"stdout={owner_mkdir.stdout!r} stderr={owner_mkdir.stderr!r}"
                 )
+            assert_permission_error(
+                run_as_nobody(
+                    "import os, sys; os.truncate(sys.argv[1], 0)", readonly_file
+                ),
+                "truncate of a read-only file",
+            )
+            assert_permission_error(
+                run_as_nobody(
+                    "import sys; open(sys.argv[1], 'wb').close()", readonly_file
+                ),
+                "open(O_TRUNC) of a read-only file",
+            )
             directory.chmod(0)
 
             assert_permission_error(
@@ -208,6 +232,7 @@ def main() -> None:
                 "readdir_denied=1 stat_denied=1 open_denied=1 access_denied=1 "
                 "create_denied=1 mkdir_denied=1 unlink_denied=1 rename_denied=1 "
                 "rmdir_denied=1 chmod_denied=1 utimens_denied=1 truncate_denied=1 "
+                "open_trunc_denied=1 readonly_truncate_denied=1 "
                 "getxattr_denied=1 listxattr_denied=1 setxattr_denied=1 "
                 "removexattr_denied=1"
             )

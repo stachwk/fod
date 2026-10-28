@@ -164,11 +164,12 @@ path-search checks. The same test checks that PostgreSQL-authoritative parent
 write/search authorization rejects `create`, `mkdir`, `unlink`, `rename` and
 `rmdir` in the mode-000 directory. It also creates a file owned by `nobody`
 before removing directory permissions, then verifies `chmod` and `utimens`
-cannot reach that file by path, and path-based `truncate` is denied. It also
-verifies Linux xattr calls (`getxattr`, `listxattr`, `setxattr` and
-`removexattr`) fail through the inaccessible parent. This is extension
-coverage, not a POSIX base claim. Other path-resolution requirements remain
-under review.
+cannot reach that file by path, and path-based `truncate` is denied. On a
+searchable parent it also verifies that `truncate` and `open(O_TRUNC)` reject
+a file without write permission. Linux xattr calls (`getxattr`, `listxattr`,
+`setxattr` and `removexattr`) fail through the inaccessible parent. This is
+extension coverage, not a POSIX base claim. Other path-resolution requirements
+remain under review.
 
 ## Audit procedure
 
