@@ -34,7 +34,10 @@ mv "${link_path}" "${link_renamed}"
 fod_assert_eq "$(readlink "${link_renamed}")" "${payload}" "renamed symlink target mismatch"
 fod_assert_eq "$(cat "${link_renamed}")" "${payload_value}" "renamed symlink payload mismatch"
 
-rm -f "${link_renamed}" "${payload}"
+rm -f "${link_renamed}"
+[[ ! -e "${link_renamed}" ]]
+fod_assert_eq "$(cat "${payload}")" "${payload_value}" "unlinking symlink removed its target"
+rm -f "${payload}"
 
 printf '%s\n' "${payload_value}" >"${payload}"
 ln -s "${payload}" "${orphaned_link}"
@@ -84,4 +87,4 @@ for path in (loop_a, loop_b):
         raise AssertionError("resolving symlink loop unexpectedly succeeded")
 PY
 
-echo "OK symlink/readlink dangling_stat_lstat_loop=1 dangling_excl=EEXIST"
+echo "OK symlink/readlink unlink_preserves_target=1 dangling_stat_lstat_loop=1 dangling_excl=EEXIST"
