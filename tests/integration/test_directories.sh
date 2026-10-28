@@ -41,6 +41,26 @@ if ! grep -q "Is a directory\|Permission denied\|Operation not permitted" /tmp/f
     exit 1
 fi
 
+not_a_directory="${dir}/rmdir-file-${suffix}"
+printf 'rmdir target file\n' >"${not_a_directory}"
+python3 - "${not_a_directory}" "${dir}" <<'PY'
+import errno
+import os
+import sys
+
+file_path, nonempty_dir = sys.argv[1:]
+for path, expected, label in (
+    (file_path, errno.ENOTDIR, "rmdir regular file"),
+    (nonempty_dir, errno.ENOTEMPTY, "rmdir non-empty directory"),
+):
+    try:
+        os.rmdir(path)
+    except OSError as error:
+        assert error.errno == expected, (label, error.errno, expected)
+    else:
+        raise AssertionError(f"{label} unexpectedly succeeded")
+PY
+rm -f "${not_a_directory}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=ENOTDIR,ENOTEMPTY"
