@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import errno
+import fcntl
 import os
 import stat
 import tempfile
@@ -69,6 +70,8 @@ def main() -> None:
             append_path.write_bytes(b"prefix")
             fd = os.open(append_path, os.O_WRONLY | os.O_APPEND)
             try:
+                assert fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND
+                assert fcntl.fcntl(fd, fcntl.F_GETFD) & fcntl.FD_CLOEXEC
                 assert os.lseek(fd, 0, os.SEEK_SET) == 0
                 assert os.write(fd, b"-one") == 4
                 expected_append = b"prefix-one"
@@ -248,7 +251,7 @@ def main() -> None:
                 "OK lseek/mount append_after_seek=1 pread_pwrite_offset=1 "
                 "dup_shared_offset=1 eof_short_read=1 zero_write=1 "
                 "zero_read=1 pwrite_beyond_eof=1 descriptor_metadata=1 "
-                "access_mode_errors=1"
+                "descriptor_flags=1 access_mode_errors=1"
             )
         finally:
             launcher.stop()

@@ -3089,14 +3089,15 @@ impl FodFuse {
             .iter()
             .map(|record| {
                 format!(
-                    "{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}",
                     record.owner,
                     record.typ,
                     record.start,
                     record
                         .end
                         .map(|value| value.to_string())
-                        .unwrap_or_default()
+                        .unwrap_or_default(),
+                    record.pid,
                 )
             })
             .collect::<Vec<_>>()
@@ -3115,6 +3116,10 @@ impl FodFuse {
                 "" => None,
                 value => Some(value.parse::<u64>().map_err(|_| EIO)?),
             };
+            let pid = match parts.next() {
+                Some(value) => value.parse::<u32>().map_err(|_| EIO)?,
+                None => 0,
+            };
             if parts.next().is_some() {
                 return Err(EIO);
             }
@@ -3123,7 +3128,7 @@ impl FodFuse {
                 typ,
                 start,
                 end,
-                pid: 0,
+                pid,
             });
         }
         Ok(records)
@@ -10803,6 +10808,29 @@ mod tests {
             FodFuse::namespace_mutation_errno(super::PARENT_ACCESS_DENIED),
             libc::EACCES
         );
+    }
+
+    #[test]
+    fn lock_record_blob_round_trip_preserves_pid_and_reads_legacy_rows() {
+        let record = super::PosixLockRecord {
+            owner: 41,
+            typ: libc::F_WRLCK,
+            start: 7,
+            end: Some(19),
+            pid: 1234,
+        };
+        let encoded = FodFuse::lock_records_to_blob(std::slice::from_ref(&record));
+        let decoded = FodFuse::lock_records_from_blob(encoded.as_bytes()).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].owner, record.owner);
+        assert_eq!(decoded[0].typ, record.typ);
+        assert_eq!(decoded[0].start, record.start);
+        assert_eq!(decoded[0].end, record.end);
+        assert_eq!(decoded[0].pid, record.pid);
+
+        let legacy = FodFuse::lock_records_from_blob(b"41\t1\t7\t19").unwrap();
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].pid, 0);
     }
 
     fn file_attr(kind: FileType, atime_age_secs: u64, mtime_age_secs: u64) -> FileAttr {

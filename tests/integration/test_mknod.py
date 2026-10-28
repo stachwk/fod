@@ -134,17 +134,11 @@ def test_regular_mknod(work_dir: Path) -> None:
 
 
 def test_fifo_mknod(work_dir: Path) -> None:
-    # FIFO jest obecnie czesciowo wspierane.
+    # FIFO jest częścią deklarowanego kontraktu POSIX FOD.
     fifo_path = work_dir / "mknod_fifo"
 
     safe_unlink(fifo_path)
-    try:
-        os.mknod(fifo_path, stat.S_IFIFO | 0o600)
-    except OSError as exc:
-        if known_special_node_limit(exc):
-            print(f"SKIP: FIFO mknod returns errno={exc.errno} on current FOD")
-            return
-        raise
+    os.mkfifo(fifo_path, 0o600)
 
     assert_scandir_not_regular(fifo_path)
 
@@ -152,22 +146,32 @@ def test_fifo_mknod(work_dir: Path) -> None:
         fifo_path,
         stat.S_ISFIFO,
         0o600,
-        allow_special_limit=True,
         label="FIFO",
     )
-    if st is None:
-        return
 
     try:
-        fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+        os.open(fifo_path, os.O_WRONLY | os.O_NONBLOCK)
     except OSError as exc:
-        if known_special_node_limit(exc) or exc.errno == errno.ENXIO:
-            print(f"OK: FIFO mknod, open=unsupported errno={exc.errno}")
-        else:
+        if exc.errno != errno.ENXIO:
             raise
     else:
-        os.close(fd)
-        print("OK: FIFO mknod, open=supported")
+        raise AssertionError("nonblocking FIFO writer without a reader succeeded")
+
+    reader = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+    writer = os.open(fifo_path, os.O_WRONLY | os.O_NONBLOCK)
+    try:
+        payload = b"fifo payload"
+        assert os.write(writer, payload) == len(payload)
+        assert os.read(reader, len(payload)) == payload
+        os.close(writer)
+        writer = -1
+        assert os.read(reader, 1) == b""
+    finally:
+        if writer >= 0:
+            os.close(writer)
+        os.close(reader)
+
+    print("OK: FIFO mkfifo nonblocking open/read/write")
 
     safe_unlink(fifo_path)
 

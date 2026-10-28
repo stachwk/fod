@@ -314,6 +314,13 @@ fn primary_uses_pg_leases_and_replica_stays_memory_backed() -> Result<(), String
             primary_b_query.l_type
         ));
     }
+    if primary_b_query.l_pid != unsafe { libc::getpid() } {
+        return Err(format!(
+            "F_GETLK should report the conflicting process pid {}, got {}",
+            unsafe { libc::getpid() },
+            primary_b_query.l_pid
+        ));
+    }
 
     // O_RDONLY primary B nie konkuruje o write ownership. F_RDLCK jest
     // jednak prawidlowym POSIX probe i musi konfliktowac z cudzym F_WRLCK.

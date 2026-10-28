@@ -6972,6 +6972,14 @@ impl DbRepo {
                 )
                 AND EXISTS (
                     SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = '{schema}'
+                      AND table_name = 'lock_range_leases'
+                      AND column_name = 'lock_pid'
+                      AND is_nullable = 'NO'
+                )
+                AND EXISTS (
+                    SELECT 1
                     FROM pg_indexes
                     WHERE schemaname = '{schema}'
                       AND indexname = 'idx_lock_leases_identity'
@@ -7232,11 +7240,19 @@ impl DbRepo {
                                 lock_type INTEGER NOT NULL,
                                 range_start BIGINT NOT NULL,
                                 range_end BIGINT NULL,
+                                lock_pid INTEGER NOT NULL DEFAULT 0,
                                 lease_expires_at TIMESTAMP NOT NULL,
                                 heartbeat_at TIMESTAMP NOT NULL,
                                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                                 updated_at TIMESTAMP NOT NULL DEFAULT NOW()
                             )
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
+                            ALTER TABLE IF EXISTS lock_range_leases
+                            ADD COLUMN IF NOT EXISTS lock_pid INTEGER NOT NULL DEFAULT 0
                             ",
                         )
                         .map_err(|_| "SQL contains NUL byte".to_string())?,
@@ -9365,7 +9381,7 @@ impl DbRepo {
         self.ensure_lock_schema_ready()?;
         let sql = CString::new(
             "
-            SELECT owner_key, lock_type, range_start, range_end
+            SELECT owner_key, lock_type, range_start, range_end, lock_pid
             FROM lock_range_leases
             WHERE resource_kind = $1
               AND resource_id = $2
@@ -9384,7 +9400,7 @@ impl DbRepo {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
             let mut output = Vec::new();
-            if rows >= 1 && cols >= 4 {
+            if rows >= 1 && cols >= 5 {
                 for row in 0..rows {
                     if row > 0 {
                         output.push(b'\n');
@@ -9393,6 +9409,7 @@ impl DbRepo {
                     let type_ptr = PQgetvalue(res, row, 1);
                     let start_ptr = PQgetvalue(res, row, 2);
                     let end_ptr = PQgetvalue(res, row, 3);
+                    let pid_ptr = PQgetvalue(res, row, 4);
                     let owner = if owner_ptr.is_null() {
                         String::new()
                     } else {
@@ -9413,6 +9430,11 @@ impl DbRepo {
                     } else {
                         CStr::from_ptr(end_ptr).to_string_lossy().to_string()
                     };
+                    let pid = if pid_ptr.is_null() {
+                        "0".to_string()
+                    } else {
+                        CStr::from_ptr(pid_ptr).to_string_lossy().to_string()
+                    };
                     output.extend_from_slice(owner.as_bytes());
                     output.push(b'\t');
                     output.extend_from_slice(lock_type.as_bytes());
@@ -9420,6 +9442,8 @@ impl DbRepo {
                     output.extend_from_slice(start.as_bytes());
                     output.push(b'\t');
                     output.extend_from_slice(end.as_bytes());
+                    output.push(b'\t');
+                    output.extend_from_slice(pid.as_bytes());
                 }
             }
             PQclear(res);
@@ -9466,6 +9490,7 @@ impl DbRepo {
                         lock_type,
                         range_start,
                         range_end,
+                        lock_pid,
                         lease_expires_at,
                         heartbeat_at,
                         created_at,
@@ -9478,7 +9503,8 @@ impl DbRepo {
                         $5,
                         $6,
                         $7,
-                        NOW() + ($8 || ' seconds')::interval,
+                        $8,
+                        NOW() + ($9 || ' seconds')::interval,
                         NOW(),
                         NOW(),
                         NOW()
@@ -9496,6 +9522,7 @@ impl DbRepo {
                         lock_type,
                         range_start,
                         range_end,
+                        lock_pid,
                         lease_expires_at,
                         heartbeat_at,
                         created_at,
@@ -9508,7 +9535,8 @@ impl DbRepo {
                         $5,
                         $6,
                         NULL,
-                        NOW() + ($7 || ' seconds')::interval,
+                        $7,
+                        NOW() + ($8 || ' seconds')::interval,
                         NOW(),
                         NOW(),
                         NOW()
@@ -9537,6 +9565,7 @@ impl DbRepo {
                     let range_end = parts
                         .next()
                         .ok_or_else(|| "invalid range state line".to_string())?;
+                    let lock_pid = parts.next().unwrap_or("0");
                     let owner_key_value = owner_key_text
                         .parse::<u64>()
                         .map_err(|_| "owner key contains invalid value".to_string())?;
@@ -9546,6 +9575,13 @@ impl DbRepo {
                         .map_err(|_| "lock type contains NUL byte".to_string())?;
                     let range_start = CString::new(range_start)
                         .map_err(|_| "range start contains NUL byte".to_string())?;
+                    let lock_pid = CString::new(
+                        lock_pid
+                            .parse::<u32>()
+                            .map_err(|_| "lock pid contains invalid value".to_string())?
+                            .to_string(),
+                    )
+                    .map_err(|_| "lock pid contains NUL byte".to_string())?;
                     let line_session_id = self.session_id_for_owner_key_text(owner_key_value)?;
                     let range_end = if range_end.is_empty() {
                         None
@@ -9567,6 +9603,7 @@ impl DbRepo {
                             &lock_type,
                             &range_start,
                             range_end,
+                            &lock_pid,
                             &ttl_sql,
                         ];
                         exec_command_params(conn, &insert_sql, &params)?;
@@ -9578,6 +9615,7 @@ impl DbRepo {
                             &owner_key,
                             &lock_type,
                             &range_start,
+                            &lock_pid,
                             &ttl_sql,
                         ];
                         exec_command_params(conn, &insert_sql_null_end, &params)?;
@@ -9637,6 +9675,7 @@ impl DbRepo {
                         lock_type,
                         range_start,
                         range_end,
+                        lock_pid,
                         lease_expires_at,
                         heartbeat_at,
                         created_at,
@@ -9649,7 +9688,8 @@ impl DbRepo {
                         $5,
                         $6,
                         $7,
-                        NOW() + ($8 || ' seconds')::interval,
+                        $8,
+                        NOW() + ($9 || ' seconds')::interval,
                         NOW(),
                         NOW(),
                         NOW()
@@ -9667,6 +9707,7 @@ impl DbRepo {
                         lock_type,
                         range_start,
                         range_end,
+                        lock_pid,
                         lease_expires_at,
                         heartbeat_at,
                         created_at,
@@ -9679,7 +9720,8 @@ impl DbRepo {
                         $5,
                         $6,
                         NULL,
-                        NOW() + ($7 || ' seconds')::interval,
+                        $7,
+                        NOW() + ($8 || ' seconds')::interval,
                         NOW(),
                         NOW(),
                         NOW()
@@ -9711,6 +9753,7 @@ impl DbRepo {
                     let range_end = parts
                         .next()
                         .ok_or_else(|| "invalid range state line".to_string())?;
+                    let lock_pid = parts.next().unwrap_or("0");
                     if parts.next().is_some() {
                         return Err("invalid range state line".to_string());
                     }
@@ -9721,6 +9764,13 @@ impl DbRepo {
                         .map_err(|_| "lock type contains NUL byte".to_string())?;
                     let range_start = CString::new(range_start)
                         .map_err(|_| "range start contains NUL byte".to_string())?;
+                    let lock_pid = CString::new(
+                        lock_pid
+                            .parse::<u32>()
+                            .map_err(|_| "lock pid contains invalid value".to_string())?
+                            .to_string(),
+                    )
+                    .map_err(|_| "lock pid contains NUL byte".to_string())?;
                     let line_session_id = self.session_id_for_owner_key_text(owner_key)?;
                     if range_end.is_empty() {
                         let params = [
@@ -9730,6 +9780,7 @@ impl DbRepo {
                             &owner_key_sql,
                             &lock_type,
                             &range_start,
+                            &lock_pid,
                             &ttl_sql,
                         ];
                         exec_command_params(conn, &insert_sql_null_end, &params)?;
@@ -9744,6 +9795,7 @@ impl DbRepo {
                             &lock_type,
                             &range_start,
                             &range_end,
+                            &lock_pid,
                             &ttl_sql,
                         ];
                         exec_command_params(conn, &insert_sql, &params)?;
@@ -9781,7 +9833,7 @@ impl DbRepo {
             tx.query_scalar_text(&advisory_lock_sql)?;
 
             let load_sql = format!(
-                "SELECT owner_key::text, lock_type::text, range_start::text, COALESCE(range_end::text, '') \
+                "SELECT owner_key::text, lock_type::text, range_start::text, COALESCE(range_end::text, ''), lock_pid::text \
                  FROM lock_range_leases \
                  WHERE resource_kind = {} AND resource_id = {} AND lease_expires_at > NOW() \
                  ORDER BY owner_key, range_start, COALESCE(range_end, 9223372036854775807)",
@@ -9791,7 +9843,7 @@ impl DbRepo {
             let rows = tx.query_rows_text(&load_sql)?;
             let mut state = Vec::new();
             for (index, row) in rows.iter().enumerate() {
-                if row.len() != 4 {
+                if row.len() != 5 {
                     return Err("invalid lock range row returned by PostgreSQL".to_string());
                 }
                 if index > 0 {
@@ -9830,6 +9882,11 @@ impl DbRepo {
                     .parse::<u64>()
                     .map_err(|_| "invalid range start in owner payload".to_string())?;
                 let range_end = fields.next().unwrap_or_default();
+                let lock_pid = fields
+                    .next()
+                    .unwrap_or("0")
+                    .parse::<u32>()
+                    .map_err(|_| "invalid pid in owner payload".to_string())?;
                 if line_owner != owner_key_text || fields.next().is_some() {
                     return Err("invalid owner in lock range payload".to_string());
                 }
@@ -9842,7 +9899,7 @@ impl DbRepo {
                         .to_string()
                 };
                 let insert_sql = format!(
-                    "INSERT INTO lock_range_leases (resource_kind, resource_id, session_id, owner_key, lock_type, range_start, range_end, lease_expires_at, heartbeat_at, created_at, updated_at) VALUES ({}, {}, {}, {}, {}, {}, {}, NOW() + INTERVAL '{} seconds', NOW(), NOW(), NOW())",
+                    "INSERT INTO lock_range_leases (resource_kind, resource_id, session_id, owner_key, lock_type, range_start, range_end, lock_pid, lease_expires_at, heartbeat_at, created_at, updated_at) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, NOW() + INTERVAL '{} seconds', NOW(), NOW(), NOW())",
                     Self::quote_literal(resource_kind),
                     resource_id,
                     Self::quote_literal(&session_id_text),
@@ -9850,6 +9907,7 @@ impl DbRepo {
                     lock_type,
                     range_start,
                     range_end_sql,
+                    lock_pid,
                     lease_ttl_seconds.max(1)
                 );
                 tx.exec(&insert_sql)?;

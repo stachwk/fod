@@ -9,6 +9,7 @@ import errno
 import os
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -62,8 +63,13 @@ def main() -> None:
             dir_path.mkdir()
             file_path.write_bytes(payload)
 
+            old_mtime_ns = (time.time_ns() - 60_000_000_000) // 1000 * 1000
+            os.utime(file_path, ns=(old_mtime_ns, old_mtime_ns))
+
             os.truncate(file_path, block_size)
-            assert file_path.stat().st_size == block_size
+            truncated_stat = file_path.stat()
+            assert truncated_stat.st_size == block_size
+            assert truncated_stat.st_mtime_ns > old_mtime_ns
 
             os.truncate(file_path, block_size * 2)
             assert file_path.stat().st_size == block_size * 2
@@ -125,7 +131,7 @@ def main() -> None:
                 777,
             )
 
-            print("OK truncate shrink block boundary")
+            print("OK truncate shrink block boundary timestamp_update=1")
             print("OK truncate off-boundary extend zero fill")
             print("OK ftruncate descriptor offset and access mode")
         finally:
