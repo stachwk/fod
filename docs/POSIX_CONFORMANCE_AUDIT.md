@@ -75,7 +75,7 @@ its status can move from Pending.
 | File locks | XSH `fcntl` record locking and applicable advisory-lock requirements | `getlk`/`setlk`; `test_mount_suite.py`, Rust lock smoke tests | Pending |
 | Filesystem capacity and status | XSH `statvfs`; XBD `statvfs` fields and units | `statfs`; `test_df.sh`, two-mount quota tests, `docs/space-accounting.md` | Pending |
 | Error behavior | XSH per-interface `ERRORS` and `RATIONALE`; errno precedence for supported operations | Targeted integration tests and `pjdfstest` subsets; map each error assertion to clause | Pending |
-| Linux/FUSE extensions | Not POSIX base requirements; use Linux and FUSE references | `test_xattr.py`, `test_acl_mount_option.py`, `test_ioctl.py`, compatibility contracts | Separate extension audit |
+| Linux/FUSE extensions | Not POSIX base requirements; use Linux and FUSE references | `test_xattr.py`, `test_acl_mount_option.py`, `test_ioctl.py`, path-search xattr cases in `test_path_search_permissions.py`, compatibility contracts | Separate extension audit |
 
 ### Sparse `lseek` finding
 
@@ -164,8 +164,11 @@ path-search checks. The same test checks that PostgreSQL-authoritative parent
 write/search authorization rejects `create`, `mkdir`, `unlink`, `rename` and
 `rmdir` in the mode-000 directory. It also creates a file owned by `nobody`
 before removing directory permissions, then verifies `chmod` and `utimens`
-cannot reach that file by path. Other path-resolution requirements remain under
-review.
+cannot reach that file by path, and path-based `truncate` is denied. It also
+verifies Linux xattr calls (`getxattr`, `listxattr`, `setxattr` and
+`removexattr`) fail through the inaccessible parent. This is extension
+coverage, not a POSIX base claim. Other path-resolution requirements remain
+under review.
 
 ## Audit procedure
 

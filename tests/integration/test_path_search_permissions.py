@@ -88,6 +88,15 @@ def main() -> None:
                     "nobody could not create the owner-permission test file in mode-777 directory: "
                     f"stdout={owner_create.stdout!r} stderr={owner_create.stderr!r}"
                 )
+            xattr_setup = run_as_nobody(
+                "import os, sys; os.setxattr(sys.argv[1], 'user.path-search', b'value')",
+                owner_file,
+            )
+            if xattr_setup.returncode != 0:
+                raise AssertionError(
+                    "nobody could not create the xattr test value in mode-777 directory: "
+                    f"stdout={xattr_setup.stdout!r} stderr={xattr_setup.stderr!r}"
+                )
             owner_dir = directory / "nobody-owned-dir"
             owner_mkdir = run_as_nobody(
                 "import pathlib, sys; pathlib.Path(sys.argv[1]).mkdir()", owner_dir
@@ -169,11 +178,38 @@ def main() -> None:
                 run_as_nobody("import os, sys; os.utime(sys.argv[1], None)", owner_file),
                 "utimens of an owned file through mode-000 directory",
             )
+            assert_permission_error(
+                run_as_nobody(
+                    "import os, sys; open(sys.argv[1], 'r+b').truncate()", owner_file
+                ),
+                "truncate of an owned file through mode-000 directory",
+            )
+            for label, script in (
+                (
+                    "getxattr",
+                    "import os, sys; os.getxattr(sys.argv[1], 'user.path-search')",
+                ),
+                ("listxattr", "import os, sys; os.listxattr(sys.argv[1])"),
+                (
+                    "setxattr",
+                    "import os, sys; os.setxattr(sys.argv[1], 'user.after-lock', b'value')",
+                ),
+                (
+                    "removexattr",
+                    "import os, sys; os.removexattr(sys.argv[1], 'user.path-search')",
+                ),
+            ):
+                assert_permission_error(
+                    run_as_nobody(script, owner_file),
+                    f"{label} through mode-000 directory",
+                )
             print(
                 "OK path-search-permissions default_permissions=0 "
                 "readdir_denied=1 stat_denied=1 open_denied=1 access_denied=1 "
                 "create_denied=1 mkdir_denied=1 unlink_denied=1 rename_denied=1 "
-                "rmdir_denied=1 chmod_denied=1 utimens_denied=1"
+                "rmdir_denied=1 chmod_denied=1 utimens_denied=1 truncate_denied=1 "
+                "getxattr_denied=1 listxattr_denied=1 setxattr_denied=1 "
+                "removexattr_denied=1"
             )
         except Exception:
             launcher._dump_log()
