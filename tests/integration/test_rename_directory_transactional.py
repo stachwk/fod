@@ -144,6 +144,27 @@ def nonempty_target_is_preserved(mount_a: Path, mount_b: Path) -> None:
     )
 
 
+def missing_source_preserves_destination(mount_a: Path, mount_b: Path) -> None:
+    suffix = uuid.uuid4().hex
+    missing_source = mount_a / f"rename-missing-source-{suffix}"
+    destination = mount_a / f"rename-missing-destination-{suffix}.bin"
+    destination_other = mount_b / destination.name
+    payload = b"destination survives missing-source rename"
+
+    destination.write_bytes(payload)
+    wait_for_bytes(destination_other, payload)
+    expect_replace_errno(missing_source, destination, errno.ENOENT, "missing source")
+
+    if os.path.lexists(missing_source):
+        raise AssertionError("missing rename source unexpectedly appeared")
+    if destination.read_bytes() != payload:
+        raise AssertionError("failed rename changed destination")
+    if destination_other.read_bytes() != payload:
+        raise AssertionError("failed rename changed destination on other mount")
+
+    print("OK rename-missing-source errno=ENOENT destination_preserved=1")
+
+
 def type_mismatch_errors(mount_a: Path, mount_b: Path) -> None:
     suffix = uuid.uuid4().hex
 
@@ -284,11 +305,12 @@ def main() -> None:
 
             directory_move_and_replace(mount_a, mount_b)
             nonempty_target_is_preserved(mount_a, mount_b)
+            missing_source_preserves_destination(mount_a, mount_b)
             type_mismatch_errors(mount_a, mount_b)
             descendant_is_rejected(mount_a, mount_b)
             rollback_after_target_removal(mount_a, mount_b, barrier_dir)
 
-            print("OK rename-directory-transactional protected_cases=5")
+            print("OK rename-directory-transactional protected_cases=6")
         except BaseException:
             print("\n=== MOUNT A LOG ===")
             launcher_a._dump_log()
