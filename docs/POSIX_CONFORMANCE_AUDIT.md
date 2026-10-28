@@ -62,7 +62,7 @@ its status can move from Pending.
 | Area | Normative interfaces / clauses to review | Existing FOD evidence to inspect | Status |
 | --- | --- | --- | --- |
 | Path resolution and name syntax | XSH `open`, `stat`, `mkdir`, `link`, `symlink`, `rename`, `unlink`; XBD pathname resolution | `rust_fuse/src/fs.rs`; `tests/integration/test_mount_suite.py`, `test_symlink.sh`, `test_rename_directory_transactional.py` | Pending |
-| Directory operations and iteration | XSH `opendir`, `readdir`, `closedir`, `mkdir`, `rmdir`; XBD directory stream rules | FUSE callbacks in `rust_fuse/src/fs.rs`; `test_mount_suite.py`, `test_directories.sh`, `test_tree_scale.py`, `test_readdir_small_buffers.py`, `test_readdir_permission_denied.py` | Pending |
+| Directory operations and iteration | XSH `opendir`, `readdir`, `closedir`, `mkdir`, `rmdir`; XBD directory stream rules | FUSE callbacks in `rust_fuse/src/fs.rs`; `test_mount_suite.py`, `test_directories.sh`, `test_tree_scale.py`, `test_readdir_small_buffers.py`, `test_path_search_permissions.py` | Pending |
 | Open and descriptor semantics | XSH `open`, `close`, `fcntl`, `dup`; access modes, append and create flags | `open`, `create`, `release`, `flush` callbacks; `test_mount_suite.py`, `test_create_write_ownership.py` | Pending |
 | Read and write | XSH `read`, `write`, `pread`, `pwrite`; short I/O, EOF and offset rules | `test_lseek.py`, `test_mount_suite.py` | Pending |
 | Standard file-offset positioning | XSH `lseek`, `SEEK_SET`, `SEEK_CUR`, `SEEK_END`; negative result, offset beyond EOF and no size change from seeking | Mounted `test_lseek.py` | Pass (listed cases) |
@@ -148,13 +148,19 @@ other error and mutation cases are reviewed.
 
 The permission review found that `readdir` relied on Linux's
 `default_permissions` mount option. When that option was disabled, the callback
-returned names without checking directory read permission, even though other
-access checks are implemented in FOD. It now checks `R_OK` through the same
-mode and POSIX ACL authorization path before listing entries. The regression
-mounts with `default_permissions` disabled and `allow_other` enabled, sets a
-directory to mode `000`, and verifies the unrelated `nobody` user receives
-`EACCES`. The failure was reproduced before the fix; the targeted test passes
-after it. This closes only the reviewed directory-read permission case.
+returned names without checking directory read permission. A path-resolution
+check found the same gap in `lookup` and cached-inode operations: a user could
+stat or open a child through a directory without search permission. The
+callbacks now check directory `R_OK` before listing and `X_OK` on each parent
+before lookup, path-based `getattr` or `open`, using FOD's mode and POSIX ACL
+authorization path. These extra checks are skipped when kernel
+`default_permissions` checks are active. The regression mounts with
+`default_permissions` disabled and `allow_other` enabled, sets a directory to
+mode `000`, and verifies the unrelated `nobody` user receives `EACCES` both
+when listing it, statting a child through it and reading a child file. The
+listing and stat failures were reproduced before their fixes; the read case is
+covered by the targeted regression. The full targeted test passes after the
+path-search checks. Other path-resolution requirements remain under review.
 
 ## Audit procedure
 

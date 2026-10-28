@@ -1626,6 +1626,7 @@ pub struct FodFuse {
     reloadable_runtime: Arc<RwLock<RuntimeReloadableSettings>>,
     pub read_only: bool,
     degraded_read_only: bool,
+    default_permissions: bool,
     pub use_fuse_context: bool,
     pub fopen_direct_io: bool,
     pub selinux_enabled: bool,
@@ -1727,6 +1728,7 @@ impl FodFuse {
             security,
             atime_policy,
             read_only,
+            default_permissions,
             degraded_read_only,
             use_fuse_context,
             fopen_direct_io,
@@ -1781,6 +1783,7 @@ impl FodFuse {
             reloadable_runtime: Arc::new(RwLock::new(runtime.reloadable_settings())),
             read_only,
             degraded_read_only,
+            default_permissions,
             use_fuse_context,
             fopen_direct_io,
             selinux_enabled: security.selinux_enabled,
@@ -2909,6 +2912,41 @@ impl FodFuse {
         } else {
             Ok(self.can_access(subject, attrs, mode))
         }
+    }
+
+    fn check_path_search_permissions(
+        &self,
+        path: &str,
+        subject: &SubjectIdentity,
+    ) -> Result<(), libc::c_int> {
+        if self.default_permissions {
+            return Ok(());
+        }
+        let normalized = Self::normalize_path(path);
+        let components: Vec<&str> = normalized
+            .split('/')
+            .filter(|component| !component.is_empty())
+            .collect();
+        if components.is_empty() {
+            return Ok(());
+        }
+        let parent_component_count = components.len().saturating_sub(1);
+        let mut directory = "/".to_string();
+
+        for index in 0..=parent_component_count {
+            let attrs = self.attrs_for_path(&directory)?.ok_or(ENOENT)?;
+            if !self.acl_allows(&directory, &attrs.file_attr, libc::X_OK, subject)? {
+                return Err(libc::EACCES);
+            }
+            if index < parent_component_count {
+                directory = if directory == "/" {
+                    format!("/{}", components[index])
+                } else {
+                    format!("{}/{}", directory, components[index])
+                };
+            }
+        }
+        Ok(())
     }
 
     fn append_journal_event(
@@ -5640,22 +5678,50 @@ impl Filesystem for FodFuse {
         Ok(())
     }
 
-    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let parent = parent.0;
         let req_id = self.next_request_id();
-        let Some(parent_path) = self.path_for_inode(parent) else {
-            self.log_request_error(
-                req_id,
-                "lookup",
-                ENOENT,
-                format!("parent={} name={}", parent, name.to_string_lossy()),
-            );
-            fuse_reply_error!(reply, ENOENT);
-            return;
+        let parent_path = match self.entry_path_for_ino(parent) {
+            Ok(path) => path,
+            Err(errno) => {
+                self.log_request_error(
+                    req_id,
+                    "lookup",
+                    errno,
+                    format!("parent={} name={}", parent, name.to_string_lossy()),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
+            }
         };
         if let Err(errno) = self.parent_entry_id_for_inode(parent) {
             fuse_reply_error!(reply, errno);
             return;
+        }
+        let subject = self.request_identity(req);
+        if !self.default_permissions {
+            let parent_attrs = match self.attrs_for_path(&parent_path) {
+                Ok(Some(attrs)) => attrs,
+                Ok(None) => {
+                    fuse_reply_error!(reply, ENOENT);
+                    return;
+                }
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            };
+            match self.acl_allows(&parent_path, &parent_attrs.file_attr, libc::X_OK, &subject) {
+                Ok(true) => {}
+                Ok(false) => {
+                    fuse_reply_error!(reply, libc::EACCES);
+                    return;
+                }
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
         }
         let child_path = Self::join_path(&parent_path, name);
         self.log_request_start(
@@ -5682,7 +5748,7 @@ impl Filesystem for FodFuse {
         self.profile_forget_event(ino.0, nlookup, remaining, evicted);
     }
 
-    fn getattr(&self, _req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
+    fn getattr(&self, req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
         let ino = ino.0;
         let req_id = self.next_request_id();
         self.log_request_start(req_id, "getattr", format!("ino={} fh={:?}", ino, fh));
@@ -5718,6 +5784,19 @@ impl Filesystem for FodFuse {
         }
         match self.entry_attrs_for_ino(ino) {
             Ok((path, attrs)) => {
+                if fh.is_none() {
+                    let subject = self.request_identity(req);
+                    if let Err(errno) = self.check_path_search_permissions(&path, &subject) {
+                        self.log_request_error(
+                            req_id,
+                            "getattr",
+                            errno,
+                            format!("path={} search_permission", path),
+                        );
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                }
                 self.register_path(&path, attrs.file_attr.ino.0);
                 reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
             }
@@ -5767,9 +5846,8 @@ impl Filesystem for FodFuse {
         let mut readdir_child_lookup_us = 0u64;
         let mut readdir_register_us = 0u64;
         let mut readdir_entries = 0u64;
-        let attrs_lookup_started = metadata_profile_enabled.then(Instant::now);
-        let (path, current_attrs) = match self.entry_attrs_for_ino(ino) {
-            Ok(value) => value,
+        let path = match self.entry_path_for_ino(ino) {
+            Ok(path) => path,
             Err(errno) => {
                 self.log_request_error(
                     req_id,
@@ -5781,26 +5859,61 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        if let Some(started) = attrs_lookup_started {
-            readdir_parent_lookup_us =
-                readdir_parent_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
-        }
         if ino != ROOT_INO {
             if let Err(errno) = self.parent_entry_id_for_inode(ino) {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         }
-        let subject = self.request_identity(req);
-        match self.acl_allows(&path, &current_attrs.file_attr, libc::R_OK, &subject) {
-            Ok(true) => {}
-            Ok(false) => {
-                fuse_reply_error!(reply, libc::EACCES);
-                return;
+        let current_attrs = if path == "/" {
+            None
+        } else {
+            let attrs_lookup_started = metadata_profile_enabled.then(Instant::now);
+            let result = self.lookup_path(&path);
+            if let Some(started) = attrs_lookup_started {
+                readdir_parent_lookup_us =
+                    readdir_parent_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
             }
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
+            match result {
+                Ok(Some(attrs)) => Some(attrs.file_attr),
+                Err(errno) => {
+                    self.log_request_error(
+                        req_id,
+                        "readdir",
+                        errno,
+                        format!("path={} attrs skipped", path),
+                    );
+                    None
+                }
+                Ok(None) => None,
+            }
+        };
+        let subject = self.request_identity(req);
+        if !self.default_permissions {
+            let permission_attrs = match current_attrs.clone() {
+                Some(attrs) => attrs,
+                None => match self.attrs_for_path(&path) {
+                    Ok(Some(attrs)) => attrs.file_attr,
+                    Ok(None) => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                },
+            };
+            match self.acl_allows(&path, &permission_attrs, libc::R_OK, &subject) {
+                Ok(true) => {}
+                Ok(false) => {
+                    fuse_reply_error!(reply, libc::EACCES);
+                    return;
+                }
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
             }
         }
         self.log_request_start(
@@ -5890,7 +6003,9 @@ impl Filesystem for FodFuse {
                 Ok(Some(blob)) => blob,
                 Ok(None) => {
                     debug!("FOD readdir path={} empty", path);
-                    self.touch_access_time(&path, &current_attrs.file_attr);
+                    if let Some(attrs) = current_attrs.as_ref() {
+                        self.touch_access_time(&path, attrs);
+                    }
                     reply.ok();
                     return;
                 }
@@ -5953,11 +6068,13 @@ impl Filesystem for FodFuse {
                     .fetch_add(duration_to_micros(started.elapsed()), Ordering::Relaxed);
             }
         }
-        self.touch_access_time(&path, &current_attrs.file_attr);
+        if let Some(attrs) = current_attrs.as_ref() {
+            self.touch_access_time(&path, attrs);
+        }
         reply.ok();
     }
 
-    fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
+    fn readlink(&self, req: &Request, ino: INodeNo, reply: ReplyData) {
         let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
         let path = match self.path_for_inode(ino) {
@@ -5967,6 +6084,11 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        let subject = self.request_identity(req);
+        if let Err(errno) = self.check_path_search_permissions(&path, &subject) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         let authority = self.repo.authoritative_view();
         match authority.resolve_path(&path) {
             Ok(resolved) => {
@@ -6482,6 +6604,10 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        if let Err(errno) = self.check_path_search_permissions(&path, &subject) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         debug!("FOD access path={} mask={:#x}", path, mask);
         match self.acl_allows(&path, &attrs.file_attr, mask, &subject) {
             Ok(true) => {
@@ -6893,6 +7019,16 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        if let Err(errno) = self.check_path_search_permissions(&path, &subject) {
+            self.log_request_error(
+                req_id,
+                "open",
+                errno,
+                format!("path={} search_permission", path),
+            );
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         self.log_request_start(
             req_id,
             "open",
