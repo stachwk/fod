@@ -13,6 +13,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -172,6 +173,97 @@ def test_fifo_mknod(work_dir: Path) -> None:
         os.close(reader)
 
     print("OK: FIFO mkfifo nonblocking open/read/write")
+
+    writer_started = threading.Event()
+    writer_opened = threading.Event()
+    blocking_errors: list[BaseException] = []
+
+    def blocking_writer() -> None:
+        writer_started.set()
+        try:
+            fd = os.open(fifo_path, os.O_WRONLY)
+            writer_opened.set()
+            try:
+                assert os.write(fd, b"blocking") == len(b"blocking")
+            finally:
+                os.close(fd)
+        except BaseException as exc:
+            blocking_errors.append(exc)
+            writer_opened.set()
+
+    writer_thread = threading.Thread(target=blocking_writer, daemon=True)
+    writer_thread.start()
+    assert writer_started.wait(timeout=1), "blocking FIFO writer did not start"
+    if writer_opened.wait(timeout=0.1):
+        raise AssertionError("blocking FIFO writer opened before a reader existed")
+
+    reader = os.open(fifo_path, os.O_RDONLY)
+    try:
+        assert writer_opened.wait(timeout=2), "blocking FIFO writer did not open for reader"
+        assert os.read(reader, len(b"blocking")) == b"blocking"
+        assert os.read(reader, 1) == b""
+    finally:
+        os.close(reader)
+        writer_thread.join(timeout=2)
+    if writer_thread.is_alive():
+        raise AssertionError("blocking FIFO writer did not terminate")
+    if blocking_errors:
+        raise blocking_errors[0]
+
+    print("OK: FIFO blocking writer waits for reader")
+
+    atomic_reader = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+    pipe_buf = os.fpathconf(atomic_reader, "PC_PIPE_BUF")
+    record_size = min(pipe_buf, 4096)
+    records_per_writer = 16
+    expected_size = record_size * records_per_writer * 2
+    atomic_writers = [
+        os.open(fifo_path, os.O_WRONLY),
+        os.open(fifo_path, os.O_WRONLY),
+    ]
+    os.set_blocking(atomic_reader, True)
+    atomic_errors: list[BaseException] = []
+
+    def write_records(fd: int, byte: bytes) -> None:
+        record = byte * record_size
+        try:
+            for _ in range(records_per_writer):
+                if os.write(fd, record) != len(record):
+                    raise AssertionError("FIFO write shorter than PIPE_BUF record")
+        except BaseException as exc:
+            atomic_errors.append(exc)
+        finally:
+            os.close(fd)
+
+    atomic_threads = [
+        threading.Thread(target=write_records, args=(atomic_writers[0], b"A"), daemon=True),
+        threading.Thread(target=write_records, args=(atomic_writers[1], b"B"), daemon=True),
+    ]
+    for thread in atomic_threads:
+        thread.start()
+
+    stream = bytearray()
+    try:
+        while len(stream) < expected_size:
+            chunk = os.read(atomic_reader, min(8192, expected_size - len(stream)))
+            if not chunk:
+                break
+            stream.extend(chunk)
+    finally:
+        os.close(atomic_reader)
+    for thread in atomic_threads:
+        thread.join(timeout=2)
+        if thread.is_alive():
+            raise AssertionError("FIFO atomic writer did not terminate")
+    if atomic_errors:
+        raise atomic_errors[0]
+    if len(stream) != expected_size:
+        raise AssertionError(f"FIFO stream length {len(stream)} != {expected_size}")
+    records = [stream[offset : offset + record_size] for offset in range(0, len(stream), record_size)]
+    if any(record not in (b"A" * record_size, b"B" * record_size) for record in records):
+        raise AssertionError("concurrent FIFO writes at or below PIPE_BUF were interleaved")
+
+    print(f"OK: FIFO PIPE_BUF atomic writes pipe_buf={pipe_buf} record_size={record_size}")
 
     safe_unlink(fifo_path)
 
