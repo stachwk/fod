@@ -28,6 +28,18 @@ ln -s "${payload}" "${link_path}"
 [[ -L "${link_path}" ]]
 fod_assert_eq "$(readlink "${link_path}")" "${payload}" "symlink target mismatch"
 fod_assert_eq "$(cat "${link_path}")" "${payload_value}" "symlink payload mismatch"
+python3 - "${payload}" <<'PY'
+import errno
+import os
+import sys
+
+try:
+    os.readlink(sys.argv[1])
+except OSError as error:
+    assert error.errno == errno.EINVAL, error.errno
+else:
+    raise AssertionError("readlink on a regular file unexpectedly succeeded")
+PY
 
 mv "${link_path}" "${link_renamed}"
 [[ -L "${link_renamed}" ]]
@@ -102,4 +114,4 @@ for path in (loop_a, loop_b):
         raise AssertionError("resolving symlink loop unexpectedly succeeded")
 PY
 
-echo "OK symlink/readlink unlink_preserves_target=1 readlink_shortbuf=1 dangling_lstat_size=1 dangling_stat_loop=1 dangling_excl=EEXIST"
+echo "OK symlink/readlink regular_path=EINVAL unlink_preserves_target=1 readlink_shortbuf=1 dangling_lstat_size=1 dangling_stat_loop=1 dangling_excl=EEXIST"
