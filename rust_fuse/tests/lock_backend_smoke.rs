@@ -6,6 +6,9 @@ mod support;
 use std::fs::{self, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use support::{db_repo, resolve_file_id, unique_suffix, MountedFs};
 
@@ -499,6 +502,104 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
             primary_b_after_unlock.l_type
         ));
     }
+
+    drop(fd_b);
+    drop(fd_a);
+    drop(primary_b);
+    drop(primary_a);
+    Ok(())
+}
+
+#[test]
+fn blocking_setlkw_waits_for_cross_mount_unlock() -> Result<(), String> {
+    if skip_without_root() {
+        return Ok(());
+    }
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let primary_a = MountedFs::start_with_role("lock-setlkw-primary-a", "primary", &[])?;
+    let suffix = unique_suffix();
+    let relative = format!("lock-setlkw-{suffix}/payload.txt");
+    let file_path = primary_a.mountpoint.join(&relative);
+    fs::create_dir(file_path.parent().expect("file parent"))
+        .map_err(|err| format!("create lock directory failed: {err}"))?;
+    fs::write(&file_path, b"blocking lock handoff")
+        .map_err(|err| format!("write lock file failed: {err}"))?;
+
+    let fd_a = OpenOptions::new()
+        .read(true)
+        .open(&file_path)
+        .map_err(|err| format!("open primary A failed: {err}"))?;
+    let mut lock_a = flock(libc::F_RDLCK as i16, 0, 0);
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut lock_a)
+        .map_err(|err| format!("primary A setlk failed: {err}"))?;
+
+    let primary_b = MountedFs::start_with_role(
+        "lock-setlkw-primary-b",
+        "primary",
+        &[("FOD_LOG_LEVEL", "debug".to_string())],
+    )?;
+    let fd_b = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(primary_b.mountpoint.join(&relative))
+        .map_err(|err| format!("open primary B failed: {err}"))?;
+
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let waiter = thread::spawn(move || {
+        let mut lock_b = flock(libc::F_WRLCK as i16, 0, 0);
+        let result = fcntl_lock(fd_b.as_raw_fd(), libc::F_SETLKW, &mut lock_b);
+        let _ = result_tx.send((result, fd_b));
+    });
+
+    let wait_marker = format!("FOD setlk waiting path=/{relative}");
+    let wait_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if primary_b.log_tail(400).contains(&wait_marker) {
+            break;
+        }
+        if let Ok((result, returned_fd)) = result_rx.try_recv() {
+            let _ = waiter.join();
+            drop(returned_fd);
+            return Err(format!(
+                "F_SETLKW returned before the conflicting lock was released: {result:?}"
+            ));
+        }
+        if Instant::now() >= wait_deadline {
+            return Err(format!(
+                "F_SETLKW did not enter the blocking wait path\n{}",
+                primary_b.log_tail(400)
+            ));
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let mut unlock_a = flock(libc::F_UNLCK as i16, 0, 0);
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut unlock_a)
+        .map_err(|err| format!("primary A unlock failed: {err}"))?;
+
+    let (wait_result, fd_b) = result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|err| format!("F_SETLKW did not complete after unlock: {err}"))?;
+    wait_result.map_err(|err| format!("F_SETLKW failed after unlock: {err}"))?;
+    waiter
+        .join()
+        .map_err(|_| "F_SETLKW waiter thread panicked".to_string())?;
+
+    let observed = query_lock(fd_a.as_raw_fd(), libc::F_WRLCK as i16)?;
+    if observed.l_type != libc::F_WRLCK as i16 {
+        return Err(format!(
+            "primary A should observe primary B's acquired write lock, got l_type={}",
+            observed.l_type
+        ));
+    }
+
+    let mut unlock_b = flock(libc::F_UNLCK as i16, 0, 0);
+    fcntl_lock(fd_b.as_raw_fd(), libc::F_SETLK, &mut unlock_b)
+        .map_err(|err| format!("primary B unlock failed: {err}"))?;
 
     drop(fd_b);
     drop(fd_a);
