@@ -100,6 +100,37 @@ def main() -> None:
                 expected_positioned_io,
             )
 
+            short_read_path = dir_path / "short-read-eof.txt"
+            short_read_payload = b"read through eof"
+            short_read_path.write_bytes(short_read_payload)
+            fd = os.open(short_read_path, os.O_RDONLY)
+            try:
+                assert os.lseek(fd, len(short_read_payload) - 2, os.SEEK_SET) == len(
+                    short_read_payload
+                ) - 2
+                assert os.read(fd, 8) == short_read_payload[-2:]
+                eof_offset = len(short_read_payload)
+                assert os.lseek(fd, 0, os.SEEK_CUR) == eof_offset
+                assert os.read(fd, 1) == b""
+                assert os.lseek(fd, 0, os.SEEK_CUR) == eof_offset
+                assert os.pread(fd, 4, eof_offset - 1) == short_read_payload[-1:]
+                assert os.lseek(fd, 0, os.SEEK_CUR) == eof_offset
+            finally:
+                os.close(fd)
+
+            zero_write_path = dir_path / "zero-write.txt"
+            zero_write_path.write_bytes(b"unchanged")
+            fd = os.open(zero_write_path, os.O_RDWR)
+            try:
+                zero_write_offset = len(b"unchanged") + 7
+                assert os.lseek(fd, zero_write_offset, os.SEEK_SET) == zero_write_offset
+                assert os.write(fd, b"") == 0
+                assert os.lseek(fd, 0, os.SEEK_CUR) == zero_write_offset
+                assert os.fstat(fd).st_size == len(b"unchanged")
+            finally:
+                os.close(fd)
+            assert zero_write_path.read_bytes() == b"unchanged"
+
             beyond_eof_path = dir_path / "seek-beyond-eof.txt"
             initial = b"abc"
             beyond_eof_path.write_bytes(initial)
@@ -158,7 +189,7 @@ def main() -> None:
 
             print(
                 "OK lseek/mount append_after_seek=1 pread_pwrite_offset=1 "
-                "dup_shared_offset=1"
+                "dup_shared_offset=1 eof_short_read=1 zero_write=1"
             )
         finally:
             launcher.stop()
