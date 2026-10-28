@@ -100,6 +100,39 @@ def main() -> None:
                 expected_positioned_io,
             )
 
+            fd = os.open(positioned_io_path, os.O_WRONLY)
+            try:
+                for operation in (
+                    lambda: os.read(fd, 1),
+                    lambda: os.pread(fd, 1, 0),
+                ):
+                    try:
+                        operation()
+                    except OSError as error:
+                        assert error.errno == errno.EBADF, error.errno
+                    else:
+                        raise AssertionError("read from write-only fd succeeded")
+                    assert os.lseek(fd, 0, os.SEEK_CUR) == 0
+            finally:
+                os.close(fd)
+
+            fd = os.open(positioned_io_path, os.O_RDONLY)
+            try:
+                for operation in (
+                    lambda: os.write(fd, b"X"),
+                    lambda: os.pwrite(fd, b"X", 0),
+                ):
+                    try:
+                        operation()
+                    except OSError as error:
+                        assert error.errno == errno.EBADF, error.errno
+                    else:
+                        raise AssertionError("write to read-only fd succeeded")
+                    assert os.lseek(fd, 0, os.SEEK_CUR) == 0
+            finally:
+                os.close(fd)
+            assert positioned_io_path.read_bytes() == expected_positioned_io
+
             short_read_path = dir_path / "short-read-eof.txt"
             short_read_payload = b"read through eof"
             short_read_path.write_bytes(short_read_payload)
@@ -189,7 +222,8 @@ def main() -> None:
 
             print(
                 "OK lseek/mount append_after_seek=1 pread_pwrite_offset=1 "
-                "dup_shared_offset=1 eof_short_read=1 zero_write=1"
+                "dup_shared_offset=1 eof_short_read=1 zero_write=1 "
+                "access_mode_errors=1"
             )
         finally:
             launcher.stop()
