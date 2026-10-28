@@ -6,6 +6,7 @@ mod copy_plan;
 mod fs;
 mod logging;
 mod pg_lanes;
+mod platform_requirements;
 mod read_cache;
 mod startup;
 mod write_buffer;
@@ -30,6 +31,10 @@ struct Args {
 fn main() {
     logging::init();
     let args = Args::parse();
+    if let Err(err) = platform_requirements::validate_runtime_requirements() {
+        eprintln!("fod-rust-fuse: unsupported host: {err}");
+        std::process::exit(1);
+    }
     let conninfo = env_var_with_legacy_alias("FOD_DSN_CONNINFO")
         .expect("FOD_DSN_CONNINFO must be set when launching fod-rust-fuse");
     log::debug!("FOD resolved mountpoint={}", args.mountpoint.display());

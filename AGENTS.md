@@ -47,6 +47,15 @@ a module. Keep cohesive code together and avoid extra abstractions or wrappers
 without a demonstrated need. Stop the refactoring pass when the obvious,
 worthwhile candidates in the reviewed area have been addressed.
 
+## Linux and libfuse runtime floor
+
+Keep the minimum supported mount runtime explicit and fail closed before a
+mount is attempted. FOD requires Linux 4.18.0 or newer and libfuse3 3.0.0 or
+newer. Changes to the FUSE frontend, its dependencies or required negotiated
+capabilities must re-evaluate this floor, update the startup preflight and
+`docs/FUSE_REQUIREMENTS.md`, and add or update boundary tests. Do not silently
+continue on an older or unparseable runtime.
+
 ## Commit review
 
 After every completed, verified logical change, create a commit on `main`

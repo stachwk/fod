@@ -41,6 +41,10 @@ fn negotiated_u64(line: &str, key: &str) -> Result<Option<u64>, String> {
 fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
     let mounted = MountedFs::start("fuse-compatibility")?;
     let log = mounted.log_tail(200);
+    let host_requirements_line = log
+        .lines()
+        .find(|line| line.contains("FOD host requirements:"))
+        .ok_or_else(|| format!("missing FOD host requirements log line\n{log}"))?;
     let compatibility_line = log
         .lines()
         .find(|line| line.contains("FOD FUSE compatibility:"))
@@ -50,8 +54,23 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
         .find(|line| line.contains("FOD FUSE negotiated:"))
         .ok_or_else(|| format!("missing FUSE negotiated log line\n{log}"))?;
 
+    println!("{host_requirements_line}");
     println!("{compatibility_line}");
     println!("{negotiated_line}");
+
+    for field in [
+        "FOD host requirements:",
+        "linux_kernel=",
+        "minimum_linux_kernel=4.18.0",
+        "libfuse=",
+        "minimum_libfuse=3.0.0",
+    ] {
+        if !host_requirements_line.contains(field) {
+            return Err(format!(
+                "missing host requirement field {field:?}\n{host_requirements_line}"
+            ));
+        }
+    }
 
     for field in [
         "FOD FUSE compatibility:",

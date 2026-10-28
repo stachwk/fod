@@ -18,8 +18,23 @@ Wnioski w tym dokumencie sa oparte na pomiarach FOD 3.3.12/3.3.13 wykonanych
 
 ## 1. Wymagania podstawowe
 
-FOD wymaga dzialajacego FUSE3 i kernela Linux pozwalajacego zamontowac
-filesystem przez `fuser`.
+Minimalny wspierany zestaw uruchomieniowy FOD to:
+
+- Linux 4.18.0 lub nowszy;
+- libfuse3 3.0.0 lub nowszy;
+- dostepne `/dev/fuse` i pomocnik `fusermount3` odpowiedni dla zainstalowanej
+  biblioteki.
+
+`fod-rust-fuse` sprawdza wersje kernela i zaladowanej biblioteki przed
+polaczeniem z PostgreSQL oraz przed proba mountowania. Niespelnienie minimum
+konczy proces z komunikatem `unsupported host`; FOD nie probuje uruchamiac
+mounta w trybie ograniczonej zgodnosci.
+
+Wymaganie libfuse3 3.0.0 odpowiada minimalnej wersji sprawdzanej podczas
+kompilacji przez przypiety `fuser 0.18.0`. Gotowy pakiet lub plik wykonywalny
+musi dodatkowo otrzymac zgodny SONAME/ABI libfuse, z ktorym zostal zbudowany;
+sama zgodnosc numeru wersji nie zastepuje kontroli zaleznosci ELF wykonywanej
+przez linker i system pakietow.
 
 Podczas startu FOD raportuje m.in.:
 
