@@ -430,6 +430,27 @@ fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
         return Err(format!("primary B wrong range lock error: {blocked_errno}"));
     }
 
+    let mut partial_unlock = flock(libc::F_UNLCK as i16, 4, 2);
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut partial_unlock)
+        .map_err(|err| format!("primary A partial range unlock failed: {err}"))?;
+    for (offset, expected_type) in [
+        (2, libc::F_WRLCK as i16),
+        (4, libc::F_UNLCK as i16),
+        (8, libc::F_WRLCK as i16),
+    ] {
+        let observed = query_lock_range(fd_b.as_raw_fd(), libc::F_WRLCK as i16, offset, 1)?;
+        if observed.l_type != expected_type {
+            let repo = db_repo()?;
+            let file_id = resolve_file_id(&repo, &primary_a.mountpoint, &file_path)?;
+            let ranges = repo.load_lock_range_state_blob("file", file_id)?;
+            return Err(format!(
+                "partial unlock at offset 4 length 2: offset {offset} expected lock type {expected_type}, got {}; stored ranges: {}",
+                observed.l_type,
+                String::from_utf8_lossy(&ranges)
+            ));
+        }
+    }
+
     let mut unlock = flock(libc::F_UNLCK as i16, range_start, range_len);
     fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut unlock).map_err(|err| {
         format!(

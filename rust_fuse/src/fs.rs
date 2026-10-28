@@ -3001,7 +3001,44 @@ impl FodFuse {
     fn range_overlaps(start_a: u64, end_a: Option<u64>, start_b: u64, end_b: Option<u64>) -> bool {
         let end_a = end_a.unwrap_or(u64::MAX);
         let end_b = end_b.unwrap_or(u64::MAX);
-        start_a < end_b && start_b < end_a
+        start_a <= end_b && start_b <= end_a
+    }
+
+    fn update_owner_lock_range(
+        records: &[PosixLockRecord],
+        owner: u64,
+        start: u64,
+        end: u64,
+        replacement: Option<PosixLockRecord>,
+    ) -> Vec<PosixLockRecord> {
+        let mut updated = Vec::with_capacity(records.len() + 1);
+        for record in records {
+            if record.owner != owner
+                || !Self::range_overlaps(start, Some(end), record.start, record.end)
+            {
+                updated.push(record.clone());
+                continue;
+            }
+
+            if record.start < start {
+                updated.push(PosixLockRecord {
+                    end: Some(start - 1),
+                    ..record.clone()
+                });
+            }
+
+            let record_end = record.end.unwrap_or(u64::MAX);
+            if end < record_end {
+                updated.push(PosixLockRecord {
+                    start: end + 1,
+                    ..record.clone()
+                });
+            }
+        }
+        if let Some(replacement) = replacement {
+            updated.push(replacement);
+        }
+        updated
     }
 
     fn resource_key_for_lock(&self, path: &str) -> Result<String, libc::c_int> {
@@ -7327,17 +7364,14 @@ impl Filesystem for FodFuse {
             path, owner, start, end, typ, pid, sleep_flag
         );
         if typ == libc::F_UNLCK {
-            let mut records = match self.load_lock_records_for_key(&resource_key) {
+            let records = match self.load_lock_records_for_key(&resource_key) {
                 Ok(records) => records,
                 Err(errno) => {
                     fuse_reply_error!(reply, errno);
                     return;
                 }
             };
-            records.retain(|record| {
-                record.owner != owner
-                    || !Self::range_overlaps(start, Some(end), record.start, record.end)
-            });
+            let records = Self::update_owner_lock_range(&records, owner, start, end, None);
             if let Err(errno) = self.persist_lock_records_for_key(&resource_key, owner, &records) {
                 fuse_reply_error!(reply, errno);
                 return;
@@ -7357,7 +7391,7 @@ impl Filesystem for FodFuse {
         }
 
         loop {
-            let mut records = match self.load_lock_records_for_key(&resource_key) {
+            let records = match self.load_lock_records_for_key(&resource_key) {
                 Ok(records) => records,
                 Err(errno) => {
                     fuse_reply_error!(reply, errno);
@@ -7365,19 +7399,19 @@ impl Filesystem for FodFuse {
                 }
             };
             if Self::lock_conflict(&records, owner, typ, start, end).is_none() {
-                records.retain(|record| {
-                    record.owner != owner
-                        || !Self::range_overlaps(start, Some(end), record.start, record.end)
-                });
-                if typ != libc::F_UNLCK {
-                    records.push(PosixLockRecord {
+                let records = Self::update_owner_lock_range(
+                    &records,
+                    owner,
+                    start,
+                    end,
+                    (typ != libc::F_UNLCK).then_some(PosixLockRecord {
                         owner,
                         typ,
                         start,
                         end: Some(end),
                         pid,
-                    });
-                }
+                    }),
+                );
                 if let Err(errno) =
                     self.persist_lock_records_for_key(&resource_key, owner, &records)
                 {
