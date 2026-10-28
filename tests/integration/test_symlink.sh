@@ -28,13 +28,22 @@ ln -s "${payload}" "${link_path}"
 [[ -L "${link_path}" ]]
 fod_assert_eq "$(readlink "${link_path}")" "${payload}" "symlink target mismatch"
 fod_assert_eq "$(cat "${link_path}")" "${payload_value}" "symlink payload mismatch"
-python3 - "${payload}" <<'PY'
+python3 - "${link_path}" "${payload}" <<'PY'
 import errno
 import os
+import stat
 import sys
 
+link, target = sys.argv[1:]
+link_stat = os.lstat(link)
+target_stat = os.stat(target)
+followed_stat = os.stat(link)
+assert stat.S_ISLNK(link_stat.st_mode)
+assert followed_stat.st_ino == target_stat.st_ino
+assert link_stat.st_ino != target_stat.st_ino
+
 try:
-    os.readlink(sys.argv[1])
+    os.readlink(target)
 except OSError as error:
     assert error.errno == errno.EINVAL, error.errno
 else:
@@ -114,4 +123,4 @@ for path in (loop_a, loop_b):
         raise AssertionError("resolving symlink loop unexpectedly succeeded")
 PY
 
-echo "OK symlink/readlink regular_path=EINVAL unlink_preserves_target=1 readlink_shortbuf=1 dangling_lstat_size=1 dangling_stat_loop=1 dangling_excl=EEXIST"
+echo "OK symlink/readlink regular_path=EINVAL stat_lstat_follow=1 unlink_preserves_target=1 readlink_shortbuf=1 dangling_lstat_size=1 dangling_stat_loop=1 dangling_excl=EEXIST"
