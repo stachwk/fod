@@ -1540,6 +1540,11 @@ test-access-groups: init
 test-inode-model: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_READDIR_BATCH_METADATA=$(FOD_READDIR_BATCH_METADATA) $(VENV_PYTHON) tests/integration/test_inode_model.py
 
+test-path-trailing-slash: init
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_path_trailing_slash.py
+
+.PHONY: test-path-trailing-slash
+
 test-ownership-inheritance: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_ownership_inheritance.py
 
