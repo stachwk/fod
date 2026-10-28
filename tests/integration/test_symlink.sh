@@ -66,6 +66,14 @@ for operation in (lambda: os.stat(orphaned), lambda: os.open(orphaned, os.O_RDON
     else:
         raise AssertionError("following dangling symlink unexpectedly succeeded")
 
+try:
+    os.open(orphaned, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+except OSError as error:
+    assert error.errno == errno.EEXIST, error.errno
+else:
+    raise AssertionError("O_CREAT|O_EXCL followed dangling symlink")
+assert stat.S_ISLNK(os.lstat(orphaned).st_mode)
+
 for path in (loop_a, loop_b):
     assert stat.S_ISLNK(os.lstat(path).st_mode)
     try:
@@ -76,4 +84,4 @@ for path in (loop_a, loop_b):
         raise AssertionError("resolving symlink loop unexpectedly succeeded")
 PY
 
-echo "OK symlink/readlink dangling_stat_lstat_loop=1"
+echo "OK symlink/readlink dangling_stat_lstat_loop=1 dangling_excl=EEXIST"
