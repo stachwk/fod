@@ -14,13 +14,6 @@ Reading guide:
 
 ## Unresolved findings
 
-- [ ] **Add a mounted stale-read `ESTALE` regression.**
-  `assemble_degraded_snapshot()` returns `ESTALE` when an opened file is absent
-  from the read snapshot; this currently has only a unit test. Add the mounted
-  regression when the degraded read-only test environment is available. The
-  code is centralized in [`errno.rs`](rust_fuse/src/errno.rs), and the name is
-  included in [`ERRNO_REFERENCE.md`](docs/ERRNO_REFERENCE.md). Track under P12
-  in the [POSIX audit](docs/POSIX_CONFORMANCE_AUDIT.md).
 - [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
   mounted probe opened the same file for append from two mounts backed by the
   same PostgreSQL database. The second writable `open()` returned `EBUSY` while
@@ -79,6 +72,13 @@ Reading guide:
   PostgreSQL rows. Do not close this finding based on passing reruns alone.
 
 ## Previously tracked follow-ups (closed or deferred)
+
+- [x] Add a mounted stale-read `ESTALE` regression for degraded read-only mode.
+  - Closure note (2026-10-29): `test_pg_three_node_failover.sh` holds a file
+    descriptor open on a standby, deletes only that dedicated test file row on
+    primary, waits until the deletion LSN is replayed, then checks that reading
+    the already-open descriptor returns `ESTALE`. The complete three-node HA
+    test passed with `degraded_open_file_missing_snapshot_errno=ESTALE`.
 
 - [x] Set the POSIX record-lock scope for FIFO objects.
   - Decision (2026-10-29): POSIX Issue 8 requires `fcntl()` record locks for regular files and makes support on other file types optional. FOD's cross-mount PostgreSQL lock guarantee covers regular files only; FIFO record locks are outside that guarantee. A Linux v6.17 probe showed the kernel accepts FIFO locks locally on each mount without calling FOD's FUSE lock callbacks: FUSE assigns FIFO `pipefifo_fops`, which has no `.lock` operation. Two FOD mounts therefore each obtained an exclusive lock on the same FIFO. This is an explicit Linux FUSE limitation, not a POSIX conformance failure; do not claim shared FIFO lock semantics. Sources: [POSIX `fcntl()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fcntl.html), [FUSE inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c), [special inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/inode.c), [FIFO operations](https://github.com/torvalds/linux/blob/v6.17/fs/pipe.c).

@@ -21,6 +21,7 @@ STACK_STARTED=0
 MOUNTPOINT=""
 LOG_FILE=""
 FOD_PID=""
+STALE_READER_PID=""
 
 for cmd in docker psql mountpoint; do
     command -v "${cmd}" >/dev/null 2>&1 || {
@@ -91,6 +92,10 @@ wait_replay() {
 cleanup() {
     local status=$?
     trap - EXIT
+    if [[ -n "${STALE_READER_PID}" ]]; then
+        kill "${STALE_READER_PID}" 2>/dev/null || true
+        wait "${STALE_READER_PID}" 2>/dev/null || true
+    fi
     if [[ -n "${MOUNTPOINT}" ]]; then
         fod_test_cleanup || true
         if [[ -n "${LOG_FILE}" && -f "${LOG_FILE}" ]]; then
@@ -136,6 +141,8 @@ fod_test_make_mountpoint "/tmp/fod-ha-chain-before"
 FOD_TEST_LOG_ARCHIVE="${ARTIFACT_DIR}/fod-master-mount.log"
 fod_test_start_mount "${MOUNTPOINT}"
 printf 'marker written through original master\n' >"${MOUNTPOINT}/ha-chain-marker.txt"
+printf 'stale-read target written through original master\n' \
+    >"${MOUNTPOINT}/ha-chain-estale-marker.txt"
 sync
 fod_test_cleanup
 MOUNTPOINT="" LOG_FILE=""
@@ -155,6 +162,72 @@ fod_test_start_mount "${MOUNTPOINT}"
     echo "Degraded monitor mount could not read the initial marker" >&2
     exit 1
 }
+
+echo "=== Verify ESTALE for an opened standby file removed from its replayed snapshot ==="
+STALE_CONTROL_DIR="$(mktemp -d "${ARTIFACT_DIR}/stale-read.XXXXXX")"
+python3 - "${MOUNTPOINT}/ha-chain-estale-marker.txt" "${STALE_CONTROL_DIR}" <<'PY' &
+import errno
+import os
+import sys
+import time
+from pathlib import Path
+
+path = sys.argv[1]
+control = Path(sys.argv[2])
+fd = os.open(path, os.O_RDONLY)
+try:
+    first = os.read(fd, 1)
+    if first != b"s":
+        raise AssertionError(f"unexpected initial byte: {first!r}")
+    (control / "ready").write_text("ready", encoding="ascii")
+    deadline = time.monotonic() + 180
+    while not (control / "read").exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("timed out waiting for stale read trigger")
+        time.sleep(0.02)
+    try:
+        result = os.read(fd, 1)
+    except OSError as exc:
+        name = errno.errorcode.get(exc.errno, str(exc.errno))
+        (control / "result").write_text(name, encoding="ascii")
+    else:
+        (control / "result").write_text(f"success:{result!r}", encoding="ascii")
+finally:
+    os.close(fd)
+PY
+STALE_READER_PID=$!
+for _ in $(seq 1 $((WAIT_SECONDS * 10))); do
+    [[ -f "${STALE_CONTROL_DIR}/ready" ]] && break
+    kill -0 "${STALE_READER_PID}" 2>/dev/null || {
+        echo "ESTALE reader exited before opening its descriptor" >&2
+        exit 1
+    }
+    sleep 0.1
+done
+[[ -f "${STALE_CONTROL_DIR}/ready" ]] || {
+    echo "Timed out waiting for degraded mount to open the ESTALE target" >&2
+    exit 1
+}
+DELETED_FILE_ID="$(psql_node "${MASTER_PORT}" -c \
+    "SET search_path TO fod, public; DELETE FROM files WHERE name = 'ha-chain-estale-marker.txt' RETURNING id_file")"
+[[ "${DELETED_FILE_ID}" =~ ^[0-9]+$ ]] || {
+    echo "Could not remove test file row on primary: ${DELETED_FILE_ID:-empty}" >&2
+    exit 1
+}
+DELETE_LSN="$(psql_node "${MASTER_PORT}" -c \
+    "SELECT pg_current_wal_flush_lsn()::text")"
+wait_replay slave1_estale_delete "${SLAVE1_PORT}" "${DELETE_LSN}"
+touch "${STALE_CONTROL_DIR}/read"
+wait "${STALE_READER_PID}"
+STALE_READER_PID=""
+ESTALE_RESULT="$(cat "${STALE_CONTROL_DIR}/result")"
+[[ "${ESTALE_RESULT}" == "ESTALE" ]] || {
+    echo "Opened degraded read returned ${ESTALE_RESULT}, expected ESTALE" >&2
+    exit 1
+}
+printf 'degraded_open_file_missing_snapshot_errno=%s file_id=%s\n' \
+    "${ESTALE_RESULT}" "${DELETED_FILE_ID}" | tee -a "${ARTIFACT_DIR}/topology.txt"
+rm -rf "${STALE_CONTROL_DIR}"
 
 echo "=== Fence old master and promote slave1 ==="
 # Stopping the isolated primary container is the fencing action in this test.
