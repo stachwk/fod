@@ -39,6 +39,18 @@ valid replacement for filesystem operation ordering.
 
 See `docs/FOD_ARCHITECTURE_INVARIANTS.md`.
 
+## Problem tracking
+
+Record every newly discovered unresolved defect, POSIX gap, failed regression
+or environment limitation that affects correctness or verification in
+`TODO.md` before moving on. Include the observed symptom or reproduction, the
+available evidence and root-cause confidence, the impact, and the next
+diagnostic or fix step; link the relevant code, tests and detailed review.
+Keep the item there until evidence supports resolution. `TODO.md` preserves
+findings and decisions; when work becomes active or its priority changes, also
+update the ordered queue in `docs/plans/CURRENT.md` rather than treating the
+archive as the active queue.
+
 ## Selective refactoring
 
 Refactor only clear duplication, unnecessary complexity or mixed responsibilities

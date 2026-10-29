@@ -1,7 +1,8 @@
-# FOD Decisions, Follow-ups & Archive
+# FOD Decisions, Follow-ups, Unresolved Findings & Archive
 
-This document is a historical decision, follow-up and regression archive. It is
-not an active implementation backlog. The only ordered queue is
+This document preserves historical decisions and completed follow-ups, and is
+the durable record for unresolved findings that must not be lost. It is not an
+active implementation backlog. The only ordered queue is
 [`docs/plans/CURRENT.md`](docs/plans/CURRENT.md). The legacy path
 [`docs/FOD_CURRENT_ACTION_PLAN.md`](docs/FOD_CURRENT_ACTION_PLAN.md) is a
 compatibility pointer.
@@ -10,6 +11,21 @@ Reading guide:
 - `Historical note:` means closed-item context, benchmark results, or archived implementation detail.
 - `Decision:` means durable guidance that still applies.
 - The old extent-engine proposal is superseded; `Target Architecture` is historical context, not the current runtime design.
+
+## Unresolved findings
+
+- [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
+  mounted probe opened the same file for append from two mounts backed by the
+  same PostgreSQL database. The second writable `open()` returned `EBUSY` while
+  the first mount held the exclusive file write-ownership lease. Source review
+  traced the error to `FodFuse::create_writable_handle_with_ownership()`.
+  This blocks POSIX concurrent append behavior before writes can be serialized.
+  Design PostgreSQL-authoritative admission/ordering that permits concurrent
+  writable opens while preserving cross-host fencing, then test complete append
+  records from both mounts. Details and audit status:
+  [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#cross-mount-append-finding);
+  active work is tracked under P03/P04 in
+  [`current plan`](docs/plans/CURRENT.md).
 
 ## Previously tracked follow-ups (closed or deferred)
 
