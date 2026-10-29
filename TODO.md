@@ -106,9 +106,10 @@ Reading guide:
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **Finish SQLSTATE-to-errno mapping for namespace mutations.** `errno.rs`
   now maps PostgreSQL `53100` (`disk_full`) to `ENOSPC`; `mkdir()` and
-  hardlink-insert SQL errors preserve SQLSTATE, and `rmdir()` command errors
-  flow through `exec_command_params()`. Audit the remaining namespace mutation
-  paths for uses of `conn_error()` that lose SQLSTATE or domain information,
+  regular-file, symlink, special-file and hardlink insert errors preserve
+  SQLSTATE. `rmdir()` and hardlink-promotion commands use
+  `exec_command_params()`. Audit remaining namespace mutation paths for uses of
+  `conn_error()` that lose SQLSTATE or domain information,
   define mappings for backend unavailable/unknown errors, and verify disk-full
   classification with deterministic fault injection. Do not parse localized
   PostgreSQL error text. See

@@ -10083,8 +10083,9 @@ impl DbRepo {
                             value
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            return Err(conn_error(conn));
+                            return Err(error);
                         }
                     };
 
@@ -10111,16 +10112,13 @@ impl DbRepo {
                         let parent_id = CString::new(parent_id.to_string())
                             .map_err(|_| "parent id contains NUL byte".to_string())?;
                         let params = [&parent_id, &file_name, &file_id];
-                        let res = exec_params(conn, &sql_update_parent, &params)?;
-                        PQclear(res);
+                        exec_command_params(conn, &sql_update_parent, &params)?;
                     } else {
                         let params = [&file_name, &file_id];
-                        let res = exec_params(conn, &sql_update_null_parent, &params)?;
-                        PQclear(res);
+                        exec_command_params(conn, &sql_update_null_parent, &params)?;
                     }
                     let params = [&hardlink_id];
-                    let res = exec_params(conn, &sql_delete, &params)?;
-                    PQclear(res);
+                    exec_command_params(conn, &sql_delete, &params)?;
                     let did_promote = CString::new("true")
                         .map_err(|_| "promotion flag contains NUL byte".to_string())?;
                     let params = [&request_token, &file_id, &did_promote];
@@ -11478,8 +11476,9 @@ impl DbRepo {
                         value.ok_or_else(|| "failed to create symlink".to_string())
                     }
                     _ => {
+                        let error = result_error(res);
                         PQclear(res);
-                        Err(conn_error(conn))
+                        Err(error)
                     }
                 }?;
                 if let Some(parent_id) = target_parent_id {
@@ -11933,8 +11932,9 @@ impl DbRepo {
                         value.ok_or_else(|| "failed to create file".to_string())
                     }
                     _ => {
+                        let error = result_error(res);
                         PQclear(res);
-                        Err(conn_error(conn))
+                        Err(error)
                     }
                 }?;
                 if let Some(inherited_acl) = inherited_acl.as_ref() {
@@ -12224,8 +12224,9 @@ impl DbRepo {
                         value.ok_or_else(|| "failed to create special file".to_string())?
                     }
                     _ => {
+                        let error = result_error(res);
                         PQclear(res);
-                        return Err(conn_error(conn));
+                        return Err(error);
                     }
                 };
 
@@ -12238,8 +12239,9 @@ impl DbRepo {
                         PQclear(res);
                     }
                     _ => {
+                        let error = result_error(res);
                         PQclear(res);
-                        return Err(conn_error(conn));
+                        return Err(error);
                     }
                 }
 
