@@ -104,15 +104,16 @@ Reading guide:
   attribution are mapped. Source and audit:
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617),
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
-- [ ] **Finish SQLSTATE-to-errno mapping for namespace mutations.** `errno.rs`
-  now maps PostgreSQL `53100` (`disk_full`) to `ENOSPC`; `mkdir()` and
-  regular-file, symlink, special-file and hardlink insert errors preserve
-  SQLSTATE. `rmdir()` and hardlink-promotion commands use
-  `exec_command_params()`. Audit remaining namespace mutation paths for uses of
-  `conn_error()` that lose SQLSTATE or domain information,
-  define mappings for backend unavailable/unknown errors, and verify disk-full
-  classification with deterministic fault injection. Do not parse localized
-  PostgreSQL error text. See
+- [ ] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
+  mutations.** `errno.rs` maps PostgreSQL `53100` (`disk_full`) to `ENOSPC` in
+  both persistence and namespace error mappers. File-block persistence also
+  maps the configured FOD quota to `ENOSPC`. `mkdir()` and regular-file,
+  symlink, special-file and hardlink inserts preserve SQLSTATE; `rmdir()` and
+  hardlink-promotion commands use `exec_command_params()`. Audit remaining
+  mutation paths for uses of `conn_error()` that lose SQLSTATE/domain
+  information and verify backend disk-full classification with deterministic
+  fault injection. Current quota tests do not prove PostgreSQL SQLSTATE 53100
+  handling. Do not parse localized PostgreSQL error text. See
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617).
 - [ ] **P02 directory-stream errno attribution remains open.** POSIX requires
   `readdir()` to report `EOVERFLOW` when a returned `struct dirent` field cannot

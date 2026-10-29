@@ -19,7 +19,9 @@ const POSTGRES_DISK_FULL_SQLSTATE: &str = "SQLSTATE 53100:";
 
 /// Converts a persisted-write domain error into the Linux errno exposed by FOD.
 pub(crate) fn persist_error_errno(error: &str) -> c_int {
-    if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
+    if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX)
+        || error.starts_with(POSTGRES_DISK_FULL_SQLSTATE)
+    {
         ENOSPC
     } else if error.starts_with(FILE_WRITE_ACCESS_DENIED) {
         EACCES
