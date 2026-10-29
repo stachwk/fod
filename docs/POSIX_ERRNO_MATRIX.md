@@ -7,16 +7,44 @@ obiektów objętych daną pozycją. Zachowanie Linux VFS może zakończyć opera
 przed wywołaniem callbacku FUSE; testy zamontowane w FOD potwierdzają wynik
 wywołania systemowego, ale same nie dowodzą, która warstwa zwróciła errno.
 
-Odnośniki do Issue 8 są punktem odniesienia dla dalszej weryfikacji. Bieżące
-zestawienie oparto na pozycjach POSIX Programmer's Manual oznaczonych `3p`;
-zgodność każdego warunku z wydaniem Issue 8 oraz granica VFS/FUSE pozostają do
-potwierdzenia przed zamknięciem P12.
+Wiersze `open`, `read`/`pread` i `write`/`pwrite` sprawdzono względem tekstu
+POSIX Issue 8 oraz porównano z pozycjami POSIX Programmer's Manual `3p`.
+Warunki oznaczone XSI są oddzielone od wymagań bazowego zakresu FOD. Kolejne
+interfejsy oraz pełne przypisanie errno do warstwy VFS, libfuse lub FOD pozostają
+do sprawdzenia w P12.
 
-| Interfejs | POSIX: wymagane błędy w zakresie FOD | POSIX: warunkowe / `may fail` | Dowody FOD i otwarte sprawdzenia |
+| Interfejs | POSIX: wymagane błędy w zakresie FOD | POSIX: warunkowe, `may fail` lub XSI | Dowody FOD i otwarte sprawdzenia |
 | --- | --- | --- | --- |
-| `open()` | `EACCES`, `EEXIST`, `EINTR`, `EISDIR`, `ELOOP`, `EMFILE`, `ENAMETOOLONG`, `ENFILE`, `ENOENT`, `ENOSPC`, `ENOTDIR`, `ENXIO` (nieblokujący zapis do FIFO bez czytelnika), `EOVERFLOW`, `EROFS` | `EAGAIN` dla zablokowanego PTY; `EINVAL` dla nieobsługiwanej opcji; `ELOOP` przy przekroczeniu `SYMLOOP_MAX`; `ENAMETOOLONG` dla `PATH_MAX`; `EOPNOTSUPP` dla socketu; `ETXTBSY` dla wykonywanego pliku | `O_EXCL`, tryby deskryptora i błędy ścieżek mają regresje w [`test_mount_suite.py`](../tests/integration/test_mount_suite.py), [`test_directories.sh`](../tests/integration/test_directories.sh), [`test_symlink.sh`](../tests/integration/test_symlink.sh), [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py), [`test_df.sh`](../tests/integration/test_df.sh) i [`test_mknod.py`](../tests/integration/test_mknod.py). Limit deskryptorów, `EINTR`, `EOVERFLOW` i błędne flagi nie mają jeszcze dedykowanych testów FOD. |
-| `read()` / `pread()` | `EBADF`; `EINTR` gdy sygnał przerwie odczyt przed przekazaniem danych; `EISDIR` dla katalogu, którego implementacja nie pozwala czytać jako pliku; `EOVERFLOW` dla pozycji poza limitem offsetu; `EINVAL` dla ujemnego offsetu `pread()`; `EAGAIN` dla nieblokującego pustego FIFO, gdy zapisujący pozostaje otwarty | `EIO` w warunkach terminala albo błędu fizycznego; `ENXIO` dla nieistniejącego urządzenia; błędy STREAMS/socket dotyczą zakresu spoza FOD | [`test_lseek.py`](../tests/integration/test_lseek.py) sprawdza EOF, offsety i niezgodny tryb deskryptora; [`test_mknod.py`](../tests/integration/test_mknod.py) sprawdza FIFO. Sygnałowe przerwanie, `EOVERFLOW`, ujemny offset `pread()` i błąd odczytu `EIO` wymagają osobnych testów albo udokumentowania obsługi przez Linux VFS. |
-| `write()` / `pwrite()` | `EBADF`, `EFBIG` (limit rozmiaru pliku lub offsetu), `EINTR` gdy nie zapisano danych, `ENOSPC`; `EINVAL` dla ujemnego offsetu `pwrite()`; `EPIPE` dla FIFO bez czytelników; `EAGAIN` dla nieblokującego FIFO, gdy zapis opóźniłby wątek | `EIO` w warunkach terminala albo błędu fizycznego; błędy STREAMS/socket/urządzeń są poza zakresem FOD | [`test_lseek.py`](../tests/integration/test_lseek.py) sprawdza tryby deskryptora, zapis pozycyjny i rozszerzanie pliku; [`test_two_mount_quota.py`](../tests/integration/test_two_mount_quota.py) i [`test_df.sh`](../tests/integration/test_df.sh) sprawdzają `ENOSPC`; [`test_mknod.py`](../tests/integration/test_mknod.py) sprawdza zapis do FIFO. Sygnałowe przerwanie, limity `off_t`, `EPIPE` i nieblokujące `EAGAIN` wymagają dedykowanych regresji albo udokumentowania obsługi przez Linux VFS. |
+| `open()` | `EACCES`, `EEXIST`, `EILSEQ` gdy `O_CREAT` nie może utworzyć nazwy nieprzenośnej, `EINTR`, `EISDIR`, `ELOOP`, `EMFILE`, `ENAMETOOLONG` dla komponentu dłuższego niż `NAME_MAX`, `ENFILE`, `ENOENT`, `ENOSPC`, `ENOTDIR`, `ENXIO` (nieblokujący zapis do FIFO bez czytelnika), `EOVERFLOW`, `EROFS`; `EINVAL` jeśli podano flagi synchronizowanego I/O, których implementacja nie obsługuje | `EAGAIN` dla zablokowanego PTY (XSI); `EINVAL` dla nieprawidłowej opcji; `ELOOP` przy przekroczeniu `SYMLOOP_MAX`; `ENAMETOOLONG` dla `PATH_MAX`; `EOPNOTSUPP` dla socketu; `ETXTBSY` dla wykonywanego pliku | `O_EXCL`, tryby deskryptora i błędy ścieżek mają regresje w [`test_mount_suite.py`](../tests/integration/test_mount_suite.py), [`test_directories.sh`](../tests/integration/test_directories.sh), [`test_symlink.sh`](../tests/integration/test_symlink.sh), [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py), [`test_df.sh`](../tests/integration/test_df.sh) i [`test_mknod.py`](../tests/integration/test_mknod.py). Test w `test_path_trailing_slash.py` sprawdza `EILSEQ` i brak aliasowania nie-UTF-8 nazwy. Limit deskryptorów, `EINTR` i `EOVERFLOW` nie mają osobnych regresji. |
+| `read()` / `pread()` | `EBADF`; `EINTR` gdy sygnał przerwie odczyt przed przekazaniem danych; `EOVERFLOW` dla pozycji poza limitem offsetu; `EINVAL` dla ujemnego offsetu `pread()`; `ESPIPE` dla `pread()` na nieprzeszukiwalnym obiekcie; `EAGAIN` dla nieblokującego FIFO, gdy zapisujący pozostaje otwarty | `EISDIR` dla katalogu jest oznaczone XSI; `EIO` w warunkach terminala albo błędu fizycznego; `ENXIO` dla nieistniejącego urządzenia; błędy STREAMS/socket dotyczą zakresu spoza FOD | [`test_lseek.py`](../tests/integration/test_lseek.py) sprawdza EOF, offsety, niezgodny tryb deskryptora i ujemny offset `pread()`; [`test_mknod.py`](../tests/integration/test_mknod.py) sprawdza FIFO. Sygnałowe przerwanie, `EOVERFLOW`, `ESPIPE` i błąd odczytu `EIO` wymagają osobnych testów albo potwierdzonego zachowania Linux VFS. |
+| `write()` / `pwrite()` | `EBADF`, `EFBIG` (limit rozmiaru pliku lub offsetu), `EINTR` gdy nie zapisano danych, `ENOSPC`; `EINVAL` dla ujemnego offsetu `pwrite()`; `ESPIPE` dla `pwrite()` na nieprzeszukiwalnym obiekcie; `EPIPE` dla `write()` do FIFO bez czytelników; `EAGAIN` dla nieblokującego FIFO, gdy zapis opóźniłby wątek | `EIO` przy fizycznym błędzie I/O; błędy terminala, STREAMS/socket/urządzeń są poza zakresem FOD | [`test_lseek.py`](../tests/integration/test_lseek.py) sprawdza tryby deskryptora, zapis pozycyjny, rozszerzanie pliku i ujemny offset `pwrite()`; [`test_two_mount_quota.py`](../tests/integration/test_two_mount_quota.py) i [`test_df.sh`](../tests/integration/test_df.sh) sprawdzają `ENOSPC`; [`test_mknod.py`](../tests/integration/test_mknod.py) sprawdza zapis do FIFO. Sygnałowe przerwanie, limity `off_t`, `ESPIPE`, `EPIPE` i nieblokujące `EAGAIN` wymagają dedykowanych regresji albo potwierdzonego zachowania Linux VFS. |
+
+## Potwierdzone skróty Linux VFS (v6.17)
+
+Te wyniki opisują warstwę Linux i nie dowodzą, że odpowiadający im callback
+FOD został wywołany:
+
+- `read()` i `write()` odrzucają nieprawidłowy deskryptor przed wejściem do VFS;
+  `vfs_read()` i `vfs_write()` zwracają `EBADF`, gdy plik nie został otwarty do
+  wymaganego trybu, zanim wywołają operację odczytu/zapisu systemu plików.
+- `pread()` i `pwrite()` sprawdzają ujemny offset przed deskryptorem i przed
+  przekazaniem operacji do `vfs_read()`/`vfs_write()`; Linux zwraca wtedy
+  `EINVAL`. Test montowany w `test_lseek.py` potwierdza errno, zachowanie
+  offsetu deskryptora i brak modyfikacji zawartości.
+- Przy pobieraniu argumentu ścieżki Linux zwraca `ENOENT` dla pustej ścieżki
+  oraz `ENAMETOOLONG`, gdy ścieżka osiąga `PATH_MAX`; te kontrole zachodzą przed
+  rozwiązywaniem ścieżki i callbackiem FUSE.
+- Baza FOD przechowuje nazwy w PostgreSQL `text`, więc nazwa z bajtami spoza
+  UTF-8 nie może być zachowana. `validate_component_name()` zwraca dla niej
+  `EILSEQ` przed użyciem `to_string_lossy()`, co zapobiega utworzeniu lub
+  odczytaniu innego pliku pod nazwą zawierającą znak zastępczy. Regresja
+  `non_utf8_create` sprawdza `EILSEQ` i brak takiego aliasu.
+
+Podstawa źródłowa: Linux [`read_write.c`](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c#L3120-L3158)
+(`vfs_read`), [`vfs_write`](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c#L3314-L3354),
+[`pread64`/`pwrite64`](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c#L3460-L3525)
+oraz [`namei.c`](https://github.com/torvalds/linux/blob/v6.17/fs/namei.c#L2390-L2524)
+(`getname_flags`).
 
 ## Źródła i granice
 

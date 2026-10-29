@@ -96,10 +96,26 @@ def main() -> None:
                 errno.ENAMETOOLONG,
                 "open name longer than NAME_MAX",
             )
+
+            invalid_utf8_name = os.fsencode(directory) + b"/invalid-\xff-name"
+            replacement_name = directory / "invalid-\ufffd-name"
+            expect_errno(
+                lambda: os.open(
+                    invalid_utf8_name,
+                    os.O_CREAT | os.O_RDWR,
+                    0o600,
+                ),
+                errno.EILSEQ,
+                "open cannot create a non-UTF-8 component",
+            )
+            assert not replacement_name.exists(), (
+                "invalid UTF-8 component aliased to its replacement character"
+            )
             print(
                 "OK pathname trailing slash file=ENOTDIR "
                 "symlink_file=ENOTDIR symlink_directory=accepted "
-                "dotdot_repeated_separator=1 name_max_boundary=1"
+                "dotdot_repeated_separator=1 name_max_boundary=1 "
+                "non_utf8_create=EILSEQ"
             )
         finally:
             launcher.stop()

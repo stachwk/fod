@@ -116,6 +116,28 @@ def main() -> None:
                 expected_positioned_io,
             )
 
+            negative_positioned_io_path = dir_path / "negative-positioned-io.txt"
+            negative_positioned_io_path.write_bytes(b"unchanged")
+            fd = os.open(negative_positioned_io_path, os.O_RDWR)
+            try:
+                assert os.lseek(fd, 2, os.SEEK_SET) == 2
+                for operation in (
+                    lambda: os.pread(fd, 1, -1),
+                    lambda: os.pwrite(fd, b"X", -1),
+                ):
+                    try:
+                        operation()
+                    except OSError as error:
+                        assert error.errno == errno.EINVAL, error.errno
+                    else:
+                        raise AssertionError(
+                            "positioned I/O accepted a negative offset"
+                        )
+                    assert os.lseek(fd, 0, os.SEEK_CUR) == 2
+            finally:
+                os.close(fd)
+            assert negative_positioned_io_path.read_bytes() == b"unchanged"
+
             fd = os.open(positioned_io_path, os.O_WRONLY)
             try:
                 for operation in (
@@ -251,7 +273,8 @@ def main() -> None:
                 "OK lseek/mount append_after_seek=1 pread_pwrite_offset=1 "
                 "dup_shared_offset=1 eof_short_read=1 zero_write=1 "
                 "zero_read=1 pwrite_beyond_eof=1 descriptor_metadata=1 "
-                "descriptor_flags=1 access_mode_errors=1"
+                "descriptor_flags=1 access_mode_errors=1 "
+                "negative_pread_pwrite=1"
             )
         finally:
             launcher.stop()

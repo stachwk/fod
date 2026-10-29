@@ -17,8 +17,8 @@ use fuser::{
     ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use crate::errno::{
-    EACCES, EBADF, EBUSY, EEXIST, EFBIG, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODATA, ENOENT,
-    ENOTDIR, ENOTEMPTY, ENOTTY, ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE, EROFS,
+    EACCES, EBADF, EBUSY, EEXIST, EFBIG, EILSEQ, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODATA,
+    ENOENT, ENOTDIR, ENOTEMPTY, ENOTTY, ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE, EROFS,
     ESTALE, EWOULDBLOCK, EXDEV,
 };
 use libc::{POLLIN, POLLOUT};
@@ -2503,6 +2503,10 @@ impl FodFuse {
         const NAME_MAX: usize = 255;
         if name.as_bytes().len() > NAME_MAX {
             Err(ENAMETOOLONG)
+        } else if name.to_str().is_none() {
+            // PostgreSQL text cannot preserve invalid UTF-8 path bytes. Reject
+            // them before any lossy conversion could alias another name.
+            Err(EILSEQ)
         } else {
             Ok(())
         }
