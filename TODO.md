@@ -104,15 +104,14 @@ Reading guide:
   attribution are mapped. Source and audit:
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617),
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
-- [ ] **Keep PostgreSQL SQLSTATE when mapping namespace failures.** `mkdir()`
-  and `rmdir()` currently map recognized domain errors (`EACCES`, `EEXIST`,
-  `EPERM`, `ENOENT`) and map other backend errors to `EIO`. Some SQL mutation
-  paths construct errors using `conn_error()`, which loses the result SQLSTATE;
-  this prevents reliable classification of backend storage exhaustion as
-  `ENOSPC` and may conflate it with generic I/O or connection failures. Preserve
-  structured SQLSTATE/domain errors through the repository boundary, then
-  define errno mapping for storage full, unavailable backend, and unknown
-  failures. Do not parse localized PostgreSQL error text. See
+- [ ] **Finish SQLSTATE-to-errno mapping for namespace mutations.** `errno.rs`
+  now maps PostgreSQL `53100` (`disk_full`) to `ENOSPC`; `mkdir()` and
+  hardlink-insert SQL errors preserve SQLSTATE, and `rmdir()` command errors
+  flow through `exec_command_params()`. Audit the remaining namespace mutation
+  paths for uses of `conn_error()` that lose SQLSTATE or domain information,
+  define mappings for backend unavailable/unknown errors, and verify disk-full
+  classification with deterministic fault injection. Do not parse localized
+  PostgreSQL error text. See
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617).
 - [ ] **P02 directory-stream errno attribution remains open.** POSIX requires
   `readdir()` to report `EOVERFLOW` when a returned `struct dirent` field cannot

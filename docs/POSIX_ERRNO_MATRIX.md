@@ -70,13 +70,15 @@ FOD został wywołany:
   się na `EACCES`, konflikt na `EEXIST`, a brak rodzica na `ENOENT`. `rmdir()`
   zwraca z callbacku `ENOENT` dla brakującego wpisu, `ENOTDIR` dla wpisu
   niebędącego katalogiem, `ENOTEMPTY` dla katalogu z dziećmi, a kontrola ACL i
-  sticky bitu daje odpowiednio `EACCES`/`EPERM`. Pozostałe błędy backendu
-  przechodzą przez `namespace_mutation_errno()` i domyślnie stają się `EIO`.
-  W ścieżce błędu SQL tworzenia katalogu FOD pobiera tekst przez `conn_error()`;
-  SQLSTATE nie jest zachowany, więc warunku braku miejsca w backendzie nie da
-  się obecnie odróżnić od ogólnego I/O przez ten mapper. Trzeba rozdzielić
-  błędy operacyjne od błędów infrastruktury, zanim przypisze się im POSIX
-  `ENOSPC`.
+  sticky bitu daje odpowiednio `EACCES`/`EPERM`. `namespace_mutation_errno()`
+  mapuje PostgreSQL SQLSTATE [`53100` (`disk_full`)](https://www.postgresql.org/docs/current/errcodes-appendix.html#ERRCODES-TABLE)
+  na `ENOSPC`, a pozostałe
+  nierozpoznane błędy backendu na `EIO`. Odpowiedzi SQL dla tworzenia katalogu
+  i hardlinku zachowują SQLSTATE przez `result_error()`; komendy SQL w ścieżce
+  `rmdir()` korzystają z `exec_command_params()`, które również je zachowuje.
+  Część innych mutacji namespace nadal może używać `conn_error()` albo zwracać
+  błędy domenowe bez SQLSTATE; pełny przegląd i deterministyczna weryfikacja
+  awarii backendu pozostają otwarte.
 - Baza FOD przechowuje nazwy w PostgreSQL `text`, więc nazwa z bajtami spoza
   UTF-8 nie może być zachowana. `validate_component_name()` zwraca dla niej
   `EILSEQ` przed użyciem `to_string_lossy()`, co zapobiega utworzeniu lub

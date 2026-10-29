@@ -15,6 +15,8 @@ use rust_hotpath::pg::{
     STICKY_PERMISSION_DENIED, STORAGE_QUOTA_EXCEEDED_PREFIX, WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 
+const POSTGRES_DISK_FULL_SQLSTATE: &str = "SQLSTATE 53100:";
+
 /// Converts a persisted-write domain error into the Linux errno exposed by FOD.
 pub(crate) fn persist_error_errno(error: &str) -> c_int {
     if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
@@ -32,7 +34,9 @@ pub(crate) fn persist_error_errno(error: &str) -> c_int {
 
 /// Converts a namespace mutation domain error into the Linux errno exposed by FOD.
 pub(crate) fn namespace_mutation_errno(error: &str) -> c_int {
-    if error == PARENT_ACCESS_DENIED {
+    if error.starts_with(POSTGRES_DISK_FULL_SQLSTATE) {
+        ENOSPC
+    } else if error == PARENT_ACCESS_DENIED {
         EACCES
     } else if error.starts_with(NAMESPACE_ENTRY_EXISTS_PREFIX) {
         EEXIST

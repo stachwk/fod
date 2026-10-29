@@ -11284,8 +11284,9 @@ impl DbRepo {
                         value.ok_or_else(|| "failed to create hardlink".to_string())
                     }
                     _ => {
+                        let error = result_error(res);
                         PQclear(res);
-                        Err(conn_error(conn))
+                        Err(error)
                     }
                 }?;
                 if let Some(parent_id) = target_parent_id {
@@ -11686,8 +11687,9 @@ impl DbRepo {
                         value.ok_or_else(|| "failed to create directory".to_string())
                     }
                     _ => {
+                        let error = result_error(res);
                         PQclear(res);
-                        Err(conn_error(conn))
+                        Err(error)
                     }
                 }?;
                 if let Some(inherited_acl) = inherited_acl.as_ref() {
