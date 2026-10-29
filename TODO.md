@@ -14,6 +14,13 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **POSIX disposition for `unlink(directory)` errno.** FOD's `unlink`
+  callback returns Linux `EISDIR` when the target is a directory, and
+  `tests/integration/test_directories.sh` asserts that result. POSIX Issue 8
+  specifies `EPERM` when `unlink()` is prohibited for a directory. Decide and
+  document whether the Linux-compatible errno is the intended FOD contract or
+  whether strict POSIX mode/conformance should return `EPERM`; keep the
+  platform distinction explicit in the errno reference and matrix.
 - [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
   mounted probe opened the same file for append from two mounts backed by the
   same PostgreSQL database. The second writable `open()` returned `EBUSY` while

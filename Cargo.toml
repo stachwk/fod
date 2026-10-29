@@ -11,7 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "3.4.181"
+version = "3.4.182"
 rust-version = "1.85"
 
 [profile.release-lto]

@@ -20,7 +20,7 @@ stałych przy zwracaniu błędów konkretnych operacji.
 | `EINVAL` | POSIX | Argument lub kombinacja opcji jest nieprawidłowa | Zakres `truncate` i ioctl: [`test_truncate_shrink_block_boundary.py`](../tests/integration/test_truncate_shrink_block_boundary.py), [`test_ioctl.py`](../tests/integration/test_ioctl.py) |
 | `EIO` | POSIX | Błąd wejścia/wyjścia | Wybrane błędy PostgreSQL i wstrzyknięta awaria transakcji: [`test_rename_write_ownership.py`](../tests/integration/test_rename_write_ownership.py), [`test_tx03h1_invalid_session.py`](../tests/integration/test_tx03h1_invalid_session.py). `EIO` konkretnie z `statvfs()` pozostaje nieprzetestowane. |
 | `EILSEQ` | POSIX | Sekwencja bajtów nie tworzy poprawnej nazwy w bieżącym locale; `open(O_CREAT)` może wymagać go dla nieprzenośnej nazwy, której implementacja nie potrafi utworzyć | FOD zwraca `EILSEQ` dla nie-UTF-8 komponentów, których PostgreSQL `text` nie może przechować: [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py) |
-| `EISDIR` | POSIX | Operacja plikowa została skierowana na katalog | `unlink` lub `truncate` katalogu: [`test_directories.sh`](../tests/integration/test_directories.sh), [`test_truncate_shrink_block_boundary.py`](../tests/integration/test_truncate_shrink_block_boundary.py) |
+| `EISDIR` | POSIX tylko w określonych interfejsach (np. `open`/`truncate`); Linux rozszerza użycie na `unlink` katalogu | Operacja, która nie obsługuje katalogu, trafiła na katalog | `unlink` katalogu: [`test_directories.sh`](../tests/integration/test_directories.sh); `truncate` katalogu: [`test_truncate_shrink_block_boundary.py`](../tests/integration/test_truncate_shrink_block_boundary.py). Issue 8 wymaga `EPERM`, gdy implementacja zabrania `unlink()` katalogu; rozbieżność FOD jest opisana w [`TODO.md`](../TODO.md). |
 | `ELOOP` | POSIX | Rozwiązywanie ścieżki napotkało zbyt wiele symlinków | Cykl symlinków: [`test_symlink.sh`](../tests/integration/test_symlink.sh), [`test_df.sh`](../tests/integration/test_df.sh) |
 | `EINTR` | POSIX | Wywołanie przerwane sygnałem | Wymagania zależą od interfejsu; przerwanie `F_SETLKW` i `statvfs()` pozostaje do sprawdzenia w P10/P11 audytu POSIX. |
 | `ENAMETOOLONG` | POSIX | Komponent lub ścieżka przekracza limit | Zbyt długi komponent: [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py), [`test_df.sh`](../tests/integration/test_df.sh) |
@@ -70,7 +70,7 @@ Pełne wymagane błędy trzeba sprawdzić osobno dla każdego interfejsu, w tym 
 warunki, priorytet oraz przypadki obsługiwane wcześniej przez VFS. Zbiorczy
 audyt i brakujące przypadki są śledzone w
 [POSIX_CONFORMANCE_AUDIT.md](POSIX_CONFORMANCE_AUDIT.md), szczególnie P10-P12;
-robocza mapa wymaganych i warunkowych błędów dla `open`, `read` i `write`
+robocza mapa wymaganych i warunkowych błędów dla operacji plikowych i namespace
 znajduje się w [POSIX_ERRNO_MATRIX.md](POSIX_ERRNO_MATRIX.md).
 
 Źródła: [POSIX `<errno.h>`](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/errno.h.html),
