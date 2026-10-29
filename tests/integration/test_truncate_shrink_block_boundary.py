@@ -74,6 +74,34 @@ def main() -> None:
             os.truncate(file_path, block_size * 2)
             assert file_path.stat().st_size == block_size * 2
 
+            symlink_target = dir_path / "truncate-symlink-target.bin"
+            symlink_path = dir_path / "truncate-symlink.bin"
+            symlink_target.write_bytes(b"truncate follows symlink")
+            symlink_path.symlink_to(symlink_target.name)
+            os.truncate(symlink_path, 8)
+            assert symlink_path.is_symlink()
+            assert symlink_target.read_bytes() == b"truncate"
+
+            for path, expected_errno, label in (
+                (dir_path, errno.EISDIR, "directory"),
+                (dir_path / "missing-truncate-target", errno.ENOENT, "missing path"),
+            ):
+                try:
+                    os.truncate(path, 0)
+                except OSError as error:
+                    assert error.errno == expected_errno, (label, error.errno)
+                else:
+                    raise AssertionError(f"truncate on {label} succeeded")
+
+            size_before_invalid_truncate = file_path.stat().st_size
+            try:
+                os.truncate(file_path, -1)
+            except OSError as error:
+                assert error.errno == errno.EINVAL, error.errno
+            else:
+                raise AssertionError("truncate with negative length succeeded")
+            assert file_path.stat().st_size == size_before_invalid_truncate
+
             data = file_path.read_bytes()
             assert len(data) == block_size * 2, len(data)
             assert data == expected, data[block_size : block_size + 64]
@@ -132,6 +160,7 @@ def main() -> None:
             )
 
             print("OK truncate shrink block boundary timestamp_update=1")
+            print("OK truncate symlink and path errors EISDIR/ENOENT/EINVAL")
             print("OK truncate off-boundary extend zero fill")
             print("OK ftruncate descriptor offset and access mode")
         finally:
