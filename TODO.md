@@ -101,10 +101,13 @@ Reading guide:
   `test-df` in `release-lto` with debug logs archived; retain the failed-run log
   and PostgreSQL rows if the mismatch returns. A stale kernel-visible size was
   reproduced in isolated C7 and fixed; it could make `copy_file_range()` return
-  zero before FOD handles it. `test-df` now passes, but its archive still does
-  not contain a FOD `copy_file_range` callback trace, so the earlier sharing
-  mismatch's connection to the callback/adoption path remains unproven. Do not
-  close this finding based on passing reruns alone.
+  zero before FOD handles it. The test previously archived only the second
+  mount's log, after remount verification; it now also saves the first mount's
+  log as `<FOD_TEST_LOG_ARCHIVE>.before-remount`, where the copy callback runs.
+  Four traceable `test-df` runs on 3.4.207 (including three repeats) recorded
+  `whole_object_adoption=true` and successful source-object adoption. The
+  original mismatch has not been reproduced; keep the finding open until a
+  failure is captured with its first-mount trace and PostgreSQL rows.
 
 ## Previously tracked follow-ups (closed or deferred)
 

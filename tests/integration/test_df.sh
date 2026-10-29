@@ -476,6 +476,14 @@ awk -v mount="${MOUNTPOINT}" '
   }
 ' "${DF_INODES_OUTPUT}"
 
+# Preserve the first-mount trace before starting the remount. The common test
+# cleanup archives LOG_FILE at exit, by which point the second mount has
+# replaced it and the copy_file_range path from this run is no longer visible.
+if [[ -n "${FOD_TEST_LOG_ARCHIVE:-}" && -f "${LOG_FILE:-}" ]]; then
+  mkdir -p "$(dirname "${FOD_TEST_LOG_ARCHIVE}")"
+  cp "${LOG_FILE}" "${FOD_TEST_LOG_ARCHIVE}.before-remount"
+fi
+
 if command -v fusermount3 >/dev/null 2>&1; then
   fusermount3 -u "${MOUNTPOINT}"
 elif command -v fusermount >/dev/null 2>&1; then
