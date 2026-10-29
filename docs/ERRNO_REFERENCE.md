@@ -68,7 +68,9 @@ Tabela opisuje nazwy i przykłady, nie jest obietnicą pełnej zgodności POSIX.
 Pełne wymagane błędy trzeba sprawdzić osobno dla każdego interfejsu, w tym ich
 warunki, priorytet oraz przypadki obsługiwane wcześniej przez VFS. Zbiorczy
 audyt i brakujące przypadki są śledzone w
-[POSIX_CONFORMANCE_AUDIT.md](POSIX_CONFORMANCE_AUDIT.md), szczególnie P10-P12.
+[POSIX_CONFORMANCE_AUDIT.md](POSIX_CONFORMANCE_AUDIT.md), szczególnie P10-P12;
+robocza mapa wymaganych i warunkowych błędów dla `open`, `read` i `write`
+znajduje się w [POSIX_ERRNO_MATRIX.md](POSIX_ERRNO_MATRIX.md).
 
 Źródła: [POSIX `<errno.h>`](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/errno.h.html),
 [lista symboli POSIX errno](https://linuxman7.org/linux/man-pages/man0/errno.h.0p.html),
