@@ -92,8 +92,8 @@ not the whole row unless all of its normative conditions and errors are mapped.
 | --- | --- | --- | --- |
 | P01 | Path resolution and name syntax | Trailing slash, symlink following, dangling links and loops have mounted regressions; `test_path_trailing_slash.py` also covers `.`/`..`, repeated separators, the reported `NAME_MAX` boundary and `ENAMETOOLONG` | Map remaining XBD pathname-resolution rules for empty components, `PATH_MAX`, and per-operation final-component following; add mounted boundary and errno cases |
 | P02 | Directory operations and iteration | Create/remove errors, permissions, link counts and small-buffer cookies are covered; `test_directories.sh` repeats directory-fd listing and checks `ENOTDIR`/`EBADF` descriptor errors | Verify `readdir()` mutation rules and all remaining required `mkdir()`/`rmdir()` errors against Issue 8 |
-| P03 | Open and descriptor semantics | Access modes, append-after-seek, shared duplicated offset, create conflicts, descriptor `O_APPEND`/`FD_CLOEXEC` flags and symlink create/truncate are covered; a two-mount concurrency probe found a second writable open returns `EBUSY` while the first mount owns the file write lease | Design PostgreSQL-authoritative shared or serialized append admission that permits concurrent writable opens without losing cross-host write fencing; then assert complete, non-interleaved `O_APPEND` records across mounts. Also map all supported `open()` flags and errors and test interrupted close boundary; lowest-descriptor selection remains a kernel descriptor-table property rather than a FOD callback |
-| P04 | Read and write | EOF short reads, zero-length read/write, access-mode errors, positioned-I/O offset preservation, and write/pwrite beyond-EOF zero-fill are covered | Add partial-I/O/error boundaries; cross-mount append serialization cannot be validated until concurrent writable opens are admitted under a PostgreSQL-authoritative ordering contract |
+| P03 | Open and descriptor semantics | Access modes, append-after-seek, shared duplicated offset, create conflicts, descriptor `O_APPEND`/`FD_CLOEXEC` flags and symlink create/truncate are covered; a two-mount concurrency probe found a second writable open returns `EBUSY` while the first mount owns the file write lease | Determine whether standard FUSE can preserve kernel-visible append offsets while PostgreSQL serializes concurrent cross-mount appends; Linux chooses `O_APPEND` from each mount-local inode size before FUSE and the write reply carries no assigned offset. Keep the exclusive lease until a design preserves descriptor positions and cross-host fencing; then test complete append records across mounts. Also map all supported `open()` flags and errors and test interrupted close boundary; lowest-descriptor selection remains a kernel descriptor-table property rather than a FOD callback |
+| P04 | Read and write | EOF short reads, zero-length read/write, access-mode errors, positioned-I/O offset preservation, and write/pwrite beyond-EOF zero-fill are covered | Add partial-I/O/error boundaries; cross-mount append requires a PostgreSQL ordering contract plus a way to keep kernel-local inode size and descriptor positions consistent |
 | P05 | Truncation and file length | Shrink/extend zero-fill, block boundaries, descriptor offset preservation, mtime update, symlink following, `EISDIR`/`ENOENT`/`EINVAL` path errors and read-only descriptor rejection are covered | Map `truncate()`/`ftruncate()` authorization and remaining required errors; verify remaining timestamp effects and concurrent truncate/write serialization across mounts |
 | P06 | Metadata and timestamps | Root metadata, common stat fields, chmod/chown, timestamp authorization, symlink-follow behavior, and descriptor-based `fstat()`/`fchmod()`/timestamp updates are covered | Verify remaining file-status fields and type-specific values, timestamp precision contract, and required errors |
 | P07 | Permissions and identity | Mode checks, supplementary groups, umask, ownership inheritance, ACL authorization and inaccessible-parent search are covered | Map effective/real-ID semantics for `access()`, privilege rules for ownership/mode changes, set-ID bit clearing, and default ACL inheritance separately from base POSIX modes |
@@ -112,9 +112,16 @@ barrier. Source inspection traces this to
 `FodFuse::create_writable_handle_with_ownership()`: PostgreSQL grants one
 exclusive file write-ownership lease, and a competing mount maps an unavailable
 lease to `EBUSY`. This is a concrete POSIX open/append limitation, not evidence
-of record interleaving. Keep the P03/P04 items open until writable opens can
-participate in a PostgreSQL-authoritative serialization design and a mounted
-test proves complete append records from both mounts.
+of record interleaving. In Linux v6.17, both cached and direct FUSE write paths
+run `generic_write_checks()` before the FUSE write callback and choose the
+append position from that mount’s local inode size;
+the FUSE write reply contains no server-assigned offset. A database transaction
+that appends at its authoritative EOF would therefore need an additional way to
+keep kernel-visible file positions synchronized. Keep the exclusive lease until
+a supported design preserves descriptor offsets and cross-host fencing. Sources:
+[Linux FUSE write paths](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/file.c),
+[Linux write checks](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c),
+[FUSE write reply](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h).
 
 ### Sparse `lseek` finding
 

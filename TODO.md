@@ -19,10 +19,22 @@ Reading guide:
   same PostgreSQL database. The second writable `open()` returned `EBUSY` while
   the first mount held the exclusive file write-ownership lease. Source review
   traced the error to `FodFuse::create_writable_handle_with_ownership()`.
-  This blocks POSIX concurrent append behavior before writes can be serialized.
-  Design PostgreSQL-authoritative admission/ordering that permits concurrent
-  writable opens while preserving cross-host fencing, then test complete append
-  records from both mounts. Details and audit status:
+  Linux v6.17's cached and direct FUSE write paths both run
+  `generic_write_checks()` before issuing the FUSE write request;
+  `generic_write_checks_count()` resolves `IOCB_APPEND` from that mount's local
+  `inode->i_size`. The FUSE `fuse_write_out` reply contains only the byte count,
+  so userspace cannot return a PostgreSQL-assigned append offset for the kernel
+  to install as the descriptor position. Therefore, merely allowing shared
+  append leases and choosing the current PostgreSQL EOF in the callback would
+  leave Linux's local inode size and file position out of sync. Preserve the
+  current exclusive lease/`EBUSY` behavior until a design is found that also
+  preserves kernel-visible append offsets, descriptor positions and cross-host
+  fencing. Investigate whether FUSE inode invalidation or a kernel/protocol
+  extension can close that gap before implementing shared append admission.
+  Sources: [FUSE write paths](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/file.c),
+  [`generic_write_checks_count()`](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c),
+  [`fuse_write_out`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h).
+  Details and audit status:
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#cross-mount-append-finding);
   active work is tracked under P03/P04 in
   [`current plan`](docs/plans/CURRENT.md).
