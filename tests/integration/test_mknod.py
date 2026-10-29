@@ -174,6 +174,24 @@ def test_fifo_mknod(work_dir: Path) -> None:
 
     print("OK: FIFO mkfifo nonblocking open/read/write")
 
+    reader = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+    writer = os.open(fifo_path, os.O_WRONLY | os.O_NONBLOCK)
+    os.close(reader)
+    try:
+        try:
+            os.write(writer, b"no readers")
+        except OSError as exc:
+            if exc.errno != errno.EPIPE:
+                raise AssertionError(
+                    f"FIFO write without readers returned errno={exc.errno}, expected EPIPE"
+                ) from exc
+        else:
+            raise AssertionError("FIFO write succeeded after its last reader closed")
+    finally:
+        os.close(writer)
+
+    print("OK: FIFO write without readers returns EPIPE")
+
     writer_started = threading.Event()
     writer_opened = threading.Event()
     blocking_errors: list[BaseException] = []
