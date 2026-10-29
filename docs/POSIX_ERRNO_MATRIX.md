@@ -52,6 +52,17 @@ FOD został wywołany:
   wymienia `EINVAL` dla nieprawidłowego `mode` jako `may fail`, więc Linux nie
   ma obowiązku zwracać tego błędu dla dodatkowych bitów. [Źródło Linux
   v6.17 `fs/open.c`](https://github.com/torvalds/linux/blob/v6.17/fs/open.c).
+- Linux v6.17 sprawdza część warunków `mkdir()` i `rmdir()` przed FUSE:
+  `may_create()` zwraca `EEXIST` dla zajętej nazwy, a sprawdzenie uprawnień
+  rodzica może zakończyć się `EACCES`; `do_mkdirat()` dopiero potem wywołuje
+  `vfs_mkdir()`. `do_rmdir()` zwraca `EINVAL` dla końcowego `.`, `ENOTEMPTY`
+  dla `..` i `EBUSY` dla korzenia ścieżki przed lookupem wpisu. `may_delete()`
+  odrzuca końcowy obiekt inny niż katalog przez `ENOTDIR` (w tym symlink),
+  a korzeń wpisu przez `EBUSY`; `vfs_rmdir()` zwraca `EBUSY` dla mountpointu.
+  Kontrola `mnt_want_write()` może też zwrócić błąd read-only mount przed
+  callbackiem. Zatem regresja syscalla może potwierdzić errno aplikacyjne,
+  lecz nie przypisuje go automatycznie do callbacku FOD. Źródło: Linux v6.17
+  [`fs/namei.c`](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/refs/tags/v6.17/fs/namei.c#L3167).
 - Baza FOD przechowuje nazwy w PostgreSQL `text`, więc nazwa z bajtami spoza
   UTF-8 nie może być zachowana. `validate_component_name()` zwraca dla niej
   `EILSEQ` przed użyciem `to_string_lossy()`, co zapobiega utworzeniu lub

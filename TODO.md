@@ -95,11 +95,15 @@ Reading guide:
   `test_mount_suite.py::test_replica_read_only` permits either `EROFS` or
   `EPERM` for `mkdir()` and does not check `rmdir()`; no direct `rmdir()` on a
   read-only mount regression was found. Add exact-error cases where FOD's
-  callback owns the result, and inspect Linux VFS behavior for cases it may
-  reject first (including final `.`/`..`, mount root, and final symlink). Keep
-  P02 Pending until required `opendir()`/`mkdir()`/`rmdir()` errors and their
-  layer attribution are mapped. See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger)
-  and [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md).
+  callback owns the result. Linux v6.17 source review confirms that VFS handles
+  `rmdir(.)` as `EINVAL`, `rmdir(..)` as `ENOTEMPTY`, root/mountpoint removal as
+  `EBUSY`, and a final symlink as `ENOTDIR` before calling FUSE; VFS also checks
+  destination existence and parent permissions. Distinguish these syscall
+  results from callback-owned errors in the remaining map. Keep P02 Pending
+  until required `opendir()`/`mkdir()`/`rmdir()` errors and their layer
+  attribution are mapped. Source and audit:
+  [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617),
+  [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
   security and lifecycle fixes worth adopting. Upgrade the development/test
