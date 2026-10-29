@@ -29,13 +29,6 @@ Reading guide:
   [FUSE inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c),
   [special inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/inode.c),
   [FIFO operations](https://github.com/torvalds/linux/blob/v6.17/fs/pipe.c).
-- [ ] **POSIX disposition for `unlink(directory)` errno.** FOD's `unlink`
-  callback returns Linux `EISDIR` when the target is a directory, and
-  `tests/integration/test_directories.sh` asserts that result. POSIX Issue 8
-  specifies `EPERM` when `unlink()` is prohibited for a directory. Decide and
-  document whether the Linux-compatible errno is the intended FOD contract or
-  whether strict POSIX mode/conformance should return `EPERM`; keep the
-  platform distinction explicit in the errno reference and matrix.
 - [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
   mounted probe opened the same file for append from two mounts backed by the
   same PostgreSQL database. The second writable `open()` returned `EBUSY` while
@@ -72,6 +65,9 @@ Reading guide:
   PostgreSQL rows. Do not close this finding based on passing reruns alone.
 
 ## Previously tracked follow-ups (closed or deferred)
+
+- [x] Decide the errno for `unlink(directory)`.
+  - Decision (2026-10-29): retain Linux-compatible `EISDIR` for FOD's Linux FUSE backend; POSIX Issue 8 prescribes `EPERM` when directory unlink is prohibited. The test asserts `EISDIR`, and both errno references state the platform difference. Do not claim this case is identical to the POSIX prescribed errno.
 
 - [x] Protect one destination path against concurrent copies from independent FOD mounts or machines.
   - Closure note (2026-09-29, FOD 3.4.30-3.4.31): direct writable `create`/copy and temporary-file plus `rename`/replace are PostgreSQL-authoritative first-writer-wins paths.
