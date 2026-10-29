@@ -49,11 +49,16 @@ import os
 import sys
 
 file_path, nonempty_dir = sys.argv[1:]
+missing_parent = os.path.join(nonempty_dir, "missing-parent")
 for path, expected, label in (
     (nonempty_dir, errno.EISDIR, "unlink directory"),
     (os.path.join(nonempty_dir, "missing-unlink-target"), errno.ENOENT, "unlink missing path"),
     (os.path.join(nonempty_dir, "missing-rmdir-target"), errno.ENOENT, "rmdir missing path"),
+    (os.path.join(missing_parent, "new-directory"), errno.ENOENT, "mkdir missing parent"),
+    (os.path.join(missing_parent, "child"), errno.ENOENT, "rmdir missing parent"),
     (file_path, errno.ENOTDIR, "rmdir regular file"),
+    (os.path.join(file_path, "child"), errno.ENOTDIR, "mkdir parent is regular file"),
+    (os.path.join(file_path, "child"), errno.ENOTDIR, "rmdir parent is regular file"),
     (nonempty_dir, errno.ENOTEMPTY, "rmdir non-empty directory"),
     (nonempty_dir, errno.EEXIST, "mkdir existing directory"),
     (file_path, errno.EEXIST, "mkdir existing regular file"),
@@ -96,4 +101,4 @@ PY
 rm -f "${not_a_directory}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY directory_fd_repeat=1"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY mkdir_rmdir_parent_errors=1 directory_fd_repeat=1"
