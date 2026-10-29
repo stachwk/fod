@@ -390,9 +390,16 @@ it sets and reads a POSIX access ACL, checks the resulting mode and access
 decisions, validates default ACL inheritance, and confirms denied access.
 `make test-xattr` and `make test-ioctl` also pass on the mounted filesystem;
 the xattr test uses its documented compatibility fallback for namespaces that
-the host denies, and ioctl coverage exercises `FIONREAD` plus `FICLONE` when
-available (or the documented unsupported errors). This does not validate SELinux
-MAC enforcement or every ioctl/xattr namespace. `unlink`, `rmdir` and both parents of
+the host denies. `FIONREAD` is exercised through FUSE. `FICLONE` returns the
+documented unsupported error on the current FUSE stack, so this test does not
+exercise the FOD userspace clone branch. Linux VFS dispatches `FICLONE` and
+`FICLONERANGE` through `file_operations.remap_file_range`; Linux v6.17's FUSE
+file operations provide `copy_file_range` but no `remap_file_range`, leaving
+the FOD ioctl branches unreachable on this stack. See the [Linux FUSE file
+operations](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fuse/file.c?h=v6.17)
+and [VFS ioctl dispatch](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ioctl.c?h=v6.17).
+This does not validate SELinux MAC enforcement or every ioctl/xattr namespace.
+`unlink`, `rmdir` and both parents of
 `rename` now perform the write+search check through the parent access ACL (or
 mode bits when no ACL exists) inside the namespace mutation transaction. The
 parent row lock serializes each check with ACL and mode changes, including for
@@ -474,10 +481,13 @@ remain available for internal callers and do not carry a request identity.
   ACL/mode check and repeats authorization under the file row lock in its
   content transaction. Timestamp `setattr` authorization and field-preserving
   updates also share one primary transaction.
-  `FICLONE` and `FICLONERANGE` require a writable destination FUSE handle and a
-  readable source descriptor; invalid open modes return `EBADF` before copy
-  planning. Mounted `FIONREAD` and `FICLONE` behavior passed; range clone and
-  invalid-handle/access-mode cases still need mounted validation.
+  FOD's userspace `FICLONE` and `FICLONERANGE` branches validate writable
+  destination handles and readable source descriptors, but standard Linux FUSE
+  does not route these VFS remap ioctls to the userspace ioctl callback on the
+  tested v6.17 kernel. `FICLONE` therefore returned `EOPNOTSUPP` before the FOD
+  branch ran; `FICLONERANGE` behaved the same. These source-level checks have no
+  mounted runtime evidence on this stack and must not be counted as enforced
+  behavior. Mounted `FIONREAD` remains validated.
   FUSE `access` and `open` also evaluate owner/group/mode from primary and
   reject a stale inode-to-path mapping before deciding access.
   Shared database credentials do not replace these decisions.

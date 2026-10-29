@@ -26,6 +26,17 @@ Reading guide:
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#cross-mount-append-finding);
   active work is tracked under P03/P04 in
   [`current plan`](docs/plans/CURRENT.md).
+- [ ] **FICLONE/FICLONERANGE FOD ioctl branches are unreachable on standard
+  Linux FUSE.** A mounted `FICLONERANGE` probe returned `EOPNOTSUPP` before a
+  matching FUSE ioctl request reached userspace. Source evidence from Linux
+  v6.17 shows VFS handles these commands through `remap_file_range`, while the
+  kernel FUSE file operations expose `copy_file_range` but no
+  `remap_file_range`. The current `test_ioctl.py` fallback therefore does not
+  validate FOD's userspace clone branch. Keep clone ioctl support explicitly
+  unsupported for this backend unless a kernel-supported route is implemented;
+  remove or clearly mark unreachable userspace branches and keep tests from
+  claiming they exercise them. See the
+  [primary-authority audit](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#remaining-source-level-review-items).
 
 ## Previously tracked follow-ups (closed or deferred)
 
