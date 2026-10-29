@@ -39,6 +39,16 @@ valid replacement for filesystem operation ordering.
 
 See `docs/FOD_ARCHITECTURE_INVARIANTS.md`.
 
+## Linux errno centralization
+
+`rust_fuse/src/errno.rs` is the single source of truth for Linux errno values
+and mappings exposed by the Rust FUSE frontend. Add new errno definitions and
+domain-error translations there, and have filesystem callbacks refer to those
+symbols instead of embedding raw `libc::E...` values or duplicating mappings.
+When modifying a callback that still uses an inline errno, move that use to
+`errno.rs` as part of the same change. Keep `docs/ERRNO_REFERENCE.md` aligned
+with the supported names, POSIX scope and FOD behavior.
+
 ## Problem tracking
 
 Record every newly discovered unresolved defect, POSIX gap, failed regression
