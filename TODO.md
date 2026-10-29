@@ -45,6 +45,20 @@ Reading guide:
   version at 3.0.0 unless FOD starts using an API or behavior that requires a
   higher floor; updating libfuse does not by itself add missing FUSE callbacks
   such as `remap_file_range`.
+- [ ] **Intermittent whole-object sharing failure in `test-df`.** On
+  2026-10-29, one mounted run completed the 65,536-byte `copy_file_range()`
+  with correct file contents but found different PostgreSQL
+  `data_object_id` values for the source and copy (`695` and `696`). Two later
+  runs passed, including one with debug logging, so the cause is not established
+  and the issue is not considered fixed. Source review shows that whole-object
+  adoption is skipped when either open write state has pending changes; the
+  current successful-run log archive does not establish which copy branch ran.
+  ASM/ELF review of the `release-lto` x86-64 PIE confirmed that symbols are
+  stripped and found the copy completion/adoption log call sites, but did not
+  identify a causal branch or optimization defect. Reproduce with an event-level
+  trace of source/destination write-state dirtiness, copy bounds, adoption
+  result, and resulting object IDs; preserve the exact failed-run log and
+  PostgreSQL rows. Do not close this finding based on passing reruns alone.
 
 ## Previously tracked follow-ups (closed or deferred)
 
