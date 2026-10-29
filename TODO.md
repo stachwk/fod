@@ -14,6 +14,19 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **`F_SETLKW` signal interruption is blocked by the fuser frontend.**
+  A mounted probe held a conflicting lock on one mount, waited in `F_SETLKW` on
+  a second mount, then sent `SIGUSR1` to the waiting thread. The syscall did not
+  return `EINTR`; FOD continued logging the lock wait, and test cleanup found
+  the mount busy. Source inspection identifies the boundary: pinned fuser
+  0.18.0's high-level dispatcher has `FUSE_INTERRUPT` marked TODO and returns
+  `ENOSYS` instead of notifying the original request. Root cause confidence is
+  high. This leaves the POSIX `F_SETLKW` interruption case unsupported and can
+  keep a caller blocked after its signal. Upgrade or patch the frontend to
+  route interrupt request IDs to cancellable lock waits, cancel the
+  PostgreSQL-backed wait without changing lock authority, then rerun the
+  mounted probe and verify no late lock acquisition. Source: fuser 0.18.0
+  `src/request.rs`, high-level `Operation::Interrupt` dispatch.
 - [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
   mounted probe opened the same file for append from two mounts backed by the
   same PostgreSQL database. The second writable `open()` returned `EBUSY` while
