@@ -37,6 +37,14 @@ Reading guide:
   remove or clearly mark unreachable userspace branches and keep tests from
   claiming they exercise them. See the
   [primary-authority audit](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#remaining-source-level-review-items).
+- [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
+  host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
+  security and lifecycle fixes worth adopting. Upgrade the development/test
+  environment and verify FOD mount, unmount, multi-threaded shutdown, and
+  integration behavior on that release. Keep the project's minimum supported
+  version at 3.0.0 unless FOD starts using an API or behavior that requires a
+  higher floor; updating libfuse does not by itself add missing FUSE callbacks
+  such as `remap_file_range`.
 
 ## Previously tracked follow-ups (closed or deferred)
 
