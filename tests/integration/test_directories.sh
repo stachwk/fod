@@ -84,9 +84,44 @@ else:
     os.close(child_fd)
     raise AssertionError("file creation below a regular file unexpectedly succeeded")
 
+for label, operation, child_name in (
+    (
+        "hard link below regular file",
+        lambda child: os.link(file_path, child),
+        "child-hardlink",
+    ),
+    (
+        "symbolic link below regular file",
+        lambda child: os.symlink("target", child),
+        "child-symlink",
+    ),
+):
+    child = os.path.join(file_path, child_name)
+    try:
+        operation(child)
+    except OSError as error:
+        assert error.errno == errno.ENOTDIR, (label, error.errno)
+    else:
+        raise AssertionError(f"{label} unexpectedly succeeded")
+    assert not os.path.lexists(child), (label, "child entry appeared")
+
+rename_source = os.path.join(nonempty_dir, "rename-source")
+with open(rename_source, "wb") as source_file:
+    source_file.write(b"rename source remains")
+rename_target = os.path.join(file_path, "child-rename-target")
+try:
+    os.replace(rename_source, rename_target)
+except OSError as error:
+    assert error.errno == errno.ENOTDIR, ("rename destination below regular file", error.errno)
+else:
+    raise AssertionError("rename into a regular file unexpectedly succeeded")
+with open(rename_source, "rb") as source_file:
+    assert source_file.read() == b"rename source remains"
+assert not os.path.lexists(rename_target)
+os.unlink(rename_source)
+
 with open(file_path, "rb") as existing_file:
     assert existing_file.read() == b"rmdir target file\n"
-assert not os.path.lexists(child_file)
 
 file_fd = os.open(file_path, os.O_RDONLY)
 try:
@@ -114,4 +149,4 @@ PY
 rm -f "${not_a_directory}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY create_mkdir_rmdir_parent_errors=1 directory_fd_repeat=1"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY child_entry_parent_errors=1 directory_fd_repeat=1"
