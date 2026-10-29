@@ -5795,6 +5795,12 @@ impl Filesystem for FodFuse {
         const STATFS_FREE_INODE_HEADROOM: u64 = 1_000_000;
         const STATFS_NAME_MAX: u32 = 255;
 
+        if std::env::var_os("FOD_TEST_STATFS_FORCE_EIO").is_some() {
+            warn!("FOD statfs snapshot failed err=test fault injection");
+            fuse_reply_error!(reply, EIO);
+            return;
+        }
+
         let snapshot = match self.cached_statfs_snapshot() {
             Ok(snapshot) => snapshot,
             Err(err) => {
