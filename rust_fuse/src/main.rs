@@ -3,6 +3,7 @@
 
 mod compatibility;
 mod copy_plan;
+mod errno;
 mod fs;
 mod logging;
 mod pg_lanes;

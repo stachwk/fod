@@ -16,7 +16,7 @@ use fuser::{
     ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyLseek,
     ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
-use libc::{EIO, ENOENT, ENOSPC, ENOTDIR, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
+use libc::{EIO, ENOENT, ENOTDIR, ENOTEMPTY, ENOTTY, POLLIN, POLLOUT};
 use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
@@ -25,9 +25,6 @@ use rust_hotpath::pg::{
     GeneratedSharedBlockRows, InodePermissionChange, InodePermissionOutcome, InodeTimeValue,
     InodeTimesChange, InodeTimesOutcome, PersistBlockRow, RenameFileReplaceOutcome,
     RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
-    FILE_WRITE_ACCESS_DENIED, FILE_WRITE_TARGET_MISSING, NAMESPACE_ENTRY_EXISTS_PREFIX,
-    NAMESPACE_PARENT_MISSING_PREFIX, NAMESPACE_SOURCE_CHANGED, PARENT_ACCESS_DENIED,
-    STICKY_PERMISSION_DENIED, STORAGE_QUOTA_EXCEEDED_PREFIX, WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
@@ -52,6 +49,7 @@ pub use fod_rust_runtime::{AtimePolicy, LockBackend};
 
 use crate::compatibility::FuseCompatibilitySnapshot;
 use crate::copy_plan::{copy_range_bounds, pack_copy_skip_unchanged_runs, CopyRangeBounds};
+use crate::errno::persist_error_errno;
 use crate::read_cache::{
     FileCacheGenerationGate, ReadBlockCache, ReadFillCoordinator, ReadSequenceState,
 };
@@ -124,20 +122,6 @@ fn fod_fuse_readdir_register_paths_enabled() -> bool {
 
 fn readdir_child_entries_to_skip(offset: u64) -> usize {
     offset.saturating_sub(2) as usize
-}
-
-pub(crate) fn persist_error_errno(error: &str) -> libc::c_int {
-    if error.starts_with(STORAGE_QUOTA_EXCEEDED_PREFIX) {
-        ENOSPC
-    } else if error.starts_with(FILE_WRITE_ACCESS_DENIED) {
-        libc::EACCES
-    } else if error.starts_with(FILE_WRITE_TARGET_MISSING) {
-        ENOENT
-    } else if error.starts_with(WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX) {
-        libc::EBUSY
-    } else {
-        EIO
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2622,9 +2606,7 @@ impl FodFuse {
         match resolved.kind.as_deref() {
             Some("hardlink") => {
                 let hardlink_id = resolved.entry_id.ok_or(EIO)?;
-                authority
-                    .get_hardlink_file_id(hardlink_id)
-                    .map_err(|_| EIO)
+                authority.get_hardlink_file_id(hardlink_id).map_err(|_| EIO)
             }
             Some("file") => Ok(resolved.entry_id),
             _ => Ok(None),
@@ -5013,22 +4995,6 @@ impl FodFuse {
         Ok(())
     }
 
-    fn namespace_mutation_errno(error: &str) -> libc::c_int {
-        if error == PARENT_ACCESS_DENIED {
-            libc::EACCES
-        } else if error.starts_with(NAMESPACE_ENTRY_EXISTS_PREFIX) {
-            libc::EEXIST
-        } else if error == STICKY_PERMISSION_DENIED {
-            libc::EPERM
-        } else if error.starts_with(NAMESPACE_PARENT_MISSING_PREFIX)
-            || error == NAMESPACE_SOURCE_CHANGED
-        {
-            ENOENT
-        } else {
-            EIO
-        }
-    }
-
     fn create_file_for_subject(
         &self,
         parent_id: Option<u64>,
@@ -5200,7 +5166,7 @@ impl FodFuse {
                         path, owner_key, err
                     );
                     release_destination("create_file");
-                    return Err(Self::namespace_mutation_errno(&err));
+                    return Err(crate::errno::namespace_mutation_errno(&err));
                 }
             },
         };
@@ -8558,7 +8524,7 @@ impl Filesystem for FodFuse {
                     Err(errno) => fuse_reply_error!(reply, errno),
                 }
             }
-            Err(err) => fuse_reply_error!(reply, Self::namespace_mutation_errno(&err)),
+            Err(err) => fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err)),
         }
     }
 
@@ -8707,7 +8673,7 @@ impl Filesystem for FodFuse {
                 let errno = if err == "FOD_UNLINK_SOURCE_CHANGED" {
                     ENOENT
                 } else {
-                    Self::namespace_mutation_errno(&err)
+                    crate::errno::namespace_mutation_errno(&err)
                 };
                 self.log_request_error(
                     req_id,
@@ -8815,7 +8781,7 @@ impl Filesystem for FodFuse {
                     "FOD rmdir failed path={} directory_id={} err={}",
                     child_path, directory_id, err
                 );
-                fuse_reply_error!(reply, Self::namespace_mutation_errno(&err));
+                fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err));
             }
         }
     }
@@ -9198,7 +9164,7 @@ impl Filesystem for FodFuse {
                             "FOD req={} op=rename protected namespace replace failed old_path={} new_path={} err={}",
                             req_id, old_path, new_path, err
                         );
-                        fuse_reply_error!(reply, Self::namespace_mutation_errno(&err));
+                        fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err));
                         return;
                     }
                 }
@@ -9319,7 +9285,7 @@ impl Filesystem for FodFuse {
             ) {
                 Ok(file_id) => file_id,
                 Err(err) => {
-                    fuse_reply_error!(reply, Self::namespace_mutation_errno(&err));
+                    fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err));
                     return;
                 }
             };
@@ -10484,7 +10450,7 @@ impl Filesystem for FodFuse {
                     Ok(None) => fuse_reply_error!(reply, EIO),
                     Err(errno) => fuse_reply_error!(reply, errno),
                 },
-                Err(err) => fuse_reply_error!(reply, Self::namespace_mutation_errno(&err)),
+                Err(err) => fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err)),
             }
             return;
         }
@@ -10552,7 +10518,7 @@ impl Filesystem for FodFuse {
         match create_result {
             Ok(_) => {}
             Err(err) => {
-                fuse_reply_error!(reply, Self::namespace_mutation_errno(&err));
+                fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err));
                 return;
             }
         };
@@ -10645,7 +10611,7 @@ impl Filesystem for FodFuse {
                 Ok(None) => fuse_reply_error!(reply, EIO),
                 Err(errno) => fuse_reply_error!(reply, errno),
             },
-            Err(err) => fuse_reply_error!(reply, Self::namespace_mutation_errno(&err)),
+            Err(err) => fuse_reply_error!(reply, crate::errno::namespace_mutation_errno(&err)),
         }
     }
 
@@ -10769,7 +10735,7 @@ impl Filesystem for FodFuse {
                 if err == "FOD_LINK_SOURCE_UNAVAILABLE" {
                     ENOENT
                 } else {
-                    Self::namespace_mutation_errno(&err)
+                    crate::errno::namespace_mutation_errno(&err)
                 }
             ),
         }
@@ -10805,7 +10771,7 @@ mod tests {
     #[test]
     fn parent_access_denial_maps_to_eacces() {
         assert_eq!(
-            FodFuse::namespace_mutation_errno(super::PARENT_ACCESS_DENIED),
+            crate::errno::namespace_mutation_errno(rust_hotpath::pg::PARENT_ACCESS_DENIED),
             libc::EACCES
         );
     }

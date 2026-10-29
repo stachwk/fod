@@ -5,6 +5,9 @@ interpretacją Linuksa i zakresem POSIX.1-2024. Kod errno opisuje niepowodzenie
 wywołania; sam fakt, że jego nazwa występuje w POSIX, nie oznacza, że POSIX
 wymaga zwrócenia go przez FOD w każdym wymienionym tu przypadku. Konkretne
 wymagania zależą od interfejsu, warunków wejściowych i kolejności sprawdzeń.
+Mapowanie błędów domenowych FOD na linuksowe kody errno jest zebrane w
+[`rust_fuse/src/errno.rs`](../rust_fuse/src/errno.rs); kody dla błędów
+konkretnych operacji są zwracane bezpośrednio przy ich obsłudze.
 
 ## Kody operacji plikowych
 

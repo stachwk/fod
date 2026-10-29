@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Wojciech Stach
 // Licensed under BSL 1.1
 
-use crate::fs::{persist_error_errno, FodFuse, PersistFileBlocksProfileInput};
+use crate::errno::persist_error_errno;
+use crate::fs::{FodFuse, PersistFileBlocksProfileInput};
 use crate::write_payload::WritePayloadState;
 use libc::EIO;
 use log::{debug, warn};
