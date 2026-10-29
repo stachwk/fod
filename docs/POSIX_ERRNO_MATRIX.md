@@ -64,6 +64,19 @@ FOD został wywołany:
   callbackiem. Zatem regresja syscalla może potwierdzić errno aplikacyjne,
   lecz nie przypisuje go automatycznie do callbacku FOD. Źródło: Linux v6.17
   [`fs/namei.c`](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/refs/tags/v6.17/fs/namei.c#L3167).
+- W callbacku FOD `mkdir()` zwraca `EROFS` na montowaniu tylko do odczytu,
+  `EILSEQ` dla nazwy spoza UTF-8 i `ENAMETOOLONG` ponad 255 bajtów. Transakcja
+  PostgreSQL serializuje utworzenie nazwy; kontrola uprawnień rodzica mapuje
+  się na `EACCES`, konflikt na `EEXIST`, a brak rodzica na `ENOENT`. `rmdir()`
+  zwraca z callbacku `ENOENT` dla brakującego wpisu, `ENOTDIR` dla wpisu
+  niebędącego katalogiem, `ENOTEMPTY` dla katalogu z dziećmi, a kontrola ACL i
+  sticky bitu daje odpowiednio `EACCES`/`EPERM`. Pozostałe błędy backendu
+  przechodzą przez `namespace_mutation_errno()` i domyślnie stają się `EIO`.
+  W ścieżce błędu SQL tworzenia katalogu FOD pobiera tekst przez `conn_error()`;
+  SQLSTATE nie jest zachowany, więc warunku braku miejsca w backendzie nie da
+  się obecnie odróżnić od ogólnego I/O przez ten mapper. Trzeba rozdzielić
+  błędy operacyjne od błędów infrastruktury, zanim przypisze się im POSIX
+  `ENOSPC`.
 - Baza FOD przechowuje nazwy w PostgreSQL `text`, więc nazwa z bajtami spoza
   UTF-8 nie może być zachowana. `validate_component_name()` zwraca dla niej
   `EILSEQ` przed użyciem `to_string_lossy()`, co zapobiega utworzeniu lub
