@@ -48,17 +48,6 @@ Reading guide:
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#cross-mount-append-finding);
   active work is tracked under P03/P04 in
   [`current plan`](docs/plans/CURRENT.md).
-- [ ] **FICLONE/FICLONERANGE FOD ioctl branches are unreachable on standard
-  Linux FUSE.** A mounted `FICLONERANGE` probe returned `EOPNOTSUPP` before a
-  matching FUSE ioctl request reached userspace. Source evidence from Linux
-  v6.17 shows VFS handles these commands through `remap_file_range`, while the
-  kernel FUSE file operations expose `copy_file_range` but no
-  `remap_file_range`. The current `test_ioctl.py` fallback therefore does not
-  validate FOD's userspace clone branch. Keep clone ioctl support explicitly
-  unsupported for this backend unless a kernel-supported route is implemented;
-  remove or clearly mark unreachable userspace branches and keep tests from
-  claiming they exercise them. See the
-  [primary-authority audit](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#remaining-source-level-review-items).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
   security and lifecycle fixes worth adopting. Upgrade the development/test
@@ -289,8 +278,8 @@ Reading guide:
   - [x] Potem `FS_IOC_GETFLAGS`. Na razie zwracane jest neutralne `0`, bo flags nie są jeszcze trwale przechowywane.
   - [x] `FS_IOC_SETFLAGS` przyjmuje teraz tylko `0` jako bezpieczny no-op; inne flagi dostają `EOPNOTSUPP` do czasu decyzji o trwałej polityce.
   - [x] `FS_IOC_FSGETXATTR` zwraca teraz wyzerowany `fsxattr`, a `FS_IOC_FSSETXATTR` przyjmuje tylko zero/no-op do czasu decyzji o trwałej polityce xflags.
-  - [x] `FICLONE` zostaje na razie eksperymentalny, bo na tym hoście obecny kernel/FUSE stack ucina ten request przed userspace; FOD nie ma jeszcze end-to-end potwierdzenia dla tego pathu.
-    - Historical note: `tests/integration/test_ioctl.py` now covers `FICLONE` alongside `FIONREAD`, accepting the current unsupported path while still verifying that a successful clone would preserve payload contents. The host-side conclusion remains that the request is blocked before userspace on this stack.
+  - [x] Ustalić status `FICLONE` i `FICLONERANGE` dla standardowego Linux FUSE.
+    - Historical note (2026-10-29): Linux v6.17 dispatches these VFS remap ioctls through `remap_file_range`, which FUSE does not expose. FOD's unreachable userspace branches were removed; `test_ioctl.py` now checks that the kernel rejects `FICLONE` before userspace and leaves the destination unchanged. Clone ioctls remain unsupported unless a kernel-supported FUSE route is added. See [`FOD_PRIMARY_AUTHORITY_AUDIT.md`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#remaining-source-level-review-items).
 - [x] Zaprojektować pełną politykę mount-label SELinux. Celowo zamknięte jako non-goal: FOD używa hostowego modelu SELinux; na Rocky Linux 10.2 wspierany kontrakt to `fusefs_t` plus polityka domen, a nie per-inode `security.selinux` relabeling na zwykłym FUSE.
 
 ### PostgreSQL tuning and ingest hardening

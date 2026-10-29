@@ -650,10 +650,12 @@ A `read_only=true` FOD mount is observation-only and must not emit metadata or
 payload DML to PostgreSQL during read-only filesystem activity.
 
 The guard covers automatic atime writes, every mutating `setattr` field
-(mode/owner/size/timestamps/flags), and mutating ioctls such as SETFLAGS,
-FSSETXATTR, FICLONE and FICLONERANGE. Existing create/write/delete/rename/xattr
-and copy_file_range read-only fences remain in force. PostgreSQL session and
-lock-heartbeat writes are already disabled for read-only mounts.
+(mode/owner/size/timestamps/flags), and mutating ioctls such as SETFLAGS and
+FSSETXATTR. Linux FUSE rejects FICLONE/FICLONERANGE before dispatching to
+userspace, so FOD has no corresponding ioctl branch. Existing
+create/write/delete/rename/xattr and copy_file_range read-only fences remain
+in force. PostgreSQL session and lock-heartbeat writes are already disabled for
+read-only mounts.
 
 The Docker primary-write / replica-read diagnostic fails on SQLSTATE 25006,
 on PostgreSQL read-only transaction write errors, or when final FOD PostgreSQL

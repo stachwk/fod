@@ -19,7 +19,7 @@ use fuser::{
 use crate::errno::{
     EACCES, EBADF, EBUSY, EEXIST, EFBIG, EILSEQ, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODATA,
     ENOENT, ENOTDIR, ENOTEMPTY, ENOTTY, ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE, EROFS,
-    ESTALE, EWOULDBLOCK, EXDEV,
+    ESTALE, EWOULDBLOCK,
 };
 use libc::{POLLIN, POLLOUT};
 use log::{debug, info, warn};
@@ -91,20 +91,6 @@ pub(crate) struct PersistFileBlocksProfileInput<'rows, 'data> {
     pub(crate) write_authorization: Option<FileWriteAuthorization>,
 }
 
-struct CopyRangeFromStatesInput {
-    req_id: u64,
-    op: &'static str,
-    src_file_id: u64,
-    dst_file_id: u64,
-    fh_out: u64,
-    src_state: Option<WriteState>,
-    dst_state: Option<WriteState>,
-    src_offset: u64,
-    dst_offset: u64,
-    len: u64,
-    truncate_destination: bool,
-}
-
 fn fod_fuse_profile_io_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_IO", false))
@@ -164,8 +150,6 @@ fn ioctl_is_mutating(cmd: u32) -> bool {
     cmd == libc::FS_IOC_SETFLAGS as u32
         || cmd == libc::FS_IOC32_SETFLAGS as u32
         || cmd == IOCTL_FS_IOC_FSSETXATTR
-        || cmd == libc::FICLONE as u32
-        || cmd == libc::FICLONERANGE as u32
 }
 
 macro_rules! fuse_reply_error {
@@ -283,15 +267,6 @@ struct FileHandleState {
     read_metadata: Option<FileReadMetadata>,
     read_metadata_loaded_at: Option<Instant>,
     write_ownership: Option<FileWriteOwnership>,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct FileCloneRangeIoctl {
-    src_fd: i64,
-    src_offset: u64,
-    src_length: u64,
-    dest_offset: u64,
 }
 
 struct LockHeartbeatHandle {
@@ -3363,13 +3338,6 @@ impl FodFuse {
         self.file_id_for_handle(fh, ino)?.ok_or(ENOENT)
     }
 
-    fn writable_file_id_for_ioctl(&self, fh: u64) -> Result<u64, libc::c_int> {
-        let state = self.file_handle_state_for_handle(fh).ok_or(EBADF)?;
-        if state.flags & libc::O_ACCMODE == libc::O_RDONLY {
-            return Err(EBADF);
-        }
-        state.file_id.ok_or(EBADF)
-    }
 
     fn should_cache_file_read_metadata(
         read_only: bool,
@@ -3499,36 +3467,6 @@ impl FodFuse {
         }
     }
 
-    fn ioctl_ficlone_source_fd(in_data: &[u8]) -> Result<i64, libc::c_int> {
-        match in_data.len() {
-            4 => {
-                let fd_bytes: [u8; 4] = in_data.try_into().map_err(|_| EINVAL)?;
-                Ok(i64::from(i32::from_ne_bytes(fd_bytes)))
-            }
-            8 => {
-                let fd_bytes: [u8; 8] = in_data.try_into().map_err(|_| EINVAL)?;
-                Ok(i64::from_ne_bytes(fd_bytes))
-            }
-            _ => Err(EINVAL),
-        }
-    }
-
-    fn ioctl_ficlonerange_args(in_data: &[u8]) -> Result<FileCloneRangeIoctl, libc::c_int> {
-        if in_data.len() != std::mem::size_of::<FileCloneRangeIoctl>() {
-            return Err(EINVAL);
-        }
-        let src_fd_bytes: [u8; 8] = in_data[0..8].try_into().map_err(|_| EINVAL)?;
-        let src_offset_bytes: [u8; 8] = in_data[8..16].try_into().map_err(|_| EINVAL)?;
-        let src_length_bytes: [u8; 8] = in_data[16..24].try_into().map_err(|_| EINVAL)?;
-        let dest_offset_bytes: [u8; 8] = in_data[24..32].try_into().map_err(|_| EINVAL)?;
-        Ok(FileCloneRangeIoctl {
-            src_fd: i64::from_ne_bytes(src_fd_bytes),
-            src_offset: u64::from_ne_bytes(src_offset_bytes),
-            src_length: u64::from_ne_bytes(src_length_bytes),
-            dest_offset: u64::from_ne_bytes(dest_offset_bytes),
-        })
-    }
-
     fn ioctl_flags_value(in_data: &[u8]) -> Result<u32, libc::c_int> {
         match in_data.len() {
             4 => {
@@ -3547,378 +3485,6 @@ impl FodFuse {
         }
     }
 
-    fn ioctl_clone_source_path(req: &Request, src_fd: i64) -> Result<String, libc::c_int> {
-        if src_fd < 0 {
-            return Err(EINVAL);
-        }
-        let fd_info_path = PathBuf::from(format!("/proc/{}/fdinfo/{}", req.pid(), src_fd));
-        let fd_info = fs::read_to_string(fd_info_path).map_err(|_| EBADF)?;
-        let flags = fd_info
-            .lines()
-            .find_map(|line| line.strip_prefix("flags:").map(str::trim))
-            .ok_or(EBADF)?;
-        let flags = u32::from_str_radix(flags, 8).map_err(|_| EBADF)?;
-        let access_mode = flags & libc::O_ACCMODE as u32;
-        if access_mode == libc::O_WRONLY as u32
-            || access_mode == libc::O_ACCMODE as u32
-            || flags & libc::O_PATH as u32 != 0
-        {
-            return Err(EBADF);
-        }
-        let fd_path = PathBuf::from(format!("/proc/{}/fd/{}", req.pid(), src_fd));
-        let resolved = fs::read_link(&fd_path).map_err(|_| EBADF)?;
-        Ok(resolved.to_string_lossy().into_owned())
-    }
-
-    fn copy_range_from_states(&self, input: CopyRangeFromStatesInput) -> Result<u32, libc::c_int> {
-        let CopyRangeFromStatesInput {
-            req_id,
-            op,
-            src_file_id,
-            dst_file_id,
-            fh_out,
-            src_state,
-            dst_state,
-            src_offset,
-            dst_offset,
-            len,
-            truncate_destination,
-        } = input;
-        let dst_size = if let Some(state) = dst_state.as_ref() {
-            state.file_size
-        } else {
-            match self.file_size_for_update_file_id_or_errno(dst_file_id) {
-                Ok(value) => value,
-                Err(errno) => {
-                    self.log_request_error(
-                        req_id,
-                        op,
-                        errno,
-                        format!("dst_file_id={} size", dst_file_id),
-                    );
-                    return Err(errno);
-                }
-            }
-        };
-        let src_size = if let Some(state) = src_state.as_ref() {
-            state.file_size
-        } else {
-            match self.file_size_for_update_file_id_or_errno(src_file_id) {
-                Ok(value) => value,
-                Err(errno) => {
-                    self.log_request_error(
-                        req_id,
-                        op,
-                        errno,
-                        format!("src_file_id={} size", src_file_id),
-                    );
-                    return Err(errno);
-                }
-            }
-        };
-        let Some(bounds) =
-            copy_range_bounds(self.block_size, src_offset, dst_offset, len, src_size)
-        else {
-            if truncate_destination && src_offset == 0 && dst_offset == 0 && src_size == 0 {
-                let mut state =
-                    dst_state.unwrap_or_else(|| Self::new_write_state(dst_file_id, 0, true));
-                state.file_id = dst_file_id;
-                state.file_size = 0;
-                state.truncate_pending = true;
-                state.buffered_bytes = 0;
-                state.load_error = false;
-                state.clear_payload();
-                self.attach_write_persistence_fence_for_handle(fh_out, &mut state)?;
-                if let Err(errno) = self.flush_write_state(&mut state) {
-                    self.log_request_error(req_id, op, errno, format!("fh_out={} flush", fh_out));
-                    return Err(errno);
-                }
-                if Self::write_state_has_pending_changes(&state) {
-                    self.update_write_state(fh_out, state);
-                } else {
-                    self.remove_write_state(fh_out);
-                }
-                debug!(
-                    "FOD req={} op={} truncated destination for empty source src_file_id={} dst_file_id={}",
-                    req_id, op, src_file_id, dst_file_id
-                );
-            }
-            return Ok(0);
-        };
-        let src_dirty = src_state
-            .as_ref()
-            .map(Self::write_state_has_pending_changes)
-            .unwrap_or(false);
-        let dst_dirty = dst_state
-            .as_ref()
-            .map(Self::write_state_has_pending_changes)
-            .unwrap_or(false);
-        let adopt_whole_object =
-            bounds.can_adopt_whole_object(src_size, dst_size, src_dirty, dst_dirty);
-        let CopyRangeBounds {
-            src_offset,
-            dst_offset,
-            copy_len,
-            src_end_offset,
-            dst_end_offset,
-            src_first_block,
-            src_last_block,
-            dst_first_block,
-            dst_last_block,
-        } = bounds;
-        let dedupe_enabled = self.copy_dedupe_enabled_for_len(copy_len);
-
-        if adopt_whole_object {
-            match self.adopt_source_data_object_for_handle(fh_out, src_file_id, dst_file_id) {
-                Ok(true) => {
-                    if let Some(state) = dst_state.as_ref() {
-                        let mut state = self.clone_write_state_profiled(state);
-                        state.file_size = src_size;
-                        self.update_write_state(fh_out, state);
-                    }
-                    self.clear_read_cache_for_file(dst_file_id);
-                    self.clear_recent_write_blocks_for_file(dst_file_id);
-                    self.invalidate_statfs_cache();
-                    debug!(
-                        "FOD req={} op={} adopted source data object src_file_id={} dst_file_id={} len={}",
-                        req_id, op, src_file_id, dst_file_id, copy_len
-                    );
-                    return Ok(copy_len as u32);
-                }
-                Ok(false) => {}
-                Err(_) => {
-                    self.log_request_error(
-                        req_id,
-                        op,
-                        EIO,
-                        format!(
-                            "src_file_id={} dst_file_id={} adopt",
-                            src_file_id, dst_file_id
-                        ),
-                    );
-                    return Err(EIO);
-                }
-            }
-        }
-
-        let target_file_size = dst_size.max(dst_end_offset);
-        let reservation_bytes = target_file_size
-            .saturating_add(self.block_size.saturating_sub(1))
-            .checked_div(self.block_size.max(1))
-            .unwrap_or(0)
-            .saturating_mul(self.block_size.max(1));
-        let capacity_reservation =
-            match PayloadCapacityReservation::reserve(&self.repo, reservation_bytes) {
-                Ok(reservation) => reservation,
-                Err(err) => {
-                    let errno = persist_error_errno(&err);
-                    self.log_request_error(
-                        req_id,
-                        op,
-                        errno,
-                        format!(
-                            "dst_file_id={} reserve_bytes={} err={}",
-                            dst_file_id, reservation_bytes, err
-                        ),
-                    );
-                    return Err(errno);
-                }
-            };
-
-        let data = if let Some(state) = src_state.as_ref() {
-            let mut state = self.clone_write_state_profiled(state);
-            match self.read_from_write_state(&mut state, src_offset, copy_len) {
-                Ok(data) => data,
-                Err(errno) => {
-                    self.log_request_error(
-                        req_id,
-                        op,
-                        errno,
-                        format!("src_file_id={} load_write_state", src_file_id),
-                    );
-                    return Err(errno);
-                }
-            }
-        } else {
-            match self.repo.assemble_file_slice_authoritative(
-                src_file_id,
-                src_first_block,
-                src_last_block,
-                src_offset,
-                src_end_offset,
-                self.block_size,
-            ) {
-                Ok(data) => data,
-                Err(_) => {
-                    self.log_request_error(
-                        req_id,
-                        op,
-                        EIO,
-                        format!("src_file_id={} assemble", src_file_id),
-                    );
-                    return Err(EIO);
-                }
-            }
-        };
-        let dst_initial_size = dst_state
-            .as_ref()
-            .map(|state| state.file_size)
-            .unwrap_or(dst_size);
-        let had_dst_state = dst_state.is_some();
-        let mut state = dst_state
-            .unwrap_or_else(|| Self::new_write_state(dst_file_id, dst_initial_size, false));
-        state.file_id = dst_file_id;
-        let current_size = state.file_size;
-        let target_end = dst_offset.saturating_add(copy_len);
-
-        if dedupe_enabled && dst_offset < current_size {
-            let current = if had_dst_state {
-                let mut compare_state = self.clone_write_state_profiled(&state);
-                if target_end > compare_state.file_size {
-                    compare_state.file_size = target_end;
-                }
-                self.read_copy_destination_slice(ReadCopyDestinationSlice {
-                    dst_file_id,
-                    state: Some(&mut compare_state),
-                    dst_first_block,
-                    dst_last_block,
-                    dst_offset,
-                    size: copy_len,
-                    current_size,
-                })
-            } else {
-                self.read_copy_destination_slice(ReadCopyDestinationSlice {
-                    dst_file_id,
-                    state: None,
-                    dst_first_block,
-                    dst_last_block,
-                    dst_offset,
-                    size: copy_len,
-                    current_size,
-                })
-            };
-            let current = match current {
-                Ok(data) => data,
-                Err(_) => {
-                    self.log_request_error(
-                        req_id,
-                        op,
-                        EIO,
-                        format!("dst_file_id={} assemble", dst_file_id),
-                    );
-                    return Err(EIO);
-                }
-            };
-            let runs = pack_copy_skip_unchanged_runs(dst_offset, self.block_size, &data, &current);
-            if runs.is_empty() {
-                if truncate_destination && target_end != current_size {
-                    state.file_size = target_end;
-                    state.truncate_pending = true;
-                    if let Err(errno) = self.flush_write_state_with_capacity_reservation(
-                        &mut state,
-                        capacity_reservation.token(),
-                    ) {
-                        self.log_request_error(
-                            req_id,
-                            op,
-                            errno,
-                            format!("fh_out={} flush", fh_out),
-                        );
-                        return Err(errno);
-                    }
-                    self.update_write_state(fh_out, state);
-                    debug!(
-                        "FOD req={} op={} adjusted size without changed blocks src_file_id={} dst_file_id={} len={}",
-                        req_id, op, src_file_id, dst_file_id, copy_len
-                    );
-                } else if target_end > current_size {
-                    state.file_size = target_end;
-                    if let Err(errno) = self.flush_write_state_with_capacity_reservation(
-                        &mut state,
-                        capacity_reservation.token(),
-                    ) {
-                        self.log_request_error(
-                            req_id,
-                            op,
-                            errno,
-                            format!("fh_out={} flush", fh_out),
-                        );
-                        return Err(errno);
-                    }
-                    self.update_write_state(fh_out, state);
-                    debug!(
-                        "FOD req={} op={} dedupe extended size without changed blocks src_file_id={} dst_file_id={} len={}",
-                        req_id, op, src_file_id, dst_file_id, copy_len
-                    );
-                } else {
-                    debug!(
-                        "FOD req={} op={} dedupe skipped unchanged blocks src_file_id={} dst_file_id={} len={}",
-                        req_id, op, src_file_id, dst_file_id, copy_len
-                    );
-                }
-                return Ok(copy_len as u32);
-            }
-            if target_end > state.file_size {
-                state.file_size = target_end;
-            }
-            for (run_start, run_payload) in runs {
-                if let Err(errno) = self.update_write_buffer(&mut state, run_start, &run_payload) {
-                    self.log_request_error(
-                        req_id,
-                        op,
-                        errno,
-                        format!("fh_out={} update_write_buffer", fh_out),
-                    );
-                    return Err(errno);
-                }
-                state.buffered_bytes = state
-                    .buffered_bytes
-                    .saturating_add(run_payload.len() as u64);
-            }
-            if truncate_destination {
-                state.truncate_pending = true;
-            }
-            if let Err(errno) = self.flush_write_state_with_capacity_reservation(
-                &mut state,
-                capacity_reservation.token(),
-            ) {
-                self.log_request_error(req_id, op, errno, format!("fh_out={} flush", fh_out));
-                return Err(errno);
-            }
-            self.update_write_state(fh_out, state);
-            debug!(
-                "FOD req={} op={} dedupe wrote changed blocks src_file_id={} dst_file_id={} len={}",
-                req_id, op, src_file_id, dst_file_id, copy_len
-            );
-            return Ok(copy_len as u32);
-        }
-
-        if let Err(errno) = self.update_write_buffer(&mut state, dst_offset, &data) {
-            self.log_request_error(
-                req_id,
-                op,
-                errno,
-                format!("fh_out={} update_write_buffer", fh_out),
-            );
-            return Err(errno);
-        }
-        state.buffered_bytes = state.buffered_bytes.saturating_add(data.len() as u64);
-        if truncate_destination {
-            state.truncate_pending = true;
-        }
-        if let Err(errno) = self
-            .flush_write_state_with_capacity_reservation(&mut state, capacity_reservation.token())
-        {
-            self.log_request_error(req_id, op, errno, format!("fh_out={} flush", fh_out));
-            return Err(errno);
-        }
-        self.update_write_state(fh_out, state);
-        debug!(
-            "FOD req={} op={} completed src_file_id={} dst_file_id={} len={}",
-            req_id, op, src_file_id, dst_file_id, copy_len
-        );
-        Ok(copy_len as u32)
-    }
 
     fn remove_primary_file_or_promote_hardlink(&self, file_id: u64) -> Result<(), String> {
         match self.repo.count_file_links(file_id) {
@@ -6737,7 +6303,7 @@ impl Filesystem for FodFuse {
 
     fn ioctl(
         &self,
-        req: &Request,
+        _req: &Request,
         ino: INodeNo,
         fh: FileHandle,
         _flags: IoctlFlags,
@@ -6877,191 +6443,6 @@ impl Filesystem for FodFuse {
                 }
                 let available = size.min(u32::MAX as u64) as u32;
                 reply.ioctl(0, &available.to_ne_bytes());
-            }
-            value if value == libc::FICLONE as u32 => {
-                if attrs.file_attr.kind != FileType::RegularFile {
-                    fuse_reply_error!(reply, ENOTTY);
-                    return;
-                }
-                let src_fd = match Self::ioctl_ficlone_source_fd(in_data) {
-                    Ok(value) => value,
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                let src_path = match Self::ioctl_clone_source_path(req, src_fd) {
-                    Ok(value) => value,
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                let src_file_id = match self.file_id_for_path(&src_path) {
-                    Ok(Some(value)) => value,
-                    Ok(None) => {
-                        fuse_reply_error!(reply, EXDEV);
-                        return;
-                    }
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                let dst_file_id = match self.writable_file_id_for_ioctl(fh) {
-                    Ok(value) => value,
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                if src_file_id == dst_file_id {
-                    fuse_reply_error!(reply, EINVAL);
-                    return;
-                }
-                if let Err(errno) =
-                    self.flush_pending_write_states_for_file_except(src_file_id, u64::MAX)
-                {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
-                if let Err(errno) = self.flush_pending_write_states_for_file_except(dst_file_id, fh)
-                {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
-                let dst_state = self.write_state_for_handle(fh);
-                let src_size = match self.file_size_for_update_file_id_or_errno(src_file_id) {
-                    Ok(value) => value,
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                let req_id = self.next_request_id();
-                self.log_request_start(
-                    req_id,
-                    "ioctl_ficlone",
-                    format!(
-                        "src_path={} src_file_id={} dst_path={} dst_file_id={} src_fd={} len={}",
-                        src_path, src_file_id, path, dst_file_id, src_fd, src_size
-                    ),
-                );
-                match self.copy_range_from_states(CopyRangeFromStatesInput {
-                    req_id,
-                    op: "ioctl_ficlone",
-                    src_file_id,
-                    dst_file_id,
-                    fh_out: fh,
-                    src_state: None,
-                    dst_state,
-                    src_offset: 0,
-                    dst_offset: 0,
-                    len: src_size,
-                    truncate_destination: true,
-                }) {
-                    Ok(_) => reply.ioctl(0, &[]),
-                    Err(errno) => fuse_reply_error!(reply, errno),
-                }
-            }
-            value if value == libc::FICLONERANGE as u32 => {
-                if attrs.file_attr.kind != FileType::RegularFile {
-                    fuse_reply_error!(reply, ENOTTY);
-                    return;
-                }
-                let args = match Self::ioctl_ficlonerange_args(in_data) {
-                    Ok(value) => value,
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                let src_path = match Self::ioctl_clone_source_path(req, args.src_fd) {
-                    Ok(value) => value,
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                let src_file_id = match self.file_id_for_path(&src_path) {
-                    Ok(Some(value)) => value,
-                    Ok(None) => {
-                        fuse_reply_error!(reply, EXDEV);
-                        return;
-                    }
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                let dst_file_id = match self.writable_file_id_for_ioctl(fh) {
-                    Ok(value) => value,
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                if src_file_id == dst_file_id {
-                    fuse_reply_error!(reply, EINVAL);
-                    return;
-                }
-                if let Err(errno) =
-                    self.flush_pending_write_states_for_file_except(src_file_id, u64::MAX)
-                {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
-                if let Err(errno) = self.flush_pending_write_states_for_file_except(dst_file_id, fh)
-                {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
-                let dst_state = self.write_state_for_handle(fh);
-                let src_size = match self.file_size_for_update_file_id_or_errno(src_file_id) {
-                    Ok(value) => value,
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                };
-                let src_offset = args.src_offset;
-                let len = if args.src_length == 0 {
-                    src_size.saturating_sub(src_offset)
-                } else {
-                    args.src_length.min(src_size.saturating_sub(src_offset))
-                };
-                let req_id = self.next_request_id();
-                self.log_request_start(
-                    req_id,
-                    "ioctl_ficlonerange",
-                    format!(
-                        "src_path={} src_file_id={} dst_path={} dst_file_id={} src_fd={} src_offset={} dest_offset={} len={}",
-                        src_path,
-                        src_file_id,
-                        path,
-                        dst_file_id,
-                        args.src_fd,
-                        src_offset,
-                        args.dest_offset,
-                        len
-                    ),
-                );
-                match self.copy_range_from_states(CopyRangeFromStatesInput {
-                    req_id,
-                    op: "ioctl_ficlonerange",
-                    src_file_id,
-                    dst_file_id,
-                    fh_out: fh,
-                    src_state: None,
-                    dst_state,
-                    src_offset,
-                    dst_offset: args.dest_offset,
-                    len,
-                    truncate_destination: false,
-                }) {
-                    Ok(_) => reply.ioctl(0, &[]),
-                    Err(errno) => fuse_reply_error!(reply, errno),
-                }
             }
             _ => fuse_reply_error!(reply, ENOTTY),
         }
@@ -11143,8 +10524,6 @@ mod tests {
         assert!(ioctl_is_mutating(libc::FS_IOC_SETFLAGS as u32));
         assert!(ioctl_is_mutating(libc::FS_IOC32_SETFLAGS as u32));
         assert!(ioctl_is_mutating(super::IOCTL_FS_IOC_FSSETXATTR));
-        assert!(ioctl_is_mutating(libc::FICLONE as u32));
-        assert!(ioctl_is_mutating(libc::FICLONERANGE as u32));
 
         assert!(!ioctl_is_mutating(super::IOCTL_FIGETBSZ));
         assert!(!ioctl_is_mutating(libc::FIONREAD as u32));

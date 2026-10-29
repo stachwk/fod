@@ -58,27 +58,28 @@ def main() -> None:
             src_fd = os.open(clone_source, os.O_RDONLY)
             dst_fd = os.open(clone_dest, os.O_RDWR)
             try:
-                clone_supported = True
                 try:
                     fcntl.ioctl(dst_fd, FICLONE, src_fd)
                 except OSError as exc:
-                    clone_supported = False
                     assert exc.errno in {
                         errno.EOPNOTSUPP,
                         errno.ENOTSUP,
                         errno.EINVAL,
                         errno.ENOTTY,
                     }, exc.errno
+                else:
+                    raise AssertionError(
+                        "Linux FUSE unexpectedly accepted FICLONE; the FOD "
+                        "userspace clone callback is not reachable through "
+                        "the standard kernel interface"
+                    )
             finally:
                 os.close(src_fd)
                 os.close(dst_fd)
 
-            if clone_supported:
-                assert clone_dest.read_bytes() == clone_source_payload
-            else:
-                assert clone_dest.read_bytes() == clone_dest_payload
+            assert clone_dest.read_bytes() == clone_dest_payload
 
-            print("OK ioctl/mount")
+            print("OK ioctl/mount (FIONREAD supported, FICLONE unsupported by Linux FUSE)")
         finally:
             launcher.stop()
 

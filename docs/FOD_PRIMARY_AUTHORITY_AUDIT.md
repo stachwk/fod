@@ -392,10 +392,10 @@ decisions, validates default ACL inheritance, and confirms denied access.
 the xattr test uses its documented compatibility fallback for namespaces that
 the host denies. `FIONREAD` is exercised through FUSE. `FICLONE` returns the
 documented unsupported error on the current FUSE stack, so this test does not
-exercise the FOD userspace clone branch. Linux VFS dispatches `FICLONE` and
+exercise a FOD clone implementation. Linux VFS dispatches `FICLONE` and
 `FICLONERANGE` through `file_operations.remap_file_range`; Linux v6.17's FUSE
-file operations provide `copy_file_range` but no `remap_file_range`, leaving
-the FOD ioctl branches unreachable on this stack. See the [Linux FUSE file
+file operations provide `copy_file_range` but no `remap_file_range`. The
+unreachable FOD clone branches have been removed. See the [Linux FUSE file
 operations](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fuse/file.c?h=v6.17)
 and [VFS ioctl dispatch](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ioctl.c?h=v6.17).
 This does not validate SELinux MAC enforcement or every ioctl/xattr namespace.
@@ -481,13 +481,12 @@ remain available for internal callers and do not carry a request identity.
   ACL/mode check and repeats authorization under the file row lock in its
   content transaction. Timestamp `setattr` authorization and field-preserving
   updates also share one primary transaction.
-  FOD's userspace `FICLONE` and `FICLONERANGE` branches validate writable
-  destination handles and readable source descriptors, but standard Linux FUSE
-  does not route these VFS remap ioctls to the userspace ioctl callback on the
-  tested v6.17 kernel. `FICLONE` therefore returned `EOPNOTSUPP` before the FOD
-  branch ran; `FICLONERANGE` behaved the same. These source-level checks have no
-  mounted runtime evidence on this stack and must not be counted as enforced
-  behavior. Mounted `FIONREAD` remains validated.
+  Standard Linux FUSE does not route `FICLONE` or `FICLONERANGE` VFS remap
+  ioctls to the userspace ioctl callback on the tested v6.17 kernel.
+  `FICLONE` therefore returned `EOPNOTSUPP` before userspace; the mounted test
+  verifies this unsupported result and that the destination stays unchanged.
+  FOD has no clone ioctl implementation on this backend. Mounted `FIONREAD`
+  remains validated.
   FUSE `access` and `open` also evaluate owner/group/mode from primary and
   reject a stale inode-to-path mapping before deciding access.
   Shared database credentials do not replace these decisions.
