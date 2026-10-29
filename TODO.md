@@ -86,6 +86,12 @@ Reading guide:
 
 ## Previously tracked follow-ups (closed or deferred)
 
+- [x] Document and test FOD's virtual free-inode headroom.
+  - Closure note (2026-10-29, FOD 3.4.203): `statfs` reports a synthetic
+    `f_ffree`/`f_favail` headroom of 1,000,000 because PostgreSQL-backed FOD
+    has no fixed inode pool or separate non-privileged inode quota.
+    `test_df.sh` now asserts the value and equality of both fields.
+
 - [x] Add a mounted `statfs` failure regression for `EIO`.
   - Closure note (2026-10-29, FOD 3.4.201): the mounted integration probe
     injects an `EIO` reply in the FOD statfs callback with
