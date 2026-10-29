@@ -89,6 +89,17 @@ Reading guide:
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#cross-mount-append-finding);
   active work is tracked under P03/P04 in
   [`current plan`](docs/plans/CURRENT.md).
+- [ ] **P02 POSIX directory-error evidence is incomplete.** Source/test review
+  on 2026-10-30 found that `test_path_search_permissions.py` only checks the
+  Python exception class for denied `mkdir()` and `rmdir()`, not exact `EACCES`.
+  `test_mount_suite.py::test_replica_read_only` permits either `EROFS` or
+  `EPERM` for `mkdir()` and does not check `rmdir()`; no direct `rmdir()` on a
+  read-only mount regression was found. Add exact-error cases where FOD's
+  callback owns the result, and inspect Linux VFS behavior for cases it may
+  reject first (including final `.`/`..`, mount root, and final symlink). Keep
+  P02 Pending until required `opendir()`/`mkdir()`/`rmdir()` errors and their
+  layer attribution are mapped. See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger)
+  and [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
   security and lifecycle fixes worth adopting. Upgrade the development/test
