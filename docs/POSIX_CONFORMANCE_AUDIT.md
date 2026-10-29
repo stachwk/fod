@@ -123,19 +123,22 @@ run `generic_write_checks()` before the FUSE write callback and choose the
 append position from that mount’s local inode size;
 the FUSE write reply contains no server-assigned offset. Linux v6.17 inode
 invalidation only invalidates attributes/pages on the receiving mount's FUSE
-session, while `FUSE_NOTIFY_STORE` may extend that mount's local inode size.
-Neither notification can revise an offset already selected for an in-flight
-write or serialize requests already dispatched by another mount; notifications
-must also be delivered separately to each mount. A database transaction that
-appends at its authoritative EOF therefore needs another way to keep
-kernel-visible file positions synchronized. Keep the exclusive lease until a
-supported kernel/protocol design or an explicitly narrower contract preserves
-descriptor offsets and cross-host fencing. Sources:
+session. `FUSE_NOTIFY_STORE` writes the supplied bytes into that mount's page
+cache and increases its local inode size only when the stored range extends
+beyond the current size; it does not shrink a stale larger size. This suggests
+a possible pre-open synchronization experiment for a mount whose cached size
+is stale-low: while holding the PostgreSQL write lease, fetch the authoritative
+tail and store it before replying to `OPEN`. That experiment must also cover
+shrinks and ensure the stored page data is complete. Neither notification can
+revise an offset already selected for an in-flight write or serialize requests
+already dispatched by another mount; notifications must also be delivered
+separately to each mount. Keep the exclusive lease until a supported design
+preserves descriptor offsets and cross-host fencing. Sources:
 [Linux FUSE write paths](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/file.c),
 [Linux write checks](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c),
 [FUSE write reply](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h),
 [inode invalidation](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c),
-[store notification](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/dev.c).
+[store notification](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/notify.c).
 
 ### Sparse `lseek` finding
 

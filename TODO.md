@@ -67,9 +67,14 @@ Reading guide:
   preserves kernel-visible append offsets, descriptor positions and cross-host
   fencing. Linux v6.17's `FUSE_NOTIFY_INVAL_INODE` invalidates attributes and
   pages on the receiving mount's FUSE session; it does not change the offset
-  already selected for an in-flight write. `FUSE_NOTIFY_STORE` can extend that
-  mount's local inode size, but likewise cannot revise an in-flight write's
-  offset or descriptor position. Notifications must reach each mount's own
+  already selected for an in-flight write. `FUSE_NOTIFY_STORE` writes supplied
+  bytes to that mount's page cache and increases local `i_size` only when the
+  stored range extends beyond the current size; it does not shrink a stale
+  larger size. Evaluate a pre-open synchronization experiment that, under the
+  PostgreSQL write lease, fetches and stores the authoritative tail before
+  replying to `OPEN`, including truncated files and complete page contents.
+  Store likewise cannot revise an in-flight write's offset or descriptor
+  position. Notifications must reach each mount's own
   session and do not serialize writes already dispatched by another mount.
   Therefore, notifications alone do not close the append gap; retain the
   exclusive lease until a kernel/protocol design or explicitly narrower
@@ -79,7 +84,7 @@ Reading guide:
   [`generic_write_checks_count()`](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c),
   [`fuse_write_out`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h),
   [`FUSE_NOTIFY_INVAL_INODE`](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c),
-  and [`FUSE_NOTIFY_STORE`](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/dev.c).
+  and [`FUSE_NOTIFY_STORE`](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/notify.c).
   Details and audit status:
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#cross-mount-append-finding);
   active work is tracked under P03/P04 in
