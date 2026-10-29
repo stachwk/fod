@@ -14,13 +14,21 @@ Reading guide:
 
 ## Unresolved findings
 
-- [ ] **POSIX/Linux `fcntl()` locks on FIFO objects are not represented by FOD.**
-  On Linux `6.17.0-41-generic`, a local FIFO accepted `F_GETLK` and `F_SETLK`.
-  FOD's `getlk`/`setlk` callbacks currently accept only resolved `file` and
-  `hardlink` kinds and return `ENOENT` for other kinds, including FIFO. Add a
-  mounted regression to confirm the observed errno, then decide whether FIFO
-  lock support belongs in FOD's contract and, if so, add a PostgreSQL-backed
-  resource identity that preserves cross-host ordering.
+- [ ] **POSIX record locks on FUSE FIFO objects are mount-local, not
+  PostgreSQL-authoritative.** On 2026-10-29, a cross-mount probe used two FOD
+  primary mounts backed by the same PostgreSQL database and separate processes.
+  Both processes acquired an exclusive `F_SETLK` on the same FIFO; a native
+  Linux FIFO accepts the operation too. Linux v6.17 source explains the bypass:
+  `fs/fuse/inode.c` sends FIFO inodes through `init_special_inode()`,
+  `fs/inode.c` assigns `pipefifo_fops`, and `fs/pipe.c` defines no `.lock`
+  operation there. The kernel therefore applies local POSIX locks to each
+  mount's separate inode without calling FOD's FUSE lock callbacks. Resolve
+  whether FOD can make FIFO locks cross-mount authoritative with the available
+  FUSE interface; if it cannot, document the limitation explicitly rather than
+  claiming shared FIFO-lock semantics. Sources:
+  [FUSE inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c),
+  [special inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/inode.c),
+  [FIFO operations](https://github.com/torvalds/linux/blob/v6.17/fs/pipe.c).
 - [ ] **POSIX disposition for `unlink(directory)` errno.** FOD's `unlink`
   callback returns Linux `EISDIR` when the target is a directory, and
   `tests/integration/test_directories.sh` asserts that result. POSIX Issue 8
