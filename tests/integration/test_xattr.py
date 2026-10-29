@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import os
 import struct
@@ -395,6 +396,39 @@ def build_posix_acl(user_perm: int, group_perm: int, other_perm: int) -> bytes:
     return bytes(acl)
 
 
+def assert_xattr_small_buffer_returns_erange(path: Path, name: str) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    getxattr = libc.getxattr
+    getxattr.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+    ]
+    getxattr.restype = ctypes.c_ssize_t
+    listxattr = libc.listxattr
+    listxattr.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t]
+    listxattr.restype = ctypes.c_ssize_t
+
+    path_bytes = os.fsencode(path)
+    tiny_buffer = ctypes.create_string_buffer(1)
+    ctypes.set_errno(0)
+    get_result = getxattr(path_bytes, os.fsencode(name), tiny_buffer, 1)
+    get_errno = ctypes.get_errno()
+    assert get_result == -1 and get_errno == errno.ERANGE, (
+        f"getxattr small-buffer result={get_result} errno={get_errno}, "
+        f"expected -1/ERANGE for {name!r}"
+    )
+
+    ctypes.set_errno(0)
+    list_result = listxattr(path_bytes, tiny_buffer, 1)
+    list_errno = ctypes.get_errno()
+    assert list_result == -1 and list_errno == errno.ERANGE, (
+        f"listxattr small-buffer result={list_result} errno={list_errno}, "
+        "expected -1/ERANGE"
+    )
+
+
 def main() -> None:
     launcher = FODMount(str(ROOT))
     launcher.init_schema()
@@ -423,6 +457,7 @@ def main() -> None:
             os.setxattr(file_path, "user.comment", user_value)
             assert os.getxattr(file_path, "user.comment") == user_value
             assert "user.comment" in os.listxattr(file_path)
+            assert_xattr_small_buffer_returns_erange(file_path, "user.comment")
 
             os.setxattr(file_path, "trusted.fod", trusted_value)
             assert os.getxattr(file_path, "trusted.fod") == trusted_value

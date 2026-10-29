@@ -14,14 +14,11 @@ Reading guide:
 
 ## Unresolved findings
 
-- [ ] **Add mounted errno regressions for xattr buffer sizing and stale degraded reads.**
-  `rust_fuse/src/fs.rs` returns `ERANGE` from `getxattr()` and `listxattr()` when
-  a supplied buffer is too small, but `test_xattr.py` does not assert this
-  boundary. `assemble_degraded_snapshot()` returns `ESTALE` when an opened file
-  is absent from the read snapshot; this currently has only a unit test. Add
-  mounted `ERANGE` assertions and add the `ESTALE` mounted regression when the
-  degraded read-only test environment is available. The code paths are
-  centralized in [`errno.rs`](rust_fuse/src/errno.rs), and the names are now
+- [ ] **Add a mounted stale-read `ESTALE` regression.**
+  `assemble_degraded_snapshot()` returns `ESTALE` when an opened file is absent
+  from the read snapshot; this currently has only a unit test. Add the mounted
+  regression when the degraded read-only test environment is available. The
+  code is centralized in [`errno.rs`](rust_fuse/src/errno.rs), and the name is
   included in [`ERRNO_REFERENCE.md`](docs/ERRNO_REFERENCE.md). Track under P12
   in the [POSIX audit](docs/POSIX_CONFORMANCE_AUDIT.md).
 - [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
