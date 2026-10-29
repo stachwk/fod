@@ -325,6 +325,8 @@ assert path_stats.f_bsize > 0
 assert path_stats.f_frsize > 0
 assert 0 <= path_stats.f_bavail <= path_stats.f_bfree <= path_stats.f_blocks
 assert 0 <= path_stats.f_favail <= path_stats.f_ffree <= path_stats.f_files
+assert path_stats.f_bavail == path_stats.f_bfree, "FOD reports no reserved filesystem blocks"
+assert path_stats.f_favail == path_stats.f_ffree, "Linux FUSE exposes all free inodes"
 if hasattr(os, "ST_RDONLY"):
     assert not (path_stats.f_flag & os.ST_RDONLY), "read-write FOD mount reports ST_RDONLY"
 if hasattr(os, "ST_NOSUID"):
