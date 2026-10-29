@@ -632,6 +632,7 @@ Status: active design direction, but the main decisions below are already taken.
 ### POSIX Conformance Audit
 
 - [ ] Complete the [POSIX conformance audit](docs/POSIX_CONFORMANCE_AUDIT.md) for FOD's declared filesystem API. The audit defines POSIX.1-2024 Issue 8 as its baseline, identifies Linux/FUSE extensions separately, and starts a requirement matrix. Review exact normative sections and optional/XSI applicability; classify each requirement as pending, pass, fail, not implemented, or not applicable; map it to implementation evidence and a regression or `pjdfstest` case. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
+- [ ] Diagnose parallel `rust_fuse/tests/lock_backend_smoke.rs` failures before changing timing or retry behavior. On 2026-10-28, `make test-locking` had 5/7 pass and two replica tests returned `ENOENT` during lookup, alongside busy-mount teardown errors; the same built binary passed all 7/7 tests serially under `sudo`. Capture per-mount logs and PostgreSQL namespace state at failure, identify the conflicting operation or lifecycle event, then add a deterministic regression for the established cause. Current owner: POSIX audit follow-up.
 
 ### pjdfstest Observations
 
