@@ -11,8 +11,11 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "3.4.204"
+version = "3.4.205"
 rust-version = "1.85"
+
+[patch.crates-io]
+fuser = { path = "vendor/fuser" }
 
 [profile.release-lto]
 inherits = "release"

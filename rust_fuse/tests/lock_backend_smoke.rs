@@ -12,6 +12,24 @@ use std::time::{Duration, Instant};
 
 use support::{db_repo, resolve_file_id, unique_suffix, MountedFs};
 
+extern "C" fn ignore_signal(_signal: libc::c_int) {}
+
+fn install_signal_handler(signal: libc::c_int) -> Result<libc::sigaction, String> {
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = ignore_signal as *const () as usize;
+    action.sa_flags = 0;
+    unsafe { libc::sigemptyset(&mut action.sa_mask) };
+    let mut previous: libc::sigaction = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::sigaction(signal, &action, &mut previous) };
+    if rc == -1 {
+        return Err(format!(
+            "install signal handler failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(previous)
+}
+
 fn flock(lock_type: i16, start: i64, len: i64) -> libc::flock {
     flock_with_whence(lock_type, libc::SEEK_SET as i16, start, len)
 }
@@ -675,6 +693,160 @@ fn blocking_setlkw_waits_for_cross_mount_unlock() -> Result<(), String> {
     drop(fd_a);
     drop(primary_b);
     drop(primary_a);
+    Ok(())
+}
+
+#[test]
+fn blocking_setlkw_returns_eintr_without_acquiring_lock_later() -> Result<(), String> {
+    if skip_without_root() {
+        return Ok(());
+    }
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let signal = libc::SIGUSR1;
+    let primary_a = MountedFs::start_with_role("lock-setlkw-eintr-primary-a", "primary", &[])?;
+    let suffix = unique_suffix();
+    let relative = format!("lock-setlkw-eintr-{suffix}/payload.txt");
+    let file_path = primary_a.mountpoint.join(&relative);
+    fs::create_dir(file_path.parent().expect("file parent"))
+        .map_err(|err| format!("create lock directory failed: {err}"))?;
+    fs::write(&file_path, b"interrupt blocking lock")
+        .map_err(|err| format!("write lock file failed: {err}"))?;
+
+    let fd_a = OpenOptions::new()
+        .read(true)
+        .open(&file_path)
+        .map_err(|err| format!("open primary A failed: {err}"))?;
+    let mut lock_a = flock(libc::F_RDLCK as i16, 0, 0);
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut lock_a)
+        .map_err(|err| format!("primary A setlk failed: {err}"))?;
+
+    let primary_b = MountedFs::start_with_role(
+        "lock-setlkw-eintr-primary-b",
+        "primary",
+        &[("FOD_LOG_LEVEL", "debug".to_string())],
+    )?;
+    let fd_b = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(primary_b.mountpoint.join(&relative))
+        .map_err(|err| format!("open primary B failed: {err}\n{}", primary_b.log_tail(200)))?;
+
+    let previous_handler = install_signal_handler(signal)?;
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let (thread_tx, thread_rx) = mpsc::sync_channel(1);
+    let waiter = thread::spawn(move || {
+        let pthread = unsafe { libc::pthread_self() };
+        let _ = thread_tx.send(pthread);
+        let mut lock_b = flock(libc::F_WRLCK as i16, 0, 0);
+        let rc = unsafe { libc::fcntl(fd_b.as_raw_fd(), libc::F_SETLKW, &mut lock_b) };
+        let result = if rc == -1 {
+            Err(std::io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EIO))
+        } else {
+            Ok(())
+        };
+        let _ = result_tx.send((result, fd_b));
+    });
+
+    let wait_marker = format!("FOD setlk waiting path=/{relative}");
+    let wait_deadline = Instant::now() + Duration::from_secs(5);
+    let mut entered_wait = false;
+    while Instant::now() < wait_deadline {
+        if primary_b.log_tail(400).contains(&wait_marker) {
+            entered_wait = true;
+            break;
+        }
+        if result_rx.try_recv().is_ok() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let mut failure = if entered_wait {
+        match thread_rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(pthread) => {
+                let rc = unsafe { libc::pthread_kill(pthread, signal) };
+                if rc != 0 {
+                    Some(format!(
+                        "pthread_kill failed: {}",
+                        std::io::Error::from_raw_os_error(rc)
+                    ))
+                } else {
+                    None
+                }
+            }
+            Err(err) => Some(format!("waiting pthread id was not reported: {err}")),
+        }
+    } else {
+        Some(format!(
+            "F_SETLKW did not enter the blocking wait path\n{}",
+            primary_b.log_tail(400)
+        ))
+    };
+
+    let mut result = result_rx.recv_timeout(Duration::from_secs(3)).ok();
+    if result.is_none() {
+        if failure.is_none() {
+            failure = Some("F_SETLKW did not return after SIGUSR1".to_string());
+        }
+        // Release the conflicting lock so a broken implementation can still
+        // finish and clean up its mount instead of leaving the test hung.
+        let mut unlock_a = flock(libc::F_UNLCK as i16, 0, 0);
+        if let Err(err) = fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut unlock_a) {
+            failure.get_or_insert_with(|| format!("primary A unlock failed: {err}"));
+        }
+        result = result_rx.recv_timeout(Duration::from_secs(5)).ok();
+    } else {
+        let mut unlock_a = flock(libc::F_UNLCK as i16, 0, 0);
+        if let Err(err) = fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut unlock_a) {
+            failure.get_or_insert_with(|| format!("primary A unlock failed: {err}"));
+        }
+    }
+
+    if let Some((wait_result, fd_b)) = result {
+        let was_interrupted = wait_result == Err(libc::EINTR);
+        if !was_interrupted {
+            failure.get_or_insert_with(|| {
+                format!("F_SETLKW should return EINTR after SIGUSR1, got {wait_result:?}")
+            });
+        }
+
+        match query_lock(fd_a.as_raw_fd(), libc::F_WRLCK as i16) {
+            Ok(observed) if observed.l_type != libc::F_UNLCK as i16 => {
+                failure.get_or_insert_with(|| {
+                    format!(
+                        "interrupted waiter left or later acquired a write lock, observed l_type={}",
+                        observed.l_type
+                    )
+                });
+                let mut unlock_b = flock(libc::F_UNLCK as i16, 0, 0);
+                let _ = fcntl_lock(fd_b.as_raw_fd(), libc::F_SETLK, &mut unlock_b);
+            }
+            Err(err) => {
+                failure.get_or_insert_with(|| format!("query lock after EINTR failed: {err}"));
+            }
+            _ => {}
+        }
+        drop(fd_b);
+    } else {
+        failure.get_or_insert_with(|| "F_SETLKW waiter did not finish during cleanup".to_string());
+    }
+
+    if waiter.join().is_err() {
+        failure.get_or_insert_with(|| "F_SETLKW waiter thread panicked".to_string());
+    }
+    unsafe { libc::sigaction(signal, &previous_handler, std::ptr::null_mut()) };
+    drop(fd_a);
+    drop(primary_b);
+    drop(primary_a);
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
     Ok(())
 }
 

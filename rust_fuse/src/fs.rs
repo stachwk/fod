@@ -14,12 +14,13 @@ use fuser::{
     Filesystem, FopenFlags, Generation, INodeNo, InitFlags, IoctlFlags, KernelConfig, LockOwner,
     OpenFlags, PollEvents, PollFlags, PollNotifier, RenameFlags, ReplyAttr, ReplyBmap, ReplyCreate,
     ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyLseek,
-    ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
+    ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, RequestId, TimeOrNow,
+    WriteFlags,
 };
 use crate::errno::{
     EACCES, EBADF, EBUSY, EEXIST, EFBIG, EILSEQ, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODATA,
     ENOENT, ENOTDIR, ENOTEMPTY, ENOTTY, ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE, EROFS,
-    ESTALE, EWOULDBLOCK,
+    EINTR, ESTALE, EWOULDBLOCK,
 };
 use libc::{POLLIN, POLLOUT};
 use log::{debug, info, warn};
@@ -77,6 +78,24 @@ const IOCTL_FSXATTR_BYTES: usize = 28;
 
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type RecentWriteBlockKey = (u64, u64);
+
+struct PendingLockWait {
+    cancelled: AtomicBool,
+    waiter: thread::Thread,
+}
+
+struct PendingLockWaitGuard<'a> {
+    waits: &'a Mutex<HashMap<RequestId, Arc<PendingLockWait>>>,
+    request_id: RequestId,
+}
+
+impl Drop for PendingLockWaitGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut waits) = self.waits.lock() {
+            waits.remove(&self.request_id);
+        }
+    }
+}
 
 pub(crate) struct PersistFileBlocksProfileInput<'rows, 'data> {
     pub(crate) file_id: u64,
@@ -1608,6 +1627,7 @@ pub struct FodFuse {
     pub(crate) recent_write_blocks_len: AtomicU64,
     pub(crate) read_sequence_state: Mutex<HashMap<u64, ReadSequenceState>>,
     posix_locks: Arc<Mutex<HashMap<String, Vec<PosixLockRecord>>>>,
+    pending_lock_waits: Mutex<HashMap<RequestId, Arc<PendingLockWait>>>,
     local_lock_owners: Arc<Mutex<HashSet<u64>>>,
     pid_groups_cache: Mutex<HashMap<RequestPidGroupsCacheKey, CachedPidGroups>>,
     statfs_cache: Mutex<Option<StatfsSnapshot>>,
@@ -1767,6 +1787,7 @@ impl FodFuse {
             recent_write_blocks_len: AtomicU64::new(0),
             read_sequence_state: Mutex::new(HashMap::new()),
             posix_locks: Arc::new(Mutex::new(HashMap::new())),
+            pending_lock_waits: Mutex::new(HashMap::new()),
             local_lock_owners: Arc::new(Mutex::new(HashSet::new())),
             pid_groups_cache: Mutex::new(HashMap::new()),
             statfs_cache: Mutex::new(None),
@@ -6757,7 +6778,7 @@ impl Filesystem for FodFuse {
 
     fn setlk(
         &self,
-        _req: &Request,
+        req: &Request,
         ino: INodeNo,
         _fh: FileHandle,
         lock_owner: LockOwner,
@@ -6768,6 +6789,29 @@ impl Filesystem for FodFuse {
         sleep_flag: bool,
         reply: ReplyEmpty,
     ) {
+        let (pending_wait, _pending_wait_guard) = if sleep_flag {
+            let pending = Arc::new(PendingLockWait {
+                cancelled: AtomicBool::new(false),
+                waiter: thread::current(),
+            });
+            match self.pending_lock_waits.lock() {
+                Ok(mut waits) => {
+                    waits.insert(req.unique(), pending.clone());
+                }
+                Err(_) => {
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
+            }
+            let guard = PendingLockWaitGuard {
+                waits: &self.pending_lock_waits,
+                request_id: req.unique(),
+            };
+            (Some(pending), Some(guard))
+        } else {
+            (None, None)
+        };
+
         if self.degraded_read_only {
             fuse_reply_error!(reply, EOPNOTSUPP);
             return;
@@ -6849,6 +6893,13 @@ impl Filesystem for FodFuse {
         }
 
         loop {
+            if pending_wait
+                .as_ref()
+                .is_some_and(|pending| pending.cancelled.load(Ordering::Acquire))
+            {
+                fuse_reply_error!(reply, EINTR);
+                return;
+            }
             let acquired = if self.lock_backend_is_pg() {
                 match self.update_pg_lock_range(&resource_key, owner, start, end, typ, pid) {
                     Ok(acquired) => acquired,
@@ -6907,12 +6958,34 @@ impl Filesystem for FodFuse {
                 fuse_reply_error!(reply, EWOULDBLOCK);
                 return;
             }
+            if pending_wait
+                .as_ref()
+                .is_some_and(|pending| pending.cancelled.load(Ordering::Acquire))
+            {
+                fuse_reply_error!(reply, EINTR);
+                return;
+            }
             debug!(
                 "FOD setlk waiting path={} owner={} typ={}",
                 path, owner, typ
             );
             thread::park_timeout(self.lock_poll_interval);
         }
+    }
+
+    fn interrupt(&self, _req: &Request, interrupted_request_id: RequestId) -> bool {
+        let pending = self
+            .pending_lock_waits
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(&interrupted_request_id)
+            .cloned();
+        let Some(pending) = pending else {
+            return false;
+        };
+        pending.cancelled.store(true, Ordering::Release);
+        pending.waiter.unpark();
+        true
     }
 
     fn bmap(&self, _req: &Request, ino: INodeNo, blocksize: u32, idx: u64, reply: ReplyBmap) {

@@ -14,23 +14,19 @@ Reading guide:
 
 ## Unresolved findings
 
-- [ ] **`F_SETLKW` signal interruption is blocked by the fuser frontend.**
+- [x] **`F_SETLKW` signal interruption is supported through the fuser frontend.**
   A mounted probe held a conflicting lock on one mount, waited in `F_SETLKW` on
   a second mount, then sent `SIGUSR1` to the waiting thread. The syscall did not
   return `EINTR`; FOD continued logging the lock wait, and test cleanup found
-  the mount busy. Source inspection identifies the boundary: pinned fuser
-  0.18.0's high-level dispatcher has `FUSE_INTERRUPT` marked TODO and returns
-  `ENOSYS` instead of notifying the original request. Root cause confidence is
-  high. This leaves the POSIX `F_SETLKW` interruption case unsupported and can
-  keep a caller blocked after its signal. Upgrade or patch the frontend to
-  route interrupt request IDs to cancellable lock waits, cancel the
-  PostgreSQL-backed wait without changing lock authority, then rerun the
-  mounted probe and verify no late lock acquisition. Follow-up source check
-  (2026-10-29): fuser 0.18.0 is the latest published crate, and upstream
-  `master` still returns `ENOSYS` for `Operation::Interrupt`; a version bump
-  alone does not provide the required behavior. The frontend therefore needs
-  a maintained patch/fork with an interrupt callback that exposes the target
-  `RequestId` to FOD. Source: [upstream fuser request dispatcher](https://github.com/cberner/fuser/blob/master/src/request.rs#L136-L139).
+  the mount busy. The root cause was pinned fuser 0.18.0's high-level
+  dispatcher returning `ENOSYS` for `FUSE_INTERRUPT`. FOD now carries a narrow
+  local fuser patch that exposes the target `RequestId`, registers blocking
+  lock requests before path/lease work, and wakes only a matching pending lock
+  wait. A cancelled wait returns `EINTR`; PostgreSQL still arbitrates lock
+  acquisition, and an operation that acquired its lock before cancellation
+  completes successfully. Mounted regression tests passed for both signal
+  interruption/no-late-acquisition and ordinary cross-mount unlock handoff on
+  2026-10-29. Upstream source evidence: [fuser request dispatcher](https://github.com/cberner/fuser/blob/master/src/request.rs#L136-L139).
 - [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
   mounted probe opened the same file for append from two mounts backed by the
   same PostgreSQL database. The second writable `open()` returned `EBUSY` while
