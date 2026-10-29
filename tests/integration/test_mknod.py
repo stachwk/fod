@@ -161,6 +161,21 @@ def test_fifo_mknod(work_dir: Path) -> None:
     reader = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
     writer = os.open(fifo_path, os.O_WRONLY | os.O_NONBLOCK)
     try:
+        for operation, action, expected_errno in (
+            ("pread", lambda: os.pread(reader, 1, 0), errno.ESPIPE),
+            ("pwrite", lambda: os.pwrite(writer, b"x", 0), errno.ESPIPE),
+            ("empty nonblocking read", lambda: os.read(reader, 1), errno.EAGAIN),
+        ):
+            try:
+                action()
+            except OSError as exc:
+                if exc.errno != expected_errno:
+                    raise AssertionError(
+                        f"FIFO {operation} returned errno={exc.errno}, expected {expected_errno}"
+                    ) from exc
+            else:
+                raise AssertionError(f"FIFO {operation} unexpectedly succeeded")
+
         payload = b"fifo payload"
         assert os.write(writer, payload) == len(payload)
         assert os.read(reader, len(payload)) == payload
