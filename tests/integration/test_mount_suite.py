@@ -552,6 +552,27 @@ class FODMountSuite(unittest.TestCase):
                 if exc.errno != errno.EROFS:
                     raise
 
+            metadata_mutations = (
+                ("chmod", lambda: os.chmod(replica_seed_file, 0o600)),
+                (
+                    "chown",
+                    lambda: os.chown(
+                        replica_seed_file,
+                        replica_stat.st_uid,
+                        replica_stat.st_gid + 1,
+                    ),
+                ),
+                (
+                    "utime",
+                    lambda: os.utime(replica_seed_file, ns=(1_700_000_000_000_000_000,) * 2),
+                ),
+            )
+            for operation, mutate in metadata_mutations:
+                with self.subTest(read_only_metadata_operation=operation):
+                    with self.assertRaises(OSError) as mutation_exc:
+                        mutate()
+                    self.assertEqual(mutation_exc.exception.errno, errno.EROFS)
+
             with self.assertRaises(OSError) as touch_exc:
                 (replica_mountpoint / "new.txt").write_text("x", encoding="utf-8")
             self.assertIn(touch_exc.exception.errno, {errno.EROFS, errno.EPERM})
