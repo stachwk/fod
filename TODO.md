@@ -14,21 +14,6 @@ Reading guide:
 
 ## Unresolved findings
 
-- [ ] **POSIX record locks on FUSE FIFO objects are mount-local, not
-  PostgreSQL-authoritative.** On 2026-10-29, a cross-mount probe used two FOD
-  primary mounts backed by the same PostgreSQL database and separate processes.
-  Both processes acquired an exclusive `F_SETLK` on the same FIFO; a native
-  Linux FIFO accepts the operation too. Linux v6.17 source explains the bypass:
-  `fs/fuse/inode.c` sends FIFO inodes through `init_special_inode()`,
-  `fs/inode.c` assigns `pipefifo_fops`, and `fs/pipe.c` defines no `.lock`
-  operation there. The kernel therefore applies local POSIX locks to each
-  mount's separate inode without calling FOD's FUSE lock callbacks. Resolve
-  whether FOD can make FIFO locks cross-mount authoritative with the available
-  FUSE interface; if it cannot, document the limitation explicitly rather than
-  claiming shared FIFO-lock semantics. Sources:
-  [FUSE inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c),
-  [special inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/inode.c),
-  [FIFO operations](https://github.com/torvalds/linux/blob/v6.17/fs/pipe.c).
 - [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
   mounted probe opened the same file for append from two mounts backed by the
   same PostgreSQL database. The second writable `open()` returned `EBUSY` while
@@ -65,6 +50,9 @@ Reading guide:
   PostgreSQL rows. Do not close this finding based on passing reruns alone.
 
 ## Previously tracked follow-ups (closed or deferred)
+
+- [x] Set the POSIX record-lock scope for FIFO objects.
+  - Decision (2026-10-29): POSIX Issue 8 requires `fcntl()` record locks for regular files and makes support on other file types optional. FOD's cross-mount PostgreSQL lock guarantee covers regular files only; FIFO record locks are outside that guarantee. A Linux v6.17 probe showed the kernel accepts FIFO locks locally on each mount without calling FOD's FUSE lock callbacks: FUSE assigns FIFO `pipefifo_fops`, which has no `.lock` operation. Two FOD mounts therefore each obtained an exclusive lock on the same FIFO. This is an explicit Linux FUSE limitation, not a POSIX conformance failure; do not claim shared FIFO lock semantics. Sources: [POSIX `fcntl()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fcntl.html), [FUSE inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c), [special inode setup](https://github.com/torvalds/linux/blob/v6.17/fs/inode.c), [FIFO operations](https://github.com/torvalds/linux/blob/v6.17/fs/pipe.c).
 
 - [x] Decide the errno for `unlink(directory)`.
   - Decision (2026-10-29): retain Linux-compatible `EISDIR` for FOD's Linux FUSE backend; POSIX Issue 8 prescribes `EPERM` when directory unlink is prohibited. The test asserts `EISDIR`, and both errno references state the platform difference. Do not claim this case is identical to the POSIX prescribed errno.
