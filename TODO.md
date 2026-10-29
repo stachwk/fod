@@ -25,8 +25,12 @@ Reading guide:
   keep a caller blocked after its signal. Upgrade or patch the frontend to
   route interrupt request IDs to cancellable lock waits, cancel the
   PostgreSQL-backed wait without changing lock authority, then rerun the
-  mounted probe and verify no late lock acquisition. Source: fuser 0.18.0
-  `src/request.rs`, high-level `Operation::Interrupt` dispatch.
+  mounted probe and verify no late lock acquisition. Follow-up source check
+  (2026-10-29): fuser 0.18.0 is the latest published crate, and upstream
+  `master` still returns `ENOSYS` for `Operation::Interrupt`; a version bump
+  alone does not provide the required behavior. The frontend therefore needs
+  a maintained patch/fork with an interrupt callback that exposes the target
+  `RequestId` to FOD. Source: [upstream fuser request dispatcher](https://github.com/cberner/fuser/blob/master/src/request.rs#L136-L139).
 - [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
   mounted probe opened the same file for append from two mounts backed by the
   same PostgreSQL database. The second writable `open()` returned `EBUSY` while
