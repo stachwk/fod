@@ -29,11 +29,21 @@ Reading guide:
   leave Linux's local inode size and file position out of sync. Preserve the
   current exclusive lease/`EBUSY` behavior until a design is found that also
   preserves kernel-visible append offsets, descriptor positions and cross-host
-  fencing. Investigate whether FUSE inode invalidation or a kernel/protocol
-  extension can close that gap before implementing shared append admission.
+  fencing. Linux v6.17's `FUSE_NOTIFY_INVAL_INODE` invalidates attributes and
+  pages on the receiving mount's FUSE session; it does not change the offset
+  already selected for an in-flight write. `FUSE_NOTIFY_STORE` can extend that
+  mount's local inode size, but likewise cannot revise an in-flight write's
+  offset or descriptor position. Notifications must reach each mount's own
+  session and do not serialize writes already dispatched by another mount.
+  Therefore, notifications alone do not close the append gap; retain the
+  exclusive lease until a kernel/protocol design or explicitly narrower
+  contract preserves kernel-visible append offsets, descriptor positions and
+  cross-host fencing.
   Sources: [FUSE write paths](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/file.c),
   [`generic_write_checks_count()`](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c),
-  [`fuse_write_out`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h).
+  [`fuse_write_out`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h),
+  [`FUSE_NOTIFY_INVAL_INODE`](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c),
+  and [`FUSE_NOTIFY_STORE`](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/dev.c).
   Details and audit status:
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#cross-mount-append-finding);
   active work is tracked under P03/P04 in
