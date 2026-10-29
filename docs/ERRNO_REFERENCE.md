@@ -1,9 +1,9 @@
 # Kody błędów Linuksa i POSIX w FOD
 
-To jest kanoniczne zestawienie nazw `errno` używanych w testach FOD, z
-interpretacją Linuksa i zakresem POSIX.1-2024. Kod errno opisuje niepowodzenie
-wywołania; sam fakt, że jego nazwa występuje w POSIX, nie oznacza, że POSIX
-wymaga zwrócenia go przez FOD w każdym wymienionym tu przypadku. Konkretne
+To jest kanoniczne zestawienie nazw `errno` używanych w testach FOD oraz
+wymienionych w audycie POSIX, z interpretacją Linuksa i zakresem POSIX.1-2024.
+Kod errno opisuje niepowodzenie wywołania; sama obecność nazwy w POSIX nie
+oznacza, że POSIX wymaga zwrócenia tego błędu przez FOD w każdym przypadku. Konkretne
 wymagania zależą od interfejsu, warunków wejściowych i kolejności sprawdzeń.
 Kanoniczne stałe Linux errno oraz mapowanie błędów domenowych FOD są zebrane w
 [`rust_fuse/src/errno.rs`](../rust_fuse/src/errno.rs). Callbacki używają tych
@@ -16,14 +16,19 @@ stałych przy zwracaniu błędów konkretnych operacji.
 | `EACCES` | POSIX | Brak praw do operacji albo przeszukiwania komponentu ścieżki | Kontrola praw i ACL: [`test_path_search_permissions.py`](../tests/integration/test_path_search_permissions.py), [`test_acl_mount_option.py`](../tests/integration/test_acl_mount_option.py); path search w [`test_df.sh`](../tests/integration/test_df.sh) |
 | `EBADF` | POSIX | Deskryptor jest nieprawidłowy albo otwarty w trybie niezgodnym z operacją | `read`/`write`, blokady, `ftruncate`, `fstatvfs`: [`test_lseek.py`](../tests/integration/test_lseek.py), [`test_truncate_shrink_block_boundary.py`](../tests/integration/test_truncate_shrink_block_boundary.py), [`lock_backend_smoke.rs`](../rust_fuse/tests/lock_backend_smoke.rs), [`test_df.sh`](../tests/integration/test_df.sh) |
 | `EBUSY` | POSIX | Zasób jest zajęty | FOD używa go przy konflikcie wyłącznej własności zapisu i rename. To specyficzna polityka FOD, a nie ogólny wymóg POSIX dla konkurencyjnych zapisów: [`test_create_write_ownership.py`](../tests/integration/test_create_write_ownership.py), [`test_rename_write_ownership.py`](../tests/integration/test_rename_write_ownership.py). |
+| `EDEADLK` | POSIX | Żądana blokada pliku doprowadziłaby do zakleszczenia | POSIX wymaga tego błędu dla `F_SETLKW`, gdy żądanie spowodowałoby deadlock. Brak dedykowanego testu, P10/P12 audytu: [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md). |
 | `EEXIST` | POSIX | Wpis już istnieje | `O_CREAT|O_EXCL`, `mkdir` i utworzenie symlinka: [`test_directories.sh`](../tests/integration/test_directories.sh), [`test_symlink.sh`](../tests/integration/test_symlink.sh) |
+| `EFBIG` | POSIX | Zapis przekroczył limit rozmiaru pliku lub offsetu | Brak dedykowanego testu limitu pliku/`off_t`; wymagania `write()`/`pwrite()` są opisane w [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md). |
 | `EINVAL` | POSIX | Argument lub kombinacja opcji jest nieprawidłowa | Zakres `truncate` i ioctl: [`test_truncate_shrink_block_boundary.py`](../tests/integration/test_truncate_shrink_block_boundary.py), [`test_ioctl.py`](../tests/integration/test_ioctl.py) |
 | `EIO` | POSIX | Błąd wejścia/wyjścia | Wybrane błędy PostgreSQL i wstrzyknięta awaria transakcji: [`test_rename_write_ownership.py`](../tests/integration/test_rename_write_ownership.py), [`test_tx03h1_invalid_session.py`](../tests/integration/test_tx03h1_invalid_session.py). `EIO` konkretnie z `statvfs()` pozostaje nieprzetestowane. |
 | `EILSEQ` | POSIX | Sekwencja bajtów nie tworzy poprawnej nazwy w bieżącym locale; `open(O_CREAT)` może wymagać go dla nieprzenośnej nazwy, której implementacja nie potrafi utworzyć | FOD zwraca `EILSEQ` dla nie-UTF-8 komponentów, których PostgreSQL `text` nie może przechować: [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py) |
 | `EISDIR` | POSIX tylko w określonych interfejsach (np. `open`/`truncate`); Linux rozszerza użycie na `unlink` katalogu | Operacja, która nie obsługuje katalogu, trafiła na katalog | `unlink` katalogu: [`test_directories.sh`](../tests/integration/test_directories.sh); `truncate` katalogu: [`test_truncate_shrink_block_boundary.py`](../tests/integration/test_truncate_shrink_block_boundary.py). Issue 8 wymaga `EPERM`, gdy implementacja zabrania `unlink()` katalogu; rozbieżność FOD jest opisana w [`TODO.md`](../TODO.md). |
 | `ELOOP` | POSIX | Rozwiązywanie ścieżki napotkało zbyt wiele symlinków | Cykl symlinków: [`test_symlink.sh`](../tests/integration/test_symlink.sh), [`test_df.sh`](../tests/integration/test_df.sh) |
 | `EINTR` | POSIX | Wywołanie przerwane sygnałem | Wymagania zależą od interfejsu; przerwanie `F_SETLKW` i `statvfs()` pozostaje do sprawdzenia w P10/P11 audytu POSIX. |
+| `EMFILE` | POSIX | Proces osiągnął limit otwartych deskryptorów | Brak dedykowanej regresji limitu deskryptorów dla `open()`; przypadek ujęty w [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md). |
+| `EMLINK` | POSIX | Osiągnięto limit dowiązań do pliku lub katalogu | Brak dedykowanego testu limitu dowiązań; wymagania `link()`/`mkdir()`/`rename()` są ujęte w [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md). |
 | `ENAMETOOLONG` | POSIX | Komponent lub ścieżka przekracza limit | Zbyt długi komponent: [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py), [`test_df.sh`](../tests/integration/test_df.sh) |
+| `ENFILE` | POSIX | System osiągnął limit otwartych plików | Brak dedykowanej regresji systemowego limitu dla `open()`; przypadek ujęty w [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md). |
 | `ENODATA` | POSIX symbol; znaczenie w POSIX dotyczy STREAMS | Na Linuksie brak żądanego atrybutu rozszerzonego | Xattr są rozszerzeniem Linux/FUSE, nie bazowym interfejsem POSIX: [`test_xattr.py`](../tests/integration/test_xattr.py). |
 | `ENOENT` | POSIX | Ścieżka, wpis lub wymagany obiekt nie istnieje | Brak pliku/katalogu, dangling symlink lub brakujący cel: [`test_directories.sh`](../tests/integration/test_directories.sh), [`test_symlink.sh`](../tests/integration/test_symlink.sh), [`test_rename_directory_transactional.py`](../tests/integration/test_rename_directory_transactional.py) |
 | `ENOSPC` | POSIX | Brak dostępnej pojemności | Limit pojemności/quota FOD odrzuca zapis: [`test_two_mount_quota.py`](../tests/integration/test_two_mount_quota.py), [`test_df.sh`](../tests/integration/test_df.sh) |
@@ -33,10 +38,14 @@ stałych przy zwracaniu błędów konkretnych operacji.
 | `ENOTSUP` | POSIX symbol; konkretne warunki zależą od interfejsu/opcji | Żądana funkcja nie jest obsługiwana | FOD ioctl/fallocate/FUSE: [`test_ioctl.py`](../tests/integration/test_ioctl.py), [`test_fallocate_contract.py`](../tests/integration/test_fallocate_contract.py). Na Linuksie ma tę samą wartość co `EOPNOTSUPP`. |
 | `ENOTTY` | POSIX | Nieodpowiednia operacja ioctl dla obiektu/deskryptora | Nieznane polecenie ioctl: [`test_ioctl.py`](../tests/integration/test_ioctl.py) |
 | `ENXIO` | POSIX | Brak urządzenia/adresu albo żądanie poza możliwościami obiektu | FIFO otwierane do zapisu bez czytelnika oraz sparse `lseek`: [`test_mknod.py`](../tests/integration/test_mknod.py), [`test_lseek_sparse_runtime.py`](../tests/integration/test_lseek_sparse_runtime.py) |
+| `ENOLCK` | POSIX | Brak dostępnych zasobów do utworzenia blokady | POSIX wymienia ten błąd, gdy system nie może przydzielić zasobów blokad. Brak dedykowanej regresji limitu, P10/P12 audytu: [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md). |
 | `EOVERFLOW` | POSIX | Wynik nie mieści się w typie danych | Obowiązuje m.in. dla określonych wyników `statvfs()`; brak testu, P11 audytu POSIX. |
 | `EPERM` | POSIX | Operacja jest zabroniona z powodu uprawnień lub ograniczeń obiektu | ACL/właściciel i operacje na katalogach: [`test_acl_mount_option.py`](../tests/integration/test_acl_mount_option.py), [`test_unlink_primary_authority_docker.py`](../tests/integration/test_unlink_primary_authority_docker.py) |
+| `EPIPE` | POSIX | Zapis do FIFO bez czytelników; proces może otrzymać `SIGPIPE` | `test_mknod.py` sprawdza przepływ FIFO, ale nie dedykowany przypadek zapisu po zamknięciu wszystkich czytelników; patrz [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md). |
 | `EROFS` | POSIX | System plików jest tylko do odczytu | Próby mutacji w montowaniu read-only: [`test_mount_suite.py`](../tests/integration/test_mount_suite.py) |
+| `ESPIPE` | POSIX | Operacja pozycyjna lub seek dotyczy obiektu nieprzeszukiwalnego | Brak dedykowanego testu `pread()`/`pwrite()` na FIFO; wymaganie jest ujęte w [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md). |
 | `EAGAIN` / `EWOULDBLOCK` | POSIX; wartości mogą być aliasami | Operacja nie może teraz postępować bez oczekiwania | Nieblokująca kolidująca blokada zakresu: [`lock_backend_smoke.rs`](../rust_fuse/tests/lock_backend_smoke.rs). Na Linuksie są aliasami. |
+| `ETXTBSY` | POSIX (`may fail` dla niektórych operacji) | Próba modyfikacji pliku używanego jako wykonywalny tekst | FOD nie ma dedykowanego testu; POSIX dopuszcza m.in. ten błąd dla `unlink()` w warunkach opisanych w [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md). |
 | `EXDEV` | POSIX | Operacja wymaga przekroczenia granicy systemu plików | FOD sprawdza rename do/z katalogu głównego montowania: [`test_rename_root_conflict.sh`](../tests/integration/test_rename_root_conflict.sh) |
 
 ## Kody POSIX socketów używane w diagnostyce backendu
