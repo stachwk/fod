@@ -290,6 +290,7 @@ fi
 
 python3 - "${MOUNTPOINT}" <<'PY'
 import os
+import errno
 import sys
 
 mountpoint = sys.argv[1]
@@ -318,6 +319,31 @@ assert path_stats.f_bsize > 0
 assert path_stats.f_frsize > 0
 assert 0 <= path_stats.f_bavail <= path_stats.f_bfree <= path_stats.f_blocks
 assert 0 <= path_stats.f_favail <= path_stats.f_ffree <= path_stats.f_files
+if hasattr(os, "ST_RDONLY"):
+    assert not (path_stats.f_flag & os.ST_RDONLY), "read-write FOD mount reports ST_RDONLY"
+if hasattr(os, "ST_NOSUID"):
+    assert path_stats.f_flag & os.ST_NOSUID, "FOD mount must report ST_NOSUID"
+
+try:
+    os.statvfs(os.path.join(mountpoint, "statvfs-missing-entry"))
+except OSError as exc:
+    assert exc.errno == errno.ENOENT, f"statvfs missing path errno={exc.errno}"
+else:
+    raise AssertionError("statvfs unexpectedly succeeded for a missing path")
+
+try:
+    os.statvfs(os.path.join(mountpoint, "accounting-small.bin", "child"))
+except OSError as exc:
+    assert exc.errno == errno.ENOTDIR, f"statvfs regular-file prefix errno={exc.errno}"
+else:
+    raise AssertionError("statvfs unexpectedly traversed a regular-file prefix")
+
+try:
+    os.fstatvfs(-1)
+except OSError as exc:
+    assert exc.errno == errno.EBADF, f"fstatvfs invalid descriptor errno={exc.errno}"
+else:
+    raise AssertionError("fstatvfs unexpectedly succeeded for an invalid descriptor")
 PY
 
 ln -s accounting-small.bin "${MOUNTPOINT}/accounting-link"
