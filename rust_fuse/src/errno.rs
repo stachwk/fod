@@ -52,6 +52,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn linux_errno_aliases_match() {
+        assert_eq!(libc::EAGAIN, EWOULDBLOCK);
+        assert_eq!(libc::ENOTSUP, EOPNOTSUPP);
+    }
+
+    #[test]
     fn persisted_write_errors_map_to_linux_errno() {
         assert_eq!(
             persist_error_errno(STORAGE_QUOTA_EXCEEDED_PREFIX),

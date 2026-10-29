@@ -3,8 +3,9 @@
 To jest kanoniczne zestawienie nazw `errno` używanych w testach FOD oraz
 wymienionych w audycie POSIX, z interpretacją Linuksa i zakresem POSIX.1-2024.
 Kod errno opisuje niepowodzenie wywołania; sama obecność nazwy w POSIX nie
-oznacza, że POSIX wymaga zwrócenia tego błędu przez FOD w każdym przypadku. Konkretne
-wymagania zależą od interfejsu, warunków wejściowych i kolejności sprawdzeń.
+oznacza, że POSIX wymaga zwrócenia tego błędu przez FOD w każdym przypadku.
+Konkretne wymagania zależą od interfejsu, warunków wejściowych i kolejności
+sprawdzeń.
 Kanoniczne stałe Linux errno oraz mapowanie błędów domenowych FOD są zebrane w
 [`rust_fuse/src/errno.rs`](../rust_fuse/src/errno.rs). Callbacki używają tych
 stałych przy zwracaniu błędów konkretnych operacji.
