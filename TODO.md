@@ -14,6 +14,13 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **POSIX/Linux `fcntl()` locks on FIFO objects are not represented by FOD.**
+  On Linux `6.17.0-41-generic`, a local FIFO accepted `F_GETLK` and `F_SETLK`.
+  FOD's `getlk`/`setlk` callbacks currently accept only resolved `file` and
+  `hardlink` kinds and return `ENOENT` for other kinds, including FIFO. Add a
+  mounted regression to confirm the observed errno, then decide whether FIFO
+  lock support belongs in FOD's contract and, if so, add a PostgreSQL-backed
+  resource identity that preserves cross-host ordering.
 - [ ] **POSIX disposition for `unlink(directory)` errno.** FOD's `unlink`
   callback returns Linux `EISDIR` when the target is a directory, and
   `tests/integration/test_directories.sh` asserts that result. POSIX Issue 8

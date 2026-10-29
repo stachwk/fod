@@ -7,11 +7,11 @@ obiektów objętych daną pozycją. Zachowanie Linux VFS może zakończyć opera
 przed wywołaniem callbacku FUSE; testy zamontowane w FOD potwierdzają wynik
 wywołania systemowego, ale same nie dowodzą, która warstwa zwróciła errno.
 
-Wiersze `open`, `read`/`pread`, `write`/`pwrite`, podstawowe operacje namespace
-oraz operacje metadanych sprawdzono względem tekstu POSIX Issue 8. Warunki
-oznaczone XSI są oddzielone od wymagań bazowego zakresu FOD. Kolejne interfejsy
-oraz pełne przypisanie errno do warstwy VFS, libfuse lub FOD pozostają do
-sprawdzenia w P12.
+Wiersze `open`, `read`/`pread`, `write`/`pwrite`, podstawowe operacje namespace,
+metadane, blokady rekordowe oraz `statvfs`/`fstatvfs` sprawdzono względem tekstu
+POSIX Issue 8. Warunki oznaczone XSI są oddzielone od wymagań bazowego zakresu
+FOD. Pełne przypisanie errno do warstwy VFS, libfuse lub FOD i regresje dla
+pozostałych warunków pozostają do sprawdzenia w P12.
 
 | Interfejs | POSIX: wymagane błędy w zakresie FOD | POSIX: warunkowe, `may fail` lub XSI | Dowody FOD i otwarte sprawdzenia |
 | --- | --- | --- | --- |
@@ -28,6 +28,8 @@ sprawdzenia w P12.
 | `chmod()` / `fchmod()` | `EACCES`, `EBADF` dla nieprawidłowego deskryptora `fchmod()`, `ELOOP`, `ENAMETOOLONG` dla komponentu ponad `NAME_MAX`, `ENOENT`, `ENOTDIR`, `EPERM` gdy wywołujący nie jest właścicielem i nie ma wymaganych uprawnień, `EROFS` | `EINTR`, `EINVAL` dla nieprawidłowego trybu, przekroczenie `SYMLOOP_MAX` lub `PATH_MAX`; `EOPNOTSUPP` dla nieobsługiwanego `AT_SYMLINK_NOFOLLOW` | [`test_path_search_permissions.py`](../tests/integration/test_path_search_permissions.py) sprawdza `EPERM` przy zmianie trybu pliku innego właściciela oraz `EACCES` przy braku prawa wyszukiwania; [`test_metadata.sh`](../tests/integration/test_metadata.sh) i [`test_permissions.py`](../tests/integration/test_permissions.py) sprawdzają poprawne zmiany trybu. Nieprawidłowy tryb, `EROFS` i `fchmod()` z nieprawidłowym deskryptorem nadal wymagają osobnych sprawdzeń. |
 | `chown()` / `fchown()` | `EACCES`, `EBADF` dla nieprawidłowego deskryptora `fchown()`, `ELOOP`, `ENAMETOOLONG` dla komponentu ponad `NAME_MAX`, `ENOENT`, `ENOTDIR`, `EPERM` gdy wywołujący nie ma wymaganych uprawnień, `EROFS` | `EIO`, `EINTR`, `EINVAL` dla UID/GID nieobsługiwanego przez implementację, przekroczenie `SYMLOOP_MAX` lub `PATH_MAX` | [`test_path_search_permissions.py`](../tests/integration/test_path_search_permissions.py) sprawdza dokładne `EPERM` przy próbie zmiany właściciela cudzego pliku; [`test_permissions.py`](../tests/integration/test_permissions.py) sprawdza zmianę grupy i zachowanie bitów setuid/setgid. `EINVAL`, `EROFS` i deskryptor `fchown()` nadal wymagają osobnych sprawdzeń. |
 | `utimensat()` / `futimens()` | `EINVAL` gdy `tv_nsec` jest mniejsze od zera lub co najmniej miliard, z wyjątkiem znaczników `UTIME_NOW` i `UTIME_OMIT`, albo gdy czas nie jest obsługiwany przez system plików; `EPERM` dla jawnego czasu ustawianego przez nie-właściciela bez wymaganych uprawnień; `EROFS`; `EBADF` dla nieprawidłowego deskryptora `futimens()` | `EACCES` przy odmowie zapisu dla `UTIME_NOW`/braku tablicy czasów oraz przy braku prawa wyszukiwania w prefiksie; błędy ścieżki, przekroczenie `SYMLOOP_MAX`/`PATH_MAX`; `EINVAL` dla nieprawidłowych flag `utimensat()`; gdy oba czasy to `UTIME_OMIT`, część błędów jest `may fail` | [`test_acl_mount_option.py`](../tests/integration/test_acl_mount_option.py) sprawdza `EINVAL` dla nanosekund równych miliardowi, `EPERM` dla jawnego czasu ustawianego przez nie-właściciela z prawem zapisu ACL, `UTIME_OMIT` i `ENOENT` pominiętej ścieżki; [`test_path_search_permissions.py`](../tests/integration/test_path_search_permissions.py) sprawdza odmowę przejścia przez katalog. Pełny zestaw `UTIME_NOW`/`UTIME_OMIT`, `EROFS` i nieprawidłowe flagi nadal wymaga sprawdzenia. |
+| `fcntl(F_GETLK/F_SETLK/F_SETLKW)` | `EACCES` lub `EAGAIN` gdy nieblokująca blokada koliduje; `EBADF` dla nieprawidłowego deskryptora lub trybu otwarcia niezgodnego z blokadą; `EINTR` gdy sygnał przerwie oczekujące `F_SETLKW`; `EINVAL` dla nieprawidłowego polecenia/struktury albo obiektu bez blokad; `EDEADLK` gdy `F_SETLKW` spowodowałoby zakleszczenie; `ENOLCK` po przekroczeniu systemowego limitu blokad; `EOVERFLOW` dla zakresu, którego nie da się przedstawić jako `off_t` | — | [`lock_backend_smoke.rs`](../rust_fuse/tests/lock_backend_smoke.rs) sprawdza kolizję `F_SETLK` (`EACCES` albo Linux `EWOULDBLOCK`, alias `EAGAIN`), `EBADF` dla niezgodnego trybu deskryptora, `F_GETLK`, zakresy i przekazanie `F_SETLKW` po zwolnieniu. Callbacki FOD odrzucają obiekty inne niż plik/hardlink jako `ENOENT`; lokalny Linux 6.17 pozwolił wykonać `F_GETLK` i `F_SETLK` na FIFO, więc tę różnicę trzeba potwierdzić testem montowanym i rozstrzygnąć według kontraktu FOD. Brak testu sygnałowego `EINTR`, deadlock `EDEADLK`, limitu `ENOLCK` i przepełnienia `off_t`. |
+| `statvfs()` / `fstatvfs()` | `EIO`, `EINTR` dla przechwyconego sygnału, `EOVERFLOW` gdy wynik nie mieści się w strukturze; `fstatvfs()` dodatkowo `EBADF` dla nieprawidłowego deskryptora; `statvfs()` dodatkowo `EACCES`, `ELOOP`, `ENAMETOOLONG` dla komponentu ponad `NAME_MAX`, `ENOENT`, `ENOTDIR` | `ELOOP` po przekroczeniu `SYMLOOP_MAX` i `ENAMETOOLONG` dla ścieżki ponad `PATH_MAX` są `may fail` | [`test_df.sh`](../tests/integration/test_df.sh) sprawdza `EBADF` i ścieżkowe `EACCES`, `ELOOP`, `ENAMETOOLONG`, `ENOENT`, `ENOTDIR`, a także zgodność `statvfs`/`fstatvfs`; kod FOD mapuje błędy snapshotu/statvfs do `EIO`. Brak deterministycznego fault injection dla `EIO`, testu `EINTR` i `EOVERFLOW` na wspieranych ABI. |
 
 ## Potwierdzone skróty Linux VFS (v6.17)
 
@@ -75,11 +77,12 @@ oraz [`namei.c`](https://github.com/torvalds/linux/blob/v6.17/fs/namei.c#L2390-L
   [`chmod()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/chmod.html),
   [`chown()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/chown.html)
   i [`utimensat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/utimensat.html).
+- POSIX [`fcntl()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fcntl.html)
+  oraz [`statvfs()`/`fstatvfs()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/statvfs.html).
 - [Linux FUSE API](https://docs.kernel.org/filesystems/fuse/fuse.html) oraz
   callbacki w [`rust_fuse/src/fs.rs`](../rust_fuse/src/fs.rs).
 
 Tabela celowo nie traktuje każdego errno wymienionego przez POSIX jako
 wymagania wobec FOD: część dotyczy socketów, STREAMS, urządzeń terminalowych
-lub opcji nieobjętych interfejsem FOD. Kolejny etap P12 ma rozszerzyć mapę na
-blokady i pojemność oraz przypisać błędy do Linux VFS, libfuse lub callbacku
-FOD.
+lub opcji nieobjętych interfejsem FOD. Pozostaje zamknąć wskazane luki testowe
+i przypisać niezweryfikowane błędy do Linux VFS, libfuse lub callbacku FOD.
