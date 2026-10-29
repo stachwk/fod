@@ -68,7 +68,17 @@ def main():
             dst_path.write_bytes(b"")
 
             with src_path.open("rb") as src_fh, dst_path.open("r+b") as dst_fh:
-                copied = os.copy_file_range(src_fh.fileno(), dst_fh.fileno(), 5, offset_src=2, offset_dst=4)
+                try:
+                    copied = os.copy_file_range(
+                        src_fh.fileno(),
+                        dst_fh.fileno(),
+                        5,
+                        offset_src=2,
+                        offset_dst=4,
+                    )
+                except OSError:
+                    launcher._dump_log()
+                    raise
             assert copied == 5, copied
 
             assert dst_path.stat().st_size == 9, dst_path.stat()

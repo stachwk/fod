@@ -3828,6 +3828,53 @@ impl FodFuse {
         }))
     }
 
+    fn pending_write_state_for_path(&self, path: &str) -> Option<WriteState> {
+        let handles = self
+            .fh_table
+            .lock()
+            .ok()?
+            .iter()
+            .filter_map(|(fh, handle)| {
+                (handle.path == path && handle.file_id.is_some()).then_some(*fh)
+            })
+            .collect::<Vec<_>>();
+        let states = self.write_states.lock().ok()?;
+        let pending = handles
+            .iter()
+            .filter_map(|fh| states.get(fh))
+            .filter(|state| Self::write_state_has_pending_changes(state))
+            .collect::<Vec<_>>();
+        pending
+            .iter()
+            .filter(|state| state.truncate_pending)
+            .max_by_key(|state| state.file_size)
+            .or_else(|| pending.iter().max_by_key(|state| state.file_size))
+            .map(|state| (*state).clone())
+    }
+
+    fn overlay_pending_write_size(&self, attrs: &mut ParsedAttrs, state: Option<&WriteState>) {
+        let Some(state) = state.filter(|state| Self::write_state_has_pending_changes(state)) else {
+            return;
+        };
+        if attrs.file_attr.kind == FileType::RegularFile {
+            if attrs.file_attr.blocks == 0 {
+                let pending_allocated_bytes = state
+                    .payload
+                    .as_blocks()
+                    .map(|blocks| {
+                        blocks
+                            .values()
+                            .filter(|block| block.iter().any(|byte| *byte != 0))
+                            .count() as u64
+                            * self.block_size
+                    })
+                    .unwrap_or(0);
+                attrs.file_attr.blocks = self.block_count(pending_allocated_bytes, "file");
+            }
+            attrs.file_attr.size = state.file_size;
+        }
+    }
+
     fn attrs_for_open_inode(&self, ino: u64) -> Result<Option<ParsedAttrs>, libc::c_int> {
         let file_ids = self
             .fh_table
@@ -5444,7 +5491,9 @@ impl Filesystem for FodFuse {
                 .and_then(|guard| guard.get(&fh).and_then(|state| state.file_id));
             if let Some(file_id) = file_id {
                 match self.attrs_for_open_file_id(file_id) {
-                    Ok(Some(attrs)) => {
+                    Ok(Some(mut attrs)) => {
+                        let write_state = self.write_state_for_handle(fh);
+                        self.overlay_pending_write_size(&mut attrs, write_state.as_ref());
                         reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
                         return;
                     }
@@ -5466,7 +5515,7 @@ impl Filesystem for FodFuse {
             }
         }
         match self.entry_attrs_for_ino(ino) {
-            Ok((path, attrs)) => {
+            Ok((path, mut attrs)) => {
                 if fh.is_none() {
                     let subject = self.request_identity(req);
                     if let Err(errno) = self.check_path_search_permissions(&path, &subject) {
@@ -5479,6 +5528,8 @@ impl Filesystem for FodFuse {
                         fuse_reply_error!(reply, errno);
                         return;
                     }
+                    let write_state = self.pending_write_state_for_path(&path);
+                    self.overlay_pending_write_size(&mut attrs, write_state.as_ref());
                 }
                 self.register_path(&path, attrs.file_attr.ino.0);
                 reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
@@ -9585,6 +9636,23 @@ impl Filesystem for FodFuse {
             .unwrap_or(false);
         let adopt_whole_object =
             bounds.can_adopt_whole_object(src_size, dst_size, src_dirty, dst_dirty);
+        debug!(
+            "FOD req={} op=copy_file_range whole_object_decision src_file_id={} dst_file_id={} src_size={} dst_size={} src_state_present={} dst_state_present={} src_dirty={} dst_dirty={} src_offset={} dst_offset={} requested_len={} copy_len={} whole_object_adoption={}",
+            req_id,
+            src_file_id,
+            dst_file_id,
+            src_size,
+            dst_size,
+            src_state.is_some(),
+            dst_state.is_some(),
+            src_dirty,
+            dst_dirty,
+            offset_in,
+            offset_out,
+            len,
+            bounds.copy_len,
+            adopt_whole_object
+        );
         let CopyRangeBounds {
             src_offset,
             dst_offset,
@@ -9617,7 +9685,10 @@ impl Filesystem for FodFuse {
                     self.reply_written_profiled(reply, copy_len as u32);
                     return;
                 }
-                Ok(false) => {}
+                Ok(false) => debug!(
+                    "FOD req={} op=copy_file_range whole_object_adoption declined src_file_id={} dst_file_id={} src_size={} dst_size={}",
+                    req_id, src_file_id, dst_file_id, src_size, dst_size
+                ),
                 Err(_) => {
                     self.log_request_error(
                         req_id,
@@ -9704,6 +9775,16 @@ impl Filesystem for FodFuse {
         let mut state = dst_state
             .unwrap_or_else(|| Self::new_write_state(dst_file_id, dst_initial_size, false));
         state.file_id = dst_file_id;
+        if let Err(errno) = self.attach_write_persistence_fence_for_handle(fh_out, &mut state) {
+            self.log_request_error(
+                req_id,
+                "copy_file_range",
+                errno,
+                format!("fh_out={} fence", fh_out),
+            );
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         let current_size = state.file_size;
         let target_end = dst_offset.saturating_add(copy_len);
 

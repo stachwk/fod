@@ -143,6 +143,13 @@ def main() -> None:
             # A has released the destination lease. B may now enter FUSE's
             # full-object copy_file_range fast path with a valid write fence.
             with src_b.open("rb") as src_fd, dst_b.open("r+b") as dst_fd:
+                src_fd_size = os.fstat(src_fd.fileno()).st_size
+                dst_fd_size = os.fstat(dst_fd.fileno()).st_size
+                if src_fd_size != len(payload) or dst_fd_size != 0:
+                    raise AssertionError(
+                        "unexpected kernel-visible sizes before copy: "
+                        f"source={src_fd_size} destination={dst_fd_size}"
+                    )
                 copied = os.copy_file_range(
                     src_fd.fileno(),
                     dst_fd.fileno(),

@@ -14,6 +14,22 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Partial `copy_file_range()` fallback omitted the write-persistence fence.**
+  On 2026-10-29, `make test-copy-file-range` returned `EBUSY`; the mounted log
+  showed `__FOD_WRITE_OWNERSHIP_FENCE_REJECTED__` because the partial-copy path
+  created a new destination `WriteState` and flushed it without attaching the
+  destination handle's active PostgreSQL write fence. The callback now attaches
+  the fence before changing the destination buffer. The dedicated mounted test
+  passed after the fix on FOD 3.4.206.
+- [x] **`getattr` returned stale attributes while a buffered write was flushing.**
+  On 2026-10-29, isolated C7 showed PostgreSQL reporting a 65,536-byte source
+  while `fstat()` on the mounted handle reported size 0. The FUSE trace showed
+  `GETATTR` overlapping the final `FLUSH`; the callback read old PostgreSQL
+  attributes without overlaying the mount's pending `WriteState`. The kernel
+  then returned a zero-byte `copy_file_range` before reaching FOD's callback.
+  `getattr` now overlays the pending local size and, when PostgreSQL reports no
+  allocated blocks yet, derives `st_blocks` from nonzero pending blocks. The
+  isolated two-mount C7 test and `test-df` passed with this regression covered.
 - [x] **`F_SETLKW` signal interruption is supported through the fuser frontend.**
   A mounted probe held a conflicting lock on one mount, waited in `F_SETLKW` on
   a second mount, then sent `SIGUSR1` to the waiting thread. The syscall did not
@@ -79,10 +95,16 @@ Reading guide:
   current successful-run log archive does not establish which copy branch ran.
   ASM/ELF review of the `release-lto` x86-64 PIE confirmed that symbols are
   stripped and found the copy completion/adoption log call sites, but did not
-  identify a causal branch or optimization defect. Reproduce with an event-level
-  trace of source/destination write-state dirtiness, copy bounds, adoption
-  result, and resulting object IDs; preserve the exact failed-run log and
-  PostgreSQL rows. Do not close this finding based on passing reruns alone.
+  identify a causal branch or optimization defect. `copy_file_range` now logs
+  source/destination state presence and dirtiness, sizes, offsets, copy bounds,
+  whole-object decision, and a declined adoption result at debug level. Re-run
+  `test-df` in `release-lto` with debug logs archived; retain the failed-run log
+  and PostgreSQL rows if the mismatch returns. A stale kernel-visible size was
+  reproduced in isolated C7 and fixed; it could make `copy_file_range()` return
+  zero before FOD handles it. `test-df` now passes, but its archive still does
+  not contain a FOD `copy_file_range` callback trace, so the earlier sharing
+  mismatch's connection to the callback/adoption path remains unproven. Do not
+  close this finding based on passing reruns alone.
 
 ## Previously tracked follow-ups (closed or deferred)
 
