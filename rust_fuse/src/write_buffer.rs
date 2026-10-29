@@ -4,7 +4,7 @@
 use crate::errno::persist_error_errno;
 use crate::fs::{FodFuse, PersistFileBlocksProfileInput};
 use crate::write_payload::WritePayloadState;
-use libc::EIO;
+use crate::errno::EIO;
 use log::{debug, warn};
 use rust_hotpath::pg::{FileWriteAuthorization, PersistBlockRow, WritePersistenceFence};
 use rust_hotpath::{

@@ -2,7 +2,7 @@
 // Licensed under BSL 1.1
 
 use crate::fs::{FodFuse, FodFuseProfileCounters};
-use libc::EIO;
+use crate::errno::EIO;
 use linked_hash_map::LinkedHashMap;
 use log::warn;
 use rust_hotpath::pg::DbRepo;
