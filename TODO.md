@@ -88,10 +88,11 @@ Reading guide:
 
 - [x] Add a mounted `statfs` failure regression for `EIO`.
   - Closure note (2026-10-29, FOD 3.4.201): the mounted integration probe
-    injects a snapshot failure with `FOD_TEST_STATFS_FORCE_EIO` and asserts
-    `os.statvfs()` returns exactly `EIO`. The injection is confined to the
-    test-named environment variable and exercises the FOD callback's existing
-    snapshot-error mapping.
+    injects an `EIO` reply in the FOD statfs callback with
+    `FOD_TEST_STATFS_FORCE_EIO` and asserts `os.statvfs()` returns exactly
+    `EIO`. This verifies callback-to-syscall errno delivery; it does not inject
+    a real PostgreSQL failure. The injection is confined to the test-named
+    environment variable.
 
 - [x] Add a mounted stale-read `ESTALE` regression for degraded read-only mode.
   - Closure note (2026-10-29): `test_pg_three_node_failover.sh` holds a file
