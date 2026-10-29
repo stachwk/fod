@@ -7,10 +7,11 @@ obiektów objętych daną pozycją. Zachowanie Linux VFS może zakończyć opera
 przed wywołaniem callbacku FUSE; testy zamontowane w FOD potwierdzają wynik
 wywołania systemowego, ale same nie dowodzą, która warstwa zwróciła errno.
 
-Wiersze `open`, `read`/`pread`, `write`/`pwrite` oraz podstawowe operacje
-namespace sprawdzono względem tekstu POSIX Issue 8. Warunki oznaczone XSI są
-oddzielone od wymagań bazowego zakresu FOD. Kolejne interfejsy oraz pełne
-przypisanie errno do warstwy VFS, libfuse lub FOD pozostają do sprawdzenia w P12.
+Wiersze `open`, `read`/`pread`, `write`/`pwrite`, podstawowe operacje namespace
+oraz operacje metadanych sprawdzono względem tekstu POSIX Issue 8. Warunki
+oznaczone XSI są oddzielone od wymagań bazowego zakresu FOD. Kolejne interfejsy
+oraz pełne przypisanie errno do warstwy VFS, libfuse lub FOD pozostają do
+sprawdzenia w P12.
 
 | Interfejs | POSIX: wymagane błędy w zakresie FOD | POSIX: warunkowe, `may fail` lub XSI | Dowody FOD i otwarte sprawdzenia |
 | --- | --- | --- | --- |
@@ -23,6 +24,10 @@ przypisanie errno do warstwy VFS, libfuse lub FOD pozostają do sprawdzenia w P1
 | `rename()` | `EACCES`, `EBUSY`, `EEXIST` lub `ENOTEMPTY` dla niepustego celu-katalogu, `EILSEQ` dla nieprzenośnej nazwy celu, `EINVAL` dla katalogu przenoszonego do własnego potomka lub końcowego `.`/`..`, `EIO`, `EISDIR`, `ELOOP`, `EMLINK`, `ENAMETOOLONG` dla komponentu ponad `NAME_MAX`, `ENOENT`, `ENOSPC`, `ENOTDIR`, `EROFS`, `EXDEV` | `EPERM`/`EACCES` dla sticky directory są XSI; przekroczenie `SYMLOOP_MAX` lub `PATH_MAX` jest `may fail` | [`test_directories.sh`](../tests/integration/test_directories.sh) sprawdza `ENOTDIR` i brak zmian źródła/celu; [`test_rename_directory_transactional.py`](../tests/integration/test_rename_directory_transactional.py) sprawdza `ENOENT`, `ENOTEMPTY`, `ENOTDIR`, `EISDIR` i `EINVAL`/`EBUSY`; [`test_rename_root_conflict.sh`](../tests/integration/test_rename_root_conflict.sh) sprawdza `EBUSY`/`EXDEV`. Uprawnienia, `EILSEQ`, `EIO`, limity i `ENOSPC` wymagają dalszego mapowania. |
 | `link()` | `EACCES`, `EEXIST`, `EILSEQ` dla nieprzenośnej nazwy celu, `ELOOP`, `EMLINK`, `ENAMETOOLONG` dla komponentu ponad `NAME_MAX`, `ENOENT`, `ENOSPC`, `ENOTDIR`, `EPERM` dla katalogu jako źródła, `EROFS`, `EXDEV` | Przekroczenie `SYMLOOP_MAX` lub `PATH_MAX` jest `may fail`; reguły dostępu do źródła zależą od implementacji | [`test_hardlink.sh`](../tests/integration/test_hardlink.sh) sprawdza `EEXIST`, `ENOENT` i `EPERM`; [`test_directories.sh`](../tests/integration/test_directories.sh) sprawdza `ENOTDIR` dla celu pod plikiem. Pozostałe warunki wymagają osobnych regresji albo potwierdzenia obsługi przez VFS. |
 | `symlink()` / `readlink()` | `symlink()`: `EACCES`, `EEXIST`, `EILSEQ` dla nieprzenośnej nazwy linku, `EIO`, `ELOOP`, `ENAMETOOLONG` dla komponentu ponad `NAME_MAX`, `ENOENT`, `ENOSPC`, `ENOTDIR`, `EROFS`. `readlink()`: `EACCES`, `EINVAL` dla obiektu niebędącego symlinkiem, `EIO`, `ELOOP`, `ENAMETOOLONG`, `ENOENT`, `ENOTDIR` | Przekroczenie `SYMLOOP_MAX` lub `PATH_MAX` jest `may fail`; `symlink()` może zwrócić `ENAMETOOLONG`, gdy treść celu przekracza `SYMLINK_MAX` | [`test_symlink.sh`](../tests/integration/test_symlink.sh) sprawdza `EINVAL`, `ENOENT`, `ELOOP`, zachowanie dangling linków, `O_CREAT|O_EXCL` oraz usuwanie samego linku; [`test_directories.sh`](../tests/integration/test_directories.sh) sprawdza `ENOTDIR` dla rodzica będącego plikiem. Pozostałe warunki wymagają osobnych regresji albo potwierdzenia wcześniejszej obsługi przez Linux VFS. |
+| `stat()` / `fstat()` | `EACCES`, `EBADF` dla nieprawidłowego deskryptora `fstat()`, `EIO`, `ELOOP`, `ENAMETOOLONG` dla komponentu ponad `NAME_MAX`, `ENOENT`, `ENOTDIR`, `EOVERFLOW` gdy rozmiar, liczba bloków lub numer pliku nie mieści się w `struct stat` | Przekroczenie `SYMLOOP_MAX` lub `PATH_MAX`; `EOVERFLOW` dla innego pola struktury jest `may fail` | [`test_path_search_permissions.py`](../tests/integration/test_path_search_permissions.py) sprawdza odmowę `stat()` przez katalog bez prawa wyszukiwania; [`test_mount_suite.py`](../tests/integration/test_mount_suite.py) sprawdza podstawowe pola metadanych; testy ścieżek sprawdzają `ENOENT`, `ENOTDIR` i `ELOOP`. Brak dedykowanej awarii `EIO` i testów `EOVERFLOW` dla wspieranych ABI. `fstat()` nie rozwiązuje ścieżki, więc błędy ścieżkowe nie dotyczą tej odmiany. |
+| `chmod()` / `fchmod()` | `EACCES`, `EBADF` dla nieprawidłowego deskryptora `fchmod()`, `ELOOP`, `ENAMETOOLONG` dla komponentu ponad `NAME_MAX`, `ENOENT`, `ENOTDIR`, `EPERM` gdy wywołujący nie jest właścicielem i nie ma wymaganych uprawnień, `EROFS` | `EINTR`, `EINVAL` dla nieprawidłowego trybu, przekroczenie `SYMLOOP_MAX` lub `PATH_MAX`; `EOPNOTSUPP` dla nieobsługiwanego `AT_SYMLINK_NOFOLLOW` | [`test_path_search_permissions.py`](../tests/integration/test_path_search_permissions.py) sprawdza `EPERM` przy zmianie trybu pliku innego właściciela oraz `EACCES` przy braku prawa wyszukiwania; [`test_metadata.sh`](../tests/integration/test_metadata.sh) i [`test_permissions.py`](../tests/integration/test_permissions.py) sprawdzają poprawne zmiany trybu. Nieprawidłowy tryb, `EROFS` i `fchmod()` z nieprawidłowym deskryptorem nadal wymagają osobnych sprawdzeń. |
+| `chown()` / `fchown()` | `EACCES`, `EBADF` dla nieprawidłowego deskryptora `fchown()`, `ELOOP`, `ENAMETOOLONG` dla komponentu ponad `NAME_MAX`, `ENOENT`, `ENOTDIR`, `EPERM` gdy wywołujący nie ma wymaganych uprawnień, `EROFS` | `EIO`, `EINTR`, `EINVAL` dla UID/GID nieobsługiwanego przez implementację, przekroczenie `SYMLOOP_MAX` lub `PATH_MAX` | [`test_path_search_permissions.py`](../tests/integration/test_path_search_permissions.py) sprawdza dokładne `EPERM` przy próbie zmiany właściciela cudzego pliku; [`test_permissions.py`](../tests/integration/test_permissions.py) sprawdza zmianę grupy i zachowanie bitów setuid/setgid. `EINVAL`, `EROFS` i deskryptor `fchown()` nadal wymagają osobnych sprawdzeń. |
+| `utimensat()` / `futimens()` | `EINVAL` gdy `tv_nsec` jest mniejsze od zera lub co najmniej miliard, z wyjątkiem znaczników `UTIME_NOW` i `UTIME_OMIT`, albo gdy czas nie jest obsługiwany przez system plików; `EPERM` dla jawnego czasu ustawianego przez nie-właściciela bez wymaganych uprawnień; `EROFS`; `EBADF` dla nieprawidłowego deskryptora `futimens()` | `EACCES` przy odmowie zapisu dla `UTIME_NOW`/braku tablicy czasów oraz przy braku prawa wyszukiwania w prefiksie; błędy ścieżki, przekroczenie `SYMLOOP_MAX`/`PATH_MAX`; `EINVAL` dla nieprawidłowych flag `utimensat()`; gdy oba czasy to `UTIME_OMIT`, część błędów jest `may fail` | [`test_acl_mount_option.py`](../tests/integration/test_acl_mount_option.py) sprawdza `EINVAL` dla nanosekund równych miliardowi, `EPERM` dla jawnego czasu ustawianego przez nie-właściciela z prawem zapisu ACL, `UTIME_OMIT` i `ENOENT` pominiętej ścieżki; [`test_path_search_permissions.py`](../tests/integration/test_path_search_permissions.py) sprawdza odmowę przejścia przez katalog. Pełny zestaw `UTIME_NOW`/`UTIME_OMIT`, `EROFS` i nieprawidłowe flagi nadal wymaga sprawdzenia. |
 
 ## Potwierdzone skróty Linux VFS (v6.17)
 
@@ -66,11 +71,15 @@ oraz [`namei.c`](https://github.com/torvalds/linux/blob/v6.17/fs/namei.c#L2390-L
   [`link()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/link.html),
   [`symlink()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/symlink.html)
   i [`readlink()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/readlink.html).
+- POSIX [`stat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/stat.html),
+  [`chmod()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/chmod.html),
+  [`chown()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/chown.html)
+  i [`utimensat()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/utimensat.html).
 - [Linux FUSE API](https://docs.kernel.org/filesystems/fuse/fuse.html) oraz
   callbacki w [`rust_fuse/src/fs.rs`](../rust_fuse/src/fs.rs).
 
 Tabela celowo nie traktuje każdego errno wymienionego przez POSIX jako
 wymagania wobec FOD: część dotyczy socketów, STREAMS, urządzeń terminalowych
 lub opcji nieobjętych interfejsem FOD. Kolejny etap P12 ma rozszerzyć mapę na
-metadane, blokady i pojemność oraz przypisać błędy do Linux VFS, libfuse lub
-callbacku FOD.
+blokady i pojemność oraz przypisać błędy do Linux VFS, libfuse lub callbacku
+FOD.

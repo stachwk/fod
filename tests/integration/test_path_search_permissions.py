@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -48,6 +49,16 @@ def assert_permission_error(
         raise AssertionError(
             f"{operation} failed for a reason other than denied access: "
             f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+
+def assert_errno_from_nobody(
+    result: subprocess.CompletedProcess[str], expected: int, operation: str
+) -> None:
+    if result.returncode != 0 or result.stdout.strip() != str(expected):
+        raise AssertionError(
+            f"{operation}: errno={result.stdout.strip()!r}, expected={expected}; "
+            f"stderr={result.stderr!r}"
         )
 
 
@@ -97,6 +108,44 @@ def main() -> None:
                     "nobody could not create the xattr test value in mode-777 directory: "
                     f"stdout={xattr_setup.stdout!r} stderr={xattr_setup.stderr!r}"
                 )
+            metadata_owner_file = directory / "metadata-owner"
+            metadata_owner_file.write_text("owner metadata\n", encoding="utf-8")
+            metadata_owner_file.chmod(0o666)
+            assert_errno_from_nobody(
+                run_as_nobody(
+                    """
+import os
+import sys
+try:
+    os.chmod(sys.argv[1], 0o600)
+except OSError as error:
+    print(error.errno)
+else:
+    print(0)
+""",
+                    metadata_owner_file,
+                ),
+                errno.EPERM,
+                "chmod of another user's file",
+            )
+            assert_errno_from_nobody(
+                run_as_nobody(
+                    """
+import os
+import sys
+try:
+    os.chown(sys.argv[1], int(sys.argv[2]), -1)
+except OSError as error:
+    print(error.errno)
+else:
+    print(0)
+""",
+                    metadata_owner_file,
+                    str(os.getuid()),
+                ),
+                errno.EPERM,
+                "chown of another user's file",
+            )
             readonly_file = directory / "nobody-readonly"
             readonly_setup = run_as_nobody(
                 "import os, pathlib, sys; "
@@ -232,6 +281,7 @@ def main() -> None:
                 "readdir_denied=1 stat_denied=1 open_denied=1 access_denied=1 "
                 "create_denied=1 mkdir_denied=1 unlink_denied=1 rename_denied=1 "
                 "rmdir_denied=1 chmod_denied=1 utimens_denied=1 truncate_denied=1 "
+                "nonowner_chmod_chown_errno=EPERM "
                 "open_trunc_denied=1 readonly_truncate_denied=1 "
                 "getxattr_denied=1 listxattr_denied=1 setxattr_denied=1 "
                 "removexattr_denied=1"

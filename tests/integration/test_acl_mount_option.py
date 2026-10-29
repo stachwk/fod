@@ -50,6 +50,19 @@ def call_utimensat(path: Path, atime_nsec: int, mtime_nsec: int) -> None:
         raise OSError(error, os.strerror(error), str(path))
 
 
+def assert_invalid_utimensat_nanoseconds(path: Path) -> None:
+    before = path.stat()
+    try:
+        call_utimensat(path, 1_000_000_000, 0)
+    except OSError as error:
+        assert error.errno == errno.EINVAL, error.errno
+    else:
+        raise AssertionError("utimensat accepted tv_nsec equal to one billion")
+    after = path.stat()
+    assert after.st_atime_ns == before.st_atime_ns
+    assert after.st_mtime_ns == before.st_mtime_ns
+
+
 def build_posix_acl(user_perm: int, group_perm: int, other_perm: int) -> bytes:
     version = 0x0002
     acl = bytearray(struct.pack("<I", version))
@@ -367,10 +380,11 @@ def main() -> None:
 
                 timestamp_path = mountpoint / f"acl-timestamp-{suffix}.txt"
                 timestamp_path.write_bytes(b"timestamp payload\n")
+                assert_invalid_utimensat_nanoseconds(timestamp_path)
                 assert_partial_omit_preserves_atime(timestamp_path)
                 assert_non_owner_timestamp_rules(timestamp_path)
 
-                print("OK acl-mount-option")
+                print("OK acl-mount-option utimens_invalid_nsec=EINVAL")
             finally:
                 try:
                     unmount(mountpoint)
