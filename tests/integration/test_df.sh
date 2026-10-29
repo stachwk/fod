@@ -12,12 +12,16 @@ OUTPUT_DIR="$(mktemp -d /tmp/fod-df-output.XXXXXX)"
 export FOD_PG_VISIBLE_PATH="${OUTPUT_DIR}"
 export FOD_STATFS_CACHE_TTL_SECONDS=0
 ORIGINAL_MAX_FS_SIZE_BYTES=""
+ACCOUNTING_SYMLINK=""
 read -r host_fragment_size host_available_blocks < <(
   stat -f -c '%S %a' "${FOD_PG_VISIBLE_PATH}"
 )
 host_available_bytes=$((host_fragment_size * host_available_blocks))
 
 cleanup() {
+  if [[ -n "${ACCOUNTING_SYMLINK}" ]] && mountpoint -q "${MOUNTPOINT}"; then
+    rm -f "${ACCOUNTING_SYMLINK}"
+  fi
   fod_test_cleanup
   if [[ -n "${ORIGINAL_MAX_FS_SIZE_BYTES}" ]]; then
     ORIGINAL_MAX_FS_SIZE_BYTES="${ORIGINAL_MAX_FS_SIZE_BYTES}" \
@@ -43,6 +47,8 @@ PY
   fi
   rm -rf "${OUTPUT_DIR}"
 }
+
+ACCOUNTING_SYMLINK="${MOUNTPOINT}/accounting-link-$$-${RANDOM}"
 
 trap cleanup EXIT
 
@@ -344,9 +350,10 @@ except OSError as exc:
     assert exc.errno == errno.EBADF, f"fstatvfs invalid descriptor errno={exc.errno}"
 else:
     raise AssertionError("fstatvfs unexpectedly succeeded for an invalid descriptor")
+
 PY
 
-ln -s accounting-small.bin "${MOUNTPOINT}/accounting-link"
+ln -s accounting-small.bin "${ACCOUNTING_SYMLINK}"
 read -r symlink_fs_inodes symlink_fs_free_inodes < <(
   stat -f -c '%c %d' "${MOUNTPOINT}"
 )
@@ -360,6 +367,76 @@ if [[ "${symlink_fs_free_inodes}" -ne "${fs_free_inodes}" ]]; then
     "${fs_free_inodes}" "${symlink_fs_free_inodes}" >&2
   exit 1
 fi
+
+python3 - "${MOUNTPOINT}" <<'PY'
+import errno
+import os
+import sys
+
+mountpoint = sys.argv[1]
+loop_a = os.path.join(mountpoint, "statvfs-loop-a")
+loop_b = os.path.join(mountpoint, "statvfs-loop-b")
+private_dir = os.path.join(mountpoint, "statvfs-private")
+for stale_path in (loop_a, loop_b):
+    try:
+        os.unlink(stale_path)
+    except FileNotFoundError:
+        pass
+if os.path.isdir(private_dir):
+    os.chmod(private_dir, 0o700)
+    os.rmdir(private_dir)
+elif os.path.lexists(private_dir):
+    os.unlink(private_dir)
+
+try:
+    os.statvfs("")
+except OSError as exc:
+    assert exc.errno == errno.ENOENT, f"statvfs empty path errno={exc.errno}"
+else:
+    raise AssertionError("statvfs unexpectedly accepted an empty path")
+
+too_long_name = "n" * 256
+try:
+    os.statvfs(os.path.join(mountpoint, too_long_name))
+except OSError as exc:
+    assert exc.errno == errno.ENAMETOOLONG, (
+        f"statvfs overlong component errno={exc.errno}"
+    )
+else:
+    raise AssertionError("statvfs unexpectedly accepted an overlong component")
+
+os.symlink("statvfs-loop-b", loop_a)
+os.symlink("statvfs-loop-a", loop_b)
+try:
+    os.statvfs(loop_a)
+except OSError as exc:
+    assert exc.errno == errno.ELOOP, f"statvfs symlink loop errno={exc.errno}"
+else:
+    raise AssertionError("statvfs unexpectedly followed a symlink loop")
+finally:
+    os.unlink(loop_a)
+    os.unlink(loop_b)
+
+if os.geteuid() == 0:
+    print("SKIP: statvfs EACCES path-search case requires an unprivileged caller")
+else:
+    os.mkdir(private_dir, 0o700)
+    os.chmod(private_dir, 0)
+    try:
+        try:
+            os.statvfs(os.path.join(private_dir, "child"))
+        except OSError as exc:
+            assert exc.errno == errno.EACCES, (
+                f"statvfs inaccessible parent errno={exc.errno}"
+            )
+        else:
+            raise AssertionError("statvfs unexpectedly traversed an inaccessible parent")
+    finally:
+        os.chmod(private_dir, 0o700)
+        os.rmdir(private_dir)
+PY
+
+rm -f "${ACCOUNTING_SYMLINK}"
 
 DF_BYTES_OUTPUT="${OUTPUT_DIR}/df.ph"
 DF_INODES_OUTPUT="${OUTPUT_DIR}/df.phi"
