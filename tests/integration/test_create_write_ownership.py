@@ -227,6 +227,49 @@ def main() -> None:
 
             wait_for_ownership_cleanup(launcher_a, file_name)
 
+            # Existing-file O_APPEND follows the same cross-mount exclusive
+            # write-ownership contract as create/truncate opens.
+            append_fd_a = os.open(path_a, os.O_WRONLY | os.O_APPEND)
+            try:
+                os.write(append_fd_a, b"-A")
+                os.fsync(append_fd_a)
+                started = time.monotonic()
+                try:
+                    fd_b = os.open(path_b, os.O_WRONLY | os.O_APPEND)
+                except OSError as exc:
+                    append_loser_errno = exc.errno
+                else:
+                    os.close(fd_b)
+                    fd_b = None
+                    raise AssertionError(
+                        "second mount acquired O_APPEND while the first held "
+                        "the write lease"
+                    )
+                elapsed = time.monotonic() - started
+            finally:
+                os.close(append_fd_a)
+
+            if append_loser_errno != errno.EBUSY or elapsed >= FAIL_FAST_SECONDS:
+                raise AssertionError(
+                    "cross-mount O_APPEND ownership refusal "
+                    f"errno={append_loser_errno} elapsed={elapsed:.6f}s "
+                    f"expected EBUSY before {FAIL_FAST_SECONDS}s"
+                )
+            if db_file_size(launcher_a, file_name) != 3:
+                raise AssertionError("first mount O_APPEND did not extend the file")
+            wait_for_ownership_cleanup(launcher_a, file_name)
+
+            append_fd_b = os.open(path_b, os.O_WRONLY | os.O_APPEND)
+            os.close(append_fd_b)
+            wait_for_ownership_cleanup(launcher_a, file_name)
+
+            print(
+                "OK cross-mount-append-ownership "
+                f"loser_errno={append_loser_errno} "
+                f"loser_elapsed_ms={elapsed * 1000.0:.3f} "
+                "first_append_size=3 lease_reacquired=true"
+            )
+
             # ----------------------------------------------------------
             # Recovered existing + O_TRUNC
             # ----------------------------------------------------------

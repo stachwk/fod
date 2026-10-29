@@ -43,11 +43,18 @@ Reading guide:
   completes successfully. Mounted regression tests passed for both signal
   interruption/no-late-acquisition and ordinary cross-mount unlock handoff on
   2026-10-29. Upstream source evidence: [fuser request dispatcher](https://github.com/cberner/fuser/blob/master/src/request.rs#L136-L139).
-- [ ] **Concurrent cross-mount `O_APPEND` is rejected.** On 2026-10-29, a
-  mounted probe opened the same file for append from two mounts backed by the
-  same PostgreSQL database. The second writable `open()` returned `EBUSY` while
-  the first mount held the exclusive file write-ownership lease. Source review
-  traced the error to `FodFuse::create_writable_handle_with_ownership()`.
+- [ ] **Cross-mount `O_APPEND` offsets are not PostgreSQL-coherent.** On
+  2026-10-30, a mounted probe opened a file for append on mount A, appended
+  `-A`, flushed it, and verified PostgreSQL size 3. A competing append open on
+  mount B correctly returned fail-fast `EBUSY` while A held the exclusive file
+  write lease. After A released it, B acquired an append descriptor, but its
+  next append reached the FUSE write callback with offset 0 and changed the
+  bytes from expected `A-A-B` to `-BA`. The kernel used mount B's stale local
+  `inode->i_size`; this reproduces a sequential stale-offset failure as well as
+  the concurrent-open limitation. `test_create_write_ownership.py` retains the
+  EBUSY and lease-reacquisition regression without encoding the failing write
+  as accepted behavior. Source review traced lease exclusion to
+  `FodFuse::create_writable_handle_with_ownership()`.
   Linux v6.17's cached and direct FUSE write paths both run
   `generic_write_checks()` before issuing the FUSE write request;
   `generic_write_checks_count()` resolves `IOCB_APPEND` from that mount's local
