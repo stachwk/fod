@@ -594,6 +594,7 @@ impl DbRepo {
                     SELECT s.name, 'symlink', s.id_symlink, s.inode_seed, ''
                     FROM symlinks s
                     WHERE s.id_parent = $1
+                    ORDER BY name
                     ",
                 )
                 .map_err(|_| "SQL contains NUL byte".to_string())?,
@@ -622,6 +623,7 @@ impl DbRepo {
                     SELECT s.name, 'symlink', s.id_symlink, s.inode_seed, ''
                     FROM symlinks s
                     WHERE s.id_parent IS NULL
+                    ORDER BY name
                     ",
                 )
                 .map_err(|_| "SQL contains NUL byte".to_string())?,
@@ -654,6 +656,7 @@ impl DbRepo {
                     SELECT name FROM directories WHERE id_parent = $1
                     UNION ALL
                     SELECT name FROM symlinks WHERE id_parent = $1
+                    ORDER BY name
                     ",
                 )
                 .map_err(|_| "SQL contains NUL byte".to_string())?,
@@ -671,6 +674,7 @@ impl DbRepo {
                     SELECT name FROM hardlinks WHERE id_directory IS NULL
                     UNION ALL
                     SELECT name FROM symlinks WHERE id_parent IS NULL
+                    ORDER BY name
                     ",
                 )
                 .map_err(|_| "SQL contains NUL byte".to_string())?,
