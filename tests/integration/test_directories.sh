@@ -75,6 +75,19 @@ for path, expected, label in (
     else:
         raise AssertionError(f"{label} unexpectedly succeeded")
 
+child_file = os.path.join(file_path, "child-file")
+try:
+    child_fd = os.open(child_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+except OSError as error:
+    assert error.errno == errno.ENOTDIR, ("create below regular file", error.errno)
+else:
+    os.close(child_fd)
+    raise AssertionError("file creation below a regular file unexpectedly succeeded")
+
+with open(file_path, "rb") as existing_file:
+    assert existing_file.read() == b"rmdir target file\n"
+assert not os.path.lexists(child_file)
+
 file_fd = os.open(file_path, os.O_RDONLY)
 try:
     try:
@@ -101,4 +114,4 @@ PY
 rm -f "${not_a_directory}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY mkdir_rmdir_parent_errors=1 directory_fd_repeat=1"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY create_mkdir_rmdir_parent_errors=1 directory_fd_repeat=1"
