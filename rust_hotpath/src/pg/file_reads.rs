@@ -96,11 +96,20 @@ unsafe fn fetch_single_block_binary(
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows < 1 || cols < 1 {
+            if rows == 0 {
                 Ok(None)
+            } else if rows != 1 || cols != 1 {
+                Err("invalid single block row returned by PostgreSQL".to_string())
+            } else if PQgetisnull(res, 0, 0) != 0 {
+                Err("data block payload is NULL".to_string())
             } else {
                 read_result_binary_field(res, 0, 0, |bytes| {
                     Ok(normalize_block_bytes(bytes, block_size))
+                })
+                .and_then(|value| {
+                    value
+                        .map(Some)
+                        .ok_or_else(|| "data block payload is NULL".to_string())
                 })
             }
         }
@@ -126,8 +135,10 @@ unsafe fn fetch_block_range_rows_shared(
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows < 1 || cols < 2 {
+            if rows == 0 {
                 Ok(Vec::new())
+            } else if rows < 0 || cols != 2 {
+                Err("invalid block range rows returned by PostgreSQL".to_string())
             } else {
                 let mut blocks = Vec::with_capacity(rows as usize);
                 for row in 0..rows {
@@ -138,7 +149,7 @@ unsafe fn fetch_block_range_rows_shared(
                         Ok(normalize_block_arc(bytes, block_size))
                     })? {
                         Some(bytes) => bytes,
-                        None => continue,
+                        None => return Err("data block payload is NULL".to_string()),
                     };
                     if profile_enabled {
                         decoded_rows = decoded_rows.saturating_add(1);
@@ -180,6 +191,12 @@ unsafe fn decode_generation_block_snapshot(
         let mut blocks = Vec::new();
         for row in 0..PQntuples(res) {
             if PQgetisnull(res, row, 0) == 0 {
+                if PQgetisnull(res, row, 1) != 0
+                    || PQgetisnull(res, row, 2) == 0
+                    || PQgetisnull(res, row, 3) == 0
+                {
+                    return Err("malformed generation metadata row".to_string());
+                }
                 let size = u64::try_from(result_binary_i64(res, row, 0)?)
                     .map_err(|_| "negative snapshot file size".to_string())?;
                 let generation = u64::try_from(result_binary_i64(res, row, 1)?)
@@ -187,13 +204,18 @@ unsafe fn decode_generation_block_snapshot(
                 if metadata.replace((size, generation)).is_some() {
                     return Err("duplicate generation metadata row".to_string());
                 }
-            } else if PQgetisnull(res, row, 2) == 0 {
+            } else {
+                if PQgetisnull(res, row, 1) == 0 || PQgetisnull(res, row, 2) != 0 {
+                    return Err("malformed generation block row".to_string());
+                }
                 let index = u64::try_from(result_binary_i64(res, row, 2)?)
                     .map_err(|_| "negative snapshot block index".to_string())?;
                 if let Some(data) = read_result_binary_field(res, row, 3, |bytes| {
                     Ok(normalize_block_arc(bytes, block_size))
                 })? {
                     blocks.push((index, data));
+                } else {
+                    return Err("data block payload is NULL".to_string());
                 }
             }
         }
@@ -216,16 +238,19 @@ unsafe fn fetch_block_range_with_size_rows_shared(
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows < 1 {
+            if rows == 0 {
                 return Ok(None);
             }
-            if cols < 3 {
-                return Err("fused file read row is missing fields".to_string());
+            if rows < 0 || cols != 3 {
+                return Err("invalid fused file read rows returned by PostgreSQL".to_string());
             }
             let mut file_size = None;
             let mut blocks = Vec::with_capacity(rows.saturating_sub(1) as usize);
             for row in 0..rows {
                 if PQgetisnull(res, row, 0) == 0 {
+                    if PQgetisnull(res, row, 1) == 0 || PQgetisnull(res, row, 2) == 0 {
+                        return Err("malformed fused file metadata row".to_string());
+                    }
                     let value = result_binary_i64(res, row, 0)?;
                     let value =
                         u64::try_from(value).map_err(|_| "negative file size value".to_string())?;
@@ -235,7 +260,7 @@ unsafe fn fetch_block_range_with_size_rows_shared(
                     continue;
                 }
                 if PQgetisnull(res, row, 1) != 0 {
-                    continue;
+                    return Err("fused block row is missing its block index".to_string());
                 }
                 let index = u64::try_from(result_binary_i64(res, row, 1)?)
                     .map_err(|_| "negative block index value".to_string())?;
@@ -243,7 +268,7 @@ unsafe fn fetch_block_range_with_size_rows_shared(
                     Ok(normalize_block_arc(bytes, block_size))
                 })? {
                     Some(bytes) => bytes,
-                    None => continue,
+                    None => return Err("data block payload is NULL".to_string()),
                 };
                 if profile_enabled {
                     decoded_rows = decoded_rows.saturating_add(1);

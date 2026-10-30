@@ -390,6 +390,12 @@ Reading guide:
   `pg_query::xattr_null_value_is_not_reported_as_missing_attribute` passes on a
   temporary database. Query-failure injection for the xattr remains covered by
   the mounted primary-authority suite.
+  File-block read decoders had the analogous issue: a `NULL` payload for an
+  existing block was skipped, making corrupt data look like a sparse zero block.
+  `load_block()`, both block-range readers, and the generation snapshot now fail
+  closed on NULL payloads and malformed row shapes. The
+  `block_read_decoders_reject_null_payloads` regression reproduced the old
+  behavior and now verifies all four query paths against PostgreSQL.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

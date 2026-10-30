@@ -819,6 +819,75 @@ fn generated_block_snapshot_matches_committed_payload() -> Result<(), String> {
 }
 
 #[test]
+fn block_read_decoders_reject_null_payloads() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let block_size = u64::from(repo.startup_snapshot()?.block_size.unwrap_or(4096));
+    let file_id = repo.create_file(
+        None,
+        &unique_name("null_block_payload"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("null_block_payload_seed"),
+    )?;
+    let payload = vec![0x5a; block_size as usize];
+    let row = PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: block_size,
+    };
+
+    let result = (|| {
+        repo.persist_file_blocks_with_crc_flag(
+            file_id,
+            block_size,
+            block_size,
+            1,
+            false,
+            &[row],
+            false,
+        )?;
+        repo.exec("ALTER TABLE data_blocks ALTER COLUMN data DROP NOT NULL")?;
+        repo.exec(&format!(
+            "UPDATE data_blocks SET data = NULL WHERE data_object_id = (SELECT data_object_id FROM files WHERE id_file = {file_id}) AND _order = 0"
+        ))?;
+
+        fn expect_null_payload_error<T>(
+            result: Result<T, String>,
+            operation: &str,
+        ) -> Result<(), String> {
+            match result {
+                Err(error) if error.contains("NULL") => Ok(()),
+                Err(error) => Err(format!("{operation} returned the wrong error: {error}")),
+                Ok(_) => Err(format!("{operation} accepted a NULL persisted payload")),
+            }
+        }
+
+        expect_null_payload_error(repo.load_block(file_id, 0, block_size), "load_block")?;
+        expect_null_payload_error(
+            repo.fetch_block_range_shared(file_id, 0, 0, block_size),
+            "fetch_block_range",
+        )?;
+        expect_null_payload_error(
+            repo.fetch_block_range_with_size_shared(file_id, 0, 0, block_size),
+            "fetch_block_range_with_size",
+        )?;
+        expect_null_payload_error(
+            repo.fetch_block_range_with_generation_shared(file_id, 0, 0, block_size),
+            "fetch_block_range_with_generation",
+        )?;
+        Ok(())
+    })();
+
+    let cleanup = (|| {
+        repo.purge_primary_file(file_id)?;
+        repo.exec("ALTER TABLE data_blocks ALTER COLUMN data SET NOT NULL")
+    })();
+    result.and(cleanup)
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
