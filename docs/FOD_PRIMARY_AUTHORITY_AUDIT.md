@@ -512,10 +512,17 @@ mutation transaction then locks that owner row as before. `user.*` reads
 evaluate read permission using the same verified attributes and fetch the
 access ACL by owner ID, including the open-unlinked case, rather than trying to
 re-resolve a vanished pathname.
-This closes the source-identified stale-path selection path, but no mounted
-replacement-race regression was run; add one before treating the behavior as
-runtime-verified. Confidence: high for the source-level mechanism and fix;
-runtime reproduction remains unverified.
+The mounted regression now exercises both cases across two mounts with ACLs
+enabled: an open-unlinked file remains bound to its original file ID, and a
+cached path inode whose name was remotely replaced returns `ENOENT` on
+`setxattr` without changing the replacement object's xattr. The regression
+passed against an isolated PostgreSQL 17.11 instance on 2026-10-30. While
+making the stale-path case deterministic, it also exposed that the documented
+FUSE cache timeout environment variables were incorrectly passed as mount
+options. FOD now places entry and attribute TTLs in FUSE replies and can return
+cacheable negative lookup replies; all three configured timeout variables are
+covered by the mounted regression. This verifies the described cases, not
+every xattr namespace or every interleaving.
 
 ### Directory open after remote path replacement
 

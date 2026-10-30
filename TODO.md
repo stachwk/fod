@@ -126,8 +126,33 @@ Reading guide:
   unlink/replacement, they use the open handle's primary-resolved `file_id`.
   Confidence is high for the code-path fix. A two-mount regression covers
   get/list, set/remove and `fgetxattr(user.*)` on an open-unlinked inode with
-  ACLs enabled; it passed against a temporary PostgreSQL 17.11 instance. See
-  [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
+  ACLs enabled. It also primes a path entry on mount B, replaces that path from
+  mount A, and verifies stale-path `setxattr` returns `ENOENT` without changing
+  the replacement. The test passed against a temporary PostgreSQL 17.11
+  instance. See [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
+- [x] **FUSE entry, attribute and negative-cache timeouts were passed as invalid mount options.**
+  On 2026-10-30, setting `FOD_ENTRY_TIMEOUT_SECONDS=60` made the mount fail
+  before initialization. The captured FUSE/libfuse diagnostic was
+  `fuse: unknown option(s): '-o entry_timeout=60'`. Source review confirmed
+  that low-level FUSE accepts the timeout values in entry/create/attribute
+  replies, not as these mount options. FOD now removes the invalid mount
+  options, sends entry and attribute TTLs separately, and sends a negative
+  entry reply for a missing lookup when its timeout is positive. The mounted
+  xattr stale-inode regression also sets all three timeout variables, verifies
+  the negative lookup cache, and passed on 2026-10-30. See
+  [`runtime configuration`](docs/runtime-configuration.md#entry_timeout_seconds)
+  and [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
+- [ ] **Investigate `utimens_noop` ctime change in the FUSE profile smoke test.**
+  On 2026-10-30, `cargo test -p fod-rust-fuse --offline` failed
+  `profile_smoke::utimens_noop` because the file ctime changed after
+  `utimensat()` was called with the file's existing atime/mtime; the isolated
+  rerun reproduced the same failure. This is outside the cache-timeout change.
+  The failing assertion establishes the observable result, but the test
+  currently provides no syscall trace or FUSE callback values, so the cause is
+  undetermined. Capture before/after kernel timestamps and the `SETATTR` request
+  fields, then compare Linux and FOD no-op timestamp semantics before changing
+  the callback or expectation. See
+  [`profile smoke test`](rust_fuse/tests/profile_smoke.rs).
 - [x] **Mounted stale-inode directory replacement regression.** On
   2026-10-30, source review found that `opendir()` fetched attributes through
   the replica-routed repository without checking whether the locally cached

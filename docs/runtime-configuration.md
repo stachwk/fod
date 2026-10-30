@@ -139,17 +139,23 @@ The base INI keeps it `false`.
 ### `entry_timeout_seconds`
 
 Environment override: `FOD_ENTRY_TIMEOUT_SECONDS`. Optional non-negative FUSE
-entry-cache timeout. Kept commented in base INI to preserve defaults.
+entry-cache timeout. FOD sends it in entry/create replies; it is not a kernel or
+libfuse mount option. If unset, the runtime metadata-cache timeout is used.
+Kept commented in base INI to preserve defaults.
 
 ### `attr_timeout_seconds`
 
 Environment override: `FOD_ATTR_TIMEOUT_SECONDS`. Optional non-negative FUSE
-attribute-cache timeout. Kept commented by default.
+attribute-cache timeout, sent separately from entry TTLs in entry, create and
+getattr replies. If unset, the runtime metadata-cache timeout is used. Kept
+commented by default.
 
 ### `negative_timeout_seconds`
 
 Environment override: `FOD_NEGATIVE_TIMEOUT_SECONDS`. Optional non-negative
-negative-lookup timeout. Kept commented by default.
+negative-lookup timeout. A positive value lets the kernel cache missing names
+from `lookup` replies; zero keeps the uncached `ENOENT` reply. Kept commented
+by default.
 
 ## Environment-only audit
 

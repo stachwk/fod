@@ -1024,7 +1024,7 @@ pub fn mount_with_lanes(
         observability_interval,
     )?;
     let settings =
-        crate::startup::FodFuseSettings::from_runtime(runtime, &snapshot, requested_readonly);
+        crate::startup::FodFuseSettings::from_runtime(runtime, &snapshot, requested_readonly)?;
     let (mount_repo, keepalive, mut telemetry_repo) = lanes.into_mount_repo();
     if telemetry_repo.is_none() && settings.read_only {
         telemetry_repo = match crate::startup::telemetry_repo_from_env(runtime) {

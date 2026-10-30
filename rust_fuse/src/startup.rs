@@ -37,6 +37,9 @@ pub struct FuseStorageSettings {
 #[derive(Debug, Clone)]
 pub struct FuseCacheSettings {
     pub metadata_cache_ttl: Duration,
+    pub entry_cache_ttl: Duration,
+    pub attr_cache_ttl: Duration,
+    pub negative_cache_ttl: Duration,
     pub statfs_cache_ttl: Duration,
     pub read_cache_blocks: u64,
     pub read_cache_eviction_policy: String,
@@ -89,7 +92,7 @@ impl FodFuseSettings {
         runtime: &RuntimeConfig,
         snapshot: &StartupSnapshot,
         requested_readonly: bool,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let degraded_read_only =
             env_var_truthy_with_legacy_alias("FOD_DEGRADED_READONLY_ENABLED", false);
         let read_only = degraded_read_only
@@ -99,7 +102,13 @@ impl FodFuseSettings {
         let lock = runtime.lock_settings(read_only);
         let cache = runtime.cache_settings();
         let storage = runtime.storage_settings();
-        Self {
+        let entry_cache_ttl =
+            configured_fuse_timeout("FOD_ENTRY_TIMEOUT_SECONDS", cache.metadata_cache_ttl)?;
+        let attr_cache_ttl =
+            configured_fuse_timeout("FOD_ATTR_TIMEOUT_SECONDS", cache.metadata_cache_ttl)?;
+        let negative_cache_ttl =
+            configured_fuse_timeout("FOD_NEGATIVE_TIMEOUT_SECONDS", Duration::ZERO)?;
+        Ok(Self {
             storage: FuseStorageSettings {
                 block_size: snapshot.block_size.unwrap_or(4096) as u64,
                 write_flush_threshold_bytes: storage.write_flush_threshold_bytes,
@@ -115,6 +124,21 @@ impl FodFuseSettings {
                     Duration::ZERO
                 } else {
                     cache.metadata_cache_ttl
+                },
+                entry_cache_ttl: if degraded_read_only {
+                    Duration::ZERO
+                } else {
+                    entry_cache_ttl
+                },
+                attr_cache_ttl: if degraded_read_only {
+                    Duration::ZERO
+                } else {
+                    attr_cache_ttl
+                },
+                negative_cache_ttl: if degraded_read_only {
+                    Duration::ZERO
+                } else {
+                    negative_cache_ttl
                 },
                 statfs_cache_ttl: if degraded_read_only {
                     Duration::ZERO
@@ -170,8 +194,26 @@ impl FodFuseSettings {
             use_fuse_context: mount.use_fuse_context,
             fopen_direct_io: degraded_read_only || mount.fopen_direct_io,
             degraded_read_only,
-        }
+        })
     }
+}
+
+fn configured_fuse_timeout(name: &str, default: Duration) -> Result<Duration, String> {
+    let Some(value) = env_var_with_legacy_alias(name).filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(default);
+    };
+    let seconds = value
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| format!("{name} must be a finite non-negative number of seconds"))?;
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(format!(
+            "{name} must be a finite non-negative number of seconds"
+        ));
+    }
+    Duration::try_from_secs_f64(seconds)
+        .map_err(|_| format!("{name} is outside the supported duration range"))
 }
 
 const DEFAULT_FUSE_EVENT_THREADS: usize = 1;
@@ -298,27 +340,6 @@ fn mount_config(
     }
     if let Some(value) = security.selinux_rootcontext.as_ref() {
         options.push(MountOption::CUSTOM(format!("rootcontext={value}")));
-    }
-    if !degraded_read_only {
-        if let Some(value) = env_var_with_legacy_alias("FOD_ENTRY_TIMEOUT_SECONDS")
-            .filter(|value| !value.trim().is_empty())
-        {
-            options.push(MountOption::CUSTOM(format!("entry_timeout={value}")));
-        }
-    }
-    if !degraded_read_only {
-        if let Some(value) = env_var_with_legacy_alias("FOD_ATTR_TIMEOUT_SECONDS")
-            .filter(|value| !value.trim().is_empty())
-        {
-            options.push(MountOption::CUSTOM(format!("attr_timeout={value}")));
-        }
-    }
-    if !degraded_read_only {
-        if let Some(value) = env_var_with_legacy_alias("FOD_NEGATIVE_TIMEOUT_SECONDS")
-            .filter(|value| !value.trim().is_empty())
-        {
-            options.push(MountOption::CUSTOM(format!("negative_timeout={value}")));
-        }
     }
     if mount.fuse_writeback_cache && !degraded_read_only {
         options.push(MountOption::CUSTOM("writeback_cache".to_string()));
@@ -556,6 +577,12 @@ pub fn mount_fuse(
         .map_err(|err| format!("failed to start logical task observability: {err}"))?;
 
     let config = mount_config(&mount, &security, degraded_read_only)?;
+    info!(
+        "FOD FUSE reply cache TTLs: entry={}s attr={}s negative={}s",
+        fs.entry_cache_ttl_live().as_secs_f64(),
+        fs.attr_cache_ttl_live().as_secs_f64(),
+        fs.negative_cache_ttl_live().as_secs_f64()
+    );
     log_mount_status(MountStatusLogInput {
         mountpoint,
         core: &core,

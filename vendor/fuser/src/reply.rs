@@ -270,6 +270,12 @@ impl ReplyEntry {
         ));
     }
 
+    /// Reply with a negative entry so the kernel can cache a missing name.
+    pub fn negative(self, ttl: &Duration) {
+        self.reply
+            .send_ll(&ll::ResponseStruct::new_negative_entry(*ttl));
+    }
+
     /// Reply to a request with the given error code
     pub fn error(self, err: Errno) {
         self.reply.error(err);
@@ -507,9 +513,23 @@ impl ReplyCreate {
         fh: ll::FileHandle,
         flags: FopenFlags,
     ) {
+        self.created_with_ttls(ttl, ttl, attr, generation, fh, flags);
+    }
+
+    /// Reply with a newly created entry using distinct entry and attribute TTLs.
+    pub fn created_with_ttls(
+        self,
+        attr_ttl: &Duration,
+        entry_ttl: &Duration,
+        attr: &FileAttr,
+        generation: Generation,
+        fh: ll::FileHandle,
+        flags: FopenFlags,
+    ) {
         assert!(!flags.contains(FopenFlags::FOPEN_PASSTHROUGH));
         self.reply.send_ll(&ll::ResponseStruct::new_create(
-            ttl,
+            attr_ttl,
+            entry_ttl,
             &attr.into(),
             generation,
             fh,
@@ -562,6 +582,7 @@ impl ReplyCreate {
         backing_id: &BackingId,
     ) {
         self.reply.send_ll(&ll::ResponseStruct::new_create(
+            ttl,
             ttl,
             &attr.into(),
             generation,

@@ -37,8 +37,19 @@ def main() -> None:
     ) as mount_b_tmp:
         mount_a = Path(mount_a_tmp)
         mount_b = Path(mount_b_tmp)
-        launcher_a.start(str(mount_a))
+        timeout_names = (
+            "FOD_ENTRY_TIMEOUT_SECONDS",
+            "FOD_ATTR_TIMEOUT_SECONDS",
+            "FOD_NEGATIVE_TIMEOUT_SECONDS",
+        )
+        previous_timeouts = {name: os.environ.get(name) for name in timeout_names}
+        os.environ["FOD_ENTRY_TIMEOUT_SECONDS"] = "60"
+        os.environ["FOD_ATTR_TIMEOUT_SECONDS"] = "30"
+        os.environ["FOD_NEGATIVE_TIMEOUT_SECONDS"] = "60"
+        stale_path_a: Path | None = None
+        missing_path_a: Path | None = None
         try:
+            launcher_a.start(str(mount_a))
             launcher_b.start(str(mount_b))
             path_a: Path | None = None
             try:
@@ -84,17 +95,81 @@ def main() -> None:
                         raise AssertionError("fremovexattr modified the replacement inode")
                 finally:
                     os.close(fd_b)
+
+                stale_path_a = mount_a / f"stale-path-{suffix}.txt"
+                stale_path_b = mount_b / stale_path_a.name
+                stale_path_a.write_bytes(b"old path inode")
+                os.setxattr(stale_path_a, name, original_value)
+                stale_path_b.stat()
+                if os.getxattr(stale_path_b, name) != original_value:
+                    raise AssertionError("second mount did not prime the old path inode")
+
+                stale_path_a.unlink()
+                stale_path_a.write_bytes(b"replacement path inode")
+                os.setxattr(stale_path_a, name, replacement_value)
+
+                try:
+                    os.setxattr(stale_path_b, name, updated_value)
+                except OSError as exc:
+                    if exc.errno != errno.ENOENT:
+                        raise AssertionError(
+                            "stale path xattr mutation returned unexpected errno "
+                            f"{exc.errno}, expected ENOENT"
+                        ) from exc
+                else:
+                    raise AssertionError(
+                        "setxattr through the cached old path inode did not fail closed"
+                    )
+
+                if os.getxattr(stale_path_a, name) != replacement_value:
+                    raise AssertionError(
+                        "stale path setxattr modified the replacement inode"
+                    )
+
+                missing_path_a = mount_a / f"negative-cache-{suffix}.txt"
+                missing_path_b = mount_b / missing_path_a.name
+                try:
+                    missing_path_b.stat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise AssertionError("negative-cache target unexpectedly exists")
+                missing_path_a.write_bytes(b"created after negative lookup")
+                try:
+                    missing_path_b.stat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise AssertionError("negative lookup was not cached on mount B")
             finally:
                 if path_a is not None:
                     try:
                         path_a.unlink()
                     except FileNotFoundError:
                         pass
+                if stale_path_a is not None:
+                    try:
+                        stale_path_a.unlink()
+                    except FileNotFoundError:
+                        pass
+                if missing_path_a is not None:
+                    try:
+                        missing_path_a.unlink()
+                    except FileNotFoundError:
+                        pass
                 launcher_b.stop()
         finally:
             launcher_a.stop()
+            for name, previous_value in previous_timeouts.items():
+                if previous_value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = previous_value
 
-    print("OK: stale inode xattr operations remain bound to the open file with ACL enabled")
+    print(
+        "OK: stale inode xattr operations stay bound to the open file and "
+        "cached path replacements fail closed with ACL enabled"
+    )
 
 
 if __name__ == "__main__":

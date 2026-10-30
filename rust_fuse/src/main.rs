@@ -93,7 +93,11 @@ fn main() {
         std::process::exit(1);
     });
     log::debug!("FOD startup snapshot={:?}", snapshot);
-    let settings = startup::FodFuseSettings::from_runtime(&runtime, &snapshot, args.readonly);
+    let settings = startup::FodFuseSettings::from_runtime(&runtime, &snapshot, args.readonly)
+        .unwrap_or_else(|err| {
+            eprintln!("fod-rust-fuse: invalid FUSE cache timeout config: {err}");
+            std::process::exit(1);
+        });
     let telemetry_repo = if settings.read_only {
         match startup::telemetry_repo_from_env(&runtime) {
             Some(Ok(repo)) => {

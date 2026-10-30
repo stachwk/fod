@@ -1628,6 +1628,9 @@ pub struct FodFuse {
     pub lock_heartbeat_interval: Duration,
     pub lock_poll_interval: Duration,
     pub atime_policy: AtimePolicy,
+    entry_cache_ttl: Duration,
+    attr_cache_ttl: Duration,
+    negative_cache_ttl: Duration,
     reloadable_runtime: Arc<RwLock<RuntimeReloadableSettings>>,
     pub read_only: bool,
     degraded_read_only: bool,
@@ -1787,6 +1790,9 @@ impl FodFuse {
             lock_heartbeat_interval: locks.lock_heartbeat_interval,
             lock_poll_interval: locks.lock_poll_interval,
             atime_policy,
+            entry_cache_ttl: cache.entry_cache_ttl,
+            attr_cache_ttl: cache.attr_cache_ttl,
+            negative_cache_ttl: cache.negative_cache_ttl,
             reloadable_runtime: Arc::new(RwLock::new(runtime.reloadable_settings())),
             read_only,
             degraded_read_only,
@@ -1875,6 +1881,30 @@ impl FodFuse {
             Duration::ZERO
         } else {
             self.reloadable_runtime().metadata_cache_ttl
+        }
+    }
+
+    pub(crate) fn entry_cache_ttl_live(&self) -> Duration {
+        if self.degraded_read_only {
+            Duration::ZERO
+        } else {
+            self.entry_cache_ttl
+        }
+    }
+
+    pub(crate) fn attr_cache_ttl_live(&self) -> Duration {
+        if self.degraded_read_only {
+            Duration::ZERO
+        } else {
+            self.attr_cache_ttl
+        }
+    }
+
+    pub(crate) fn negative_cache_ttl_live(&self) -> Duration {
+        if self.degraded_read_only {
+            Duration::ZERO
+        } else {
+            self.negative_cache_ttl
         }
     }
 
@@ -5646,13 +5676,21 @@ impl Filesystem for FodFuse {
         match self.lookup_path(&child_path) {
             Ok(Some(attrs)) => {
                 self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
-                reply.entry(
-                    &self.metadata_cache_ttl_live(),
+                reply.entry_with_ttls(
+                    &self.attr_cache_ttl_live(),
+                    &self.entry_cache_ttl_live(),
                     &attrs.file_attr,
                     Generation(0),
                 );
             }
-            Ok(None) => fuse_reply_error!(reply, ENOENT),
+            Ok(None) => {
+                let ttl = self.negative_cache_ttl_live();
+                if ttl.is_zero() {
+                    fuse_reply_error!(reply, ENOENT);
+                } else {
+                    reply.negative(&ttl);
+                }
+            }
             Err(errno) => fuse_reply_error!(reply, errno),
         }
     }
@@ -5678,7 +5716,7 @@ impl Filesystem for FodFuse {
                     Ok(Some(mut attrs)) => {
                         let write_state = self.write_state_for_handle(fh);
                         self.overlay_pending_write_size(&mut attrs, write_state.as_ref());
-                        reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
+                        reply.attr(&self.attr_cache_ttl_live(), &attrs.file_attr);
                         return;
                     }
                     Ok(None) => {
@@ -5716,7 +5754,7 @@ impl Filesystem for FodFuse {
                     self.overlay_pending_write_size(&mut attrs, write_state.as_ref());
                 }
                 self.register_path(&path, attrs.file_attr.ino.0);
-                reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
+                reply.attr(&self.attr_cache_ttl_live(), &attrs.file_attr);
             }
             Err(ENOENT) => match self.attrs_for_open_inode(ino) {
                 Ok(Some(attrs)) => {
@@ -5724,7 +5762,7 @@ impl Filesystem for FodFuse {
                         "FOD req={} op=getattr open_inode_fallback ino={} nlink={}",
                         req_id, ino, attrs.file_attr.nlink
                     );
-                    reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr);
+                    reply.attr(&self.attr_cache_ttl_live(), &attrs.file_attr);
                 }
                 Ok(None) => {
                     self.log_request_error(req_id, "getattr", ENOENT, format!("ino={}", ino));
@@ -8143,7 +8181,7 @@ impl Filesystem for FodFuse {
             self.attrs_for_path_from_repo(&authority, &path)
         } {
             Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => {
-                reply.attr(&self.metadata_cache_ttl_live(), &attrs.file_attr)
+                reply.attr(&self.attr_cache_ttl_live(), &attrs.file_attr)
             }
             Ok(Some(_)) => fuse_reply_error!(reply, ENOENT),
             Ok(None) => fuse_reply_error!(reply, ENOENT),
@@ -8254,8 +8292,9 @@ impl Filesystem for FodFuse {
                             "FOD req={} op=mkdir created path={} directory_id={}",
                             req_id, child_path, directory_id
                         );
-                        reply.entry(
-                            &self.metadata_cache_ttl_live(),
+                        reply.entry_with_ttls(
+                            &self.attr_cache_ttl_live(),
+                            &self.entry_cache_ttl_live(),
                             &attrs.file_attr,
                             Generation(0),
                         );
@@ -9100,8 +9139,9 @@ impl Filesystem for FodFuse {
                     "FOD req={} op=create completed path={} file_id={} fh={} created_new={}",
                     req_id, child_path, file_id, fh, created_new
                 );
-                reply.created(
-                    &self.metadata_cache_ttl_live(),
+                reply.created_with_ttls(
+                    &self.attr_cache_ttl_live(),
+                    &self.entry_cache_ttl_live(),
                     &attrs.file_attr,
                     Generation(0),
                     FileHandle(fh),
@@ -10217,8 +10257,9 @@ impl Filesystem for FodFuse {
                     Ok(Some(attrs)) => {
                         self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                         self.invalidate_statfs_cache();
-                        reply.entry(
-                            &self.metadata_cache_ttl_live(),
+                        reply.entry_with_ttls(
+                            &self.attr_cache_ttl_live(),
+                            &self.entry_cache_ttl_live(),
                             &attrs.file_attr,
                             Generation(0),
                         );
@@ -10306,8 +10347,9 @@ impl Filesystem for FodFuse {
             Ok(Some(attrs)) => {
                 self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                 self.invalidate_statfs_cache();
-                reply.entry(
-                    &self.metadata_cache_ttl_live(),
+                reply.entry_with_ttls(
+                    &self.attr_cache_ttl_live(),
+                    &self.entry_cache_ttl_live(),
                     &attrs.file_attr,
                     Generation(0),
                 );
@@ -10384,8 +10426,9 @@ impl Filesystem for FodFuse {
                 Ok(Some(attrs)) => {
                     self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                     self.invalidate_statfs_cache();
-                    reply.entry(
-                        &self.metadata_cache_ttl_live(),
+                    reply.entry_with_ttls(
+                        &self.attr_cache_ttl_live(),
+                        &self.entry_cache_ttl_live(),
                         &attrs.file_attr,
                         Generation(0),
                     );
@@ -10499,8 +10542,9 @@ impl Filesystem for FodFuse {
                 Ok(Some(attrs)) => {
                     self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                     self.invalidate_statfs_cache();
-                    reply.entry(
-                        &self.metadata_cache_ttl_live(),
+                    reply.entry_with_ttls(
+                        &self.attr_cache_ttl_live(),
+                        &self.entry_cache_ttl_live(),
                         &attrs.file_attr,
                         Generation(0),
                     );
