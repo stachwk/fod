@@ -5,8 +5,8 @@ release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed base: commit `7b1c980` (`FOD 3.4.386`). This inventory records the
-implementation and evidence available at that commit.
+Reviewed base: commit `ddd26c9` (`FOD 3.4.387`), plus the mounted
+`statvfs()` signal-interruption regression recorded below.
 
 ## Overall filesystem compatibility status
 
@@ -19,9 +19,9 @@ claim.
 
 | Area | Implemented boundary | Verification status |
 | --- | --- | --- |
-| POSIX filesystem API | Broad Linux filesystem operations, metadata, permissions, namespace changes, regular-file locks and FIFO behavior | Requirement audit remains open. Only the listed standard and sparse `lseek()` case groups are marked Pass; other groups remain Pending until every in-scope rule and required error has evidence. P07 includes paused-replica checks for `open()` denial and `access(X_OK)` refresh with kernel `default_permissions`; the latter uses a read-only mount with configured positive attr TTL and primary-backed `getattr()`. The detailed P01-P12 ledger owns remaining work. |
-| Linux kernel/VFS | Linux-only runtime; startup rejects kernels older than 4.18.0. VFS may handle or reject operations before FUSE dispatch. | The preflight boundary has unit coverage. Mounted evidence is concentrated on Linux 6.17; end-to-end execution on the declared minimum kernel has not been recorded. |
-| FUSE/libfuse | `fuser 0.18.0`, explicit libfuse3 backend, userspace protocol ceiling 7.40, runtime protocol/capability negotiation | Mounted evidence uses Linux 6.17/libfuse 3.17.4. The declared libfuse3 3.0.0 floor has preflight coverage but no recorded minimum-version mount matrix. Per-callback coverage and omissions are listed below. |
+| POSIX filesystem API | Broad Linux filesystem operations, metadata, permissions, namespace changes, regular-file locks and FIFO behavior | Issue 8 audit remains open: 2 `lseek()` case groups are Pass and 12 areas remain Pending. No overall POSIX conformance claim is made. P07 includes paused-replica checks for `open()` denial and `access(X_OK)` refresh with kernel `default_permissions`; `statvfs()` now has a mounted `EINTR` regression. The detailed P01-P12 ledger owns remaining work. |
+| Linux kernel/VFS | Linux-only runtime; startup rejects kernels older than 4.18.0. VFS may handle or reject operations before FUSE dispatch. | Preflight boundary has unit coverage. Mounted evidence is concentrated on Linux 6.17; end-to-end execution on the declared minimum kernel has not been recorded. Linux-specific behavior, including VFS errno short-circuits, is attributed separately from FOD callbacks. |
+| FUSE/libfuse | `fuser 0.18.0`, explicit libfuse3 backend, userspace protocol ceiling 7.40, runtime protocol/capability negotiation | Mounted evidence uses Linux 6.17/libfuse 3.17.4. The declared libfuse3 3.0.0 floor has preflight coverage but no recorded minimum-version mount matrix. Callback coverage and omissions are listed below; `FUSE_INTERRUPT` now returns `EINTR` for pending `statfs` replies and blocked POSIX lock waits. |
 | Product platform | 64-bit and wider userspace only | 32-bit binaries and ABI targets are outside the support matrix. |
 
 This summary deliberately distinguishes a declared runtime floor from tested

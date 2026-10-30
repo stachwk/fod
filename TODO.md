@@ -812,6 +812,18 @@ Reading guide:
     a real PostgreSQL failure. The injection is confined to the test-named
     environment variable.
 
+- [x] **`statvfs()` did not return `EINTR` when a caught signal arrived during a blocked FUSE request.**
+  - Closure note (2026-10-31, FOD 3.4.387): a mounted regression in
+    `test_unlink_primary_authority_docker.py` holds an exclusive PostgreSQL
+    table lock until the FUSE `statfs` query waits on it, then sends `SIGUSR1`
+    to a C helper calling `statvfs()`. Before the fix the call remained
+    blocked. FOD now tracks pending statfs replies and answers the interrupted
+    request with `EINTR`; the integration run passed and records
+    `statvfs_signal_returns_eintr=true`. This cancels the caller's wait and
+    discards a later reply; it does not cancel the already-running PostgreSQL
+    query. See the [POSIX audit](docs/POSIX_CONFORMANCE_AUDIT.md) and
+    [FUSE requirements](docs/FUSE_REQUIREMENTS.md).
+
 - [x] Add a mounted stale-read `ESTALE` regression for degraded read-only mode.
   - Closure note (2026-10-29): `test_pg_three_node_failover.sh` holds a file
     descriptor open on a standby, deletes only that dedicated test file row on

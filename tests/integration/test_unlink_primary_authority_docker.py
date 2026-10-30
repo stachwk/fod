@@ -12,7 +12,9 @@ import io
 import json
 import os
 from pathlib import Path
+import select
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -57,6 +59,110 @@ def wait_for(predicate, label, timeout=30):
             return
         time.sleep(0.05)
     raise AssertionError(f"timed out: {label}")
+
+
+def assert_statvfs_is_interrupted_by_signal(mountpoint, db, workdir):
+    source = Path(workdir) / "statvfs_interrupt.c"
+    binary = Path(workdir) / "statvfs_interrupt"
+    source.write_text(
+        """
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <sys/statvfs.h>
+
+static volatile sig_atomic_t caught_signal = 0;
+
+static void record_signal(int signal_number) {
+    caught_signal = signal_number;
+}
+
+int main(int argc, char **argv) {
+    struct sigaction action = {0};
+    struct statvfs stats;
+    int result;
+    int saved_errno;
+
+    if (argc != 2) return 2;
+    action.sa_handler = record_signal;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+    if (sigaction(SIGUSR1, &action, NULL) != 0) return 3;
+    puts("READY");
+    fflush(stdout);
+    errno = 0;
+    result = statvfs(argv[1], &stats);
+    saved_errno = errno;
+    printf("RESULT %d %d %d\\n", result, saved_errno, (int)caught_signal);
+    return 0;
+}
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["cc", "-O2", "-Wall", "-Wextra", str(source), "-o", str(binary)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    execute(db, "BEGIN")
+    process = None
+    try:
+        execute(db, "LOCK TABLE fod.files IN ACCESS EXCLUSIVE MODE")
+        process = subprocess.Popen(
+            [str(binary), str(mountpoint)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        assert process.stdout.readline().strip() == "READY"
+        blocker_pid = db.get_backend_pid()
+
+        def statfs_is_waiting_for_relation_lock():
+            rows = query(
+                db,
+                "SELECT query FROM pg_stat_activity "
+                "WHERE datname = current_database() AND pid <> %s "
+                "AND state = 'active' AND wait_event_type = 'Lock'",
+                (blocker_pid,),
+            )
+            return any("files" in row[0].lower() for row in rows)
+
+        wait_for(
+            statfs_is_waiting_for_relation_lock,
+            "FUSE statfs query blocked on fod.files",
+            timeout=10,
+        )
+        os.kill(process.pid, signal.SIGUSR1)
+        readable, _, _ = select.select([process.stdout], [], [], 5)
+        if not readable:
+            raise AssertionError(
+                "statvfs did not return while its PostgreSQL-backed FUSE "
+                "request was blocked"
+            )
+        result = process.stdout.readline().strip()
+        expected = f"RESULT -1 {errno.EINTR} {signal.SIGUSR1}"
+        if result != expected:
+            raise AssertionError(
+                f"interrupted statvfs returned {result!r}, expected {expected!r}"
+            )
+    finally:
+        execute(db, "ROLLBACK")
+        if process is not None:
+            try:
+                output, _ = process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                output, _ = process.communicate()
+                raise AssertionError(f"statvfs signal helper did not exit: {output}")
+            if process.returncode != 0:
+                raise AssertionError(
+                    f"statvfs signal helper exited {process.returncode}: {output}"
+                )
 
 
 def main():
@@ -249,6 +355,26 @@ def main():
             os.environ.pop("FOD_METADATA_CACHE_TTL_SECONDS", None)
         else:
             os.environ["FOD_METADATA_CACHE_TTL_SECONDS"] = previous_metadata_ttl
+
+        previous_statfs_ttl = os.environ.get("FOD_STATFS_CACHE_TTL_SECONDS")
+        previous_replica_routing = os.environ.get(
+            "FOD_PG_REPLICA_READ_ROUTING_ENABLED"
+        )
+        os.environ["FOD_STATFS_CACHE_TTL_SECONDS"] = "0"
+        os.environ["FOD_PG_REPLICA_READ_ROUTING_ENABLED"] = "0"
+        me = temp / "statfs-interrupt"
+        statfs_mount = FODMount(str(ROOT)); mounts.append(statfs_mount)
+        statfs_mount.start(str(me))
+        if previous_statfs_ttl is None:
+            os.environ.pop("FOD_STATFS_CACHE_TTL_SECONDS", None)
+        else:
+            os.environ["FOD_STATFS_CACHE_TTL_SECONDS"] = previous_statfs_ttl
+        if previous_replica_routing is None:
+            os.environ.pop("FOD_PG_REPLICA_READ_ROUTING_ENABLED", None)
+        else:
+            os.environ["FOD_PG_REPLICA_READ_ROUTING_ENABLED"] = previous_replica_routing
+        assert_statvfs_is_interrupted_by_signal(me, primary, temp)
+        results["statvfs_signal_returns_eintr"] = True
 
         # Root's access(X_OK) exception depends on the current primary mode:
         # root still needs at least one execute bit. A lagged read replica must

@@ -1,6 +1,7 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, FOD 3.4.386, reviewed commit `7b1c980`.
+Stan dokumentu: 2026-10-31, przegląd FOD 3.4.387 (`ddd26c9`) z bieżącym testem
+przerwania `statvfs()`.
 
 Ten dokument opisuje aktualny kontrakt uruchomieniowy Linux/FUSE, jego
 walidację oraz ograniczenia. Nie jest deklaracją zgodności POSIX. Status
@@ -67,7 +68,7 @@ callback FOD został wywołany. Dokładne przykłady i przypisanie errno są w
 
 | Stan w FOD | Obszary |
 | --- | --- |
-| Implementowane i objęte testami | init, lookup/forget/getattr, readdir/readlink/statfs, xattr, access, poll, open/read/write/release, POSIX/flock locks, flush/fsync, setattr, namespace, copy_file_range, regular `mknod`/FIFO, symlink/link; tworzenie węzłów urządzeń nie jest wspierane |
+| Implementowane i objęte testami | init, lookup/forget/getattr, readdir/readlink/statfs (w tym `EINTR` dla przerwanego `statvfs()`), xattr, access, poll, open/read/write/release, POSIX/flock locks, flush/fsync, setattr, namespace, copy_file_range, regular `mknod`/FIFO, symlink/link; tworzenie węzłów urządzeń nie jest wspierane |
 | Implementowane, lecz dowody nie pokrywają całego kontraktu | ioctl, bmap, wybrane tryby fallocate, callback lseek dla SEEK_DATA/SEEK_HOLE |
 | Brak jawnej implementacji FOD | destroy, batch_forget, readdirplus, fsyncdir; katalogi używają domyślnego zachowania warstwy fuser zamiast własnych callbacków opendir/releasedir |
 | Brak callbacku w używanym wysokopoziomowym API fuser | natywne SYNCFS, TMPFILE i STATX |
@@ -91,6 +92,10 @@ bitu wykonywania widzi nowy tryb: mount read-only ma skonfigurowany dodatni TTL
 konfiguracji testy
 obejmowały m.in. suite mount, operacje POSIX, locki, FIFO, sparse seek,
 równoległe zadania, negocjację capability i rejection nieobsługiwanych opcji.
+Mounted regresja `statvfs()` blokuje zapytanie na tabeli PostgreSQL, wysyła
+przechwycony `SIGUSR1` i potwierdza `EINTR`; Linux dokumentuje, że FUSE
+userspace może odpowiedzieć `EINTR` na pierwotne żądanie po `FUSE_INTERRUPT`
+([opis zachowania](https://github.com/torvalds/linux/blob/v6.17/Documentation/filesystems/fuse/fuse.rst)).
 Test jednostkowy preflight sprawdza granicę wersji 4.18.0 oraz odrzucenie
 starszego/nieparsowalnego jądra i libfuse poniżej 3.0.0.
 

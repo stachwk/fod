@@ -85,6 +85,17 @@ fn parse_file_mode(mode: &str) -> Result<u16, libc::c_int> {
 
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type RecentWriteBlockKey = (u64, u64);
+type PendingStatfsReply = Arc<Mutex<Option<ReplyStatfs>>>;
+
+#[derive(Debug, Clone, Copy)]
+struct StatfsReplyData {
+    blocks: u64,
+    free_blocks: u64,
+    total_inodes: u64,
+    free_inodes: u64,
+    block_size: u32,
+    name_max: u32,
+}
 
 struct PendingLockWait {
     cancelled: AtomicBool,
@@ -1661,6 +1672,7 @@ pub struct FodFuse {
     pub(crate) read_sequence_state: Mutex<HashMap<u64, ReadSequenceState>>,
     posix_locks: Arc<Mutex<HashMap<String, Vec<PosixLockRecord>>>>,
     pending_lock_waits: Mutex<HashMap<RequestId, Arc<PendingLockWait>>>,
+    pending_statfs_replies: Mutex<HashMap<RequestId, PendingStatfsReply>>,
     local_lock_owners: Arc<Mutex<HashSet<u64>>>,
     pid_groups_cache: Mutex<HashMap<RequestPidGroupsCacheKey, CachedPidGroups>>,
     statfs_cache: Mutex<Option<StatfsSnapshot>>,
@@ -1826,6 +1838,7 @@ impl FodFuse {
             read_sequence_state: Mutex::new(HashMap::new()),
             posix_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_lock_waits: Mutex::new(HashMap::new()),
+            pending_statfs_replies: Mutex::new(HashMap::new()),
             local_lock_owners: Arc::new(Mutex::new(HashSet::new())),
             pid_groups_cache: Mutex::new(HashMap::new()),
             statfs_cache: Mutex::new(None),
@@ -2428,6 +2441,72 @@ impl FodFuse {
             blocks,
             loaded_at: SystemTime::now(),
         })
+    }
+
+    fn register_statfs_reply(&self, request_id: RequestId, reply: ReplyStatfs) {
+        let pending = Arc::new(Mutex::new(Some(reply)));
+        let previous = self
+            .pending_statfs_replies
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(request_id, pending);
+        debug_assert!(previous.is_none(), "duplicate in-flight FUSE request id");
+    }
+
+    fn finish_statfs_reply(
+        &self,
+        request_id: RequestId,
+        result: Result<StatfsReplyData, libc::c_int>,
+    ) {
+        let pending = self
+            .pending_statfs_replies
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&request_id);
+        let Some(pending) = pending else {
+            // The kernel interrupted this request while the statfs query was
+            // in flight. Its EINTR reply has already been sent.
+            return;
+        };
+        let reply = pending
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take();
+        let Some(reply) = reply else {
+            return;
+        };
+        match result {
+            Ok(stats) => reply.statfs(
+                stats.blocks,
+                stats.free_blocks,
+                stats.free_blocks,
+                stats.total_inodes,
+                stats.free_inodes,
+                stats.block_size,
+                stats.name_max,
+                stats.block_size,
+            ),
+            Err(errno) => fuse_reply_error!(reply, errno),
+        }
+    }
+
+    fn interrupt_statfs(&self, request_id: RequestId) -> bool {
+        let pending = self
+            .pending_statfs_replies
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&request_id);
+        let Some(pending) = pending else {
+            return false;
+        };
+        if let Some(reply) = pending
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+        {
+            fuse_reply_error!(reply, EINTR);
+        }
+        true
     }
 
     pub(crate) fn invalidate_statfs_cache(&self) {
@@ -6196,13 +6275,15 @@ impl Filesystem for FodFuse {
         }
     }
 
-    fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
+    fn statfs(&self, req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
         const STATFS_FREE_INODE_HEADROOM: u64 = 1_000_000;
         const STATFS_NAME_MAX: u32 = 255;
+        let request_id = req.unique();
+        self.register_statfs_reply(request_id, reply);
 
         if std::env::var_os("FOD_TEST_STATFS_FORCE_EIO").is_some() {
             warn!("FOD statfs snapshot failed err=test fault injection");
-            fuse_reply_error!(reply, EIO);
+            self.finish_statfs_reply(request_id, Err(EIO));
             return;
         }
 
@@ -6210,7 +6291,7 @@ impl Filesystem for FodFuse {
             Ok(snapshot) => snapshot,
             Err(err) => {
                 warn!("FOD statfs snapshot failed err={}", err);
-                fuse_reply_error!(reply, EIO);
+                self.finish_statfs_reply(request_id, Err(EIO));
                 return;
             }
         };
@@ -6218,7 +6299,7 @@ impl Filesystem for FodFuse {
             Ok(capacity) => capacity,
             Err(err) => {
                 warn!("FOD statfs capacity failed err={}", err);
-                fuse_reply_error!(reply, EIO);
+                self.finish_statfs_reply(request_id, Err(EIO));
                 return;
             }
         };
@@ -6254,15 +6335,16 @@ impl Filesystem for FodFuse {
             snapshot.max_fs_size_bytes,
             self.pg_visible_path.as_deref().map(|path| path.display().to_string())
         );
-        reply.statfs(
-            total_blocks,
-            free_blocks,
-            free_blocks,
-            total_inodes,
-            free_inodes,
-            self.block_size as u32,
-            STATFS_NAME_MAX,
-            self.block_size as u32,
+        self.finish_statfs_reply(
+            request_id,
+            Ok(StatfsReplyData {
+                blocks: total_blocks,
+                free_blocks,
+                total_inodes,
+                free_inodes,
+                block_size: self.block_size as u32,
+                name_max: STATFS_NAME_MAX,
+            }),
         );
     }
 
@@ -7354,6 +7436,9 @@ impl Filesystem for FodFuse {
     }
 
     fn interrupt(&self, _req: &Request, interrupted_request_id: RequestId) -> bool {
+        if self.interrupt_statfs(interrupted_request_id) {
+            return true;
+        }
         let pending = self
             .pending_lock_waits
             .lock()
