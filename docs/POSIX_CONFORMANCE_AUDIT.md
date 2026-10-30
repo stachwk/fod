@@ -91,7 +91,7 @@ not the whole row unless all of its normative conditions and errors are mapped.
 | ID | Area | Verified baseline | Remaining closure evidence |
 | --- | --- | --- | --- |
 | P01 | Path resolution and name syntax | Trailing slash, symlink following, dangling links and loops have mounted regressions; `test_path_trailing_slash.py` also covers `.`/`..`, repeated separators, the reported `NAME_MAX` boundary and `ENAMETOOLONG` | Map remaining XBD pathname-resolution rules for empty components, `PATH_MAX`, and per-operation final-component following; add mounted boundary and errno cases |
-| P02 | Directory operations and iteration | Create/remove errors, permissions, link counts and small-buffer cookies are covered; `test_directories.sh` repeats directory-fd listing and checks `ENOTDIR`/`EBADF` descriptor errors. Issue 8 leaves membership unspecified for entries added/removed since the latest `opendir()`/`rewinddir()`; FOD queries the directory when each FUSE `readdir` request arrives and does not promise a snapshot. fuser's default `opendir()`/`releasedir()` and FOD's `readdir()` callback are mapped in [`POSIX_ERRNO_MATRIX.md`](POSIX_ERRNO_MATRIX.md) | Map remaining required errors and layer attribution for `opendir()`/`readdir()`/`closedir()`/`mkdir()`/`rmdir()`. Current tests exercise the `getdents64()` syscall, not the libc directory-stream error boundary; audit `EOVERFLOW` and descriptor-limit cases. Preserve PostgreSQL SQLSTATE on namespace errors so backend storage exhaustion can be distinguished from generic I/O |
+| P02 | Directory operations and iteration | Create/remove errors, permissions, link counts and small-buffer cookies are covered; `test_directories.sh` repeats directory-fd listing and checks `ENOTDIR`/`EBADF` descriptor errors. FOD pins ordered entries to each `opendir()` handle, uses the snapshot for continuation and refreshes after rewind. POSIX leaves visibility of names added/removed since `opendir()`/`rewinddir()` unspecified. Mounted concurrent-mutation and rewind regressions remain open. See [`POSIX errno matrix`](POSIX_ERRNO_MATRIX.md) | Map remaining required errors and layer attribution for `opendir()`/`readdir()`/`closedir()`/`mkdir()`/`rmdir()`. Current tests exercise the `getdents64()` syscall, not the libc directory-stream error boundary; audit `EOVERFLOW` and descriptor-limit cases. Preserve PostgreSQL SQLSTATE on namespace errors so backend storage exhaustion can be distinguished from generic I/O |
 | P03 | Open and descriptor semantics | Access modes, append-after-seek, shared duplicated offset, create conflicts, descriptor `O_APPEND`/`FD_CLOEXEC` flags and symlink create/truncate are covered; `test_create_write_ownership.py` verifies a second mount gets fail-fast `EBUSY` for `O_APPEND` while the first holds the write lease, then can acquire a descriptor after release | Cross-mount sequential append is not coherent: a mounted probe confirmed PostgreSQL size 3 but the next mount's FUSE write callback received offset 0 and produced `-BA` instead of `A-A-B`. Determine whether standard FUSE can preserve kernel-visible append offsets while PostgreSQL serializes cross-mount appends; keep the exclusive lease until descriptor positions and cross-host fencing are preserved. Also map all supported `open()` flags and errors and test interrupted close boundary; lowest-descriptor selection remains a kernel descriptor-table property rather than a FOD callback |
 | P04 | Read and write | EOF short reads, zero-length read/write, access-mode errors, positioned-I/O offset preservation, and write/pwrite beyond-EOF zero-fill are covered; persistence errors map configured quota and PostgreSQL SQLSTATE `53100` to `ENOSPC` | Add partial-I/O/error boundaries and deterministic PostgreSQL disk-full fault injection; cross-mount append requires a PostgreSQL ordering contract plus a way to keep kernel-local inode size and descriptor positions consistent; the observed stale offset is tracked in [`TODO.md`](../TODO.md) |
 | P05 | Truncation and file length | Shrink/extend zero-fill, block boundaries, descriptor offset preservation, mtime update, symlink following, `EISDIR`/`ENOENT`/`EINVAL` path errors and read-only descriptor rejection are covered | Map `truncate()`/`ftruncate()` authorization and remaining required errors; verify remaining timestamp effects and concurrent truncate/write serialization across mounts |
@@ -215,24 +215,20 @@ incoming offset. The mounted small-buffer regression uses 64-byte
 
 POSIX.1-2024 `readdir()` explicitly leaves unspecified whether an entry added
 or removed after the latest `opendir()` or `rewinddir()` is returned by a later
-call. FOD does not pin a per-open directory snapshot: each FUSE `readdir`
-request lists current PostgreSQL entries and resumes from the supplied cookie.
-No regression should assert whether a new or deleted name appears in that
-case. This rule does not remove the need for a stable ordering when the
-directory contents have not changed: both FOD listing queries previously used
-`UNION ALL` without `ORDER BY`, although cookies are positional. Both queries
-now order names explicitly, so separate requests against an unchanged
-directory use the same order. Membership changes can still shift positional
-cookies across requests; whether FOD needs per-open state for that case remains
-unresolved and P02 stays Pending. See [POSIX.1-2024 `readdir()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/readdir.html).
+call. FOD now pins an ordered entry snapshot to each `opendir()` handle, uses it
+for continuation requests, refreshes it when cookie zero rewinds an already
+iterated stream, and releases it in `releasedir()`. This prevents membership
+changes on another mount from shifting positional cookies during continuation.
+No regression should assert whether a newly added or removed name appears
+before rewind. Mounted continuation, concurrent mutation and rewind coverage
+remain open; P02 stays Pending until those regressions and the libc/kernel/FUSE
+error attribution work are complete. See [POSIX.1-2024 `readdir()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/readdir.html).
 
 The libc stream calls add error conditions distinct from the FUSE callback:
 POSIX requires `EOVERFLOW` when a `readdir()` result cannot fit `struct
 dirent`; invalid-stream `EBADF` is a `may fail` case for `readdir()` and
-`closedir()`, and `closedir()` may also fail with `EINTR`. FOD does not
-implement fuser's default `opendir()` (which sets a zero handle) or
-`releasedir()` (which succeeds); its `readdir()` implementation receives
-kernel `getdents64()` requests. `test_directories.sh`'s `EBADF` case calls
+`closedir()`, and `closedir()` may also fail with `EINTR`. FOD now implements `opendir()` and `releasedir()` with per-open handles; its
+`readdir()` implementation receives kernel `getdents64()` requests. `test_directories.sh`'s `EBADF` case calls
 `getdents64()` after closing the descriptor, so it does not establish the
 libc `closedir()` contract. The errno matrix records this boundary and the
 remaining ABI/error attribution work.

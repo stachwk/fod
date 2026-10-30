@@ -27,10 +27,11 @@ use log::{debug, info, warn};
 use rust_hotpath::assemble_read_slice;
 use rust_hotpath::pg::{
     prepared_statement_profile_snapshot_lines, DbRepo, DbRepoSourceSnapshot,
-    DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome, FileWriteAuthorization,
-    GeneratedSharedBlockRows, InodePermissionChange, InodePermissionOutcome, InodeTimeValue,
-    InodeTimesChange, InodeTimesOutcome, PersistBlockRow, RenameFileReplaceOutcome,
-    RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease, WritePersistenceFence,
+    DirectoryEntryMetadata, DirectoryUnlinkOutcome, FileReadMetadata, FileUnlinkOutcome,
+    FileWriteAuthorization, GeneratedSharedBlockRows, InodePermissionChange,
+    InodePermissionOutcome, InodeTimeValue, InodeTimesChange, InodeTimesOutcome, PersistBlockRow,
+    RenameFileReplaceOutcome, RenameNamespaceSource, RenameNamespaceTarget, WriteOwnershipLease,
+    WritePersistenceFence,
 };
 use rust_hotpath::pg::{
     result_decode_profile_snapshot_lines, sql_statement_profile_snapshot_lines,
@@ -118,11 +119,6 @@ fn fod_fuse_profile_io_enabled() -> bool {
 fn fod_fuse_profile_metadata_cache_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_METADATA_CACHE", false))
-}
-
-fn fod_fuse_readdir_batch_metadata_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_BATCH_METADATA", true))
 }
 
 fn fod_fuse_readdir_register_paths_enabled() -> bool {
@@ -286,6 +282,14 @@ struct FileHandleState {
     read_metadata: Option<FileReadMetadata>,
     read_metadata_loaded_at: Option<Instant>,
     write_ownership: Option<FileWriteOwnership>,
+}
+
+struct DirectoryHandleState {
+    ino: u64,
+    path: String,
+    parent_ino: u64,
+    entries: Vec<DirectoryEntryMetadata>,
+    highest_requested_offset: u64,
 }
 
 struct LockHeartbeatHandle {
@@ -1618,6 +1622,7 @@ pub struct FodFuse {
     path_to_inode: RwLock<HashMap<String, u64>>,
     lookup_refs: Mutex<HashMap<u64, u64>>,
     fh_table: Arc<Mutex<HashMap<u64, FileHandleState>>>,
+    directory_fh_table: Mutex<HashMap<u64, Arc<Mutex<DirectoryHandleState>>>>,
     write_ownership_gate: Mutex<()>,
     pub(crate) write_states: Mutex<HashMap<u64, WriteState>>,
     pub(crate) read_block_cache: Mutex<ReadBlockCache>,
@@ -1776,6 +1781,7 @@ impl FodFuse {
             path_to_inode: RwLock::new(path_to_inode),
             lookup_refs: Mutex::new(HashMap::new()),
             fh_table: Arc::new(Mutex::new(HashMap::new())),
+            directory_fh_table: Mutex::new(HashMap::new()),
             write_ownership_gate: Mutex::new(()),
             write_states: Mutex::new(HashMap::new()),
             read_block_cache: Mutex::new(ReadBlockCache::new(
@@ -5563,82 +5569,33 @@ impl Filesystem for FodFuse {
         }
     }
 
-    fn readdir(
-        &self,
-        req: &Request,
-        ino: INodeNo,
-        _fh: FileHandle,
-        offset: u64,
-        mut reply: ReplyDirectory,
-    ) {
+    fn opendir(&self, req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
         let ino = ino.0;
-        let req_id = self.next_request_id();
-        let metadata_profile_enabled = fod_fuse_profile_metadata_cache_enabled();
-        let readdir_started = metadata_profile_enabled.then(Instant::now);
-        let mut readdir_parent_lookup_us = 0u64;
-        let mut readdir_list_us = 0u64;
-        let mut readdir_child_lookup_us = 0u64;
-        let mut readdir_register_us = 0u64;
-        let mut readdir_entries = 0u64;
         let path = match self.entry_path_for_ino(ino) {
             Ok(path) => path,
             Err(errno) => {
-                self.log_request_error(
-                    req_id,
-                    "readdir",
-                    errno,
-                    format!("ino={} offset={}", ino, offset),
-                );
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        if ino != ROOT_INO {
-            if let Err(errno) = self.parent_entry_id_for_inode(ino) {
+        let attrs = match self.attrs_for_path(&path) {
+            Ok(Some(attrs)) => attrs.file_attr,
+            Ok(None) => {
+                fuse_reply_error!(reply, ENOENT);
+                return;
+            }
+            Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
+        };
+        if attrs.kind != FileType::Directory {
+            fuse_reply_error!(reply, ENOTDIR);
+            return;
         }
-        let current_attrs = if path == "/" {
-            None
-        } else {
-            let attrs_lookup_started = metadata_profile_enabled.then(Instant::now);
-            let result = self.lookup_path(&path);
-            if let Some(started) = attrs_lookup_started {
-                readdir_parent_lookup_us =
-                    readdir_parent_lookup_us.saturating_add(duration_to_micros(started.elapsed()));
-            }
-            match result {
-                Ok(Some(attrs)) => Some(attrs.file_attr),
-                Err(errno) => {
-                    self.log_request_error(
-                        req_id,
-                        "readdir",
-                        errno,
-                        format!("path={} attrs skipped", path),
-                    );
-                    None
-                }
-                Ok(None) => None,
-            }
-        };
-        let subject = self.request_identity(req);
         if !self.default_permissions {
-            let permission_attrs = match current_attrs.clone() {
-                Some(attrs) => attrs,
-                None => match self.attrs_for_path(&path) {
-                    Ok(Some(attrs)) => attrs.file_attr,
-                    Ok(None) => {
-                        fuse_reply_error!(reply, ENOENT);
-                        return;
-                    }
-                    Err(errno) => {
-                        fuse_reply_error!(reply, errno);
-                        return;
-                    }
-                },
-            };
-            match self.acl_allows(&path, &permission_attrs, libc::R_OK, &subject) {
+            let subject = self.request_identity(req);
+            match self.acl_allows(&path, &attrs, libc::R_OK, &subject) {
                 Ok(true) => {}
                 Ok(false) => {
                     fuse_reply_error!(reply, EACCES);
@@ -5650,173 +5607,169 @@ impl Filesystem for FodFuse {
                 }
             }
         }
+        let metadata_profile_enabled = fod_fuse_profile_metadata_cache_enabled();
+        let snapshot_started = metadata_profile_enabled.then(Instant::now);
+        let entries = match self.repo.list_directory_entry_metadata(&path) {
+            Ok(entries) => entries,
+            Err(err) => {
+                warn!("FOD opendir snapshot failed path={} err={}", path, err);
+                fuse_reply_error!(reply, EIO);
+                return;
+            }
+        };
+        if let Some(started) = snapshot_started {
+            let elapsed = duration_to_micros(started.elapsed());
+            self.metadata_profile_readdir_list_us
+                .fetch_add(elapsed, Ordering::Relaxed);
+            self.metadata_profile_readdir_total_us
+                .fetch_add(elapsed, Ordering::Relaxed);
+        }
+        let parent_path = path
+            .rsplit_once('/')
+            .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+            .unwrap_or("/");
+        let parent_ino = if ino == ROOT_INO {
+            ROOT_INO
+        } else {
+            self.inode_for_path(parent_path).unwrap_or(ROOT_INO)
+        };
+        let fh = self.next_handle();
+        let state = DirectoryHandleState {
+            ino,
+            path,
+            parent_ino,
+            entries,
+            highest_requested_offset: 0,
+        };
+        self.directory_fh_table
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(fh, Arc::new(Mutex::new(state)));
+        reply.opened(FileHandle(fh), FopenFlags::empty());
+    }
+
+    fn readdir(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
+        mut reply: ReplyDirectory,
+    ) {
+        let ino = ino.0;
+        let req_id = self.next_request_id();
+        let Some(state) = self
+            .directory_fh_table
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(&fh.0)
+            .cloned()
+        else {
+            fuse_reply_error!(reply, EBADF);
+            return;
+        };
+        let (path, parent_ino, entries) = {
+            let mut state = state.lock().unwrap_or_else(|err| err.into_inner());
+            if state.ino != ino {
+                fuse_reply_error!(reply, EBADF);
+                return;
+            }
+            // Cookie zero after any stream progress is a rewind. Refresh the
+            // per-open snapshot once so a restarted stream sees current names.
+            if offset == 0 && state.highest_requested_offset > 0 {
+                match self.repo.list_directory_entry_metadata(&state.path) {
+                    Ok(entries) => state.entries = entries,
+                    Err(err) => {
+                        warn!(
+                            "FOD readdir rewind snapshot failed path={} err={}",
+                            state.path, err
+                        );
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                }
+                state.highest_requested_offset = 0;
+            }
+            state.highest_requested_offset = state.highest_requested_offset.max(offset);
+            (state.path.clone(), state.parent_ino, state.entries.clone())
+        };
         self.log_request_start(
             req_id,
             "readdir",
-            format!("path={} ino={} offset={}", path, ino, offset),
+            format!("path={} ino={} fh={} offset={}", path, ino, fh.0, offset),
         );
-        let batch_metadata_enabled = fod_fuse_readdir_batch_metadata_enabled();
+        let started = Instant::now();
+        let mut emitted = 0u64;
         if offset < 1 && reply.add(INodeNo(ino), 1, FileType::Directory, ".") {
             reply.ok();
             return;
         }
-        if offset < 2 {
-            let parent_ino = if ino == ROOT_INO {
-                ROOT_INO
-            } else {
-                let parent_path = path
-                    .rsplit_once('/')
-                    .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
-                    .unwrap_or("/");
-                self.inode_for_path(parent_path).unwrap_or(ROOT_INO)
-            };
-            if reply.add(INodeNo(parent_ino), 2, FileType::Directory, "..") {
-                reply.ok();
-                return;
-            }
+        if offset < 2 && reply.add(INodeNo(parent_ino), 2, FileType::Directory, "..") {
+            reply.ok();
+            return;
         }
-
-        if batch_metadata_enabled {
-            let list_started = metadata_profile_enabled.then(Instant::now);
-            let list_result = self.repo.list_directory_entry_metadata(&path);
-            if let Some(started) = list_started {
-                readdir_list_us =
-                    readdir_list_us.saturating_add(duration_to_micros(started.elapsed()));
-            }
-            let entries = match list_result {
-                Ok(entries) => entries,
-                Err(_) => {
-                    fuse_reply_error!(reply, EIO);
-                    return;
-                }
+        for (index, entry) in entries
+            .into_iter()
+            .enumerate()
+            .skip(readdir_child_entries_to_skip(offset))
+        {
+            let kind = match entry.kind.as_str() {
+                "dir" => FileType::Directory,
+                "symlink" => FileType::Symlink,
+                "file" | "hardlink" => entry
+                    .special_type
+                    .as_deref()
+                    .map(Self::file_type_from_special)
+                    .unwrap_or(FileType::RegularFile),
+                _ => continue,
             };
-            debug!(
-                "FOD readdir path={} entries={} batch_metadata=1",
-                path,
-                entries.len()
-            );
-            for (index, entry) in entries
-                .into_iter()
-                .enumerate()
-                .skip(readdir_child_entries_to_skip(offset))
-            {
-                readdir_entries = readdir_entries.saturating_add(1);
-                let kind = match entry.kind.as_str() {
-                    "dir" => FileType::Directory,
-                    "symlink" => FileType::Symlink,
-                    "file" | "hardlink" => entry
-                        .special_type
-                        .as_deref()
-                        .map(Self::file_type_from_special)
-                        .unwrap_or(FileType::RegularFile),
-                    _ => continue,
-                };
-                let inode = self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
+            let inode = self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
+            if fod_fuse_readdir_register_paths_enabled() {
                 let child_path = Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
-                if fod_fuse_readdir_register_paths_enabled() {
-                    let register_started = metadata_profile_enabled.then(Instant::now);
-                    self.register_path(&child_path, inode);
-                    if let Some(started) = register_started {
-                        readdir_register_us = readdir_register_us
-                            .saturating_add(duration_to_micros(started.elapsed()));
-                    }
-                }
-                let added = reply.add(INodeNo(inode), (index + 3) as u64, kind, entry.name);
-                if added {
-                    break;
-                }
+                self.register_path(&child_path, inode);
             }
-        } else {
-            let list_started = metadata_profile_enabled.then(Instant::now);
-            let list_result = self.repo.list_directory_entries_blob(&path);
-            if let Some(started) = list_started {
-                readdir_list_us =
-                    readdir_list_us.saturating_add(duration_to_micros(started.elapsed()));
-            }
-            let blob = match list_result {
-                Ok(Some(blob)) => blob,
-                Ok(None) => {
-                    debug!("FOD readdir path={} empty", path);
-                    if let Some(attrs) = current_attrs.as_ref() {
-                        self.touch_access_time(&path, attrs);
-                    }
-                    reply.ok();
-                    return;
-                }
-                Err(_) => {
-                    fuse_reply_error!(reply, EIO);
-                    return;
-                }
-            };
-            let entries = Self::decode_nul_fields(&blob);
-            debug!("FOD readdir path={} entries={}", path, entries.len());
-            for (index, name) in entries
-                .into_iter()
-                .enumerate()
-                .skip(readdir_child_entries_to_skip(offset))
-            {
-                let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
-                readdir_entries = readdir_entries.saturating_add(1);
-                let lookup_started = metadata_profile_enabled.then(Instant::now);
-                let lookup_result = self.lookup_path(&child_path);
-                if let Some(started) = lookup_started {
-                    readdir_child_lookup_us = readdir_child_lookup_us
-                        .saturating_add(duration_to_micros(started.elapsed()));
-                }
-                match lookup_result {
-                    Ok(Some(attrs)) => {
-                        if fod_fuse_readdir_register_paths_enabled() {
-                            let register_started = metadata_profile_enabled.then(Instant::now);
-                            self.register_path(&child_path, attrs.file_attr.ino.0);
-                            if let Some(started) = register_started {
-                                readdir_register_us = readdir_register_us
-                                    .saturating_add(duration_to_micros(started.elapsed()));
-                            }
-                        }
-                        let kind = attrs.file_attr.kind;
-                        let added = reply.add(attrs.file_attr.ino, (index + 3) as u64, kind, name);
-                        if added {
-                            break;
-                        }
-                    }
-                    _ => continue,
-                }
+            emitted = emitted.saturating_add(1);
+            if reply.add(INodeNo(inode), (index + 3) as u64, kind, entry.name) {
+                break;
             }
         }
-
-        if metadata_profile_enabled {
+        if fod_fuse_profile_metadata_cache_enabled() {
             self.metadata_profile_readdir_calls
                 .fetch_add(1, Ordering::Relaxed);
             self.metadata_profile_readdir_entries
-                .fetch_add(readdir_entries, Ordering::Relaxed);
-            self.metadata_profile_readdir_parent_lookup_us
-                .fetch_add(readdir_parent_lookup_us, Ordering::Relaxed);
-            self.metadata_profile_readdir_list_us
-                .fetch_add(readdir_list_us, Ordering::Relaxed);
-            self.metadata_profile_readdir_child_lookup_us
-                .fetch_add(readdir_child_lookup_us, Ordering::Relaxed);
-            self.metadata_profile_readdir_register_us
-                .fetch_add(readdir_register_us, Ordering::Relaxed);
-            if let Some(started) = readdir_started {
-                self.metadata_profile_readdir_total_us
-                    .fetch_add(duration_to_micros(started.elapsed()), Ordering::Relaxed);
-            }
+                .fetch_add(emitted, Ordering::Relaxed);
+            self.metadata_profile_readdir_total_us
+                .fetch_add(duration_to_micros(started.elapsed()), Ordering::Relaxed);
         }
-        if let Some(attrs) = current_attrs.as_ref() {
-            self.touch_access_time(&path, attrs);
-        } else if path == "/"
-            && !matches!(self.atime_policy, AtimePolicy::NoAtime | AtimePolicy::Nodiratime)
-        {
-            // Root attributes are otherwise skipped here to avoid counting
-            // child directories just for readdir. Atime policy needs the
-            // stored root timestamp, but not its synthesized link count.
-            match self.attrs_for_path(&path) {
-                Ok(Some(attrs)) => self.touch_access_time(&path, &attrs.file_attr),
-                Ok(None) => {}
-                Err(errno) => warn!("FOD root atime lookup skipped errno={}", errno),
+        if !matches!(
+            self.atime_policy,
+            AtimePolicy::NoAtime | AtimePolicy::Nodiratime
+        ) {
+            if let Ok(Some(attrs)) = self.attrs_for_path(&path) {
+                self.touch_access_time(&path, &attrs.file_attr);
             }
         }
         reply.ok();
+    }
+
+    fn releasedir(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _flags: OpenFlags,
+        reply: ReplyEmpty,
+    ) {
+        let removed = self
+            .directory_fh_table
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&fh.0);
+        if removed.is_some() {
+            reply.ok();
+        } else {
+            fuse_reply_error!(reply, EBADF);
+        }
     }
 
     fn readlink(&self, req: &Request, ino: INodeNo, reply: ReplyData) {

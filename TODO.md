@@ -118,23 +118,23 @@ Reading guide:
 - [ ] **P02 directory-stream errno attribution remains open.** POSIX requires
   `readdir()` to report `EOVERFLOW` when a returned `struct dirent` field cannot
   represent the value; `EBADF`/`ENOENT` for `readdir()`, and `EBADF`/`EINTR` for
-  `closedir()`, are conditional `may fail` cases. FOD uses fuser's default
-  zero-handle `opendir()` and successful `releasedir()`, while its callback
-  serves kernel `getdents64()` requests. Existing closed-fd `EBADF` coverage is
-  a `getdents64()` syscall check, not a libc `closedir()` check. Map which
-  conditions belong to libc, Linux getdents and the FUSE callback, including
-  `EOVERFLOW` on supported ABIs. See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
+  `closedir()`, are conditional `may fail` cases. FOD now provides per-open
+  handles in `opendir()`/`releasedir()` while `readdir()` serves kernel
+  `getdents64()` requests. Existing closed-fd `EBADF` coverage is a `getdents64()`
+  syscall check, not a libc `closedir()` check. Map which conditions belong to
+  libc, Linux getdents and the FUSE callback, including `EOVERFLOW` on supported
+  ABIs. See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
-- [ ] **P02 readdir cookies across namespace changes need a mounted check.** FOD
-  assigns positional cookies and obtains a fresh PostgreSQL listing per FUSE
-  request. The listing SQL now has deterministic name ordering, fixing planner-
-  dependent ordering when the directory is unchanged. Determine whether
-  mutations between continuation requests can still skip or repeat unaffected
-  entries under Linux FUSE/getdents semantics, and whether per-open state is
-  required. POSIX leaves the visibility of added/removed names unspecified;
-  keep the expectation limited to unaffected entries and record the exact
-  Linux behavior before changing the protocol. See
-  [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
+- [ ] **P02 directory-stream snapshot behavior needs mounted regressions.** FOD
+  now pins an ordered PostgreSQL entry snapshot to each `opendir()` handle, uses
+  it for continuation requests, refreshes it on `rewinddir()` (cookie zero
+  after stream progress), and releases it in `releasedir()`. This prevents
+  positional cookies from shifting when another mount changes directory
+  membership. Verify continuation and rewind with mounted FUSE operations,
+  including concurrent add/remove and large directories; POSIX leaves
+  visibility of additions/removals unspecified, so assert stable unaffected
+  entries and no cookie-induced repeats/skips rather than membership policy.
+  See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
   security and lifecycle fixes worth adopting. Upgrade the development/test
