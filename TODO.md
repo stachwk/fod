@@ -149,7 +149,9 @@ Reading guide:
   both persistence and namespace error mappers. File-block persistence also
   maps the configured FOD quota to `ENOSPC`. `mkdir()` and regular-file,
   symlink, special-file and hardlink inserts preserve SQLSTATE; `rmdir()` and
-  hardlink-promotion commands use `exec_command_params()`. Source review found
+  hardlink-promotion commands use `exec_command_params()`. Parent timestamp
+  updates in those five creation transactions now also check command status and
+  preserve SQLSTATE. Source review found
   that several non-success `PGresult` branches discarded the result before
   reading `conn_error()`; these now capture `result_error()` first. The
   `touch_data_object()` helper also now propagates the original command error

@@ -11292,8 +11292,7 @@ impl DbRepo {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
                     let params = [&parent_id];
-                    let res = exec_params(conn, &sql_touch_parent, &params)?;
-                    PQclear(res);
+                    exec_command_params(conn, &sql_touch_parent, &params)?;
                 }
                 Ok(value)
             })
@@ -11486,8 +11485,7 @@ impl DbRepo {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
                     let params = [&parent_id];
-                    let res = exec_params(conn, &sql_touch_parent, &params)?;
-                    PQclear(res);
+                    exec_command_params(conn, &sql_touch_parent, &params)?;
                 }
                 Ok(value)
             })
@@ -11699,8 +11697,7 @@ impl DbRepo {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
                     let params = [&parent_id];
-                    let res = exec_params(conn, &sql_touch_parent, &params)?;
-                    PQclear(res);
+                    exec_command_params(conn, &sql_touch_parent, &params)?;
                 }
                 Ok(value)
             });
@@ -11950,8 +11947,7 @@ impl DbRepo {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
                     let params = [&parent_id];
-                    let res = exec_params(conn, &sql_touch_parent, &params)?;
-                    PQclear(res);
+                    exec_command_params(conn, &sql_touch_parent, &params)?;
                 }
                 Ok(value)
             });
@@ -12259,8 +12255,7 @@ impl DbRepo {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
                     let params = [&parent_id];
-                    let res = exec_params(conn, &sql_touch_parent, &params)?;
-                    PQclear(res);
+                    exec_command_params(conn, &sql_touch_parent, &params)?;
                 }
                 Ok(id_file)
             });
