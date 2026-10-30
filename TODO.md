@@ -425,6 +425,11 @@ Reading guide:
   non-octal values into a file row, requiring errors to propagate. Broader
   malformed-row fault injection, including NULL mode and query failure through
   this exact lookup, remains open.
+  Namespace ID decoders also reject zero: the logical root uses a separate
+  sentinel, so zero is never a valid directory, file, hardlink or symlink row
+  ID. `namespace_lookups_reject_zero_inode_ids` corrupts a symlink primary key
+  and verifies both direct lookup and resolved-path lookup fail instead of
+  returning inode 0.
   Directory metadata decoding now rejects empty names, unsupported entry kinds
   and empty inode seeds. A temporary-database regression feeds NULL name and
   inode-seed fields through the real query decoder; a mounted regression also

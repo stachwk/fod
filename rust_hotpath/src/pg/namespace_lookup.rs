@@ -52,11 +52,14 @@ unsafe fn parse_optional_namespace_id(
         return Err(format!("{description} returned a null id pointer"));
     }
     let value = CStr::from_ptr(value_ptr).to_string_lossy();
-    value
+    let id = value
         .trim()
         .parse::<u64>()
-        .map(Some)
-        .map_err(|err| format!("{description} returned an invalid id: {err}"))
+        .map_err(|err| format!("{description} returned an invalid id: {err}"))?;
+    if id == 0 {
+        return Err(format!("{description} returned a non-positive id"));
+    }
+    Ok(Some(id))
 }
 
 unsafe fn parse_optional_resolved_entry(
@@ -82,6 +85,9 @@ unsafe fn parse_optional_resolved_entry(
         .trim()
         .parse::<u64>()
         .map_err(|err| format!("path lookup returned an invalid entry id: {err}"))?;
+    if entry_id == 0 {
+        return Err("path lookup returned a non-positive entry id".to_string());
+    }
     Ok(Some((kind, entry_id)))
 }
 

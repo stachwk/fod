@@ -2377,6 +2377,42 @@ fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
 }
 
 #[test]
+fn namespace_lookups_reject_zero_inode_ids() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let authority = repo.authoritative_view();
+    let name = unique_name("zero_symlink_id");
+    let symlink_id = repo.create_symlink(None, &name, "target", 1000, 1000, &name)?;
+    let path = format!("/{name}");
+
+    let result = (|| {
+        if authority.get_symlink_id(&path)? != Some(symlink_id) {
+            return Err("valid symlink lookup returned the wrong id".to_string());
+        }
+        repo.exec(&format!(
+            "UPDATE symlinks SET id_symlink = 0 WHERE id_symlink = {symlink_id}"
+        ))?;
+
+        match authority.get_symlink_id(&path) {
+            Err(error) if error.contains("non-positive id") => {}
+            Err(error) => return Err(format!("unexpected symlink id error: {error}")),
+            Ok(value) => return Err(format!("zero symlink id was accepted: {value:?}")),
+        }
+        match authority.resolve_path(&path) {
+            Err(error) if error.contains("non-positive entry id") => {}
+            Err(error) => return Err(format!("unexpected resolved-path id error: {error}")),
+            Ok(value) => return Err(format!("zero resolved-path id was accepted: {value:?}")),
+        }
+        Ok(())
+    })();
+
+    let cleanup = repo
+        .delete_symlink_entry(0)
+        .and_then(|()| repo.delete_symlink_entry(symlink_id));
+    result.and(cleanup)
+}
+
+#[test]
 fn directory_count_query_failures_are_not_empty() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let temporary_db = TemporaryDatabase::create()?;
