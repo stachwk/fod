@@ -349,6 +349,9 @@ def main() -> None:
             linked_directory_lstat = os.lstat(linked_directory_with_slash)
             assert linked_directory_lstat.st_ino == trailing_directory.stat().st_ino
             assert linked_directory_lstat.st_mode & 0o170000 == 0o040000
+            assert os.statvfs(linked_directory_with_slash).f_bsize > 0
+            os.chown(linked_directory_with_slash, -1, -1)
+            assert os.access(linked_directory_with_slash, os.F_OK)
             expect_errno(
                 lambda: os.mkdir(linked_directory_with_slash),
                 errno.EEXIST,
@@ -394,7 +397,32 @@ def main() -> None:
                 errno.ENOTDIR,
                 "rename symlink to directory/",
             )
+            expect_errno(
+                lambda: os.rename(rename_source, linked_directory_with_slash),
+                errno.ENOTDIR,
+                "rename destination symlink to directory/",
+            )
+            expect_errno(
+                lambda: os.link(
+                    linked_directory_with_slash,
+                    directory / "directory-symlink-hardlink",
+                ),
+                errno.EPERM,
+                "link source symlink to directory/",
+            )
+            expect_errno(
+                lambda: os.link(rename_source, linked_directory_with_slash),
+                errno.EEXIST,
+                "link destination symlink to directory/",
+            )
+            expect_errno(
+                lambda: os.symlink("unused", linked_directory_with_slash),
+                errno.EEXIST,
+                "symlink destination symlink to directory/",
+            )
             assert directory_link.is_symlink() and trailing_directory.is_dir()
+            assert rename_source.read_bytes() == b"rename source"
+            assert not (directory / "directory-symlink-hardlink").exists()
             assert not renamed_directory_target.exists()
 
             normalized = f"{directory}//./created-with-slash/../regular-file"
@@ -440,7 +468,8 @@ def main() -> None:
                 "symlink_file=ENOTDIRx14,EEXISTx3 access=ENOTDIR "
                 "symlink_directory=accepted "
                 "dangling_slash=ENOENTx9,EEXISTx2,ENOTDIRx3 "
-                "slash_symlink_dir=mkdir:EEXIST,unlink:ENOTDIR,rmdir:ENOTDIR "
+                "slash_symlink_dir=statvfs:ok,chown:ok,access:ok,link:EPERM "
+                "mkdir/link/symlink_dest:EEXIST,unlink/rmdir/rename:ENOTDIR "
                 "chmod_target=0o711 utime_target=exact truncate:EISDIR "
                 "readlink:EINVAL rename:ENOTDIR leading_slashes=//,/// "
                 "dotdot_repeated_separator=1 name_max_boundary=1 "

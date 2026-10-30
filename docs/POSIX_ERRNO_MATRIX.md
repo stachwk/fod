@@ -60,9 +60,11 @@ FOD został wywołany:
   symlinku do katalogu z ukośnikiem test sprawdza
   `mkdir()`=`EEXIST` oraz `unlink()`/`rmdir()`=`ENOTDIR`, potwierdzając, że
   symlink i katalog docelowy pozostają; `stat()`, `lstat()`, `open()`,
-  `chmod()` i `utime()` podążają do katalogu. Zmiana praw i czasu dotyczy celu,
-  a czas symlinku pozostaje bez zmian. `truncate()` zwraca `EISDIR`,
-  `readlink()` `EINVAL`, a `rename()` `ENOTDIR`.
+  `chmod()`, `utime()`, `chown()`, `statvfs()` i `access()` podążają do
+  katalogu. Zmiana praw i czasu dotyczy celu, a czas symlinku pozostaje bez
+  zmian. Hardlinkowanie katalogu zwraca `EPERM`, a cele hardlinku i symlinku
+  zwracają `EEXIST`. `truncate()` zwraca `EISDIR`, `readlink()` `EINVAL`, a
+  rename ze źródła lub do celu zakończonego takim symlinkiem zwraca `ENOTDIR`.
   Końcowy symlink z ukośnikiem do pliku zwraca `ENOTDIR` dla `stat()`,
   `open()`, `lstat()`, `unlink()`, `rmdir()`, `truncate()`, `chmod()`,
   `chown()`, `utime()`, `readlink()`, `statvfs()`, źródła hardlinku i obu stron
