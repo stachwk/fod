@@ -373,6 +373,12 @@ Reading guide:
   verifies root alias selection and promotion, then injects an empty persisted
   name and confirms selection/promotion fail without changing the primary
   namespace. Broader malformed-row fault injection remains open.
+  FOD 3.4.334 also changes copy-on-write source adoption to distinguish a
+  missing file row from malformed size or data-object fields. Invalid values
+  now fail the transaction instead of silently disabling adoption. The
+  `pg_query::source_adoption_rejects_malformed_file_info_instead_of_falling_back`
+  regression injects a negative persisted size and confirms that adoption
+  returns an error while the destination object and size stay unchanged.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

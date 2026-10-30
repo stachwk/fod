@@ -13922,29 +13922,46 @@ impl DbRepo {
                         PGRES_TUPLES_OK => {
                             let rows = PQntuples(res);
                             let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 2 {
+                            let value = if rows == 0 {
                                 None
+                            } else if rows != 1 || cols < 2 {
+                                PQclear(res);
+                                return Err("invalid file info row returned by PostgreSQL".into());
+                            } else if PQgetisnull(res, 0, 0) != 0 || PQgetisnull(res, 0, 1) != 0 {
+                                PQclear(res);
+                                return Err(
+                                    "file info row contains a NULL size or data-object id".into()
+                                );
                             } else {
                                 let size_ptr = PQgetvalue(res, 0, 0);
                                 let data_object_ptr = PQgetvalue(res, 0, 1);
                                 if size_ptr.is_null() || data_object_ptr.is_null() {
-                                    None
-                                } else {
-                                    let size = CStr::from_ptr(size_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .ok();
-                                    let data_object_id = CStr::from_ptr(data_object_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .ok();
-                                    match (size, data_object_id) {
-                                        (Some(size), Some(data_object_id)) => {
-                                            Some((size, data_object_id))
-                                        }
-                                        _ => None,
+                                    PQclear(res);
+                                    return Err("file info row contains a missing value".into());
+                                }
+                                let size = CStr::from_ptr(size_ptr)
+                                    .to_string_lossy()
+                                    .trim()
+                                    .parse::<u64>()
+                                    .map_err(|err| format!("invalid file size: {err}"));
+                                let data_object_id = CStr::from_ptr(data_object_ptr)
+                                    .to_string_lossy()
+                                    .trim()
+                                    .parse::<u64>()
+                                    .map_err(|err| format!("invalid file data-object id: {err}"));
+                                match (size, data_object_id) {
+                                    (Ok(size), Ok(data_object_id)) if data_object_id > 0 => {
+                                        Some((size, data_object_id))
+                                    }
+                                    (Err(err), _) | (_, Err(err)) => {
+                                        PQclear(res);
+                                        return Err(err);
+                                    }
+                                    _ => {
+                                        PQclear(res);
+                                        return Err(
+                                            "invalid non-positive file data-object id".to_string()
+                                        );
                                     }
                                 }
                             };

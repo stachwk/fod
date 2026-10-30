@@ -2279,6 +2279,60 @@ fn create_data_object_reuses_matching_hash_and_size() -> Result<(), String> {
 }
 
 #[test]
+fn source_adoption_rejects_malformed_file_info_instead_of_falling_back() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+
+    let source_name = unique_name("rust_pg_bad_adoption_source");
+    let destination_name = unique_name("rust_pg_bad_adoption_destination");
+    let source_file_id = repo.create_file(
+        None,
+        &source_name,
+        0o644,
+        1000,
+        1000,
+        &unique_name("bad_adoption_source_seed"),
+    )?;
+    let destination_file_id = repo.create_file(
+        None,
+        &destination_name,
+        0o644,
+        1000,
+        1000,
+        &unique_name("bad_adoption_destination_seed"),
+    )?;
+    let destination_object_id = repo
+        .file_data_object_id(destination_file_id)?
+        .ok_or_else(|| "destination is missing its data object".to_string())?;
+
+    repo.exec(&format!(
+        "UPDATE files SET size = -1 WHERE id_file = {source_file_id}"
+    ))?;
+    let error = repo
+        .adopt_source_data_object(source_file_id, destination_file_id)
+        .expect_err("negative persisted file size must fail adoption");
+    if !error.contains("invalid file size") {
+        return Err(format!("unexpected adoption error: {error}"));
+    }
+    if repo.file_data_object_id(destination_file_id)? != Some(destination_object_id) {
+        return Err("malformed source metadata changed destination data object".to_string());
+    }
+    if repo.query_scalar_text(&format!(
+        "SELECT size FROM files WHERE id_file = {destination_file_id}"
+    ))? != "0"
+    {
+        return Err("malformed source metadata changed destination size".to_string());
+    }
+
+    repo.exec(&format!(
+        "UPDATE files SET size = 0 WHERE id_file = {source_file_id}"
+    ))?;
+    repo.purge_primary_file(source_file_id)?;
+    repo.purge_primary_file(destination_file_id)?;
+    Ok(())
+}
+
+#[test]
 fn shared_data_object_survives_purge_of_adopted_copy() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
