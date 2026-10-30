@@ -61,6 +61,9 @@ def _assert_ctime_not_older(before: float, after: float) -> None:
 
 
 def main() -> None:
+    # The sticky-bit checks run as `nobody`; the FUSE session and its parent
+    # path must both permit that caller to reach the filesystem operations.
+    os.environ["FOD_ALLOW_OTHER"] = "1"
     launcher = FODMount(str(ROOT))
     launcher.init_schema()
 
@@ -74,6 +77,7 @@ def main() -> None:
     suffix = uuid.uuid4().hex[:8]
     with tempfile.TemporaryDirectory(prefix=f"/tmp/fod-permissions-{suffix}.") as tmpdir:
         mountpoint = Path(tmpdir)
+        os.chmod(mountpoint, 0o755)
         launcher.start(str(mountpoint))
         try:
             sticky_dir = mountpoint / f"sticky-{suffix}"

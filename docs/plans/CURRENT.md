@@ -54,3 +54,8 @@ connects the transaction, privilege, write-fencing and authority reviews.
 Update this queue when a task closes or its priority changes. Keep detailed
 experiments and acceptance matrices in the linked topic document rather than
 duplicating them here.
+
+Recent authority-audit increment: identical-write suppression now compares
+against primary data. A paused-replica regression confirms stale bytes written
+by another mount still replace the current primary payload. Continue the
+remaining mutation-precondition audit.

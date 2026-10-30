@@ -80,7 +80,8 @@ def main():
         FOD_ATIME_POLICY="noatime", FOD_METADATA_CACHE_TTL_SECONDS="0",
         FOD_READ_CACHE_BLOCKS="0", FOD_FOPEN_DIRECT_IO="1",
         FOD_SCHEMA_ADMIN_PASSWORD="unlink-authority-test-admin",
-        FOD_CONFIG=str(ROOT / "fod_config.ini"), FOD_LOG_LEVEL="info",
+        FOD_CONFIG=str(ROOT / "fod_config.ini"),
+        FOD_LOG_LEVEL=os.environ.get("FOD_LOG_LEVEL", "info"),
     )
     for key in ("FOD_DEGRADED_READONLY_ENABLED", "FOD_TELEMETRY_DSN", "FOD_MONITOR_DSN"):
         os.environ.pop(key, None)
@@ -217,6 +218,59 @@ def main():
         os.environ["FOD_PG_REPLICA_READ_ROUTING_ENABLED"] = "1"
         b = FODMount(str(ROOT)); mounts.append(b)
         b.start(str(mb))
+
+        # The unchanged-write fast path may skip persistence only after reading
+        # the comparison bytes from the write authority. A paused replica still
+        # has the old value while primary already has the newer bytes.
+        stale_write_file_a = ma / "stale-replica-unchanged-write"
+        stale_write_file_b = mb / stale_write_file_a.name
+        stale_value = b"stale-replica-value"
+        primary_value = b"new-primary-value!!"
+        stale_write_file_a.write_bytes(stale_value)
+        barrier()
+        assert stale_write_file_b.read_bytes() == stale_value
+        pause()
+        with stale_write_file_a.open("r+b", buffering=0) as handle:
+            assert os.pwrite(handle.fileno(), primary_value, 0) == len(primary_value)
+            os.fsync(handle.fileno())
+        assert stale_write_file_a.read_bytes() == primary_value
+        primary_value_before_stale_write = query(
+            primary,
+            "SELECT substring(b.data FROM 1 FOR %s) "
+            "FROM fod.files f JOIN fod.data_blocks b "
+            "ON b.data_object_id=f.data_object_id AND b._order=0 "
+            "WHERE f.name=%s AND NOT f.unlinked",
+            (len(primary_value), stale_write_file_a.name),
+        )[0][0]
+        if primary_value_before_stale_write is not None:
+            primary_value_before_stale_write = bytes(primary_value_before_stale_write)
+        assert primary_value_before_stale_write == primary_value, (
+            "primary database did not contain the expected pre-write bytes: "
+            f"{primary_value_before_stale_write!r}"
+        )
+        stale_write_fd = os.open(stale_write_file_b, os.O_WRONLY)
+        try:
+            written = os.pwrite(stale_write_fd, stale_value, 0)
+            assert written == len(stale_value), written
+            os.fsync(stale_write_fd)
+        finally:
+            os.close(stale_write_fd)
+        actual_after_stale_write = query(
+            primary,
+            "SELECT substring(b.data FROM 1 FOR %s) "
+            "FROM fod.files f JOIN fod.data_blocks b "
+            "ON b.data_object_id=f.data_object_id AND b._order=0 "
+            "WHERE f.name=%s AND NOT f.unlinked",
+            (len(stale_value), stale_write_file_a.name),
+        )[0][0]
+        if actual_after_stale_write is not None:
+            actual_after_stale_write = bytes(actual_after_stale_write)
+        assert actual_after_stale_write == stale_value, (
+            "write matching stale replica bytes was incorrectly treated as a no-op: "
+            f"primary now contains {actual_after_stale_write!r}"
+        )
+        results["unchanged_write_compares_primary_after_replica_lag"] = True
+        resume()
 
         previous_batch_metadata = os.environ.get("FOD_READDIR_BATCH_METADATA")
         os.environ["FOD_READDIR_BATCH_METADATA"] = "0"

@@ -2125,28 +2125,6 @@ impl FodFuse {
         result
     }
 
-    pub(crate) fn assemble_file_slice_profiled(
-        &self,
-        file_id: u64,
-        first_block: u64,
-        last_block: u64,
-        offset: u64,
-        end_offset: u64,
-        block_size: u64,
-    ) -> Result<Vec<u8>, String> {
-        let started = Instant::now();
-        let result = self.repo.assemble_file_slice(
-            file_id,
-            first_block,
-            last_block,
-            offset,
-            end_offset,
-            block_size,
-        );
-        self.record_repo_assemble_file_slice_elapsed(started.elapsed());
-        result
-    }
-
     pub(crate) fn assemble_file_slice_for_update_profiled(
         &self,
         file_id: u64,
@@ -9376,7 +9354,10 @@ impl Filesystem for FodFuse {
             let first_block = offset / self.block_size;
             let last_block = (end_offset.saturating_sub(1)) / self.block_size;
             let probe_started = Instant::now();
-            let existing = self.assemble_file_slice_profiled(
+            // This comparison can suppress a real mutation. Never compare the
+            // request with replica-routed bytes: a lagging replica could make
+            // an old value look unchanged after another writer committed.
+            let existing = self.assemble_file_slice_for_update_profiled(
                 file_id,
                 first_block,
                 last_block,

@@ -266,7 +266,7 @@ parent ACL checks for creation and namespace removal/movement.
 
 | Operation family | Authority path | What was established |
 | --- | --- | --- |
-| Payload `write`, flush, fsync, truncate | `with_cached_connection` -> primary targets | Persistence transaction checks the file lease, live session and fencing token under a PostgreSQL advisory lock |
+| Payload `write`, flush, fsync, truncate | `with_cached_connection` -> primary targets | Persistence transaction checks the file lease, live session and fencing token under a PostgreSQL advisory lock; the unchanged-slice write optimization also reads comparison bytes from primary |
 | `fallocate` hole punching, clone/copy adoption | Primary persistence APIs with a write fence | Hole-punch fencing regression passed; adoption also validates its destination fence in the primary transaction |
 | Open/client sessions, ownership and heartbeat | `with_control_connection` -> the same primary targets; normal read-only mounts use a writable control repo | Remote open/unlink/recreate test passed with distinct inode generations and old-handle writes isolated from the replacement |
 | `rename` / replace | Primary transaction with destination/file locks and source/target revalidation | Source inspection confirms transaction guards; test details are recorded below |
@@ -464,6 +464,15 @@ Write and copy planning also reads current file sizes from the write authority.
 Copy source blocks and destination blocks used for deduplication are likewise
 read from primary. A replica's stale size or payload could otherwise make a
 buffered write/copy persist an older, shorter extent or copy stale bytes.
+
+The write callback's unchanged-slice optimization is also mutation input: if
+the requested bytes equal a lagged replica's old contents, skipping persistence
+would silently lose a real overwrite. It now loads the compared slice through
+`assemble_file_slice_authoritative()`. The two-mount integration regression
+pauses replica replay, commits a same-length replacement through the primary,
+then writes the old replica bytes through the replica-routed mount and checks
+the persisted `data_blocks` bytes directly on primary. The check passed on
+2026-10-30 as part of `test_unlink_primary_authority_docker.py`.
 
 Timestamp `setattr` now resolves the inode seed and applies POSIX time-setting
 authorization and timestamp writes in one primary transaction under the inode

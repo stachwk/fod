@@ -305,6 +305,12 @@ reported one reproduced hardlink/unlink data-loss case and additional mutation
 review items; the implementation queue tracks their revalidation and closure.
 Do not treat an older audit's test result as proof of current behavior.
 
+The buffered-write unchanged-slice optimization compares data from primary,
+because a stale replica match must never suppress a real write. The mounted
+primary/replica regression pauses replay, overwrites a file on primary, writes
+the replica's old bytes through another mount, and verifies `data_blocks`
+directly in PostgreSQL. The broader mutation-authority audit remains active.
+
 ## Cross-mount write ownership and FUSE hang safety
 
 Writable FOD mounts use PostgreSQL-authoritative write ownership introduced with

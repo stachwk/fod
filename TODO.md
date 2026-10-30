@@ -14,6 +14,21 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **An unchanged-write check could trust stale replica bytes.** The write
+  callback compared a candidate overwrite through the replica-routed slice
+  reader and returned success without persistence if those old bytes matched.
+  It now compares through `assemble_file_slice_authoritative()`. The
+  two-mount regression pauses replay, verifies primary has a same-length newer
+  value, writes the stale replica value from the other mount, and checks the
+  resulting `data_blocks` bytes directly on primary. It passed on 2026-10-30
+  in `test_unlink_primary_authority_docker.py` (artifact:
+  `artifacts/integration/unlink-primary-authority-20261030T141413Z/results.json`).
+- [x] **The sticky-bit integration test stopped before reaching FOD.** Its
+  `nobody` subprocess could not traverse the mode-0700 temporary mountpoint and
+  received `EACCES` before testing the intended `EPERM`. The test now makes the
+  parent traversable and starts an allow-other FUSE session; the complete
+  primary-authority integration script, including its permission suite, passed
+  on 2026-10-30 (same artifact directory as above).
 - [x] **Partial `copy_file_range()` fallback omitted the write-persistence fence.**
   On 2026-10-29, `make test-copy-file-range` returned `EBUSY`; the mounted log
   showed `__FOD_WRITE_OWNERSHIP_FENCE_REJECTED__` because the partial-copy path
