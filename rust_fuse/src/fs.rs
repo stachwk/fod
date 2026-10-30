@@ -3988,6 +3988,18 @@ impl FodFuse {
         self.attrs_for_path(&path)
     }
 
+    fn lookup_path_from_authority(
+        &self,
+        path: &str,
+    ) -> Result<Option<ParsedAttrs>, libc::c_int> {
+        let path = Self::normalize_path(path);
+        if path == "/" {
+            return self.root_attr().map(Some);
+        }
+        let authority = self.repo.authoritative_view();
+        self.attrs_for_path_from_repo(&authority, &path)
+    }
+
     fn root_attr(&self) -> Result<ParsedAttrs, libc::c_int> {
         let authority = self.repo.authoritative_view();
         let mut attrs = self
@@ -8089,10 +8101,6 @@ impl Filesystem for FodFuse {
             }
         };
         let child_path = Self::join_path(&parent_path, name);
-        if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            fuse_reply_error!(reply, EEXIST);
-            return;
-        }
         let parent_id = match self.parent_entry_id_for_inode(parent) {
             Ok(value) => value,
             Err(errno) => {
@@ -8145,7 +8153,7 @@ impl Filesystem for FodFuse {
                     Some(directory_id),
                 );
                 self.invalidate_statfs_cache();
-                match self.lookup_path(&child_path) {
+                match self.lookup_path_from_authority(&child_path) {
                     Ok(Some(attrs)) => {
                         self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                         debug!(
@@ -8874,10 +8882,6 @@ impl Filesystem for FodFuse {
                 parent_path, child_path, mode, flags, subject.uid, subject.gid
             ),
         );
-        if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            fuse_reply_error!(reply, EEXIST);
-            return;
-        }
         let parent_id = match self.parent_entry_id_for_inode(parent) {
             Ok(value) => value,
             Err(errno) => {
@@ -8978,7 +8982,7 @@ impl Filesystem for FodFuse {
             );
         }
 
-        match self.lookup_path(&child_path) {
+        match self.lookup_path_from_authority(&child_path) {
             Ok(Some(attrs)) => {
                 self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                 if created_new {
@@ -10080,10 +10084,6 @@ impl Filesystem for FodFuse {
                 }
             };
             let child_path = Self::join_path(&parent_path, name);
-            if let Ok(Some(_)) = self.lookup_path(&child_path) {
-                fuse_reply_error!(reply, EEXIST);
-                return;
-            }
             let parent_id = match self.parent_entry_id_for_inode(parent) {
                 Ok(value) => value,
                 Err(errno) => {
@@ -10105,7 +10105,7 @@ impl Filesystem for FodFuse {
                 &child_path,
                 &supplementary_groups,
             ) {
-                Ok(_) => match self.lookup_path(&child_path) {
+                Ok(_) => match self.lookup_path_from_authority(&child_path) {
                     Ok(Some(attrs)) => {
                         self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                         self.invalidate_statfs_cache();
@@ -10130,10 +10130,6 @@ impl Filesystem for FodFuse {
             }
         };
         let child_path = Self::join_path(&parent_path, name);
-        if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            fuse_reply_error!(reply, EEXIST);
-            return;
-        }
         let parent_id = match self.parent_entry_id_for_inode(parent) {
             Ok(value) => value,
             Err(errno) => {
@@ -10190,7 +10186,7 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        match self.lookup_path(&child_path) {
+        match self.lookup_path_from_authority(&child_path) {
             Ok(Some(attrs)) => {
                 self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                 self.invalidate_statfs_cache();
@@ -10231,10 +10227,6 @@ impl Filesystem for FodFuse {
             }
         };
         let child_path = Self::join_path(&parent_path, link_name);
-        if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            fuse_reply_error!(reply, EEXIST);
-            return;
-        }
         let parent_id = match self.parent_entry_id_for_inode(parent) {
             Ok(value) => value,
             Err(errno) => {
@@ -10266,7 +10258,7 @@ impl Filesystem for FodFuse {
             )
         };
         match create_result {
-            Ok(_) => match self.lookup_path(&child_path) {
+            Ok(_) => match self.lookup_path_from_authority(&child_path) {
                 Ok(Some(attrs)) => {
                     self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                     self.invalidate_statfs_cache();
@@ -10353,10 +10345,6 @@ impl Filesystem for FodFuse {
             }
         };
         let child_path = Self::join_path(&new_parent_path, newname);
-        if let Ok(Some(_)) = self.lookup_path(&child_path) {
-            fuse_reply_error!(reply, EEXIST);
-            return;
-        }
         let new_parent_id = match self.parent_entry_id_for_inode(newparent) {
             Ok(value) => value,
             Err(errno) => {
@@ -10385,7 +10373,7 @@ impl Filesystem for FodFuse {
             )
         };
         match create_result {
-            Ok(_) => match self.lookup_path(&child_path) {
+            Ok(_) => match self.lookup_path_from_authority(&child_path) {
                 Ok(Some(attrs)) => {
                     self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                     self.invalidate_statfs_cache();

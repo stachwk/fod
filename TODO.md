@@ -144,6 +144,16 @@ Reading guide:
   and a fresh lookup opens it. Source-level fixes are in place; mounted
   reproduction is not yet verified. Snapshot reads remain on the configured
   read route, consistent with the mount's read-routing policy.
+- [ ] **Create callbacks need a replica-lag regression.** `mkdir`, `create`,
+  `mknod`, `symlink` and `link` previously checked destination existence via
+  the ordinary read route before entering their PostgreSQL-authoritative
+  mutation transaction. A lagging replica could incorrectly return `EEXIST`;
+  after a successful primary transaction, a replica-routed metadata lookup
+  could also return `EIO` instead of the new entry. The callbacks now let the
+  serialized primary transaction decide vacancy and fetch the reply metadata
+  from the authority. Add a two-mount test with replica reads enabled and
+  controlled replication lag, covering each operation's success/conflict
+  result and ensuring a committed create is not reported as failed.
 - [ ] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
   mutations.** `errno.rs` maps PostgreSQL `53100` (`disk_full`) to `ENOSPC` in
   both persistence and namespace error mappers. File-block persistence also
