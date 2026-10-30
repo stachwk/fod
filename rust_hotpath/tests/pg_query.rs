@@ -1824,6 +1824,39 @@ fn xattr_null_value_is_not_reported_as_missing_attribute() -> Result<(), String>
 }
 
 #[test]
+fn xattr_null_or_empty_name_is_not_reported_as_valid_name() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let repo = DbRepo::with_runtime(&conninfo_for_database(&temporary_db.name), &runtime)?;
+
+    repo.exec("CREATE SCHEMA fod")?;
+    repo.exec(
+        "CREATE TABLE fod.xattrs (owner_kind TEXT NOT NULL, owner_id BIGINT NOT NULL, name TEXT, value BYTEA NOT NULL)",
+    )?;
+    repo.exec(
+        "INSERT INTO fod.xattrs (owner_kind, owner_id, name, value) VALUES ('file', 17, NULL, '\\x00')",
+    )?;
+
+    let null_error = repo
+        .list_xattr_names_for_owner("file", 17)
+        .expect_err("NULL xattr name must be rejected");
+    if !null_error.contains("NULL") {
+        return Err(format!("unexpected NULL xattr-name error: {null_error}"));
+    }
+
+    repo.exec("UPDATE fod.xattrs SET name = ''")?;
+    let empty_error = repo
+        .list_xattr_names_for_owner("file", 17)
+        .expect_err("empty xattr name must be rejected");
+    if !empty_error.contains("empty name") {
+        return Err(format!("unexpected empty xattr-name error: {empty_error}"));
+    }
+    Ok(())
+}
+
+#[test]
 fn directory_entry_metadata_rejects_missing_required_fields() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let temporary_db = TemporaryDatabase::create()?;

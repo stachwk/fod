@@ -5,10 +5,9 @@
 //! Keep path resolution here; connection routing and SQL execution stay in `pg`.
 
 use super::{
-    exec_command_params, exec_params, fetch_first_column_texts, fetch_first_row_texts,
-    is_retryable_connection_error, replayable_sql_error, result_error, sql_is_replayable_command,
-    DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus,
-    PGRES_TUPLES_OK,
+    exec_command_params, exec_params, fetch_first_row_texts, is_retryable_connection_error,
+    replayable_sql_error, result_error, sql_is_replayable_command, DbRepo, PQclear, PQgetisnull,
+    PQgetvalue, PQnfields, PQntuples, PQresultStatus, PGRES_TUPLES_OK,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -27,6 +26,49 @@ fn xattr_owner_table(owner_kind: &str) -> Result<(&'static str, &'static str), S
         "symlink" => Ok(("symlinks", "id_symlink")),
         _ => Err("unsupported xattr owner kind".to_string()),
     }
+}
+
+unsafe fn decode_xattr_name_rows(res: *mut super::PGresult) -> Result<Vec<String>, String> {
+    let result = match PQresultStatus(res) {
+        PGRES_TUPLES_OK => {
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            if rows == 0 {
+                Ok(Vec::new())
+            } else if rows < 0 || cols < 1 {
+                Err("invalid xattr name rows returned by PostgreSQL".to_string())
+            } else {
+                let mut names = Vec::with_capacity(rows as usize);
+                let mut decode_error = None;
+                for row in 0..rows {
+                    if PQgetisnull(res, row, 0) != 0 {
+                        decode_error = Some("xattr name row contains NULL".to_string());
+                        break;
+                    }
+                    let value = PQgetvalue(res, row, 0);
+                    if value.is_null() {
+                        decode_error = Some("xattr name row contains a missing value".to_string());
+                        break;
+                    }
+                    let name = std::ffi::CStr::from_ptr(value)
+                        .to_string_lossy()
+                        .to_string();
+                    if name.is_empty() {
+                        decode_error = Some("xattr name row contains an empty name".to_string());
+                        break;
+                    }
+                    names.push(name);
+                }
+                match decode_error {
+                    Some(error) => Err(error),
+                    None => Ok(names),
+                }
+            }
+        }
+        _ => Err(result_error(res)),
+    };
+    PQclear(res);
+    result
 }
 
 unsafe fn authorize_xattr_mutation_on_conn(
@@ -670,7 +712,7 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id];
             let res = exec_params(conn, &sql, &params)?;
-            fetch_first_column_texts(res)
+            decode_xattr_name_rows(res)
         })
     }
 }

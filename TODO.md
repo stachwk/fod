@@ -297,6 +297,10 @@ Reading guide:
   state intact. The test passed against temporary PostgreSQL 17.11. Do not parse
   localized PostgreSQL error text. See
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617).
+- [x] **Reject malformed xattr names during list decoding.** `listxattr()` now
+  returns an error instead of exposing a SQL `NULL` name as `""`, and it also
+  rejects empty names. A focused regression verified both malformed rows
+  against PostgreSQL on 2026-10-30.
 - [ ] **PostgreSQL read failures must not appear as empty metadata.** Source
   review found that `count_file_links()`, `count_file_blocks()`,
   `path_has_children()`, startup config reads and xattr value/name reads could
