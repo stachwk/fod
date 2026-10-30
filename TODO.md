@@ -90,18 +90,19 @@ Reading guide:
   active work is tracked under P03/P04 in
   [`current plan`](docs/plans/CURRENT.md).
 - [ ] **P02 POSIX directory-error evidence is incomplete.** Source/test review
-  on 2026-10-30 found that `test_path_search_permissions.py` only checks the
+  on 2026-10-30 found that `test_path_search_permissions.py` only checked the
   Python exception class for denied `mkdir()` and `rmdir()`, not exact `EACCES`.
-  `test_mount_suite.py::test_replica_read_only` permits either `EROFS` or
-  `EPERM` for `mkdir()` and does not check `rmdir()`; no direct `rmdir()` on a
-  read-only mount regression was found. Add exact-error cases where FOD's
-  callback owns the result. Linux v6.17 source review confirms that VFS handles
-  `rmdir(.)` as `EINVAL`, `rmdir(..)` as `ENOTEMPTY`, root/mountpoint removal as
-  `EBUSY`, and a final symlink as `ENOTDIR` before calling FUSE; VFS also checks
-  destination existence and parent permissions. Distinguish these syscall
-  results from callback-owned errors in the remaining map. Keep P02 Pending
-  until required `opendir()`/`mkdir()`/`rmdir()` errors and their layer
-  attribution are mapped. Source and audit:
+  `test_mount_suite.py::test_replica_read_only` permitted either `EROFS` or
+  `EPERM` for `mkdir()` and did not check `rmdir()`. These gaps are now covered:
+  mode-000 parent operations assert exact `EACCES`, and a writable parent on a
+  read-only replica asserts exact `EROFS` for both `mkdir()` and `rmdir()`.
+  Linux v6.17 source review confirms that VFS handles `rmdir(.)` as `EINVAL`,
+  `rmdir(..)` as `ENOTEMPTY`, root/mountpoint removal as `EBUSY`, and a final
+  symlink as `ENOTDIR` before calling FUSE; VFS also checks destination
+  existence and parent permissions. Distinguish these syscall results from
+  callback-owned errors in the remaining map. Keep P02 Pending until required
+  `opendir()`/`mkdir()`/`rmdir()` errors and their layer attribution are mapped.
+  Source and audit:
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617),
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **P07 `access()` identity and root execute regressions remain untested.**

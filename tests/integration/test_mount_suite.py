@@ -519,13 +519,17 @@ class FODMountSuite(unittest.TestCase):
         replica_mountpoint = Path(tempfile.mkdtemp(prefix="fod-replica-suite.", dir="/tmp"))
         seed_dir: Path | None = None
         seed_file: Path | None = None
+        seed_empty_dir: Path | None = None
         try:
             suffix = uuid.uuid4().hex[:8]
             seed_dir = self.mountpoint / f"replica_seed_{suffix}"
             seed_file = seed_dir / "seed.txt"
 
-            seed_dir.mkdir(mode=0o755)
+            seed_dir.mkdir(mode=0o777)
+            seed_dir.chmod(0o777)
             seed_file.write_text("seed-data", encoding="utf-8")
+            seed_empty_dir = seed_dir / "empty"
+            seed_empty_dir.mkdir(mode=0o777)
 
             replica_launcher.start(str(replica_mountpoint))
             replica_seed_file = replica_mountpoint / seed_dir.name / "seed.txt"
@@ -578,8 +582,12 @@ class FODMountSuite(unittest.TestCase):
             self.assertIn(touch_exc.exception.errno, {errno.EROFS, errno.EPERM})
 
             with self.assertRaises(OSError) as mkdir_exc:
-                (replica_mountpoint / "newdir").mkdir()
-            self.assertIn(mkdir_exc.exception.errno, {errno.EROFS, errno.EPERM})
+                (replica_mountpoint / seed_dir.name / "newdir").mkdir()
+            self.assertEqual(mkdir_exc.exception.errno, errno.EROFS)
+
+            with self.assertRaises(OSError) as rmdir_exc:
+                (replica_mountpoint / seed_dir.name / "empty").rmdir()
+            self.assertEqual(rmdir_exc.exception.errno, errno.EROFS)
         finally:
             replica_launcher.stop()
             shutil.rmtree(replica_mountpoint, ignore_errors=True)
@@ -587,6 +595,12 @@ class FODMountSuite(unittest.TestCase):
             if seed_file is not None:
                 try:
                     seed_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            if seed_empty_dir is not None:
+                try:
+                    seed_empty_dir.rmdir()
                 except Exception:
                     pass
 

@@ -216,11 +216,22 @@ else:
                 ),
                 "create in mode-000 directory",
             )
-            assert_permission_error(
+            assert_errno_from_nobody(
                 run_as_nobody(
-                    "import pathlib, sys; pathlib.Path(sys.argv[1]).mkdir()",
+                    """
+import errno
+import pathlib
+import sys
+try:
+    pathlib.Path(sys.argv[1]).mkdir()
+except OSError as error:
+    print(error.errno)
+else:
+    print(0)
+""",
                     directory / "new-directory",
                 ),
+                errno.EACCES,
                 "mkdir in mode-000 directory",
             )
             assert_permission_error(
@@ -237,8 +248,22 @@ else:
                 ),
                 "rename in mode-000 directory",
             )
-            assert_permission_error(
-                run_as_nobody("import os, sys; os.rmdir(sys.argv[1])", owner_dir),
+            assert_errno_from_nobody(
+                run_as_nobody(
+                    """
+import errno
+import os
+import sys
+try:
+    os.rmdir(sys.argv[1])
+except OSError as error:
+    print(error.errno)
+else:
+    print(0)
+""",
+                    owner_dir,
+                ),
+                errno.EACCES,
                 "rmdir in mode-000 directory",
             )
             assert_permission_error(
