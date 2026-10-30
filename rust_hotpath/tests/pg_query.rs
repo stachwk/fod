@@ -2012,6 +2012,108 @@ fn promote_hardlink_to_primary_preserves_the_remaining_path() -> Result<(), Stri
 }
 
 #[test]
+fn root_hardlink_promotion_accepts_null_parent_and_rejects_malformed_name() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+
+    let primary_name = unique_name("rust_pg_root_primary");
+    let alias_name = unique_name("rust_pg_root_hardlink");
+    let file_id = repo
+        .create_file(
+            None,
+            &primary_name,
+            0o644,
+            1000,
+            1000,
+            &unique_name("root_primary_seed"),
+        )
+        .map_err(|err| format!("create root primary file: {err}"))?;
+    let hardlink_id = repo
+        .create_hardlink(file_id, None, &alias_name, 1000, 1000)
+        .map_err(|err| format!("create root hardlink: {err}"))?;
+
+    let selected = repo
+        .choose_primary_hardlink(file_id)
+        .map_err(|err| format!("choose root hardlink: {err}"))?;
+    if selected != Some((hardlink_id, None, alias_name.clone())) {
+        return Err(format!(
+            "root hardlink with a NULL parent was not selected: {selected:?}"
+        ));
+    }
+    if !repo
+        .promote_hardlink_to_primary(file_id)
+        .map_err(|err| format!("promote root hardlink: {err}"))?
+    {
+        return Err("expected root hardlink promotion to succeed".to_string());
+    }
+    if repo
+        .get_file_id(&format!("/{alias_name}"))
+        .map_err(|err| format!("lookup promoted root hardlink: {err}"))?
+        != Some(file_id)
+    {
+        return Err("promoted root hardlink does not resolve to the original file".to_string());
+    }
+    if repo
+        .get_file_id(&format!("/{primary_name}"))
+        .map_err(|err| format!("lookup old root primary: {err}"))?
+        .is_some()
+    {
+        return Err("old root primary path still exists after promotion".to_string());
+    }
+
+    let malformed_primary_name = unique_name("rust_pg_bad_root_primary");
+    let malformed_alias_name = unique_name("rust_pg_bad_root_hardlink");
+    let malformed_file_id = repo
+        .create_file(
+            None,
+            &malformed_primary_name,
+            0o644,
+            1000,
+            1000,
+            &unique_name("bad_root_primary_seed"),
+        )
+        .map_err(|err| format!("create primary for malformed hardlink: {err}"))?;
+    let malformed_hardlink_id = repo
+        .create_hardlink(malformed_file_id, None, &malformed_alias_name, 1000, 1000)
+        .map_err(|err| format!("create hardlink for malformed row: {err}"))?;
+    repo.exec(&format!(
+        "UPDATE hardlinks SET name = '' WHERE id_hardlink = {malformed_hardlink_id}"
+    ))
+    .map_err(|err| format!("inject malformed hardlink name: {err}"))?;
+
+    let choose_error = repo
+        .choose_primary_hardlink(malformed_file_id)
+        .expect_err("empty persisted hardlink name must fail closed");
+    if !choose_error.contains("hardlink row has an empty name") {
+        return Err(format!(
+            "unexpected malformed hardlink error: {choose_error}"
+        ));
+    }
+    let promote_error = repo
+        .promote_hardlink_to_primary(malformed_file_id)
+        .expect_err("promotion must not treat a malformed row as no hardlink");
+    if !promote_error.contains("hardlink row has an empty name") {
+        return Err(format!("unexpected promotion error: {promote_error}"));
+    }
+    if repo
+        .get_file_id(&format!("/{malformed_primary_name}"))
+        .map_err(|err| format!("verify malformed row did not replace primary: {err}"))?
+        != Some(malformed_file_id)
+    {
+        return Err("malformed hardlink row changed the primary namespace".to_string());
+    }
+
+    repo.delete_hardlink_entry(malformed_hardlink_id)
+        .map_err(|err| format!("delete malformed test hardlink: {err}"))?;
+    repo.purge_primary_file(malformed_file_id)
+        .map_err(|err| format!("purge malformed test file: {err}"))?;
+    repo.purge_primary_file(file_id)
+        .map_err(|err| format!("purge promoted test file: {err}"))?;
+
+    Ok(())
+}
+
+#[test]
 fn persist_file_blocks_updates_existing_block_data() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

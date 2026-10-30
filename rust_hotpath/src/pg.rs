@@ -2936,6 +2936,66 @@ unsafe fn fetch_first_column_texts(res: *mut PGresult) -> Result<Vec<String>, St
     result
 }
 
+unsafe fn decode_primary_hardlink_row(
+    res: *mut PGresult,
+    row: c_int,
+) -> Result<Option<(u64, Option<u64>, String)>, String> {
+    if row >= PQntuples(res) {
+        return Ok(None);
+    }
+    if PQnfields(res) < 3 {
+        return Err("invalid hardlink row returned by PostgreSQL".to_string());
+    }
+
+    let hardlink_id = if PQgetisnull(res, row, 0) != 0 {
+        return Err("hardlink row has a NULL id".to_string());
+    } else {
+        let value = PQgetvalue(res, row, 0);
+        if value.is_null() {
+            return Err("hardlink row has no id value".to_string());
+        }
+        CStr::from_ptr(value)
+            .to_string_lossy()
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or_else(|| "hardlink row has an invalid id".to_string())?
+    };
+
+    let parent_id = if PQgetisnull(res, row, 1) != 0 {
+        None
+    } else {
+        let value = PQgetvalue(res, row, 1);
+        if value.is_null() {
+            return Err("hardlink row has no parent id value".to_string());
+        }
+        Some(
+            CStr::from_ptr(value)
+                .to_string_lossy()
+                .trim()
+                .parse::<u64>()
+                .ok()
+                .filter(|id| *id > 0)
+                .ok_or_else(|| "hardlink row has an invalid parent id".to_string())?,
+        )
+    };
+
+    if PQgetisnull(res, row, 2) != 0 {
+        return Err("hardlink row has a NULL name".to_string());
+    }
+    let name_value = PQgetvalue(res, row, 2);
+    if name_value.is_null() {
+        return Err("hardlink row has no name value".to_string());
+    }
+    let name = CStr::from_ptr(name_value).to_string_lossy().to_string();
+    if name.is_empty() {
+        return Err("hardlink row has an empty name".to_string());
+    }
+
+    Ok(Some((hardlink_id, parent_id, name)))
+}
+
 fn join_nul_text(values: &[String]) -> Vec<u8> {
     let mut out = Vec::new();
     for (idx, value) in values.iter().enumerate() {
@@ -10179,37 +10239,9 @@ impl DbRepo {
                 } else {
                     match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 3 {
-                                None
-                            } else {
-                                let hardlink_ptr = PQgetvalue(res, 0, 0);
-                                let parent_ptr = PQgetvalue(res, 0, 1);
-                                let name_ptr = PQgetvalue(res, 0, 2);
-                                if hardlink_ptr.is_null()
-                                    || parent_ptr.is_null()
-                                    || name_ptr.is_null()
-                                {
-                                    None
-                                } else {
-                                    let hardlink_id = CStr::from_ptr(hardlink_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .ok();
-                                    let parent_id = CStr::from_ptr(parent_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .ok();
-                                    let name =
-                                        CStr::from_ptr(name_ptr).to_string_lossy().to_string();
-                                    hardlink_id.map(|hardlink_id| (hardlink_id, parent_id, name))
-                                }
-                            };
+                            let value = decode_primary_hardlink_row(res, 0);
                             PQclear(res);
-                            Ok(value)
+                            value
                         }
                         _ => {
                             let error = result_error(res);
@@ -10297,37 +10329,9 @@ impl DbRepo {
                     let res = exec_params(conn, &sql_choose, &params)?;
                     let chosen = match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 3 {
-                                None
-                            } else {
-                                let hardlink_ptr = PQgetvalue(res, 0, 0);
-                                let parent_ptr = PQgetvalue(res, 0, 1);
-                                let name_ptr = PQgetvalue(res, 0, 2);
-                                if hardlink_ptr.is_null()
-                                    || parent_ptr.is_null()
-                                    || name_ptr.is_null()
-                                {
-                                    None
-                                } else {
-                                    let hardlink_id = CStr::from_ptr(hardlink_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .ok();
-                                    let parent_id = CStr::from_ptr(parent_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .ok();
-                                    let name =
-                                        CStr::from_ptr(name_ptr).to_string_lossy().to_string();
-                                    hardlink_id.map(|hardlink_id| (hardlink_id, parent_id, name))
-                                }
-                            };
+                            let value = decode_primary_hardlink_row(res, 0);
                             PQclear(res);
-                            value
+                            value?
                         }
                         _ => {
                             let error = result_error(res);

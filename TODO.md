@@ -364,6 +364,15 @@ Reading guide:
   Full mounted evidence:
   `artifacts/integration/unlink-primary-authority-20261030T112944Z/results.json`
   (`names_snapshot_rejects_empty_child_name: true`).
+  FOD 3.4.333 also fixed one row-decoding edge: a root-level hardlink
+  legitimately stores `id_directory = NULL`, but primary-hardlink selection
+  treated that NULL as if the row were absent. Promotion could then skip the
+  surviving root alias. The shared decoder now preserves the nullable parent
+  while rejecting NULL/invalid IDs and empty names instead of returning
+  `None`. `pg_query::root_hardlink_promotion_accepts_null_parent_and_rejects_malformed_name`
+  verifies root alias selection and promotion, then injects an empty persisted
+  name and confirms selection/promotion fail without changing the primary
+  namespace. Broader malformed-row fault injection remains open.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
