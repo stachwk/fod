@@ -246,8 +246,9 @@ Reading guide:
   supported narrow-inode ABI and verify `EOVERFLOW` conversion. The mounted
   snapshot regression now traverses 512 initial entries and checks direct libc
   `opendir()`/`readdir()` EOF, successful `closedir()`, and `ENOENT` from
-  `opendir()` for a missing path; descriptor-limit and failure-path coverage
-  remains open.
+  `opendir()` for a missing path, and `EMFILE` after exhausting the process
+  descriptor limit; system-wide `ENFILE` and failure-path `closedir()` remain
+  unverified.
   See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **P02 directory-stream snapshot behavior still needs ABI and descriptor checks.** FOD
@@ -266,8 +267,9 @@ Reading guide:
   duplicate-free continuation, then confirms rewind refreshes the snapshot.
   POSIX leaves visibility of additions/removals unspecified, so the test does
   not require either membership outcome before rewind. The regression uses 512
-  initial child entries and checks the libc stream boundary. Narrow-ABI
-  `EOVERFLOW` and descriptor-limit behavior remain to be covered.
+  initial child entries and checks the libc stream boundary, including `EMFILE`.
+  Narrow-ABI `EOVERFLOW`, system-wide `ENFILE` and failure-path `closedir()`
+  behavior remain to be covered.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes

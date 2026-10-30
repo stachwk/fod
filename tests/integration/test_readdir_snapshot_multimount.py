@@ -8,6 +8,7 @@ import ctypes
 import errno
 import os
 import platform
+import resource
 import sys
 import tempfile
 import uuid
@@ -111,6 +112,28 @@ def check_libc_directory_stream(path: Path, expected_entries: int) -> None:
         raise AssertionError(
             f"libc opendir errno={error}, expected ENOENT ({errno.ENOENT})"
         )
+
+    soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    open_fd_count = len(os.listdir("/proc/self/fd")) - 1
+    exhausted_limit = max(1, open_fd_count)
+    if exhausted_limit > hard_limit:
+        raise AssertionError(
+            f"cannot exercise EMFILE: {open_fd_count} descriptors exceed hard limit {hard_limit}"
+        )
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (exhausted_limit, hard_limit))
+        ctypes.set_errno(0)
+        exhausted_stream = libc.opendir(os.fsencode(path))
+        error = ctypes.get_errno()
+        if exhausted_stream:
+            libc.closedir(exhausted_stream)
+            raise AssertionError("libc opendir succeeded after exhausting the fd limit")
+        if error != errno.EMFILE:
+            raise AssertionError(
+                f"libc opendir errno={error}, expected EMFILE ({errno.EMFILE})"
+            )
+    finally:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft_limit, hard_limit))
 
 
 def main() -> None:
