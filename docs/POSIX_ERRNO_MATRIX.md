@@ -51,7 +51,13 @@ FOD został wywołany:
   `unlink()`, `rmdir()`, `readlink()`, `access()`, `chmod()`, `chown()`,
   `utime()`, `truncate()`, `statvfs()`, `link()`, `symlink()` i `rename()`.
   Wywołanie libc `access()` sprawdza bezpośrednio, ponieważ Python `os.access()`
-  zwraca wartość logiczną zamiast errno. Dla końcowego symlinku do katalogu z ukośnikiem test sprawdza
+  zwraca wartość logiczną zamiast errno. Zwykły plik z końcowym ukośnikiem daje
+  `ENOTDIR` dla `stat()`, `open()`, `lstat()`, `unlink()`, `rmdir()`,
+  `truncate()`, `chmod()`, `chown()`, `utime()`, `readlink()`, `statvfs()`,
+  źródła hardlinku i obu stron `rename()`; `mkdir()`, cel hardlinku i cel
+  symlinku zwracają `EEXIST`. libc `access()` zwraca `-1`/`ENOTDIR`. Test
+  potwierdza, że plik i źródło rename pozostają niezmienione. Dla końcowego
+  symlinku do katalogu z ukośnikiem test sprawdza
   `mkdir()`=`EEXIST` oraz `unlink()`/`rmdir()`=`ENOTDIR`, potwierdzając, że
   symlink i katalog docelowy pozostają; `stat()`, `lstat()`, `open()`,
   `chmod()` i `utime()` podążają do katalogu. Zmiana praw i czasu dotyczy celu,

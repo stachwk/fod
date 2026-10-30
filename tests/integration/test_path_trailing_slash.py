@@ -99,7 +99,85 @@ def main() -> None:
                 errno.ENOTDIR,
                 "unlink regular file/",
             )
+            rename_source = directory / "rename-source"
+            rename_source.write_bytes(b"rename source")
+            for operation_name, operation, expected_errno in (
+                ("lstat", lambda: os.lstat(trailing_slash), errno.ENOTDIR),
+                ("mkdir", lambda: os.mkdir(trailing_slash), errno.EEXIST),
+                ("rmdir", lambda: os.rmdir(trailing_slash), errno.ENOTDIR),
+                (
+                    "truncate",
+                    lambda: os.truncate(trailing_slash, 0),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "chmod",
+                    lambda: os.chmod(trailing_slash, 0o600),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "chown",
+                    lambda: os.chown(trailing_slash, -1, -1),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "utime",
+                    lambda: os.utime(trailing_slash, None),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "readlink",
+                    lambda: os.readlink(trailing_slash),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "statvfs",
+                    lambda: os.statvfs(trailing_slash),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "link source",
+                    lambda: os.link(trailing_slash, directory / "file-slash-link"),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "link destination",
+                    lambda: os.link(rename_source, trailing_slash),
+                    errno.EEXIST,
+                ),
+                (
+                    "symlink destination",
+                    lambda: os.symlink("unused", trailing_slash),
+                    errno.EEXIST,
+                ),
+                (
+                    "rename source",
+                    lambda: os.rename(trailing_slash, directory / "renamed-file"),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "rename destination",
+                    lambda: os.rename(rename_source, trailing_slash),
+                    errno.ENOTDIR,
+                ),
+            ):
+                expect_errno(
+                    operation,
+                    expected_errno,
+                    f"{operation_name} regular file/",
+                )
+            ctypes.set_errno(0)
+            access_result = libc.access(os.fsencode(trailing_slash), os.F_OK)
+            access_error = ctypes.get_errno()
+            assert access_result == -1 and access_error == errno.ENOTDIR, (
+                "access regular file/",
+                access_result,
+                access_error,
+            )
             assert file_path.read_bytes() == b"not a directory"
+            assert rename_source.read_bytes() == b"rename source"
+            assert not (directory / "file-slash-link").exists()
+            assert not (directory / "renamed-file").exists()
 
             file_link = directory / "regular-file-link"
             os.symlink(file_path.name, file_link)
@@ -297,7 +375,8 @@ def main() -> None:
             )
             print(
                 "OK pathname empty_path=ENOENTx17 access=ENOENT "
-                "trailing_slash_file=ENOTDIR "
+                "trailing_slash_file=ENOTDIRx14,EEXISTx3 "
+                "access=ENOTDIR "
                 "symlink_file=ENOTDIRx8 symlink_directory=accepted "
                 "dangling_slash=ENOENTx9,EEXISTx2,ENOTDIRx3 "
                 "slash_symlink_dir=mkdir:EEXIST,unlink:ENOTDIR,rmdir:ENOTDIR "
