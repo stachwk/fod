@@ -198,6 +198,11 @@ Reading guide:
   converted it to end offset `0`, truncating the reported conflict. It now uses
   the maximum `loff_t` offset supported by Linux FUSE. Add a mounted regression
   querying a conflicting lock whose length is zero (through EOF).
+- [ ] **Verify malformed POSIX range-lease rows fail closed.** The decoder now
+  rejects unknown lock types, offsets outside the PostgreSQL `BIGINT`/Linux
+  `loff_t` range, reversed ranges and missing required database fields. Add a
+  backend regression showing an invalid active lock row returns `EIO` instead
+  of being omitted from conflict checks.
 - [ ] **Metadata projection must preserve restrictive directory modes.** Source
   review found that directory mode `0644` was rewritten to `0755` in FUSE
   attributes, and malformed size/uid/gid/mode values could be replaced by

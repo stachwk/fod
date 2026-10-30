@@ -3177,6 +3177,12 @@ impl FodFuse {
             if parts.next().is_some() {
                 return Err(EIO);
             }
+            if !matches!(typ, libc::F_RDLCK | libc::F_WRLCK)
+                || start > i64::MAX as u64
+                || end.is_some_and(|value| value > i64::MAX as u64 || value < start)
+            {
+                return Err(EIO);
+            }
             records.push(PosixLockRecord {
                 owner,
                 typ,

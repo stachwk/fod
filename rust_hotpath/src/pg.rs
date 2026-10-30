@@ -9422,8 +9422,12 @@ impl DbRepo {
             }
             let rows = PQntuples(res);
             let cols = PQnfields(res);
+            if cols < 5 {
+                PQclear(res);
+                return Err("invalid lock range row returned by PostgreSQL".to_string());
+            }
             let mut output = Vec::new();
-            if rows >= 1 && cols >= 5 {
+            if rows >= 1 {
                 for row in 0..rows {
                     if row > 0 {
                         output.push(b'\n');
@@ -9454,7 +9458,7 @@ impl DbRepo {
                         CStr::from_ptr(end_ptr).to_string_lossy().to_string()
                     };
                     let pid = if pid_ptr.is_null() {
-                        "0".to_string()
+                        String::new()
                     } else {
                         CStr::from_ptr(pid_ptr).to_string_lossy().to_string()
                     };
