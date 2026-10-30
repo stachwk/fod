@@ -10509,6 +10509,19 @@ mod tests {
     }
 
     #[test]
+    fn unknown_special_file_type_fails_closed() {
+        assert_eq!(FodFuse::file_type_from_special("socket"), None);
+        assert_eq!(
+            FodFuse::directory_entry_file_type("file", Some("socket")),
+            Err(crate::errno::EIO)
+        );
+        assert_eq!(
+            FodFuse::directory_entry_file_type("unknown", None),
+            Err(crate::errno::EIO)
+        );
+    }
+
+    #[test]
     fn lock_record_blob_round_trip_preserves_pid_and_reads_legacy_rows() {
         let record = super::PosixLockRecord {
             owner: 41,

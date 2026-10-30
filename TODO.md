@@ -217,8 +217,9 @@ Reading guide:
   closing this finding. Timestamp projection now preserves pre-epoch dates and
   rejects malformed values; add a mounted `utimensat/fstat` regression before
   treating timestamp projection as verified. Unknown special-file types now
-  return `EIO` instead of appearing as regular files; add a malformed-type
-  decoder regression.
+  return `EIO` instead of appearing as regular files; a unit regression verifies
+  the decoder and directory-entry conversion fail closed. Add a malformed
+  database-row regression to verify the full metadata path.
 - [ ] **Verify Linux FUSE device-number round trips for `mknod`.** The callback
   now decodes the kernel's 12-bit-major/20-bit-minor `new_encode_dev` value and
   FUSE attrs encode it in the same format; unrepresentable database values now
