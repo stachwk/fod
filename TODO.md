@@ -14,6 +14,19 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Minimalny Linux/libfuse FOD nie ma walidacji montowanego end-to-end.**
+  `rust_fuse/src/platform_requirements.rs` odrzuca Linux starszy niż 4.18.0 i
+  libfuse3 starsze niż 3.0.0; test jednostkowy sprawdza granice parsera i
+  walidatora. Najnowsze zapisane dowody mounted używają Linux 6.17/libfuse
+  3.17.4. Nie wykazano błędu działania na minimum, ale też nie potwierdzono
+  pełnego zestawu minimalnych ABI/protokołu na tej parze. Wpływ: próg runtime
+  jest zadeklarowany i fail-closed, lecz nie jest jeszcze macierzą wspieranych,
+  end-to-end przetestowanych hostów. Następny krok: uruchomić reprezentatywny
+  mount/regression gate na Linux 4.18 i libfuse3 3.0 w zgodnym środowisku albo
+  podnieść minimum do najstarszej pary faktycznie zweryfikowanej; potem
+  zaktualizować [wymagania FUSE](docs/FUSE_REQUIREMENTS.md) i
+  [kontrakty kompatybilności](docs/compatibility-contracts.md).
+
 - [x] **Zapis i skracanie pliku respektują `RLIMIT_FSIZE` na mountcie FUSE.**
   `test_lseek.py` ustawia w osobnym procesie limit 4096 bajtów, żąda zapisu
   8192 bajtów i wymaga krótkiego zapisu dokładnie do granicy oraz dostarczenia

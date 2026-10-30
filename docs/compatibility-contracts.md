@@ -1,13 +1,33 @@
-# FOD Compatibility Contracts
+# FOD compatibility status and contracts
 
 This document records the current verified compatibility boundaries of FOD. The
 release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
-Inventory date: `2026-07-28`
+Inventory date: `2026-10-30`
 
-Reviewed base: commit `ea6a1bc` (`FOD 3.2.33`) and refreshed by later planning
-and `fsync` documentation commits. The current release version remains sourced
-from `fod_version.txt`.
+Reviewed base: commit `68d23b7` (`FOD 3.4.380`). Recheck current behavior
+against code and regression tests when this inventory is updated.
+
+## Overall filesystem compatibility status
+
+FOD exposes filesystem operations through Linux FUSE. The application-visible
+result is produced by Linux VFS, FUSE protocol/libfuse and FOD callbacks
+together; success at the syscall boundary does not identify which layer
+implemented or rejected an operation. The [POSIX audit](POSIX_CONFORMANCE_AUDIT.md)
+uses POSIX.1-2024 Issue 8 as its baseline and makes no general POSIX-conformance
+claim.
+
+| Area | Implemented boundary | Verification status |
+| --- | --- | --- |
+| POSIX filesystem API | Broad Linux filesystem operations, metadata, permissions, namespace changes, regular-file locks and FIFO behavior | Requirement audit remains open. Only the listed standard and sparse `lseek()` case groups are marked Pass; other groups remain Pending until every in-scope rule and required error has evidence. The detailed P01-P12 ledger owns remaining work. |
+| Linux kernel/VFS | Linux-only runtime; startup rejects kernels older than 4.18.0. VFS may handle or reject operations before FUSE dispatch. | The preflight boundary has unit coverage. Mounted evidence is concentrated on Linux 6.17; end-to-end execution on the declared minimum kernel has not been recorded. |
+| FUSE/libfuse | `fuser 0.18.0`, explicit libfuse3 backend, userspace protocol ceiling 7.40, runtime protocol/capability negotiation | Mounted evidence uses Linux 6.17/libfuse 3.17.4. The declared libfuse3 3.0.0 floor has preflight coverage but no recorded minimum-version mount matrix. Per-callback coverage and omissions are listed below. |
+| Product platform | 64-bit and wider userspace only | 32-bit binaries and ABI targets are outside the support matrix. |
+
+This summary deliberately distinguishes a declared runtime floor from tested
+platform combinations and from POSIX requirements. The detailed current Linux
+and FUSE requirements, including the remaining minimum-stack validation gap,
+are in [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
 
 ## Supported Build Architectures
 
@@ -50,6 +70,13 @@ POSIX behavior is documented as outside supported-platform coverage.
   missing operations must first appear in the public `fuser` API.
 - Protocol availability alone never enables a feature. Every enabled feature
   needs a truthful FOD contract and a regression test.
+- A writable mount requires the negotiated `FUSE_ATOMIC_O_TRUNC` capability;
+  startup rejects the mount if Linux does not offer it. `FUSE_MAX_PAGES` affects
+  request sizing but is not required for basic correctness.
+- The runtime preflight requires Linux 4.18.0 and libfuse3 3.0.0. These are
+  enforced minimums, not a claim that every supported kernel/libfuse pair has
+  passed mounted tests. The latest recorded mounted stack is Linux 6.17 with
+  libfuse 3.17.4.
 
 ### Callback status
 
@@ -110,7 +137,9 @@ cover both the kernel-handled positioning cases and its sparse-seek callback.
 
 ## PostgreSQL storage
 
-- Current schema version: 27 (the migration manifest in `rust_mkfs/src/main.rs` is authoritative). Schema versions 20 and 21 introduced the legacy extent conversion and removal described below.
+- Current schema version: 32 (the migration manifest in
+  `rust_mkfs/src/main.rs` is authoritative). Schema versions 20 and 21
+  introduced the legacy extent conversion and removal described below.
 - Fresh installs use `migrations/base_schema.sql`; numbered files preserve the
   upgrade path.
 - Payload rows are owned by `data_object_id`.
@@ -169,10 +198,11 @@ cover both the kernel-handled positioning cases and its sparse-seek callback.
 
 | Boundary | Current contract |
 | --- | --- |
-| FUSE | fuser 0.18.0, runtime-negotiated protocol, explicit libfuse3 |
+| Filesystem API | POSIX.1-2024 audit open; no overall conformance claim |
+| Linux/FUSE | Linux >= 4.18.0 and libfuse3 >= 3.0.0 enforced; fuser 0.18.0, protocol negotiated at runtime, latest recorded mount validation Linux 6.17/libfuse3 3.17.4 |
 | Rust | minimum 1.85, Edition 2021 |
 | Automation | no active GitHub Actions workflow |
 | Hotpath ABI | internal Rust interface; `libfod.so` is command-surface only; no supported hotpath C ABI |
-| Database schema | version 27; authoritative manifest in `rust_mkfs/src/main.rs` |
+| Database schema | version 32; authoritative manifest in `rust_mkfs/src/main.rs` |
 | Capacity | canonical DB quota, advisory-lock admission, expiring reservations |
 | Layout | canonical block payload; legacy extents only before migration 20 |

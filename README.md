@@ -49,6 +49,7 @@ Start with [`docs/README.md`](docs/README.md). It groups documentation by the jo
 | configure runtime/mount behavior | [`docs/runtime-configuration.md`](docs/runtime-configuration.md) |
 | verify PostgreSQL requirements | [`docs/POSTGRESQL_REQUIREMENTS.md`](docs/POSTGRESQL_REQUIREMENTS.md) |
 | verify FUSE/kernel requirements | [`docs/FUSE_REQUIREMENTS.md`](docs/FUSE_REQUIREMENTS.md) |
+| inspect POSIX/Linux/FUSE compatibility status | [`docs/compatibility-contracts.md`](docs/compatibility-contracts.md) |
 | review security/permissions/host policy | [`docs/SECURITY.md`](docs/SECURITY.md) |
 | profile or optimize performance | [`docs/performance.md`](docs/performance.md) |
 | index/import external sources | [`docs/fod-indexer.md`](docs/fod-indexer.md) |

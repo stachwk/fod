@@ -4,6 +4,12 @@ This document is the compact canonical description of the **current** FOD archit
 
 The authoritative release version is stored in `../fod_version.txt`.
 
+Current POSIX/Linux/FUSE support status is summarized in
+[`compatibility-contracts.md`](compatibility-contracts.md). The POSIX audit is
+still in progress and does not claim general POSIX conformance. The enforced
+Linux/libfuse minimums and their validation boundary are in
+[`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
+
 ## Runtime architecture
 
 FOD is Rust-backed end to end:

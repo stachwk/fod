@@ -60,7 +60,7 @@ reported gap is still present or that a proposed fix has passed acceptance.
 | Area | Contract/design | Review and evidence |
 | --- | --- | --- |
 | PostgreSQL authority and mutation ordering | [Architecture invariants](FOD_ARCHITECTURE_INVARIANTS.md) | [Primary authority audit](FOD_PRIMARY_AUTHORITY_AUDIT.md), [C6 write fencing](FOD_C6_WRITE_FENCING_AUDIT.md) |
-| Filesystem API compatibility | [POSIX.1-2024 conformance scope](POSIX_CONFORMANCE_AUDIT.md) | [Errno reference](ERRNO_REFERENCE.md), [verified FUSE compatibility contracts](compatibility-contracts.md) |
+| Filesystem API compatibility | [Compatibility status and contracts](compatibility-contracts.md) | [POSIX.1-2024 audit](POSIX_CONFORMANCE_AUDIT.md), [Linux/FUSE requirements](FUSE_REQUIREMENTS.md), [errno matrix](POSIX_ERRNO_MATRIX.md), [errno reference](ERRNO_REFERENCE.md) |
 | Cross-mount content coherence | [TX03J contract and stages](TX03J_CROSS_MOUNT_CACHE_COHERENCE.md) | [Generation coverage and remaining gates](tx03j-generation-audit.md) |
 | Standby availability and recovery | [HA/cache plan](plans/HA_READONLY_RECOVERY_AND_CACHE.md) | [Degraded read-only contract review](FOD_DEGRADED_READONLY_CONTRACT_REVIEW.md) |
 | Transaction boundaries and privileges | [Security](SECURITY.md), [runtime privilege policy](FOD_RUNTIME_PRIVILEGE_POLICY.md) | [C10 privilege audit](FOD_C10_POSTGRES_PRIVILEGE_AUDIT.md), [C10-B SQL inventory](FOD_C10B_SQL_MUTATION_INVENTORY.md), [C10-B2 transaction review](FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md) |
@@ -69,6 +69,7 @@ reported gap is still present or that a proposed fix has passed acceptance.
 ## 1. Understand the current system
 
 - [`CURRENT_STATE.md`](CURRENT_STATE.md) - compact current architecture, deployment model, I/O size layers and lifecycle guarantees.
+- [`compatibility-contracts.md`](compatibility-contracts.md) - current status and support boundaries for POSIX, Linux VFS and FUSE/libfuse.
 - [`../README.md`](../README.md) / [`../README.pl`](../README.pl) - project entry pages.
 - [`../ROADMAP.md`](../ROADMAP.md) - current direction.
 - [`../TODO.md`](../TODO.md) - historical decisions and follow-ups; the active queue is [`plans/CURRENT.md`](plans/CURRENT.md).
@@ -87,7 +88,7 @@ reported gap is still present or that a proposed fix has passed acceptance.
 - [`runtime-env-ini-audit.md`](runtime-env-ini-audit.md) - generated environment/INI audit.
 - [`POSTGRESQL_REQUIREMENTS.md`](POSTGRESQL_REQUIREMENTS.md) - PostgreSQL requirements and tuning boundaries.
 - [`postgresql-runtime-requirements.md`](postgresql-runtime-requirements.md) - PostgreSQL session contract.
-- [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md) - FUSE/kernel capabilities and request-size constraints.
+- [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md) - enforced Linux/libfuse minimums, capability negotiation, validation evidence and request-size limits.
 - [`FOD_STORAGE_BLOCK_SIZE_SELECTION.md`](FOD_STORAGE_BLOCK_SIZE_SELECTION.md) - storage-block design background.
 
 Current high-level defaults are summarized in [`CURRENT_STATE.md`](CURRENT_STATE.md). Historical sizing experiments are indexed by [`HISTORY.md`](HISTORY.md).

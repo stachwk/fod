@@ -1,6 +1,20 @@
 # POSIX conformance audit
 
-Status: **scoping started; no general POSIX conformance claim**.
+Status as of FOD 3.4.380 (`68d23b7`): **requirement audit in progress; no
+general POSIX conformance claim**.
+
+The initial matrix marks only the tested standard `lseek()` and sparse
+`SEEK_DATA`/`SEEK_HOLE` case groups Pass. The remaining groups stay Pending
+while any applicable requirement or required error is unmapped. The P01-P12
+ledger below records the bounded closure evidence; tests collected across
+multiple FOD releases are evidence for individual cases, not a claim that the
+complete current tree passes every row. The latest broad mounted evidence
+recorded by this audit uses Linux 6.17 and libfuse 3.17.4.
+
+For the compact three-layer status, read
+[`compatibility-contracts.md`](compatibility-contracts.md). Linux/FUSE runtime
+minimums and the unverified minimum-stack test gap are summarized in
+[`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
 
 ## Scope and reference edition
 
@@ -62,7 +76,7 @@ An existing test name is a starting point for evidence, not proof of compliance.
 Every row must identify the normative section and the specific assertion before
 its status can move from Pending.
 
-## Initial requirement matrix
+## Requirement matrix
 
 | Area | Normative interfaces / clauses to review | Existing FOD evidence to inspect | Status |
 | --- | --- | --- | --- |

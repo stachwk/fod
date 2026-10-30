@@ -19,6 +19,7 @@ is a historical follow-up archive, not a plan.
 
 Release-specific sizing/buffering work:
 
+- [`FUSE_REQUEST_SIZING_FOD_3_3_12_TO_3_3_19.md`](history/FUSE_REQUEST_SIZING_FOD_3_3_12_TO_3_3_19.md) - archived request-size and throughput measurements; current runtime contract is in [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
 - [`FOD_3_2_85_FUSE_512K_IO_PLAN.md`](history/FOD_3_2_85_FUSE_512K_IO_PLAN.md)
 - [`FOD_3_2_87_FUSE_SPLIT_WRITE_BUFFERING.md`](history/FOD_3_2_87_FUSE_SPLIT_WRITE_BUFFERING.md)
 - [`FOD_3_2_88_MULTI_HANDLE_WRITE_VISIBILITY.md`](history/FOD_3_2_88_MULTI_HANDLE_WRITE_VISIBILITY.md)
