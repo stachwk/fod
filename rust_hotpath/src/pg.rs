@@ -6774,7 +6774,7 @@ impl DbRepo {
             };
             match status {
                 Ok(()) => Ok(true),
-                Err(_) => Err("failed to update data object".to_string()),
+                Err(err) => Err(err),
             }
         })
     }

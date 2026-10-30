@@ -152,7 +152,9 @@ Reading guide:
   hardlink-promotion commands use `exec_command_params()`. Source review found
   that several non-success `PGresult` branches discarded the result before
   reading `conn_error()`; these now capture `result_error()` first. The
-  remaining gap is deterministic backend fault injection proving SQLSTATE
+  `touch_data_object()` helper also now propagates the original command error
+  instead of replacing it with a generic string. The remaining gap is
+  deterministic backend fault injection proving SQLSTATE
   `53100` reaches FUSE as `ENOSPC`; current quota tests exercise FOD's own
   quota path and do not establish this PostgreSQL error mapping. Do not parse
   localized PostgreSQL error text. See
