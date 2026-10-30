@@ -340,6 +340,15 @@ Reading guide:
   FUSE with `default_permissions` disabled against an isolated PostgreSQL
   17.11 instance. Broader P07 gaps remain in the conformance ledger. See the
   [`permissions and identity audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
+- [x] **P07 directory set-ID clearing is distinct from regular-file chown.**
+  Linux v6.17 `chown_common()` requests set-ID clearing only for
+  non-directories. FOD already preserved both directory bits, but the
+  integration test allowed either `02755` or `06755`; it now requires
+  exact mode `06755` after changing the group. This records Linux
+  compatibility behavior, not a claim that POSIX requires it for
+  directories. Broader P07 gaps remain in the conformance ledger.
+  See [`permissions and identity audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger)
+  and [`errno matrix`](docs/POSIX_ERRNO_MATRIX.md).
 - [x] **Verify stale-inode xattr behavior on mounted FUSE.** Source review
   found that xattr callbacks resolved the request's inode through a cached path
   without confirming that the path still resolved to that inode. After a

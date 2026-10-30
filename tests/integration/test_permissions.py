@@ -180,8 +180,7 @@ def main() -> None:
             suid_dir_after = suid_subdir.stat()
             assert suid_dir_after.st_gid == alt_gid, suid_dir_after
             suid_dir_mode_after = suid_dir_after.st_mode & 0o7777
-            assert suid_dir_after.st_mode & 0o2000 == 0o2000, suid_dir_after
-            assert suid_dir_mode_after in {0o2755, 0o6755}, oct(suid_dir_mode_after)
+            assert suid_dir_mode_after == 0o6755, oct(suid_dir_mode_after)
 
             suid_link.symlink_to(suid_file)
             _chgrp(suid_link, alt_gid, follow_symlinks=False)
