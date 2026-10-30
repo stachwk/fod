@@ -379,6 +379,13 @@ Reading guide:
   `pg_query::source_adoption_rejects_malformed_file_info_instead_of_falling_back`
   regression injects a negative persisted size and confirms that adoption
   returns an error while the destination object and size stay unchanged.
+  A follow-up fault-injection test found that `fetch_xattr_value_for_owner()`
+  treated a persisted SQL `NULL` payload as an absent xattr: the new regression
+  initially failed with `None` instead of an error. The query decoder now
+  distinguishes zero rows from a NULL payload and rejects malformed row shape;
+  `pg_query::xattr_null_value_is_not_reported_as_missing_attribute` passes on a
+  temporary database. Query-failure injection for the xattr remains covered by
+  the mounted primary-authority suite.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

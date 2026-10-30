@@ -6,8 +6,9 @@
 
 use super::{
     exec_command_params, exec_params, fetch_first_column_texts, fetch_first_row_texts,
-    fetch_single_optional_text, is_retryable_connection_error, replayable_sql_error, result_error,
-    sql_is_replayable_command, DbRepo, PQclear, PQntuples, PQresultStatus, PGRES_TUPLES_OK,
+    is_retryable_connection_error, replayable_sql_error, result_error, sql_is_replayable_command,
+    DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus,
+    PGRES_TUPLES_OK,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -302,7 +303,33 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id, &name];
             let res = exec_params(conn, &sql, &params)?;
-            let encoded = fetch_single_optional_text(res)?;
+            let encoded = match PQresultStatus(res) {
+                PGRES_TUPLES_OK => {
+                    let rows = PQntuples(res);
+                    let cols = PQnfields(res);
+                    if rows == 0 {
+                        Ok(None)
+                    } else if rows != 1 || cols < 1 {
+                        Err("invalid xattr value row returned by PostgreSQL".to_string())
+                    } else if PQgetisnull(res, 0, 0) != 0 {
+                        Err("xattr value row contains a NULL payload".to_string())
+                    } else {
+                        let value = PQgetvalue(res, 0, 0);
+                        if value.is_null() {
+                            Err("xattr value row contains a missing payload".to_string())
+                        } else {
+                            Ok(Some(
+                                std::ffi::CStr::from_ptr(value)
+                                    .to_string_lossy()
+                                    .to_string(),
+                            ))
+                        }
+                    }
+                }
+                _ => Err(result_error(res)),
+            };
+            PQclear(res);
+            let encoded = encoded?;
             let value = match encoded {
                 None => None,
                 Some(encoded) => {

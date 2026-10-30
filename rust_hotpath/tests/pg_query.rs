@@ -1799,6 +1799,31 @@ fn directory_link_count_query_failures_are_not_zero() -> Result<(), String> {
 }
 
 #[test]
+fn xattr_null_value_is_not_reported_as_missing_attribute() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let repo = DbRepo::with_runtime(&conninfo_for_database(&temporary_db.name), &runtime)?;
+
+    repo.exec("CREATE SCHEMA fod")?;
+    repo.exec(
+        "CREATE TABLE fod.xattrs (owner_kind TEXT NOT NULL, owner_id BIGINT NOT NULL, name TEXT NOT NULL, value BYTEA)",
+    )?;
+    repo.exec(
+        "INSERT INTO fod.xattrs (owner_kind, owner_id, name, value) VALUES ('file', 17, 'user.corrupt', NULL)",
+    )?;
+
+    let error = repo
+        .fetch_xattr_value_for_owner("file", 17, "user.corrupt")
+        .expect_err("NULL xattr payload must be rejected, not reported as absent");
+    if !error.contains("NULL") {
+        return Err(format!("unexpected malformed xattr error: {error}"));
+    }
+    Ok(())
+}
+
+#[test]
 fn directory_entry_metadata_rejects_missing_required_fields() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let temporary_db = TemporaryDatabase::create()?;
