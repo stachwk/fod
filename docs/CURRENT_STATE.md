@@ -358,7 +358,8 @@ fault-injection coverage for malformed persisted rows remains in the
 [unresolved findings](../TODO.md#unresolved-findings).
 Namespace lookup and directory-entry metadata decoders reject entity ID zero;
 FOD represents the logical root separately and does not assign it an entity
-row ID of zero.
+row ID of zero. Single-entry child lookup also rejects parent `Some(0)` so it
+cannot be interpreted as the root's SQL NULL-parent sentinel.
 
 Primary authority requirements are defined by
 [FOD_ARCHITECTURE_INVARIANTS.md](FOD_ARCHITECTURE_INVARIANTS.md). A dated audit

@@ -113,9 +113,7 @@ fn parse_directory_entry_metadata_rows(
                 .parse::<u64>()
                 .map_err(|err| format!("invalid directory entry id: {err}"))?;
             if entry_id == 0 {
-                return Err(
-                    "directory entry metadata row has a non-positive entry id".to_string(),
-                );
+                return Err("directory entry metadata row has a non-positive entry id".to_string());
             }
             if row[3].trim().is_empty() {
                 return Err("directory entry metadata row has an empty inode seed".to_string());
@@ -808,6 +806,9 @@ impl DbRepo {
         parent_id: Option<u64>,
         name: &str,
     ) -> Result<Option<DirectoryEntryMetadata>, String> {
+        if parent_id == Some(0) {
+            return Err("directory entry lookup received a non-positive parent id".to_string());
+        }
         let parent_id = CString::new(parent_id.unwrap_or(0).to_string())
             .map_err(|_| "directory id contains NUL byte".to_string())?;
         let name = CString::new(name).map_err(|_| "entry name contains NUL byte".to_string())?;

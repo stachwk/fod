@@ -2592,6 +2592,16 @@ fn directory_entry_metadata_rejects_missing_required_fields() -> Result<(), Stri
     );
 
     repo.exec("TRUNCATE fod.files")?;
+    repo.exec("INSERT INTO fod.files VALUES ('root-entry', NULL, FALSE, 17, 'valid-seed')")?;
+    let zero_parent_error = repo
+        .directory_entry_metadata_for_id_and_name(Some(0), "root-entry")
+        .expect_err("zero parent id must not alias the logical root");
+    assert!(
+        zero_parent_error.contains("non-positive parent id"),
+        "{zero_parent_error}"
+    );
+
+    repo.exec("TRUNCATE fod.files")?;
     repo.exec("INSERT INTO fod.files VALUES ('zero-id', NULL, FALSE, 0, 'valid-seed')")?;
     let zero_id_error = repo
         .list_directory_entry_metadata_for_id(None)

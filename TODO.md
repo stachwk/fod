@@ -447,8 +447,9 @@ Reading guide:
   Directory metadata decoding now rejects zero entry IDs in addition to empty
   names, unsupported entry kinds and empty inode seeds. A temporary-database
   regression feeds zero IDs and NULL name/inode-seed fields through the real
-  query decoder; a mounted regression also confirms `stat()` returns `EIO` when
-  persisted `files.inode_seed` is empty.
+  query decoder; single-entry lookup rejects `Some(0)` instead of aliasing it
+  to the logical root sentinel. A mounted regression also confirms `stat()`
+  returns `EIO` when persisted `files.inode_seed` is empty.
   The Rust query suite passed on 2026-10-30 (42 tests); mounted evidence is
   `artifacts/integration/unlink-primary-authority-20261030T112245Z/results.json`
   (`malformed_metadata_fields_return_eio` includes `inode_seed`).
