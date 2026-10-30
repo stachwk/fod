@@ -704,6 +704,138 @@ fn concurrent_threads_create_write_and_read_independent_files() -> Result<(), St
 }
 
 #[test]
+fn concurrent_threads_unlink_and_replace_many_open_file_tasks() -> Result<(), String> {
+    const WORKERS: usize = 8;
+    const TASKS_PER_WORKER: usize = 4;
+    const PAYLOAD_LEN: usize = 16 * 1024;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-threaded-open-unlink-replace",
+        &[("FOD_FUSE_EVENT_THREADS", WORKERS.to_string())],
+    )?;
+    let mount_log = mounted.log_tail(200);
+    let event_loop = mount_log
+        .lines()
+        .find(|line| line.contains("FOD FUSE event loop:"))
+        .ok_or_else(|| format!("missing FUSE event-loop configuration\n{mount_log}"))?;
+    if !event_loop.contains(&format!("threads={WORKERS}")) {
+        return Err(format!(
+            "expected {WORKERS} FUSE event threads, got {event_loop}"
+        ));
+    }
+    let root = mounted
+        .mountpoint
+        .join(format!("open-unlink-replace-{}", unique_suffix()));
+    fs::create_dir(&root).map_err(|err| format!("create task directory failed: {err}"))?;
+
+    let mut worker_tasks = (0..WORKERS)
+        .map(|_| Vec::with_capacity(TASKS_PER_WORKER))
+        .collect::<Vec<_>>();
+    for worker_id in 0..WORKERS {
+        for task_id in 0..TASKS_PER_WORKER {
+            let path = root.join(format!("worker-{worker_id}-task-{task_id}.bin"));
+            let old_marker = u8::try_from(worker_id + 1)
+                .map_err(|err| format!("invalid old-file marker: {err}"))?;
+            let replacement_marker = u8::try_from(WORKERS + worker_id + 1)
+                .map_err(|err| format!("invalid replacement marker: {err}"))?;
+            let old_payload = vec![old_marker; PAYLOAD_LEN + task_id];
+            let replacement_payload = vec![replacement_marker; PAYLOAD_LEN + task_id];
+            fs::write(&path, &old_payload)
+                .map_err(|err| format!("worker {worker_id} task {task_id} seed failed: {err}"))?;
+            let old_file = fs::File::open(&path)
+                .map_err(|err| format!("worker {worker_id} task {task_id} open failed: {err}"))?;
+            let old_inode = old_file
+                .metadata()
+                .map_err(|err| format!("worker {worker_id} task {task_id} fstat failed: {err}"))?
+                .ino();
+            worker_tasks[worker_id].push((
+                path,
+                old_file,
+                old_inode,
+                old_payload,
+                replacement_payload,
+            ));
+        }
+    }
+
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let workers = worker_tasks
+        .into_iter()
+        .enumerate()
+        .map(|(worker_id, tasks)| {
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<(), String> {
+                barrier.wait();
+                for (task_id, (path, old_file, old_inode, old_payload, replacement_payload)) in
+                    tasks.into_iter().enumerate()
+                {
+                    fs::remove_file(&path).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} unlink failed: {err}")
+                    })?;
+                    fs::write(&path, &replacement_payload).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} replacement failed: {err}")
+                    })?;
+
+                    let mut old_actual = Vec::new();
+                    old_file
+                        .take((old_payload.len() + 1) as u64)
+                        .read_to_end(&mut old_actual)
+                        .map_err(|err| {
+                            format!("worker {worker_id} task {task_id} old read failed: {err}")
+                        })?;
+                    if old_actual != old_payload {
+                        return Err(format!(
+                            "worker {worker_id} task {task_id} old descriptor read replacement data"
+                        ));
+                    }
+
+                    let replacement_file = fs::File::open(&path).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} replacement open failed: {err}")
+                    })?;
+                    let replacement_inode = replacement_file
+                        .metadata()
+                        .map_err(|err| {
+                            format!(
+                                "worker {worker_id} task {task_id} replacement fstat failed: {err}"
+                            )
+                        })?
+                        .ino();
+                    if replacement_inode == old_inode {
+                        return Err(format!(
+                            "worker {worker_id} task {task_id} reused inode {old_inode}"
+                        ));
+                    }
+                    let mut replacement_actual = Vec::new();
+                    replacement_file
+                        .take((replacement_payload.len() + 1) as u64)
+                        .read_to_end(&mut replacement_actual)
+                        .map_err(|err| {
+                            format!(
+                                "worker {worker_id} task {task_id} replacement read failed: {err}"
+                            )
+                        })?;
+                    if replacement_actual != replacement_payload {
+                        return Err(format!(
+                            "worker {worker_id} task {task_id} replacement payload mismatch"
+                        ));
+                    }
+                }
+                Ok(())
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for worker in workers {
+        worker
+            .join()
+            .map_err(|_| "open/unlink replacement worker panicked".to_string())??;
+    }
+
+    fs::remove_dir_all(&root).map_err(|err| format!("remove task directory failed: {err}"))?;
+    Ok(())
+}
+
+#[test]
 fn concurrent_read_tasks_on_sparse_file_preserve_parallel_block_ranges() -> Result<(), String> {
     const READERS: usize = 8;
     const STORED_BLOCKS: usize = 16;

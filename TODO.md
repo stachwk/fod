@@ -14,6 +14,14 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Wielowątkowe usuwanie i odtwarzanie nazw zachowuje otwarte inode’y.**
+  `mount_smoke::concurrent_threads_unlink_and_replace_many_open_file_tasks`
+  wykonuje 32 zadania w 8 wątkach na 8 wątkach event loop FUSE. Każde zadanie
+  otwiera plik, usuwa jego nazwę, tworzy nowy plik pod tą samą ścieżką i
+  potwierdza, że stary deskryptor nadal czyta stare bajty, a nowa ścieżka
+  wskazuje inny inode i nową zawartość. Test przeszedł 2026-10-30 na FOD
+  3.4.369 i jednorazowej bazie schematu 32.
+
 - [x] **POSIX blokady rekordów są związane z otwartym inode’em po usunięciu nazwy.**
   `getlk()` i `setlk()` ignorowały uchwyt FUSE i wybierały zasób blokady przez
   ponowne rozwiązanie bieżącej ścieżki. Po zdalnym `unlink()` i utworzeniu

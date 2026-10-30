@@ -33,6 +33,10 @@ create/write/read and 32-task copy tests pass against a disposable schema-32
 database on Linux 6.17/libfuse 3.17.4. `FOD_TEST_CONFIG` isolates Rust FUSE
 tests from a developer's shared database. Older failed test attempts left
 test-owned mount artifacts documented in [`TODO.md`](../TODO.md).
+The eight-thread `concurrent_threads_unlink_and_replace_many_open_file_tasks`
+regression runs 32 unlink/recreate tasks together and verifies each old open
+descriptor still reads its original inode while each pathname reads a distinct
+replacement inode.
 The permissions regression invokes libc `opendir()` as `nobody` on a mode-000
 directory and checks exact `EACCES`; the mounted ACL and permissions tests pass.
 
