@@ -101,7 +101,9 @@ Reading guide:
   component exceeds `NAME_MAX`; neither operation may create or remove an
   entry in these cases.
   It now also verifies Linux VFS returns `EBUSY` when asked to remove the
-  mounted FUSE root. `test_permissions.py` now calls `unlink()` and `rmdir()`
+  mounted FUSE root, and exact `ENOTEMPTY` for `rmdir(directory/..)`, which
+  Linux v6.17 rejects before the FUSE callback. `test_permissions.py` now calls
+  `unlink()` and `rmdir()`
   directly as `nobody` in a sticky directory and asserts exact `EPERM`; the
   former shell-command checks accepted any failure and did not establish errno.
   The POSIX errno matrix no longer lists sticky-directory errors for `mkdir()`,

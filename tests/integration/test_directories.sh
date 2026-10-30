@@ -65,6 +65,7 @@ for path, expected, label in (
     (os.path.join(missing_parent, "new-directory"), errno.ENOENT, "mkdir missing parent"),
     (os.path.join(missing_parent, "child"), errno.ENOENT, "rmdir missing parent"),
     (os.path.join(nonempty_dir, "."), errno.EINVAL, "rmdir final dot component"),
+    (os.path.join(nonempty_dir, ".."), errno.ENOTEMPTY, "rmdir final dot-dot component"),
     (file_path, errno.ENOTDIR, "rmdir regular file"),
     (symlink_path, errno.ENOTDIR, "rmdir symlink to directory"),
     (os.path.join(file_path, "child"), errno.ENOTDIR, "mkdir parent is regular file"),
@@ -170,4 +171,4 @@ PY
 rm -f "${not_a_directory}" "${not_a_directory_link}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EBUSY,EEXIST,EISDIR,EINVAL,ELOOP,ENAMETOOLONG,ENOENT,ENOTDIR,ENOTEMPTY rmdir_symlink=ENOTDIR child_entry_parent_errors=1 directory_fd_repeat=1"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EBUSY,EEXIST,EISDIR,EINVAL,ELOOP,ENAMETOOLONG,ENOENT,ENOTDIR,ENOTEMPTY rmdir_dotdot=ENOTEMPTY rmdir_symlink=ENOTDIR child_entry_parent_errors=1 directory_fd_repeat=1"
