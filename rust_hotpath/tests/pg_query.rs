@@ -888,6 +888,91 @@ fn block_read_decoders_reject_null_payloads() -> Result<(), String> {
 }
 
 #[test]
+fn rename_replace_rejects_missing_target_data_object() -> Result<(), String> {
+    use fod_rust_hotpath::pg::{RenameNamespaceSource, RenameNamespaceTarget};
+
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let source_name = unique_name("missing_object_rename_source");
+    let target_name = unique_name("missing_object_rename_target");
+    let source_id = repo.create_file(
+        None,
+        &source_name,
+        0o644,
+        1000,
+        1000,
+        &unique_name("missing_object_source_seed"),
+    )?;
+    let target_id = repo.create_file(
+        None,
+        &target_name,
+        0o644,
+        1000,
+        1000,
+        &unique_name("missing_object_target_seed"),
+    )?;
+    let original_object_id = repo
+        .query_scalar_text(&format!(
+            "SELECT data_object_id::text FROM files WHERE id_file = {target_id}"
+        ))?
+        .parse::<u64>()
+        .map_err(|err| format!("invalid target data object id: {err}"))?;
+    let missing_object_id = repo
+        .query_scalar_text("SELECT COALESCE(MAX(id_data_object), 0) + 1000000 FROM data_objects")?
+        .parse::<u64>()
+        .map_err(|err| format!("invalid missing data object id: {err}"))?;
+    let mut file_foreign_key_dropped = false;
+
+    let result = (|| {
+        repo.exec("ALTER TABLE files DROP CONSTRAINT files_data_object_id_fkey")?;
+        file_foreign_key_dropped = true;
+        repo.exec(&format!(
+            "UPDATE files SET data_object_id = {missing_object_id} WHERE id_file = {target_id}"
+        ))?;
+
+        let error = repo
+            .rename_namespace_replace_with_ownership_guard(
+                RenameNamespaceSource::File { file_id: source_id },
+                None,
+                &source_name,
+                None,
+                &target_name,
+                Some(RenameNamespaceTarget::File { file_id: target_id }),
+                1000,
+            )
+            .err()
+            .ok_or_else(|| "rename replaced a target with a missing data object".to_string())?;
+        if !error.contains("data-object reference count") {
+            return Err(format!("unexpected missing-object error: {error}"));
+        }
+
+        if repo.resolve_path(&format!("/{target_name}"))?.entry_id != Some(target_id)
+            || repo.resolve_path(&format!("/{source_name}"))?.entry_id != Some(source_id)
+        {
+            return Err("failed rename changed one of its namespace entries".to_string());
+        }
+        Ok(())
+    })();
+
+    let cleanup = (|| {
+        if file_foreign_key_dropped {
+            repo.exec(&format!(
+                "UPDATE files SET data_object_id = {original_object_id} WHERE id_file = {target_id}"
+            ))?;
+            repo.exec(
+                "ALTER TABLE files ADD CONSTRAINT files_data_object_id_fkey FOREIGN KEY (data_object_id) REFERENCES data_objects(id_data_object)",
+            )?;
+        }
+        repo.purge_primary_file(target_id)?;
+        repo.purge_primary_file(source_id)?;
+        repo.exec(&format!(
+            "DELETE FROM data_objects WHERE id_data_object = {original_object_id} AND NOT EXISTS (SELECT 1 FROM files WHERE data_object_id = {original_object_id})"
+        ))
+    })();
+    result.and(cleanup)
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

@@ -396,6 +396,11 @@ Reading guide:
   closed on NULL payloads and malformed row shapes. The
   `block_read_decoders_reject_null_payloads` regression reproduced the old
   behavior and now verifies all four query paths against PostgreSQL.
+  Rename replacement also treated a missing data-object reference-count row as
+  `1`, allowing it to remove a target whose `data_object_id` was orphaned. The
+  operation now errors instead; `rename_replace_rejects_missing_target_data_object`
+  reproduced the old deletion and verifies the source and target bindings stay
+  unchanged.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

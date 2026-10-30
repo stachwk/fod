@@ -10534,7 +10534,9 @@ impl DbRepo {
             .map_err(|_| "invalid data_object_id value".to_string())?;
         let reference_count = self
             .data_object_reference_count_on_conn(conn, data_object_id)?
-            .unwrap_or(1);
+            .ok_or_else(|| {
+                format!("missing data-object reference count for {data_object_id}")
+            })?;
         let data_object_id_param = CString::new(data_object_id.to_string())
             .map_err(|_| "data object id contains NUL byte".to_string())?;
 
