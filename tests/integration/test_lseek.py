@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import json
 import os
 import struct
 import stat
+import subprocess
 import tempfile
 import time
 import uuid
@@ -21,6 +23,123 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tests.integration.fod_mount import FODMount
+
+
+def run_rlimit_fsize_worker(
+    file_path: Path,
+    truncate_path: Path,
+    ftruncate_path: Path,
+) -> dict[str, int]:
+    import resource
+    import signal
+
+    limit = 4096
+    _, hard_limit = resource.getrlimit(resource.RLIMIT_FSIZE)
+    if hard_limit != resource.RLIM_INFINITY:
+        limit = min(limit, hard_limit)
+    if limit < 2:
+        raise AssertionError(f"RLIMIT_FSIZE hard limit is too small: {hard_limit}")
+
+    delivered_signals: list[int] = []
+    signal.signal(signal.SIGXFSZ, lambda signum, _frame: delivered_signals.append(signum))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (limit, hard_limit))
+    fd = os.open(file_path, os.O_WRONLY | os.O_TRUNC)
+    try:
+        written = os.write(fd, b"W" * (limit * 2))
+        try:
+            os.write(fd, b"X")
+        except OSError as error:
+            write_errno = error.errno
+        else:
+            write_errno = 0
+        try:
+            os.pwrite(fd, b"P", limit)
+        except OSError as error:
+            pwrite_errno = error.errno
+        else:
+            pwrite_errno = 0
+        os.fsync(fd)
+        size = os.fstat(fd).st_size
+    finally:
+        os.close(fd)
+
+    try:
+        os.truncate(truncate_path, limit + 1)
+    except OSError as error:
+        truncate_errno = error.errno
+    else:
+        truncate_errno = 0
+    truncate_size = truncate_path.stat().st_size
+
+    ftruncate_fd = os.open(ftruncate_path, os.O_WRONLY)
+    try:
+        try:
+            os.ftruncate(ftruncate_fd, limit + 1)
+        except OSError as error:
+            ftruncate_errno = error.errno
+        else:
+            ftruncate_errno = 0
+        ftruncate_size = os.fstat(ftruncate_fd).st_size
+    finally:
+        os.close(ftruncate_fd)
+
+    return {
+        "limit": limit,
+        "written": written,
+        "write_errno": write_errno,
+        "pwrite_errno": pwrite_errno,
+        "size": size,
+        "truncate_errno": truncate_errno,
+        "truncate_size": truncate_size,
+        "ftruncate_errno": ftruncate_errno,
+        "ftruncate_size": ftruncate_size,
+        "sigxfsz_count": len(delivered_signals),
+    }
+
+
+def check_rlimit_fsize(dir_path: Path) -> None:
+    file_path = dir_path / "rlimit-fsize.bin"
+    truncate_path = dir_path / "rlimit-fsize-truncate.bin"
+    ftruncate_path = dir_path / "rlimit-fsize-ftruncate.bin"
+    for path in (file_path, truncate_path, ftruncate_path):
+        path.write_bytes(b"")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--rlimit-fsize-worker",
+            str(file_path),
+            str(truncate_path),
+            str(ftruncate_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            "RLIMIT_FSIZE worker failed: "
+            f"status={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+    report = json.loads(result.stdout)
+    limit = report["limit"]
+    assert report["written"] == limit, report
+    assert report["write_errno"] == errno.EFBIG, report
+    assert report["pwrite_errno"] == errno.EFBIG, report
+    assert report["size"] == limit, report
+    assert report["truncate_errno"] == errno.EFBIG, report
+    assert report["truncate_size"] == 0, report
+    assert report["ftruncate_errno"] == errno.EFBIG, report
+    assert report["ftruncate_size"] == 0, report
+    assert report["sigxfsz_count"] >= 1, report
+    assert file_path.read_bytes() == b"W" * limit
+    assert truncate_path.read_bytes() == b""
+    assert ftruncate_path.read_bytes() == b""
+    print(
+        f"OK RLIMIT_FSIZE partial_write={limit} SIGXFSZ={report['sigxfsz_count']} "
+        "write_errno=EFBIG pwrite_errno=EFBIG "
+        "truncate_errno=EFBIG ftruncate_errno=EFBIG"
+    )
 
 
 def main() -> None:
@@ -38,6 +157,8 @@ def main() -> None:
 
             dir_path.mkdir()
             file_path.write_bytes(payload)
+
+            check_rlimit_fsize(dir_path)
 
             overwrite_path = dir_path / "seek-overwrite.txt"
             original = b"0123456789abcdef"
@@ -365,4 +486,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 5 and sys.argv[1] == "--rlimit-fsize-worker":
+        print(
+            json.dumps(
+                run_rlimit_fsize_worker(
+                    Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4])
+                )
+            )
+        )
+    else:
+        main()

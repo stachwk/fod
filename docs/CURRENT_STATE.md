@@ -84,6 +84,13 @@ record lock. `posix_record_locks_survive_exec_with_open_fd` checks that a
 separate process still sees the lock after its owner execs while preserving the
 open descriptor.
 
+`test_lseek.py` also checks the `RLIMIT_FSIZE` write boundary on a mounted FOD
+filesystem. An oversized write stops at the configured limit and raises
+`SIGXFSZ`. Later `write()`/`pwrite()` and over-limit `truncate()`/`ftruncate()`
+fail with `EFBIG`; the written payload remains intact and failed truncations
+leave their files empty. POSIX interruption and I/O-error cases remain under
+review in the conformance audit.
+
 PostgreSQL schema 30 includes transactional per-file content generations and
 the cross-mount POSIX lock wait graph.
 These primitives and the local cache publication gate do not establish default

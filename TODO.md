@@ -14,6 +14,19 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Zapis i skracanie pliku respektują `RLIMIT_FSIZE` na mountcie FUSE.**
+  `test_lseek.py` ustawia w osobnym procesie limit 4096 bajtów, żąda zapisu
+  8192 bajtów i wymaga krótkiego zapisu dokładnie do granicy oraz dostarczenia
+  `SIGXFSZ`. Kolejne `write()`/`pwrite()` i przekroczenie limitu przez
+  `truncate()`/`ftruncate()` zwracają `EFBIG`; oba pliki użyte do prób
+  rozszerzenia ponad limit pozostają puste. Test przeszedł
+  2026-10-30 na FOD 3.4.372, Linux 6.17,
+  libfuse 3.17.4 i izolowanej bazie PostgreSQL 16.15, którą usunięto po
+  przebiegu. Wynik potwierdza zachowanie wywołań systemowych na mountcie FUSE;
+  test nie przypisuje odpowiedzi do callbacku FOD, bo kernel może ograniczyć
+  zapis przed dispatch do userspace. Pozostają przerwanie I/O przez `EINTR`
+  oraz kontrolowany błąd backendu `EIO`.
+
 - [x] **Blokady rekordów POSIX nie są dziedziczone po `fork()`.**
   `lock_backend_smoke::posix_record_locks_are_not_inherited_across_fork` ustawia
   blokadę `F_WRLCK` w rodzicu, forkuje proces z odziedziczonym deskryptorem i
