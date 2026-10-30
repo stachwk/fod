@@ -9966,8 +9966,9 @@ impl DbRepo {
                             Ok(value)
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            Err(conn_error(conn))
+                            Err(error)
                         }
                     }
                 }
@@ -13712,8 +13713,9 @@ impl DbRepo {
                             value
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            return Err(conn_error(conn));
+                            return Err(error);
                         }
                     };
                     Ok(info)
@@ -14161,11 +14163,11 @@ impl DbRepo {
                 return Err(conn_error(conn));
             }
             let status = PQresultStatus(res);
+            let error = (status != PGRES_COMMAND_OK).then(|| result_error(res));
             PQclear(res);
-            if status == PGRES_COMMAND_OK {
-                Ok(())
-            } else {
-                Err(conn_error(conn))
+            match error {
+                None => Ok(()),
+                Some(error) => Err(error),
             }
         })
     }

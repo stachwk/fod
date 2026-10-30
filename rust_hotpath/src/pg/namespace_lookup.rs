@@ -7,8 +7,8 @@
 
 use super::{
     conn_error, exec_params, exec_prepared_params, fetch_first_column_texts, fetch_first_row_texts,
-    fetch_rows_text, fetch_single_text, join_nul_text, DbRepo, PQclear, PQgetvalue, PQnfields,
-    PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
+    fetch_rows_text, fetch_single_text, join_nul_text, result_error, DbRepo, PQclear, PQgetvalue,
+    PQnfields, PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
 };
 use std::ffi::{CStr, CString};
 
@@ -95,8 +95,9 @@ impl DbRepo {
                             Ok(value)
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            Err(conn_error(conn))
+                            Err(error)
                         }
                     }
                 }
@@ -169,8 +170,9 @@ impl DbRepo {
                             Ok(value)
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            Err(conn_error(conn))
+                            Err(error)
                         }
                     }
                 }
@@ -231,8 +233,9 @@ impl DbRepo {
                             Ok(value)
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            Err(conn_error(conn))
+                            Err(error)
                         }
                     }
                 }
@@ -295,8 +298,9 @@ impl DbRepo {
                             Ok(value)
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            Err(conn_error(conn))
+                            Err(error)
                         }
                     }
                 }
@@ -337,8 +341,9 @@ impl DbRepo {
                             Ok(value)
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            Err(conn_error(conn))
+                            Err(error)
                         }
                     }
                 }
@@ -377,8 +382,9 @@ impl DbRepo {
                 exec_prepared_params(conn, PreparedStatement::GetSpecialFileMetadata, &params)?;
             let result = {
                 if PQresultStatus(res) != PGRES_TUPLES_OK {
+                    let error = result_error(res);
                     PQclear(res);
-                    return Err(conn_error(conn));
+                    return Err(error);
                 }
                 let rows = PQntuples(res);
                 let cols = PQnfields(res);
@@ -465,8 +471,9 @@ impl DbRepo {
                             Ok(value)
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            Err(conn_error(conn))
+                            Err(error)
                         }
                     }
                 }
@@ -548,8 +555,9 @@ impl DbRepo {
                             Ok(value)
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            Err(conn_error(conn))
+                            Err(error)
                         }
                     }
                 }
@@ -757,8 +765,9 @@ impl DbRepo {
                             }
                         }
                         _ => {
+                            let error = result_error(res);
                             PQclear(res);
-                            Err(conn_error(conn))
+                            Err(error)
                         }
                     }
                 }

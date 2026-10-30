@@ -76,10 +76,12 @@ FOD został wywołany:
   nierozpoznane błędy backendu na `EIO`. Odpowiedzi SQL dla tworzenia katalogu,
   pliku, symlinku, pliku specjalnego i hardlinku zachowują SQLSTATE przez
   `result_error()`; komendy w ścieżkach `rmdir()` i promocji hardlinku korzystają
-  z `exec_command_params()`, które również je zachowuje. Część innych mutacji
-  namespace nadal może używać `conn_error()` albo zwracać błędy domenowe bez
-  SQLSTATE; pełny przegląd i deterministyczna weryfikacja awarii backendu
-  pozostają otwarte.
+  z `exec_command_params()`, które również je zachowuje. Źródłowy przegląd
+  gałęzi błędnych statusów `PGresult` wykrył kilka miejsc odczytujących
+  `conn_error()` po zwolnieniu wyniku; teraz pobierają `result_error()` przed
+  `PQclear()`. Pozostaje deterministyczny fault injection SQLSTATE `53100`, aby
+  potwierdzić widoczne dla FUSE `ENOSPC`; obecne testy limitu FOD nie dowodzą
+  mapowania PostgreSQL `disk_full`.
 - Linux v6.17 obsługuje `FIONREAD` dla zwykłego pliku w `do_vfs_ioctl()` i
   zwraca `i_size - f_pos` przed przekazaniem polecenia do callbacku FUSE.
   Pozycja deskryptora nie występuje w żądaniu ioctl FUSE, więc callback

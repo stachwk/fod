@@ -145,11 +145,13 @@ Reading guide:
   both persistence and namespace error mappers. File-block persistence also
   maps the configured FOD quota to `ENOSPC`. `mkdir()` and regular-file,
   symlink, special-file and hardlink inserts preserve SQLSTATE; `rmdir()` and
-  hardlink-promotion commands use `exec_command_params()`. Audit remaining
-  mutation paths for uses of `conn_error()` that lose SQLSTATE/domain
-  information and verify backend disk-full classification with deterministic
-  fault injection. Current quota tests do not prove PostgreSQL SQLSTATE 53100
-  handling. Do not parse localized PostgreSQL error text. See
+  hardlink-promotion commands use `exec_command_params()`. Source review found
+  that several non-success `PGresult` branches discarded the result before
+  reading `conn_error()`; these now capture `result_error()` first. The
+  remaining gap is deterministic backend fault injection proving SQLSTATE
+  `53100` reaches FUSE as `ENOSPC`; current quota tests exercise FOD's own
+  quota path and do not establish this PostgreSQL error mapping. Do not parse
+  localized PostgreSQL error text. See
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617).
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
