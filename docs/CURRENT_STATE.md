@@ -75,6 +75,11 @@ handle. They remain attached to an unlinked inode if another mount creates a
 replacement at the old path. The two-mount regression is
 `file_locks_remain_bound_to_open_inode_after_path_replacement` in
 `rust_fuse/tests/lock_backend_smoke.rs`.
+`posix_record_locks_are_not_inherited_across_fork` checks that a child process
+inherits the descriptor but `F_GETLK` still reports the parent's process-owned
+record lock. `posix_record_locks_survive_exec_with_open_fd` checks that a
+separate process still sees the lock after its owner execs while preserving the
+open descriptor.
 
 PostgreSQL schema 30 includes transactional per-file content generations and
 the cross-mount POSIX lock wait graph.

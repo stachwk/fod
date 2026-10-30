@@ -7,6 +7,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
@@ -486,6 +487,263 @@ fn file_locks_remain_bound_to_open_inode_after_path_replacement() -> Result<(), 
     drop(mount_b);
     drop(mount_a);
     Ok(())
+}
+
+#[test]
+fn posix_record_locks_are_not_inherited_across_fork() -> Result<(), String> {
+    if skip_without_root() {
+        return Ok(());
+    }
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let mount = MountedFs::start_with_role("lock-fork-inheritance", "primary", &[])?;
+    let suffix = unique_suffix();
+    let dir_path = mount.mountpoint.join(format!("lock-fork-{suffix}"));
+    let file_path = dir_path.join("payload.txt");
+    fs::create_dir(&dir_path).map_err(|err| format!("create lock directory failed: {err}"))?;
+    fs::write(&file_path, b"fork lock inheritance")
+        .map_err(|err| format!("write lock file failed: {err}"))?;
+    let fd = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&file_path)
+        .map_err(|err| format!("open lock file failed: {err}"))?;
+    let mut parent_lock = flock(libc::F_WRLCK as i16, 0, 0);
+    fcntl_lock(fd.as_raw_fd(), libc::F_SETLK, &mut parent_lock).map_err(|err| {
+        format!(
+            "set parent write lock failed: {err}\n{}",
+            mount.log_tail(200)
+        )
+    })?;
+
+    let mut pipe_fds = [0; 2];
+    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } == -1 {
+        return Err(format!(
+            "create fork result pipe failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let child_pid = unsafe { libc::fork() };
+    if child_pid == -1 {
+        unsafe {
+            libc::close(pipe_fds[0]);
+            libc::close(pipe_fds[1]);
+        }
+        return Err(format!(
+            "fork lock probe failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if child_pid == 0 {
+        unsafe {
+            libc::close(pipe_fds[0]);
+            let mut child_probe = flock(libc::F_RDLCK as i16, 0, 0);
+            let result = libc::fcntl(fd.as_raw_fd(), libc::F_GETLK, &mut child_probe);
+            let report = [result, child_probe.l_type as i32, child_probe.l_pid];
+            let written = libc::write(
+                pipe_fds[1],
+                report.as_ptr().cast(),
+                std::mem::size_of_val(&report),
+            );
+            libc::close(pipe_fds[1]);
+            libc::_exit(i32::from(
+                written != std::mem::size_of_val(&report) as isize,
+            ));
+        }
+    }
+
+    unsafe { libc::close(pipe_fds[1]) };
+    let mut report = [0i32; 3];
+    let mut received = 0usize;
+    while received < std::mem::size_of_val(&report) {
+        let result = unsafe {
+            libc::read(
+                pipe_fds[0],
+                report.as_mut_ptr().cast::<u8>().add(received).cast(),
+                std::mem::size_of_val(&report) - received,
+            )
+        };
+        if result <= 0 {
+            break;
+        }
+        received += result as usize;
+    }
+    unsafe { libc::close(pipe_fds[0]) };
+
+    let mut child_status = 0;
+    if unsafe { libc::waitpid(child_pid, &mut child_status, 0) } != child_pid {
+        return Err(format!(
+            "wait for fork lock probe failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if child_status != 0 || received != std::mem::size_of_val(&report) {
+        return Err(format!(
+            "fork lock probe exited abnormally: status={child_status} bytes={received}"
+        ));
+    }
+    if report[0] != 0 {
+        return Err(format!(
+            "child F_GETLK failed with return value {}",
+            report[0]
+        ));
+    }
+    if report[1] != libc::F_WRLCK as i32 || report[2] != unsafe { libc::getpid() } {
+        return Err(format!(
+            "child did not observe the parent's non-inherited write lock: type={} pid={} parent_pid={}",
+            report[1],
+            report[2],
+            unsafe { libc::getpid() }
+        ));
+    }
+
+    let mut unlock = flock(libc::F_UNLCK as i16, 0, 0);
+    fcntl_lock(fd.as_raw_fd(), libc::F_SETLK, &mut unlock)
+        .map_err(|err| format!("unlock parent lock failed: {err}"))?;
+    drop(fd);
+    drop(mount);
+    Ok(())
+}
+
+#[test]
+fn posix_record_locks_survive_exec_with_open_fd() -> Result<(), String> {
+    const STAGE_ENV: &str = "FOD_LOCK_EXEC_STAGE";
+    const PATH_ENV: &str = "FOD_LOCK_EXEC_PATH";
+    const FD_ENV: &str = "FOD_LOCK_EXEC_FD";
+    const PID_ENV: &str = "FOD_LOCK_EXEC_PID";
+
+    match std::env::var(STAGE_ENV).as_deref() {
+        Ok("start") => {
+            let path = std::env::var(PATH_ENV).map_err(|err| err.to_string())?;
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .map_err(|err| format!("exec probe open failed: {err}"))?;
+            let fd = file.as_raw_fd();
+            let mut lock = flock(libc::F_WRLCK as i16, 0, 0);
+            fcntl_lock(fd, libc::F_SETLK, &mut lock)
+                .map_err(|err| format!("exec probe setlk failed: {err}"))?;
+            let descriptor_flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            if descriptor_flags == -1
+                || unsafe { libc::fcntl(fd, libc::F_SETFD, descriptor_flags & !libc::FD_CLOEXEC) }
+                    == -1
+            {
+                return Err(format!(
+                    "exec probe clear FD_CLOEXEC failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            let exec_error = Command::new(
+                std::env::current_exe().map_err(|err| format!("current_exe failed: {err}"))?,
+            )
+            .args([
+                "--exact",
+                "posix_record_locks_survive_exec_with_open_fd",
+                "--nocapture",
+            ])
+            .env(STAGE_ENV, "verify")
+            .env(PATH_ENV, path)
+            .env(FD_ENV, fd.to_string())
+            .exec();
+            Err(format!("exec probe execve failed: {exec_error}"))
+        }
+        Ok("verify") => {
+            let fd = std::env::var(FD_ENV)
+                .map_err(|err| err.to_string())?
+                .parse::<i32>()
+                .map_err(|err| format!("invalid inherited descriptor: {err}"))?;
+            if unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1 {
+                return Err(format!(
+                    "open descriptor did not survive exec: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let path = std::env::var(PATH_ENV).map_err(|err| err.to_string())?;
+            let expected_pid = unsafe { libc::getpid() };
+            let status = Command::new(
+                std::env::current_exe().map_err(|err| format!("current_exe failed: {err}"))?,
+            )
+            .args([
+                "--exact",
+                "posix_record_locks_survive_exec_with_open_fd",
+                "--nocapture",
+            ])
+            .env(STAGE_ENV, "observe")
+            .env(PATH_ENV, path)
+            .env(PID_ENV, expected_pid.to_string())
+            .status()
+            .map_err(|err| format!("exec observer spawn failed: {err}"))?;
+            unsafe { libc::close(fd) };
+            if !status.success() {
+                return Err(format!("exec lock observer failed with {status}"));
+            }
+            Ok(())
+        }
+        Ok("observe") => {
+            let path = std::env::var(PATH_ENV).map_err(|err| err.to_string())?;
+            let expected_pid = std::env::var(PID_ENV)
+                .map_err(|err| err.to_string())?
+                .parse::<libc::pid_t>()
+                .map_err(|err| format!("invalid expected lock pid: {err}"))?;
+            let observer_file = OpenOptions::new()
+                .read(true)
+                .open(path)
+                .map_err(|err| format!("exec observer open failed: {err}"))?;
+            let conflict = query_lock(observer_file.as_raw_fd(), libc::F_WRLCK as i16)?;
+            if conflict.l_type != libc::F_WRLCK as i16 || conflict.l_pid != expected_pid {
+                return Err(format!(
+                    "lock did not survive exec: type={} pid={} expected_pid={expected_pid}",
+                    conflict.l_type, conflict.l_pid
+                ));
+            }
+            Ok(())
+        }
+        Ok(stage) => Err(format!("unexpected exec probe stage {stage:?}")),
+        Err(_) => {
+            if skip_without_root() {
+                return Ok(());
+            }
+            if !Path::new("/dev/fuse").exists() {
+                eprintln!(
+                    "skipping lock backend smoke: /dev/fuse is unavailable in this environment"
+                );
+                return Ok(());
+            }
+
+            let mount = MountedFs::start_with_role("lock-exec-inheritance", "primary", &[])?;
+            let suffix = unique_suffix();
+            let dir_path = mount.mountpoint.join(format!("lock-exec-{suffix}"));
+            let file_path = dir_path.join("payload.txt");
+            fs::create_dir(&dir_path)
+                .map_err(|err| format!("create lock directory failed: {err}"))?;
+            fs::write(&file_path, b"exec lock inheritance")
+                .map_err(|err| format!("write lock file failed: {err}"))?;
+            let status = Command::new(
+                std::env::current_exe().map_err(|err| format!("current_exe failed: {err}"))?,
+            )
+            .args([
+                "--exact",
+                "posix_record_locks_survive_exec_with_open_fd",
+                "--nocapture",
+            ])
+            .env(STAGE_ENV, "start")
+            .env(PATH_ENV, &file_path)
+            .status()
+            .map_err(|err| format!("exec lock probe spawn failed: {err}"))?;
+            fs::remove_dir_all(&dir_path)
+                .map_err(|err| format!("remove exec lock test directory failed: {err}"))?;
+            if !status.success() {
+                return Err(format!("exec lock probe failed with {status}"));
+            }
+            drop(mount);
+            Ok(())
+        }
+    }
 }
 
 #[test]

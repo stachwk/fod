@@ -14,6 +14,20 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Blokady rekordów POSIX nie są dziedziczone po `fork()`.**
+  `lock_backend_smoke::posix_record_locks_are_not_inherited_across_fork` ustawia
+  blokadę `F_WRLCK` w rodzicu, forkuje proces z odziedziczonym deskryptorem i
+  sprawdza, że `F_GETLK` dziecka nadal zwraca blokadę rodzica oraz jego PID.
+  Test przeszedł 2026-10-30 na FOD 3.4.370 i jednorazowej bazie schematu 32.
+  To spełnia wymóg [POSIX `fcntl()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/fcntl.html).
+
+- [x] **Blokada rekordowa POSIX przetrwa `exec()` z otwartym deskryptorem.**
+  `lock_backend_smoke::posix_record_locks_survive_exec_with_open_fd` uruchamia
+  osobny proces, zakłada `F_WRLCK`, czyści `FD_CLOEXEC` i wykonuje `exec()`.
+  Po execie test potwierdza, że ten sam deskryptor nadal jest otwarty, a drugi
+  proces widzi blokadę z PID procesu wykonującego exec. Przeszło 2026-10-30 na
+  FOD 3.4.370 i jednorazowej bazie schematu 32.
+
 - [x] **Wielowątkowe usuwanie i odtwarzanie nazw zachowuje otwarte inode’y.**
   `mount_smoke::concurrent_threads_unlink_and_replace_many_open_file_tasks`
   wykonuje 32 zadania w 8 wątkach na 8 wątkach event loop FUSE. Każde zadanie
