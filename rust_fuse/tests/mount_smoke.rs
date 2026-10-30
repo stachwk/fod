@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use support::{MountedFs, block_size_from_config, unique_suffix};
+use support::{block_size_from_config, unique_suffix, MountedFs};
 
 fn metadata_times(path: &Path) -> Result<(i64, i64, i64, i64), String> {
     let meta = fs::metadata(path).map_err(|err| err.to_string())?;
@@ -672,6 +672,91 @@ fn concurrent_threads_create_write_and_read_independent_files() -> Result<(), St
         return Err(format!(
             "concurrent namespace workers left entries behind: {leftover_namespace_dirs:?}"
         ));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn concurrent_threads_append_complete_records_to_one_file() -> Result<(), String> {
+    const WORKERS: usize = 8;
+    const APPENDS_PER_WORKER: usize = 32;
+    const RECORD_LEN: usize = 16;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-threaded-append-tasks",
+        &[("FOD_FUSE_EVENT_THREADS", WORKERS.to_string())],
+    )?;
+    let path = mounted
+        .mountpoint
+        .join(format!("concurrent-append-{}.bin", unique_suffix()));
+    fs::write(&path, []).map_err(|err| format!("create append target failed: {err}"))?;
+
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let writers = (0..WORKERS)
+        .map(|worker_id| {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<(), String> {
+                let mut file = OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .map_err(|err| format!("append worker {worker_id} open failed: {err}"))?;
+                barrier.wait();
+
+                for task_id in 0..APPENDS_PER_WORKER {
+                    let mut record = [0u8; RECORD_LEN];
+                    record[..8].copy_from_slice(&(worker_id as u64).to_le_bytes());
+                    record[8..].copy_from_slice(&(task_id as u64).to_le_bytes());
+                    let written = file.write(&record).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} append failed: {err}")
+                    })?;
+                    if written != RECORD_LEN {
+                        return Err(format!(
+                            "worker {worker_id} task {task_id} wrote a partial record: {written}/{RECORD_LEN} bytes"
+                        ));
+                    }
+                }
+
+                file.sync_all()
+                    .map_err(|err| format!("append worker {worker_id} sync failed: {err}"))
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for writer in writers {
+        writer
+            .join()
+            .map_err(|_| "concurrent append worker panicked".to_string())??;
+    }
+
+    let actual = fs::read(&path).map_err(|err| format!("read append result failed: {err}"))?;
+    let expected_len = WORKERS * APPENDS_PER_WORKER * RECORD_LEN;
+    if actual.len() != expected_len {
+        return Err(format!(
+            "concurrent append produced {} bytes; expected {expected_len}",
+            actual.len()
+        ));
+    }
+
+    let mut observed = vec![vec![false; APPENDS_PER_WORKER]; WORKERS];
+    for (record_index, record) in actual.chunks_exact(RECORD_LEN).enumerate() {
+        let worker_id = u64::from_le_bytes(record[..8].try_into().unwrap()) as usize;
+        let task_id = u64::from_le_bytes(record[8..].try_into().unwrap()) as usize;
+        if worker_id >= WORKERS || task_id >= APPENDS_PER_WORKER {
+            return Err(format!(
+                "append record {record_index} has unexpected identity ({worker_id}, {task_id})"
+            ));
+        }
+        if std::mem::replace(&mut observed[worker_id][task_id], true) {
+            return Err(format!(
+                "append record ({worker_id}, {task_id}) appeared more than once"
+            ));
+        }
+    }
+
+    if observed.iter().flatten().any(|present| !present) {
+        return Err("concurrent append omitted one or more task records".to_string());
     }
 
     Ok(())
