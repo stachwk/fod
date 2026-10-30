@@ -763,6 +763,100 @@ fn concurrent_threads_append_complete_records_to_one_file() -> Result<(), String
 }
 
 #[test]
+fn concurrent_threads_rename_one_source_to_distinct_destinations() -> Result<(), String> {
+    const ROUNDS: usize = 16;
+    const WORKERS: usize = 2;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-threaded-rename-race",
+        &[("FOD_FUSE_EVENT_THREADS", WORKERS.to_string())],
+    )?;
+    let root = mounted
+        .mountpoint
+        .join(format!("rename-races-{}", unique_suffix()));
+    fs::create_dir(&root).map_err(|err| format!("create rename race directory failed: {err}"))?;
+
+    for round in 0..ROUNDS {
+        let source = root.join(format!("source-{round}.bin"));
+        let destinations = [
+            root.join(format!("destination-{round}-a.bin")),
+            root.join(format!("destination-{round}-b.bin")),
+        ];
+        let payload = format!("rename-race-round-{round}").into_bytes();
+        fs::write(&source, &payload)
+            .map_err(|err| format!("seed rename race source failed: {err}"))?;
+
+        let barrier = Arc::new(Barrier::new(WORKERS));
+        let renamers = destinations
+            .iter()
+            .cloned()
+            .map(|destination| {
+                let source = source.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    fs::rename(&source, &destination)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut successful_renames = 0;
+        for renamer in renamers {
+            match renamer
+                .join()
+                .map_err(|_| format!("rename race worker panicked in round {round}"))?
+            {
+                Ok(()) => successful_renames += 1,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "rename race failed unexpectedly in round {round}: {err}"
+                    ));
+                }
+            }
+        }
+
+        if successful_renames != 1 {
+            return Err(format!(
+                "expected exactly one successful rename in round {round}, got {successful_renames}"
+            ));
+        }
+
+        if source.exists() {
+            return Err(format!("rename race source still exists in round {round}"));
+        }
+        let mut present_destinations = 0;
+        for destination in &destinations {
+            match fs::read(destination) {
+                Ok(actual) => {
+                    present_destinations += 1;
+                    if actual != payload {
+                        return Err(format!(
+                            "rename race destination {} has incorrect contents in round {round}",
+                            destination.display()
+                        ));
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "read rename race destination {} failed: {err}",
+                        destination.display()
+                    ));
+                }
+            }
+        }
+        if present_destinations != 1 {
+            return Err(format!(
+                "expected exactly one destination in round {round}, found {present_destinations}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn cross_mount_append_uses_fresh_kernel_file_size() -> Result<(), String> {
     for (mode, direct_io) in [("buffered", "0"), ("direct-io", "1")] {
         verify_cross_mount_append_mode(mode, direct_io)?;
