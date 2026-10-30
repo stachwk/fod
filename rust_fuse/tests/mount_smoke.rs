@@ -763,6 +763,103 @@ fn concurrent_threads_append_complete_records_to_one_file() -> Result<(), String
 }
 
 #[test]
+fn cross_mount_append_uses_fresh_kernel_file_size() -> Result<(), String> {
+    for (mode, direct_io) in [("buffered", "0"), ("direct-io", "1")] {
+        verify_cross_mount_append_mode(mode, direct_io)?;
+    }
+    Ok(())
+}
+
+fn verify_cross_mount_append_mode(mode: &str, direct_io: &str) -> Result<(), String> {
+    const REQUESTED_ATTR_TTL_SECONDS: &str = "120";
+    const INITIAL: &[u8] = b"A";
+
+    let extra_env = [
+        (
+            "FOD_ATTR_TIMEOUT_SECONDS",
+            REQUESTED_ATTR_TTL_SECONDS.to_string(),
+        ),
+        ("FOD_FOPEN_DIRECT_IO", direct_io.to_string()),
+    ];
+    let mount_a = MountedFs::start_with_env(&format!("cross-mount-append-a-{mode}"), &extra_env)?;
+    let mount_b = MountedFs::start_with_env(&format!("cross-mount-append-b-{mode}"), &extra_env)?;
+    let path_a = mount_a
+        .mountpoint
+        .join(format!("cross-mount-append-{}.bin", unique_suffix()));
+    let path_b = mount_b.mountpoint.join(
+        path_a
+            .file_name()
+            .ok_or_else(|| "append test path has no file name".to_string())?,
+    );
+
+    for (label, mounted) in [("A", &mount_a), ("B", &mount_b)] {
+        let log = mounted.log_tail(100);
+        let cache_line = log
+            .lines()
+            .find(|line| line.contains("FOD FUSE reply cache TTLs:"))
+            .ok_or_else(|| format!("mount {label} has no FUSE cache TTL log line\n{log}"))?;
+        if !cache_line.contains("attr=0s") {
+            return Err(format!(
+                "writable mount {label} kept a positive attribute TTL despite cross-mount append requirements: {cache_line}"
+            ));
+        }
+    }
+
+    fs::write(&path_a, INITIAL).map_err(|err| format!("create append target failed: {err}"))?;
+    let cached_size = fs::metadata(&path_b)
+        .map_err(|err| format!("prime mount B file attributes failed: {err}"))?
+        .len();
+    if cached_size != INITIAL.len() as u64 {
+        return Err(format!("mount B observed initial size {cached_size}"));
+    }
+
+    let mut writer_a = OpenOptions::new()
+        .append(true)
+        .open(&path_a)
+        .map_err(|err| format!("mount A append open failed: {err}"))?;
+    writer_a
+        .write_all(b"-A")
+        .map_err(|err| format!("mount A append failed: {err}"))?;
+    writer_a
+        .sync_all()
+        .map_err(|err| format!("mount A append sync failed: {err}"))?;
+    drop(writer_a);
+
+    let mut writer_b = OpenOptions::new()
+        .append(true)
+        .open(&path_b)
+        .map_err(|err| format!("mount B append open failed: {err}"))?;
+    writer_b
+        .write_all(b"-B")
+        .map_err(|err| format!("mount B append failed: {err}"))?;
+    writer_b
+        .sync_all()
+        .map_err(|err| format!("mount B append sync failed: {err}"))?;
+    drop(writer_b);
+
+    let actual = fs::read(&path_b).map_err(|err| format!("read append result failed: {err}"))?;
+    if actual != b"A-A-B" {
+        return Err(format!(
+            "cross-mount append corrupted file: expected {:?}, got {:?}",
+            b"A-A-B", actual
+        ));
+    }
+
+    let mount_b_log = mount_b.log_tail(200);
+    let write_line = mount_b_log
+        .lines()
+        .find(|line| line.contains("op=write ino=") && line.contains("len=2"))
+        .ok_or_else(|| format!("mount B did not log its FUSE write\n{mount_b_log}"))?;
+    if !write_line.contains("offset=3") {
+        return Err(format!(
+            "mount B sent a stale O_APPEND offset instead of current EOF: {write_line}"
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn create_file_and_directory_parent_missing() -> Result<(), String> {
     let mounted = MountedFs::start_without_init("create-parent-missing")?;
     let suffix = unique_suffix();

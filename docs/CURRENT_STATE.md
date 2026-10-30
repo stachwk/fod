@@ -17,6 +17,15 @@ FOD is Rust-backed end to end:
 
 PostgreSQL owns durable filesystem metadata, payload, shared lock/session state and replication.
 
+Writable mounts use a zero FUSE attribute-cache TTL even if
+`FOD_ATTR_TIMEOUT_SECONDS` requests a positive value. Linux computes an
+`O_APPEND` write offset from its local inode size before sending the request to
+FUSE; refreshing attributes before each writable path lookup prevents a stale
+size on one mount from overwriting an append committed through another mount.
+Read-only mounts keep the configured attribute TTL. This correctness rule can
+increase metadata requests on writable mounts; the entry-name TTL remains a
+separate setting.
+
 ## Correctness boundaries and unfinished work
 
 [Architecture invariants](FOD_ARCHITECTURE_INVARIANTS.md) define the required

@@ -68,8 +68,8 @@ its status can move from Pending.
 | --- | --- | --- | --- |
 | Path resolution and name syntax | XSH `open`, `stat`, `mkdir`, `link`, `symlink`, `rename`, `unlink`; XBD pathname resolution | `rust_fuse/src/fs.rs`; `test_path_trailing_slash.py` checks `ENOTDIR` for regular files and symlinks to files, plus directory and symlink-to-directory resolution; `test_directories.sh` checks `O_CREAT|O_EXCL` file creation below a regular file returns `ENOTDIR` without changing that file; `test_symlink.sh` checks `stat` follows a valid link while `lstat` reports the link inode, `EINVAL` for `readlink` on a regular file, short-buffer behavior without NUL termination, `lstat` target-byte `st_size`, unlink preserving the target, dangling-link errors, `O_CREAT|O_EXCL` returning `EEXIST`, and `ELOOP`; `test_mount_suite.py`, `test_rename_directory_transactional.py` | Pending |
 | Directory operations and iteration | XSH `opendir`, `readdir`, `closedir`, `mkdir`, `rmdir`; XBD directory stream rules | FUSE callbacks in `rust_fuse/src/fs.rs`; `test_directories.sh` checks `EEXIST` for `mkdir` on an existing file or directory, `EISDIR`/`ENOENT` for invalid `unlink` and `ENOENT`/`ENOTDIR` (including `rmdir` on a symlink to a directory)/`ENOTEMPTY` for invalid `rmdir`, and `ENOENT`/`ENOTDIR` when file creation, `mkdir` or `rmdir` traverses a missing or non-directory parent; failed child creation preserves the parent file contents; `test_mount_suite.py`, `test_tree_scale.py`, `test_readdir_small_buffers.py`, `test_path_search_permissions.py` | Pending |
-| Open and descriptor semantics | XSH `open`, `close`, `fcntl`, `dup`; access modes, append and create flags | `open`, `create`, `release`, `flush` callbacks; `test_mount_suite.py`, `test_create_write_ownership.py` (`O_EXCL` conflict/recovery), `test_symlink.sh` verifies `O_TRUNC` follows a valid symlink and `O_CREAT` creates the target through a dangling symlink while retaining the link; append-after-seek, shared-`dup`-offset and descriptor access-mode cases in `test_lseek.py`; see the cross-mount append finding below | Pending |
-| Read and write | XSH `read`, `write`, `pread`, `pwrite`; short I/O, EOF, access-mode errors and offset rules | `test_lseek.py` (including EOF short reads, zero-byte writes, `EBADF` for incompatible descriptor modes, and `pread`/`pwrite` offset preservation), `test_mount_suite.py`; cross-mount append remains blocked at writable open by the exclusive write-ownership lease | Pending |
+| Open and descriptor semantics | XSH `open`, `close`, `fcntl`, `dup`; access modes, append and create flags | `open`, `create`, `release`, `flush` callbacks; `test_mount_suite.py`, `test_create_write_ownership.py` (`O_EXCL` conflict/recovery and exclusive cross-mount write lease), `test_symlink.sh` verifies `O_TRUNC` follows a valid symlink and `O_CREAT` creates the target through a dangling symlink while retaining the link; append-after-seek, shared-`dup`-offset and descriptor access-mode cases in `test_lseek.py`; `mount_smoke::cross_mount_append_uses_fresh_kernel_file_size` verifies append offsets after another mount changes EOF | Pending |
+| Read and write | XSH `read`, `write`, `pread`, `pwrite`; short I/O, EOF, access-mode errors and offset rules | `test_lseek.py` (including EOF short reads, zero-byte writes, `EBADF` for incompatible descriptor modes, and `pread`/`pwrite` offset preservation), `test_mount_suite.py`; `mount_smoke::cross_mount_append_uses_fresh_kernel_file_size` verifies the second mount writes at the PostgreSQL-current EOF after acquiring the lease | Pending |
 | Standard file-offset positioning | XSH `lseek`, `SEEK_SET`, `SEEK_CUR`, `SEEK_END`; negative result, offset beyond EOF and no size change from seeking | Mounted `test_lseek.py` | Pass (listed cases) |
 | Sparse file-offset positioning | Optional POSIX.1-2024 XSH `lseek` `SEEK_DATA` and `SEEK_HOLE` behavior; distinguish Issue 8 requirements from their pre-Issue-8 Linux/BSD history and Linux FUSE callback details | `test_lseek_sparse_runtime.py`, `test_lseek_sparse_contract.py`; callback `FodFuse::lseek` | Pass |
 | Truncation and file length | XSH `truncate`, `ftruncate`, `open(O_TRUNC)` | `test_truncate_shrink_block_boundary.py` covers block-boundary and zero-fill behavior, descriptor-offset preservation, and POSIX-permitted `EINVAL`/`EBADF` on a read-only descriptor; `test_mount_suite.py`, Rust `mount_smoke` | Pending |
@@ -92,8 +92,8 @@ not the whole row unless all of its normative conditions and errors are mapped.
 | --- | --- | --- | --- |
 | P01 | Path resolution and name syntax | Trailing slash, symlink following, dangling links and loops have mounted regressions; `test_path_trailing_slash.py` checks Linux `ENOENT` for empty pathnames in `stat`, `lstat`, `open`, `mkdir`, `unlink`, `rmdir`, `readlink`, `access`, `chmod`, `chown`, `utime`, `truncate`, `statvfs`, `link`, `symlink` and `rename`; libc `access()` is checked for `-1`/`ENOENT` because Python `os.access()` reports failure as `False`. A path to a regular file ending in `/` returns `ENOTDIR` for `stat`, `open`, `lstat`, `unlink`, `rmdir`, `truncate`, `chmod`, `chown`, `utime`, `readlink`, `statvfs`, hard-link source, and rename source/destination; `mkdir`, hard-link destination and symlink destination return `EEXIST`; `access` returns `-1`/`ENOTDIR`. The file and rename source remain unchanged. A trailing-slash symlink to a regular file returns `ENOTDIR` for `stat`, `open`, `lstat`, `unlink`, `rmdir`, `truncate`, `chmod`, `chown`, `utime`, `readlink`, `statvfs`, hard-link source and rename source/destination; `mkdir`, hard-link destination and symlink destination return `EEXIST`, and `access` returns `-1`/`ENOTDIR`. The link and target remain unchanged. A trailing-slash symlink to a dangling target returns `ENOENT` for `stat`, `lstat`, `open`, `truncate`, `chmod`, `chown`, `utime`, `readlink`, `statvfs`, hard-link source and `access`; `mkdir`, hard-link destination and symlink destination return `EEXIST`; `unlink`, `rmdir` and rename source/destination return `ENOTDIR`. The dangling symlink and rename source are preserved. A trailing-slash symlink to a directory resolves for `stat`, `lstat`, `open`, `chmod`, `utime`, `chown`, `statvfs` and `access` (metadata operations apply to the target); `mkdir` and link/symlink destinations return `EEXIST`, hard-linking the directory returns `EPERM`, `unlink`/`rmdir` and rename source/destination return `ENOTDIR`, `truncate` returns `EISDIR`, and `readlink` returns `EINVAL`, preserving the symlink, directory and rename source. The test also verifies that a path longer than the mount's `PC_PATH_MAX`, composed of single-byte components below `NAME_MAX`, returns `ENAMETOOLONG` for 17 path operations and `-1`/`ENAMETOOLONG` through libc `access()`; Linux rejects it before FUSE dispatch. It covers `.`/`..`, repeated separators, Linux equivalence of paths beginning `//` and `///` to a single leading slash, and `NAME_MAX` boundary behavior | Map remaining XBD pathname-resolution rules for empty components and final-component behavior of other operations; classify residual `PATH_MAX` behavior against conditional POSIX requirements |
 | P02 | Directory operations and iteration | Create/remove errors, PostgreSQL SQLSTATE `53100` mapped to exact `ENOSPC` for `mkdir()`, SQLSTATE `58030` mapped to exact `EIO` for `mkdir()`/`rmdir()` with namespace rollback, exact `EACCES` for denied `mkdir()`/`rmdir()`, and ACL-enabled `EACCES` for regular-file, directory, `mknod`, symlink and hardlink creation plus `unlink()`, `rmdir()` and both rename parents when a named-user ACL denies parent write access despite mode `0777`; exact `EROFS` for those operations on a read-only replica, `EBUSY` when `rmdir()` targets the mounted FUSE root, `ELOOP` for `mkdir()`/`rmdir()` through a symlink-loop parent, `ENAMETOOLONG` for components beyond `NAME_MAX`, `EINVAL` for `rmdir()` of final `.`, `ENOTEMPTY` for final `..`, `ENOTDIR` for `rmdir()` on a symlink to a directory, link counts, small-buffer cookies, and two-mount remove/recreate with old-handle rewind are covered; the replacement receives a distinct inode and is visible after fresh lookup. `test_directories.sh` checks `ENOTDIR`/`EBADF` descriptor errors. `test_readdir_snapshot_multimount.py` traverses 512 initial children, changes membership through a second mount, verifies stable unaffected entries, duplicate-free continuation, and refreshed membership after rewind; direct libc calls cover successful `opendir()`/`readdir()`/`closedir()`, `ENOENT` for a missing path and `EMFILE` at the process descriptor limit. POSIX leaves pre-rewind visibility of changed names unspecified. FOD pins ordered entries to each `opendir()` handle and refreshes after rewind. See [`POSIX errno matrix`](POSIX_ERRNO_MATRIX.md) | 32-bit narrow-`ino_t` `EOVERFLOW` conversion is outside FOD's supported architecture matrix; artifacts target 64-bit and wider userspace only. Exact sticky-directory `EPERM` for `unlink()` and `rmdir()` is covered by `test_permissions.py`; system-wide `ENFILE`, failure-path `closedir()` behavior and remaining `mkdir()`/`rmdir()` errors remain to be checked on supported systems. Current mounted tests exercise `getdents64()` and libc on the host ABI |
-| P03 | Open and descriptor semantics | Access modes, append-after-seek, shared duplicated offset, create conflicts, descriptor `O_APPEND`/`FD_CLOEXEC` flags and symlink create/truncate are covered; `test_create_write_ownership.py` verifies a second mount gets fail-fast `EBUSY` for `O_APPEND` while the first holds the write lease, then can acquire a descriptor after release | Cross-mount sequential append is not coherent: a mounted probe confirmed PostgreSQL size 3 but the next mount's FUSE write callback received offset 0 and produced `-BA` instead of `A-A-B`. Determine whether standard FUSE can preserve kernel-visible append offsets while PostgreSQL serializes cross-mount appends; keep the exclusive lease until descriptor positions and cross-host fencing are preserved. Also map all supported `open()` flags and errors and test interrupted close boundary; lowest-descriptor selection remains a kernel descriptor-table property rather than a FOD callback |
-| P04 | Read and write | EOF short reads, zero-length read/write, access-mode errors, positioned-I/O offset preservation, write/pwrite beyond-EOF zero-fill, PostgreSQL SQLSTATE `53100` reaching `fsync()` as `ENOSPC` are covered | Add partial-I/O/error boundaries; cross-mount append requires a PostgreSQL ordering contract plus a way to keep kernel-local inode size and descriptor positions consistent; the observed stale offset is tracked in [`TODO.md`](../TODO.md) |
+| P03 | Open and descriptor semantics | Access modes, append-after-seek, shared duplicated offset, create conflicts, descriptor `O_APPEND`/`FD_CLOEXEC` flags and symlink create/truncate are covered; `test_create_write_ownership.py` verifies a second mount gets fail-fast `EBUSY` for `O_APPEND` while the first holds the write lease; `mount_smoke::cross_mount_append_uses_fresh_kernel_file_size` primes a stale size on mount B, appends through A, then proves B receives offset 3 and preserves `A-A-B` even when a positive attribute TTL is requested. Writable mounts now send zero attribute TTL so Linux revalidates inode size before `O_APPEND` offset selection | Map all supported `open()` flags and errors and test the interrupted close boundary; lowest-descriptor selection remains a kernel descriptor-table property rather than a FOD callback |
+| P04 | Read and write | EOF short reads, zero-length read/write, access-mode errors, positioned-I/O offset preservation, write/pwrite beyond-EOF zero-fill, PostgreSQL SQLSTATE `53100` reaching `fsync()` as `ENOSPC`, and cross-mount append at the current EOF are covered | Add partial-I/O/error boundaries |
 | P05 | Truncation and file length | Shrink/extend zero-fill, block boundaries, descriptor offset preservation, mtime update, symlink following, `EISDIR`/`ENOENT`/`EINVAL` path errors and read-only descriptor rejection are covered | Map `truncate()`/`ftruncate()` authorization and remaining required errors; verify remaining timestamp effects and concurrent truncate/write serialization across mounts |
 | P06 | Metadata and timestamps | Root metadata, common stat fields, chmod/chown, timestamp authorization, symlink-follow behavior, and descriptor-based `fstat()`/`fchmod()`/timestamp updates are covered | Verify remaining file-status fields and type-specific values, timestamp precision contract, and required errors |
 | P07 | Permissions and identity | Mode checks, supplementary groups, umask, ownership inheritance, ACL authorization, inaccessible-parent search, real-UID `access()` with effective UID 0, root `X_OK` with/without execute bits, and named-user ACL denial for file/directory/special-file/symlink/hardlink creation, `unlink()`, `rmdir()` and both rename parents despite mode `0777` are covered; `test_acl_mount_option.py` checks exact `EACCES` and preservation | Map privilege rules for ownership/mode changes and set-ID clearing separately from default ACL inheritance; check remaining operation-specific permission errors |
@@ -105,40 +105,41 @@ not the whole row unless all of its normative conditions and errors are mapped.
 
 ### Cross-mount append finding
 
-A mounted probe opened the same file for `O_APPEND` from two FOD mounts backed
-by the same PostgreSQL database and synchronized concurrent writers. The second
-writable `open()` returned `EBUSY` before either thread reached its write
-barrier. `test_create_write_ownership.py` preserves this lease-exclusion
-behavior and verifies that the second mount can acquire a descriptor after the
-first releases its lease. A follow-up sequential probe then exposed a separate
-offset failure: after mount A appended and PostgreSQL reported size 3, mount B's
-append reached the FUSE callback with offset 0 and produced `-BA` instead of
-`A-A-B`. Source inspection traces lease refusal to
-`FodFuse::create_writable_handle_with_ownership()`: PostgreSQL grants one
-exclusive file write-ownership lease, and a competing mount maps an unavailable
-lease to `EBUSY`. The sequential offset mismatch is a reproduced data
-corruption; simultaneous append records remain rejected before their writes.
-In Linux v6.17, both cached and direct FUSE write paths
-run `generic_write_checks()` before the FUSE write callback and choose the
-append position from that mount’s local inode size;
-the FUSE write reply contains no server-assigned offset. Linux v6.17 inode
-invalidation only invalidates attributes/pages on the receiving mount's FUSE
-session. `FUSE_NOTIFY_STORE` writes the supplied bytes into that mount's page
-cache and increases its local inode size only when the stored range extends
-beyond the current size; it does not shrink a stale larger size. This suggests
-a possible pre-open synchronization experiment for a mount whose cached size
-is stale-low: while holding the PostgreSQL write lease, fetch the authoritative
-tail and store it before replying to `OPEN`. That experiment must also cover
-shrinks and ensure the stored page data is complete. Neither notification can
-revise an offset already selected for an in-flight write or serialize requests
-already dispatched by another mount; notifications must also be delivered
-separately to each mount. Keep the exclusive lease until a supported design
-preserves descriptor offsets and cross-host fencing. Sources:
+Resolved in FOD 3.4.310.
+
+The PostgreSQL exclusive file write-ownership lease remains in place:
+`test_create_write_ownership.py` verifies that a second mount gets `EBUSY`
+while the first holds the lease and can acquire a descriptor after release.
+The separate sequential offset defect reproduced on FOD 3.4.309 when a writable
+mount had a positive attribute TTL: mount B first observed size 1, mount A
+appended `-A`, then B's FUSE write callback still received offset 1 and
+overwrote the file as `A-B` instead of `A-A-B`. This reproduced at attribute
+TTLs 1 and 120 seconds; separate probes reproduced it in buffered and direct-I/O
+modes.
+With attribute TTL zero, B received offset 3 and the contents remained
+`A-A-B`.
+
+Linux v6.17 runs `generic_write_checks()` before the FUSE write callback and
+chooses the append position from that mount's local inode size; the FUSE write
+reply contains no server-assigned offset. FOD now sends an effective attribute
+TTL of zero on writable mounts, even when a positive TTL is requested. This
+forces Linux to refresh the inode size before resolving `O_APPEND`; read-only
+mounts retain their configured TTL and the entry-name TTL remains independent.
+The mounted `mount_smoke::cross_mount_append_uses_fresh_kernel_file_size` test
+requests a 120-second TTL in buffered and direct-I/O modes, checks the effective
+logged value is zero, primes mount B's cached size at 1, appends through A and
+then B, and verifies both callback offset 3 and final bytes `A-A-B` in each
+mode. The test passed on FOD 3.4.310;
+the full Rust `mount_smoke` suite and the exclusive ownership integration test
+also passed. The tradeoff is an additional attribute revalidation on writable
+mount metadata accesses; effective attribute TTL is logged at mount startup.
+The earlier anomalous output came from an older 3.4.304 runtime artifact and is
+not evidence against the current-version regression.
+
+Sources:
 [Linux FUSE write paths](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/file.c),
 [Linux write checks](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c),
-[FUSE write reply](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h),
-[inode invalidation](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c),
-[store notification](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/notify.c).
+[FUSE write reply](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h).
 
 ### Sparse `lseek` finding
 

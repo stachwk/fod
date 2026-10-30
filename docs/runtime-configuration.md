@@ -148,7 +148,11 @@ Kept commented in base INI to preserve defaults.
 Environment override: `FOD_ATTR_TIMEOUT_SECONDS`. Optional non-negative FUSE
 attribute-cache timeout, sent separately from entry TTLs in entry, create and
 getattr replies. If unset, the runtime metadata-cache timeout is used. Kept
-commented by default.
+commented by default. Writable mounts always send an effective attribute TTL
+of zero, regardless of this setting: Linux selects `O_APPEND` offsets from
+the cached inode size before sending a FUSE write, so a positive TTL could
+overwrite data appended through another mount. Read-only mounts retain the
+configured attribute TTL. The effective value appears in the startup log.
 
 ### `negative_timeout_seconds`
 

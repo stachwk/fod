@@ -43,52 +43,27 @@ Reading guide:
   completes successfully. Mounted regression tests passed for both signal
   interruption/no-late-acquisition and ordinary cross-mount unlock handoff on
   2026-10-29. Upstream source evidence: [fuser request dispatcher](https://github.com/cberner/fuser/blob/master/src/request.rs#L136-L139).
-- [ ] **Cross-mount `O_APPEND` offsets are not PostgreSQL-coherent.** On
-  2026-10-30, a mounted probe opened a file for append on mount A, appended
-  `-A`, flushed it, and verified PostgreSQL size 3. A competing append open on
-  mount B correctly returned fail-fast `EBUSY` while A held the exclusive file
-  write lease. After A released it, B acquired an append descriptor, but its
-  next append reached the FUSE write callback with offset 0 and changed the
-  bytes from expected `A-A-B` to `-BA`. The kernel used mount B's stale local
-  `inode->i_size`; this reproduces a sequential stale-offset failure as well as
-  the concurrent-open limitation. `test_create_write_ownership.py` retains the
-  EBUSY and lease-reacquisition regression without encoding the failing write
-  as accepted behavior. Source review traced lease exclusion to
-  `FodFuse::create_writable_handle_with_ownership()`.
-  Linux v6.17's cached and direct FUSE write paths both run
-  `generic_write_checks()` before issuing the FUSE write request;
-  `generic_write_checks_count()` resolves `IOCB_APPEND` from that mount's local
-  `inode->i_size`. The FUSE `fuse_write_out` reply contains only the byte count,
-  so userspace cannot return a PostgreSQL-assigned append offset for the kernel
-  to install as the descriptor position. Therefore, merely allowing shared
-  append leases and choosing the current PostgreSQL EOF in the callback would
-  leave Linux's local inode size and file position out of sync. Preserve the
-  current exclusive lease/`EBUSY` behavior until a design is found that also
-  preserves kernel-visible append offsets, descriptor positions and cross-host
-  fencing. Linux v6.17's `FUSE_NOTIFY_INVAL_INODE` invalidates attributes and
-  pages on the receiving mount's FUSE session; it does not change the offset
-  already selected for an in-flight write. `FUSE_NOTIFY_STORE` writes supplied
-  bytes to that mount's page cache and increases local `i_size` only when the
-  stored range extends beyond the current size; it does not shrink a stale
-  larger size. Evaluate a pre-open synchronization experiment that, under the
-  PostgreSQL write lease, fetches and stores the authoritative tail before
-  replying to `OPEN`, including truncated files and complete page contents.
-  Store likewise cannot revise an in-flight write's offset or descriptor
-  position. Notifications must reach each mount's own
-  session and do not serialize writes already dispatched by another mount.
-  Therefore, notifications alone do not close the append gap; retain the
-  exclusive lease until a kernel/protocol design or explicitly narrower
-  contract preserves kernel-visible append offsets, descriptor positions and
-  cross-host fencing.
-  Sources: [FUSE write paths](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/file.c),
-  [`generic_write_checks_count()`](https://github.com/torvalds/linux/blob/v6.17/fs/read_write.c),
-  [`fuse_write_out`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h),
-  [`FUSE_NOTIFY_INVAL_INODE`](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/inode.c),
-  and [`FUSE_NOTIFY_STORE`](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/notify.c).
-  Details and audit status:
-  [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#cross-mount-append-finding);
-  active work is tracked under P03/P04 in
-  [`current plan`](docs/plans/CURRENT.md).
+- [x] **Writable-mount `O_APPEND` used another mount's cached inode size.**
+  On 2026-10-30, FOD 3.4.309 reproduced corruption with a positive FUSE
+  attribute TTL: after mount B cached size 1 and mount A appended `-A`, mount
+  B's FUSE write callback received offset 1 and overwrote the result as `A-B`.
+  This reproduced at `FOD_ATTR_TIMEOUT_SECONDS=1` and `=120`; separate probes
+  reproduced it with buffered and direct-I/O opens. Linux v6.17 resolves
+  `IOCB_APPEND` from local `inode->i_size` in `generic_write_checks_count()` before dispatching FUSE
+  WRITE; the FUSE write reply cannot return a replacement offset.
+  FOD 3.4.310 makes the effective FUSE attribute TTL zero on writable mounts,
+  including when a positive TTL is requested; read-only mounts retain their
+  configured TTL. The deterministic mounted regression
+  `mount_smoke::cross_mount_append_uses_fresh_kernel_file_size` requests 120 s
+  in both buffered and direct-I/O modes, checks the effective TTL, primes mount
+  B's size at 1, then verifies callback offset 3 and final bytes `A-A-B` after
+  both mounts append. It passed together with all 13 `mount_smoke` tests and
+  `make test-create-write-ownership`, which
+  confirms PostgreSQL's exclusive write lease still returns `EBUSY` to a
+  competing mount. Writable metadata accesses now incur attribute
+  revalidation; the entry-name TTL remains configurable. The earlier anomalous
+  result came from an older 3.4.304 runtime artifact, not the current binary.
+  Details: [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#cross-mount-append-finding).
 - [ ] **P02 POSIX directory-error evidence is incomplete.** Source/test review
   on 2026-10-30 found that `test_path_search_permissions.py` only checked the
   Python exception class for denied `mkdir()` and `rmdir()`, not exact `EACCES`.

@@ -1893,7 +1893,10 @@ impl FodFuse {
     }
 
     pub(crate) fn attr_cache_ttl_live(&self) -> Duration {
-        if self.degraded_read_only {
+        // Linux chooses an O_APPEND write offset from the cached inode size
+        // before sending FUSE_WRITE. A writable mount therefore cannot keep
+        // attributes cached across mutations made through another mount.
+        if self.degraded_read_only || !self.read_only {
             Duration::ZERO
         } else {
             self.attr_cache_ttl
