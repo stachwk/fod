@@ -2456,6 +2456,110 @@ mod logical_task_admission_tests {
     }
 
     #[test]
+    fn concurrent_workers_run_tasks_within_capacity_and_balance_metrics() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const CAPACITY: usize = 4;
+        const WORKERS: usize = 16;
+
+        let gate = Arc::new(LogicalTaskAdmissionGate::new(CAPACITY as u64));
+        let tracker = tracker();
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak_active = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(std::sync::Barrier::new(WORKERS + 1));
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+        let mut releases = Vec::with_capacity(WORKERS);
+        let mut workers = Vec::with_capacity(WORKERS);
+
+        for id in 0..WORKERS {
+            let gate = Arc::clone(&gate);
+            let tracker = Arc::clone(&tracker);
+            let active = Arc::clone(&active);
+            let peak_active = Arc::clone(&peak_active);
+            let start = Arc::clone(&start);
+            let admitted = admitted_tx.clone();
+            let (release_tx, release_rx) = mpsc::channel();
+            releases.push(Some(release_tx));
+            workers.push(
+                thread::Builder::new()
+                    .name(format!("fod-parallel-task-{id}"))
+                    .stack_size(WORKER_STACK_BYTES)
+                    .spawn(move || {
+                        start.wait();
+                        let (permit, observation) = gate.observe_task(&tracker, 32, true);
+                        let now_active = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak_active.fetch_max(now_active, Ordering::SeqCst);
+                        admitted.send(id).expect("send admitted task id");
+                        release_rx
+                            .recv_timeout(Duration::from_secs(5))
+                            .expect("parallel task release timed out");
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        observation.complete(1, 32);
+                        drop(permit);
+                    })
+                    .expect("spawn parallel task worker"),
+            );
+        }
+        drop(admitted_tx);
+        start.wait();
+        wait_for_next_ticket(&gate, WORKERS as u64);
+
+        let mut currently_active = Vec::with_capacity(WORKERS);
+        for _ in 0..CAPACITY {
+            currently_active.push(
+                admitted_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("worker did not start within admission capacity"),
+            );
+        }
+        let mut admitted_count = currently_active.len();
+        assert_eq!(active.load(Ordering::SeqCst), CAPACITY);
+        assert_eq!(peak_active.load(Ordering::SeqCst), CAPACITY);
+
+        while admitted_count < WORKERS {
+            let finished = currently_active.remove(0);
+            releases[finished]
+                .take()
+                .expect("release sender for active task")
+                .send(())
+                .expect("release active parallel task");
+            let admitted = admitted_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("queued worker was not admitted after a task finished");
+            currently_active.push(admitted);
+            admitted_count += 1;
+            assert!(active.load(Ordering::SeqCst) <= CAPACITY);
+        }
+
+        for id in currently_active {
+            releases[id]
+                .take()
+                .expect("release sender for final active task")
+                .send(())
+                .expect("release final parallel task");
+        }
+        for worker in workers {
+            worker.join().expect("parallel task worker panicked");
+        }
+
+        let finished = tracker.queue_snapshot().expect("finished task snapshot");
+        assert_eq!(finished.admitted_tasks, WORKERS as u64);
+        assert_eq!(finished.completed_tasks, WORKERS as u64);
+        assert_eq!(finished.failed_tasks, 0);
+        assert_eq!(finished.queued_tasks, 0);
+        assert_eq!(finished.active_tasks, 0);
+        assert_eq!(finished.active_transactions, 0);
+        assert_eq!(finished.payload_in_flight_bytes, 0);
+        assert_eq!(finished.accounting_errors, 0);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(peak_active.load(Ordering::SeqCst), CAPACITY);
+
+        let throughput = tracker.throughput_snapshot().expect("task throughput");
+        assert_eq!(throughput.completed_files, WORKERS as u64);
+        assert_eq!(throughput.completed_bytes, WORKERS as u64 * 32);
+    }
+
+    #[test]
     #[ignore = "diagnostic 500-waiter targeted FIFO wake benchmark"]
     fn fifo_targeted_wake_benchmark_500_waiters() {
         let gate = Arc::new(LogicalTaskAdmissionGate::new(1));
