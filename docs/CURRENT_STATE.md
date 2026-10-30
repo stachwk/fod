@@ -421,9 +421,10 @@ The runtime contract is:
 - monotonic fencing tokens protect persistence after lease loss or takeover;
 - stale writers are rejected before PostgreSQL payload persistence;
 - a competing pathname `truncate()` on mount B returns `EBUSY` while mount A
-  holds a valid lease, without changing the payload, PostgreSQL file size,
-  lease owner or fencing token; verified on FOD 3.4.352 against an isolated
-  PostgreSQL database on 2026-10-30;
+  writes under its valid lease; the size and payload match mount A's completed
+  4096-byte write, and lease owner/token remain unchanged. Verified on FOD
+  3.4.354 by racing `pwrite()` and path `truncate()` across two mounts
+  against an isolated PostgreSQL database on 2026-10-30;
 - path-based `truncate()` checks write/search permissions through FOD's mode and POSIX ACL authorization path; mounted tests verify exact `EACCES` for a non-writable file, a non-searchable parent and a denying ACL, while preserving payload and size;
 - writable `open`, `O_TRUNC`, `create` and path-based `truncate`/`setattr`
   participate in the same ownership/fencing contract;

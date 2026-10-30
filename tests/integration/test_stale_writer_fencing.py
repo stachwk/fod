@@ -4,10 +4,12 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import errno
 import os
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -204,29 +206,38 @@ def main() -> None:
                     f"lease session mismatch: mount_a={session_a} lease={lease_session_a}"
                 )
 
-            # A valid write lease on mount A must keep a pathname truncate on
-            # mount B from changing the same PostgreSQL-authoritative file.
-            # Check the errno and both payload and lease state before the
-            # later, deliberately injected fencing-token takeover.
-            competing_truncate_errno: int | None = None
-            try:
-                os.truncate(path_b, BLOCK_SIZE // 2)
-            except OSError as exc:
-                competing_truncate_errno = exc.errno
-                if competing_truncate_errno != errno.EBUSY:
-                    raise
+            # Race a real write on mount A against pathname truncate on mount
+            # B. A's held lease must serialize the operations in PostgreSQL
+            # and reject B without changing the file or ownership.
+            start = threading.Barrier(2)
 
+            def write_during_truncate_race() -> int:
+                start.wait(timeout=5)
+                return os.pwrite(fd_a, b"R" * BLOCK_SIZE, 0)
+
+            def truncate_during_write_race() -> int:
+                start.wait(timeout=5)
+                try:
+                    os.truncate(path_b, BLOCK_SIZE // 2)
+                except OSError as exc:
+                    return exc.errno
+                return 0
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                write_future = pool.submit(write_during_truncate_race)
+                truncate_future = pool.submit(truncate_during_write_race)
+                concurrent_write_bytes = write_future.result(timeout=30)
+                competing_truncate_errno = truncate_future.result(timeout=30)
+
+            if concurrent_write_bytes != BLOCK_SIZE:
+                raise AssertionError(
+                    "write racing pathname truncate was short: "
+                    f"{concurrent_write_bytes}/{BLOCK_SIZE}"
+                )
             if competing_truncate_errno != errno.EBUSY:
                 raise AssertionError(
-                    "competing path truncate errno="
+                    "concurrent path truncate errno="
                     f"{competing_truncate_errno}, expected EBUSY"
-                )
-            payload_after_competing_truncate = path_b.read_bytes()
-            if payload_after_competing_truncate != b"S" * BLOCK_SIZE:
-                raise AssertionError(
-                    "competing path truncate changed the lease owner's payload: "
-                    f"len={len(payload_after_competing_truncate)} "
-                    f"prefix={payload_after_competing_truncate[:16]!r}"
                 )
             lease_after_competing_truncate = file_lease_snapshot()
             if lease_after_competing_truncate != (token_a, session_a, file_id):
@@ -238,10 +249,10 @@ def main() -> None:
             authoritative_size, authoritative_payload = file_state_snapshot(file_id)
             if (authoritative_size, authoritative_payload) != (
                 BLOCK_SIZE,
-                b"S" * BLOCK_SIZE,
+                b"R" * BLOCK_SIZE,
             ):
                 raise AssertionError(
-                    "competing path truncate changed PostgreSQL-authoritative state: "
+                    "concurrent path truncate changed PostgreSQL-authoritative state: "
                     f"size={authoritative_size} payload_len={len(authoritative_payload)} "
                     f"prefix={authoritative_payload[:16]!r}"
                 )
@@ -345,7 +356,8 @@ def main() -> None:
                 f"session_a={session_a} "
                 f"token_a={token_a} token_b={token_b} "
                 f"takeover_elapsed_ms={takeover_elapsed * 1000.0:.3f} "
-                f"competing_truncate_errno={competing_truncate_errno} "
+                f"concurrent_write_bytes={concurrent_write_bytes} "
+                f"concurrent_truncate_errno={competing_truncate_errno} "
                 f"stale_ftruncate_errno={stale_ftruncate_errno} "
                 f"stale_write_errno={stale_write_errno} "
                 f"stale_fsync_errno={stale_fsync_errno} "
