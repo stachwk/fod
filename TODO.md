@@ -104,6 +104,17 @@ Reading guide:
   attribution are mapped. Source and audit:
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617),
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
+- [ ] **P07 `access()` identity and root execute regressions remain untested.**
+  Linux v6.17 `do_faccessat()` switches fsuid/fsgid to the caller's real
+  uid/gid for ordinary `access()`; FUSE request headers carry those fs IDs, so
+  FOD's `req.uid()`/`req.gid()` already have the required identity. Source
+  review found that FOD's root bypass granted `X_OK` on regular files with no
+  execute bit. The callback now returns `EACCES` for that case, matching Linux
+  v6.17. Confidence: high from kernel/FUSE source and direct callback review;
+  no mounted regression was run. Add a mounted setuid-style real/effective ID
+  distinction and root `X_OK` cases with and without execute bits before
+  closing P07. See the
+  [`permissions and identity audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
   mutations.** `errno.rs` maps PostgreSQL `53100` (`disk_full`) to `ENOSPC` in
   both persistence and namespace error mappers. File-block persistence also

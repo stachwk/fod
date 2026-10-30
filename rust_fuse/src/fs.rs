@@ -6382,6 +6382,18 @@ impl Filesystem for FodFuse {
             return;
         }
         debug!("FOD access path={} mask={:#x}", path, mask);
+        // Linux permits root to bypass read/write mode checks, but X_OK on a
+        // regular file still requires at least one execute bit to be set.
+        // Keep this access(2) rule local: other root permission checks use
+        // the ordinary privileged bypass in `acl_allows`.
+        if subject.is_root()
+            && attrs.file_attr.kind == FileType::RegularFile
+            && mask & libc::X_OK != 0
+            && attrs.file_attr.perm & 0o111 == 0
+        {
+            fuse_reply_error!(reply, EACCES);
+            return;
+        }
         match self.acl_allows(&path, &attrs.file_attr, mask, &subject) {
             Ok(true) => {
                 debug!("FOD access granted path={} mask={:#x}", path, mask);
