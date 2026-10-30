@@ -237,11 +237,13 @@ Reading guide:
   the maximum `loff_t` offset supported by Linux FUSE. The mounted two-primary
   regression queried a conflicting zero-length lock through EOF and confirmed
   the returned `l_start` and `l_len` against temporary PostgreSQL 17.11.
-- [ ] **Verify malformed POSIX range-lease rows fail closed.** The decoder now
+- [x] **Verify malformed POSIX range-lease rows fail closed.** The decoder
   rejects unknown lock types, offsets outside the PostgreSQL `BIGINT`/Linux
-  `loff_t` range, reversed ranges and malformed fields; a unit regression covers
-  these corrupt blobs. Add a backend regression showing an invalid active lock
-  row returns `EIO` instead of being omitted from conflict checks.
+  `loff_t` range, reversed ranges and malformed fields; a unit regression
+  covers these corrupt blobs. A mounted backend regression inserts an active
+  PostgreSQL range lease with an unsupported lock type and confirms `F_GETLK`
+  returns exactly `EIO` rather than reporting the corrupt row as absent. See
+  `rust_fuse/tests/lock_backend_smoke.rs::malformed_active_range_lease_returns_eio_from_getlk`.
 - [ ] **Metadata projection must preserve restrictive directory modes.** Source
   review found that directory mode `0644` was rewritten to `0755` in FUSE
   attributes, and malformed size/uid/gid/mode values could be replaced by
@@ -981,7 +983,7 @@ Status: active design direction, but the main decisions below are already taken.
 ### POSIX Conformance Audit
 
 - [ ] Complete the [POSIX conformance audit](docs/POSIX_CONFORMANCE_AUDIT.md) for FOD's declared filesystem API. The audit defines POSIX.1-2024 Issue 8 as its baseline, identifies Linux/FUSE extensions separately, and starts a requirement matrix. Review exact normative sections and optional/XSI applicability; classify each requirement as pending, pass, fail, not implemented, or not applicable; map it to implementation evidence and a regression or `pjdfstest` case. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
-- [ ] Diagnose parallel `rust_fuse/tests/lock_backend_smoke.rs` failures before changing timing or retry behavior. On 2026-10-28, `make test-locking` had 5/7 pass and two replica tests returned `ENOENT` during lookup, alongside busy-mount teardown errors; the same built binary passed all 7/7 tests serially under `sudo`. Capture per-mount logs and PostgreSQL namespace state at failure, identify the conflicting operation or lifecycle event, then add a deterministic regression for the established cause. Current owner: POSIX audit follow-up.
+- [ ] Diagnose parallel `rust_fuse/tests/lock_backend_smoke.rs` failures before changing timing or retry behavior. On 2026-10-28, `make test-locking` had 5/7 pass and two replica tests returned `ENOENT` during lookup, alongside busy-mount teardown errors; the same built binary passed all 7/7 tests serially under `sudo`. On 2026-10-30, a parallel run had 9/10 pass and `primary_uses_pg_leases_and_replica_stays_memory_backed` again failed opening a replica file with `ENOENT`, with additional busy-mount teardown messages; the exact release-lto binary then passed all 10/10 tests serially under `sudo`. This confirms a repeatable parallel-versus-serial difference but does not identify its cause. Capture per-mount logs and PostgreSQL namespace state at failure, identify the conflicting operation or lifecycle event, then add a deterministic regression for the established cause. Do not change timing or retries to mask the symptom. Current owner: POSIX audit follow-up.
 
 ### pjdfstest Observations
 

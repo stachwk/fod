@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use support::{db_repo, resolve_file_id, unique_suffix, MountedFs};
+use support::{MountedFs, db_repo, resolve_file_id, unique_suffix};
 
 extern "C" fn ignore_signal(_signal: libc::c_int) {}
 
@@ -458,6 +458,59 @@ fn getlk_reports_zero_length_lock_through_eof() -> Result<(), String> {
     drop(fd_a);
     drop(primary_b);
     drop(primary_a);
+    Ok(())
+}
+
+#[test]
+fn malformed_active_range_lease_returns_eio_from_getlk() -> Result<(), String> {
+    if skip_without_root() {
+        return Ok(());
+    }
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let mount = MountedFs::start_with_role("lock-malformed-range-lease", "primary", &[])?;
+    let suffix = unique_suffix();
+    let dir_path = mount.mountpoint.join(format!("lock-malformed-{suffix}"));
+    let file_path = dir_path.join("payload.txt");
+    fs::create_dir(&dir_path).map_err(|err| format!("create_dir failed: {err}"))?;
+    fs::write(&file_path, b"malformed-lock-lease").map_err(|err| format!("write failed: {err}"))?;
+
+    let fd = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&file_path)
+        .map_err(|err| format!("open malformed-lease file failed: {err}"))?;
+    let repo = db_repo()?;
+    let file_id = resolve_file_id(&repo, &mount.mountpoint, &file_path)?;
+    let owner = file_id.saturating_add(1);
+    repo.exec(&format!(
+        "INSERT INTO lock_range_leases (resource_kind, resource_id, session_id, owner_key, lock_type, range_start, range_end, lock_pid, lease_expires_at, heartbeat_at, created_at, updated_at) VALUES ('file', {file_id}, 0, {owner}, 3, 0, 8, 1234, NOW() + INTERVAL '1 minute', NOW(), NOW(), NOW())"
+    ))
+    .map_err(|err| format!("seed malformed active range lease failed: {err}"))?;
+
+    // F_GETLK must surface corrupt authoritative state as EIO. Treating the
+    // row as absent would incorrectly report F_UNLCK and permit new locks.
+    let mut probe = flock(libc::F_WRLCK as i16, 0, 1);
+    let rc = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETLK, &mut probe) };
+    let observed_errno = std::io::Error::last_os_error().raw_os_error();
+
+    let cleanup = repo.exec(&format!(
+        "DELETE FROM lock_range_leases WHERE resource_kind = 'file' AND resource_id = {file_id} AND owner_key = {owner}"
+    ));
+    drop(fd);
+    let _ = fs::remove_file(&file_path);
+    let _ = fs::remove_dir(&dir_path);
+    drop(mount);
+    cleanup.map_err(|err| format!("remove malformed range lease fixture failed: {err}"))?;
+
+    if rc != -1 || observed_errno != Some(libc::EIO) {
+        return Err(format!(
+            "F_GETLK on malformed active range lease should fail with EIO, got rc={rc} errno={observed_errno:?}"
+        ));
+    }
     Ok(())
 }
 
