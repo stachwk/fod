@@ -173,8 +173,9 @@ Reading guide:
   before clearing the result. Namespace ID lookups and path resolution now
   return an error for NULL or malformed IDs rather than treating them as a
   missing entry; xattr path lookup no longer substitutes ID 0 for a missing
-  directory ID. PostgreSQL fault-injection and malformed-row regressions for
-  these paths remain pending.
+  directory ID. Special-file metadata decoding now rejects NULL/malformed rows
+  and frees every `PGresult` on parse failures. PostgreSQL fault-injection and
+  malformed-row regressions for these paths remain pending.
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's

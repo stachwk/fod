@@ -387,30 +387,41 @@ impl DbRepo {
                 }
                 let rows = PQntuples(res);
                 let cols = PQnfields(res);
-                if rows < 1 || cols < 3 {
+                if rows < 1 {
                     PQclear(res);
                     return Ok(None);
+                }
+                if cols < 3 {
+                    PQclear(res);
+                    return Err("special file metadata row is missing fields".to_string());
+                }
+                if (0..3).any(|column| PQgetisnull(res, 0, column) != 0) {
+                    PQclear(res);
+                    return Err("special file metadata contains NULL fields".to_string());
                 }
                 let file_type_ptr = PQgetvalue(res, 0, 0);
                 let major_ptr = PQgetvalue(res, 0, 1);
                 let minor_ptr = PQgetvalue(res, 0, 2);
                 if file_type_ptr.is_null() || major_ptr.is_null() || minor_ptr.is_null() {
                     PQclear(res);
-                    return Ok(None);
+                    return Err("special file metadata contains null field pointers".to_string());
                 }
                 let file_type = CStr::from_ptr(file_type_ptr).to_string_lossy().to_string();
-                let rdev_major = CStr::from_ptr(major_ptr)
-                    .to_string_lossy()
-                    .trim()
-                    .parse::<u32>()
-                    .map_err(|_| "invalid special file major".to_string())?;
-                let rdev_minor = CStr::from_ptr(minor_ptr)
-                    .to_string_lossy()
-                    .trim()
-                    .parse::<u32>()
-                    .map_err(|_| "invalid special file minor".to_string())?;
+                let parsed = (|| {
+                    let rdev_major = CStr::from_ptr(major_ptr)
+                        .to_string_lossy()
+                        .trim()
+                        .parse::<u32>()
+                        .map_err(|_| "invalid special file major".to_string())?;
+                    let rdev_minor = CStr::from_ptr(minor_ptr)
+                        .to_string_lossy()
+                        .trim()
+                        .parse::<u32>()
+                        .map_err(|_| "invalid special file minor".to_string())?;
+                    Ok((file_type, rdev_major, rdev_minor))
+                })();
                 PQclear(res);
-                Ok(Some((file_type, rdev_major, rdev_minor)))
+                parsed.map(Some)
             };
             result
         })
