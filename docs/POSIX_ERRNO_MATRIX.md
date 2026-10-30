@@ -45,9 +45,13 @@ FOD został wywołany:
   `EINVAL`. Test montowany w `test_lseek.py` potwierdza errno, zachowanie
   offsetu deskryptora i brak modyfikacji zawartości.
 - Przy pobieraniu argumentu ścieżki Linux zwraca `ENOENT` dla pustej ścieżki
-  oraz `ENAMETOOLONG`, gdy ścieżka osiąga `PATH_MAX`; te kontrole zachodzą przed
-  rozwiązywaniem ścieżki i callbackiem FUSE. [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py)
-  sprawdza pustą ścieżkę dla `stat()`, `lstat()`, `open()`, `mkdir()`,
+  oraz `ENAMETOOLONG`, gdy ścieżka przekracza dostępny limit długości; te
+  kontrole zachodzą przed rozwiązywaniem ścieżki i callbackiem FUSE.
+  [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py)
+  sprawdza też ścieżkę dłuższą niż `PC_PATH_MAX` zamontowanego systemu, złożoną
+  z jednobajtowych komponentów poniżej `NAME_MAX`: 17 wywołań ścieżkowych
+  zwraca `ENAMETOOLONG`, a libc `access()` zwraca `-1`/`ENAMETOOLONG`; plik
+  źródłowy i potencjalne cele pozostają bez zmian. Test sprawdza pustą ścieżkę dla `stat()`, `lstat()`, `open()`, `mkdir()`,
   `unlink()`, `rmdir()`, `readlink()`, `access()`, `chmod()`, `chown()`,
   `utime()`, `truncate()`, `statvfs()`, `link()`, `symlink()` i `rename()`.
   Wywołanie libc `access()` sprawdza bezpośrednio, ponieważ Python `os.access()`

@@ -84,6 +84,61 @@ def main() -> None:
             assert file_path.read_bytes() == b"not a directory"
             assert not (directory / "empty-link-source").exists()
             assert not (directory / "empty-rename-source").exists()
+
+            path_max = os.pathconf(mountpoint, "PC_PATH_MAX")
+            overlong_path = "/" + ("x/" * (path_max // 2 + 1))
+            assert len(os.fsencode(overlong_path)) > path_max
+            for operation_name, operation in (
+                ("stat", lambda: os.stat(overlong_path)),
+                ("lstat", lambda: os.lstat(overlong_path)),
+                ("open", lambda: os.open(overlong_path, os.O_RDONLY)),
+                ("mkdir", lambda: os.mkdir(overlong_path)),
+                ("unlink", lambda: os.unlink(overlong_path)),
+                ("rmdir", lambda: os.rmdir(overlong_path)),
+                ("truncate", lambda: os.truncate(overlong_path, 0)),
+                ("chmod", lambda: os.chmod(overlong_path, 0o600)),
+                ("chown", lambda: os.chown(overlong_path, -1, -1)),
+                ("utime", lambda: os.utime(overlong_path, None)),
+                ("statvfs", lambda: os.statvfs(overlong_path)),
+                ("readlink", lambda: os.readlink(overlong_path)),
+                (
+                    "link source",
+                    lambda: os.link(overlong_path, directory / "overlong-link-source"),
+                ),
+                (
+                    "link destination",
+                    lambda: os.link(file_path, overlong_path),
+                ),
+                (
+                    "symlink destination",
+                    lambda: os.symlink("target", overlong_path),
+                ),
+                (
+                    "rename source",
+                    lambda: os.rename(overlong_path, directory / "overlong-rename-source"),
+                ),
+                (
+                    "rename destination",
+                    lambda: os.rename(file_path, overlong_path),
+                ),
+            ):
+                expect_errno(
+                    operation,
+                    errno.ENAMETOOLONG,
+                    f"{operation_name} beyond PATH_MAX",
+                )
+            ctypes.set_errno(0)
+            access_result = libc.access(os.fsencode(overlong_path), os.F_OK)
+            access_error = ctypes.get_errno()
+            assert access_result == -1 and access_error == errno.ENAMETOOLONG, (
+                "access beyond PATH_MAX",
+                access_result,
+                access_error,
+            )
+            assert file_path.read_bytes() == b"not a directory"
+            assert not (directory / "overlong-link-source").exists()
+            assert not (directory / "overlong-rename-source").exists()
+
             trailing_slash = f"{file_path}/"
 
             expect_errno(
@@ -483,6 +538,7 @@ def main() -> None:
             )
             print(
                 "OK pathname empty_path=ENOENTx17 access=ENOENT "
+                "path_max_errors=ENAMETOOLONGx17 access=ENAMETOOLONG "
                 "trailing_slash_file=ENOTDIRx14,EEXISTx3 "
                 "access=ENOTDIR "
                 "symlink_file=ENOTDIRx14,EEXISTx3 access=ENOTDIR "
