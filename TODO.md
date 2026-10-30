@@ -1034,6 +1034,9 @@ Status: active design direction, but the main decisions below are already taken.
   The mounted regression passed on 2026-10-30; references are recorded in
   [`POSIX_ERRNO_MATRIX.md`](docs/POSIX_ERRNO_MATRIX.md) and
   [`POSIX_CONFORMANCE_AUDIT.md`](docs/POSIX_CONFORMANCE_AUDIT.md).
+- [x] **Verify `rmdir()` with a final `.` component.** `test_directories.sh`
+  now requires exact `EINVAL` for `rmdir(directory/.)`; the mounted test passed
+  on 2026-10-30. The POSIX errno matrix records the result.
 - [x] **Verify directory link counts after cross-parent `rename()`.** The
   two-mount `test_rename_directory_transactional.py` regression moves a child
   directory and replaces an existing empty child directory across parents. It
