@@ -6957,18 +6957,19 @@ impl Filesystem for FodFuse {
             }
         };
         if let Some(conflict) = Self::lock_conflict(&records, owner, typ, start, end) {
+            let conflict_end = conflict.end.unwrap_or(i64::MAX as u64);
             debug!(
                 "FOD getlk conflict path={} owner={} conflict_owner={} start={} end={} typ={}",
                 path,
                 owner,
                 conflict.owner,
                 conflict.start,
-                conflict.end.unwrap_or(0),
+                conflict_end,
                 conflict.typ
             );
             reply.locked(
                 conflict.start,
-                conflict.end.unwrap_or(0),
+                conflict_end,
                 conflict.typ,
                 conflict.pid,
             );

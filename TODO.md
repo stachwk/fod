@@ -193,6 +193,11 @@ Reading guide:
   shared (`1`) and exclusive (`2`) values; malformed persisted values no longer
   become type `0` and bypass conflict checks. Add a regression that seeds an
   invalid active lease and confirms another acquisition returns an error.
+- [ ] **Verify `F_GETLK` reports locks extending to EOF.** An unbounded
+  PostgreSQL range was represented internally as `None` but the FUSE reply
+  converted it to end offset `0`, truncating the reported conflict. It now uses
+  the maximum `loff_t` offset supported by Linux FUSE. Add a mounted regression
+  querying a conflicting lock whose length is zero (through EOF).
 - [ ] **Metadata projection must preserve restrictive directory modes.** Source
   review found that directory mode `0644` was rewritten to `0755` in FUSE
   attributes, and malformed size/uid/gid/mode values could be replaced by
