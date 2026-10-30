@@ -246,19 +246,18 @@ Reading guide:
   PostgreSQL range lease with an unsupported lock type and confirms `F_GETLK`
   returns exactly `EIO` rather than reporting the corrupt row as absent. See
   `rust_fuse/tests/lock_backend_smoke.rs::malformed_active_range_lease_returns_eio_from_getlk`.
-- [ ] **Metadata projection must preserve restrictive directory modes.** Source
-  review found that directory mode `0644` was rewritten to `0755` in FUSE
-  attributes, and malformed size/uid/gid/mode values could be replaced by
-  permissive or process-local defaults. Projection now preserves `0644`,
-  rejects malformed numeric fields with `EIO`, and fails if a hardlink lacks
-  its backing file or an open file's link-count row. Add mounted `mkdir/chmod`
-  checks for `0644` and a decoder regression for malformed metadata before
-  closing this finding. Timestamp projection now preserves pre-epoch dates and
-  rejects malformed values; add a mounted `utimensat/fstat` regression before
-  treating timestamp projection as verified. Unknown special-file types now
-  return `EIO` instead of appearing as regular files; a unit regression verifies
-  the decoder and directory-entry conversion fail closed. Add a malformed
-  database-row regression to verify the full metadata path.
+- [x] **Metadata projection preserves restrictive modes and rejects malformed rows.**
+  The mounted `test_unlink_primary_authority_docker.py` regression creates and
+  chmods a directory to `0644`, sets pre-epoch file timestamps through
+  `utimensat` and checks them through `stat`, then corrupts persisted `size`,
+  `mode`, `uid`, `gid` and `modification_date` one field at a time. Each
+  malformed metadata row returns `EIO` from the FUSE metadata path; the test
+  restores the original row after each injection. The existing unit regression
+  verifies unknown special-file types fail closed. The full isolated
+  primary/replica suite passed on 2026-10-30; results are in
+  `artifacts/integration/unlink-primary-authority-20261030T104648Z/results.json`.
+  Malformed PostgreSQL query results and missing hardlink/link-count rows remain
+  tracked separately under PostgreSQL read-failure handling.
 - [x] **Verify Linux FUSE device-number round trips for `mknod`.** The callback
   decodes the kernel's 12-bit-major/20-bit-minor `new_encode_dev` value and FUSE
   attrs encode it in the same format; unrepresentable database values fail

@@ -32,6 +32,11 @@ def query(db, sql, params=()):
         return cursor.fetchall()
 
 
+def execute(db, sql, params=()):
+    with db.cursor() as cursor:
+        cursor.execute(sql, params or None)
+
+
 def wait_for(predicate, label, timeout=30):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -140,6 +145,61 @@ def main():
         os.environ["FOD_PG_REPLICA_READ_ROUTING_ENABLED"] = "1"
         b = FODMount(str(ROOT)); mounts.append(b)
         b.start(str(mb))
+
+        restrictive_directory = ma / "projection-mode-0644"
+        restrictive_directory.mkdir()
+        os.chmod(restrictive_directory, 0o644)
+        projected_mode = stat.S_IMODE(os.stat(restrictive_directory).st_mode)
+        assert projected_mode == 0o644, f"directory mode projected as {projected_mode:04o}"
+        results["directory_mode_0644_projection"] = True
+
+        pre_epoch_file = ma / "projection-pre-epoch"
+        seed(pre_epoch_file)
+        os.utime(pre_epoch_file, ns=(-2_000_000_000, -3_000_000_000))
+        projected_time = os.stat(pre_epoch_file)
+        assert projected_time.st_atime_ns == -2_000_000_000, projected_time.st_atime_ns
+        assert projected_time.st_mtime_ns == -3_000_000_000, projected_time.st_mtime_ns
+        results["pre_epoch_timestamp_projection"] = True
+
+        malformed_metadata_file = ma / "projection-malformed-metadata"
+        seed(malformed_metadata_file)
+        malformed_name = malformed_metadata_file.name
+        malformed_fields = {
+            "size": -1,
+            "mode": "broken",
+            "uid": -1,
+            "gid": -1,
+            "modification_date": "infinity",
+        }
+        for field, malformed_value in malformed_fields.items():
+            original_value = query(
+                primary,
+                f"SELECT {field} FROM fod.files WHERE name=%s AND NOT unlinked",
+                (malformed_name,),
+            )[0][0]
+            try:
+                execute(
+                    primary,
+                    f"UPDATE fod.files SET {field}=%s WHERE name=%s AND NOT unlinked",
+                    (malformed_value, malformed_name),
+                )
+                try:
+                    os.stat(malformed_metadata_file)
+                except OSError as exc:
+                    assert exc.errno == errno.EIO, (
+                        f"malformed {field} returned errno {exc.errno}"
+                    )
+                else:
+                    raise AssertionError(
+                        f"malformed persisted {field} was projected as valid metadata"
+                    )
+            finally:
+                execute(
+                    primary,
+                    f"UPDATE fod.files SET {field}=%s WHERE name=%s AND NOT unlinked",
+                    (original_value, malformed_name),
+                )
+        results["malformed_metadata_fields_return_eio"] = sorted(malformed_fields)
 
         # Ownership on a paused replica cannot authorize chmod/chown on primary.
         seed(ma / "permission-file")
