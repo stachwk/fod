@@ -78,11 +78,9 @@ const IOCTL_FS_IOC_FSSETXATTR: u32 = libc::_IOW::<[u8; IOCTL_FSXATTR_BYTES]>('X'
 const IOCTL_FSXATTR_BYTES: usize = 28;
 
 fn parse_file_mode(mode: &str) -> Result<u16, libc::c_int> {
-    let mode = u16::from_str_radix(mode.trim_start_matches("0o"), 8).map_err(|_| EIO)?;
-    if mode > 0o7777 {
-        return Err(EIO);
-    }
-    Ok(mode)
+    rust_hotpath::pg::parse_persisted_posix_mode(mode)
+        .map(|mode| mode as u16)
+        .map_err(|_| EIO)
 }
 
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;

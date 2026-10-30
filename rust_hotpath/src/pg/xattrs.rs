@@ -6,8 +6,9 @@
 
 use super::{
     exec_command_params, exec_params, fetch_first_row_texts, is_retryable_connection_error,
-    replayable_sql_error, result_error, sql_is_replayable_command, DbRepo, PQclear, PQgetisnull,
-    PQgetvalue, PQnfields, PQntuples, PQresultStatus, PGRES_TUPLES_OK,
+    parse_persisted_posix_mode, replayable_sql_error, result_error, sql_is_replayable_command,
+    DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus,
+    PGRES_TUPLES_OK,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -93,7 +94,7 @@ unsafe fn authorize_xattr_mutation_on_conn(
     }
     let owner_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
     let owner_gid = row[1].parse::<u32>().map_err(|err| err.to_string())?;
-    let mode = u32::from_str_radix(&row[2], 8).map_err(|err| err.to_string())?;
+    let mode = parse_persisted_posix_mode(&row[2])?;
 
     if name.starts_with("trusted.") && actor_uid != 0 {
         return Err("FOD_XATTR_PERMISSION_DENIED".to_string());
@@ -612,8 +613,7 @@ impl DbRepo {
             let mode_text = mode_row
                 .get(1)
                 .ok_or_else(|| "inode mode missing from locked row".to_string())?;
-            let current_mode = u32::from_str_radix(mode_text, 8)
-                .map_err(|err| format!("invalid inode mode: {err}"))?;
+            let current_mode = parse_persisted_posix_mode(mode_text)?;
             let acl_exists = fetch_first_row_texts(exec_params(
                 tx.conn,
                 &check_acl,

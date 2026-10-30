@@ -4,7 +4,10 @@
 //! Mode, ownership and timestamp updates through the repository's authority pool.
 //! File content generation belongs to content mutations, not metadata updates.
 
-use super::{exec_command_params, exec_params, fetch_first_row_texts, DbRepo, PGconn};
+use super::{
+    exec_command_params, exec_params, fetch_first_row_texts, parse_persisted_posix_mode, DbRepo,
+    PGconn,
+};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use std::ffi::CString;
@@ -211,7 +214,7 @@ pub(super) unsafe fn validate_file_write_authorization_on_conn(
     if authorization.actor_uid == 0 {
         return Ok(());
     }
-    let mode = u32::from_str_radix(&rows[2], 8).map_err(|err| err.to_string())?;
+    let mode = parse_persisted_posix_mode(&rows[2])?;
     let acl_rows = if authorization.use_posix_acl {
         fetch_first_row_texts(exec_params(
             conn,
@@ -301,7 +304,7 @@ impl DbRepo {
             }
             let owner_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
             let owner_gid = row[1].parse::<u32>().map_err(|err| err.to_string())?;
-            let mode = u32::from_str_radix(&row[2], 8).map_err(|err| err.to_string())?;
+            let mode = parse_persisted_posix_mode(&row[2])?;
             if change.actor_uid != 0 && change.actor_uid != owner_uid {
                 let only_now_or_omit = [change.atime, change.mtime]
                     .into_iter()
@@ -393,7 +396,7 @@ impl DbRepo {
             }
             let uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
             let gid = row[1].parse::<u32>().map_err(|err| err.to_string())?;
-            let current_mode = u32::from_str_radix(&row[2], 8).map_err(|err| err.to_string())?;
+            let current_mode = parse_persisted_posix_mode(&row[2])?;
             if change.actor_uid != 0 {
                 if change.actor_uid != uid
                     || change.uid.is_some_and(|new_uid| new_uid != uid)

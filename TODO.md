@@ -573,7 +573,11 @@ Reading guide:
   restores the original row after each injection. It also injects octal `10000`
   and requires `EIO`; PostgreSQL mode lookup and path/open FUSE attribute
   parsing enforce the permission-bit range `0o0000–0o7777`. Rust regressions
-  cover both decoders. The mounted `10000` case is added but awaits execution
+  cover both decoders. A follow-up source audit found metadata/ACL authorization
+  decoders with separate unbounded octal parsing; all now share one POSIX-mode
+  parser, and the PostgreSQL regression verifies xattr authorization rejects
+  `10000` without writing the xattr. Unit and PostgreSQL tests passed. The
+  mounted `10000` case is added but awaits execution
   against an isolated/up-to-date database because current schema upgrade is
   blocked by active FOD sessions. The existing unit regression verifies
   unknown special-file types fail closed. The full isolated

@@ -7,8 +7,9 @@
 
 use super::{
     conn_error, exec_params, exec_prepared_params, fetch_first_column_texts, fetch_first_row_texts,
-    fetch_rows_text, join_nul_text, result_error, DbRepo, PQclear, PQgetisnull, PQgetvalue,
-    PQnfields, PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
+    fetch_rows_text, join_nul_text, parse_persisted_posix_mode, result_error, DbRepo, PQclear,
+    PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus, PreparedStatement,
+    PGRES_TUPLES_OK,
 };
 use std::ffi::{CStr, CString};
 
@@ -340,13 +341,8 @@ impl DbRepo {
                                         .to_string();
                                     if mode.is_empty() {
                                         Err("file mode is empty".to_string())
-                                    } else if !matches!(
-                                        u32::from_str_radix(&mode, 8),
-                                        Ok(value) if value <= 0o7777
-                                    ) {
-                                        Err("file mode is not octal or exceeds 0o7777".to_string())
                                     } else {
-                                        Ok(Some(mode))
+                                        parse_persisted_posix_mode(&mode).map(|_| Some(mode))
                                     }
                                 }
                             };

@@ -88,6 +88,20 @@ static NEXT_LOCK_SESSION_ID: AtomicI64 = AtomicI64::new(-1);
 
 type StatfsSnapshotRows = (u64, u64, u64, u64, u64, Option<u64>);
 
+/// Decode a persisted POSIX permission mode. The inode type is stored in
+/// separate namespace metadata, so database modes may contain only the
+/// permission and special bits.
+pub fn parse_persisted_posix_mode(mode: &str) -> Result<u32, String> {
+    let parsed = u32::from_str_radix(mode.trim_start_matches("0o"), 8)
+        .map_err(|err| format!("persisted file mode is not octal: {err}"))?;
+    if parsed > 0o7777 {
+        return Err(format!(
+            "persisted file mode exceeds the POSIX permission range 0o7777: {mode}"
+        ));
+    }
+    Ok(parsed)
+}
+
 fn fod_profile_io_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_IO", false))
@@ -5921,7 +5935,7 @@ impl DbRepo {
             ));
         }
         let parent_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
-        let mode = u32::from_str_radix(&row[1], 8).map_err(|err| err.to_string())?;
+        let mode = parse_persisted_posix_mode(&row[1])?;
         if mode & 0o1000 == 0 || actor_uid == parent_uid {
             return Ok(());
         }
@@ -5975,7 +5989,7 @@ impl DbRepo {
         }
         let owner_uid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
         let owner_gid = row[1].parse::<u32>().map_err(|err| err.to_string())?;
-        let mode = u32::from_str_radix(&row[2], 8).map_err(|err| err.to_string())?;
+        let mode = parse_persisted_posix_mode(&row[2])?;
         let allowed = if actor_uid == owner_uid {
             (mode >> 6) & 0o7
         } else if actor_gid == owner_gid || actor_groups.contains(&owner_gid) {
@@ -6030,7 +6044,7 @@ impl DbRepo {
         let directory_id = rows[0].parse::<u64>().map_err(|err| err.to_string())?;
         let owner_uid = rows[1].parse::<u32>().map_err(|err| err.to_string())?;
         let owner_gid = rows[2].parse::<u32>().map_err(|err| err.to_string())?;
-        let mode = u32::from_str_radix(&rows[3], 8).map_err(|err| err.to_string())?;
+        let mode = parse_persisted_posix_mode(&rows[3])?;
         let acl_allowed = metadata_updates::directory_acl_allows_on_conn(
             conn,
             directory_id,
@@ -14536,6 +14550,19 @@ mod tests {
     use fod_rust_monitor::DbRepoPayloadObservabilitySnapshot;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn persisted_posix_mode_parser_enforces_permission_bit_range() {
+        assert_eq!(parse_persisted_posix_mode("640"), Ok(0o640));
+        assert_eq!(parse_persisted_posix_mode("0o4755"), Ok(0o4755));
+        assert_eq!(parse_persisted_posix_mode("7777"), Ok(0o7777));
+        assert!(parse_persisted_posix_mode("10000")
+            .unwrap_err()
+            .contains("0o7777"));
+        assert!(parse_persisted_posix_mode("broken")
+            .unwrap_err()
+            .contains("not octal"));
+    }
 
     fn conninfo() -> String {
         let dbname = std::env::var("POSTGRES_DB").unwrap_or_else(|_| "foddbname".to_string());

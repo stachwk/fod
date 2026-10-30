@@ -2348,7 +2348,9 @@ fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
             return Err("valid file mode lookup returned the wrong value".to_string());
         }
 
-        repo.exec(&format!("UPDATE files SET mode = '' WHERE id_file = {file_id}"))?;
+        repo.exec(&format!(
+            "UPDATE files SET mode = '' WHERE id_file = {file_id}"
+        ))?;
         match authority.get_file_mode_value(&path) {
             Err(error) if error.contains("empty") => {}
             Err(error) => return Err(format!("unexpected empty-mode error: {error}")),
@@ -2357,7 +2359,9 @@ fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
             }
         }
 
-        repo.exec(&format!("UPDATE files SET mode = '89' WHERE id_file = {file_id}"))?;
+        repo.exec(&format!(
+            "UPDATE files SET mode = '89' WHERE id_file = {file_id}"
+        ))?;
         match authority.get_file_mode_value(&path) {
             Err(error) if error.contains("octal") => {}
             Err(error) => return Err(format!("unexpected non-octal mode error: {error}")),
@@ -2366,7 +2370,9 @@ fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
             }
         }
 
-        repo.exec(&format!("UPDATE files SET mode = '10000' WHERE id_file = {file_id}"))?;
+        repo.exec(&format!(
+            "UPDATE files SET mode = '10000' WHERE id_file = {file_id}"
+        ))?;
         match authority.get_file_mode_value(&path) {
             Err(error) if error.contains("0o7777") => {}
             Err(error) => return Err(format!("unexpected out-of-range mode error: {error}")),
@@ -2375,7 +2381,41 @@ fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
             }
         }
 
-        if authority.get_file_mode_value("/missing_file_mode_probe")?.is_some() {
+        match authority.store_xattr_value_for_owner_as(
+            "file",
+            file_id,
+            "user.mode-probe",
+            b"must-not-be-written",
+            false,
+            false,
+            1000,
+            1000,
+            &[1000],
+            false,
+        ) {
+            Err(error) if error.contains("0o7777") => {}
+            Err(error) => {
+                return Err(format!(
+                    "xattr authorization returned the wrong corrupt-mode error: {error}"
+                ));
+            }
+            Ok(()) => {
+                return Err(
+                    "xattr authorization accepted an out-of-range persisted mode".to_string(),
+                );
+            }
+        }
+        if repo.query_scalar_text(&format!(
+            "SELECT EXISTS (SELECT 1 FROM xattrs WHERE owner_kind='file' AND owner_id={file_id} AND name='user.mode-probe')::text"
+        ))? != "false"
+        {
+            return Err("rejected xattr authorization still wrote an xattr".to_string());
+        }
+
+        if authority
+            .get_file_mode_value("/missing_file_mode_probe")?
+            .is_some()
+        {
             return Err("missing file mode lookup returned a value".to_string());
         }
         Ok(())

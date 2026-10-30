@@ -355,8 +355,10 @@ PostgreSQL file-mode lookups return `None` only when the path has no matching
 row. NULL, empty, non-octal, malformed, or out-of-range modes (above `0o7777`)
 fail as metadata errors instead of being presented as a missing path or
 projected with file-type bits as permissions. FUSE validates path and open-file
-attribute modes against the same bound. Broader
-fault-injection coverage for malformed persisted rows remains in the
+attribute modes against the same bound. PostgreSQL uses one POSIX-mode decoder
+for namespace lookups, mutation authorization, ACL/xattr checks and directory
+permission checks, so these paths reject corrupt mode rows consistently.
+Broader fault-injection coverage for malformed persisted rows remains in the
 [unresolved findings](../TODO.md#unresolved-findings).
 Namespace lookup and directory-entry metadata decoders reject entity ID zero;
 FOD represents the logical root separately and does not assign it an entity
