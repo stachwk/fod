@@ -44,12 +44,12 @@ fi
 not_a_directory="${dir}/rmdir-file-${suffix}"
 printf 'rmdir target file\n' >"${not_a_directory}"
 not_a_directory_link="${dir}/rmdir-symlink-${suffix}"
-python3 - "${not_a_directory}" "${dir}" "${not_a_directory_link}" <<'PY'
+python3 - "${not_a_directory}" "${dir}" "${not_a_directory_link}" "${MOUNTPOINT}" <<'PY'
 import errno
 import os
 import sys
 
-file_path, nonempty_dir, symlink_path = sys.argv[1:]
+file_path, nonempty_dir, symlink_path, mountpoint = sys.argv[1:]
 os.symlink(nonempty_dir, symlink_path)
 loop_a = os.path.join(nonempty_dir, "loop-a")
 loop_b = os.path.join(nonempty_dir, "loop-b")
@@ -73,6 +73,7 @@ for path, expected, label in (
     (os.path.join(loop_a, "child"), errno.ELOOP, "rmdir symlink loop in parent"),
     (os.path.join(nonempty_dir, long_component), errno.ENAMETOOLONG, "mkdir component over NAME_MAX"),
     (os.path.join(nonempty_dir, long_component), errno.ENAMETOOLONG, "rmdir component over NAME_MAX"),
+    (mountpoint, errno.EBUSY, "rmdir mounted filesystem root"),
     (nonempty_dir, errno.ENOTEMPTY, "rmdir non-empty directory"),
     (nonempty_dir, errno.EEXIST, "mkdir existing directory"),
     (file_path, errno.EEXIST, "mkdir existing regular file"),
@@ -169,4 +170,4 @@ PY
 rm -f "${not_a_directory}" "${not_a_directory_link}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,EINVAL,ELOOP,ENAMETOOLONG,ENOENT,ENOTDIR,ENOTEMPTY rmdir_symlink=ENOTDIR child_entry_parent_errors=1 directory_fd_repeat=1"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EBUSY,EEXIST,EISDIR,EINVAL,ELOOP,ENAMETOOLONG,ENOENT,ENOTDIR,ENOTEMPTY rmdir_symlink=ENOTDIR child_entry_parent_errors=1 directory_fd_repeat=1"

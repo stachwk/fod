@@ -100,6 +100,8 @@ Reading guide:
   traverses a symlink loop in its parent and exact `ENAMETOOLONG` when the final
   component exceeds `NAME_MAX`; neither operation may create or remove an
   entry in these cases.
+  It now also verifies Linux VFS returns `EBUSY` when asked to remove the
+  mounted FUSE root.
   Linux v6.17 source review confirms that VFS handles `rmdir(.)` as `EINVAL`,
   `rmdir(..)` as `ENOTEMPTY`, root/mountpoint removal as `EBUSY`, and a final
   symlink as `ENOTDIR` before calling FUSE; VFS also checks destination
