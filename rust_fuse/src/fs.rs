@@ -18,9 +18,9 @@ use fuser::{
     WriteFlags,
 };
 use crate::errno::{
-    EACCES, EBADF, EBUSY, EEXIST, EFBIG, EILSEQ, EINVAL, EIO, EISDIR, ENAMETOOLONG, ENODATA,
-    ENOENT, ENOTDIR, ENOTEMPTY, ENOTTY, ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM, ERANGE, EROFS,
-    EINTR, ESTALE, EWOULDBLOCK,
+    EACCES, EBADF, EBUSY, EDEADLK, EEXIST, EFBIG, EILSEQ, EINTR, EINVAL, EIO, EISDIR,
+    ENAMETOOLONG, ENODATA, ENOENT, ENOTDIR, ENOTEMPTY, ENOTTY, ENXIO, EOPNOTSUPP, EOVERFLOW, EPERM,
+    ERANGE, EROFS, ESTALE, EWOULDBLOCK,
 };
 use libc::{POLLIN, POLLOUT};
 use log::{debug, info, warn};
@@ -5405,6 +5405,14 @@ impl FodFuse {
 
     fn clear_locks_for_owner_and_sync(&self, owner: u64, context: &str, fh: u64) {
         self.register_local_lock_owner(owner);
+        if self.lock_backend_is_pg() {
+            if let Err(err) = self.repo.clear_lock_wait_edges_for_owner(owner) {
+                warn!(
+                    "FOD {} clear lock wait edges failed fh={} owner={} err={}",
+                    context, fh, owner, err
+                );
+            }
+        }
         let changed = self.clear_locks_for_owner(owner);
         for resource_key in changed {
             let result = if self.lock_backend_is_pg() {
@@ -7168,6 +7176,17 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
+        let wait_resource = if self.lock_backend_is_pg() && sleep_flag {
+            match Self::lock_resource_kind_id(&resource_key) {
+                Ok(value) => Some(value),
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let owner = lock_owner;
         self.register_local_lock_owner(owner);
         debug!(
@@ -7212,7 +7231,21 @@ impl Filesystem for FodFuse {
             return;
         }
 
+        let mut wait_edge_registered = false;
         loop {
+            if wait_edge_registered {
+                if let Err(err) = self.repo.clear_lock_wait_edges(owner, req.unique().0) {
+                    warn!(
+                        "FOD setlk clear wait edges failed owner={} wait_id={} err={}",
+                        owner,
+                        req.unique().0,
+                        err
+                    );
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
+                wait_edge_registered = false;
+            }
             if pending_wait
                 .as_ref()
                 .is_some_and(|pending| pending.cancelled.load(Ordering::Acquire))
@@ -7278,10 +7311,56 @@ impl Filesystem for FodFuse {
                 fuse_reply_error!(reply, EWOULDBLOCK);
                 return;
             }
+            if self.lock_backend_is_pg() {
+                let (resource_kind, resource_id) = wait_resource
+                    .as_ref()
+                    .expect("blocking PostgreSQL lock has a resource identity");
+                match self.repo.register_lock_wait_and_detect_deadlock(
+                    resource_kind,
+                    *resource_id,
+                    owner,
+                    pid,
+                    req.unique().0,
+                    typ,
+                    start,
+                    end,
+                    self.lock_lease_ttl.as_secs_f64().ceil().max(1.0) as u64,
+                ) {
+                    Ok(true) => {
+                        debug!(
+                            "FOD setlk deadlock path={} owner={} wait_id={}",
+                            path,
+                            owner,
+                            req.unique().0
+                        );
+                        fuse_reply_error!(reply, EDEADLK);
+                        return;
+                    }
+                    Ok(false) => wait_edge_registered = true,
+                    Err(err) => {
+                        warn!(
+                            "FOD setlk wait graph update failed path={} owner={} err={}",
+                            path, owner, err
+                        );
+                        fuse_reply_error!(reply, EIO);
+                        return;
+                    }
+                }
+            }
             if pending_wait
                 .as_ref()
                 .is_some_and(|pending| pending.cancelled.load(Ordering::Acquire))
             {
+                if self.lock_backend_is_pg() {
+                    if let Err(err) = self.repo.clear_lock_wait_edges(owner, req.unique().0) {
+                        warn!(
+                            "FOD setlk cancelled wait cleanup failed owner={} wait_id={} err={}",
+                            owner,
+                            req.unique().0,
+                            err
+                        );
+                    }
+                }
                 fuse_reply_error!(reply, EINTR);
                 return;
             }

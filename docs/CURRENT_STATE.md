@@ -37,7 +37,8 @@ passing mounted regressions and further mutation-precondition review.
 Its findings must be resolved and validated before claiming complete
 primary-authoritative mutation coverage.
 
-PostgreSQL schema 27 includes transactional per-file content generations.
+PostgreSQL schema 30 includes transactional per-file content generations and
+the cross-mount POSIX lock wait graph.
 These primitives and the local cache publication gate do not establish default
 cross-mount cache coherence. The [TX03J generation audit](tx03j-generation-audit.md)
 tracks missing integration; strict opt-in reads are diagnostic coverage, not
@@ -295,7 +296,7 @@ also pass.
 
 ## Database schema and primary-authoritative mutations
 
-Current PostgreSQL schema version is 27; the migration manifest in
+Current PostgreSQL schema version is 30; the migration manifest in
 `rust_mkfs/src/main.rs` is authoritative. Earlier schema numbers below identify
 the migrations that introduced particular contracts.
 
@@ -312,6 +313,22 @@ write or supply old bytes to a copy. The mounted primary/replica regression
 pauses replay, changes the source on primary, then verifies both an overwrite
 and a partial `copy_file_range` through another mount directly in PostgreSQL.
 The broader mutation-authority audit remains active.
+
+## POSIX byte-range locks
+
+Writable primary mounts store record-lock ranges and blocking wait-for edges in
+PostgreSQL. The wait graph uses `(host_name, lock_pid)` process identities,
+because FUSE `lock_owner` values are local to one mount connection. `F_SETLKW`
+registers active conflicting processes and checks for a path back to the
+waiting process while holding the shared wait-graph transaction lock. A
+detected cycle returns `EDEADLK`; lock-range updates use
+the same graph-before-resource lock order and invalidate incoming wait edges so
+waiters rebuild them as ranges change. This gives deadlock detection one
+ordering authority across processes and mounts. The graph lock serializes
+PostgreSQL-backed range-lock changes and needs workload measurement before any
+optimization. FIFO lock operations remain local Linux FUSE behavior and are
+outside FOD's cross-mount lock guarantee. See the [POSIX audit](POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger)
+for remaining `fork()`/`exec()` and lock-limit checks.
 
 ## Cross-mount write ownership and FUSE hang safety
 

@@ -4,13 +4,34 @@
 mod support;
 
 use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use support::{db_repo, mountpoint_ready, resolve_file_id, try_unmount, unique_suffix, MountedFs};
+
+struct DeadlockChildren {
+    children: Vec<(Child, ChildStdin)>,
+    ready_paths: Vec<PathBuf>,
+}
+
+impl Drop for DeadlockChildren {
+    fn drop(&mut self) {
+        for ready_path in &self.ready_paths {
+            let _ = fs::remove_file(ready_path);
+        }
+        for (child, _) in &mut self.children {
+            let _ = child.kill();
+        }
+        for (child, _) in &mut self.children {
+            let _ = child.wait();
+        }
+    }
+}
 
 extern "C" fn ignore_signal(_signal: libc::c_int) {}
 
@@ -868,6 +889,198 @@ fn blocking_setlkw_waits_for_cross_mount_unlock() -> Result<(), String> {
     drop(fd_a);
     drop(primary_b);
     drop(primary_a);
+    Ok(())
+}
+
+#[test]
+fn blocking_setlkw_reports_cross_mount_deadlock() -> Result<(), String> {
+    const CHILD_MODE: &str = "FOD_LOCK_DEADLOCK_CHILD";
+    if std::env::var_os(CHILD_MODE).is_some() {
+        let initial_path = std::env::var("FOD_LOCK_DEADLOCK_INITIAL_PATH")
+            .map_err(|err| format!("missing deadlock initial path: {err}"))?;
+        let target_path = std::env::var("FOD_LOCK_DEADLOCK_TARGET_PATH")
+            .map_err(|err| format!("missing deadlock target path: {err}"))?;
+        let ready_path = std::env::var("FOD_LOCK_DEADLOCK_READY")
+            .map_err(|err| format!("missing deadlock ready path: {err}"))?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&initial_path)
+            .map_err(|err| format!("deadlock child open failed: {err}"))?;
+        let target_file = OpenOptions::new()
+            .read(true)
+            .open(&target_path)
+            .map_err(|err| format!("deadlock child target open failed: {err}"))?;
+        let mut initial_lock = flock(libc::F_WRLCK as i16, 0, 1);
+        fcntl_lock(file.as_raw_fd(), libc::F_SETLK, &mut initial_lock)
+            .map_err(|err| format!("deadlock child initial lock failed: {err}"))?;
+        fs::write(&ready_path, b"ready")
+            .map_err(|err| format!("deadlock child ready marker failed: {err}"))?;
+
+        let mut go = [0u8; 1];
+        std::io::stdin()
+            .read_exact(&mut go)
+            .map_err(|err| format!("deadlock child start signal failed: {err}"))?;
+        if go[0] != b'G' {
+            return Err("deadlock child received an invalid start signal".to_string());
+        }
+
+        let mut requested_lock = flock(libc::F_RDLCK as i16, 0, 1);
+        let rc = unsafe {
+            libc::fcntl(
+                target_file.as_raw_fd(),
+                libc::F_SETLKW,
+                &mut requested_lock as *mut libc::flock,
+            )
+        };
+        let errno = if rc == -1 {
+            std::io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EIO)
+        } else {
+            0
+        };
+        if errno != libc::EDEADLK {
+            return Err(format!(
+                "F_SETLKW should detect the inter-process cycle as EDEADLK, got rc={rc} errno={errno}"
+            ));
+        }
+        return Ok(());
+    }
+
+    if skip_without_root() {
+        return Ok(());
+    }
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let debug_options = [("FOD_LOG_LEVEL", "debug".to_string())];
+    let mount_a = MountedFs::start_with_role("lock-setlkw-deadlock-a", "primary", &debug_options)?;
+    let mount_b = MountedFs::start_with_role("lock-setlkw-deadlock-b", "primary", &debug_options)?;
+    let suffix = unique_suffix();
+    let file_a = mount_a
+        .mountpoint
+        .join(format!("lock-setlkw-deadlock-{suffix}-a.bin"));
+    let file_b = mount_a
+        .mountpoint
+        .join(format!("lock-setlkw-deadlock-{suffix}-b.bin"));
+    let file_a_on_b = mount_b.mountpoint.join(file_a.file_name().unwrap());
+    let file_b_on_b = mount_b.mountpoint.join(file_b.file_name().unwrap());
+    fs::write(&file_a, b"deadlock detection a")
+        .map_err(|err| format!("seed first deadlock lock file failed: {err}"))?;
+    fs::write(&file_b, b"deadlock detection b")
+        .map_err(|err| format!("seed second deadlock lock file failed: {err}"))?;
+
+    let mut children = DeadlockChildren {
+        children: Vec::new(),
+        ready_paths: Vec::new(),
+    };
+    for worker in 0..2 {
+        let (initial_path, target_path) = if worker == 0 {
+            (file_a.clone(), file_b_on_b.clone())
+        } else {
+            (file_b_on_b.clone(), file_a_on_b.clone())
+        };
+        let ready_path = std::env::temp_dir().join(format!(
+            "fod-lock-deadlock-{}-{worker}-{suffix}.ready",
+            std::process::id()
+        ));
+        let child = Command::new(std::env::current_exe().map_err(|err| err.to_string())?)
+            .arg("--exact")
+            .arg("blocking_setlkw_reports_cross_mount_deadlock")
+            .arg("--nocapture")
+            .env(CHILD_MODE, "1")
+            .env("FOD_LOCK_DEADLOCK_INITIAL_PATH", &initial_path)
+            .env("FOD_LOCK_DEADLOCK_TARGET_PATH", &target_path)
+            .env("FOD_LOCK_DEADLOCK_READY", &ready_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|err| format!("spawn deadlock lock owner failed: {err}"))?;
+        let mut child = child;
+        let child_stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "deadlock lock owner has no stdin pipe".to_string())?;
+        children.ready_paths.push(ready_path.clone());
+        children.children.push((child, child_stdin));
+
+        let ready_deadline = Instant::now() + Duration::from_secs(5);
+        while !ready_path.exists() {
+            if let Some(status) = children
+                .children
+                .last_mut()
+                .expect("child was stored")
+                .0
+                .try_wait()
+                .map_err(|err| format!("poll deadlock lock owner failed: {err}"))?
+            {
+                return Err(format!(
+                    "deadlock lock owner exited before taking its first lock: {status}"
+                ));
+            }
+            if Instant::now() >= ready_deadline {
+                return Err(format!(
+                    "deadlock lock owner did not acquire its first range: {}",
+                    ready_path.display()
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    for (_, stdin) in &mut children.children {
+        stdin
+            .write_all(b"G")
+            .map_err(|err| format!("release deadlock lock owner: {err}"))?;
+        stdin
+            .flush()
+            .map_err(|err| format!("flush deadlock lock owner signal: {err}"))?;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut detected = false;
+    let mut child_failures = Vec::new();
+    while Instant::now() < deadline {
+        for (child, _) in &mut children.children {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|err| format!("poll deadlock result failed: {err}"))?
+            {
+                if status.success() {
+                    detected = true;
+                } else {
+                    child_failures.push(status.to_string());
+                }
+            }
+        }
+        if detected || !child_failures.is_empty() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    if !child_failures.is_empty() {
+        return Err(format!(
+            "deadlock child rejected F_SETLKW result: {}",
+            child_failures.join(", ")
+        ));
+    }
+    if !detected {
+        return Err(
+            format!(
+                "F_SETLKW deadlock cycle did not produce EDEADLK within 10 seconds\nmount A:\n{}\nmount B:\n{}",
+                mount_a.log_tail(300),
+                mount_b.log_tail(300)
+            ),
+        );
+    }
+    drop(children);
+    drop(mount_b);
+    drop(mount_a);
     Ok(())
 }
 

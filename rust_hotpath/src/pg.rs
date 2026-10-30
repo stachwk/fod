@@ -6941,6 +6941,7 @@ impl DbRepo {
                 to_regclass('{schema}.lock_leases') IS NOT NULL
                 AND to_regclass('{schema}.lock_lease_request_tokens') IS NOT NULL
                 AND to_regclass('{schema}.lock_range_leases') IS NOT NULL
+                AND to_regclass('{schema}.lock_wait_edges') IS NOT NULL
                 AND EXISTS (
                     SELECT 1
                     FROM information_schema.columns
@@ -7003,6 +7004,12 @@ impl DbRepo {
                     FROM pg_indexes
                     WHERE schemaname = '{schema}'
                       AND indexname = 'idx_lock_range_leases_session'
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM pg_indexes
+                    WHERE schemaname = '{schema}'
+                      AND indexname = 'idx_lock_wait_edges_waiter'
                 )
             THEN '1' ELSE '0' END
             ",
@@ -7259,6 +7266,40 @@ impl DbRepo {
                         .map_err(|_| "SQL contains NUL byte".to_string())?,
                         CString::new(
                             "
+                            CREATE TABLE IF NOT EXISTS lock_wait_edges (
+                                waiter_session_id BIGINT NOT NULL,
+                                wait_id NUMERIC(20,0) NOT NULL,
+                                waiter_owner_key NUMERIC(20,0) NOT NULL,
+                                waiter_host_name VARCHAR(255) NOT NULL,
+                                waiter_pid BIGINT NOT NULL,
+                                blocked_session_id BIGINT NOT NULL,
+                                blocked_owner_key NUMERIC(20,0) NOT NULL,
+                                blocked_host_name VARCHAR(255) NOT NULL,
+                                blocked_pid BIGINT NOT NULL,
+                                lease_expires_at TIMESTAMP NOT NULL,
+                                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                                PRIMARY KEY (waiter_session_id, wait_id, blocked_session_id, blocked_owner_key),
+                                CHECK (waiter_host_name <> blocked_host_name OR waiter_pid <> blocked_pid)
+                            )
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
+                            CREATE INDEX IF NOT EXISTS idx_lock_wait_edges_waiter
+                            ON lock_wait_edges (waiter_host_name, waiter_pid, lease_expires_at)
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
+                            CREATE INDEX IF NOT EXISTS idx_lock_wait_edges_blocked
+                            ON lock_wait_edges (blocked_host_name, blocked_pid, lease_expires_at)
+                            ",
+                        )
+                        .map_err(|_| "SQL contains NUL byte".to_string())?,
+                        CString::new(
+                            "
                             ALTER TABLE IF EXISTS lock_range_leases
                             ADD COLUMN IF NOT EXISTS lock_pid INTEGER NOT NULL DEFAULT 0
                             ",
@@ -7483,10 +7524,14 @@ impl DbRepo {
                             CREATE OR REPLACE FUNCTION fod_prune_client_session_lock_leases()
                             RETURNS trigger AS $$
                             BEGIN
+                                PERFORM pg_advisory_xact_lock(hashtextextended('fod-posix-lock-wait-graph', 0));
                                 DELETE FROM lock_leases
                                 WHERE session_id = OLD.session_id;
                                 DELETE FROM lock_range_leases
                                 WHERE session_id = OLD.session_id;
+                                DELETE FROM lock_wait_edges
+                                WHERE waiter_session_id = OLD.session_id
+                                   OR blocked_session_id = OLD.session_id;
                                 RETURN OLD;
                             END;
                             $$ LANGUAGE plpgsql
@@ -9852,6 +9897,9 @@ impl DbRepo {
         let session_id_text = session_id.to_string_lossy().into_owned();
         let owner_key_text = owner_key.to_string();
         self.with_transaction(|tx| {
+            tx.query_scalar_text(
+                "SELECT pg_advisory_xact_lock(hashtextextended('fod-posix-lock-wait-graph', 0))",
+            )?;
             let lock_key = format!("posix-lock-range:{resource_kind}:{resource_id}");
             let advisory_lock_sql = format!(
                 "SELECT pg_advisory_xact_lock(hashtextextended({}, 0))",
@@ -9939,7 +9987,156 @@ impl DbRepo {
                 );
                 tx.exec(&insert_sql)?;
             }
+            // A blocker changing any part of its range invalidates all wait
+            // edges pointing at it. Waiting requests rebuild those edges on
+            // their next polling iteration.
+            tx.exec(&format!(
+                "DELETE FROM lock_wait_edges
+                 WHERE blocked_session_id = {}
+                   AND blocked_owner_key = {}",
+                Self::quote_literal(&session_id_text),
+                Self::quote_literal(&owner_key_text)
+            ))?;
             Ok(true)
+        })
+    }
+
+    /// Record the active owners blocking this POSIX lock and detect whether
+    /// the resulting wait-for graph contains a cycle back to this owner.
+    pub fn register_lock_wait_and_detect_deadlock(
+        &self,
+        resource_kind: &str,
+        resource_id: u64,
+        waiter_owner_key: u64,
+        waiter_pid: u32,
+        wait_id: u64,
+        lock_type: i32,
+        range_start: u64,
+        range_end: u64,
+        lease_ttl_seconds: u64,
+    ) -> Result<bool, String> {
+        self.ensure_lock_schema_ready()?;
+        let waiter_session_id = self.session_id_for_owner_key_text(waiter_owner_key)?;
+        let waiter_session_id = waiter_session_id.to_string_lossy().into_owned();
+        let waiter_session_sql = Self::quote_literal(&waiter_session_id);
+        let waiter_owner_sql = Self::quote_literal(&waiter_owner_key.to_string());
+        let waiter_pid_sql = waiter_pid.to_string();
+        let wait_id_sql = Self::quote_literal(&wait_id.to_string());
+        let resource_kind_sql = Self::quote_literal(resource_kind);
+        // Linux F_WRLCK is 1 and F_RDLCK is 0 on the supported ABI.
+        let requested_lock_type = if lock_type == 1 { 1 } else { 0 };
+        let lease_ttl_seconds = lease_ttl_seconds.max(1);
+
+        self.with_transaction(|tx| {
+            tx.query_scalar_text(
+                "SELECT pg_advisory_xact_lock(hashtextextended('fod-posix-lock-wait-graph', 0))",
+            )?;
+            let waiter_host_name = tx.query_scalar_text(&format!(
+                "SELECT host_name FROM client_sessions WHERE session_id = {waiter_session_sql}"
+            ))?;
+            let waiter_host_name = Self::quote_literal(waiter_host_name.trim());
+            tx.exec("DELETE FROM lock_wait_edges WHERE lease_expires_at <= NOW()")?;
+            tx.exec(&format!(
+                "DELETE FROM lock_wait_edges
+                 WHERE waiter_session_id = {waiter_session_sql}
+                   AND wait_id = {wait_id_sql}"
+            ))?;
+
+            let resource_lock_key = format!("posix-lock-range:{resource_kind}:{resource_id}");
+            tx.query_scalar_text(&format!(
+                "SELECT pg_advisory_xact_lock(hashtextextended({}, 0))",
+                Self::quote_literal(&resource_lock_key)
+            ))?;
+            tx.exec(&format!(
+                "INSERT INTO lock_wait_edges (
+                    waiter_session_id, wait_id, waiter_owner_key,
+                    waiter_host_name, waiter_pid,
+                    blocked_session_id, blocked_owner_key,
+                    blocked_host_name, blocked_pid, lease_expires_at
+                 )
+                 SELECT {waiter_session_sql}, {wait_id_sql}, {waiter_owner_sql},
+                        {waiter_host_name}, {waiter_pid_sql},
+                        lease.session_id, lease.owner_key,
+                        session.host_name, lease.lock_pid,
+                        NOW() + INTERVAL '{lease_ttl_seconds} seconds'
+                 FROM lock_range_leases AS lease
+                 JOIN client_sessions AS session ON session.session_id = lease.session_id
+                 WHERE lease.resource_kind = {resource_kind_sql}
+                   AND lease.resource_id = {resource_id}
+                   AND lease.lease_expires_at > NOW()
+                   AND session.lease_expires_at > NOW()
+                   AND NOT (session.host_name = {waiter_host_name} AND lease.lock_pid = {waiter_pid_sql})
+                   AND (lease.lock_type = 1 OR {requested_lock_type} = 1)
+                   AND lease.range_start <= {range_end}
+                   AND (lease.range_end IS NULL OR lease.range_end >= {range_start})
+                 GROUP BY lease.session_id, lease.owner_key, session.host_name, lease.lock_pid
+                 ON CONFLICT (waiter_session_id, wait_id, blocked_session_id, blocked_owner_key)
+                 DO UPDATE SET lease_expires_at = EXCLUDED.lease_expires_at"
+            ))?;
+
+            // UNION (rather than UNION ALL with path expansion) deduplicates
+            // each owner pair, so even a graph with many paths terminates after
+            // visiting each reachable owner once.
+            let cycle_sql = format!(
+                "WITH RECURSIVE reachable(host_name, pid) AS (
+                    SELECT blocked_host_name, blocked_pid
+                    FROM lock_wait_edges
+                    WHERE waiter_session_id = {waiter_session_sql}
+                      AND wait_id = {wait_id_sql}
+                      AND lease_expires_at > NOW()
+                    UNION
+                    SELECT edge.blocked_host_name, edge.blocked_pid
+                    FROM reachable
+                    JOIN lock_wait_edges AS edge
+                      ON edge.waiter_host_name = reachable.host_name
+                     AND edge.waiter_pid = reachable.pid
+                     AND edge.lease_expires_at > NOW()
+                 )
+                 SELECT CASE WHEN EXISTS (
+                     SELECT 1 FROM reachable
+                     WHERE host_name = {waiter_host_name}
+                       AND pid = {waiter_pid_sql}
+                 ) THEN '1' ELSE '0' END"
+            );
+            let has_cycle = tx.query_scalar_text(&cycle_sql)?.trim() == "1";
+            if has_cycle {
+                tx.exec(&format!(
+                    "DELETE FROM lock_wait_edges
+                     WHERE waiter_session_id = {waiter_session_sql}
+                       AND wait_id = {wait_id_sql}"
+                ))?;
+            }
+            Ok(has_cycle)
+        })
+    }
+
+    pub fn clear_lock_wait_edges(&self, waiter_owner_key: u64, wait_id: u64) -> Result<(), String> {
+        let session_id = self.session_id_for_owner_key_text(waiter_owner_key)?;
+        let session_id = Self::quote_literal(&session_id.to_string_lossy());
+        let wait_id = Self::quote_literal(&wait_id.to_string());
+        self.with_transaction(|tx| {
+            tx.query_scalar_text(
+                "SELECT pg_advisory_xact_lock(hashtextextended('fod-posix-lock-wait-graph', 0))",
+            )?;
+            tx.exec(&format!(
+                "DELETE FROM lock_wait_edges WHERE waiter_session_id = {session_id} AND wait_id = {wait_id}"
+            ))
+        })
+    }
+
+    pub fn clear_lock_wait_edges_for_owner(&self, owner_key: u64) -> Result<(), String> {
+        let session_id = self.session_id_for_owner_key_text(owner_key)?;
+        let session_id = Self::quote_literal(&session_id.to_string_lossy());
+        let owner_key = Self::quote_literal(&owner_key.to_string());
+        self.with_transaction(|tx| {
+            tx.query_scalar_text(
+                "SELECT pg_advisory_xact_lock(hashtextextended('fod-posix-lock-wait-graph', 0))",
+            )?;
+            tx.exec(&format!(
+                "DELETE FROM lock_wait_edges
+                 WHERE (waiter_session_id = {session_id} AND waiter_owner_key = {owner_key})
+                    OR (blocked_session_id = {session_id} AND blocked_owner_key = {owner_key})"
+            ))
         })
     }
 

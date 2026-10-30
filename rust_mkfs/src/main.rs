@@ -25,9 +25,9 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 28;
+const SCHEMA_VERSION: u64 = 30;
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_FILES: [&str; 28] = [
+const MIGRATION_FILES: [&str; 30] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -56,9 +56,11 @@ const MIGRATION_FILES: [&str; 28] = [
     "0026_file_content_generation.sql",
     "0027_explicit_file_content_generation.sql",
     "0028_namespace_parent_timestamps.sql",
+    "0029_posix_lock_wait_graph.sql",
+    "0030_posix_lock_wait_process_identity.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 28] = [
+const MIGRATION_DESCRIPTIONS: [&str; 30] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -87,6 +89,8 @@ const MIGRATION_DESCRIPTIONS: [&str; 28] = [
     "Track transactional per-file content generations for cross-mount coherence",
     "Use explicit transactional content generation updates",
     "Update directory timestamps with namespace changes, including root",
+    "Track blocking POSIX lock dependencies for cross-mount deadlock detection",
+    "Use host and process identity for cross-mount POSIX lock wait graphs",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -270,6 +274,14 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0028_namespace_parent_timestamps.sql"
         )),
+        29 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0029_posix_lock_wait_graph.sql"
+        )),
+        30 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0030_posix_lock_wait_process_identity.sql"
+        )),
         _ => "",
     }
 }
@@ -304,6 +316,8 @@ fn migration_description(version: u64) -> &'static str {
         26 => MIGRATION_DESCRIPTIONS[25],
         27 => MIGRATION_DESCRIPTIONS[26],
         28 => MIGRATION_DESCRIPTIONS[27],
+        29 => MIGRATION_DESCRIPTIONS[28],
+        30 => MIGRATION_DESCRIPTIONS[29],
         _ => "Migration",
     }
 }
@@ -338,6 +352,8 @@ fn migration_filename(version: u64) -> &'static str {
         26 => MIGRATION_FILES[25],
         27 => MIGRATION_FILES[26],
         28 => MIGRATION_FILES[27],
+        29 => MIGRATION_FILES[28],
+        30 => MIGRATION_FILES[29],
         _ => "unknown.sql",
     }
 }

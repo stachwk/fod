@@ -349,6 +349,22 @@ Reading guide:
   PostgreSQL range lease with an unsupported lock type and confirms `F_GETLK`
   returns exactly `EIO` rather than reporting the corrupt row as absent. See
   `rust_fuse/tests/lock_backend_smoke.rs::malformed_active_range_lease_returns_eio_from_getlk`.
+- [x] **Detect cross-mount POSIX lock deadlocks.** `F_SETLKW` previously
+  retried a PostgreSQL range conflict indefinitely and did not report
+  `EDEADLK`. Migrations 0029 and 0030 add a PostgreSQL wait-for graph whose
+  nodes use host and caller PID, because FUSE `lock_owner` values are local to a
+  mount. Cycle registration and lock-range changes share one transaction
+  advisory lock so independent mounts use the same ordering authority. A mounted
+  regression starts two processes on separate mounts, grants them exclusive
+  locks on separate files, then requests each other's file and requires one
+  request to return `EDEADLK`; the other
+  process is stopped by test cleanup. The regression exposed the mount-local
+  FUSE lock-owner identity; `(host_name, lock_pid)` fixes that mismatch.
+  `make test-locking` passed 12/12 and `make test-schema-upgrade` passed
+  (2026-10-30). This global graph
+  lock serializes PostgreSQL-backed POSIX range-lock updates; measure that cost
+  before tuning it. `fork()`/`exec()` lock lifecycle and `ENOLCK` limits remain
+  outside this fix. See P10 in the [POSIX audit](docs/POSIX_CONFORMANCE_AUDIT.md).
 - [x] **Metadata projection preserves restrictive modes and rejects malformed rows.**
   The mounted `test_unlink_primary_authority_docker.py` regression creates and
   chmods a directory to `0644`, sets pre-epoch file timestamps through
