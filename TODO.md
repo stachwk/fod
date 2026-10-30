@@ -215,7 +215,9 @@ Reading guide:
   checks for `0644` and a decoder regression for malformed metadata before
   closing this finding. Timestamp projection now preserves pre-epoch dates and
   rejects malformed values; add a mounted `utimensat/fstat` regression before
-  treating timestamp projection as verified.
+  treating timestamp projection as verified. Unknown special-file types now
+  return `EIO` instead of appearing as regular files; add a malformed-type
+  decoder regression.
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's

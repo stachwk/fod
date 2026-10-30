@@ -2629,12 +2629,27 @@ impl FodFuse {
         UNIX_EPOCH.checked_sub(since_epoch)
     }
 
-    fn file_type_from_special(special_type: &str) -> FileType {
+    fn file_type_from_special(special_type: &str) -> Option<FileType> {
         match special_type {
-            "fifo" => FileType::NamedPipe,
-            "char" => FileType::CharDevice,
-            "block" => FileType::BlockDevice,
-            _ => FileType::RegularFile,
+            "fifo" => Some(FileType::NamedPipe),
+            "char" => Some(FileType::CharDevice),
+            "block" => Some(FileType::BlockDevice),
+            _ => None,
+        }
+    }
+
+    fn directory_entry_file_type(
+        entry_kind: &str,
+        special_type: Option<&str>,
+    ) -> Result<FileType, libc::c_int> {
+        match entry_kind {
+            "dir" => Ok(FileType::Directory),
+            "symlink" => Ok(FileType::Symlink),
+            "file" | "hardlink" => match special_type {
+                Some(special_type) => Self::file_type_from_special(special_type).ok_or(EIO),
+                None => Ok(FileType::RegularFile),
+            },
+            _ => Err(EIO),
         }
     }
 
@@ -3788,14 +3803,14 @@ impl FodFuse {
                 if let Some((special_type, major, minor)) =
                     repo.get_special_file_metadata(file_id).map_err(|_| EIO)?
                 {
-                    kind = Self::file_type_from_special(&special_type);
+                    kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
                     rdev = ((major as u64) << 8) | (minor as u64);
                 }
             } else if obj_type == "file" {
                 if let Some((special_type, major, minor)) =
                     repo.get_special_file_metadata(raw_inode).map_err(|_| EIO)?
                 {
-                    kind = Self::file_type_from_special(&special_type);
+                    kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
                     rdev = ((major as u64) << 8) | (minor as u64);
                 }
             }
@@ -3890,7 +3905,7 @@ impl FodFuse {
             .get_special_file_metadata(raw_inode)
             .map_err(|_| EIO)?
         {
-            kind = Self::file_type_from_special(&special_type);
+            kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
             rdev = ((major as u64) << 8) | (minor as u64);
         }
 
@@ -5896,15 +5911,19 @@ impl Filesystem for FodFuse {
                     .enumerate()
                     .skip(readdir_child_entries_to_skip(offset))
                 {
-                    let kind = match entry.kind.as_str() {
-                        "dir" => FileType::Directory,
-                        "symlink" => FileType::Symlink,
-                        "file" | "hardlink" => entry
-                            .special_type
-                            .as_deref()
-                            .map(Self::file_type_from_special)
-                            .unwrap_or(FileType::RegularFile),
-                        _ => continue,
+                    let kind = match Self::directory_entry_file_type(
+                        &entry.kind,
+                        entry.special_type.as_deref(),
+                    ) {
+                        Ok(kind) => kind,
+                        Err(errno) => {
+                            warn!(
+                                "FOD readdir invalid child type path={} name={} type={} special_type={:?}",
+                                path, entry.name, entry.kind, entry.special_type
+                            );
+                            fuse_reply_error!(reply, errno);
+                            return;
+                        }
                     };
                     let inode =
                         self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
@@ -5940,15 +5959,19 @@ impl Filesystem for FodFuse {
                             return;
                         }
                     };
-                    let kind = match entry.kind.as_str() {
-                        "dir" => FileType::Directory,
-                        "symlink" => FileType::Symlink,
-                        "file" | "hardlink" => entry
-                            .special_type
-                            .as_deref()
-                            .map(Self::file_type_from_special)
-                            .unwrap_or(FileType::RegularFile),
-                        _ => continue,
+                    let kind = match Self::directory_entry_file_type(
+                        &entry.kind,
+                        entry.special_type.as_deref(),
+                    ) {
+                        Ok(kind) => kind,
+                        Err(errno) => {
+                            warn!(
+                                "FOD readdir invalid child type path={} name={} type={} special_type={:?}",
+                                path, entry.name, entry.kind, entry.special_type
+                            );
+                            fuse_reply_error!(reply, errno);
+                            return;
+                        }
                     };
                     let inode =
                         self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
