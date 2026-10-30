@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import errno
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -116,9 +117,38 @@ def main() -> None:
             before = suid_file.stat().st_mode
             assert before & 0o6000 == 0o6000, oct(before)
 
+            setcap = shutil.which("setcap")
+            capability_xattr_installed = False
+            if setcap is None:
+                print("SKIP security.capability chown regression: setcap is unavailable")
+            else:
+                setcap_result = subprocess.run(
+                    ["sudo", "-n", setcap, "cap_net_bind_service=ep", str(suid_file)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                assert setcap_result.returncode == 0, (
+                    "setcap failed before chown regression",
+                    setcap_result.returncode,
+                    setcap_result.stderr,
+                )
+                capability_value = os.getxattr(suid_file, "security.capability")
+                assert capability_value, "setcap installed an empty security.capability xattr"
+                capability_xattr_installed = True
+
             _chgrp(suid_file, alt_gid)
             after = suid_file.stat().st_mode
             assert after & 0o6000 == 0, oct(after)
+            if capability_xattr_installed:
+                try:
+                    os.getxattr(suid_file, "security.capability")
+                except OSError as error:
+                    assert error.errno == errno.ENODATA, error
+                else:
+                    raise AssertionError(
+                        "chown preserved security.capability on a regular file"
+                    )
 
             group_file.write_text("group\n", encoding="utf-8")
             _chgrp(group_file, alt_gid)

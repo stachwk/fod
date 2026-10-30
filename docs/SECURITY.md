@@ -87,6 +87,15 @@ filesystem mechanisms implemented/exposed by FOD:
 Do not weaken `/etc/fod` or `/var/log/fod` permissions merely to make mounted
 data available to ordinary users. Those are separate concerns.
 
+Linux file capabilities are a separate privilege mechanism from POSIX ACLs.
+On Linux, `chown()` on a regular file clears its `security.capability` xattr;
+`test_permissions.py` verifies this through a mounted FOD filesystem. With the
+current FUSE negotiation, Linux VFS performs the kill-privilege step and
+forwards xattr removal through FUSE. See Linux v6.17
+[`chown_common()`](https://github.com/torvalds/linux/blob/v6.17/fs/open.c#L3434-L3438),
+[`cap_inode_killpriv()`](https://github.com/torvalds/linux/blob/v6.17/security/commoncap.c#L351-L357),
+and [`fuse_removexattr()`](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/xattr.c#L156-L171).
+
 ## Native packages
 
 Native `.deb`/`.rpm` packages preserve the same root-operated runtime model and

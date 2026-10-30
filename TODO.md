@@ -349,6 +349,15 @@ Reading guide:
   directories. Broader P07 gaps remain in the conformance ledger.
   See [`permissions and identity audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger)
   and [`errno matrix`](docs/POSIX_ERRNO_MATRIX.md).
+- [x] **P07 Linux file-capability clearing on chown.** `test_permissions.py`
+  now installs `security.capability` with `setcap`, changes the file's
+  group through FOD, and requires the xattr to be absent. The mounted
+  test passed on 2026-10-30 with a disposable PostgreSQL database.
+  Linux v6.17 `chown_common()` requests `ATTR_KILL_PRIV`;
+  `cap_inode_killpriv()` removes the capability xattr and the FUSE
+  xattr operation reaches FOD. This Linux extension is distinct from
+  POSIX ACL and default-ACL behavior. Details are in
+  [`SECURITY.md`](docs/SECURITY.md).
 - [x] **Verify stale-inode xattr behavior on mounted FUSE.** Source review
   found that xattr callbacks resolved the request's inode through a cached path
   without confirming that the path still resolved to that inode. After a
