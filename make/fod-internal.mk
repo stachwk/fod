@@ -1462,6 +1462,15 @@ test-locking: init
 		test -x "$$test_bin"; \
 		sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) "$$test_bin" --nocapture
 
+.PHONY: test-postgres-enospc
+test-postgres-enospc: init
+	mkdir -p $(FOD_LOCKING_TARGET_DIR)
+	CARGO_TARGET_DIR=$(FOD_LOCKING_TARGET_DIR) $(CARGO_TEST_FUSE) --test postgres_error_mapping --no-run --message-format=json > $(FOD_LOCKING_TARGET_DIR)/postgres-enospc-build.json
+	@test_bin="$$($(PYTHON) -c 'import json, sys; print(*[message["executable"] for message in map(json.loads, sys.stdin) if message.get("reason") == "compiler-artifact" and message.get("target", {}).get("name") == "postgres_error_mapping" and message.get("executable")], sep="\n")' < $(FOD_LOCKING_TARGET_DIR)/postgres-enospc-build.json | tail -n 1)"; \
+		test -n "$$test_bin"; \
+		test -x "$$test_bin"; \
+		sudo env $(ADMP_TRACE_ENV) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_PG_HOST=$(FOD_PG_HOST) FOD_PG_PORT=$(FOD_PG_PORT) FOD_PG_DBNAME=$(FOD_PG_DBNAME) FOD_PG_USER=$(FOD_PG_USER) FOD_PG_PASSWORD=$(FOD_PG_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) "$$test_bin" --nocapture --test-threads=1
+
 test-pg-lock-manager: init
 	$(CARGO_TEST_HOTPATH) --test lock_manager
 

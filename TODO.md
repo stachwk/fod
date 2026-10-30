@@ -152,7 +152,7 @@ Reading guide:
   from the authority. Add a two-mount test with replica reads enabled and
   controlled replication lag, covering each operation's success/conflict
   result and ensuring a committed create is not reported as failed.
-- [ ] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
+- [x] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
   mutations.** `errno.rs` maps PostgreSQL `53100` (`disk_full`) to `ENOSPC` in
   both persistence and namespace error mappers. File-block persistence also
   maps the configured FOD quota to `ENOSPC`. `mkdir()` and regular-file,
@@ -164,11 +164,12 @@ Reading guide:
   reading `conn_error()`; these now capture `result_error()` first. The
   `touch_data_object()` helper also now propagates the original command error
   instead of replacing it with a generic string. `errno.rs` unit regressions
-  now verify SQLSTATE `53100` maps to `ENOSPC` in both error mappers. The
-  remaining gap is deterministic backend fault injection proving PostgreSQL
-  emits the SQLSTATE and the callback propagates it to FUSE; current quota tests
-  exercise FOD's own quota path and do not establish this end-to-end mapping.
-  Do not parse localized PostgreSQL error text. See
+  now verify SQLSTATE `53100` maps to `ENOSPC` in both error mappers. The mounted
+  fault-injection regression and `make test-postgres-enospc` create a temporary
+  trigger on `data_blocks`, force SQLSTATE `53100`, and require `fsync()` to
+  return `ENOSPC`; it passed against temporary PostgreSQL 17.11. Current quota
+  tests exercise FOD's own quota path and do not establish this PostgreSQL error
+  mapping. Do not parse localized PostgreSQL error text. See
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617).
 - [ ] **PostgreSQL read failures must not appear as empty metadata.** Source
   review found that `count_file_links()`, `count_file_blocks()`,
