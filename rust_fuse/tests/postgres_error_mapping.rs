@@ -16,6 +16,24 @@ struct DiskFullTrigger {
     function_name: String,
 }
 
+struct DirectoryDiskFullTrigger {
+    repo: DbRepo,
+    trigger_name: String,
+    function_name: String,
+}
+
+impl Drop for DirectoryDiskFullTrigger {
+    fn drop(&mut self) {
+        let _ = self.repo.exec(&format!(
+            "DROP TRIGGER IF EXISTS {} ON directories",
+            self.trigger_name
+        ));
+        let _ = self
+            .repo
+            .exec(&format!("DROP FUNCTION IF EXISTS {}()", self.function_name));
+    }
+}
+
 impl Drop for DiskFullTrigger {
     fn drop(&mut self) {
         let _ = self.repo.exec(&format!(
@@ -65,6 +83,43 @@ fn postgres_disk_full_is_reported_as_enospc() -> Result<(), String> {
     ))?;
 
     let mounted = MountedFs::start("postgres-disk-full-enospc")?;
+    let directory_name = format!("disk-full-dir-{}", unique_suffix());
+    let directory_trigger_name = format!("fod_test_directory_disk_full_{suffix}");
+    let directory_function_name = format!("fod_test_directory_disk_full_fn_{suffix}");
+    repo.exec(&format!(
+        "CREATE FUNCTION {directory_function_name}() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+             IF NEW.name = '{directory_name}' THEN
+                 RAISE EXCEPTION 'forced namespace disk-full error from FOD regression'
+                     USING ERRCODE = '53100';
+             END IF;
+             RETURN NEW;
+         END;
+         $$"
+    ))?;
+    let _directory_trigger_cleanup = DirectoryDiskFullTrigger {
+        repo: repo.clone(),
+        trigger_name: directory_trigger_name.clone(),
+        function_name: directory_function_name.clone(),
+    };
+    repo.exec(&format!(
+        "CREATE TRIGGER {directory_trigger_name}
+         BEFORE INSERT ON directories
+         FOR EACH ROW EXECUTE FUNCTION {directory_function_name}()"
+    ))?;
+    let directory_path = mounted.mountpoint.join(&directory_name);
+    let mkdir_error = std::fs::create_dir(&directory_path)
+        .expect_err("mkdir succeeded despite PostgreSQL SQLSTATE 53100");
+    if mkdir_error.raw_os_error() != Some(libc::ENOSPC) {
+        return Err(format!(
+            "PostgreSQL SQLSTATE 53100 from mkdir reached userspace as errno={:?}, expected ENOSPC",
+            mkdir_error.raw_os_error()
+        ));
+    }
+    if directory_path.exists() {
+        return Err("mkdir left a directory behind after PostgreSQL SQLSTATE 53100".to_string());
+    }
+
     let path = mounted
         .mountpoint
         .join(format!("disk-full-{}.bin", unique_suffix()));
@@ -89,6 +144,6 @@ fn postgres_disk_full_is_reported_as_enospc() -> Result<(), String> {
         ));
     }
 
-    println!("OK: PostgreSQL SQLSTATE 53100 surfaced through FUSE as ENOSPC");
+    println!("OK: PostgreSQL SQLSTATE 53100 from mkdir and fsync surfaced through FUSE as ENOSPC");
     Ok(())
 }
