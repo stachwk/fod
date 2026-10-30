@@ -23,6 +23,15 @@ Reading guide:
   resulting `data_blocks` bytes directly on primary. It passed on 2026-10-30
   in `test_unlink_primary_authority_docker.py` (artifact:
   `artifacts/integration/unlink-primary-authority-20261030T141413Z/results.json`).
+- [x] **The non-adoption `copy_file_range()` path read source bytes from a
+  lagging replica.** Source inspection found that its block-copy branch still
+  called the ordinary replica-routed slice reader even though copy input must
+  be authoritative. It now uses `assemble_file_slice_authoritative()` through
+  the profiled write-input helper. A two-mount test pauses replay, changes the
+  source on primary, copies a partial range from the replica-routed mount, and
+  checks destination `data_blocks` on primary. It passed on 2026-10-30 in
+  FOD 3.4.313 (artifact:
+  `artifacts/integration/unlink-primary-authority-20261030T142313Z/results.json`).
 - [x] **The sticky-bit integration test stopped before reaching FOD.** Its
   `nobody` subprocess could not traverse the mode-0700 temporary mountpoint and
   received `EACCES` before testing the intended `EPERM`. The test now makes the

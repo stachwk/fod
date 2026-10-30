@@ -55,7 +55,7 @@ Update this queue when a task closes or its priority changes. Keep detailed
 experiments and acceptance matrices in the linked topic document rather than
 duplicating them here.
 
-Recent authority-audit increment: identical-write suppression now compares
-against primary data. A paused-replica regression confirms stale bytes written
-by another mount still replace the current primary payload. Continue the
-remaining mutation-precondition audit.
+Recent authority-audit increment: identical-write suppression and the
+non-adoption `copy_file_range` path now read source bytes from primary. A
+paused-replica regression verifies both behaviors against PostgreSQL payload
+rows. Continue the remaining mutation-precondition audit.

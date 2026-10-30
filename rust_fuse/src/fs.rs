@@ -10016,7 +10016,7 @@ impl Filesystem for FodFuse {
                 }
             }
         } else {
-            match self.repo.assemble_file_slice(
+            match self.assemble_file_slice_for_update_profiled(
                 src_file_id,
                 src_first_block,
                 src_last_block,

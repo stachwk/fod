@@ -464,6 +464,10 @@ Write and copy planning also reads current file sizes from the write authority.
 Copy source blocks and destination blocks used for deduplication are likewise
 read from primary. A replica's stale size or payload could otherwise make a
 buffered write/copy persist an older, shorter extent or copy stale bytes.
+The non-adoption `copy_file_range` path now uses the same authoritative slice
+reader; its two-mount regression pauses replay, changes the source on primary,
+copies a partial range through the replica-routed mount, and checks the
+destination block directly on primary. It passed on 2026-10-30.
 
 The write callback's unchanged-slice optimization is also mutation input: if
 the requested bytes equal a lagged replica's old contents, skipping persistence

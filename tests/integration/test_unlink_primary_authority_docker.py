@@ -272,6 +272,67 @@ def main():
         results["unchanged_write_compares_primary_after_replica_lag"] = True
         resume()
 
+        copy_source_a = ma / "stale-replica-copy-source"
+        copy_source_b = mb / copy_source_a.name
+        copy_destination_a = ma / "stale-replica-copy-destination"
+        copy_destination_b = mb / copy_destination_a.name
+        copy_source_old = b"old-copy-source-value"
+        copy_source_new = b"new-copy-source-value"
+        copy_destination_initial = b"destination-tail-value"
+        copy_length = 3
+        copy_source_a.write_bytes(copy_source_old)
+        copy_destination_a.write_bytes(copy_destination_initial)
+        barrier()
+        assert copy_source_b.read_bytes() == copy_source_old
+        assert copy_destination_b.read_bytes() == copy_destination_initial
+        pause()
+        with copy_source_a.open("r+b", buffering=0) as handle:
+            assert os.pwrite(handle.fileno(), copy_source_new, 0) == len(copy_source_new)
+            os.fsync(handle.fileno())
+        primary_copy_source = query(
+            primary,
+            "SELECT substring(b.data FROM 1 FOR %s) "
+            "FROM fod.files f JOIN fod.data_blocks b "
+            "ON b.data_object_id=f.data_object_id AND b._order=0 "
+            "WHERE f.name=%s AND NOT f.unlinked",
+            (len(copy_source_new), copy_source_a.name),
+        )[0][0]
+        if primary_copy_source is not None:
+            primary_copy_source = bytes(primary_copy_source)
+        assert primary_copy_source == copy_source_new, primary_copy_source
+        with copy_source_b.open("rb") as source, copy_destination_b.open(
+            "r+b", buffering=0
+        ) as destination:
+            copied = os.copy_file_range(
+                source.fileno(),
+                destination.fileno(),
+                copy_length,
+                offset_src=0,
+                offset_dst=0,
+            )
+            assert copied == copy_length, copied
+            os.fsync(destination.fileno())
+        expected_copy_destination = (
+            copy_source_new[:copy_length]
+            + copy_destination_initial[copy_length:]
+        )
+        actual_copy_destination = query(
+            primary,
+            "SELECT substring(b.data FROM 1 FOR %s) "
+            "FROM fod.files f JOIN fod.data_blocks b "
+            "ON b.data_object_id=f.data_object_id AND b._order=0 "
+            "WHERE f.name=%s AND NOT f.unlinked",
+            (len(expected_copy_destination), copy_destination_a.name),
+        )[0][0]
+        if actual_copy_destination is not None:
+            actual_copy_destination = bytes(actual_copy_destination)
+        assert actual_copy_destination == expected_copy_destination, (
+            "copy_file_range used stale replica source bytes: "
+            f"{actual_copy_destination!r}"
+        )
+        results["copy_file_range_reads_source_from_primary_after_replica_lag"] = True
+        resume()
+
         previous_batch_metadata = os.environ.get("FOD_READDIR_BATCH_METADATA")
         os.environ["FOD_READDIR_BATCH_METADATA"] = "0"
         mc = temp / "c"
