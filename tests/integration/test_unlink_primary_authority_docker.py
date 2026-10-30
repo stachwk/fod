@@ -124,6 +124,16 @@ def main():
         def visible(name):
             return query(primary, "SELECT (SELECT count(*) FROM fod.files WHERE name=%s AND NOT unlinked) + (SELECT count(*) FROM fod.hardlinks WHERE name=%s)", (name, name))[0][0]
 
+        def namespace_count(db, name):
+            return query(
+                db,
+                "SELECT (SELECT count(*) FROM fod.files WHERE name=%s AND NOT unlinked) + "
+                "(SELECT count(*) FROM fod.directories WHERE name=%s) + "
+                "(SELECT count(*) FROM fod.symlinks WHERE name=%s) + "
+                "(SELECT count(*) FROM fod.hardlinks WHERE name=%s)",
+                (name,) * 4,
+            )[0][0]
+
         ma, mb = temp / "a", temp / "b"
         a = FODMount(str(ROOT)); mounts.append(a)
         a.start(str(ma))
@@ -199,14 +209,14 @@ def main():
         seed(ma / "namespace-source")
         (ma / "namespace-nested").mkdir()
 
-        def create_kind(root, relative, kind):
+        def create_kind(root, relative, kind, source_name="namespace-source"):
             path = root / relative
             if kind == "directory":
                 path.mkdir()
             elif kind == "symlink":
                 os.symlink("missing-target", path)
             elif kind == "hardlink":
-                os.link(root / "namespace-source", path)
+                os.link(root / source_name, path)
             elif kind == "fifo":
                 os.mkfifo(path)
             else:
@@ -218,6 +228,43 @@ def main():
                     os.close(fd)
 
         kinds = ("directory", "symlink", "hardlink", "file", "fifo")
+
+        # A mounted create must return metadata from primary even when the
+        # configured read replica is paused before the new namespace row is
+        # replayed. The source for hardlink creation is made visible on both
+        # nodes before pausing replication.
+        seed(ma / "create-lag-source")
+        barrier()
+        routed_create_cases = 0
+        for kind in kinds:
+            name = f"create-lag-{kind}"
+            pause()
+            create_kind(mb, Path(name), kind, source_name="create-lag-source")
+            created = os.lstat(mb / name)
+            assert namespace_count(primary, name) == 1, f"primary did not commit {kind} create"
+            assert namespace_count(replica, name) == 0, (
+                f"replica unexpectedly replayed paused {kind} create"
+            )
+            if kind == "directory":
+                assert stat.S_ISDIR(created.st_mode), (
+                    f"mkdir returned wrong metadata: {created.st_mode:o}"
+                )
+            elif kind == "symlink":
+                assert stat.S_ISLNK(created.st_mode), (
+                    f"symlink returned wrong metadata: {created.st_mode:o}"
+                )
+            elif kind == "fifo":
+                assert stat.S_ISFIFO(created.st_mode), (
+                    f"mknod returned wrong metadata: {created.st_mode:o}"
+                )
+            else:
+                assert stat.S_ISREG(created.st_mode), (
+                    f"{kind} returned wrong metadata: {created.st_mode:o}"
+                )
+            routed_create_cases += 1
+            resume()
+        results["routed_create_success_before_replica_replay"] = routed_create_cases
+
         namespace_cases = 0
         for nested in (False, True):
             for winner in kinds:
@@ -235,7 +282,7 @@ def main():
                         create_kind(mb, relative, loser)
                     except OSError as exc:
                         loser_errno = exc.errno
-                    count = query(primary, "SELECT (SELECT count(*) FROM fod.files WHERE name=%s AND NOT unlinked) + (SELECT count(*) FROM fod.directories WHERE name=%s) + (SELECT count(*) FROM fod.symlinks WHERE name=%s) + (SELECT count(*) FROM fod.hardlinks WHERE name=%s)", (name,) * 4)[0][0]
+                    count = namespace_count(primary, name)
                     assert count == 1, f"cross-type namespace duplicated: winner={winner} loser={loser} count={count} errno={loser_errno}"
                     assert loser_errno == errno.EEXIST, f"cross-type create: winner={winner} loser={loser} errno={loser_errno}"
                     namespace_cases += 1

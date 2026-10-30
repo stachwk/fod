@@ -175,6 +175,16 @@ Permission authorization, other mutation inputs and cross-host cache coherence
 remain separate unfinished work. General writable replica read routing stays
 disabled pending those reviews.
 
+On 2026-10-30, the two-mount `test_unlink_primary_authority_docker.py` suite
+also paused replica replay and performed `mkdir`, regular-file `create`,
+`mknod` (FIFO), `symlink` and `link` from the replica-routed mount. For each
+operation, the primary contained exactly one committed entry while the replica
+still contained none, and the syscall returned metadata with the correct inode
+type. The existing paused-replica cross-type matrix continued to require
+`EEXIST` for all 40 conflicting pairs. The suite passed against an isolated
+PostgreSQL primary/replica stack; results are in
+`artifacts/integration/unlink-primary-authority-20261030T104143Z/results.json`.
+
 ## Current chmod/chown authorization and validation
 
 FOD 3.4.52 routes `setattr` metadata resolution and its reply through primary.

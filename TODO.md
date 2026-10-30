@@ -176,16 +176,18 @@ Reading guide:
   instance. Snapshot reads remain on the configured read route, consistent
   with the mount's read-routing policy. Concurrent membership changes and
   large-directory cookie behavior remain in the P02 work below.
-- [ ] **Create callbacks need a replica-lag regression.** `mkdir`, `create`,
-  `mknod`, `symlink` and `link` previously checked destination existence via
-  the ordinary read route before entering their PostgreSQL-authoritative
-  mutation transaction. A lagging replica could incorrectly return `EEXIST`;
-  after a successful primary transaction, a replica-routed metadata lookup
-  could also return `EIO` instead of the new entry. The callbacks now let the
-  serialized primary transaction decide vacancy and fetch the reply metadata
-  from the authority. Add a two-mount test with replica reads enabled and
-  controlled replication lag, covering each operation's success/conflict
-  result and ensuring a committed create is not reported as failed.
+- [x] **Create callbacks use primary during replica lag.** `mkdir`, `create`,
+  `mknod`, `symlink` and `link` let the serialized primary transaction decide
+  destination vacancy and fetch committed reply metadata from the authority.
+  The two-mount `test_unlink_primary_authority_docker.py` now pauses replica
+  replay, performs each create through the replica-routed mount, confirms the
+  primary committed exactly one entry while the replica still has none, and
+  verifies the returned inode type. Existing paused-replica cross-type cases
+  confirm competing creates return `EEXIST`. The full isolated primary/replica
+  suite passed on 2026-10-30; results are in
+  `artifacts/integration/unlink-primary-authority-20261030T104143Z/results.json`
+  (`routed_create_success_before_replica_replay: 5`,
+  `cross_type_namespace_cases: 40`).
 - [x] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
   mutations.** `errno.rs` maps PostgreSQL `53100` (`disk_full`) to `ENOSPC` in
   both persistence and namespace error mappers. File-block persistence also
