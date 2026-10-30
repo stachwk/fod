@@ -57,6 +57,11 @@ FOD został wywołany:
   Końcowy symlink z ukośnikiem do pliku zwraca `ENOTDIR` dla `lstat()`,
   `unlink()`, `rmdir()`, `truncate()`, `chmod()` i `utime()`; plik i symlink
   pozostają bez zmian.
+  Dla wiszącego symlinku z ukośnikiem Linux zwraca `ENOENT` dla operacji
+  wymagających celu (`stat()`, `lstat()`, `open()`, `truncate()`, `chmod()`,
+  `utime()`, `readlink()`, `statvfs()` i `link()`), `EEXIST` dla `mkdir()` i
+  nowego celu `symlink()`, oraz `ENOTDIR` dla `unlink()`, `rmdir()` i `rename()`.
+  Test potwierdza, że pierwotny symlink pozostaje.
 - Linux v6.17 `chmod_common()` ogranicza argument `mode` przez `S_IALLUGO` i
   zachowuje istniejące bity typu inode. Montowany probe FOD z `mode=0o10000`
   (bit `S_IFIFO`) zakończył się sukcesem i ustawił prawa na `0o000`. POSIX

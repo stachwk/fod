@@ -109,6 +109,56 @@ def main() -> None:
             )
             assert file_link.is_symlink() and file_path.read_bytes() == b"not a directory"
 
+            dangling_link = directory / "dangling-directory-link"
+            os.symlink("missing-target", dangling_link)
+            dangling_slash = f"{dangling_link}/"
+            for operation_name, operation in (
+                ("stat", lambda: os.stat(dangling_slash)),
+                ("lstat", lambda: os.lstat(dangling_slash)),
+                ("open", lambda: os.open(dangling_slash, os.O_RDONLY)),
+                ("truncate", lambda: os.truncate(dangling_slash, 0)),
+                ("chmod", lambda: os.chmod(dangling_slash, 0o600)),
+                ("utime", lambda: os.utime(dangling_slash, None)),
+                ("readlink", lambda: os.readlink(dangling_slash)),
+                ("statvfs", lambda: os.statvfs(dangling_slash)),
+                (
+                    "link",
+                    lambda: os.link(dangling_slash, directory / "dangling-hardlink"),
+                ),
+            ):
+                expect_errno(
+                    operation,
+                    errno.ENOENT,
+                    f"{operation_name} dangling symlink/",
+                )
+            expect_errno(
+                lambda: os.mkdir(dangling_slash),
+                errno.EEXIST,
+                "mkdir dangling symlink/",
+            )
+            expect_errno(
+                lambda: os.symlink("unused", dangling_slash),
+                errno.EEXIST,
+                "symlink destination dangling symlink/",
+            )
+            for operation_name, operation in (
+                ("unlink", lambda: os.unlink(dangling_slash)),
+                ("rmdir", lambda: os.rmdir(dangling_slash)),
+                (
+                    "rename",
+                    lambda: os.rename(
+                        dangling_slash, directory / "renamed-dangling-link"
+                    ),
+                ),
+            ):
+                expect_errno(
+                    operation,
+                    errno.ENOTDIR,
+                    f"{operation_name} dangling symlink/",
+                )
+            assert dangling_link.is_symlink()
+            assert os.readlink(dangling_link) == "missing-target"
+
             trailing_directory = directory / "created-with-slash"
             os.mkdir(f"{trailing_directory}/")
             assert trailing_directory.is_dir()
@@ -206,6 +256,7 @@ def main() -> None:
             print(
                 "OK pathname empty_path=ENOENTx5 trailing slash file=ENOTDIR "
                 "symlink_file=ENOTDIRx8 symlink_directory=accepted "
+                "dangling_slash=ENOENTx9,EEXISTx2,ENOTDIRx3 "
                 "slash_symlink_dir=mkdir:EEXIST,unlink:ENOTDIR,rmdir:ENOTDIR "
                 "chmod_target=0o711 utime_target=exact truncate:EISDIR "
                 "readlink:EINVAL rename:ENOTDIR "
