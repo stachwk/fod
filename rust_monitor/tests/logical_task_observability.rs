@@ -2,12 +2,12 @@
 // Licensed under BSL 1.1
 
 use fod_rust_monitor::{
-    LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
-    LogicalTaskQueueObservability,
+    LogicalTaskAdmissionGate, LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler,
+    LogicalTaskOperation, LogicalTaskQueueObservability,
 };
-use std::sync::{Arc, Barrier};
+use std::sync::{mpsc, Arc, Barrier};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn tracker() -> Arc<LogicalTaskQueueObservability> {
     Arc::new(LogicalTaskQueueObservability::new(
@@ -215,6 +215,95 @@ fn concurrent_read_write_and_copy_tasks_keep_class_accounting_isolated() {
     assert_eq!(
         classes[2].0.queue_snapshot().unwrap().class,
         LogicalTaskClass::new(LogicalTaskLane::Write, LogicalTaskOperation::FileCopy)
+    );
+}
+
+#[test]
+fn concurrent_file_write_and_copy_tasks_share_the_write_admission_limit() {
+    let gate = Arc::new(LogicalTaskAdmissionGate::new(1));
+    let write_tracker = tracker_for(LogicalTaskLane::Write, LogicalTaskOperation::FileWrite);
+    let copy_tracker = tracker_for(LogicalTaskLane::Write, LogicalTaskOperation::FileCopy);
+    let (write_permit, write_observation) = gate.observe_task(&write_tracker, 64, true);
+    let (admitted_tx, admitted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+
+    let worker_gate = Arc::clone(&gate);
+    let worker_tracker = Arc::clone(&copy_tracker);
+    let worker = thread::spawn(move || {
+        let (permit, observation) = worker_gate.observe_task(&worker_tracker, 128, true);
+        admitted_tx.send(()).expect("notify copy task admission");
+        release_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("copy task release timed out");
+        observation.complete(1, 128);
+        drop(permit);
+    });
+
+    let queued_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let queued = copy_tracker
+            .queue_snapshot()
+            .expect("queued copy task snapshot");
+        if queued.queued_tasks == 1 {
+            break;
+        }
+        assert!(
+            Instant::now() < queued_deadline,
+            "copy task did not queue behind the active file write"
+        );
+        thread::yield_now();
+    }
+
+    let active_write = write_tracker
+        .queue_snapshot()
+        .expect("active file write snapshot");
+    assert_eq!(active_write.active_tasks, 1);
+    let queued_copy = copy_tracker
+        .queue_snapshot()
+        .expect("queued copy task snapshot");
+    assert_eq!(queued_copy.active_tasks, 0);
+    assert_eq!(queued_copy.queued_tasks, 1);
+
+    write_observation.complete(1, 64);
+    drop(write_permit);
+    admitted_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("copy task was not admitted after file write completed");
+
+    let active_copy = copy_tracker
+        .queue_snapshot()
+        .expect("active copy task snapshot");
+    assert_eq!(active_copy.active_tasks, 1);
+    assert_eq!(active_copy.queued_tasks, 0);
+    assert_eq!(
+        write_tracker
+            .queue_snapshot()
+            .expect("file write remained balanced")
+            .active_tasks,
+        0
+    );
+
+    release_tx.send(()).expect("release copy task");
+    worker.join().expect("copy task worker panicked");
+
+    for tracker in [&write_tracker, &copy_tracker] {
+        let finished = tracker.queue_snapshot().expect("finished task snapshot");
+        assert_eq!(finished.admitted_tasks, 1);
+        assert_eq!(finished.completed_tasks, 1);
+        assert_eq!(finished.failed_tasks, 0);
+        assert_eq!(finished.queued_tasks, 0);
+        assert_eq!(finished.active_tasks, 0);
+        assert_eq!(finished.active_transactions, 0);
+        assert_eq!(finished.payload_in_flight_bytes, 0);
+        assert_eq!(finished.accounting_errors, 0);
+    }
+
+    assert_eq!(
+        copy_tracker
+            .queue_snapshot()
+            .expect("copy backpressure snapshot")
+            .backpressure_events,
+        1
     );
 }
 

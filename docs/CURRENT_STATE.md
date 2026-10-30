@@ -42,6 +42,9 @@ directory and checks exact `EACCES`; the mounted ACL and permissions tests pass.
 
 Logical-task admission has multithreaded unit coverage for FIFO order, capacity
 limits, queue progress as tasks finish, and balanced completion/failure metrics.
+An additional regression confirms that a running file write and a queued
+`copy_file_range` task share the same write admission limit while their
+operation-class counters remain separate.
 Additional regressions verify that unwinding a worker releases its admission
 slot for a queued task and that dropping an unfinished observation records a
 failure while balancing active-transaction and payload counters.
