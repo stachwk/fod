@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import os
 import sys
@@ -48,6 +49,41 @@ def main() -> None:
             directory.mkdir()
             file_path = directory / "regular-file"
             file_path.write_bytes(b"not a directory")
+
+            for operation_name, operation in (
+                ("lstat", lambda: os.lstat("")),
+                ("readlink", lambda: os.readlink("")),
+                ("chmod", lambda: os.chmod("", 0o600)),
+                ("chown", lambda: os.chown("", -1, -1)),
+                ("utime", lambda: os.utime("", None)),
+                ("truncate", lambda: os.truncate("", 0)),
+                ("statvfs", lambda: os.statvfs("")),
+                ("link source", lambda: os.link("", directory / "empty-link-source")),
+                ("link destination", lambda: os.link(file_path, "")),
+                ("symlink destination", lambda: os.symlink("target", "")),
+                (
+                    "rename source",
+                    lambda: os.rename("", directory / "empty-rename-source"),
+                ),
+                ("rename destination", lambda: os.rename(file_path, "")),
+            ):
+                expect_errno(operation, errno.ENOENT, f"{operation_name} empty pathname")
+
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.access.argtypes = (ctypes.c_char_p, ctypes.c_int)
+            libc.access.restype = ctypes.c_int
+            ctypes.set_errno(0)
+            access_result = libc.access(b"", os.F_OK)
+            access_error = ctypes.get_errno()
+            assert access_result == -1 and access_error == errno.ENOENT, (
+                "access empty pathname",
+                access_result,
+                access_error,
+            )
+
+            assert file_path.read_bytes() == b"not a directory"
+            assert not (directory / "empty-link-source").exists()
+            assert not (directory / "empty-rename-source").exists()
             trailing_slash = f"{file_path}/"
 
             expect_errno(
@@ -260,7 +296,8 @@ def main() -> None:
                 "invalid UTF-8 component aliased to its replacement character"
             )
             print(
-                "OK pathname empty_path=ENOENTx5 trailing slash file=ENOTDIR "
+                "OK pathname empty_path=ENOENTx17 access=ENOENT "
+                "trailing_slash_file=ENOTDIR "
                 "symlink_file=ENOTDIRx8 symlink_directory=accepted "
                 "dangling_slash=ENOENTx9,EEXISTx2,ENOTDIRx3 "
                 "slash_symlink_dir=mkdir:EEXIST,unlink:ENOTDIR,rmdir:ENOTDIR "

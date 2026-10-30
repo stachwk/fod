@@ -47,8 +47,11 @@ FOD został wywołany:
 - Przy pobieraniu argumentu ścieżki Linux zwraca `ENOENT` dla pustej ścieżki
   oraz `ENAMETOOLONG`, gdy ścieżka osiąga `PATH_MAX`; te kontrole zachodzą przed
   rozwiązywaniem ścieżki i callbackiem FUSE. [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py)
-  sprawdza pustą ścieżkę dla `stat()`, `open()`, `mkdir()`, `unlink()` i
-  `rmdir()`. Dla końcowego symlinku do katalogu z ukośnikiem test sprawdza
+  sprawdza pustą ścieżkę dla `stat()`, `lstat()`, `open()`, `mkdir()`,
+  `unlink()`, `rmdir()`, `readlink()`, `access()`, `chmod()`, `chown()`,
+  `utime()`, `truncate()`, `statvfs()`, `link()`, `symlink()` i `rename()`.
+  Wywołanie libc `access()` sprawdza bezpośrednio, ponieważ Python `os.access()`
+  zwraca wartość logiczną zamiast errno. Dla końcowego symlinku do katalogu z ukośnikiem test sprawdza
   `mkdir()`=`EEXIST` oraz `unlink()`/`rmdir()`=`ENOTDIR`, potwierdzając, że
   symlink i katalog docelowy pozostają; `stat()`, `lstat()`, `open()`,
   `chmod()` i `utime()` podążają do katalogu. Zmiana praw i czasu dotyczy celu,
