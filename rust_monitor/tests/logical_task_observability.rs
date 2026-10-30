@@ -18,6 +18,18 @@ fn tracker() -> Arc<LogicalTaskQueueObservability> {
     ))
 }
 
+fn tracker_for(
+    lane: LogicalTaskLane,
+    operation: LogicalTaskOperation,
+) -> Arc<LogicalTaskQueueObservability> {
+    Arc::new(LogicalTaskQueueObservability::new(
+        LogicalTaskClass::new(lane, operation),
+        0,
+        0,
+        4096,
+    ))
+}
+
 #[test]
 fn completed_observation_balances_active_payload_and_throughput() {
     let tracker = tracker();
@@ -99,6 +111,111 @@ fn concurrent_tasks_keep_queue_and_throughput_accounting_balanced() {
     let throughput = tracker.throughput_snapshot().unwrap();
     assert_eq!(throughput.completed_files, WORKERS as u64);
     assert_eq!(throughput.completed_bytes, WORKERS as u64 * PAYLOAD_BYTES);
+}
+
+#[test]
+fn concurrent_read_write_and_copy_tasks_keep_class_accounting_isolated() {
+    const WORKERS_PER_CLASS: usize = 4;
+    const PAYLOAD_BYTES: u64 = 512;
+
+    let classes = [
+        (
+            tracker_for(LogicalTaskLane::Read, LogicalTaskOperation::FileRead),
+            false,
+        ),
+        (
+            tracker_for(LogicalTaskLane::Write, LogicalTaskOperation::FileWrite),
+            false,
+        ),
+        (
+            tracker_for(LogicalTaskLane::Write, LogicalTaskOperation::FileCopy),
+            true,
+        ),
+    ];
+    let worker_count = classes.len() * WORKERS_PER_CLASS;
+    let all_active = Arc::new(Barrier::new(worker_count + 1));
+    let release_tasks = Arc::new(Barrier::new(worker_count + 1));
+    let workers = classes
+        .iter()
+        .flat_map(|(tracker, fail_first)| {
+            (0..WORKERS_PER_CLASS).map({
+                let tracker = Arc::clone(tracker);
+                let all_active = Arc::clone(&all_active);
+                let release_tasks = Arc::clone(&release_tasks);
+                let fail_first = *fail_first;
+                move |worker_id| {
+                    let tracker = Arc::clone(&tracker);
+                    let all_active = Arc::clone(&all_active);
+                    let release_tasks = Arc::clone(&release_tasks);
+                    thread::spawn(move || {
+                        let observation = tracker.observe_task(PAYLOAD_BYTES, true);
+                        all_active.wait();
+                        release_tasks.wait();
+                        if fail_first && worker_id == 0 {
+                            observation.fail();
+                        } else {
+                            observation.complete(1, PAYLOAD_BYTES);
+                        }
+                    })
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    all_active.wait();
+    for (tracker, _) in &classes {
+        let active = tracker.queue_snapshot().unwrap();
+        assert_eq!(active.admitted_tasks, WORKERS_PER_CLASS as u64);
+        assert_eq!(active.queued_tasks, 0);
+        assert_eq!(active.active_tasks, WORKERS_PER_CLASS as u64);
+        assert_eq!(active.peak_active_tasks, WORKERS_PER_CLASS as u64);
+        assert_eq!(active.active_transactions, WORKERS_PER_CLASS as u64);
+        assert_eq!(
+            active.payload_in_flight_bytes,
+            WORKERS_PER_CLASS as u64 * PAYLOAD_BYTES
+        );
+    }
+
+    release_tasks.wait();
+    for worker in workers {
+        worker.join().expect("mixed task worker panicked");
+    }
+
+    for (tracker, fail_first) in &classes {
+        let finished = tracker.queue_snapshot().unwrap();
+        let expected_failures = if *fail_first { 1 } else { 0 };
+        assert_eq!(finished.admitted_tasks, WORKERS_PER_CLASS as u64);
+        assert_eq!(finished.completed_tasks, WORKERS_PER_CLASS as u64);
+        assert_eq!(finished.failed_tasks, expected_failures);
+        assert_eq!(finished.queued_tasks, 0);
+        assert_eq!(finished.active_tasks, 0);
+        assert_eq!(finished.active_transactions, 0);
+        assert_eq!(finished.payload_in_flight_bytes, 0);
+        assert_eq!(finished.accounting_errors, 0);
+
+        let throughput = tracker.throughput_snapshot().unwrap();
+        assert_eq!(
+            throughput.completed_files,
+            WORKERS_PER_CLASS as u64 - expected_failures
+        );
+        assert_eq!(
+            throughput.completed_bytes,
+            (WORKERS_PER_CLASS as u64 - expected_failures) * PAYLOAD_BYTES
+        );
+    }
+
+    assert_eq!(
+        classes[0].0.queue_snapshot().unwrap().class,
+        LogicalTaskClass::new(LogicalTaskLane::Read, LogicalTaskOperation::FileRead)
+    );
+    assert_eq!(
+        classes[1].0.queue_snapshot().unwrap().class,
+        LogicalTaskClass::new(LogicalTaskLane::Write, LogicalTaskOperation::FileWrite)
+    );
+    assert_eq!(
+        classes[2].0.queue_snapshot().unwrap().class,
+        LogicalTaskClass::new(LogicalTaskLane::Write, LogicalTaskOperation::FileCopy)
+    );
 }
 
 #[test]
