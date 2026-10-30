@@ -812,6 +812,14 @@ Reading guide:
     a real PostgreSQL failure. The injection is confined to the test-named
     environment variable.
 
+- [x] **Classify `statvfs()` `EOVERFLOW` on the audited x86_64 ABI.**
+  - Closure note (2026-10-31): Linux FUSE statfs counters are `uint64_t`; the
+    mounted x86_64 ABI has 64-bit `fsblkcnt_t`/`fsfilcnt_t`, and the native
+    Linux v6.17 `statfs` conversion checks count overflow only for a 32-bit
+    destination field. The 32-bit compatibility ABI is outside FOD support, so
+    no mounted overflow test is applicable on the audited ABI. Repeat the field
+    width review before adding another ABI. Sources: [FUSE statfs ABI](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h#L2772-L2794), [Linux conversion](https://github.com/torvalds/linux/blob/v6.17/fs/statfs.c#L1179-L1200). See the [POSIX errno matrix](docs/POSIX_ERRNO_MATRIX.md).
+
 - [x] **`statvfs()` did not return `EINTR` when a caught signal arrived during a blocked FUSE request.**
   - Closure note (2026-10-31, FOD 3.4.387): a mounted regression in
     `test_unlink_primary_authority_docker.py` holds an exclusive PostgreSQL

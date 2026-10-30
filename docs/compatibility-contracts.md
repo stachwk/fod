@@ -5,8 +5,8 @@ release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed base: commit `ddd26c9` (`FOD 3.4.387`), plus the mounted
-`statvfs()` signal-interruption regression recorded below.
+Reviewed base: commit `1aaf627` (`FOD 3.4.388`), including the mounted
+`statvfs()` signal-interruption regression.
 
 ## Overall filesystem compatibility status
 
