@@ -2591,6 +2591,16 @@ fn directory_entry_metadata_rejects_missing_required_fields() -> Result<(), Stri
         "{null_name_snapshot_error}"
     );
 
+    repo.exec("TRUNCATE fod.files")?;
+    repo.exec("INSERT INTO fod.files VALUES ('zero-id', NULL, FALSE, 0, 'valid-seed')")?;
+    let zero_id_error = repo
+        .list_directory_entry_metadata_for_id(None)
+        .expect_err("zero entry id must be rejected");
+    assert!(
+        zero_id_error.contains("non-positive entry id"),
+        "{zero_id_error}"
+    );
+
     Ok(())
 }
 

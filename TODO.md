@@ -444,10 +444,11 @@ Reading guide:
   ID. `namespace_lookups_reject_zero_inode_ids` corrupts a symlink primary key
   and verifies both direct lookup and resolved-path lookup fail instead of
   returning inode 0.
-  Directory metadata decoding now rejects empty names, unsupported entry kinds
-  and empty inode seeds. A temporary-database regression feeds NULL name and
-  inode-seed fields through the real query decoder; a mounted regression also
-  confirms `stat()` returns `EIO` when persisted `files.inode_seed` is empty.
+  Directory metadata decoding now rejects zero entry IDs in addition to empty
+  names, unsupported entry kinds and empty inode seeds. A temporary-database
+  regression feeds zero IDs and NULL name/inode-seed fields through the real
+  query decoder; a mounted regression also confirms `stat()` returns `EIO` when
+  persisted `files.inode_seed` is empty.
   The Rust query suite passed on 2026-10-30 (42 tests); mounted evidence is
   `artifacts/integration/unlink-primary-authority-20261030T112245Z/results.json`
   (`malformed_metadata_fields_return_eio` includes `inode_seed`).

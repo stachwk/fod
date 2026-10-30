@@ -112,6 +112,11 @@ fn parse_directory_entry_metadata_rows(
                 .trim()
                 .parse::<u64>()
                 .map_err(|err| format!("invalid directory entry id: {err}"))?;
+            if entry_id == 0 {
+                return Err(
+                    "directory entry metadata row has a non-positive entry id".to_string(),
+                );
+            }
             if row[3].trim().is_empty() {
                 return Err("directory entry metadata row has an empty inode seed".to_string());
             }

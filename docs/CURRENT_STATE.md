@@ -356,8 +356,9 @@ row. NULL, empty, non-octal, or malformed mode results fail as
 metadata errors instead of being presented as a missing path. Broader
 fault-injection coverage for malformed persisted rows remains in the
 [unresolved findings](../TODO.md#unresolved-findings).
-Namespace lookup decoders likewise reject entity ID zero; FOD represents the
-logical root separately and does not assign it an entity row ID of zero.
+Namespace lookup and directory-entry metadata decoders reject entity ID zero;
+FOD represents the logical root separately and does not assign it an entity
+row ID of zero.
 
 Primary authority requirements are defined by
 [FOD_ARCHITECTURE_INVARIANTS.md](FOD_ARCHITECTURE_INVARIANTS.md). A dated audit
