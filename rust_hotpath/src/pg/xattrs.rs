@@ -5,13 +5,13 @@
 //! Keep path resolution here; connection routing and SQL execution stay in `pg`.
 
 use super::{
-    exec_command_params, exec_params, fetch_first_row_texts, is_retryable_connection_error,
-    replayable_sql_error, result_error, sql_is_replayable_command, DbRepo, PQclear, PQgetvalue,
-    PQnfields, PQntuples, PQresultStatus, PGRES_TUPLES_OK,
+    exec_command_params, exec_params, fetch_first_column_texts, fetch_first_row_texts,
+    fetch_single_optional_text, is_retryable_connection_error, replayable_sql_error, result_error,
+    sql_is_replayable_command, DbRepo, PQclear, PQntuples, PQresultStatus, PGRES_TUPLES_OK,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 
 pub(super) struct InheritedPosixAcl {
     pub(super) access_acl: Vec<u8>,
@@ -297,19 +297,7 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id, &name];
             let res = exec_params(conn, &sql, &params)?;
-            let rows = PQntuples(res);
-            let cols = PQnfields(res);
-            let encoded = if rows < 1 || cols < 1 {
-                None
-            } else {
-                let value_ptr = PQgetvalue(res, 0, 0);
-                if value_ptr.is_null() {
-                    None
-                } else {
-                    Some(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
-                }
-            };
-            PQclear(res);
+            let encoded = fetch_single_optional_text(res)?;
             let value = match encoded {
                 None => None,
                 Some(encoded) => {
@@ -650,19 +638,7 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&owner_kind, &owner_id];
             let res = exec_params(conn, &sql, &params)?;
-            let rows = PQntuples(res);
-            let cols = PQnfields(res);
-            let mut names = Vec::with_capacity(rows.max(0) as usize);
-            if rows >= 1 && cols >= 1 {
-                for row in 0..rows {
-                    let value_ptr = PQgetvalue(res, row, 0);
-                    if !value_ptr.is_null() {
-                        names.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
-                    }
-                }
-            }
-            PQclear(res);
-            Ok(names)
+            fetch_first_column_texts(res)
         })
     }
 }

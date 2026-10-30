@@ -2811,22 +2811,30 @@ unsafe fn schema_is_initialized_on_conn(conn: *mut PGconn) -> Result<bool, Strin
 }
 
 unsafe fn fetch_single_text(res: *mut PGresult) -> Result<String, String> {
+    Ok(fetch_single_optional_text(res)?.unwrap_or_default())
+}
+
+unsafe fn fetch_single_optional_text(res: *mut PGresult) -> Result<Option<String>, String> {
     let value = match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
             if rows < 1 || cols < 1 {
-                Ok(String::new())
+                Ok(None)
+            } else if PQgetisnull(res, 0, 0) != 0 {
+                Ok(None)
             } else {
                 let value_ptr = PQgetvalue(res, 0, 0);
                 if value_ptr.is_null() {
-                    Ok(String::new())
+                    Ok(None)
                 } else {
-                    Ok(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
+                    Ok(Some(
+                        CStr::from_ptr(value_ptr).to_string_lossy().to_string(),
+                    ))
                 }
             }
         }
-        _ => Err("unexpected PostgreSQL result status".to_string()),
+        _ => Err(result_error(res)),
     };
     PQclear(res);
     value
@@ -2862,7 +2870,7 @@ unsafe fn fetch_first_row_texts(res: *mut PGresult) -> Result<Vec<String>, Strin
                 Ok(values)
             }
         }
-        _ => Err("unexpected PostgreSQL result status".to_string()),
+        _ => Err(result_error(res)),
     };
     PQclear(res);
     result
@@ -2892,7 +2900,7 @@ unsafe fn fetch_rows_text(res: *mut PGresult) -> Result<Vec<Vec<String>>, String
                 Ok(values)
             }
         }
-        _ => Err("unexpected PostgreSQL result status".to_string()),
+        _ => Err(result_error(res)),
     };
     PQclear(res);
     result
@@ -2922,7 +2930,7 @@ unsafe fn fetch_first_column_texts(res: *mut PGresult) -> Result<Vec<String>, St
                 }
             }
         }
-        _ => Err("unexpected PostgreSQL result status".to_string()),
+        _ => Err(result_error(res)),
     };
     PQclear(res);
     result
@@ -9397,6 +9405,11 @@ impl DbRepo {
         self.with_control_connection(|conn| unsafe {
             let params = [&resource_kind, &resource_id];
             let res = exec_params(conn, &sql, &params)?;
+            if PQresultStatus(res) != PGRES_TUPLES_OK {
+                let error = result_error(res);
+                PQclear(res);
+                return Err(error);
+            }
             let rows = PQntuples(res);
             let cols = PQnfields(res);
             let mut output = Vec::new();

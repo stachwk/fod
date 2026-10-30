@@ -5,10 +5,10 @@
 //! Mutation callers remain responsible for validation in their authority transaction.
 
 use super::{
-    exec_params, exec_prepared_params, fetch_first_row_texts, fetch_single_text, DbRepo, PQclear,
-    PQgetvalue, PQnfields, PQntuples, PreparedStatement, StatfsSnapshotRows,
+    exec_params, exec_prepared_params, fetch_first_row_texts, fetch_single_text, DbRepo,
+    PreparedStatement, StatfsSnapshotRows,
 };
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 
 impl DbRepo {
     pub fn count_file_links(&self, file_id: u64) -> Result<u64, String> {
@@ -20,24 +20,10 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql, &params)?;
-            let rows = PQntuples(res);
-            let cols = PQnfields(res);
-            let value = if rows < 1 || cols < 1 {
-                0
-            } else {
-                let value_ptr = PQgetvalue(res, 0, 0);
-                if value_ptr.is_null() {
-                    0
-                } else {
-                    CStr::from_ptr(value_ptr)
-                        .to_string_lossy()
-                        .trim()
-                        .parse::<u64>()
-                        .unwrap_or(0)
-                }
-            };
-            PQclear(res);
-            Ok(value)
+            let text = fetch_single_text(res)?;
+            text.trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid file link count".to_string())
         })
     }
 
@@ -57,24 +43,10 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql_blocks, &params)?;
-            let rows = PQntuples(res);
-            let cols = PQnfields(res);
-            let value = if rows < 1 || cols < 1 {
-                0
-            } else {
-                let value_ptr = PQgetvalue(res, 0, 0);
-                if value_ptr.is_null() {
-                    0
-                } else {
-                    CStr::from_ptr(value_ptr)
-                        .to_string_lossy()
-                        .trim()
-                        .parse::<u64>()
-                        .unwrap_or(0)
-                }
-            };
-            PQclear(res);
-            Ok(value)
+            let text = fetch_single_text(res)?;
+            text.trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid file block count".to_string())
         })
     }
 
@@ -106,11 +78,7 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&directory_id];
             let res = exec_params(conn, &sql, &params)?;
-            let rows = PQntuples(res);
-            let cols = PQnfields(res);
-            let value = rows >= 1 && cols >= 1;
-            PQclear(res);
-            Ok(value)
+            Ok(super::fetch_single_optional_text(res)?.is_some())
         })
     }
 

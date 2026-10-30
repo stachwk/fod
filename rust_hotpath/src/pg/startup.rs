@@ -5,12 +5,12 @@
 //! keeps all probes on one checked-out authority connection, including before mkfs.
 
 use super::{
-    exec_params, postgres_runtime_requirements_on_conn, postgres_version_diagnostics_on_conn,
-    query_rows_text_on_conn, query_scalar_text_on_conn, schema_is_initialized_on_conn, DbRepo,
-    PGconn, PQclear, PQgetvalue, PQnfields, PQntuples,
+    exec_params, fetch_single_optional_text, postgres_runtime_requirements_on_conn,
+    postgres_version_diagnostics_on_conn, query_rows_text_on_conn, query_scalar_text_on_conn,
+    schema_is_initialized_on_conn, DbRepo, PGconn,
 };
 use fod_rust_runtime::{PostgresRuntimeRequirements, PostgresVersionDiagnostics, FOD_SCHEMA_NAME};
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartupSnapshot {
@@ -47,20 +47,7 @@ impl DbRepo {
         let key = CString::new(key).map_err(|_| "config key contains NUL byte".to_string())?;
         let params = [&key];
         let res = exec_params(conn, &sql, &params)?;
-        let rows = PQntuples(res);
-        let cols = PQnfields(res);
-        let value = if rows < 1 || cols < 1 {
-            None
-        } else {
-            let value_ptr = PQgetvalue(res, 0, 0);
-            if value_ptr.is_null() {
-                None
-            } else {
-                Some(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
-            }
-        };
-        PQclear(res);
-        Ok(value)
+        fetch_single_optional_text(res)
     }
 
     pub fn query_config_value(&self, key: &str) -> Result<Option<String>, String> {
