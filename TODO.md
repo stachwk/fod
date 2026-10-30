@@ -14,6 +14,12 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Stary uchwyt nie może wykonać `ftruncate()` po cross-mount takeover.**
+  `test_stale_writer_fencing.py` odbiera lease mountowi A, pozwala mountowi B
+  przejąć plik z wyższym fencing tokenem i zapisuje zwycięski payload. Następnie
+  `ftruncate()` ze starego deskryptora A otrzymuje dokładnie `EBUSY`; kontrola
+  przez B potwierdza, że payload i rozmiar 4096 bajtów pozostały bez zmian.
+  Test `make test-stale-writer-fencing` przeszedł na FOD 3.4.315 (2026-10-30).
 - [x] **Concurrent FUSE flush and `ftruncate()` could fail with false `EBUSY`.**
   A threaded mounted regression raced positioned `write()` with `ftruncate()`
   on cloned descriptors for 24 rounds. The trace showed FLUSH and SETATTR

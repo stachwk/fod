@@ -220,6 +220,28 @@ def main() -> None:
                     f"writer B payload missing before stale fsync: len={len(winner_before)}"
                 )
 
+            stale_ftruncate_errno: int | None = None
+            try:
+                os.ftruncate(fd_a, 1)
+            except OSError as exc:
+                stale_ftruncate_errno = exc.errno
+                if stale_ftruncate_errno != errno.EBUSY:
+                    raise
+
+            if stale_ftruncate_errno != errno.EBUSY:
+                raise AssertionError(
+                    "stale writer ftruncate errno="
+                    f"{stale_ftruncate_errno}, expected EBUSY"
+                )
+
+            winner_after_ftruncate = path_b.read_bytes()
+            if winner_after_ftruncate != b"B" * BLOCK_SIZE:
+                raise AssertionError(
+                    "stale ftruncate mutated winner B payload: "
+                    f"len={len(winner_after_ftruncate)} "
+                    f"prefix={winner_after_ftruncate[:16]!r}"
+                )
+
             stale_write_errno: int | None = None
             try:
                 os.pwrite(fd_a, b"A", 0)
@@ -263,6 +285,7 @@ def main() -> None:
                 f"session_a={session_a} "
                 f"token_a={token_a} token_b={token_b} "
                 f"takeover_elapsed_ms={takeover_elapsed * 1000.0:.3f} "
+                f"stale_ftruncate_errno={stale_ftruncate_errno} "
                 f"stale_write_errno={stale_write_errno} "
                 f"stale_fsync_errno={stale_fsync_errno} "
                 f"winner_size={len(winner_after)} "
