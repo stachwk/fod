@@ -4138,7 +4138,9 @@ pub enum RenameFileReplaceOutcome {
     NoOpSameFile,
     Busy,
     SourceMissing,
+    TargetExists,
     TargetNotEmpty,
+    InvalidDirectoryCycle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10673,6 +10675,7 @@ impl DbRepo {
             new_name,
             expected_target,
             actor_uid,
+            false,
             None,
         )
     }
@@ -10712,7 +10715,33 @@ impl DbRepo {
     ) -> Result<RenameFileReplaceOutcome, String> {
         self.rename_namespace_replace_with_ownership_guard_internal(
             source, old_parent_id, old_name, new_parent_id, new_name, expected_target,
-            actor_uid, Some((actor_uid, actor_gid, supplementary_groups, use_posix_acl)),
+            actor_uid, false, Some((actor_uid, actor_gid, supplementary_groups, use_posix_acl)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn rename_namespace_noreplace_with_ownership_guard_for_subject_acl(
+        &self,
+        source: RenameNamespaceSource,
+        old_parent_id: Option<u64>,
+        old_name: &str,
+        new_parent_id: Option<u64>,
+        new_name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+        use_posix_acl: bool,
+    ) -> Result<RenameFileReplaceOutcome, String> {
+        self.rename_namespace_replace_with_ownership_guard_internal(
+            source,
+            old_parent_id,
+            old_name,
+            new_parent_id,
+            new_name,
+            None,
+            actor_uid,
+            true,
+            Some((actor_uid, actor_gid, supplementary_groups, use_posix_acl)),
         )
     }
 
@@ -10726,11 +10755,14 @@ impl DbRepo {
         new_name: &str,
         expected_target: Option<RenameNamespaceTarget>,
         actor_uid: u32,
+        no_replace: bool,
         parent_actor: Option<(u32, u32, &[u32], bool)>,
     ) -> Result<RenameFileReplaceOutcome, String> {
         if old_name.is_empty() || new_name.is_empty() {
             return Err("rename destination name is empty".to_string());
         }
+
+        let expected_target = if no_replace { None } else { expected_target };
 
         let old_parent_key = old_parent_id.unwrap_or(0);
         let new_parent_key = new_parent_id.unwrap_or(0);
@@ -11011,8 +11043,34 @@ impl DbRepo {
                         Ok(value) => value,
                         Err(()) => return Ok(RenameFileReplaceOutcome::Busy),
                     };
+                    if no_replace && current_target.is_some() {
+                        return Ok(RenameFileReplaceOutcome::TargetExists);
+                    }
                     if !matches_target(current_target.as_ref()) {
                         return Ok(RenameFileReplaceOutcome::Busy);
+                    }
+
+                    if let (RenameNamespaceSource::Directory { directory_id }, Some(parent_id)) =
+                        (source, new_parent_id)
+                    {
+                        let cycle_sql = CString::new(
+                            "WITH RECURSIVE subtree(id_directory) AS (\
+                                 SELECT id_directory FROM directories WHERE id_directory = $1\
+                                 UNION\
+                                 SELECT child.id_directory FROM directories child\
+                                 JOIN subtree parent ON child.id_parent = parent.id_directory\
+                             )\
+                             SELECT EXISTS (SELECT 1 FROM subtree WHERE id_directory = $2)::text",
+                        )
+                        .map_err(|_| "rename cycle query contains NUL byte".to_string())?;
+                        let directory_id = CString::new(directory_id.to_string())
+                            .map_err(|_| "source directory id contains NUL byte".to_string())?;
+                        let parent_id = CString::new(parent_id.to_string())
+                            .map_err(|_| "destination parent id contains NUL byte".to_string())?;
+                        let cycle = exec_params(conn, &cycle_sql, &[&directory_id, &parent_id])?;
+                        if parse_bool(&fetch_single_text(cycle)?) {
+                            return Ok(RenameFileReplaceOutcome::InvalidDirectoryCycle);
+                        }
                     }
 
                     if let Some((actor_uid, actor_gid, actor_groups, use_posix_acl)) = parent_actor {

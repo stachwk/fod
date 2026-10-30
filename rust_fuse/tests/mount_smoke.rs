@@ -3,16 +3,41 @@
 
 mod support;
 
+use std::ffi::CString;
 use std::fs;
 use std::fs::OpenOptions;
+use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
 use support::{block_size_from_config, unique_suffix, MountedFs};
+
+fn renameat2_with_flags(old: &Path, new: &Path, flags: u32) -> io::Result<()> {
+    let old = CString::new(old.as_os_str().as_bytes())
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    let new = CString::new(new.as_os_str().as_bytes())
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            old.as_ptr(),
+            libc::AT_FDCWD,
+            new.as_ptr(),
+            flags,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
 
 fn metadata_times(path: &Path) -> Result<(i64, i64, i64, i64), String> {
     let meta = fs::metadata(path).map_err(|err| err.to_string())?;
@@ -933,6 +958,130 @@ fn concurrent_threads_append_complete_records_to_one_file() -> Result<(), String
 }
 
 #[test]
+fn concurrent_threads_run_multiple_copy_file_range_tasks() -> Result<(), String> {
+    const WORKERS: usize = 8;
+    const TASKS_PER_WORKER: usize = 4;
+    const PAYLOAD_LEN: usize = 64 * 1024;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-threaded-copy-file-range-tasks",
+        &[("FOD_FUSE_EVENT_THREADS", WORKERS.to_string())],
+    )?;
+    let mount_log = mounted.log_tail(200);
+    let event_loop = mount_log
+        .lines()
+        .find(|line| line.contains("FOD FUSE event loop:"))
+        .ok_or_else(|| format!("missing FUSE event-loop configuration\n{}", mount_log))?;
+    if !event_loop.contains(&format!("threads={WORKERS}")) {
+        return Err(format!(
+            "expected {WORKERS} FUSE event threads, got {event_loop}"
+        ));
+    }
+    let root = mounted
+        .mountpoint
+        .join(format!("copy-tasks-{}", unique_suffix()));
+    fs::create_dir(&root).map_err(|err| format!("create copy task directory failed: {err}"))?;
+
+    let mut tasks = Vec::with_capacity(WORKERS * TASKS_PER_WORKER);
+    for worker_id in 0..WORKERS {
+        for task_id in 0..TASKS_PER_WORKER {
+            let source = root.join(format!("source-{worker_id}-{task_id}.bin"));
+            let destination = root.join(format!("destination-{worker_id}-{task_id}.bin"));
+            let marker = u8::try_from(worker_id * TASKS_PER_WORKER + task_id + 1)
+                .map_err(|err| format!("invalid copy task marker: {err}"))?;
+            let payload = vec![marker; PAYLOAD_LEN + task_id];
+            fs::write(&source, &payload)
+                .map_err(|err| format!("seed copy task {worker_id}/{task_id} failed: {err}"))?;
+            tasks.push((source, destination, payload, worker_id, task_id));
+        }
+    }
+
+    let barrier = Arc::new(Barrier::new(tasks.len()));
+    let workers = tasks
+        .into_iter()
+        .map(|(source, destination, expected, worker_id, task_id)| {
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<(std::path::PathBuf, Vec<u8>), String> {
+                barrier.wait();
+                let input = fs::File::open(&source).map_err(|err| {
+                    format!("copy worker {worker_id} task {task_id} open source failed: {err}")
+                })?;
+                let output = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&destination)
+                    .map_err(|err| {
+                        format!("copy worker {worker_id} task {task_id} create destination failed: {err}")
+                    })?;
+                let mut input_offset = 0i64;
+                let mut output_offset = 0i64;
+
+                loop {
+                    if output_offset < 0 || output_offset as usize > expected.len() {
+                        return Err(format!(
+                            "copy worker {worker_id} task {task_id} produced an invalid offset: {output_offset}"
+                        ));
+                    }
+                    let remaining = expected.len() - output_offset as usize;
+                    if remaining == 0 {
+                        break;
+                    }
+                    let copied = unsafe {
+                        libc::copy_file_range(
+                            input.as_raw_fd(),
+                            &mut input_offset,
+                            output.as_raw_fd(),
+                            &mut output_offset,
+                            remaining,
+                            0,
+                        )
+                    };
+                    if copied < 0 {
+                        return Err(format!(
+                            "copy worker {worker_id} task {task_id} copy_file_range failed: {}",
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    if copied == 0 {
+                        break;
+                    }
+                }
+
+                if output_offset as usize != expected.len() {
+                    return Err(format!(
+                        "copy worker {worker_id} task {task_id} copied {} bytes, expected {}",
+                        output_offset,
+                        expected.len()
+                    ));
+                }
+                output.sync_all().map_err(|err| {
+                    format!("copy worker {worker_id} task {task_id} sync failed: {err}")
+                })?;
+                Ok((destination, expected))
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for worker in workers {
+        let (destination, expected) = worker
+            .join()
+            .map_err(|_| "concurrent copy task worker panicked".to_string())??;
+        let actual = fs::read(&destination)
+            .map_err(|err| format!("read copied task {} failed: {err}", destination.display()))?;
+        if actual != expected {
+            return Err(format!(
+                "copy task {} payload mismatch: expected {} bytes, got {}",
+                destination.display(),
+                expected.len(),
+                actual.len()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn concurrent_threads_rename_one_source_to_distinct_destinations() -> Result<(), String> {
     const ROUNDS: usize = 16;
     const WORKERS: usize = 2;
@@ -1021,6 +1170,145 @@ fn concurrent_threads_rename_one_source_to_distinct_destinations() -> Result<(),
                 "expected exactly one destination in round {round}, found {present_destinations}"
             ));
         }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn rename_noreplace_is_atomic_and_unsupported_flags_fail() -> Result<(), String> {
+    const WORKERS: usize = 2;
+    let mounted = MountedFs::start_with_env(
+        "rename-noreplace-atomicity",
+        &[("FOD_FUSE_EVENT_THREADS", WORKERS.to_string())],
+    )?;
+    let root = mounted
+        .mountpoint
+        .join(format!("rename-noreplace-{}", unique_suffix()));
+    fs::create_dir(&root).map_err(|err| format!("create rename test directory failed: {err}"))?;
+
+    let existing_source = root.join("existing-source");
+    let existing_target = root.join("existing-target");
+    fs::write(&existing_source, b"source")
+        .map_err(|err| format!("seed no-replace source failed: {err}"))?;
+    fs::write(&existing_target, b"target")
+        .map_err(|err| format!("seed no-replace target failed: {err}"))?;
+    let error = renameat2_with_flags(&existing_source, &existing_target, libc::RENAME_NOREPLACE)
+        .expect_err("RENAME_NOREPLACE replaced an existing target");
+    if error.raw_os_error() != Some(libc::EEXIST) {
+        return Err(format!(
+            "RENAME_NOREPLACE returned the wrong errno: {error}"
+        ));
+    }
+    if fs::read(&existing_source).map_err(|err| err.to_string())? != b"source"
+        || fs::read(&existing_target).map_err(|err| err.to_string())? != b"target"
+    {
+        return Err("failed RENAME_NOREPLACE changed source or target contents".to_string());
+    }
+
+    let same_path_error =
+        renameat2_with_flags(&existing_source, &existing_source, libc::RENAME_NOREPLACE)
+            .expect_err("same-path RENAME_NOREPLACE unexpectedly succeeded");
+    if same_path_error.raw_os_error() != Some(libc::EEXIST) {
+        return Err(format!(
+            "same-path RENAME_NOREPLACE returned the wrong errno: {same_path_error}"
+        ));
+    }
+
+    let exchange_error =
+        renameat2_with_flags(&existing_source, &existing_target, libc::RENAME_EXCHANGE)
+            .expect_err("unsupported RENAME_EXCHANGE unexpectedly succeeded");
+    if exchange_error.raw_os_error() != Some(libc::EINVAL) {
+        return Err(format!(
+            "unsupported RENAME_EXCHANGE returned the wrong errno: {exchange_error}"
+        ));
+    }
+
+    let movable_source = root.join("movable-source");
+    let missing_target = root.join("missing-target");
+    fs::write(&movable_source, b"move-me")
+        .map_err(|err| format!("seed missing-target source failed: {err}"))?;
+    renameat2_with_flags(&movable_source, &missing_target, libc::RENAME_NOREPLACE)
+        .map_err(|err| format!("RENAME_NOREPLACE of missing target failed: {err}"))?;
+    if !missing_target.exists() || movable_source.exists() {
+        return Err("RENAME_NOREPLACE did not move source to absent target".to_string());
+    }
+
+    let directory_source = root.join("cycle-source");
+    let existing_child = directory_source.join("existing-child");
+    fs::create_dir_all(&existing_child)
+        .map_err(|err| format!("seed existing directory-cycle target failed: {err}"))?;
+    let existing_child_error =
+        renameat2_with_flags(&directory_source, &existing_child, libc::RENAME_NOREPLACE)
+            .expect_err("RENAME_NOREPLACE replaced an existing directory-cycle target");
+    if existing_child_error.raw_os_error() != Some(libc::EEXIST) {
+        return Err(format!(
+            "directory-cycle RENAME_NOREPLACE returned the wrong errno: {existing_child_error}"
+        ));
+    }
+    fs::remove_dir(&existing_child)
+        .map_err(|err| format!("remove existing cycle target failed: {err}"))?;
+    let missing_child_error =
+        renameat2_with_flags(&directory_source, &existing_child, libc::RENAME_NOREPLACE)
+            .expect_err("RENAME_NOREPLACE moved a directory inside itself");
+    if missing_child_error.raw_os_error() != Some(libc::EINVAL) {
+        return Err(format!(
+            "directory-cycle RENAME_NOREPLACE returned the wrong errno: {missing_child_error}"
+        ));
+    }
+    if !directory_source.is_dir() || existing_child.exists() {
+        return Err("directory-cycle RENAME_NOREPLACE changed the namespace".to_string());
+    }
+
+    let sources = [root.join("racer-a"), root.join("racer-b")];
+    let target = root.join("racer-target");
+    fs::write(&sources[0], b"A").map_err(|err| format!("seed racer A failed: {err}"))?;
+    fs::write(&sources[1], b"B").map_err(|err| format!("seed racer B failed: {err}"))?;
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let racers = sources
+        .iter()
+        .cloned()
+        .map(|source| {
+            let target = target.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                renameat2_with_flags(&source, &target, libc::RENAME_NOREPLACE)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let outcomes = racers
+        .into_iter()
+        .map(|racer| {
+            racer
+                .join()
+                .map_err(|_| "RENAME_NOREPLACE racer panicked".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let winners = outcomes.iter().filter(|result| result.is_ok()).count();
+    let exists_failures = outcomes
+        .iter()
+        .filter(|result| {
+            result.as_ref().err().and_then(io::Error::raw_os_error) == Some(libc::EEXIST)
+        })
+        .count();
+    if winners != 1 || exists_failures != 1 {
+        return Err(format!(
+            "concurrent RENAME_NOREPLACE expected one winner and one EEXIST, got {outcomes:?}"
+        ));
+    }
+    let winner = fs::read(&target).map_err(|err| format!("read race winner failed: {err}"))?;
+    if winner != b"A" && winner != b"B" {
+        return Err(format!(
+            "concurrent RENAME_NOREPLACE corrupted winner: {winner:?}"
+        ));
+    }
+    let remaining_sources = sources.iter().filter(|source| source.exists()).count();
+    if remaining_sources != 1 {
+        return Err(format!(
+            "concurrent RENAME_NOREPLACE left {remaining_sources} source files"
+        ));
     }
 
     Ok(())

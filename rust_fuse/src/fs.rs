@@ -8683,13 +8683,18 @@ impl Filesystem for FodFuse {
         name: &OsStr,
         newparent: INodeNo,
         newname: &OsStr,
-        _flags: RenameFlags,
+        flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
         let parent = parent.0;
         let newparent = newparent.0;
         let req_id = self.next_request_id();
         let subject = self.request_identity(req);
+        if flags.bits() & !RenameFlags::RENAME_NOREPLACE.bits() != 0 {
+            fuse_reply_error!(reply, EINVAL);
+            return;
+        }
+        let no_replace = flags.contains(RenameFlags::RENAME_NOREPLACE);
         if self.read_only {
             fuse_reply_error!(reply, EROFS);
             return;
@@ -8803,40 +8808,42 @@ impl Filesystem for FodFuse {
             let source_is_directory = matches!(kind.as_deref(), Some("dir"));
             let target_is_directory = matches!(existing.0.as_deref(), Some("dir"));
 
-            if source_is_directory {
-                let old_prefix = format!("{}/", old_path.trim_end_matches('/'));
-                if new_parent_path == old_path || new_parent_path.starts_with(&old_prefix) {
+            if !no_replace || existing.0.is_none() {
+                if source_is_directory {
+                    let old_prefix = format!("{}/", old_path.trim_end_matches('/'));
+                    if new_parent_path == old_path || new_parent_path.starts_with(&old_prefix) {
+                        self.log_request_error(
+                            req_id,
+                            "rename",
+                            EINVAL,
+                            format!(
+                                "old_path={} new_parent_path={} directory cycle",
+                                old_path, new_parent_path
+                            ),
+                        );
+                        fuse_reply_error!(reply, EINVAL);
+                        return;
+                    }
+                    if existing.0.is_some() && !target_is_directory {
+                        self.log_request_error(
+                            req_id,
+                            "rename",
+                            ENOTDIR,
+                            format!("new_path={} non-directory target", new_path),
+                        );
+                        fuse_reply_error!(reply, ENOTDIR);
+                        return;
+                    }
+                } else if target_is_directory {
                     self.log_request_error(
                         req_id,
                         "rename",
-                        EINVAL,
-                        format!(
-                            "old_path={} new_parent_path={} directory cycle",
-                            old_path, new_parent_path
-                        ),
+                        EISDIR,
+                        format!("new_path={} directory target", new_path),
                     );
-                    fuse_reply_error!(reply, EINVAL);
+                    fuse_reply_error!(reply, EISDIR);
                     return;
                 }
-                if existing.0.is_some() && !target_is_directory {
-                    self.log_request_error(
-                        req_id,
-                        "rename",
-                        ENOTDIR,
-                        format!("new_path={} non-directory target", new_path),
-                    );
-                    fuse_reply_error!(reply, ENOTDIR);
-                    return;
-                }
-            } else if target_is_directory {
-                self.log_request_error(
-                    req_id,
-                    "rename",
-                    EISDIR,
-                    format!("new_path={} directory target", new_path),
-                );
-                fuse_reply_error!(reply, EISDIR);
-                return;
             }
 
             if matches!(
@@ -8973,9 +8980,21 @@ impl Filesystem for FodFuse {
                     return;
                 }
 
-                match self
-                    .repo
-                    .rename_namespace_replace_with_ownership_guard_for_subject_acl(
+                let rename_result = if no_replace {
+                    self.repo
+                        .rename_namespace_noreplace_with_ownership_guard_for_subject_acl(
+                            source,
+                            old_parent_id,
+                            &old_name,
+                            new_parent_id,
+                            &new_name,
+                            subject.uid,
+                            subject.gid,
+                            &subject.groups.iter().copied().collect::<Vec<_>>(),
+                            self.acl_enabled,
+                        )
+                } else {
+                    self.repo.rename_namespace_replace_with_ownership_guard_for_subject_acl(
                         source,
                         old_parent_id,
                         &old_name,
@@ -8986,7 +9005,9 @@ impl Filesystem for FodFuse {
                         subject.gid,
                         &subject.groups.iter().copied().collect::<Vec<_>>(),
                         self.acl_enabled,
-                    ) {
+                    )
+                };
+                match rename_result {
                     Ok(RenameFileReplaceOutcome::Applied) => {
                         if expected_target.is_some() {
                             self.remove_cached_path(&new_path);
@@ -9039,6 +9060,20 @@ impl Filesystem for FodFuse {
                         fuse_reply_error!(reply, ENOENT);
                         return;
                     }
+                    Ok(RenameFileReplaceOutcome::TargetExists) => {
+                        self.log_request_error(
+                            req_id,
+                            "rename",
+                            EEXIST,
+                            format!("new_path={} no-replace target exists", new_path),
+                        );
+                        fuse_reply_error!(reply, EEXIST);
+                        return;
+                    }
+                    Ok(RenameFileReplaceOutcome::InvalidDirectoryCycle) => {
+                        fuse_reply_error!(reply, EINVAL);
+                        return;
+                    }
                     Ok(RenameFileReplaceOutcome::TargetNotEmpty) => {
                         self.log_request_error(
                             req_id,
@@ -9073,6 +9108,11 @@ impl Filesystem for FodFuse {
                 ),
             );
             fuse_reply_error!(reply, EIO);
+            return;
+        }
+
+        if no_replace {
+            fuse_reply_error!(reply, EEXIST);
             return;
         }
 
