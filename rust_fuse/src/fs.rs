@@ -1640,6 +1640,7 @@ pub struct FodFuse {
     reloadable_runtime: Arc<RwLock<RuntimeReloadableSettings>>,
     pub read_only: bool,
     degraded_read_only: bool,
+    default_permissions: bool,
     pub use_fuse_context: bool,
     pub fopen_direct_io: bool,
     pub selinux_enabled: bool,
@@ -1745,6 +1746,7 @@ impl FodFuse {
             atime_policy,
             read_only,
             degraded_read_only,
+            default_permissions,
             use_fuse_context,
             fopen_direct_io,
         } = settings;
@@ -1801,6 +1803,7 @@ impl FodFuse {
             reloadable_runtime: Arc::new(RwLock::new(runtime.reloadable_settings())),
             read_only,
             degraded_read_only,
+            default_permissions,
             use_fuse_context,
             fopen_direct_io,
             selinux_enabled: security.selinux_enabled,
@@ -1901,7 +1904,7 @@ impl FodFuse {
         // Linux chooses an O_APPEND write offset from the cached inode size
         // before sending FUSE_WRITE. A writable mount therefore cannot keep
         // attributes cached across mutations made through another mount.
-        if self.degraded_read_only || !self.read_only {
+        if self.degraded_read_only || !self.read_only || self.default_permissions {
             Duration::ZERO
         } else {
             self.attr_cache_ttl
@@ -3676,6 +3679,20 @@ impl FodFuse {
             .attrs_for_open_inode(ino)?
             .filter(|attrs| attrs.xattr_owner_kind == "file")
             .ok_or(ENOENT)?;
+        Ok((path, attrs))
+    }
+
+    fn authoritative_path_attrs_for_ino(
+        &self,
+        ino: u64,
+    ) -> Result<(String, ParsedAttrs), libc::c_int> {
+        let path = self.entry_path_for_ino(ino)?;
+        let attrs = self
+            .lookup_path_from_authority(&path)?
+            .ok_or(ENOENT)?;
+        if attrs.file_attr.ino.0 != ino {
+            return Err(ENOENT);
+        }
         Ok((path, attrs))
     }
 
@@ -5746,9 +5763,29 @@ impl Filesystem for FodFuse {
                 }
             }
         }
-        match self.entry_attrs_for_ino(ino) {
+        // Linux uses this reply for local `default_permissions` checks when
+        // cached attributes expire. Do not repopulate its mode/owner cache
+        // from a lagging replica on a replica-read-routed mount.
+        match self.authoritative_path_attrs_for_ino(ino) {
             Ok((path, mut attrs)) => {
                 if fh.is_none() {
+                    // A path lookup may still resolve the detached database
+                    // row for an open, unlinked inode. `fstat()` must remain
+                    // bound to that live file_id and must not reauthorize its
+                    // former pathname after the parent has been removed.
+                    if attrs.file_attr.kind == FileType::RegularFile {
+                        match self.attrs_for_open_inode(ino) {
+                            Ok(Some(open_attrs)) if open_attrs.file_attr.nlink == 0 => {
+                                reply.attr(&self.attr_cache_ttl_live(), &open_attrs.file_attr);
+                                return;
+                            }
+                            Ok(_) => {}
+                            Err(errno) => {
+                                fuse_reply_error!(reply, errno);
+                                return;
+                            }
+                        }
+                    }
                     let subject = self.request_identity(req);
                     if let Err(errno) = self.check_path_search_permissions(&path, &subject) {
                         self.log_request_error(

@@ -37,17 +37,17 @@ Reading guide:
   przeszedł na FOD 3.4.384 dnia 2026-10-31; artefakty:
   `artifacts/integration/unlink-primary-authority-20261030T231016Z/`.
 
-- [ ] **`access(X_OK)` nadal może raportować stary tryb przy kernelowym `default_permissions`.**
-  W diagnostycznym przebiegu z FOD 3.4.383, primary/replica replay zatrzymanym
-  po zmianie trybu `0100` na `0000`, testowy mount z
-  `FOD_DEFAULT_PERMISSIONS=1` zwrócił `os.access(X_OK) == true` dla root;
-  `FUSE_ACCESS` callback nie jest wywoływany w tym kernelowym trybie
-  uprawnień. Z mountem `FOD_DEFAULT_PERMISSIONS=0` ten sam check zwraca odmowę.
-  Operacje `lookup`, `opendir` i `open` są teraz sprawdzane przez FOD, ale wynik
-  samego `access()` pozostaje oparty na atrybutach kernela i może być nieaktualny
-  do wygaśnięcia cache. Wpływ ogranicza się do odpowiedzi advisory `access()`;
-  następny krok: określić obsługiwany kontrakt cache albo wymusić primary-backed
-  permission refresh, nie osłabiając istniejącego `allow_other` i ACL.
+- [x] **`access(X_OK)` zwracał stary tryb przy kernelowym `default_permissions`.**
+  Linux wykonuje lokalny precheck na atrybutach inode, a po wygaśnięciu ich TTL
+  odświeża je przez FUSE `GETATTR`; callback `FUSE_ACCESS` nie jest źródłem
+  decyzji przy `default_permissions`. `getattr()` pobiera teraz atrybuty ścieżki
+  z autorytatywnego źródła zamiast z read-routingu repliki, a mount z
+  `default_permissions` otrzymuje zerowy TTL atrybutów. Regresja
+  `test_unlink_primary_authority_docker.py` używa read-only mountu z dodatnim
+  skonfigurowanym TTL (3 s), zapamiętuje tryb `0100`, zatrzymuje replay, zmienia
+  primary na `0000` i wymaga odmowy `os.access(X_OK)`. Pełny test primary/replica
+  przeszedł na FOD 3.4.385 dnia 2026-10-31; artefakty:
+  `artifacts/integration/unlink-primary-authority-20261030T232728Z/`.
 
 - [ ] **Minimalny Linux/libfuse FOD nie ma walidacji montowanego end-to-end.**
   `rust_fuse/src/platform_requirements.rs` odrzuca Linux starszy niż 4.18.0 i

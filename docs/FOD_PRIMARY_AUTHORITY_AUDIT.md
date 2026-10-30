@@ -17,11 +17,13 @@ connection targets in a role-routed writable mount. FUSE `access()` now also
 loads request inode attributes from primary before applying the root `X_OK`
 execute-bit rule when FUSE handles permission checks; a paused-replica regression
 covers it. Parent search checks in `lookup`, `open`, path `getattr` and `opendir`
-now also run through FOD when kernel `default_permissions` is enabled, so stale
-kernel prechecks cannot authorize those operations after a remote permission
-revocation. With kernel `default_permissions` enabled, Linux-side `access()`
-may still return an advisory result from cached attributes; that remaining
-case is tracked in [`TODO.md`](../TODO.md). Unlink now revalidates the
+also run through FOD when kernel `default_permissions` is enabled. Linux uses
+cached inode attributes for its local permission precheck and requests FUSE
+`GETATTR` when their TTL expires; FOD now returns zero attribute TTL for this
+mount option and loads path attributes from the authoritative source in
+`getattr()`. A read-only mount with a configured positive TTL and paused-replica
+regression confirms remote execute-bit revocation is visible to
+`access(X_OK)`. Unlink now revalidates the
 namespace and decides link/open/unlink/purge outcomes in one primary transaction.
 The full mounted unlink regression passes with replica replay paused. Other
 FUSE mutation preconditions still use replica-routed or cached reads, so this

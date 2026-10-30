@@ -1,6 +1,6 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, FOD 3.4.384, reviewed commit `b8a1e60`.
+Stan dokumentu: 2026-10-31, FOD 3.4.385, reviewed commit `a7c67cd`.
 
 Ten dokument opisuje aktualny kontrakt uruchomieniowy Linux/FUSE, jego
 walidację oraz ograniczenia. Nie jest deklaracją zgodności POSIX. Status
@@ -81,11 +81,13 @@ na podstawie samej wersji protokołu. Szczegółowy spis oraz follow-upy są w
 ## Co zostało zweryfikowane
 
 Ostatnie zapisane testy montowanego runtime, przywołane w audycie i
-`TODO.md`, używały Linux 6.17 i libfuse 3.17.4. Na FOD 3.4.384 test
+`TODO.md`, używały Linux 6.17 i libfuse 3.17.4. Na FOD 3.4.385 test
 primary/replica potwierdza też odmowę `open()` po cofnięciu prawa przejścia
 katalogu nadrzędnego, gdy kernelowe `default_permissions` widzi nieaktualne
-atrybuty repliki. Kernelowy wynik `access(X_OK)` z tą opcją może nadal korzystać
-z cache; ten przypadek advisory jest osobnym wpisem w `TODO.md`. W tej
+atrybuty repliki. Ten sam test potwierdza, że `access(X_OK)` po zdalnym cofnięciu
+bitu wykonywania widzi nowy tryb: mount read-only ma skonfigurowany dodatni TTL
+3 s, replay repliki jest wstrzymany, a FOD odpowiada zerowym TTL atrybutów dla
+`default_permissions` i pobiera `getattr` z autorytatywnego źródła. W tej
 konfiguracji testy
 obejmowały m.in. suite mount, operacje POSIX, locki, FIFO, sparse seek,
 równoległe zadania, negocjację capability i rejection nieobsługiwanych opcji.

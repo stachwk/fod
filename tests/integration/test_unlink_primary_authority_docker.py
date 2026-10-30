@@ -226,16 +226,42 @@ def main():
         else:
             os.environ["FOD_DEFAULT_PERMISSIONS"] = previous_default_permissions
 
+        previous_default_permissions = os.environ.get("FOD_DEFAULT_PERMISSIONS")
+        previous_readonly = os.environ.get("FOD_RUST_FUSE_READONLY")
+        previous_metadata_ttl = os.environ.get("FOD_METADATA_CACHE_TTL_SECONDS")
+        os.environ["FOD_DEFAULT_PERMISSIONS"] = "1"
+        os.environ["FOD_RUST_FUSE_READONLY"] = "1"
+        # Exercise a real positive configured TTL: the default_permissions
+        # mount must still return zero attr TTL so Linux refreshes permissions.
+        os.environ["FOD_METADATA_CACHE_TTL_SECONDS"] = "3"
+        md = temp / "d"
+        d = FODMount(str(ROOT)); mounts.append(d)
+        d.start(str(md))
+        if previous_default_permissions is None:
+            os.environ.pop("FOD_DEFAULT_PERMISSIONS", None)
+        else:
+            os.environ["FOD_DEFAULT_PERMISSIONS"] = previous_default_permissions
+        if previous_readonly is None:
+            os.environ.pop("FOD_RUST_FUSE_READONLY", None)
+        else:
+            os.environ["FOD_RUST_FUSE_READONLY"] = previous_readonly
+        if previous_metadata_ttl is None:
+            os.environ.pop("FOD_METADATA_CACHE_TTL_SECONDS", None)
+        else:
+            os.environ["FOD_METADATA_CACHE_TTL_SECONDS"] = previous_metadata_ttl
+
         # Root's access(X_OK) exception depends on the current primary mode:
         # root still needs at least one execute bit. A lagged read replica must
         # not retain an old execute bit and make access() succeed after chmod.
         root_access_name = "root-x-ok-primary-authority"
         root_access_a = ma / root_access_name
         root_access_b = mb / root_access_name
+        root_access_d = md / root_access_name
         root_access_a.write_bytes(b"root access authority\n")
         root_access_a.chmod(0o100)
         barrier()
         assert root_access_b.stat().st_mode & 0o111 == 0o100
+        assert root_access_d.stat().st_mode & 0o111 == 0o100
         pause()
         root_access_a.chmod(0o000)
         replica_mode = query(
@@ -254,17 +280,13 @@ def main():
         if os.access(root_access_b, os.X_OK):
             raise AssertionError("root access(X_OK) trusted execute bits on the lagged replica")
         results["root_x_ok_access_uses_primary_mode"] = True
+        if os.access(root_access_d, os.X_OK):
+            raise AssertionError(
+                "kernel default_permissions trusted execute bits returned by "
+                "replica-routed getattr"
+            )
+        results["default_permissions_access_refreshes_from_primary"] = True
         resume()
-
-        previous_default_permissions = os.environ.get("FOD_DEFAULT_PERMISSIONS")
-        os.environ["FOD_DEFAULT_PERMISSIONS"] = "1"
-        md = temp / "d"
-        d = FODMount(str(ROOT)); mounts.append(d)
-        d.start(str(md))
-        if previous_default_permissions is None:
-            os.environ.pop("FOD_DEFAULT_PERMISSIONS", None)
-        else:
-            os.environ["FOD_DEFAULT_PERMISSIONS"] = previous_default_permissions
 
         # Even with kernel default_permissions enabled, the FUSE open callback
         # must recheck parent search rights against primary. Linux can accept a
