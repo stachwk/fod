@@ -3584,12 +3584,19 @@ impl FodFuse {
     ) -> Result<(String, ParsedAttrs), libc::c_int> {
         let path = self.entry_path_for_ino(ino)?;
         let authority = self.repo.authoritative_view();
-        let attrs = self
-            .attrs_for_path_from_repo(&authority, &path)?
-            .ok_or(ENOENT)?;
-        if attrs.file_attr.ino.0 != ino {
-            return Err(ENOENT);
+        if let Some(attrs) = self.attrs_for_path_from_repo(&authority, &path)? {
+            if attrs.file_attr.ino.0 == ino {
+                return Ok((path, attrs));
+            }
         }
+
+        // fgetxattr/fsetxattr may target an open file after unlink or a remote
+        // replacement of its former pathname. In that case, bind the request
+        // to the live handle's file_id instead of following the stale path.
+        let attrs = self
+            .attrs_for_open_inode(ino)?
+            .filter(|attrs| attrs.xattr_owner_kind == "file")
+            .ok_or(ENOENT)?;
         Ok((path, attrs))
     }
 

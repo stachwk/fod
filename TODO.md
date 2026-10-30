@@ -120,8 +120,9 @@ Reading guide:
   without confirming that the path still resolved to that inode. After a
   remote remove/recreate, this could expose or mutate the replacement object's
   xattrs. The callbacks now verify the inode against metadata resolved from
-  the primary and use the verified xattr owner ID for the PostgreSQL read or
-  transaction. Confidence
+  the primary and use that xattr owner ID; if the old inode remains open after
+  unlink/replacement, they use the open handle's primary-resolved `file_id`.
+  Confidence
   is high for the code-path fix; no mounted race/replacement reproduction was
   run. Add a two-mount deterministic replacement case covering set/remove and
   get/list behavior before closing the finding. See

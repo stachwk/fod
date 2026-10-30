@@ -505,9 +505,10 @@ removed and recreated that path, the stale inode could read or mutate the new
 object's xattrs. `ParsedAttrs` now carries the xattr owner kind and database ID
 from the resolved metadata; all four callbacks resolve the path against the
 primary and reject an inode/path mismatch before addressing xattrs by that
-verified owner ID. Hardlinks resolve to their underlying file ID, and the root
-directory retains owner ID 0. The xattr mutation transaction then locks that
-owner row as before.
+verified owner ID. For a still-open file whose path was unlinked or
+replaced, they bind to the open file ID instead. Hardlinks resolve to their
+underlying file ID, and the root directory retains owner ID 0. The xattr
+mutation transaction then locks that owner row as before.
 This closes the source-identified stale-path selection path, but no mounted
 replacement-race regression was run; add one before treating the behavior as
 runtime-verified. Confidence: high for the source-level mechanism and fix;
