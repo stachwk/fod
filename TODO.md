@@ -105,16 +105,17 @@ Reading guide:
   Source and audit:
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617),
   [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
-- [ ] **P07 `access()` identity and root execute regressions remain untested.**
+- [x] **P07 `access()` identity and root execute regressions.**
   Linux v6.17 `do_faccessat()` switches fsuid/fsgid to the caller's real
   uid/gid for ordinary `access()`; FUSE request headers carry those fs IDs, so
   FOD's `req.uid()`/`req.gid()` already have the required identity. Source
   review found that FOD's root bypass granted `X_OK` on regular files with no
   execute bit. The callback now returns `EACCES` for that case, matching Linux
-  v6.17. Confidence: high from kernel/FUSE source and direct callback review;
-  no mounted regression was run. Add a mounted setuid-style real/effective ID
-  distinction and root `X_OK` cases with and without execute bits before
-  closing P07. See the
+  v6.17. `test_path_search_permissions.py` now uses a root process with real UID
+  `nobody` and effective UID 0 to check that `access()` uses the real ID, and
+  checks root `X_OK` both with and without execute bits. It passed on mounted
+  FUSE with `default_permissions` disabled against an isolated PostgreSQL
+  17.11 instance. Broader P07 gaps remain in the conformance ledger. See the
   [`permissions and identity audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [x] **Verify stale-inode xattr behavior on mounted FUSE.** Source review
   found that xattr callbacks resolved the request's inode through a cached path

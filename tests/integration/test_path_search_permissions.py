@@ -40,6 +40,15 @@ def run_as_nobody(
     )
 
 
+def run_as_root(script: str, *paths: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sudo", "-n", "python3", "-c", script, *(str(path) for path in paths)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def assert_permission_error(
     result: subprocess.CompletedProcess[str], operation: str
 ) -> None:
@@ -71,6 +80,12 @@ def main() -> None:
     )
     if nobody_probe.returncode != 0:
         print("SKIP path-search-permissions (sudo cannot run commands as nobody)")
+        return
+    root_probe = subprocess.run(
+        ["sudo", "-n", "true"], capture_output=True, text=True, check=False
+    )
+    if root_probe.returncode != 0:
+        print("SKIP path-search-permissions (sudo cannot run commands as root)")
         return
 
     os.environ["FOD_DEFAULT_PERMISSIONS"] = "0"
@@ -111,6 +126,47 @@ def main() -> None:
             metadata_owner_file = directory / "metadata-owner"
             metadata_owner_file.write_text("owner metadata\n", encoding="utf-8")
             metadata_owner_file.chmod(0o666)
+
+            real_uid_file = directory / "real-uid-only"
+            real_uid_file.write_text("real uid access\n", encoding="utf-8")
+            real_uid_file.chmod(0o400)
+            real_uid_access = run_as_root(
+                """
+import os
+import pwd
+import sys
+identity = pwd.getpwnam("nobody")
+os.setresgid(identity.pw_gid, 0, 0)
+os.setresuid(identity.pw_uid, 0, 0)
+print(int(os.getuid() != os.geteuid()), int(os.access(sys.argv[1], os.R_OK)))
+""",
+                real_uid_file,
+            )
+            if real_uid_access.returncode != 0 or real_uid_access.stdout.strip() != "1 0":
+                raise AssertionError(
+                    "access() did not use the real uid with default permissions disabled: "
+                    f"stdout={real_uid_access.stdout!r} stderr={real_uid_access.stderr!r}"
+                )
+
+            root_noexec_file = directory / "root-noexec"
+            root_noexec_file.write_text("no execute bit\n", encoding="utf-8")
+            root_noexec_file.chmod(0o644)
+            root_exec_file = directory / "root-exec"
+            root_exec_file.write_text("execute bit\n", encoding="utf-8")
+            root_exec_file.chmod(0o100)
+            for path, expected, label in (
+                (root_noexec_file, "0", "root X_OK without an execute bit"),
+                (root_exec_file, "1", "root X_OK with an execute bit"),
+            ):
+                result = run_as_root(
+                    "import os, sys; print(int(os.access(sys.argv[1], os.X_OK)))", path
+                )
+                if result.returncode != 0 or result.stdout.strip() != expected:
+                    raise AssertionError(
+                        f"{label}: result={result.stdout.strip()!r}, expected={expected!r}; "
+                        f"stderr={result.stderr!r}"
+                    )
+
             assert_errno_from_nobody(
                 run_as_nobody(
                     """
@@ -307,6 +363,7 @@ else:
                 "create_denied=1 mkdir_denied=1 unlink_denied=1 rename_denied=1 "
                 "rmdir_denied=1 chmod_denied=1 utimens_denied=1 truncate_denied=1 "
                 "nonowner_chmod_chown_errno=EPERM "
+                "access_real_uid=1 root_x_ok=0,1 "
                 "open_trunc_denied=1 readonly_truncate_denied=1 "
                 "getxattr_denied=1 listxattr_denied=1 setxattr_denied=1 "
                 "removexattr_denied=1"
