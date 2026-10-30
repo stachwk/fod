@@ -8270,12 +8270,34 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql, &params)?;
-            Ok(fetch_single_text_option(res)?.map(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "t" | "true" | "1" | "on"
-                )
-            }))
+            let value = match PQresultStatus(res) {
+                PGRES_TUPLES_OK => {
+                    let rows = PQntuples(res);
+                    let cols = PQnfields(res);
+                    if rows == 0 {
+                        Ok(None)
+                    } else if rows != 1 || cols != 1 {
+                        Err("invalid file unlinked-state row returned by PostgreSQL".to_string())
+                    } else if PQgetisnull(res, 0, 0) != 0 {
+                        Err("file unlinked flag is NULL".to_string())
+                    } else {
+                        let value = PQgetvalue(res, 0, 0);
+                        if value.is_null() {
+                            Err("file unlinked flag value is missing".to_string())
+                        } else {
+                            let value = CStr::from_ptr(value).to_string_lossy();
+                            match value.to_ascii_lowercase().as_str() {
+                                "t" | "true" | "1" | "on" => Ok(Some(true)),
+                                "f" | "false" | "0" | "off" => Ok(Some(false)),
+                                _ => Err(format!("invalid file unlinked flag: {value}")),
+                            }
+                        }
+                    }
+                }
+                _ => Err(result_error(res)),
+            };
+            PQclear(res);
+            value
         })
     }
 

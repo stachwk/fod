@@ -1054,6 +1054,58 @@ fn symlink_null_target_is_not_reported_as_missing_or_empty() -> Result<(), Strin
 }
 
 #[test]
+fn null_file_unlinked_flag_is_not_reported_as_missing() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let name = unique_name("null_file_unlinked");
+    let file_id = repo.create_file(
+        None,
+        &name,
+        0o644,
+        1000,
+        1000,
+        &unique_name("null_file_unlinked_seed"),
+    )?;
+    let mut unlinked_not_null_dropped = false;
+
+    let result = (|| {
+        if repo.file_is_unlinked(file_id)? != Some(false) {
+            return Err("new file did not report unlinked=false".to_string());
+        }
+        repo.exec("ALTER TABLE files ALTER COLUMN unlinked DROP NOT NULL")?;
+        unlinked_not_null_dropped = true;
+        repo.exec(&format!(
+            "UPDATE files SET unlinked = NULL WHERE id_file = {file_id}"
+        ))?;
+        match repo.file_is_unlinked(file_id) {
+            Err(error) if error.contains("NULL") => {}
+            Err(error) => return Err(format!("unexpected unlinked-state error: {error}")),
+            Ok(value) => {
+                return Err(format!(
+                    "NULL unlinked flag was treated as an ordinary result: {value:?}"
+                ));
+            }
+        }
+        Ok(())
+    })();
+
+    let cleanup = (|| {
+        if unlinked_not_null_dropped {
+            repo.exec(&format!(
+                "UPDATE files SET unlinked = FALSE WHERE id_file = {file_id}"
+            ))?;
+            repo.exec("ALTER TABLE files ALTER COLUMN unlinked SET NOT NULL")?;
+        }
+        repo.purge_primary_file(file_id)
+    })();
+    result.and(cleanup)?;
+    if repo.file_is_unlinked(file_id)?.is_some() {
+        return Err("purged file was still reported by file_is_unlinked".to_string());
+    }
+    Ok(())
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

@@ -406,6 +406,10 @@ Reading guide:
   preserves target bytes and rejects NULL/empty targets; symlink metadata uses
   the same fail-closed validation. `symlink_null_target_is_not_reported_as_missing_or_empty`
   checks the exact whitespace case and both malformed target values.
+  `file_is_unlinked()` also used to treat a SQL `NULL` flag as a nonexistent
+  file. It now distinguishes zero rows from a malformed NULL or boolean value;
+  `null_file_unlinked_flag_is_not_reported_as_missing` verifies the distinction
+  and confirms a genuinely purged file still reports as absent.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
