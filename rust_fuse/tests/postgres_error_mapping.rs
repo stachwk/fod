@@ -47,7 +47,7 @@ impl Drop for DiskFullTrigger {
 }
 
 #[test]
-fn postgres_disk_full_is_reported_as_enospc() -> Result<(), String> {
+fn postgres_errors_are_reported_as_linux_errno() -> Result<(), String> {
     if unsafe { libc::geteuid() } != 0 {
         eprintln!("skipping PostgreSQL ENOSPC mount test: run via sudo for FUSE coverage");
         return Ok(());
@@ -84,14 +84,25 @@ fn postgres_disk_full_is_reported_as_enospc() -> Result<(), String> {
 
     let mounted = MountedFs::start("postgres-disk-full-enospc")?;
     let directory_name = format!("disk-full-dir-{}", unique_suffix());
+    let mkdir_io_error_name = format!("mkdir-io-error-dir-{}", unique_suffix());
+    let rmdir_io_error_name = format!("rmdir-io-error-dir-{}", unique_suffix());
+    let rmdir_io_error_path = mounted.mountpoint.join(&rmdir_io_error_name);
+    std::fs::create_dir(&rmdir_io_error_path)
+        .map_err(|err| format!("create rmdir EIO fixture failed: {err}"))?;
     let directory_trigger_name = format!("fod_test_directory_disk_full_{suffix}");
     let directory_function_name = format!("fod_test_directory_disk_full_fn_{suffix}");
     repo.exec(&format!(
         "CREATE FUNCTION {directory_function_name}() RETURNS trigger LANGUAGE plpgsql AS $$
          BEGIN
-             IF NEW.name = '{directory_name}' THEN
-                 RAISE EXCEPTION 'forced namespace disk-full error from FOD regression'
-                     USING ERRCODE = '53100';
+             IF TG_OP = 'INSERT' AND NEW.name = '{directory_name}' THEN
+                 RAISE EXCEPTION 'forced namespace disk-full error from FOD regression' USING ERRCODE = '53100';
+             ELSIF TG_OP = 'INSERT' AND NEW.name = '{mkdir_io_error_name}' THEN
+                 RAISE EXCEPTION 'forced mkdir I/O error from FOD regression' USING ERRCODE = '58030';
+             ELSIF TG_OP = 'DELETE' AND OLD.name = '{rmdir_io_error_name}' THEN
+                 RAISE EXCEPTION 'forced rmdir I/O error from FOD regression' USING ERRCODE = '58030';
+             END IF;
+             IF TG_OP = 'DELETE' THEN
+                 RETURN OLD;
              END IF;
              RETURN NEW;
          END;
@@ -104,7 +115,7 @@ fn postgres_disk_full_is_reported_as_enospc() -> Result<(), String> {
     };
     repo.exec(&format!(
         "CREATE TRIGGER {directory_trigger_name}
-         BEFORE INSERT ON directories
+         BEFORE INSERT OR DELETE ON directories
          FOR EACH ROW EXECUTE FUNCTION {directory_function_name}()"
     ))?;
     let directory_path = mounted.mountpoint.join(&directory_name);
@@ -118,6 +129,31 @@ fn postgres_disk_full_is_reported_as_enospc() -> Result<(), String> {
     }
     if directory_path.exists() {
         return Err("mkdir left a directory behind after PostgreSQL SQLSTATE 53100".to_string());
+    }
+
+    let mkdir_io_error_path = mounted.mountpoint.join(&mkdir_io_error_name);
+    let mkdir_io_error = std::fs::create_dir(&mkdir_io_error_path)
+        .expect_err("mkdir succeeded despite PostgreSQL SQLSTATE 58030");
+    if mkdir_io_error.raw_os_error() != Some(libc::EIO) {
+        return Err(format!(
+            "PostgreSQL SQLSTATE 58030 from mkdir reached userspace as errno={:?}, expected EIO",
+            mkdir_io_error.raw_os_error()
+        ));
+    }
+    if mkdir_io_error_path.exists() {
+        return Err("mkdir left a directory behind after PostgreSQL SQLSTATE 58030".to_string());
+    }
+
+    let rmdir_io_error = std::fs::remove_dir(&rmdir_io_error_path)
+        .expect_err("rmdir succeeded despite PostgreSQL SQLSTATE 58030");
+    if rmdir_io_error.raw_os_error() != Some(libc::EIO) {
+        return Err(format!(
+            "PostgreSQL SQLSTATE 58030 from rmdir reached userspace as errno={:?}, expected EIO",
+            rmdir_io_error.raw_os_error()
+        ));
+    }
+    if !rmdir_io_error_path.is_dir() {
+        return Err("rmdir removed its directory after PostgreSQL SQLSTATE 58030".to_string());
     }
 
     let path = mounted
@@ -144,6 +180,8 @@ fn postgres_disk_full_is_reported_as_enospc() -> Result<(), String> {
         ));
     }
 
-    println!("OK: PostgreSQL SQLSTATE 53100 from mkdir and fsync surfaced through FUSE as ENOSPC");
+    println!(
+        "OK: PostgreSQL 53100 from mkdir/fsync maps to ENOSPC; 58030 from mkdir/rmdir maps to EIO"
+    );
     Ok(())
 }

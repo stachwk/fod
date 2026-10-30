@@ -208,12 +208,11 @@ Reading guide:
   instead of replacing it with a generic string. `errno.rs` unit regressions
   now verify SQLSTATE `53100` maps to `ENOSPC` in both error mappers. The mounted
   fault-injection regression and `make test-postgres-enospc` create temporary
-  triggers on `data_blocks` and `directories`, force SQLSTATE `53100`, and
-  require both `fsync()` and `mkdir()` to return `ENOSPC`; the directory
-  transaction must leave no entry behind. The test passed against temporary
-  PostgreSQL 17.11. Current quota tests exercise FOD's own quota path and do not
-  establish this PostgreSQL error mapping. Do not parse localized PostgreSQL
-  error text. See
+  triggers on `data_blocks` and `directories`. SQLSTATE `53100` must return
+  `ENOSPC` from `fsync()` and `mkdir()`, and `58030` must return `EIO` from
+  `mkdir()` and `rmdir()`; failed namespace mutations must leave the original
+  state intact. The test passed against temporary PostgreSQL 17.11. Do not parse
+  localized PostgreSQL error text. See
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617).
 - [ ] **PostgreSQL read failures must not appear as empty metadata.** Source
   review found that `count_file_links()`, `count_file_blocks()`,
