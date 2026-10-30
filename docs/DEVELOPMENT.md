@@ -20,6 +20,12 @@ toolchain is newer than the workspace minimum version.
 Production-style optimized builds use the `release-lto` profile where the
 relevant packaging/deployment paths require it.
 
+Rust FUSE integration tests read `fod_config.ini` by default. Set
+`FOD_TEST_CONFIG` to a separate INI file to isolate their PostgreSQL database;
+the same file is passed to the spawned FOD tools. This is useful for tests
+that require a specific schema version and avoids upgrading a developer's
+shared test database as a side effect.
+
 ## Active runtime crates
 
 | Crate | Responsibility |

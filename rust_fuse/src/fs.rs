@@ -3762,7 +3762,10 @@ impl FodFuse {
         repo: &DbRepo,
         path: &str,
     ) -> Result<Option<ParsedAttrs>, libc::c_int> {
-        let blob = repo.fetch_path_attrs_blob(path).map_err(|_| EIO)?;
+        let blob = repo.fetch_path_attrs_blob(path).map_err(|err| {
+            warn!("FOD path attributes query failed path={} err={}", path, err);
+            EIO
+        })?;
         let Some(blob) = blob else {
             return Ok(None);
         };
@@ -9169,11 +9172,19 @@ impl Filesystem for FodFuse {
         let parent_id = match self.parent_entry_id_for_inode(parent) {
             Ok(value) => value,
             Err(errno) => {
+                self.log_request_error(
+                    req_id,
+                    "create",
+                    errno,
+                    format!("path={} phase=resolve_parent_inode", child_path),
+                );
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        let mut mode = mode & !umask;
+        // FUSE CREATE passes the full file mode, including S_IFREG. Store only
+        // POSIX permission and special bits in the database mode column.
+        let mut mode = (mode & 0o7777) & !umask;
         if !subject.is_root() {
             mode &= !(libc::S_ISUID | libc::S_ISGID);
         }
@@ -9193,6 +9204,12 @@ impl Filesystem for FodFuse {
             ) {
                 Ok(value) => value,
                 Err(errno) => {
+                    self.log_request_error(
+                        req_id,
+                        "create",
+                        errno,
+                        format!("path={} phase=writable_create_setup", child_path),
+                    );
                     self.remove_cached_path(&child_path);
                     self.invalidate_statfs_cache();
                     fuse_reply_error!(reply, errno);
@@ -9300,6 +9317,12 @@ impl Filesystem for FodFuse {
                 );
             }
             Ok(None) => {
+                self.log_request_error(
+                    req_id,
+                    "create",
+                    EIO,
+                    format!("path={} phase=post_create_authoritative_lookup_missing", child_path),
+                );
                 // Kernel nie dostanie fh po bledzie create(), wiec musimy sami
                 // zwolnic ownership i usunac lokalny stan uchwytu.
                 if writable {
@@ -9325,6 +9348,12 @@ impl Filesystem for FodFuse {
                 fuse_reply_error!(reply, EIO);
             }
             Err(errno) => {
+                self.log_request_error(
+                    req_id,
+                    "create",
+                    errno,
+                    format!("path={} phase=post_create_authoritative_lookup", child_path),
+                );
                 // Jak wyzej: create() zwraca blad, wiec nie mozemy pozostawic
                 // niewidocznego dla kernela fh z aktywnym write ownership.
                 if writable {

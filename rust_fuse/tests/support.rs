@@ -6,6 +6,8 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
@@ -22,7 +24,10 @@ pub fn repo_root() -> PathBuf {
 }
 
 pub fn config_path() -> PathBuf {
-    repo_root().join("fod_config.ini")
+    env::var_os("FOD_TEST_CONFIG")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root().join("fod_config.ini"))
 }
 
 pub fn cargo_target_dir() -> PathBuf {
@@ -491,6 +496,8 @@ impl MountedFs {
             command.arg("--atime-policy").arg(atime_policy);
         }
         apply_admp_trace_env(&mut command)?;
+        #[cfg(unix)]
+        command.process_group(0);
         command
             .stdout(Stdio::from(
                 log_file.try_clone().map_err(|err| err.to_string())?,
@@ -534,8 +541,21 @@ impl MountedFs {
 
 impl Drop for MountedFs {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        unsafe {
+            // fod-bootstrap waits for fod-rust-fuse, so killing only the
+            // launcher can orphan the daemon and leave its FUSE mount busy.
+            let process_group = -(self.child.id() as i32);
+            let _ = libc::kill(process_group, libc::SIGTERM);
+        }
+        #[cfg(not(unix))]
         let _ = self.child.kill();
         let _ = self.child.wait();
+        #[cfg(unix)]
+        unsafe {
+            let process_group = -(self.child.id() as i32);
+            let _ = libc::kill(process_group, libc::SIGKILL);
+        }
         print_profile_io_summaries_if_enabled(&self.log_path);
         if !try_unmount(&self.mountpoint) {
             eprintln!(

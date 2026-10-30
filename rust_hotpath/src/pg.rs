@@ -11054,12 +11054,12 @@ impl DbRepo {
                         (source, new_parent_id)
                     {
                         let cycle_sql = CString::new(
-                            "WITH RECURSIVE subtree(id_directory) AS (\
-                                 SELECT id_directory FROM directories WHERE id_directory = $1\
-                                 UNION\
-                                 SELECT child.id_directory FROM directories child\
-                                 JOIN subtree parent ON child.id_parent = parent.id_directory\
-                             )\
+                            "WITH RECURSIVE subtree(id_directory) AS (\n\
+                                 SELECT id_directory FROM directories WHERE id_directory = $1\n\
+                                 UNION\n\
+                                 SELECT child.id_directory FROM directories child\n\
+                                 JOIN subtree parent ON child.id_parent = parent.id_directory\n\
+                             )\n\
                              SELECT EXISTS (SELECT 1 FROM subtree WHERE id_directory = $2)::text",
                         )
                         .map_err(|_| "rename cycle query contains NUL byte".to_string())?;

@@ -365,6 +365,10 @@ projected with file-type bits as permissions. FUSE validates path and open-file
 attribute modes against the same bound. PostgreSQL uses one POSIX-mode decoder
 for namespace lookups, mutation authorization, ACL/xattr checks and directory
 permission checks, so these paths reject corrupt mode rows consistently.
+The FUSE `CREATE` callback removes file-type bits from the mode supplied by the
+kernel before persisting permissions; the filesystem object kind is stored
+separately. This keeps regular-file mode values within the POSIX `0o7777`
+permission range.
 Broader fault-injection coverage for malformed persisted rows remains in the
 [unresolved findings](../TODO.md#unresolved-findings).
 Namespace lookup and directory-entry metadata decoders reject entity ID zero;

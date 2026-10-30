@@ -604,9 +604,10 @@ fn concurrent_threads_create_write_and_read_independent_files() -> Result<(), St
         .collect::<Vec<_>>();
 
     for worker in namespace_workers {
-        worker
+        let result = worker
             .join()
-            .map_err(|_| "concurrent namespace worker panicked".to_string())??;
+            .map_err(|_| "concurrent namespace worker panicked".to_string())?;
+        result.map_err(|err| format!("{err}\n{}", mounted.log_tail(200)))?;
     }
 
     const TASK_ITERATIONS: usize = 12;

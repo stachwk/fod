@@ -19,10 +19,14 @@ a database compatibility marker. The schema version records which ordered
 migrations have been applied. A `minimum_client_version` records which FOD
 releases may mount after the latest `mkfs.fod init` or `mkfs.fod upgrade`; it is
 raised monotonically by that command and replicated with the schema-version
-row. The database is the authority for this decision: primary mounts compare
-against the primary, and replica mounts obtain the current compatibility gate
-from the writable primary at startup while continuing to use the standby for
-read operations. A normal replica mount fails closed if that primary cannot be
+row. Mount admission does not compare a client against the release running in
+some other mounted FOD process. Instead, each client compares its own release
+with the compatibility floor published by the `mkfs.fod` client that initialized
+or last upgraded the database. The database is the authority for this decision:
+primary mounts compare against the primary, and replica mounts obtain the
+current compatibility gate from the writable primary at startup while
+continuing to use the standby for read operations. A normal replica mount fails
+closed if that primary cannot be
 reached, because a lagging standby may not yet have replayed a new client floor
 or an active schema-upgrade marker. The explicit degraded read-only mode can
 operate without the primary and then uses the standby's last replayed floor;
