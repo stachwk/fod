@@ -3705,7 +3705,6 @@ impl FodFuse {
             return Ok(None);
         }
         let obj_type = fields[0].clone();
-        let process_identity = Self::process_identity();
         let mut file_attr = if obj_type == "symlink" {
             if fields.len() < 9 {
                 return Err(EIO);
@@ -3715,8 +3714,8 @@ impl FodFuse {
             let mod_date = fields[3].clone();
             let acc_date = fields[4].clone();
             let chg_date = fields[5].clone();
-            let uid = fields[6].parse::<u32>().unwrap_or(process_identity.uid);
-            let gid = fields[7].parse::<u32>().unwrap_or(process_identity.gid);
+            let uid = fields[6].parse::<u32>().map_err(|_| EIO)?;
+            let gid = fields[7].parse::<u32>().map_err(|_| EIO)?;
             let inode_seed = fields[8].clone();
             let inode = self.stable_inode(&obj_type, &inode_seed, raw_inode);
             FileAttr {
@@ -3741,13 +3740,13 @@ impl FodFuse {
                 return Err(EIO);
             }
             let raw_inode = fields[1].parse::<u64>().map_err(|_| EIO)?;
-            let size = fields[2].parse::<u64>().unwrap_or(0);
+            let size = fields[2].parse::<u64>().map_err(|_| EIO)?;
             let mode = fields[3].clone();
             let mod_date = fields[4].clone();
             let acc_date = fields[5].clone();
             let chg_date = fields[6].clone();
-            let uid = fields[7].parse::<u32>().unwrap_or(process_identity.uid);
-            let gid = fields[8].parse::<u32>().unwrap_or(process_identity.gid);
+            let uid = fields[7].parse::<u32>().map_err(|_| EIO)?;
+            let gid = fields[8].parse::<u32>().map_err(|_| EIO)?;
             let inode_seed = fields[9].clone();
             let allocated_bytes = fields[10].parse::<u64>().map_err(|_| EIO)?;
             let mut kind = if obj_type == "dir" {
@@ -3755,17 +3754,18 @@ impl FodFuse {
             } else {
                 FileType::RegularFile
             };
-            let mut perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).unwrap_or(0o644);
+            let perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).map_err(|_| EIO)?;
             let mut rdev = 0;
             if obj_type == "hardlink" {
-                let file_id = repo.get_hardlink_file_id(raw_inode).map_err(|_| EIO)?;
-                if let Some(file_id) = file_id {
-                    if let Some((special_type, major, minor)) =
-                        repo.get_special_file_metadata(file_id).map_err(|_| EIO)?
-                    {
-                        kind = Self::file_type_from_special(&special_type);
-                        rdev = ((major as u64) << 8) | (minor as u64);
-                    }
+                let file_id = repo
+                    .get_hardlink_file_id(raw_inode)
+                    .map_err(|_| EIO)?
+                    .ok_or(EIO)?;
+                if let Some((special_type, major, minor)) =
+                    repo.get_special_file_metadata(file_id).map_err(|_| EIO)?
+                {
+                    kind = Self::file_type_from_special(&special_type);
+                    rdev = ((major as u64) << 8) | (minor as u64);
                 }
             } else if obj_type == "file" {
                 if let Some((special_type, major, minor)) =
@@ -3775,14 +3775,13 @@ impl FodFuse {
                     rdev = ((major as u64) << 8) | (minor as u64);
                 }
             }
-            if obj_type == "dir" && perm == 0o644 {
-                perm = 0o755;
-            }
             let inode = self.stable_inode(&obj_type, &inode_seed, raw_inode);
             let nlink = match obj_type.as_str() {
                 "hardlink" => {
-                    let file_id = repo.get_hardlink_file_id(raw_inode).map_err(|_| EIO)?;
-                    let file_id = file_id.unwrap_or(raw_inode);
+                    let file_id = repo
+                        .get_hardlink_file_id(raw_inode)
+                        .map_err(|_| EIO)?
+                        .ok_or(EIO)?;
                     repo.count_file_links(file_id).map_err(|_| EIO)?
                 }
                 "file" => repo.count_file_links(raw_inode).map_err(|_| EIO)?,
@@ -3849,20 +3848,19 @@ impl FodFuse {
             return Err(EIO);
         }
 
-        let process_identity = Self::process_identity();
         let raw_inode = fields[0].parse::<u64>().map_err(|_| EIO)?;
-        let size = fields[1].parse::<u64>().unwrap_or(0);
+        let size = fields[1].parse::<u64>().map_err(|_| EIO)?;
         let mode = fields[2].clone();
         let mod_date = fields[3].clone();
         let acc_date = fields[4].clone();
         let chg_date = fields[5].clone();
-        let uid = fields[6].parse::<u32>().unwrap_or(process_identity.uid);
-        let gid = fields[7].parse::<u32>().unwrap_or(process_identity.gid);
+        let uid = fields[6].parse::<u32>().map_err(|_| EIO)?;
+        let gid = fields[7].parse::<u32>().map_err(|_| EIO)?;
         let inode_seed = fields[8].clone();
         let allocated_bytes = fields[9].parse::<u64>().map_err(|_| EIO)?;
 
         let mut kind = FileType::RegularFile;
-        let perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).unwrap_or(0o644);
+        let perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).map_err(|_| EIO)?;
         let mut rdev = 0_u64;
         if let Some((special_type, major, minor)) = authority
             .get_special_file_metadata(raw_inode)
@@ -3875,7 +3873,7 @@ impl FodFuse {
         let nlink = authority
             .file_link_count_for_stat(raw_inode)
             .map_err(|_| EIO)?
-            .unwrap_or(0);
+            .ok_or(EIO)?;
         let inode = self.stable_inode("file", &inode_seed, raw_inode);
         Ok(Some(ParsedAttrs {
             inode_seed,

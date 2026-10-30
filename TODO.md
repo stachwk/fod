@@ -186,6 +186,14 @@ Reading guide:
   directory ID. Special-file metadata decoding now rejects NULL/malformed rows
   and frees every `PGresult` on parse failures. PostgreSQL fault-injection and
   malformed-row regressions for these paths remain pending.
+- [ ] **Metadata projection must preserve restrictive directory modes.** Source
+  review found that directory mode `0644` was rewritten to `0755` in FUSE
+  attributes, and malformed size/uid/gid/mode values could be replaced by
+  permissive or process-local defaults. Projection now preserves `0644`,
+  rejects malformed numeric fields with `EIO`, and fails if a hardlink lacks
+  its backing file or an open file's link-count row. Add mounted `mkdir/chmod`
+  checks for `0644` and a decoder regression for malformed metadata before
+  closing this finding.
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's
