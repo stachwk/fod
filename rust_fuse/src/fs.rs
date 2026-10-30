@@ -6609,7 +6609,7 @@ impl Filesystem for FodFuse {
         let ino = ino.0;
         let mask = mask.bits();
         let subject = self.request_identity(req);
-        let (path, attrs) = match self.entry_attrs_for_ino(ino) {
+        let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
             Ok(value) => value,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);

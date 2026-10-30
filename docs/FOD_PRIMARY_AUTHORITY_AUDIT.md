@@ -13,7 +13,10 @@ still require the reviews listed at the end.
 ## Result
 
 Mutation SQL and authoritative session/ownership operations use the primary
-connection targets in a role-routed writable mount. Unlink now revalidates the
+connection targets in a role-routed writable mount. FUSE `access()` now also
+loads request inode attributes from primary before applying the root `X_OK`
+execute-bit rule; a paused-replica regression covers a remote permission
+change. Unlink now revalidates the
 namespace and decides link/open/unlink/purge outcomes in one primary transaction.
 The full mounted unlink regression passes with replica replay paused. Other
 FUSE mutation preconditions still use replica-routed or cached reads, so this

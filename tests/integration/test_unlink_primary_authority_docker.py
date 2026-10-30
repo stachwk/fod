@@ -216,8 +216,44 @@ def main():
         a = FODMount(str(ROOT)); mounts.append(a)
         a.start(str(ma))
         os.environ["FOD_PG_REPLICA_READ_ROUTING_ENABLED"] = "1"
+        previous_default_permissions = os.environ.get("FOD_DEFAULT_PERMISSIONS")
+        os.environ["FOD_DEFAULT_PERMISSIONS"] = "0"
         b = FODMount(str(ROOT)); mounts.append(b)
         b.start(str(mb))
+        if previous_default_permissions is None:
+            os.environ.pop("FOD_DEFAULT_PERMISSIONS", None)
+        else:
+            os.environ["FOD_DEFAULT_PERMISSIONS"] = previous_default_permissions
+
+        # Root's access(X_OK) exception depends on the current primary mode:
+        # root still needs at least one execute bit. A lagged read replica must
+        # not retain an old execute bit and make access() succeed after chmod.
+        root_access_name = "root-x-ok-primary-authority"
+        root_access_a = ma / root_access_name
+        root_access_b = mb / root_access_name
+        root_access_a.write_bytes(b"root access authority\n")
+        root_access_a.chmod(0o100)
+        barrier()
+        assert root_access_b.stat().st_mode & 0o111 == 0o100
+        pause()
+        root_access_a.chmod(0o000)
+        replica_mode = query(
+            replica,
+            "SELECT mode FROM fod.files WHERE name=%s AND NOT unlinked",
+            (root_access_name,),
+        )[0][0]
+        primary_mode = query(
+            primary,
+            "SELECT mode FROM fod.files WHERE name=%s AND NOT unlinked",
+            (root_access_name,),
+        )[0][0]
+        assert replica_mode != primary_mode, (
+            "test setup did not leave stale execute metadata"
+        )
+        if os.access(root_access_b, os.X_OK):
+            raise AssertionError("root access(X_OK) trusted execute bits on the lagged replica")
+        results["root_x_ok_access_uses_primary_mode"] = True
+        resume()
 
         # Truncate's zero-fill planning must use the primary size, not an old
         # size replayed on the read replica. Extending from a stale short EOF

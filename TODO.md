@@ -14,6 +14,18 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Root `access(X_OK)` używa bitu wykonywania z opóźnionej repliki.**
+  Callback `FodFuse::access` pobierał początkowe atrybuty przez zwykły read
+  routing, a następnie stosował wyjątek Linuxa wymagający co najmniej jednego
+  bitu wykonywania dla root. `acl_allows()` odświeżał metadane z primary, lecz
+  rootowy bypass zwracał zgodę; po cofnięciu `x` na primary stary bit z repliki
+  mógł więc dać błędne `access(X_OK) == true`. Callback pobiera teraz atrybuty
+  żądanego inode przez primary-backed `authoritative_entry_attrs_for_ino()`.
+  `test_unlink_primary_authority_docker.py` zatrzymuje replay, sprawdza rozbieżne
+  tryby w PostgreSQL i wymaga odmowy `os.access(X_OK)` na mouncie z
+  `FOD_DEFAULT_PERMISSIONS=0`. Cały test primary/replica przeszedł na FOD
+  3.4.383 dnia 2026-10-30; artefakty: `artifacts/integration/unlink-primary-authority-20261030T225902Z/`.
+
 - [ ] **Minimalny Linux/libfuse FOD nie ma walidacji montowanego end-to-end.**
   `rust_fuse/src/platform_requirements.rs` odrzuca Linux starszy niż 4.18.0 i
   libfuse3 starsze niż 3.0.0; test jednostkowy sprawdza granice parsera i
