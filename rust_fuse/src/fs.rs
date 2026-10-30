@@ -132,7 +132,10 @@ fn fod_fuse_readdir_register_paths_enabled() -> bool {
 }
 
 fn readdir_child_entries_to_skip(offset: u64) -> usize {
-    offset.saturating_sub(2) as usize
+    offset
+        .saturating_sub(2)
+        .try_into()
+        .unwrap_or(usize::MAX)
 }
 
 #[derive(Debug, Clone, Copy, Default)]

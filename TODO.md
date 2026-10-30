@@ -115,15 +115,18 @@ Reading guide:
   fault injection. Current quota tests do not prove PostgreSQL SQLSTATE 53100
   handling. Do not parse localized PostgreSQL error text. See
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617).
-- [ ] **P02 directory-stream errno attribution remains open.** POSIX requires
-  `readdir()` to report `EOVERFLOW` when a returned `struct dirent` field cannot
-  represent the value; `EBADF`/`ENOENT` for `readdir()`, and `EBADF`/`EINTR` for
-  `closedir()`, are conditional `may fail` cases. FOD now provides per-open
-  handles in `opendir()`/`releasedir()` while `readdir()` serves kernel
-  `getdents64()` requests. Existing closed-fd `EBADF` coverage is a `getdents64()`
-  syscall check, not a libc `closedir()` check. Map which conditions belong to
-  libc, Linux getdents and the FUSE callback, including `EOVERFLOW` on supported
-  ABIs. See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
+- [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
+  maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
+  when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's
+  legacy compat `getdents` has its own inode-width check, while `getdents64`
+  carries a 64-bit inode. `EBADF` for a closed descriptor is rejected by the
+  kernel before FUSE; FOD's `EBADF` handles only an invalid FUSE directory
+  handle. POSIX `ENOENT` for an invalid stream position is conditional; FOD
+  treats an out-of-range cookie as end-of-stream, with saturating conversion
+  so a 64-bit cookie cannot wrap on a 32-bit `usize`. Run mounted checks on each
+  supported narrow-inode ABI and confirm libc `closedir()`/`readdir()` error
+  behavior; current host checks only `getdents64()` after descriptor close.
+  See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **P02 directory-stream snapshot behavior needs mounted regressions.** FOD
   now pins an ordered PostgreSQL snapshot to each `opendir()` handle (full
