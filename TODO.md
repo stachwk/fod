@@ -115,6 +115,17 @@ Reading guide:
   distinction and root `X_OK` cases with and without execute bits before
   closing P07. See the
   [`permissions and identity audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
+- [ ] **Mounted stale-inode xattr regression is still missing.** Source review
+  found that xattr callbacks resolved the request's inode through a cached path
+  without confirming that the path still resolved to that inode. After a
+  remote remove/recreate, this could expose or mutate the replacement object's
+  xattrs. The callbacks now verify the inode against metadata resolved from
+  the primary and use the verified xattr owner ID for the PostgreSQL read or
+  transaction. Confidence
+  is high for the code-path fix; no mounted race/replacement reproduction was
+  run. Add a two-mount deterministic replacement case covering set/remove and
+  get/list behavior before closing the finding. See
+  [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
 - [ ] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
   mutations.** `errno.rs` maps PostgreSQL `53100` (`disk_full`) to `ENOSPC` in
   both persistence and namespace error mappers. File-block persistence also

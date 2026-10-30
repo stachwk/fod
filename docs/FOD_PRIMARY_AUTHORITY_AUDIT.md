@@ -496,5 +496,22 @@ remain available for internal callers and do not carry a request identity.
   read either identity fails mount startup, keeping lifecycle state in the same
   logical database authority as filesystem data.
 
+### Xattr callbacks and stale inode-to-path mappings
+
+Source review on 2026-10-30 found that `setxattr`, `getxattr`, `listxattr`, and
+`removexattr` selected xattr owners by resolving the locally cached path without
+checking that it still named the FUSE inode in the request. If another mount
+removed and recreated that path, the stale inode could read or mutate the new
+object's xattrs. `ParsedAttrs` now carries the xattr owner kind and database ID
+from the resolved metadata; all four callbacks resolve the path against the
+primary and reject an inode/path mismatch before addressing xattrs by that
+verified owner ID. Hardlinks resolve to their underlying file ID, and the root
+directory retains owner ID 0. The xattr mutation transaction then locks that
+owner row as before.
+This closes the source-identified stale-path selection path, but no mounted
+replacement-race regression was run; add one before treating the behavior as
+runtime-verified. Confidence: high for the source-level mechanism and fix;
+runtime reproduction remains unverified.
+
 These items are source-review findings and test gaps; do not describe them as
 additional reproduced data-loss cases.

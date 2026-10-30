@@ -185,6 +185,8 @@ macro_rules! fuse_reply_error {
 struct ParsedAttrs {
     file_attr: FileAttr,
     inode_seed: String,
+    xattr_owner_kind: String,
+    xattr_owner_id: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -3341,28 +3343,6 @@ impl FodFuse {
         changed
     }
 
-    fn xattr_owner_for_path(&self, path: &str) -> Result<Option<(String, u64)>, libc::c_int> {
-        if path == "/" {
-            return Ok(Some(("dir".to_string(), 0)));
-        }
-        let authority = self.repo.authoritative_view();
-        let resolved = authority.resolve_path(path).map_err(|_| EIO)?;
-        let owner = match resolved.kind.as_deref() {
-            Some("file") => resolved.entry_id.map(|id| ("file".to_string(), id)),
-            Some("hardlink") => match resolved.entry_id {
-                Some(hardlink_id) => authority
-                    .get_hardlink_file_id(hardlink_id)
-                    .map_err(|_| EIO)?
-                    .map(|file_id| ("file".to_string(), file_id)),
-                None => None,
-            },
-            Some("dir") => resolved.entry_id.map(|id| ("dir".to_string(), id)),
-            Some("symlink") => resolved.entry_id.map(|id| ("symlink".to_string(), id)),
-            _ => None,
-        };
-        Ok(owner)
-    }
-
     fn file_handle_state_for_handle(&self, fh: u64) -> Option<FileHandleState> {
         self.fh_table
             .lock()
@@ -3598,6 +3578,21 @@ impl FodFuse {
         Ok((path, attrs))
     }
 
+    fn authoritative_entry_attrs_for_ino(
+        &self,
+        ino: u64,
+    ) -> Result<(String, ParsedAttrs), libc::c_int> {
+        let path = self.entry_path_for_ino(ino)?;
+        let authority = self.repo.authoritative_view();
+        let attrs = self
+            .attrs_for_path_from_repo(&authority, &path)?
+            .ok_or(ENOENT)?;
+        if attrs.file_attr.ino.0 != ino {
+            return Err(ENOENT);
+        }
+        Ok((path, attrs))
+    }
+
     fn parent_entry_id_for_inode(&self, ino: u64) -> Result<Option<u64>, libc::c_int> {
         if ino == ROOT_INO {
             return Ok(None);
@@ -3781,9 +3776,31 @@ impl FodFuse {
         if Self::normalize_path(path) == "/" {
             file_attr.ino = INodeNo::ROOT;
         }
+        let raw_inode = fields[1].parse::<u64>().map_err(|_| EIO)?;
+        let (xattr_owner_kind, xattr_owner_id) = match obj_type.as_str() {
+            "file" => ("file".to_string(), raw_inode),
+            "hardlink" => (
+                "file".to_string(),
+                repo.get_hardlink_file_id(raw_inode)
+                    .map_err(|_| EIO)?
+                    .ok_or(ENOENT)?,
+            ),
+            "dir" => (
+                "dir".to_string(),
+                if Self::normalize_path(path) == "/" {
+                    0
+                } else {
+                    raw_inode
+                },
+            ),
+            "symlink" => ("symlink".to_string(), raw_inode),
+            _ => return Err(EIO),
+        };
         Ok(Some(ParsedAttrs {
             file_attr,
             inode_seed: fields[if obj_type == "symlink" { 8 } else { 9 }].clone(),
+            xattr_owner_kind,
+            xattr_owner_id,
         }))
     }
 
@@ -3828,6 +3845,8 @@ impl FodFuse {
         let inode = self.stable_inode("file", &inode_seed, raw_inode);
         Ok(Some(ParsedAttrs {
             inode_seed,
+            xattr_owner_kind: "file".to_string(),
+            xattr_owner_id: raw_inode,
             file_attr: FileAttr {
                 ino: INodeNo(inode),
                 size,
@@ -5980,13 +5999,14 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EINVAL);
             return;
         }
-        let path = match self.entry_path_for_ino(ino) {
-            Ok(path) => path,
+        let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
+            Ok(value) => value,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
+        let owner = (attrs.xattr_owner_kind, attrs.xattr_owner_id);
         let name = name.to_string_lossy().to_string();
         debug!(
             "FOD setxattr path={} name={} flags={} size={}",
@@ -6011,17 +6031,6 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EOPNOTSUPP);
             return;
         }
-        let owner = match self.xattr_owner_for_path(&path) {
-            Ok(Some(owner)) => owner,
-            Ok(None) => {
-                fuse_reply_error!(reply, ENOENT);
-                return;
-            }
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
-            }
-        };
         let posix_acl_transaction = self.acl_enabled
             && ((name == "system.posix_acl_access" && matches!(owner.0.as_str(), "file" | "dir"))
                 || (name == "system.posix_acl_default" && owner.0 == "dir"));
@@ -6149,8 +6158,8 @@ impl Filesystem for FodFuse {
         let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
         self.profile.record_getxattr();
-        let path = match self.entry_path_for_ino(ino) {
-            Ok(path) => path,
+        let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
+            Ok(value) => value,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
@@ -6164,23 +6173,6 @@ impl Filesystem for FodFuse {
             return;
         }
         if name.starts_with("user.") {
-            let attrs = match self
-                .attrs_for_path_from_repo(&self.repo.authoritative_view(), &path)
-            {
-                Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => attrs,
-                Ok(Some(_)) => {
-                    fuse_reply_error!(reply, ENOENT);
-                    return;
-                }
-                Ok(None) => {
-                    fuse_reply_error!(reply, ENOENT);
-                    return;
-                }
-                Err(errno) => {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
-            };
             if !matches!(attrs.file_attr.kind, FileType::RegularFile | FileType::Directory) {
                 fuse_reply_error!(reply, ENODATA);
                 return;
@@ -6198,19 +6190,21 @@ impl Filesystem for FodFuse {
             }
         }
 
-        // Linux probes security.capability repeatedly while writing. For an
-        // already-open regular file/hardlink the handle table already contains
-        // the authoritative underlying file_id, so resolving the same pathname
-        // again would add get_dir_id + resolve_path SQL before every xattr read.
-        // The xattr value itself is still read from PostgreSQL on every request.
-        let result = if let Some(file_id) = self.open_file_id_for_path(&path) {
+        // Linux probes security.capability repeatedly while writing. Use the
+        // file-handle fast-path counter only when its file_id matches the
+        // owner resolved from the verified inode; both cases fetch the value
+        // directly by that PostgreSQL owner ID.
+        let open_file_id = self.open_file_id_for_path(&path);
+        if attrs.xattr_owner_kind == "file" && open_file_id == Some(attrs.xattr_owner_id) {
             self.profile.record_getxattr_open_file_owner_fast_path();
-            self.repo
-                .fetch_xattr_value_for_owner("file", file_id, &name)
         } else {
             self.profile.record_getxattr_path_resolution_fallback();
-            self.repo.fetch_xattr_value(&path, &name)
-        };
+        }
+        let result = self.repo.fetch_xattr_value_for_owner(
+            &attrs.xattr_owner_kind,
+            attrs.xattr_owner_id,
+            &name,
+        );
 
         match result {
             Ok(Some(value)) => {
@@ -6236,24 +6230,14 @@ impl Filesystem for FodFuse {
     fn listxattr(&self, req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
         let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
-        let path = match self.entry_path_for_ino(ino) {
-            Ok(path) => path,
+        let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
+            Ok(value) => value,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        let owner = match self.xattr_owner_for_path(&path) {
-            Ok(Some(owner)) => owner,
-            Ok(None) => {
-                reply.size(0);
-                return;
-            }
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
-            }
-        };
+        let owner = (attrs.xattr_owner_kind, attrs.xattr_owner_id);
         let actor_uid = self.request_identity(req).uid;
         debug!(
             "FOD listxattr path={} owner_kind={} owner_id={}",
@@ -6290,24 +6274,14 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
-        let path = match self.entry_path_for_ino(ino) {
-            Ok(path) => path,
+        let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
+            Ok(value) => value,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        let owner = match self.xattr_owner_for_path(&path) {
-            Ok(Some(owner)) => owner,
-            Ok(None) => {
-                fuse_reply_error!(reply, ENOENT);
-                return;
-            }
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
-            }
-        };
+        let owner = (attrs.xattr_owner_kind, attrs.xattr_owner_id);
         let name = name.to_string_lossy().to_string();
         if name.starts_with("system.posix_acl_")
             && (!self.acl_enabled
