@@ -1268,6 +1268,60 @@ fn file_read_metadata_rejects_null_timestamp() -> Result<(), String> {
 }
 
 #[test]
+fn null_file_size_is_not_reported_as_missing_file() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let file_id = repo.create_file(
+        None,
+        &unique_name("null_file_size"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("null_file_size_seed"),
+    )?;
+    let mut not_null_dropped = false;
+
+    let result = (|| {
+        if repo.file_size(file_id)? != Some(0)
+            || repo.file_size_authoritative(file_id)? != Some(0)
+        {
+            return Err("new file did not report size zero on both read routes".to_string());
+        }
+        repo.exec("ALTER TABLE files ALTER COLUMN size DROP NOT NULL")?;
+        not_null_dropped = true;
+        repo.exec(&format!("UPDATE files SET size = NULL WHERE id_file = {file_id}"))?;
+        for (route, result) in [
+            ("read", repo.file_size(file_id)),
+            ("authoritative", repo.file_size_authoritative(file_id)),
+        ] {
+            match result {
+                Err(error) if error.to_ascii_lowercase().contains("size") => {}
+                Err(error) => return Err(format!("unexpected {route} size error: {error}")),
+                Ok(value) => {
+                    return Err(format!(
+                        "NULL file size was treated as an ordinary {route} result: {value:?}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    let cleanup = (|| {
+        if not_null_dropped {
+            repo.exec(&format!("UPDATE files SET size = 0 WHERE id_file = {file_id}"))?;
+            repo.exec("ALTER TABLE files ALTER COLUMN size SET NOT NULL")?;
+        }
+        repo.purge_primary_file(file_id)
+    })();
+    result.and(cleanup)?;
+    if repo.file_size(file_id)?.is_some() || repo.file_size_authoritative(file_id)?.is_some() {
+        return Err("purged file still reported a size".to_string());
+    }
+    Ok(())
+}
+
+#[test]
 fn persist_rejects_orphaned_file_data_object() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

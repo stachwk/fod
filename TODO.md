@@ -431,7 +431,11 @@ Reading guide:
   missing as a nonexistent file and commit a successful no-op. The lookup now
   uses a left join so an orphaned reference is an error; the regression
   `persist_rejects_orphaned_file_data_object` reproduced the false success and
-  verifies that the write fails without adding blocks.
+  verifies that the write fails without adding blocks. `file_size()` and
+  `file_size_authoritative()` also used to map NULL sizes to missing files;
+  both now distinguish a corrupt value from zero rows. The regression
+  `null_file_size_is_not_reported_as_missing_file` covers both query routes and
+  confirms that a purged file still returns `None`.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

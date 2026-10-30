@@ -7,12 +7,12 @@
 
 use super::{
     conn_error, exec_params, exec_prepared_params, exec_prepared_params_with_result_format,
-    fetch_first_row_texts, fetch_single_text, fetch_single_text_option, fod_profile_io_enabled,
+    fetch_first_row_texts, fetch_single_text_option, fod_profile_io_enabled,
     fod_profile_result_decode_observe, normalize_block_bytes, result_error, DbRepo, PGresult,
     PQclear, PQexecParams, PQgetisnull, PQgetlength, PQgetvalue, PQnfields, PQntuples,
     PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
 };
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,6 +21,39 @@ type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type SizedSharedBlockRows = Option<(u64, SharedBlockRows)>;
 // (file size, committed content generation, blocks) from one PostgreSQL statement.
 pub type GeneratedSharedBlockRows = Option<(u64, u64, Vec<(u64, Arc<[u8]>)>)>;
+
+unsafe fn decode_optional_file_size(res: *mut PGresult) -> Result<Option<u64>, String> {
+    let result = match PQresultStatus(res) {
+        PGRES_TUPLES_OK => {
+            let rows = PQntuples(res);
+            let cols = PQnfields(res);
+            if rows == 0 {
+                Ok(None)
+            } else if rows != 1 || cols != 1 {
+                Err(format!(
+                    "invalid file size row: expected 1 row and 1 column, got {rows} rows and {cols} columns"
+                ))
+            } else if PQgetisnull(res, 0, 0) != 0 {
+                Err("file size is NULL".to_string())
+            } else {
+                let value = PQgetvalue(res, 0, 0);
+                if value.is_null() {
+                    Err("file size value is missing".to_string())
+                } else {
+                    CStr::from_ptr(value)
+                        .to_string_lossy()
+                        .trim()
+                        .parse::<u64>()
+                        .map(Some)
+                        .map_err(|err| format!("invalid file size value: {err}"))
+                }
+            }
+        }
+        _ => Err(result_error(res)),
+    };
+    PQclear(res);
+    result
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileReadMetadata {
@@ -405,16 +438,7 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql, &params)?;
-            let text = fetch_single_text(res)?;
-            if text.is_empty() {
-                Ok(None)
-            } else {
-                let value = text
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|_| "invalid file size value".to_string())?;
-                Ok(Some(value))
-            }
+            decode_optional_file_size(res)
         })
     }
 
@@ -428,16 +452,7 @@ impl DbRepo {
             let sql = CString::new("SELECT size FROM files WHERE id_file = $1")
                 .map_err(|_| "SQL contains NUL byte".to_string())?;
             let res = exec_params(conn, &sql, &[&file_id])?;
-            let text = fetch_single_text(res)?;
-            if text.is_empty() {
-                Ok(None)
-            } else {
-                let value = text
-                    .trim()
-                    .parse::<u64>()
-                    .map_err(|err| format!("invalid authoritative file size: {err}"))?;
-                Ok(Some(value))
-            }
+            decode_optional_file_size(res)
         })
     }
 
