@@ -482,6 +482,49 @@ fn concurrent_threads_create_write_and_read_independent_files() -> Result<(), St
         ));
     }
 
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let namespace_workers = (0..WORKERS)
+        .map(|worker_id| {
+            let parent = dir_path.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<(), String> {
+                let worker_dir = parent.join(format!("namespace-worker-{worker_id}"));
+                let renamed_dir = parent.join(format!("renamed-worker-{worker_id}"));
+
+                barrier.wait();
+                fs::create_dir(&worker_dir)
+                    .map_err(|err| format!("worker {worker_id} create directory failed: {err}"))?;
+                fs::rename(&worker_dir, &renamed_dir)
+                    .map_err(|err| format!("worker {worker_id} rename directory failed: {err}"))?;
+                fs::remove_dir(&renamed_dir)
+                    .map_err(|err| format!("worker {worker_id} rmdir failed: {err}"))?;
+                Ok(())
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for worker in namespace_workers {
+        worker
+            .join()
+            .map_err(|_| "concurrent namespace worker panicked".to_string())??;
+    }
+
+    let leftover_namespace_dirs = fs::read_dir(&dir_path)
+        .map_err(|err| format!("read task directory after namespace workers failed: {err}"))?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("namespace-worker-") || name.starts_with("renamed-worker-")
+        })
+        .map(|entry| entry.file_name())
+        .collect::<Vec<_>>();
+    if !leftover_namespace_dirs.is_empty() {
+        return Err(format!(
+            "concurrent namespace workers left entries behind: {leftover_namespace_dirs:?}"
+        ));
+    }
+
     Ok(())
 }
 
