@@ -248,7 +248,10 @@ Reading guide:
   `opendir()`/`readdir()` EOF, successful `closedir()`, and `ENOENT` from
   `opendir()` for a missing path, and `EMFILE` after exhausting the process
   descriptor limit; system-wide `ENFILE` and failure-path `closedir()` remain
-  unverified.
+  unverified. This x86_64 host cannot link a 32-bit test binary: `gcc -m32`
+  reports missing `Scrt1.o`, `crti.o` and 32-bit `libgcc`; `qemu-i386` is not
+  installed. Run the `EOVERFLOW` case on a native narrow-inode Linux runner or
+  provide a working multilib/QEMU test environment before closing the ABI gap.
   See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **P02 directory-stream snapshot behavior still needs ABI and descriptor checks.** FOD
