@@ -1480,8 +1480,22 @@ Status: active design direction, but the main decisions below are already taken.
   trzy ścieżki zwracają teraz `EOVERFLOW`, a sumowanie `2 + child_dirs` jest
   sprawdzane na przepełnienie. Test jednostkowy `fuse_nlink_reports_unrepresentable_link_counts`
   pokrywa `u32::MAX` i pierwszą nieprzedstawialną wartość. Test zamontowany
-  z miliardami wpisów nie jest praktyczny; pozostałe `stat()` pola/źródła
-  overflow nadal wymagają audytu. Zob. [macierz errno](docs/POSIX_ERRNO_MATRIX.md).
+  z miliardami wpisów nie jest praktyczny. Zakres overflow pozostałych pól
+  na x86_64 opisuje sąsiednie ustalenie; nowe ABI wymaga osobnego probe.
+  Zob. [macierz errno](docs/POSIX_ERRNO_MATRIX.md).
+
+- [x] **Sklasyfikować native Linux `stat()` `EOVERFLOW` dla x86_64.**
+  ABI probe hosta wykazał 64-bitowe `ino_t`, `off_t`, `nlink_t`, `blkcnt_t`,
+  `dev_t` i `time_t`. Linux v6.17 `cp_new_stat()` zgłasza overflow przy
+  zwężaniu inode/link count/device oraz dla rozmiaru w 32-bitowym ABI;
+  natywne x86_64 nie wykonuje tych zwężeń. FOD dodatkowo ogranicza rozmiary
+  plików do PostgreSQL `BIGINT`, inode do `i64::MAX`, a `st_blocks` do
+  `ceil(u64::MAX / 512)`, co mieści się w 64-bitowym `blkcnt_t`. Nie ma więc
+  przypadku testowego native-stat overflow dla innych pól na audytowanym ABI.
+  Zachowujemy test jednostkowy `st_nlink` ponad FUSE `u32`; test mounted
+  wymagałby ponad 4 miliardów linków. Ponowić probe przy dodaniu ABI. Źródła:
+  [Linux v6.17 `cp_new_stat()`](https://github.com/torvalds/linux/blob/v6.17/fs/stat.c#L2901-L2965),
+  [FUSE `fuse_attr`](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h#L2674-L2708).
 
 - [ ] Complete the [POSIX conformance audit](docs/POSIX_CONFORMANCE_AUDIT.md) for FOD's declared filesystem API. The audit defines POSIX.1-2024 Issue 8 as its baseline, identifies Linux/FUSE extensions separately, and starts a requirement matrix. Review exact normative sections and optional/XSI applicability; classify each requirement as pending, pass, fail, not implemented, or not applicable; map it to implementation evidence and a regression or `pjdfstest` case. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
 - [x] **Keep `chmod()` and access ACL entries synchronized.** A mounted ACL regression first reproduced the defect on FOD 3.4.378: `chmod 0640` changed inode mode while leaving `ACL_USER_OBJ` and `ACL_MASK` stale. With `FUSE_POSIX_ACL` enabled, FOD now updates the owner entry plus the mask (or `ACL_GROUP_OBJ` when no mask exists) and other entry in the same PostgreSQL transaction as the inode mode change. `pg_query::chmod_updates_access_acl_and_mode_in_one_transaction` checks named-entry ACLs on files and directories and the no-mask form; `test_acl_mount_option.py` verifies the mounted file and directory behavior. Both tests passed on FOD 3.4.379 in `release-lto` against a fresh disposable PostgreSQL database on Linux 6.17/libfuse 3.17.4 on 2026-10-30. Linux v6.17's FUSE ACL code assigns inode-permission updates to userspace ([source](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/acl.c#L116-L124)); its POSIX ACL chmod implementation defines the corresponding ACL entry changes ([source](https://github.com/torvalds/linux/blob/v6.17/fs/posix_acl.c#L506-L545)).

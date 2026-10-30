@@ -5,10 +5,13 @@ release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed base: commit `d1ab57e` (`FOD 3.4.389`). The latest mounted
+Reviewed base: commit `3e8010a` (`FOD 3.4.391`); documentation review updated
+for FOD 3.4.392. The latest mounted
 `statvfs()` signal-interruption regression cited below passed on FOD 3.4.387;
-3.4.389 adds the ABI-specific overflow classification, not a functional
-filesystem change.
+3.4.391 fixes `st_nlink` saturation at the FUSE ABI limit; its conversion
+boundary has a unit test but no mounted test with an unrepresentably large link
+count. The 3.4.392 review classifies native `stat()` overflow for the audited
+x86_64 ABI; it adds no mounted test or new POSIX pass.
 
 ## Overall filesystem compatibility status
 
@@ -21,9 +24,9 @@ claim.
 
 | Area | Implemented boundary | Verification status |
 | --- | --- | --- |
-| POSIX filesystem API | Broad Linux filesystem operations, metadata, permissions, namespace changes, regular-file locks and FIFO behavior | Issue 8 audit remains open: 2 `lseek()` case groups are Pass and 12 areas remain Pending. No overall POSIX conformance claim is made. P07 includes paused-replica checks for `open()` denial and `access(X_OK)` refresh with kernel `default_permissions`; `statvfs()` now has a mounted `EINTR` regression. The detailed P01-P12 ledger owns remaining work. |
-| Linux kernel/VFS | Linux-only runtime; startup rejects kernels older than 4.18.0. Linux VFS performs pathname, descriptor, permission and syscall work before or after FUSE callbacks. | Version-gate unit tests cover the declared floor. Recorded mounted evidence is concentrated on Linux 6.17; no end-to-end run on Linux 4.18 is recorded. Known Linux-specific differences and short-circuit behavior are attributed in the POSIX errno matrix. |
-| FUSE/libfuse | `fuser 0.18.0`, explicit libfuse3 backend, userspace protocol ceiling 7.40, runtime protocol/capability negotiation | Mounted evidence uses Linux 6.17/libfuse 3.17.4. The declared libfuse3 3.0.0 floor has preflight coverage but no minimum-version mount run. Writable mounts require negotiated `FUSE_ATOMIC_O_TRUNC`; POSIX/flock locking capabilities are requested and ACL capability is conditional. `FUSE_INTERRUPT` interruption is tested for blocked `statfs` and POSIX lock requests. Callback coverage and omissions are listed below. |
+| POSIX filesystem API | Broad Linux filesystem operations, metadata, permissions, namespace changes, regular-file locks and FIFO behavior | Issue 8 audit remains open: 2 `lseek()` case groups are Pass and 12 areas remain Pending. No overall POSIX conformance claim is made. P07 includes paused-replica checks for `open()` denial and `access(X_OK)` refresh with kernel `default_permissions`; `statvfs()` has a mounted `EINTR` regression. The detailed P01-P12 ledger owns remaining work. |
+| Linux kernel/VFS | Linux-only runtime; startup rejects kernels older than 4.18.0. Linux VFS performs pathname, descriptor, permission and syscall work before or after FUSE callbacks. | Version-gate unit tests cover the declared floor; source-level Linux v6.17 review classifies selected VFS behavior and errno precedence. Recorded mounted evidence is concentrated on Linux 6.17; no end-to-end run on Linux 4.18 is recorded. Linux-specific differences and callback short-circuits are attributed in the errno matrix. |
+| FUSE/libfuse | `fuser 0.18.0`, explicit libfuse3 backend, userspace protocol ceiling 7.40, runtime protocol/capability negotiation | Mounted evidence uses Linux 6.17/libfuse 3.17.4. The declared libfuse3 3.0.0 floor has preflight coverage but no minimum-version mount run. Writable mounts require negotiated `FUSE_ATOMIC_O_TRUNC`; POSIX/flock locking capabilities are requested and ACL capability is conditional. `FUSE_INTERRUPT` is tested for blocked `statfs` and POSIX lock requests. Callback coverage and omissions are listed below. |
 | Product platform | 64-bit and wider userspace only | 32-bit binaries and ABI targets are outside the support matrix. |
 
 This summary deliberately distinguishes a declared runtime floor from tested
