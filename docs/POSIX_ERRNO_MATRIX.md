@@ -46,7 +46,9 @@ FOD został wywołany:
   offsetu deskryptora i brak modyfikacji zawartości.
 - Przy pobieraniu argumentu ścieżki Linux zwraca `ENOENT` dla pustej ścieżki
   oraz `ENAMETOOLONG`, gdy ścieżka osiąga `PATH_MAX`; te kontrole zachodzą przed
-  rozwiązywaniem ścieżki i callbackiem FUSE.
+  rozwiązywaniem ścieżki i callbackiem FUSE. [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py)
+  sprawdza pustą ścieżkę dla `stat()`, `open()`, `mkdir()`, `unlink()` i
+  `rmdir()`.
 - Linux v6.17 `chmod_common()` ogranicza argument `mode` przez `S_IALLUGO` i
   zachowuje istniejące bity typu inode. Montowany probe FOD z `mode=0o10000`
   (bit `S_IFIFO`) zakończył się sukcesem i ustawił prawa na `0o000`. POSIX

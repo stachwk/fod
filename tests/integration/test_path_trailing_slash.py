@@ -36,6 +36,14 @@ def main() -> None:
         mountpoint = Path(tmpdir)
         launcher.start(str(mountpoint))
         try:
+            expect_errno(lambda: os.stat(""), errno.ENOENT, "stat empty pathname")
+            expect_errno(
+                lambda: os.open("", os.O_RDONLY), errno.ENOENT, "open empty pathname"
+            )
+            expect_errno(lambda: os.mkdir(""), errno.ENOENT, "mkdir empty pathname")
+            expect_errno(lambda: os.unlink(""), errno.ENOENT, "unlink empty pathname")
+            expect_errno(lambda: os.rmdir(""), errno.ENOENT, "rmdir empty pathname")
+
             directory = mountpoint / f"path-{suffix}"
             directory.mkdir()
             file_path = directory / "regular-file"
@@ -112,7 +120,7 @@ def main() -> None:
                 "invalid UTF-8 component aliased to its replacement character"
             )
             print(
-                "OK pathname trailing slash file=ENOTDIR "
+                "OK pathname empty_path=ENOENTx5 trailing slash file=ENOTDIR "
                 "symlink_file=ENOTDIR symlink_directory=accepted "
                 "dotdot_repeated_separator=1 name_max_boundary=1 "
                 "non_utf8_create=EILSEQ"
