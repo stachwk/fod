@@ -2335,6 +2335,48 @@ fn count_file_blocks_query_failure_is_not_zero() -> Result<(), String> {
 }
 
 #[test]
+fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let authority = repo.authoritative_view();
+    let name = unique_name("file_mode_metadata");
+    let file_id = repo.create_file(None, &name, 0o640, 1000, 1000, &name)?;
+    let path = format!("/{name}");
+
+    let result = (|| {
+        if authority.get_file_mode_value(&path)?.as_deref() != Some("640") {
+            return Err("valid file mode lookup returned the wrong value".to_string());
+        }
+
+        repo.exec(&format!("UPDATE files SET mode = '' WHERE id_file = {file_id}"))?;
+        match authority.get_file_mode_value(&path) {
+            Err(error) if error.contains("empty") => {}
+            Err(error) => return Err(format!("unexpected empty-mode error: {error}")),
+            Ok(value) => {
+                return Err(format!("empty file mode was accepted: {value:?}"));
+            }
+        }
+
+        repo.exec(&format!("UPDATE files SET mode = '89' WHERE id_file = {file_id}"))?;
+        match authority.get_file_mode_value(&path) {
+            Err(error) if error.contains("octal") => {}
+            Err(error) => return Err(format!("unexpected non-octal mode error: {error}")),
+            Ok(value) => {
+                return Err(format!("non-octal file mode was accepted: {value:?}"));
+            }
+        }
+
+        if authority.get_file_mode_value("/missing_file_mode_probe")?.is_some() {
+            return Err("missing file mode lookup returned a value".to_string());
+        }
+        Ok(())
+    })();
+
+    let cleanup = repo.purge_primary_file(file_id);
+    result.and(cleanup)
+}
+
+#[test]
 fn directory_count_query_failures_are_not_empty() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let temporary_db = TemporaryDatabase::create()?;

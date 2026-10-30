@@ -342,6 +342,12 @@ and session creation. Interrupted upgrades leave the marker set so operators can
 rerun `mkfs.fod upgrade`; they must unmount all FOD hosts before starting an
 upgrade.
 
+PostgreSQL file-mode lookups return `None` only when the path has no matching
+row. NULL, empty, non-octal, or malformed mode results fail as
+metadata errors instead of being presented as a missing path. Broader
+fault-injection coverage for malformed persisted rows remains in the
+[unresolved findings](../TODO.md#unresolved-findings).
+
 Primary authority requirements are defined by
 [FOD_ARCHITECTURE_INVARIANTS.md](FOD_ARCHITECTURE_INVARIANTS.md). A dated audit
 reported one reproduced hardlink/unlink data-loss case and additional mutation

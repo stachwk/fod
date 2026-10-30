@@ -418,6 +418,13 @@ Reading guide:
   `count_directory_subdirs()` and `count_root_directory_children()` now also
   verify valid counts and reject an undefined-column query with SQLSTATE
   `42703`; `make test-rust-pg-query` passed on 2026-10-30 (43 tests).
+  `get_file_mode_value()` previously conflated a NULL mode or malformed query
+  result with a missing path. It now returns `None` only for zero rows and
+  rejects NULL, empty, non-octal, or malformed result shapes. A Rust
+  PostgreSQL regression checks missing/valid cases and injects empty and
+  non-octal values into a file row, requiring errors to propagate. Broader
+  malformed-row fault injection, including NULL mode and query failure through
+  this exact lookup, remains open.
   Directory metadata decoding now rejects empty names, unsupported entry kinds
   and empty inode seeds. A temporary-database regression feeds NULL name and
   inode-seed fields through the real query decoder; a mounted regression also

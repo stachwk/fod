@@ -7,8 +7,8 @@
 
 use super::{
     conn_error, exec_params, exec_prepared_params, fetch_first_column_texts, fetch_first_row_texts,
-    fetch_rows_text, join_nul_text, result_error, DbRepo, PQclear, PQgetisnull,
-    PQgetvalue, PQnfields, PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
+    fetch_rows_text, join_nul_text, result_error, DbRepo, PQclear, PQgetisnull, PQgetvalue,
+    PQnfields, PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
 };
 use std::ffi::{CStr, CString};
 
@@ -313,18 +313,33 @@ impl DbRepo {
                         PGRES_TUPLES_OK => {
                             let rows = PQntuples(res);
                             let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
-                                None
+                            let value = if rows == 0 {
+                                Ok(None)
+                            } else if rows != 1 || cols != 1 {
+                                Err(format!(
+                                    "invalid file mode row: expected 1 row and 1 column, got {rows} rows and {cols} columns"
+                                ))
+                            } else if PQgetisnull(res, 0, 0) != 0 {
+                                Err("file mode is NULL".to_string())
                             } else {
                                 let value_ptr = PQgetvalue(res, 0, 0);
                                 if value_ptr.is_null() {
-                                    None
+                                    Err("file mode value is missing".to_string())
                                 } else {
-                                    Some(CStr::from_ptr(value_ptr).to_string_lossy().to_string())
+                                    let mode = CStr::from_ptr(value_ptr)
+                                        .to_string_lossy()
+                                        .to_string();
+                                    if mode.is_empty() {
+                                        Err("file mode is empty".to_string())
+                                    } else if u32::from_str_radix(&mode, 8).is_err() {
+                                        Err("file mode is not a valid octal value".to_string())
+                                    } else {
+                                        Ok(Some(mode))
+                                    }
                                 }
                             };
                             PQclear(res);
-                            Ok(value)
+                            value
                         }
                         _ => {
                             let error = result_error(res);
