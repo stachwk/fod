@@ -990,8 +990,12 @@ fn concurrent_threads_run_multiple_copy_file_range_tasks() -> Result<(), String>
             let marker = u8::try_from(worker_id * TASKS_PER_WORKER + task_id + 1)
                 .map_err(|err| format!("invalid copy task marker: {err}"))?;
             let payload = vec![marker; PAYLOAD_LEN + task_id];
-            fs::write(&source, &payload)
-                .map_err(|err| format!("seed copy task {worker_id}/{task_id} failed: {err}"))?;
+            fs::write(&source, &payload).map_err(|err| {
+                format!(
+                    "seed copy task {worker_id}/{task_id} failed: {err}\n{}",
+                    mounted.log_tail(200)
+                )
+            })?;
             tasks.push((source, destination, payload, worker_id, task_id));
         }
     }

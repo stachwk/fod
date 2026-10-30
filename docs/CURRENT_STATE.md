@@ -24,10 +24,12 @@ uses 4 workers, 16 stored blocks separated by holes and 8 simultaneous readers;
 all readers verify both payload and zero-filled holes. It passed on FOD 3.4.350
 against a disposable initialized database.
 The mounted `concurrent_threads_run_multiple_copy_file_range_tasks` regression
-starts 32 copy tasks together across 8 FUSE event threads and checks every
-destination byte-for-byte. It compiles, but its mounted run is pending an
-isolated database upgrade: the available database schema is 31 while this
-client requires schema 32; active mounts prevent upgrading that database.
+is designed to start 32 copy tasks together across 8 FUSE event threads and
+check every destination byte-for-byte. It compiles, but its schema-32 mounted
+run returned `EIO` while creating the first source, before copy execution. An
+existing concurrent create/write/read regression returned the same error. The
+cause is unresolved and tracked in [`TODO.md`](../TODO.md); this test is not yet
+verified end to end.
 The permissions regression now invokes libc `opendir()` as `nobody` on a
 mode-000 directory and checks exact `EACCES`; its FUSE run is pending an
 isolated/up-to-date test database.
