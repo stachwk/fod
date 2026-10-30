@@ -225,11 +225,12 @@ Reading guide:
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name; a mounted PostgreSQL fault
   regression remains pending.
-- [ ] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
-  acquisition now rejects requested and persisted types outside the supported
-  shared (`1`) and exclusive (`2`) values; malformed persisted values no longer
-  become type `0` and bypass conflict checks. Add a regression that seeds an
-  invalid active lease and confirms another acquisition returns an error.
+- [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
+  acquisition rejects requested and persisted types outside the supported
+  shared (`1`) and exclusive (`2`) values. A backend regression now seeds an
+  active lease with type `0` and confirms that a competing read-lock request
+  returns the explicit unsupported-type error instead of granting the lease.
+  The test cleans up its row after the assertion.
 - [x] **Verify `F_GETLK` reports locks extending to EOF.** An unbounded
   PostgreSQL range was represented internally as `None` but the FUSE reply
   converted it to end offset `0`, truncating the reported conflict. It now uses

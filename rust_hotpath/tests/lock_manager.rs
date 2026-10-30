@@ -177,6 +177,37 @@ fn expired_flock_lease_is_pruned_on_reacquire() {
 }
 
 #[test]
+fn invalid_active_flock_lease_type_fails_closed() {
+    let _guard = test_guard();
+    let repo = repo();
+    repo.exec("CREATE SCHEMA IF NOT EXISTS fod")
+        .expect("create FOD schema");
+    repo.ensure_lock_schema().expect("create lock schema");
+    let rid = resource_id();
+    let invalid_owner = rid.saturating_add(1);
+    let requester = rid.saturating_add(2);
+
+    repo.exec(&format!(
+        "INSERT INTO lock_leases (resource_kind, resource_id, session_id, owner_key, lease_kind, lock_type, lease_expires_at, heartbeat_at, created_at, updated_at) VALUES ('file', {rid}, 0, {invalid_owner}, 'flock', 0, NOW() + INTERVAL '1 minute', NOW(), NOW(), NOW())"
+    ))
+    .expect("seed malformed active flock lease");
+
+    let result = repo.acquire_flock_lease("file", rid, requester, 1, 30, 1);
+    let failed_closed = result
+        .as_ref()
+        .is_err_and(|err| err.contains("unsupported active flock lease type: 0"));
+
+    repo.exec(&format!(
+        "DELETE FROM lock_leases WHERE resource_kind = 'file' AND resource_id = {rid}"
+    ))
+    .expect("remove malformed lease fixture");
+    assert!(
+        failed_closed,
+        "invalid active lease should fail closed, got {result:?}"
+    );
+}
+
+#[test]
 fn range_leases_roundtrip_and_cleanup() {
     let _guard = test_guard();
     let repo = repo();
