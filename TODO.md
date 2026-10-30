@@ -14,6 +14,15 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **POSIX blokady rekordów są związane z otwartym inode’em po usunięciu nazwy.**
+  `getlk()` i `setlk()` ignorowały uchwyt FUSE i wybierały zasób blokady przez
+  ponowne rozwiązanie bieżącej ścieżki. Po zdalnym `unlink()` i utworzeniu
+  nowego pliku pod tą samą nazwą blokada ze starego deskryptora mogła dotyczyć
+  nowego pliku. Callbacki korzystają teraz z `file_id` zweryfikowanego dla
+  otwartego uchwytu. `file_locks_remain_bound_to_open_inode_after_path_replacement`
+  sprawdza na dwóch mountach, że blokada starego inode’a nie blokuje nowego.
+  Test przeszedł 2026-10-30 na FOD 3.4.368 i świeżej bazie schematu 32.
+
 - [x] **`readlink()` nie może zwrócić celu nowego symlinka przez ścieżkę starego inode.**
   Callback używa ścieżki zapamiętanej dla inode, ale wcześniej sprawdzał tylko,
   czy ta ścieżka wskazuje obecnie symlink. Po zdalnym usunięciu i ponownym

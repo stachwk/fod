@@ -605,5 +605,20 @@ replacement returns its exact target. The two-mount regression passed on FOD
 The public test target is `make test-stale-inode-readlink`. This closes this
 specific stale-symlink path; other mutation preconditions remain under review.
 
+### POSIX locks after unlink and path replacement
+
+Source review found that `getlk()` and `setlk()` ignored the FUSE file handle
+and selected a lock resource by resolving the current pathname. If another
+mount unlinked an open file and created a replacement under that name, a lock
+request through the old descriptor could target the replacement's PostgreSQL
+`file_id`. Both callbacks now validate the inode against the open handle and
+use that handle's authoritative file ID for the lock key.
+
+`file_locks_remain_bound_to_open_inode_after_path_replacement` opens the
+original through one mount, replaces its pathname through another, locks the
+old descriptor and verifies `F_GETLK` on the replacement reports `F_UNLCK`.
+It passed on FOD 3.4.368 against a fresh schema-32 database inside a private
+mount namespace.
+
 These items are source-review findings and test gaps; do not describe them as
 additional reproduced data-loss cases.

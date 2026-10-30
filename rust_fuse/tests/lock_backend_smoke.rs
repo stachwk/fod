@@ -5,6 +5,7 @@ mod support;
 
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -415,6 +416,75 @@ fn primary_uses_pg_leases_and_replica_stays_memory_backed() -> Result<(), String
     drop(replica);
     drop(primary_b);
     drop(primary_a);
+    Ok(())
+}
+
+#[test]
+fn file_locks_remain_bound_to_open_inode_after_path_replacement() -> Result<(), String> {
+    if skip_without_root() {
+        return Ok(());
+    }
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let mount_a = MountedFs::start_with_role("lock-stale-inode-primary-a", "primary", &[])?;
+    let mount_b = MountedFs::start_with_role("lock-stale-inode-primary-b", "primary", &[])?;
+    let suffix = unique_suffix();
+    let relative = format!("lock-stale-inode-{suffix}/payload.txt");
+    let path_a = mount_a.mountpoint.join(&relative);
+    let path_b = mount_b.mountpoint.join(&relative);
+    fs::create_dir(path_a.parent().expect("file parent"))
+        .map_err(|err| format!("create lock directory failed: {err}"))?;
+    fs::write(&path_a, b"original inode")
+        .map_err(|err| format!("write original file failed: {err}"))?;
+
+    let old_fd = OpenOptions::new()
+        .read(true)
+        .open(&path_b)
+        .map_err(|err| format!("open original file on mount B failed: {err}"))?;
+    let old_inode = old_fd
+        .metadata()
+        .map_err(|err| format!("stat original file failed: {err}"))?
+        .ino();
+    fs::remove_file(&path_a).map_err(|err| format!("unlink original file failed: {err}"))?;
+    fs::write(&path_a, b"replacement inode")
+        .map_err(|err| format!("create replacement file failed: {err}"))?;
+    let replacement_fd = OpenOptions::new()
+        .read(true)
+        .open(&path_a)
+        .map_err(|err| format!("open replacement file failed: {err}"))?;
+    let replacement_inode = replacement_fd
+        .metadata()
+        .map_err(|err| format!("stat replacement file failed: {err}"))?
+        .ino();
+    if old_inode == replacement_inode {
+        return Err(format!(
+            "replacement reused the open file inode: inode={old_inode}"
+        ));
+    }
+
+    let mut old_read_lock = flock(libc::F_RDLCK as i16, 0, 0);
+    fcntl_lock(old_fd.as_raw_fd(), libc::F_SETLK, &mut old_read_lock).map_err(|err| {
+        format!(
+            "set read lock on the open unlinked inode failed: {err}\n{}",
+            mount_b.log_tail(200)
+        )
+    })?;
+
+    let replacement_conflict = query_lock(replacement_fd.as_raw_fd(), libc::F_WRLCK as i16)?;
+    if replacement_conflict.l_type != libc::F_UNLCK as i16 {
+        return Err(format!(
+            "lock on old inode leaked onto replacement: l_type={} pid={}",
+            replacement_conflict.l_type, replacement_conflict.l_pid
+        ));
+    }
+
+    drop(replacement_fd);
+    drop(old_fd);
+    drop(mount_b);
+    drop(mount_a);
     Ok(())
 }
 

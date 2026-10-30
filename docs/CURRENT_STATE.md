@@ -66,6 +66,12 @@ primary-resolved path before returning a target; a stale inode cannot follow a
 replacement symlink at the same name. The two-mount regression is
 `test_stale_inode_readlink.py` (`make test-stale-inode-readlink`).
 
+POSIX record locks use the database `file_id` verified from the open FUSE
+handle. They remain attached to an unlinked inode if another mount creates a
+replacement at the old path. The two-mount regression is
+`file_locks_remain_bound_to_open_inode_after_path_replacement` in
+`rust_fuse/tests/lock_backend_smoke.rs`.
+
 PostgreSQL schema 30 includes transactional per-file content generations and
 the cross-mount POSIX lock wait graph.
 These primitives and the local cache publication gate do not establish default

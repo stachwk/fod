@@ -3156,28 +3156,20 @@ impl FodFuse {
         updated
     }
 
-    fn resource_key_for_lock(&self, path: &str) -> Result<String, libc::c_int> {
-        let authority = self.repo.authoritative_view();
-        let resolved = authority.resolve_path(path).map_err(|_| EIO)?;
-        match resolved.kind.as_deref() {
-            Some("file") => {
-                let file_id = resolved.entry_id.ok_or(EIO)?;
-                Ok(format!("file:{file_id}"))
-            }
-            Some("hardlink") => {
-                let hardlink_id = resolved.entry_id.ok_or(EIO)?;
-                let file_id = authority
-                    .get_hardlink_file_id(hardlink_id)
-                    .map_err(|_| EIO)?
-                    .ok_or(EIO)?;
-                Ok(format!("file:{file_id}"))
-            }
-            Some("dir") => {
-                let dir_id = resolved.entry_id.ok_or(EIO)?;
-                Ok(format!("dir:{dir_id}"))
-            }
-            _ => Ok(format!("path:{path}")),
+    fn resource_key_for_lock(
+        &self,
+        fh: u64,
+        ino: u64,
+    ) -> Result<(String, String), libc::c_int> {
+        let handle = self.file_handle_state_for_handle(fh).ok_or(EBADF)?;
+        let file_id = handle.file_id.ok_or(ENOENT)?;
+        let attrs = self
+            .attrs_for_open_file_id(file_id)?
+            .ok_or(ENOENT)?;
+        if attrs.file_attr.ino.0 != ino {
+            return Err(ENOENT);
         }
+        Ok((format!("file:{file_id}"), handle.path))
     }
 
     fn lock_resource_kind_id(resource_key: &str) -> Result<(String, u64), libc::c_int> {
@@ -7028,7 +7020,7 @@ impl Filesystem for FodFuse {
         &self,
         _req: &Request,
         ino: INodeNo,
-        _fh: FileHandle,
+        fh: FileHandle,
         lock_owner: LockOwner,
         start: u64,
         end: u64,
@@ -7041,41 +7033,20 @@ impl Filesystem for FodFuse {
             return;
         }
         let ino = ino.0;
+        let fh = fh.0;
         let lock_owner = lock_owner.0;
-        let path = match self.entry_path_for_ino(ino) {
-            Ok(path) => path,
+        let (resource_key, path) = match self.resource_key_for_lock(fh, ino) {
+            Ok(value) => value,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        let kind = match self.repo.authoritative_view().resolve_path(&path) {
-            Ok(resolved) => resolved.kind.unwrap_or_default(),
-            Err(_) => {
-                fuse_reply_error!(reply, EIO);
-                return;
-            }
-        };
-        if kind != "file" && kind != "hardlink" {
-            fuse_reply_error!(reply, ENOENT);
-            return;
-        }
         let owner = lock_owner;
         debug!(
             "FOD getlk path={} owner={} start={} end={} typ={}",
             path, owner, start, end, typ
         );
-        let resource_key = match self.resource_key_for_lock(&path) {
-            Ok(value) => value,
-            Err(errno) => {
-                warn!(
-                    "FOD getlk resource key failed path={} errno={}",
-                    path, errno
-                );
-                fuse_reply_error!(reply, errno);
-                return;
-            }
-        };
         let records = match self.load_lock_records_for_key(&resource_key) {
             Ok(records) => records,
             Err(errno) => {
@@ -7113,7 +7084,7 @@ impl Filesystem for FodFuse {
         &self,
         req: &Request,
         ino: INodeNo,
-        _fh: FileHandle,
+        fh: FileHandle,
         lock_owner: LockOwner,
         start: u64,
         end: u64,
@@ -7150,33 +7121,11 @@ impl Filesystem for FodFuse {
             return;
         }
         let ino = ino.0;
+        let fh = fh.0;
         let lock_owner = lock_owner.0;
-        let path = match self.entry_path_for_ino(ino) {
-            Ok(path) => path,
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
-            }
-        };
-        let kind = match self.repo.authoritative_view().resolve_path(&path) {
-            Ok(resolved) => resolved.kind.unwrap_or_default(),
-            Err(err) => {
-                warn!("FOD setlk resolve_path failed path={} err={}", path, err);
-                fuse_reply_error!(reply, EIO);
-                return;
-            }
-        };
-        if kind != "file" && kind != "hardlink" {
-            fuse_reply_error!(reply, ENOENT);
-            return;
-        }
-        let resource_key = match self.resource_key_for_lock(&path) {
+        let (resource_key, path) = match self.resource_key_for_lock(fh, ino) {
             Ok(value) => value,
             Err(errno) => {
-                warn!(
-                    "FOD setlk resource key failed path={} errno={}",
-                    path, errno
-                );
                 fuse_reply_error!(reply, errno);
                 return;
             }
