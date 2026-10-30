@@ -83,6 +83,16 @@ def build_named_user_acl(uid: int, permissions: int) -> bytes:
     return bytes(acl)
 
 
+def build_directory_acl_for_named_user(uid: int, permissions: int) -> bytes:
+    acl = bytearray(struct.pack("<I", 0x0002))
+    acl.extend(struct.pack("<HHI", 0x0001, 0o7, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0002, permissions & 0o7, uid))
+    acl.extend(struct.pack("<HHI", 0x0004, 0o7, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0010, 0o7, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0020, 0o7, 0xFFFFFFFF))
+    return bytes(acl)
+
+
 def wait_for_mount(mountpoint: Path, process: subprocess.Popen[str], log_path: Path) -> None:
     for _ in range(60):
         if subprocess.run(["mountpoint", "-q", str(mountpoint)], check=False).returncode == 0:
@@ -133,6 +143,102 @@ def can_run_as_nobody() -> bool:
         print("SKIP acl-mutation-denial (sudo cannot run commands as nobody)")
         return False
     return True
+
+
+def assert_namespace_mutation_denied_to_nobody(
+    operation: str, *paths: Path
+) -> None:
+    script = """
+import os
+import sys
+
+operation, *paths = sys.argv[1:]
+try:
+    if operation == "unlink":
+        os.unlink(paths[0])
+    elif operation == "rmdir":
+        os.rmdir(paths[0])
+    elif operation == "rename":
+        os.rename(paths[0], paths[1])
+    else:
+        raise AssertionError(f"unknown namespace operation: {operation}")
+except OSError as error:
+    print(error.errno)
+else:
+    print(0)
+"""
+    result = subprocess.run(
+        [
+            "sudo",
+            "-n",
+            "-u",
+            "nobody",
+            "python3",
+            "-c",
+            script,
+            operation,
+            *(str(path) for path in paths),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(errno.EACCES), (
+        operation,
+        paths,
+        result.stdout,
+        result.stderr,
+    )
+
+
+def assert_parent_acl_denies_namespace_mutations(mountpoint: Path, suffix: str) -> None:
+    if not can_run_as_nobody():
+        return
+
+    nobody_uid = pwd.getpwnam("nobody").pw_uid
+    if nobody_uid == os.geteuid():
+        print("SKIP acl-parent-namespace-denial (test process is nobody)")
+        return
+
+    denied_parent = mountpoint / f"acl-denied-parent-{suffix}"
+    denied_parent.mkdir(mode=0o777)
+    os.setxattr(
+        denied_parent,
+        "system.posix_acl_access",
+        build_directory_acl_for_named_user(nobody_uid, 0o1),
+    )
+    assert stat.S_IMODE(denied_parent.stat().st_mode) == 0o777
+
+    unlink_target = denied_parent / "unlink-target"
+    unlink_target.write_bytes(b"preserve unlink target")
+    rmdir_target = denied_parent / "rmdir-target"
+    rmdir_target.mkdir()
+    assert_namespace_mutation_denied_to_nobody("unlink", unlink_target)
+    assert_namespace_mutation_denied_to_nobody("rmdir", rmdir_target)
+    assert unlink_target.read_bytes() == b"preserve unlink target"
+    assert rmdir_target.is_dir()
+
+    allowed_parent = mountpoint / f"acl-allowed-parent-{suffix}"
+    allowed_parent.mkdir(mode=0o777)
+
+    denied_source = denied_parent / "rename-source-denied"
+    denied_source.write_bytes(b"preserve source")
+    allowed_destination = allowed_parent / "rename-destination-denied-source"
+    assert_namespace_mutation_denied_to_nobody(
+        "rename", denied_source, allowed_destination
+    )
+    assert denied_source.read_bytes() == b"preserve source"
+    assert not allowed_destination.exists()
+
+    allowed_source = allowed_parent / "rename-source-denied-destination"
+    allowed_source.write_bytes(b"preserve destination")
+    denied_destination = denied_parent / "rename-destination"
+    assert_namespace_mutation_denied_to_nobody(
+        "rename", allowed_source, denied_destination
+    )
+    assert allowed_source.read_bytes() == b"preserve destination"
+    assert not denied_destination.exists()
 
 
 def assert_mutations_denied_to_nobody(path: Path) -> None:
@@ -369,6 +475,8 @@ def main() -> None:
                 child_path.write_bytes(b"inherited acl\n")
                 assert os.getxattr(child_path, "system.posix_acl_access") == allow_acl
 
+                assert_parent_acl_denies_namespace_mutations(mountpoint, suffix)
+
                 deny_acl = build_posix_acl(user_perm=0o0, group_perm=0o0, other_perm=0o0)
                 os.setxattr(file_path, "system.posix_acl_access", deny_acl)
                 assert os.getxattr(file_path, "system.posix_acl_access") == deny_acl
@@ -384,7 +492,10 @@ def main() -> None:
                 assert_partial_omit_preserves_atime(timestamp_path)
                 assert_non_owner_timestamp_rules(timestamp_path)
 
-                print("OK acl-mount-option utimens_invalid_nsec=EINVAL")
+                print(
+                    "OK acl-mount-option utimens_invalid_nsec=EINVAL "
+                    "parent_namespace_unlink_rmdir_rename=EACCES"
+                )
             finally:
                 try:
                     unmount(mountpoint)
