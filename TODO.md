@@ -436,8 +436,14 @@ Reading guide:
   log as `<FOD_TEST_LOG_ARCHIVE>.before-remount`, where the copy callback runs.
   Four traceable `test-df` runs on 3.4.207 (including three repeats) recorded
   `whole_object_adoption=true` and successful source-object adoption. The
-  original mismatch has not been reproduced; keep the finding open until a
-  failure is captured with its first-mount trace and PostgreSQL rows.
+  2026-10-30 repeat on FOD 3.4.322 ran three additional `release-lto` debug
+  passes; all three recorded no pending source/destination write state,
+  `whole_object_adoption=true`, successful adoption, and matching PostgreSQL
+  source/copy object IDs. First-mount traces are retained under `/tmp/` as
+  `fod-test-df-3.4.322-20261030-{debug,run2,run3}.log.before-remount`.
+  These successful runs still do not reproduce the original mismatch; keep
+  the finding open until a failure is captured with its first-mount trace and
+  PostgreSQL rows.
 
 ## Previously tracked follow-ups (closed or deferred)
 
