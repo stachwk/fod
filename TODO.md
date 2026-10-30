@@ -115,7 +115,7 @@ Reading guide:
   distinction and root `X_OK` cases with and without execute bits before
   closing P07. See the
   [`permissions and identity audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
-- [ ] **Mounted stale-inode xattr regression is still missing.** Source review
+- [ ] **Verify stale-inode xattr behavior on mounted FUSE.** Source review
   found that xattr callbacks resolved the request's inode through a cached path
   without confirming that the path still resolved to that inode. After a
   remote remove/recreate, this could expose or mutate the replacement object's
@@ -123,10 +123,9 @@ Reading guide:
   the primary and use that xattr owner ID; if the old inode remains open after
   unlink/replacement, they use the open handle's primary-resolved `file_id`.
   Confidence
-  is high for the code-path fix; no mounted race/replacement reproduction was
-  run. Add a two-mount deterministic replacement case covering set/remove and
-  get/list behavior, plus `fgetxattr(user.*)` on an open-unlinked inode with
-  ACLs enabled, before closing the finding. See
+  is high for the code-path fix. A two-mount regression now covers get/list,
+  set/remove and `fgetxattr(user.*)` on an open-unlinked inode with ACLs enabled;
+  mounted execution remains pending. See
   [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
 - [ ] **Mounted stale-inode directory-open regression is still missing.** On
   2026-10-30, source review found that `opendir()` fetched attributes through
