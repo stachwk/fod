@@ -1739,6 +1739,13 @@ fn directory_entry_metadata_rejects_missing_required_fields() -> Result<(), Stri
         .list_directory_entry_metadata_for_id(None)
         .expect_err("NULL entry name must be rejected");
     assert!(null_name_error.contains("empty name"), "{null_name_error}");
+    let null_name_snapshot_error = repo
+        .list_directory_entries_blob_for_id(None)
+        .expect_err("NULL entry name must not become an empty readdir entry");
+    assert!(
+        null_name_snapshot_error.contains("empty name"),
+        "{null_name_snapshot_error}"
+    );
 
     Ok(())
 }

@@ -699,6 +699,9 @@ impl DbRepo {
             let param_refs = params.iter().collect::<Vec<_>>();
             let res = exec_params(conn, &sql, &param_refs)?;
             let names = fetch_first_column_texts(res)?;
+            if names.iter().any(String::is_empty) {
+                return Err("directory entries query returned an empty name".to_string());
+            }
             Ok(Some(join_nul_text(&names)))
         })
     }

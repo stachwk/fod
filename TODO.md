@@ -261,6 +261,13 @@ Reading guide:
   The Rust query suite passed on 2026-10-30 (42 tests); mounted evidence is
   `artifacts/integration/unlink-primary-authority-20261030T112245Z/results.json`
   (`malformed_metadata_fields_return_eio` includes `inode_seed`).
+  Names-only directory snapshots now reject empty names instead of encoding an
+  invalid empty `readdir` entry. The repository regression checks NULL names,
+  and the mounted test injects an empty child name with triggers disabled only
+  for that corruption transaction, then confirms `os.listdir()` returns `EIO`.
+  Full mounted evidence:
+  `artifacts/integration/unlink-primary-authority-20261030T112944Z/results.json`
+  (`names_snapshot_rejects_empty_child_name: true`).
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

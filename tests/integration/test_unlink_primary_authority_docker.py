@@ -39,6 +39,17 @@ def execute(db, sql, params=()):
         cursor.execute(sql, params or None)
 
 
+def execute_without_triggers(db, sql, params=()):
+    execute(db, "BEGIN")
+    try:
+        execute(db, "SET LOCAL session_replication_role = replica")
+        execute(db, sql, params)
+        execute(db, "COMMIT")
+    except Exception:
+        execute(db, "ROLLBACK")
+        raise
+
+
 def wait_for(predicate, label, timeout=30):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -248,6 +259,37 @@ def main():
         finally:
             os.close(readdir_fault_fd)
         results["names_snapshot_child_query_failure_returns_eio"] = True
+
+        empty_name_dir = ma / "readdir-empty-name"
+        empty_name_dir.mkdir()
+        seed(empty_name_dir / "child")
+        barrier()
+        empty_name_file_id = query(
+            primary,
+            "SELECT id_file FROM fod.files WHERE id_directory=(SELECT id_directory FROM fod.directories WHERE name=%s AND id_parent IS NULL) AND name='child' AND NOT unlinked",
+            (empty_name_dir.name,),
+        )[0][0]
+        execute_without_triggers(
+            primary,
+            "UPDATE fod.files SET name='' WHERE id_file=%s",
+            (empty_name_file_id,),
+        )
+        try:
+            barrier()
+            try:
+                os.listdir(mc / empty_name_dir.name)
+            except OSError as exc:
+                assert exc.errno == errno.EIO, f"empty readdir name returned errno {exc.errno}"
+            else:
+                raise AssertionError("names-only readdir accepted an empty child name")
+        finally:
+            execute_without_triggers(
+                primary,
+                "UPDATE fod.files SET name='child' WHERE id_file=%s",
+                (empty_name_file_id,),
+            )
+            barrier()
+        results["names_snapshot_rejects_empty_child_name"] = True
 
         xattr_fault_file = ma / "xattr-read-query-fault"
         seed(xattr_fault_file)
