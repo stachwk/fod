@@ -10375,7 +10375,7 @@ impl Filesystem for FodFuse {
                     return;
                 }
             };
-            let mut mode = mode & !umask;
+            let mut mode = (mode & !umask) & !libc::S_IFMT;
             if !subject.is_root() {
                 mode &= !(libc::S_ISUID | libc::S_ISGID);
             }
@@ -10429,7 +10429,7 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let mut mode = mode & !umask;
+        let mut mode = (mode & !umask) & !libc::S_IFMT;
         if !subject.is_root() {
             mode &= !(libc::S_ISUID | libc::S_ISGID);
         }

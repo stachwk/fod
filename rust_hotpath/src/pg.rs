@@ -5852,7 +5852,7 @@ impl DbRepo {
         &self,
         target_parent_id: Option<u64>,
         target_name: &str,
-        mode: Option<&str>,
+        mode: &str,
         uid: u32,
         gid: u32,
         inode_seed: &str,
@@ -5874,7 +5874,7 @@ impl DbRepo {
         }
         let directory_id = row[0].trim().parse::<u64>().ok();
         let matches = directory_id.is_some()
-            && mode.is_none_or(|mode| row[1].trim() == mode)
+            && row[1].trim() == mode
             && row[2].trim() == uid.to_string()
             && row[3].trim() == gid.to_string()
             && row[4].trim() == inode_seed;
@@ -6003,6 +6003,54 @@ impl DbRepo {
             return Err(PARENT_ACCESS_DENIED.to_string());
         }
         Ok(())
+    }
+
+    /// Apply Linux/POSIX setgid-directory inheritance while the parent row is
+    /// locked in the namespace transaction. A setgid parent supplies the
+    /// child's group; newly created directories also retain setgid so the
+    /// inheritance continues down the tree.
+    unsafe fn inherit_parent_setgid_on_conn(
+        conn: *mut PGconn,
+        parent_id: Option<u64>,
+        requested_gid: u32,
+        requested_mode: u32,
+        child_is_directory: bool,
+    ) -> Result<(u32, u32), String> {
+        let (sql, params): (CString, Vec<CString>) = if let Some(parent_id) = parent_id {
+            (
+                CString::new(
+                    "SELECT gid, mode FROM directories WHERE id_directory = $1 FOR NO KEY UPDATE",
+                )
+                .unwrap(),
+                vec![CString::new(parent_id.to_string()).unwrap()],
+            )
+        } else {
+            (
+                CString::new(
+                    "SELECT gid, mode FROM directories WHERE id_parent IS NULL AND name='/' FOR NO KEY UPDATE",
+                )
+                .unwrap(),
+                Vec::new(),
+            )
+        };
+        let param_refs = params.iter().collect::<Vec<_>>();
+        let row = fetch_first_row_texts(exec_params(conn, &sql, &param_refs)?)?;
+        if row.len() != 2 {
+            return Err(format!(
+                "{NAMESPACE_PARENT_MISSING_PREFIX} parent directory disappeared"
+            ));
+        }
+        let parent_gid = row[0].parse::<u32>().map_err(|err| err.to_string())?;
+        let parent_mode = parse_persisted_posix_mode(&row[1])?;
+        if parent_mode & 0o2000 == 0 {
+            return Ok((requested_gid, requested_mode));
+        }
+        let child_mode = if child_is_directory {
+            requested_mode | 0o2000
+        } else {
+            requested_mode
+        };
+        Ok((parent_gid, child_mode))
     }
 
     /// Check parent write+search permission through its access ACL when ACL
@@ -6144,7 +6192,7 @@ impl DbRepo {
         &self,
         target_parent_id: Option<u64>,
         target_name: &str,
-        mode: Option<&str>,
+        mode: &str,
         uid: u32,
         gid: u32,
         inode_seed: &str,
@@ -6167,7 +6215,7 @@ impl DbRepo {
         let file_id = row[0].trim().parse::<u64>().ok();
         let matches = file_id.is_some()
             && row[1].trim() == "0"
-            && mode.is_none_or(|mode| row[2].trim() == mode)
+            && row[2].trim() == mode
             && row[3].trim() == uid.to_string()
             && row[4].trim() == gid.to_string()
             && Self::created_inode_seed_matches(row[5].trim(), inode_seed);
@@ -6183,7 +6231,7 @@ impl DbRepo {
         &self,
         target_parent_id: Option<u64>,
         target_name: &str,
-        mode: Option<&str>,
+        mode: &str,
         uid: u32,
         gid: u32,
         inode_seed: &str,
@@ -6209,7 +6257,7 @@ impl DbRepo {
         let file_id = row[0].trim().parse::<u64>().ok();
         let matches = file_id.is_some()
             && row[1].trim() == "0"
-            && mode.is_none_or(|mode| row[2].trim() == mode)
+            && row[2].trim() == mode
             && row[3].trim() == uid.to_string()
             && row[4].trim() == gid.to_string()
             && Self::created_inode_seed_matches(row[5].trim(), inode_seed)
@@ -11801,12 +11849,12 @@ impl DbRepo {
         let inode_seed_text = inode_seed.to_string();
         let uid_value = uid;
         let gid_value = gid;
+        let mut expected_gid = gid_value;
         let target_name =
             CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
         let target =
             CString::new(target).map_err(|_| "symlink target contains NUL byte".to_string())?;
         let uid = CString::new(uid.to_string()).map_err(|_| "uid contains NUL byte".to_string())?;
-        let gid = CString::new(gid.to_string()).map_err(|_| "gid contains NUL byte".to_string())?;
         let inode_seed =
             CString::new(inode_seed).map_err(|_| "inode seed contains NUL byte".to_string())?;
         let sql_touch_parent = CString::new(
@@ -11854,6 +11902,16 @@ impl DbRepo {
                     }
                 }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
+                let (effective_gid, _) = Self::inherit_parent_setgid_on_conn(
+                    conn,
+                    target_parent_id,
+                    gid_value,
+                    0,
+                    false,
+                )?;
+                expected_gid = effective_gid;
+                let gid = CString::new(effective_gid.to_string())
+                    .map_err(|_| "gid contains NUL byte".to_string())?;
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -11907,7 +11965,7 @@ impl DbRepo {
                     &target_name_text,
                     &target_text,
                     uid_value,
-                    gid_value,
+                    expected_gid,
                     &inode_seed_text,
                 )
             }),
@@ -11995,10 +12053,11 @@ impl DbRepo {
         let mode_text = format!("{:o}", mode);
         let uid_value = uid;
         let gid_value = gid;
+        let mut expected_gid = gid_value;
+        let mut expected_mode = mode_text.clone();
         let target_name =
             CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
         let uid = CString::new(uid.to_string()).map_err(|_| "uid contains NUL byte".to_string())?;
-        let gid = CString::new(gid.to_string()).map_err(|_| "gid contains NUL byte".to_string())?;
         let inode_seed =
             CString::new(inode_seed).map_err(|_| "inode seed contains NUL byte".to_string())?;
         let requested_mode = mode;
@@ -12047,11 +12106,21 @@ impl DbRepo {
                     }
                 }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
+                let (effective_gid, inherited_mode) = Self::inherit_parent_setgid_on_conn(
+                    conn,
+                    target_parent_id,
+                    gid_value,
+                    requested_mode,
+                    true,
+                )?;
+                expected_gid = effective_gid;
+                let gid = CString::new(effective_gid.to_string())
+                    .map_err(|_| "gid contains NUL byte".to_string())?;
                 let inherited_acl = if inherit_default_acl {
                     xattrs::prepare_default_acl_inheritance_on_conn(
                         conn,
                         target_parent_id,
-                        requested_mode,
+                        inherited_mode,
                         true,
                     )?
                 } else {
@@ -12060,8 +12129,9 @@ impl DbRepo {
                 let effective_mode = inherited_acl
                     .as_ref()
                     .map(|acl| acl.mode)
-                    .unwrap_or(requested_mode);
-                let mode = CString::new(format!("{effective_mode:o}"))
+                    .unwrap_or(inherited_mode);
+                expected_mode = format!("{effective_mode:o}");
+                let mode = CString::new(expected_mode.clone())
                     .map_err(|_| "mode contains NUL byte".to_string())?;
                 let res = if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
@@ -12118,9 +12188,9 @@ impl DbRepo {
                 repo.confirm_created_directory(
                     target_parent_id,
                     &target_name_text,
-                    (!inherit_default_acl).then_some(mode_text.as_str()),
+                    &expected_mode,
                     uid_value,
-                    gid_value,
+                    expected_gid,
                     &inode_seed_text,
                 )
             }),
@@ -12210,10 +12280,11 @@ impl DbRepo {
         let mode_text = format!("{:o}", mode);
         let uid_value = uid;
         let gid_value = gid;
+        let mut expected_gid = gid_value;
+        let mut expected_mode = mode_text.clone();
         let target_name =
             CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
         let uid = CString::new(uid.to_string()).map_err(|_| "uid contains NUL byte".to_string())?;
-        let gid = CString::new(gid.to_string()).map_err(|_| "gid contains NUL byte".to_string())?;
         let inode_seed =
             CString::new(inode_seed).map_err(|_| "inode seed contains NUL byte".to_string())?;
         let requested_mode = mode;
@@ -12268,11 +12339,21 @@ impl DbRepo {
                     }
                 }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
+                let (effective_gid, inherited_mode) = Self::inherit_parent_setgid_on_conn(
+                    conn,
+                    target_parent_id,
+                    gid_value,
+                    requested_mode,
+                    false,
+                )?;
+                expected_gid = effective_gid;
+                let gid = CString::new(effective_gid.to_string())
+                    .map_err(|_| "gid contains NUL byte".to_string())?;
                 let inherited_acl = if inherit_default_acl {
                     xattrs::prepare_default_acl_inheritance_on_conn(
                         conn,
                         target_parent_id,
-                        requested_mode,
+                        inherited_mode,
                         false,
                     )?
                 } else {
@@ -12281,8 +12362,9 @@ impl DbRepo {
                 let effective_mode = inherited_acl
                     .as_ref()
                     .map(|acl| acl.mode)
-                    .unwrap_or(requested_mode);
-                let mode = CString::new(format!("{effective_mode:o}"))
+                    .unwrap_or(inherited_mode);
+                expected_mode = format!("{effective_mode:o}");
+                let mode = CString::new(expected_mode.clone())
                     .map_err(|_| "mode contains NUL byte".to_string())?;
                 let effective_inode_seed =
                     Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
@@ -12368,9 +12450,9 @@ impl DbRepo {
                 repo.confirm_created_file(
                     target_parent_id,
                     &target_name_text,
-                    (!inherit_default_acl).then_some(mode_text.as_str()),
+                    &expected_mode,
                     uid_value,
-                    gid_value,
+                    expected_gid,
                     &inode_seed_text,
                 )
             }),
@@ -12486,12 +12568,13 @@ impl DbRepo {
         let mode_text = format!("{:o}", mode);
         let uid_value = uid;
         let gid_value = gid;
+        let mut expected_gid = gid_value;
+        let mut expected_mode = mode_text.clone();
         let rdev_major_value = rdev_major;
         let rdev_minor_value = rdev_minor;
         let target_name =
             CString::new(target_name).map_err(|_| "target name contains NUL byte".to_string())?;
         let uid = CString::new(uid.to_string()).map_err(|_| "uid contains NUL byte".to_string())?;
-        let gid = CString::new(gid.to_string()).map_err(|_| "gid contains NUL byte".to_string())?;
         let inode_seed =
             CString::new(inode_seed).map_err(|_| "inode seed contains NUL byte".to_string())?;
         let requested_mode = mode;
@@ -12559,11 +12642,21 @@ impl DbRepo {
                     }
                 }
                 Self::require_namespace_vacant_on_conn(conn, target_parent_id, &target_name_text)?;
+                let (effective_gid, inherited_mode) = Self::inherit_parent_setgid_on_conn(
+                    conn,
+                    target_parent_id,
+                    gid_value,
+                    requested_mode,
+                    false,
+                )?;
+                expected_gid = effective_gid;
+                let gid = CString::new(effective_gid.to_string())
+                    .map_err(|_| "gid contains NUL byte".to_string())?;
                 let inherited_acl = if inherit_default_acl {
                     xattrs::prepare_default_acl_inheritance_on_conn(
                         conn,
                         target_parent_id,
-                        requested_mode,
+                        inherited_mode,
                         false,
                     )?
                 } else {
@@ -12572,8 +12665,9 @@ impl DbRepo {
                 let effective_mode = inherited_acl
                     .as_ref()
                     .map(|acl| acl.mode)
-                    .unwrap_or(requested_mode);
-                let mode = CString::new(format!("{effective_mode:o}"))
+                    .unwrap_or(inherited_mode);
+                expected_mode = format!("{effective_mode:o}");
+                let mode = CString::new(expected_mode.clone())
                     .map_err(|_| "mode contains NUL byte".to_string())?;
                 let effective_inode_seed =
                     Self::effective_file_inode_seed_on_conn(conn, &inode_seed)?;
@@ -12676,9 +12770,9 @@ impl DbRepo {
                 repo.confirm_created_special_file(
                     target_parent_id,
                     &target_name_text,
-                    (!inherit_default_acl).then_some(mode_text.as_str()),
+                    &expected_mode,
                     uid_value,
-                    gid_value,
+                    expected_gid,
                     &inode_seed_text,
                     &file_kind_text,
                     rdev_major_value,

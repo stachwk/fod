@@ -18,19 +18,6 @@ if str(ROOT) not in sys.path:
 from tests.integration.fod_mount import FODMount
 
 
-def assert_current_fod_gid(stat_result, label):
-    expected_gid = os.getegid()
-    assert stat_result.st_gid == expected_gid, (
-        f"{label}: FOD 2.4.0 nie dziedziczy obecnie gid po katalogu nadrzednym; "
-        f"expected_gid={expected_gid}, stat={stat_result}"
-    )
-
-def assert_current_fod_no_setgid(stat_result, label):
-    assert not (stat_result.st_mode & 0o2000), (
-        f"{label}: FOD 2.4.0 nie dziedziczy obecnie bitu setgid; "
-        f"mode={oct(stat_result.st_mode)}, stat={stat_result}"
-    )
-
 def main() -> None:
     launcher = FODMount(str(ROOT))
     launcher.init_schema()
@@ -62,34 +49,34 @@ def main() -> None:
             nested_dir.mkdir()
             nested_parent_stat = (parent_dir / "nested").stat()
             nested_leaf_stat = nested_dir.stat()
-            expected_gid = os.getegid()
-
-            assert nested_parent_stat.st_gid == expected_gid, (
-                "FOD 2.4.0 nie dziedziczy obecnie gid po katalogu nadrzednym; "
-                f"expected_gid={expected_gid}, stat={nested_parent_stat}"
-            )
-
-            assert not (nested_parent_stat.st_mode & 0o2000), (
-                "FOD 2.4.0 nie dziedziczy obecnie bitu setgid po katalogu nadrzednym; "
-                f"stat={nested_parent_stat}"
-            )
-
-            assert_current_fod_gid(nested_leaf_stat, "nested_leaf")
-            assert_current_fod_no_setgid(nested_leaf_stat, "nested_leaf")
+            assert nested_parent_stat.st_gid == inherited_gid, nested_parent_stat
+            assert nested_parent_stat.st_mode & 0o2000, nested_parent_stat
+            assert nested_leaf_stat.st_gid == inherited_gid, nested_leaf_stat
+            assert nested_leaf_stat.st_mode & 0o2000, nested_leaf_stat
 
             child_file.write_bytes(b"ownership\n")
             child_dir.mkdir()
+            child_link = parent_dir / "child-link"
+            os.symlink("child.txt", child_link)
+            child_fifo = parent_dir / "child-fifo"
+            os.mkfifo(child_fifo)
             moved_dir_src.mkdir()
             os.rename(moved_dir_src, moved_dir_dst)
 
             parent_stat = parent_dir.stat()
             file_stat = child_file.stat()
             dir_stat = child_dir.stat()
+            link_stat = child_link.lstat()
+            fifo_stat = child_fifo.stat()
             moved_stat = moved_dir_dst.stat()
 
             assert parent_stat.st_gid == inherited_gid, parent_stat
-            assert_current_fod_gid(file_stat, "file")
-            assert_current_fod_gid(dir_stat, "dir")
+            assert file_stat.st_gid == inherited_gid, file_stat
+            assert not (file_stat.st_mode & 0o2000), file_stat
+            assert dir_stat.st_gid == inherited_gid, dir_stat
+            assert dir_stat.st_mode & 0o2000, dir_stat
+            assert link_stat.st_gid == inherited_gid, link_stat
+            assert fifo_stat.st_gid == inherited_gid, fifo_stat
             assert moved_stat.st_gid == current_gid, moved_stat
             assert not (moved_stat.st_mode & 0o2000), moved_stat
 
@@ -104,10 +91,17 @@ def main() -> None:
                 os.umask(previous_umask)
 
             umask_file_mode = umask_file.stat().st_mode & 0o777
-            umask_dir_mode = umask_dir.stat().st_mode & 0o777
+            umask_dir_stat = umask_dir.stat()
+            umask_dir_mode = umask_dir_stat.st_mode & 0o777
             assert umask_file_mode == 0o640, oct(umask_file_mode)
             assert umask_dir_mode == 0o750, oct(umask_dir_mode)
-            print("OK ownership/inheritance umask_file=640 umask_dir=750")
+            assert umask_file.stat().st_gid == inherited_gid
+            assert umask_dir_stat.st_gid == inherited_gid, umask_dir_stat
+            assert umask_dir_stat.st_mode & 0o2000, umask_dir_stat
+            print(
+                f"OK ownership/inheritance setgid_gid={inherited_gid} "
+                "umask_file=640 umask_dir=2750"
+            )
         finally:
             launcher.stop()
 
