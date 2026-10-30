@@ -1072,6 +1072,9 @@ fn null_file_unlinked_flag_is_not_reported_as_missing() -> Result<(), String> {
         if repo.file_is_unlinked(file_id)? != Some(false) {
             return Err("new file did not report unlinked=false".to_string());
         }
+        if repo.file_link_count_for_stat(file_id)? != Some(1) {
+            return Err("new file did not report a single link".to_string());
+        }
         repo.exec("ALTER TABLE files ALTER COLUMN unlinked DROP NOT NULL")?;
         unlinked_not_null_dropped = true;
         repo.exec(&format!(
@@ -1083,6 +1086,15 @@ fn null_file_unlinked_flag_is_not_reported_as_missing() -> Result<(), String> {
             Ok(value) => {
                 return Err(format!(
                     "NULL unlinked flag was treated as an ordinary result: {value:?}"
+                ));
+            }
+        }
+        match repo.file_link_count_for_stat(file_id) {
+            Err(error) if error.contains("unlinked") => {}
+            Err(error) => return Err(format!("unexpected link-count error: {error}")),
+            Ok(value) => {
+                return Err(format!(
+                    "NULL unlinked flag produced an ordinary link count: {value:?}"
                 ));
             }
         }
@@ -1101,6 +1113,9 @@ fn null_file_unlinked_flag_is_not_reported_as_missing() -> Result<(), String> {
     result.and(cleanup)?;
     if repo.file_is_unlinked(file_id)?.is_some() {
         return Err("purged file was still reported by file_is_unlinked".to_string());
+    }
+    if repo.file_link_count_for_stat(file_id)?.is_some() {
+        return Err("purged file was still reported by file_link_count_for_stat".to_string());
     }
     Ok(())
 }

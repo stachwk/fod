@@ -8307,6 +8307,7 @@ impl DbRepo {
         let sql = CString::new(
             "
             SELECT
+                f.unlinked::text,
                 (CASE WHEN f.unlinked THEN 0 ELSE 1 END) + COUNT(h.id_hardlink)
             FROM files f
             LEFT JOIN hardlinks h ON h.id_file = f.id_file
@@ -8318,14 +8319,26 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&file_id];
             let res = exec_params(conn, &sql, &params)?;
-            let value = fetch_single_text_option(res)?;
-            value
-                .map(|text| {
-                    text.trim()
-                        .parse::<u64>()
-                        .map_err(|_| "invalid file link count".to_string())
-                })
-                .transpose()
+            let row = fetch_first_row_texts(res)?;
+            if row.is_empty() {
+                return Ok(None);
+            }
+            if row.len() != 2 {
+                return Err(format!(
+                    "invalid file link-count row: expected 2 columns, got {}",
+                    row.len()
+                ));
+            }
+            match row[0].trim().to_ascii_lowercase().as_str() {
+                "t" | "true" => {}
+                "f" | "false" => {}
+                _ => return Err("invalid file unlinked flag in link-count row".to_string()),
+            }
+            let value = row[1]
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| "invalid file link count".to_string())?;
+            Ok(Some(value))
         })
     }
 

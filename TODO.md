@@ -409,7 +409,11 @@ Reading guide:
   `file_is_unlinked()` also used to treat a SQL `NULL` flag as a nonexistent
   file. It now distinguishes zero rows from a malformed NULL or boolean value;
   `null_file_unlinked_flag_is_not_reported_as_missing` verifies the distinction
-  and confirms a genuinely purged file still reports as absent.
+  and confirms a genuinely purged file still reports as absent. The related
+  `file_link_count_for_stat()` query also treated NULL as `false`, which could
+  report `st_nlink=1` for a corrupted row; it now validates the persisted flag
+  before returning the link count. The same regression reproduced `Some(1)`
+  for NULL before the fix and verifies that the decoder now errors.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
