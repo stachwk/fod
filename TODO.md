@@ -221,8 +221,10 @@ Reading guide:
 - [ ] **Verify Linux FUSE device-number round trips for `mknod`.** The callback
   now decodes the kernel's 12-bit-major/20-bit-minor `new_encode_dev` value and
   FUSE attrs encode it in the same format; unrepresentable database values now
-  fail with `EIO`. Add mounted char/block-node checks with minor values above
-  255 and near the ABI boundary, then compare `stat().st_rdev` major/minor.
+  fail with `EIO`. Mounted char/block-node checks now cover minor values above
+  255 and the ABI boundary and compare `stat().st_rdev` major/minor. They remain
+  unverified because the local PostgreSQL server rejected the configured
+  `foduser` credentials; rerun `make test-mknod` with the intended test DB.
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's

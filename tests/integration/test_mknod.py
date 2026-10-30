@@ -304,7 +304,8 @@ def test_fifo_mknod(work_dir: Path) -> None:
 def test_character_device_mknod(work_dir: Path) -> None:
     # Urzadzenie znakowe wymaga sudo/root, ale backend moze je ograniczac.
     chr_path = work_dir / "mknod_char"
-    chr_rdev = os.makedev(1, 7) if hasattr(os, "makedev") else 0
+    chr_major, chr_minor = 1, 0x12345
+    chr_rdev = os.makedev(chr_major, chr_minor) if hasattr(os, "makedev") else 0
 
     safe_unlink(chr_path)
     try:
@@ -328,7 +329,10 @@ def test_character_device_mknod(work_dir: Path) -> None:
         return
 
     if hasattr(st, "st_rdev") and st.st_rdev != chr_rdev:
-        raise AssertionError(f"char rdev {st.st_rdev} != {chr_rdev}")
+        actual = (os.major(st.st_rdev), os.minor(st.st_rdev))
+        raise AssertionError(
+            f"char rdev major/minor {actual} != {(chr_major, chr_minor)}"
+        )
 
     safe_unlink(chr_path)
     print("OK: character device mknod")
@@ -337,7 +341,8 @@ def test_character_device_mknod(work_dir: Path) -> None:
 def test_block_device_mknod(work_dir: Path) -> None:
     # Urzadzenie blokowe wymaga sudo/root, ale backend moze je ograniczac.
     block_path = work_dir / "mknod_block"
-    block_rdev = os.makedev(7, 0) if hasattr(os, "makedev") else 0
+    block_major, block_minor = 0x0FFF, 0x0FFFFF
+    block_rdev = os.makedev(block_major, block_minor) if hasattr(os, "makedev") else 0
 
     safe_unlink(block_path)
     try:
@@ -361,7 +366,10 @@ def test_block_device_mknod(work_dir: Path) -> None:
         return
 
     if hasattr(st, "st_rdev") and st.st_rdev != block_rdev:
-        raise AssertionError(f"block rdev {st.st_rdev} != {block_rdev}")
+        actual = (os.major(st.st_rdev), os.minor(st.st_rdev))
+        raise AssertionError(
+            f"block rdev major/minor {actual} != {(block_major, block_minor)}"
+        )
 
     safe_unlink(block_path)
     print("OK: block device mknod")
