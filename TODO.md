@@ -245,12 +245,16 @@ Reading guide:
   has a separate fault that breaks only `hardlinks.id_file` after a new file is
   visible on the replica, then checks that `stat()` returns `EIO`; evidence:
   `artifacts/integration/unlink-primary-authority-20261030T110115Z/results.json`
-  (`link_count_query_failure_returns_eio: true`). Other malformed/missing rows
-  remain pending. `count_file_blocks()` now has a Rust
-  PostgreSQL regression using a temporary database and minimal isolated schema:
+  (`link_count_query_failure_returns_eio: true`). `count_file_blocks()` now has
+  a PostgreSQL regression in Rust using a temporary database and minimal schema:
   it verifies the valid count, renames `data_blocks.data_object_id`, and requires
-  the query error with SQLSTATE `42703` instead of a zero count. The full
+  SQLSTATE `42703` instead of a zero count. The full
   `make test-rust-pg-query` suite passed on 2026-10-30 (40 tests).
+  `path_has_children()` and `count_directory_children()` now also have isolated
+  regressions: they verify empty and non-empty directory results, then inject an
+  undefined-column error and require SQLSTATE `42703` instead of `false` or zero.
+  The expanded `make test-rust-pg-query` suite passed on 2026-10-30 (41 tests).
+  Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
   shared (`1`) and exclusive (`2`) values. A backend regression now seeds an

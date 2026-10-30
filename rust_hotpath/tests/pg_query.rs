@@ -1663,6 +1663,45 @@ fn count_file_blocks_query_failure_is_not_zero() -> Result<(), String> {
 }
 
 #[test]
+fn directory_count_query_failures_are_not_empty() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let repo = DbRepo::with_runtime(&conninfo_for_database(&temporary_db.name), &runtime)?;
+
+    repo.exec("CREATE SCHEMA fod")?;
+    repo.exec("CREATE TABLE fod.files (id_directory BIGINT, unlinked BOOLEAN NOT NULL)")?;
+    repo.exec("CREATE TABLE fod.directories (id_parent BIGINT)")?;
+    repo.exec("CREATE TABLE fod.hardlinks (id_directory BIGINT)")?;
+    repo.exec("CREATE TABLE fod.symlinks (id_parent BIGINT)")?;
+    assert!(!repo.path_has_children(41)?);
+    assert_eq!(repo.count_directory_children(41)?, 0);
+
+    repo.exec("INSERT INTO fod.files VALUES (41, FALSE)")?;
+    assert!(repo.path_has_children(41)?);
+    assert_eq!(repo.count_directory_children(41)?, 1);
+
+    repo.exec("ALTER TABLE fod.files RENAME COLUMN unlinked TO unlinked_fault_probe")?;
+    let has_children_error = repo
+        .path_has_children(41)
+        .expect_err("a failed child query must not report an empty directory");
+    assert!(
+        has_children_error.contains("SQLSTATE 42703"),
+        "expected PostgreSQL undefined-column error, got: {has_children_error}"
+    );
+    let child_count_error = repo
+        .count_directory_children(41)
+        .expect_err("a failed child-count query must not report zero");
+    assert!(
+        child_count_error.contains("SQLSTATE 42703"),
+        "expected PostgreSQL undefined-column error, got: {child_count_error}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn unlink_preserves_alias_and_rejects_stale_binding_and_unsafe_purge() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
