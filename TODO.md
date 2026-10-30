@@ -165,11 +165,12 @@ Reading guide:
   that several non-success `PGresult` branches discarded the result before
   reading `conn_error()`; these now capture `result_error()` first. The
   `touch_data_object()` helper also now propagates the original command error
-  instead of replacing it with a generic string. The remaining gap is
-  deterministic backend fault injection proving SQLSTATE
-  `53100` reaches FUSE as `ENOSPC`; current quota tests exercise FOD's own
-  quota path and do not establish this PostgreSQL error mapping. Do not parse
-  localized PostgreSQL error text. See
+  instead of replacing it with a generic string. `errno.rs` unit regressions
+  now verify SQLSTATE `53100` maps to `ENOSPC` in both error mappers. The
+  remaining gap is deterministic backend fault injection proving PostgreSQL
+  emits the SQLSTATE and the callback propagates it to FUSE; current quota tests
+  exercise FOD's own quota path and do not establish this end-to-end mapping.
+  Do not parse localized PostgreSQL error text. See
   [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md#potwierdzone-skroty-linux-vfs-v617).
 - [ ] **PostgreSQL read failures must not appear as empty metadata.** Source
   review found that `count_file_links()`, `count_file_blocks()`,
