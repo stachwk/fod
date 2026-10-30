@@ -58,6 +58,13 @@ Reading guide:
   odczytu i uruchamia 8 czytelników jednocześnie. Każdy sprawdza pełną
   zawartość, w tym wyzerowane luki. Test przeszedł 2026-10-30 na FOD 3.4.350
   w osobnej bazie ze świeżym schematem; tymczasowa baza została usunięta.
+- [x] **Wielowątkowy admission gate odzyskuje slot po panicu zadania.**
+  Testy `rust_monitor` uruchamiają zadanie trzymające jedyny slot, kolejkowany
+  worker czeka na admission, a kontrolowany unwind pierwszego zadania musi
+  zwolnić slot i obudzić kolejny wątek. Asercje sprawdzają końcowe liczniki
+  success/failure, kolejki, transakcji i bajtów payloadu. Osobny test potwierdza,
+  że drop niedokończonej obserwacji liczy zadanie jako nieudane, a RAII permitu
+  zwalnia aktywny slot.
 
 - [x] **Granica bloku przy rozszerzeniu truncate używała rozmiaru z opóźnionej repliki.**
   `prepare_truncate_boundary_blocks()` pobierało poprzedni EOF przez zwykły

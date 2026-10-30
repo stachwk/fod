@@ -2560,6 +2560,81 @@ mod logical_task_admission_tests {
     }
 
     #[test]
+    fn panicking_worker_releases_slot_and_admits_queued_task() {
+        let gate = Arc::new(LogicalTaskAdmissionGate::new(1));
+        let tracker = tracker();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let (panic_tx, panic_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker_gate = Arc::clone(&gate);
+        let worker_tracker = Arc::clone(&tracker);
+        let panicker = thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let (_permit, _observation) = worker_gate.observe_task(&worker_tracker, 32, true);
+                acquired_tx.send(()).expect("signal active task");
+                release_rx.recv().expect("release panicking task");
+                panic!("simulated task panic");
+            }));
+            panic_tx.send(result.is_err()).expect("report task panic");
+        });
+        acquired_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first task did not acquire its slot");
+
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+        let waiter = spawn_waiter(7, Arc::clone(&gate), Arc::clone(&tracker), admitted_tx);
+        wait_for_next_ticket(&gate, 2);
+        let queued = tracker.queue_snapshot().expect("queued task snapshot");
+        assert_eq!(queued.active_tasks, 1);
+        assert_eq!(queued.queued_tasks, 1);
+
+        release_tx.send(()).expect("release task to panic");
+        assert!(panic_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("panicking worker did not report unwind"));
+        panicker.join().expect("panic was caught in worker thread");
+        assert_eq!(
+            admitted_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("queued task was not admitted after panic"),
+            7
+        );
+        waiter.join().expect("queued task worker panicked");
+
+        let finished = tracker.queue_snapshot().expect("finished task snapshot");
+        assert_eq!(finished.admitted_tasks, 2);
+        assert_eq!(finished.completed_tasks, 2);
+        assert_eq!(finished.failed_tasks, 1);
+        assert_eq!(finished.queued_tasks, 0);
+        assert_eq!(finished.active_tasks, 0);
+        assert_eq!(finished.active_transactions, 0);
+        assert_eq!(finished.payload_in_flight_bytes, 0);
+        assert_eq!(finished.accounting_errors, 0);
+    }
+
+    #[test]
+    fn dropped_observation_marks_task_failed_and_balances_transaction_metrics() {
+        let gate = Arc::new(LogicalTaskAdmissionGate::new(1));
+        let tracker = tracker();
+        let (permit, observation) = gate.observe_task(&tracker, 64, true);
+
+        drop(observation);
+        let observed = tracker.queue_snapshot().expect("observed task snapshot");
+        assert_eq!(observed.failed_tasks, 1);
+        assert_eq!(observed.active_tasks, 0);
+        assert_eq!(observed.active_transactions, 0);
+        assert_eq!(observed.payload_in_flight_bytes, 0);
+        assert_eq!(observed.accounting_errors, 0);
+
+        drop(permit);
+        let finished = tracker.queue_snapshot().expect("finished task snapshot");
+        assert_eq!(finished.active_tasks, 0);
+        assert_eq!(finished.active_transactions, 0);
+        assert_eq!(finished.failed_tasks, 1);
+        assert_eq!(finished.accounting_errors, 0);
+    }
+
+    #[test]
     #[ignore = "diagnostic 500-waiter targeted FIFO wake benchmark"]
     fn fifo_targeted_wake_benchmark_500_waiters() {
         let gate = Arc::new(LogicalTaskAdmissionGate::new(1));

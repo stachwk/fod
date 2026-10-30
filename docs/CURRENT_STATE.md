@@ -24,6 +24,12 @@ uses 4 workers, 16 stored blocks separated by holes and 8 simultaneous readers;
 all readers verify both payload and zero-filled holes. It passed on FOD 3.4.350
 against a disposable initialized database.
 
+Logical-task admission has multithreaded unit coverage for FIFO order, capacity
+limits, queue progress as tasks finish, and balanced completion/failure metrics.
+Additional regressions verify that unwinding a worker releases its admission
+slot for a queued task and that dropping an unfinished observation records a
+failure while balancing active-transaction and payload counters.
+
 Writable mounts use a zero FUSE attribute-cache TTL even if
 `FOD_ATTR_TIMEOUT_SECONDS` requests a positive value. Linux computes an
 `O_APPEND` write offset from its local inode size before sending the request to
