@@ -427,6 +427,11 @@ Reading guide:
   supplied NULL; it now requires exactly four columns and rejects an empty
   timestamp field. `file_read_metadata_rejects_null_timestamp` reproduced the
   empty `access_date` and verifies rejection.
+  Copy-on-write persistence also used to treat a file whose data-object row was
+  missing as a nonexistent file and commit a successful no-op. The lookup now
+  uses a left join so an orphaned reference is an error; the regression
+  `persist_rejects_orphaned_file_data_object` reproduced the false success and
+  verifies that the write fails without adding blocks.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

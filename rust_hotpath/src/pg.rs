@@ -2100,7 +2100,7 @@ impl PreparedStatement {
                 "SELECT data_object_id FROM files WHERE id_file = $1"
             }
             PreparedStatement::FileDataObjectInfo => {
-                "SELECT f.data_object_id, d.reference_count FROM files f JOIN data_objects d ON d.id_data_object = f.data_object_id WHERE f.id_file = $1"
+                "SELECT f.data_object_id, d.reference_count FROM files f LEFT JOIN data_objects d ON d.id_data_object = f.data_object_id WHERE f.id_file = $1"
             }
             PreparedStatement::FileReadMetadata => {
                 "SELECT size, access_date, modification_date, change_date FROM files WHERE id_file = $1"
@@ -6312,8 +6312,20 @@ impl DbRepo {
             let params = [&file_id];
             let res = exec_prepared_params(conn, PreparedStatement::FileDataObjectInfo, &params)?;
             let values = fetch_first_row_texts(res)?;
-            if values.len() < 2 {
+            if values.is_empty() {
                 return Ok(None);
+            }
+            if values.len() != 2 {
+                return Err(format!(
+                    "invalid file data-object info row: expected 2 columns, got {}",
+                    values.len()
+                ));
+            }
+            if values[0].trim().is_empty() {
+                return Err("file data_object_id is NULL".to_string());
+            }
+            if values[1].trim().is_empty() {
+                return Err("missing data-object reference count".to_string());
             }
             let data_object_id = values[0]
                 .trim()

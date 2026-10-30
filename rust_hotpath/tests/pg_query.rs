@@ -1268,6 +1268,75 @@ fn file_read_metadata_rejects_null_timestamp() -> Result<(), String> {
 }
 
 #[test]
+fn persist_rejects_orphaned_file_data_object() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let snapshot = repo.startup_snapshot()?;
+    let block_size = snapshot.block_size.unwrap_or(4096) as usize;
+    let file_id = repo.create_file(
+        None,
+        &unique_name("orphan_persist_object"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("orphan_persist_object_seed"),
+    )?;
+    let original_object_id = repo
+        .file_data_object_id(file_id)?
+        .ok_or_else(|| "new file has no data object".to_string())?;
+    let missing_object_id = repo
+        .query_scalar_text("SELECT COALESCE(MAX(id_data_object), 0) + 1000000 FROM data_objects")?
+        .parse::<u64>()
+        .map_err(|err| format!("invalid missing data object id: {err}"))?;
+    let payload = vec![b'O'; block_size];
+    let rows = [PersistBlockRow {
+        block_index: 0,
+        data: &payload,
+        used_len: block_size as u64,
+    }];
+    let mut foreign_key_dropped = false;
+
+    let result = (|| {
+        repo.exec("ALTER TABLE files DROP CONSTRAINT files_data_object_id_fkey")?;
+        foreign_key_dropped = true;
+        repo.exec(&format!(
+            "UPDATE files SET data_object_id = {missing_object_id} WHERE id_file = {file_id}"
+        ))?;
+        match repo.persist_file_blocks(
+            file_id,
+            block_size as u64,
+            block_size as u64,
+            1,
+            false,
+            &rows,
+        ) {
+            Err(_) => {}
+            Ok(()) => return Err("persist reported success for an orphaned data object".into()),
+        }
+        let stored_blocks = repo.count_file_blocks(file_id)?;
+        if stored_blocks != 0 {
+            return Err(format!(
+                "orphaned file unexpectedly acquired {stored_blocks} data block(s)"
+            ));
+        }
+        Ok(())
+    })();
+
+    let cleanup = (|| {
+        if foreign_key_dropped {
+            repo.exec(&format!(
+                "UPDATE files SET data_object_id = {original_object_id} WHERE id_file = {file_id}"
+            ))?;
+            repo.exec(
+                "ALTER TABLE files ADD CONSTRAINT files_data_object_id_fkey FOREIGN KEY (data_object_id) REFERENCES data_objects(id_data_object)",
+            )?;
+        }
+        repo.purge_primary_file(file_id)
+    })();
+    result.and(cleanup)
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
