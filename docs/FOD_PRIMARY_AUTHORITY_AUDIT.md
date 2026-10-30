@@ -415,10 +415,11 @@ mode bits when no ACL exists) inside the namespace mutation transaction. The
 parent row lock serializes each check with ACL and mode changes, including for
 the durable logical root. The mounted `test_acl_mount_option.py` regression now
 uses an access ACL that leaves mode bits at `0777` but grants the named `nobody`
-user only search permission. It verifies exact `EACCES` for `unlink()`,
-`rmdir()`, rename from a denied source parent, and rename into a denied
-destination parent, while confirming that files and directories remain in
-place. The test passed on 2026-10-30. This verifies end-to-end mounted ACL
+user only search permission. It verifies exact `EACCES` for regular-file,
+directory, FIFO/`mknod`, symlink and hardlink creation, `unlink()`, `rmdir()`,
+rename from a denied source parent, and rename into a denied destination
+parent, while confirming that source and destination namespace entries remain
+unchanged. The test passed on 2026-10-30. This verifies end-to-end mounted ACL
 authorization; it is not a data-loss reproduction.
 
 ### Logical root metadata

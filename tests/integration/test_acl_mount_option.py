@@ -150,6 +150,7 @@ def assert_namespace_mutation_denied_to_nobody(
 ) -> None:
     script = """
 import os
+import stat
 import sys
 
 operation, *paths = sys.argv[1:]
@@ -160,6 +161,17 @@ try:
         os.rmdir(paths[0])
     elif operation == "rename":
         os.rename(paths[0], paths[1])
+    elif operation == "create":
+        fd = os.open(paths[0], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+    elif operation == "mkdir":
+        os.mkdir(paths[0])
+    elif operation == "mknod":
+        os.mknod(paths[0], stat.S_IFIFO | 0o600)
+    elif operation == "symlink":
+        os.symlink("missing-target", paths[0])
+    elif operation == "link":
+        os.link(paths[0], paths[1])
     else:
         raise AssertionError(f"unknown namespace operation: {operation}")
 except OSError as error:
@@ -221,6 +233,30 @@ def assert_parent_acl_denies_namespace_mutations(mountpoint: Path, suffix: str) 
 
     allowed_parent = mountpoint / f"acl-allowed-parent-{suffix}"
     allowed_parent.mkdir(mode=0o777)
+
+    create_source = allowed_parent / "hardlink-source"
+    create_source.write_bytes(b"hardlink source")
+    chown_source = subprocess.run(
+        ["sudo", "-n", "chown", str(nobody_uid), str(create_source)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert chown_source.returncode == 0, chown_source.stderr
+    assert create_source.stat().st_uid == nobody_uid
+    denied_create_paths = {
+        "create": denied_parent / "create-target",
+        "mkdir": denied_parent / "mkdir-target",
+        "mknod": denied_parent / "mknod-target",
+        "symlink": denied_parent / "symlink-target",
+    }
+    for operation, target in denied_create_paths.items():
+        assert_namespace_mutation_denied_to_nobody(operation, target)
+    denied_hardlink = denied_parent / "hardlink-target"
+    assert_namespace_mutation_denied_to_nobody("link", create_source, denied_hardlink)
+    assert all(not path.exists() for path in denied_create_paths.values())
+    assert not denied_hardlink.exists()
+    assert create_source.read_bytes() == b"hardlink source"
 
     denied_source = denied_parent / "rename-source-denied"
     denied_source.write_bytes(b"preserve source")
@@ -494,7 +530,7 @@ def main() -> None:
 
                 print(
                     "OK acl-mount-option utimens_invalid_nsec=EINVAL "
-                    "parent_namespace_unlink_rmdir_rename=EACCES"
+                    "parent_namespace_create_unlink_rmdir_rename=EACCES"
                 )
             finally:
                 try:
