@@ -220,10 +220,11 @@ Reading guide:
   return an error for NULL or malformed IDs rather than treating them as a
   missing entry; xattr path lookup no longer substitutes ID 0 for a missing
   directory ID. Special-file metadata decoding now rejects NULL/malformed rows
-  and frees every `PGresult` on parse failures. PostgreSQL fault-injection and
-  malformed-row regressions for these paths remain pending. A related copy-on-
-  write reference-count parse fallback was removed: malformed counts now fail
-  the transaction instead of defaulting to zero and deleting a data object.
+  and frees every `PGresult` on parse failures. Additional PostgreSQL
+  fault-injection and malformed-row regressions remain pending. A related
+  copy-on-write reference-count parse fallback was removed: malformed counts
+  now fail the transaction instead of defaulting to zero and deleting a data
+  object.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a
@@ -231,9 +232,12 @@ Reading guide:
   that the failing per-child PostgreSQL query surfaces as `EIO` from directory
   iteration; restoring the column and the rest of the suite passed. Evidence:
   `artifacts/integration/unlink-primary-authority-20261030T105137Z/results.json`
-  (`names_snapshot_child_query_failure_returns_eio: true`). Fault injection
-  for xattr/config reads, count helpers, and malformed/missing rows remains
-  pending.
+  (`names_snapshot_child_query_failure_returns_eio: true`). The same suite now
+  injects failures into `xattrs.value` and `xattrs.name` reads, confirming
+  `getxattr()` and `listxattr()` return `EIO`; evidence:
+  `artifacts/integration/unlink-primary-authority-20261030T105549Z/results.json`
+  (`xattr_read_query_failures_return_eio: true`). Fault injection for config
+  reads, count helpers, and other malformed/missing rows remains pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
   shared (`1`) and exclusive (`2`) values. A backend regression now seeds an

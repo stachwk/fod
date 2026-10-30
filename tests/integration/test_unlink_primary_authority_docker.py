@@ -126,6 +126,35 @@ def main():
                 handle.flush()
                 os.fsync(handle.fileno())
 
+        def expect_eio_with_renamed_column(table, column, operation, description):
+            if (table, column) not in {
+                ("files", "inode_seed"),
+                ("xattrs", "name"),
+                ("xattrs", "value"),
+            }:
+                raise AssertionError(f"unapproved fault-injection column: {table}.{column}")
+            fault_column = f"{column}_fault_probe"
+            execute(
+                primary,
+                f"ALTER TABLE fod.{table} RENAME COLUMN {column} TO {fault_column}",
+            )
+            try:
+                barrier()
+                try:
+                    operation()
+                except OSError as exc:
+                    assert exc.errno == errno.EIO, (
+                        f"{description} returned errno {exc.errno}"
+                    )
+                else:
+                    raise AssertionError(f"{description} hid a PostgreSQL query failure")
+            finally:
+                execute(
+                    primary,
+                    f"ALTER TABLE fod.{table} RENAME COLUMN {fault_column} TO {column}",
+                )
+                barrier()
+
         def visible(name):
             return query(primary, "SELECT (SELECT count(*) FROM fod.files WHERE name=%s AND NOT unlinked) + (SELECT count(*) FROM fod.hardlinks WHERE name=%s)", (name, name))[0][0]
 
@@ -163,33 +192,35 @@ def main():
         seed(readdir_fault_dir / "child")
         barrier()
         readdir_fault_fd = os.open(mc / readdir_fault_dir.name, os.O_RDONLY | os.O_DIRECTORY)
-        schema_column_renamed = False
         try:
-            execute(
-                primary,
-                "ALTER TABLE fod.files RENAME COLUMN inode_seed TO inode_seed_query_fault",
+            expect_eio_with_renamed_column(
+                "files",
+                "inode_seed",
+                lambda: os.listdir(readdir_fault_fd),
+                "names-mode readdir child metadata query",
             )
-            schema_column_renamed = True
-            barrier()
-            try:
-                os.listdir(readdir_fault_fd)
-            except OSError as exc:
-                assert exc.errno == errno.EIO, (
-                    f"names-mode child metadata query returned errno {exc.errno}"
-                )
-            else:
-                raise AssertionError(
-                    "names-mode readdir hid a PostgreSQL child metadata query failure"
-                )
         finally:
-            if schema_column_renamed:
-                execute(
-                    primary,
-                    "ALTER TABLE fod.files RENAME COLUMN inode_seed_query_fault TO inode_seed",
-                )
-                barrier()
             os.close(readdir_fault_fd)
         results["names_snapshot_child_query_failure_returns_eio"] = True
+
+        xattr_fault_file = ma / "xattr-read-query-fault"
+        seed(xattr_fault_file)
+        fault_xattr_name = "user.fod_query_failure"
+        os.setxattr(xattr_fault_file, fault_xattr_name, b"persisted-xattr")
+        barrier()
+        expect_eio_with_renamed_column(
+            "xattrs",
+            "value",
+            lambda: os.getxattr(mc / xattr_fault_file.name, fault_xattr_name),
+            "getxattr value query",
+        )
+        expect_eio_with_renamed_column(
+            "xattrs",
+            "name",
+            lambda: os.listxattr(mc / xattr_fault_file.name),
+            "listxattr names query",
+        )
+        results["xattr_read_query_failures_return_eio"] = True
 
         restrictive_directory = ma / "projection-mode-0644"
         restrictive_directory.mkdir()
