@@ -5,7 +5,8 @@ use fod_rust_monitor::{
     LogicalTaskClass, LogicalTaskLane, LogicalTaskObservabilitySampler, LogicalTaskOperation,
     LogicalTaskQueueObservability,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
+use std::thread;
 use std::time::Duration;
 
 fn tracker() -> Arc<LogicalTaskQueueObservability> {
@@ -44,6 +45,60 @@ fn completed_observation_balances_active_payload_and_throughput() {
     let throughput = tracker.throughput_snapshot().unwrap();
     assert_eq!(throughput.completed_files, 1);
     assert_eq!(throughput.completed_bytes, 4096);
+}
+
+#[test]
+fn concurrent_tasks_keep_queue_and_throughput_accounting_balanced() {
+    const WORKERS: usize = 8;
+    const PAYLOAD_BYTES: u64 = 1024;
+
+    let tracker = tracker();
+    let all_started = Arc::new(Barrier::new(WORKERS + 1));
+    let release_tasks = Arc::new(Barrier::new(WORKERS + 1));
+    let workers = (0..WORKERS)
+        .map(|_| {
+            let tracker = Arc::clone(&tracker);
+            let all_started = Arc::clone(&all_started);
+            let release_tasks = Arc::clone(&release_tasks);
+            thread::spawn(move || {
+                let observation = tracker.observe_task(PAYLOAD_BYTES, true);
+                all_started.wait();
+                release_tasks.wait();
+                observation.complete(1, PAYLOAD_BYTES);
+            })
+        })
+        .collect::<Vec<_>>();
+
+    all_started.wait();
+    let active = tracker.queue_snapshot().unwrap();
+    assert_eq!(active.admitted_tasks, WORKERS as u64);
+    assert_eq!(active.queued_tasks, 0);
+    assert_eq!(active.active_tasks, WORKERS as u64);
+    assert_eq!(active.peak_active_tasks, WORKERS as u64);
+    assert_eq!(active.active_transactions, WORKERS as u64);
+    assert_eq!(
+        active.payload_in_flight_bytes,
+        WORKERS as u64 * PAYLOAD_BYTES
+    );
+    assert_eq!(active.completed_tasks, 0);
+
+    release_tasks.wait();
+    for worker in workers {
+        worker.join().expect("concurrent task worker panicked");
+    }
+
+    let finished = tracker.queue_snapshot().unwrap();
+    assert_eq!(finished.admitted_tasks, WORKERS as u64);
+    assert_eq!(finished.completed_tasks, WORKERS as u64);
+    assert_eq!(finished.failed_tasks, 0);
+    assert_eq!(finished.active_tasks, 0);
+    assert_eq!(finished.active_transactions, 0);
+    assert_eq!(finished.payload_in_flight_bytes, 0);
+    assert_eq!(finished.accounting_errors, 0);
+
+    let throughput = tracker.throughput_snapshot().unwrap();
+    assert_eq!(throughput.completed_files, WORKERS as u64);
+    assert_eq!(throughput.completed_bytes, WORKERS as u64 * PAYLOAD_BYTES);
 }
 
 #[test]
