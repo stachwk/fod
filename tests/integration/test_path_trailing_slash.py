@@ -122,6 +122,9 @@ def main() -> None:
             linked_directory_with_slash = f"{directory_link}/"
             directory_fd = os.open(linked_directory_with_slash, os.O_RDONLY)
             os.close(directory_fd)
+            linked_directory_lstat = os.lstat(linked_directory_with_slash)
+            assert linked_directory_lstat.st_ino == trailing_directory.stat().st_ino
+            assert linked_directory_lstat.st_mode & 0o170000 == 0o040000
             expect_errno(
                 lambda: os.mkdir(linked_directory_with_slash),
                 errno.EEXIST,
@@ -138,6 +141,37 @@ def main() -> None:
                 "rmdir symlink to directory/",
             )
             assert directory_link.is_symlink() and trailing_directory.is_dir()
+            symlink_mtime_ns = os.lstat(directory_link).st_mtime_ns
+            os.chmod(linked_directory_with_slash, 0o711)
+            assert trailing_directory.stat().st_mode & 0o777 == 0o711
+            assert os.lstat(directory_link).st_mtime_ns == symlink_mtime_ns
+            target_mtime_ns = 1_700_000_000_123_456_000
+            os.utime(
+                linked_directory_with_slash,
+                ns=(target_mtime_ns, target_mtime_ns),
+            )
+            assert trailing_directory.stat().st_mtime_ns == target_mtime_ns
+            assert os.lstat(directory_link).st_mtime_ns == symlink_mtime_ns
+            expect_errno(
+                lambda: os.truncate(linked_directory_with_slash, 0),
+                errno.EISDIR,
+                "truncate symlink to directory/",
+            )
+            expect_errno(
+                lambda: os.readlink(linked_directory_with_slash),
+                errno.EINVAL,
+                "readlink symlink to directory/",
+            )
+            renamed_directory_target = directory / "renamed-directory-target"
+            expect_errno(
+                lambda: os.rename(
+                    linked_directory_with_slash, renamed_directory_target
+                ),
+                errno.ENOTDIR,
+                "rename symlink to directory/",
+            )
+            assert directory_link.is_symlink() and trailing_directory.is_dir()
+            assert not renamed_directory_target.exists()
 
             normalized = f"{directory}//./created-with-slash/../regular-file"
             assert os.stat(normalized).st_ino == file_path.stat().st_ino
@@ -173,6 +207,8 @@ def main() -> None:
                 "OK pathname empty_path=ENOENTx5 trailing slash file=ENOTDIR "
                 "symlink_file=ENOTDIRx8 symlink_directory=accepted "
                 "slash_symlink_dir=mkdir:EEXIST,unlink:ENOTDIR,rmdir:ENOTDIR "
+                "chmod_target=0o711 utime_target=exact truncate:EISDIR "
+                "readlink:EINVAL rename:ENOTDIR "
                 "dotdot_repeated_separator=1 name_max_boundary=1 "
                 "non_utf8_create=EILSEQ"
             )

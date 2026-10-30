@@ -50,7 +50,10 @@ FOD został wywołany:
   sprawdza pustą ścieżkę dla `stat()`, `open()`, `mkdir()`, `unlink()` i
   `rmdir()`. Dla końcowego symlinku do katalogu z ukośnikiem test sprawdza
   `mkdir()`=`EEXIST` oraz `unlink()`/`rmdir()`=`ENOTDIR`, potwierdzając, że
-  symlink i katalog docelowy pozostają; `stat()` i `open()` podążają do katalogu.
+  symlink i katalog docelowy pozostają; `stat()`, `lstat()`, `open()`,
+  `chmod()` i `utime()` podążają do katalogu. Zmiana praw i czasu dotyczy celu,
+  a czas symlinku pozostaje bez zmian. `truncate()` zwraca `EISDIR`,
+  `readlink()` `EINVAL`, a `rename()` `ENOTDIR`.
   Końcowy symlink z ukośnikiem do pliku zwraca `ENOTDIR` dla `lstat()`,
   `unlink()`, `rmdir()`, `truncate()`, `chmod()` i `utime()`; plik i symlink
   pozostają bez zmian.
