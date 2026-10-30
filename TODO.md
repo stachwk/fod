@@ -1026,6 +1026,15 @@ Status: active design direction, but the main decisions below are already taken.
 ### POSIX Conformance Audit
 
 - [ ] Complete the [POSIX conformance audit](docs/POSIX_CONFORMANCE_AUDIT.md) for FOD's declared filesystem API. The audit defines POSIX.1-2024 Issue 8 as its baseline, identifies Linux/FUSE extensions separately, and starts a requirement matrix. Review exact normative sections and optional/XSI applicability; classify each requirement as pending, pass, fail, not implemented, or not applicable; map it to implementation evidence and a regression or `pjdfstest` case. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
+- [x] **Verify directory link counts after cross-parent `rename()`.** The
+  two-mount `test_rename_directory_transactional.py` regression moves a child
+  directory and checks that the source/destination parents' `st_nlink` values
+  change from 3/2 to 2/3 through both mounts. It sets
+  `FOD_ATTR_TIMEOUT_SECONDS=0` because the default one-second FUSE attribute
+  cache can otherwise return a valid pre-rename `st_nlink`. The full
+  `release-lto` test passed on 2026-10-30 after building
+  `fod-rust-fuse --features integration-test-hooks`; transactional target
+  removal rollback and all existing rename-directory cases passed too.
 - [x] **Parallel lock-test `ENOENT` came from unsafe mounted-workspace cleanup.** On 2026-10-30, a parallel run had 9/10 pass and the replica lock test failed with `ENOENT`; a repeat passed 10/10 but printed busy-unmount errors. `MountedFs::drop` ignored unmount failures and recursively removed `workspace/mount` even while it was a live FUSE mount. That traversed the shared FUSE root and could delete other mounts' PostgreSQL namespace entries. After the affected run, the local Docker test database had only 3 directories and 2 files; an earlier mount-startup snapshot in that run reported 21 directories. The running `/mnt/fod` service uses a `primary` hostname unavailable from this host, so its separate endpoint could not be checked. `MountedFs::drop` now preserves the workspace and log whenever unmount cannot be confirmed. `busy_mount_drop_preserves_shared_namespace_entries` deterministically holds a process cwd in the FUSE mount, checks the failed-unmount path preserves its workspace, then remounts and verifies a sentinel directory survived. On 2026-10-30, `make test-locking` passed 11/11 in parallel; all 21 namespace rows present before the run remained afterward, with 16 expected test rows added. The failed `release-lto` binary was ELF64 x86-64, Build ID `2f9de1e6a23f93aadce341ae8dc64c01232466d6`; `lookup_path`/`attrs_for_path_from_repo` were inspected in a symbol-preserving build whose `.text` bytes matched that binary exactly, with no code-generation discrepancy found. No timing or test serialization was changed.
 
 ### pjdfstest Observations

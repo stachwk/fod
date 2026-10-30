@@ -115,6 +115,45 @@ def directory_move_and_replace(mount_a: Path, mount_b: Path) -> None:
     )
 
 
+def cross_directory_move_updates_parent_link_counts(
+    mount_a: Path, mount_b: Path
+) -> None:
+    suffix = uuid.uuid4().hex
+    source_parent = mount_a / f"rename-nlink-source-{suffix}"
+    source_parent_other = mount_b / source_parent.name
+    destination_parent = mount_a / f"rename-nlink-destination-{suffix}"
+    destination_parent_other = mount_b / destination_parent.name
+    child = source_parent / "child"
+    child_other = source_parent_other / "child"
+
+    source_parent.mkdir()
+    destination_parent.mkdir()
+    child.mkdir()
+
+    for parent in (source_parent, source_parent_other):
+        if parent.stat().st_nlink != 3:
+            raise AssertionError(f"{parent}: expected initial st_nlink=3")
+    for parent in (destination_parent, destination_parent_other):
+        if parent.stat().st_nlink != 2:
+            raise AssertionError(f"{parent}: expected initial st_nlink=2")
+
+    os.replace(child_other, destination_parent_other / "child")
+
+    for parent in (source_parent, source_parent_other):
+        observed = parent.stat().st_nlink
+        if observed != 2:
+            raise AssertionError(f"{parent}: st_nlink={observed}, expected 2 after move")
+    for parent in (destination_parent, destination_parent_other):
+        observed = parent.stat().st_nlink
+        if observed != 3:
+            raise AssertionError(f"{parent}: st_nlink={observed}, expected 3 after move")
+
+    print(
+        "OK rename-cross-directory-parent-link-counts "
+        "source=3->2 destination=2->3 observed_on_both_mounts=1"
+    )
+
+
 def nonempty_target_is_preserved(mount_a: Path, mount_b: Path) -> None:
     suffix = uuid.uuid4().hex
     source = mount_a / f"rename-dir-nonempty-source-{suffix}"
@@ -288,6 +327,8 @@ def main() -> None:
     launcher_a = FODMount(str(root))
     launcher_b = FODMount(str(root))
     launcher_a.init_schema()
+    previous_attr_timeout = os.environ.get("FOD_ATTR_TIMEOUT_SECONDS")
+    os.environ["FOD_ATTR_TIMEOUT_SECONDS"] = "0"
 
     with tempfile.TemporaryDirectory(prefix="fod-rename-dir-") as temp_dir:
         temp = Path(temp_dir)
@@ -304,13 +345,14 @@ def main() -> None:
             launcher_b.start(str(mount_b), log_prefix="/tmp/fod-rename-dir-b")
 
             directory_move_and_replace(mount_a, mount_b)
+            cross_directory_move_updates_parent_link_counts(mount_a, mount_b)
             nonempty_target_is_preserved(mount_a, mount_b)
             missing_source_preserves_destination(mount_a, mount_b)
             type_mismatch_errors(mount_a, mount_b)
             descendant_is_rejected(mount_a, mount_b)
             rollback_after_target_removal(mount_a, mount_b, barrier_dir)
 
-            print("OK rename-directory-transactional protected_cases=6")
+            print("OK rename-directory-transactional protected_cases=7")
         except BaseException:
             print("\n=== MOUNT A LOG ===")
             launcher_a._dump_log()
@@ -320,6 +362,10 @@ def main() -> None:
         finally:
             launcher_b.stop()
             launcher_a.stop()
+            if previous_attr_timeout is None:
+                os.environ.pop("FOD_ATTR_TIMEOUT_SECONDS", None)
+            else:
+                os.environ["FOD_ATTR_TIMEOUT_SECONDS"] = previous_attr_timeout
             if previous_barrier is None:
                 os.environ.pop(BARRIER_ENV, None)
             else:
