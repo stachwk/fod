@@ -9,6 +9,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::sync::{Arc, Barrier};
+use std::thread;
 
 use support::{block_size_from_config, unique_suffix, MountedFs};
 
@@ -366,6 +368,120 @@ fn multi_open_unique_handles() -> Result<(), String> {
             data
         ));
     }
+    Ok(())
+}
+
+#[test]
+fn concurrent_threads_create_write_and_read_independent_files() -> Result<(), String> {
+    const WORKERS: usize = 8;
+    const PAYLOAD_LEN: usize = 128 * 1024;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-threaded-file-tasks",
+        &[("FOD_FUSE_EVENT_THREADS", WORKERS.to_string())],
+    )?;
+    let mount_log = mounted.log_tail(200);
+    let event_loop = mount_log
+        .lines()
+        .find(|line| line.contains("FOD FUSE event loop:"))
+        .ok_or_else(|| format!("missing FUSE event-loop configuration\n{}", mount_log))?;
+    if !event_loop.contains(&format!("threads={WORKERS}")) {
+        return Err(format!(
+            "expected {WORKERS} FUSE event threads, got {event_loop}"
+        ));
+    }
+
+    let suffix = unique_suffix();
+    let dir_path = mounted
+        .mountpoint
+        .join(format!("concurrent_thread_tasks_{suffix}"));
+    fs::create_dir(&dir_path).map_err(|err| format!("create task directory failed: {err}"))?;
+
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let workers = (0..WORKERS)
+        .map(|worker_id| {
+            let path = dir_path.join(format!("worker-{worker_id}.bin"));
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<(std::path::PathBuf, Vec<u8>), String> {
+                let marker = u8::try_from(worker_id + 1)
+                    .map_err(|err| format!("invalid worker marker: {err}"))?;
+                let payload = vec![marker; PAYLOAD_LEN];
+                barrier.wait();
+
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map_err(|err| format!("worker {worker_id} create failed: {err}"))?;
+                file.write_all(&payload)
+                    .map_err(|err| format!("worker {worker_id} write failed: {err}"))?;
+                file.sync_all()
+                    .map_err(|err| format!("worker {worker_id} sync failed: {err}"))?;
+                Ok((path, payload))
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for worker in workers {
+        let (path, expected) = worker
+            .join()
+            .map_err(|_| "concurrent file worker panicked".to_string())??;
+        let actual =
+            fs::read(&path).map_err(|err| format!("read back {} failed: {err}", path.display()))?;
+        if actual != expected {
+            return Err(format!(
+                "concurrent worker wrote incorrect data to {}: expected {} bytes, got {}",
+                path.display(),
+                expected.len(),
+                actual.len()
+            ));
+        }
+    }
+
+    let shared_path = dir_path.join("same-name-race.bin");
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let creators = (0..WORKERS)
+        .map(|worker_id| {
+            let path = shared_path.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<bool, String> {
+                barrier.wait();
+                match OpenOptions::new().write(true).create_new(true).open(&path) {
+                    Ok(mut file) => {
+                        file.write_all(&[u8::try_from(worker_id + 1).unwrap()])
+                            .map_err(|err| format!("creator {worker_id} write failed: {err}"))?;
+                        file.sync_all()
+                            .map_err(|err| format!("creator {worker_id} sync failed: {err}"))?;
+                        Ok(true)
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                    Err(err) => Err(format!("creator {worker_id} failed: {err}")),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut successful_creates = 0;
+    for creator in creators {
+        successful_creates += usize::from(
+            creator
+                .join()
+                .map_err(|_| "same-name create worker panicked".to_string())??,
+        );
+    }
+    if successful_creates != 1 {
+        return Err(format!(
+            "expected exactly one successful concurrent create, got {successful_creates}"
+        ));
+    }
+    let winner_payload = fs::read(&shared_path)
+        .map_err(|err| format!("read same-name race result failed: {err}"))?;
+    if winner_payload.len() != 1 || !(1..=WORKERS as u8).contains(&winner_payload[0]) {
+        return Err(format!(
+            "same-name race produced unexpected winner contents: {winner_payload:?}"
+        ));
+    }
+
     Ok(())
 }
 
