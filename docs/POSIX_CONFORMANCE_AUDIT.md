@@ -1,6 +1,6 @@
 # POSIX conformance audit
 
-Status as of FOD 3.4.380 (`68d23b7`): **requirement audit in progress; no
+Status as of FOD 3.4.384 (`b8a1e60`, 2026-10-31): **requirement audit in progress; no
 general POSIX conformance claim**.
 
 The initial matrix marks only the tested standard `lseek()` and sparse
@@ -9,7 +9,10 @@ while any applicable requirement or required error is unmapped. The P01-P12
 ledger below records the bounded closure evidence; tests collected across
 multiple FOD releases are evidence for individual cases, not a claim that the
 complete current tree passes every row. The latest broad mounted evidence
-recorded by this audit uses Linux 6.17 and libfuse 3.17.4.
+recorded by this audit uses Linux 6.17 and libfuse 3.17.4. The 3.4.384
+primary/replica regression also verifies that `open()` is denied after parent
+search permission is revoked with kernel `default_permissions` enabled; the
+kernel-side `access(X_OK)` cache behavior remains an explicit open finding.
 
 For the compact three-layer status, read
 [`compatibility-contracts.md`](compatibility-contracts.md). Linux/FUSE runtime
