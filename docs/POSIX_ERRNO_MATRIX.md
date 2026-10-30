@@ -48,7 +48,9 @@ FOD został wywołany:
   oraz `ENAMETOOLONG`, gdy ścieżka osiąga `PATH_MAX`; te kontrole zachodzą przed
   rozwiązywaniem ścieżki i callbackiem FUSE. [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py)
   sprawdza pustą ścieżkę dla `stat()`, `open()`, `mkdir()`, `unlink()` i
-  `rmdir()`.
+  `rmdir()`. Dla końcowego symlinku do katalogu z ukośnikiem test sprawdza
+  `mkdir()`=`EEXIST` oraz `unlink()`/`rmdir()`=`ENOTDIR`, potwierdzając, że
+  symlink i katalog docelowy pozostają; `stat()` i `open()` podążają do katalogu.
 - Linux v6.17 `chmod_common()` ogranicza argument `mode` przez `S_IALLUGO` i
   zachowuje istniejące bity typu inode. Montowany probe FOD z `mode=0o10000`
   (bit `S_IFIFO`) zakończył się sukcesem i ustawił prawa na `0o000`. POSIX

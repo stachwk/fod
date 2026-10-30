@@ -88,6 +88,25 @@ def main() -> None:
             linked_directory_stat = os.stat(f"{directory_link}/")
             assert linked_directory_stat.st_ino == trailing_directory.stat().st_ino
             assert linked_directory_stat.st_mode & 0o170000 == 0o040000
+            linked_directory_with_slash = f"{directory_link}/"
+            directory_fd = os.open(linked_directory_with_slash, os.O_RDONLY)
+            os.close(directory_fd)
+            expect_errno(
+                lambda: os.mkdir(linked_directory_with_slash),
+                errno.EEXIST,
+                "mkdir symlink to directory/",
+            )
+            expect_errno(
+                lambda: os.unlink(linked_directory_with_slash),
+                errno.ENOTDIR,
+                "unlink symlink to directory/",
+            )
+            expect_errno(
+                lambda: os.rmdir(linked_directory_with_slash),
+                errno.ENOTDIR,
+                "rmdir symlink to directory/",
+            )
+            assert directory_link.is_symlink() and trailing_directory.is_dir()
 
             normalized = f"{directory}//./created-with-slash/../regular-file"
             assert os.stat(normalized).st_ino == file_path.stat().st_ino
@@ -122,6 +141,7 @@ def main() -> None:
             print(
                 "OK pathname empty_path=ENOENTx5 trailing slash file=ENOTDIR "
                 "symlink_file=ENOTDIR symlink_directory=accepted "
+                "slash_symlink_dir=mkdir:EEXIST,unlink:ENOTDIR,rmdir:ENOTDIR "
                 "dotdot_repeated_separator=1 name_max_boundary=1 "
                 "non_utf8_create=EILSEQ"
             )
