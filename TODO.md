@@ -14,6 +14,11 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`fchmod()` i `fchown()` odrzucają zamknięty deskryptor.**
+  `test_lseek.py` sprawdza dokładne `EBADF` dla obu wywołań i potwierdza,
+  że tryb, właściciel, grupa oraz zawartość pliku nie ulegają zmianie. Linux
+  wykonuje tę walidację przed callbackiem FUSE.
+
 - [x] **Wątki tworzące różne typy pod tą samą nazwą mają jednego zwycięzcę.**
   Nowy test `concurrent_file_and_directory_create_at_same_name_have_one_winner`
   uruchamia 16 wyścigów między `create_new()` pliku i `mkdir()`. Sprawdza dokładnie

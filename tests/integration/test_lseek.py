@@ -117,6 +117,32 @@ def main() -> None:
                 expected_positioned_io,
             )
 
+            descriptor_metadata_path = dir_path / "invalid-descriptor-metadata.txt"
+            descriptor_metadata_path.write_bytes(b"unchanged")
+            descriptor_metadata_before = descriptor_metadata_path.stat()
+            closed_fd = os.open(descriptor_metadata_path, os.O_RDONLY)
+            os.close(closed_fd)
+            for operation in (
+                lambda: os.fchmod(closed_fd, 0o600),
+                lambda: os.fchown(closed_fd, -1, -1),
+            ):
+                try:
+                    operation()
+                except OSError as error:
+                    assert error.errno == errno.EBADF, error.errno
+                else:
+                    raise AssertionError("descriptor metadata accepted a closed fd")
+            descriptor_metadata_after = descriptor_metadata_path.stat()
+            assert stat.S_IMODE(descriptor_metadata_after.st_mode) == stat.S_IMODE(
+                descriptor_metadata_before.st_mode
+            )
+            assert (descriptor_metadata_after.st_uid, descriptor_metadata_after.st_gid) == (
+                descriptor_metadata_before.st_uid,
+                descriptor_metadata_before.st_gid,
+            )
+            assert descriptor_metadata_path.read_bytes() == b"unchanged"
+            print("OK fchmod/fchown closed descriptor errno=EBADF unchanged=1")
+
             negative_positioned_io_path = dir_path / "negative-positioned-io.txt"
             negative_positioned_io_path.write_bytes(b"unchanged")
             fd = os.open(negative_positioned_io_path, os.O_RDWR)
