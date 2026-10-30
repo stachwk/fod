@@ -261,6 +261,30 @@ else:
             )
             directory.chmod(0)
 
+            opendir_errno = run_as_nobody(
+                """
+import ctypes
+import os
+import sys
+libc = ctypes.CDLL(None, use_errno=True)
+libc.opendir.argtypes = [ctypes.c_char_p]
+libc.opendir.restype = ctypes.c_void_p
+libc.closedir.argtypes = [ctypes.c_void_p]
+libc.closedir.restype = ctypes.c_int
+ctypes.set_errno(0)
+stream = libc.opendir(os.fsencode(sys.argv[1]))
+error = ctypes.get_errno()
+if stream:
+    libc.closedir(stream)
+    print(0)
+else:
+    print(error)
+""",
+                directory,
+            )
+            assert_errno_from_nobody(
+                opendir_errno, errno.EACCES, "opendir in mode-000 directory"
+            )
             assert_permission_error(
                 run_as_nobody("import os, sys; os.listdir(sys.argv[1])", directory),
                 "readdir in mode-000 directory",

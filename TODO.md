@@ -256,6 +256,13 @@ Reading guide:
   former shell-command checks accepted any failure and did not establish errno.
   The POSIX errno matrix no longer lists sticky-directory errors for `mkdir()`,
   where that restriction does not apply.
+  `test_path_search_permissions.py` also calls libc `opendir()` as `nobody` on
+  a mode-000 directory and checks exact `EACCES`; this isolates the directory
+  stream API boundary from `os.listdir()`/`readdir()` behavior. The mounted
+  target could not run here: schema initialization refused its upgrade because
+  three FOD client sessions were active. The new FUSE assertion remains
+  unverified until it runs against an isolated/up-to-date test database; active
+  mounts were left untouched.
   Linux v6.17 source review confirms that VFS handles `rmdir(.)` as `EINVAL`,
   `rmdir(..)` as `ENOTEMPTY`, root/mountpoint removal as `EBUSY`, and a final
   symlink as `ENOTDIR` before calling FUSE; VFS also checks destination

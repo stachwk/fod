@@ -23,6 +23,9 @@ multiple disjoint ranges and meet `FOD_WORKERS_READ_MIN_BLOCKS`. The mounted
 uses 4 workers, 16 stored blocks separated by holes and 8 simultaneous readers;
 all readers verify both payload and zero-filled holes. It passed on FOD 3.4.350
 against a disposable initialized database.
+The permissions regression now invokes libc `opendir()` as `nobody` on a
+mode-000 directory and checks exact `EACCES`; its FUSE run is pending an
+isolated/up-to-date test database.
 
 Logical-task admission has multithreaded unit coverage for FIFO order, capacity
 limits, queue progress as tasks finish, and balanced completion/failure metrics.

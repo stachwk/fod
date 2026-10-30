@@ -14,6 +14,12 @@ XSI są oddzielone od wymagań bazowego zakresu FOD. Pełne przypisanie errno do
 warstwy VFS, libfuse lub FOD i regresje dla pozostałych warunków pozostają do
 sprawdzenia w P12.
 
+`test_path_search_permissions.py` now has an assertion for libc `opendir()` as
+an unprivileged user against a mode-000 directory and exact `EACCES`, distinct
+from its `os.listdir()`/`readdir()` permission assertion. The new FUSE assertion
+has not yet run because the current test database requires schema upgrade while
+three client sessions are active; see [`TODO.md`](../TODO.md).
+
 | Interfejs | POSIX: wymagane błędy w zakresie FOD | POSIX: warunkowe, `may fail` lub XSI | Dowody FOD i otwarte sprawdzenia |
 | --- | --- | --- | --- |
 | `open()` | `EACCES`, `EEXIST`, `EILSEQ` gdy `O_CREAT` nie może utworzyć nazwy nieprzenośnej, `EINTR`, `EISDIR`, `ELOOP`, `EMFILE`, `ENAMETOOLONG` dla komponentu dłuższego niż `NAME_MAX`, `ENFILE`, `ENOENT`, `ENOSPC`, `ENOTDIR`, `ENXIO` (nieblokujący zapis do FIFO bez czytelnika), `EOVERFLOW`, `EROFS`; `EINVAL` jeśli podano flagi synchronizowanego I/O, których implementacja nie obsługuje | `EAGAIN` dla zablokowanego PTY (XSI); `EINVAL` dla nieprawidłowej opcji; `ELOOP` przy przekroczeniu `SYMLOOP_MAX`; `ENAMETOOLONG` dla `PATH_MAX`; `EOPNOTSUPP` dla socketu; `ETXTBSY` dla wykonywanego pliku | `O_EXCL`, tryby deskryptora i błędy ścieżek mają regresje w [`test_mount_suite.py`](../tests/integration/test_mount_suite.py), [`test_directories.sh`](../tests/integration/test_directories.sh), [`test_symlink.sh`](../tests/integration/test_symlink.sh), [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py), [`test_df.sh`](../tests/integration/test_df.sh) i [`test_mknod.py`](../tests/integration/test_mknod.py). Test w `test_path_trailing_slash.py` sprawdza `EILSEQ` i brak aliasowania nie-UTF-8 nazwy. Limit deskryptorów, `EINTR` i `EOVERFLOW` nie mają osobnych regresji. |
