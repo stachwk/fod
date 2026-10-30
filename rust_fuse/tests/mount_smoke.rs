@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use support::{MountedFs, block_size_from_config, unique_suffix};
+use support::{block_size_from_config, unique_suffix, MountedFs};
 
 fn metadata_times(path: &Path) -> Result<(i64, i64, i64, i64), String> {
     let meta = fs::metadata(path).map_err(|err| err.to_string())?;
@@ -672,6 +672,87 @@ fn concurrent_threads_create_write_and_read_independent_files() -> Result<(), St
         return Err(format!(
             "concurrent namespace workers left entries behind: {leftover_namespace_dirs:?}"
         ));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn concurrent_read_tasks_on_sparse_file_preserve_parallel_block_ranges() -> Result<(), String> {
+    const READERS: usize = 8;
+    const STORED_BLOCKS: usize = 16;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-sparse-parallel-reads",
+        &[
+            ("FOD_FUSE_EVENT_THREADS", READERS.to_string()),
+            ("FOD_WORKERS_READ", "4".to_string()),
+            ("FOD_WORKERS_READ_MIN_BLOCKS", "1".to_string()),
+        ],
+    )?;
+    let block_size = block_size_from_config()?;
+    let path = mounted
+        .mountpoint
+        .join(format!("concurrent-sparse-read-{}.bin", unique_suffix()));
+    let file_len = (STORED_BLOCKS * 2 - 1)
+        .checked_mul(block_size)
+        .ok_or_else(|| "sparse parallel-read file size overflow".to_string())?;
+    let mut expected = vec![0; file_len];
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|err| format!("create sparse parallel-read file failed: {err}"))?;
+    file.set_len(file_len as u64)
+        .map_err(|err| format!("extend sparse parallel-read file failed: {err}"))?;
+
+    for block_index in 0..STORED_BLOCKS {
+        let marker = u8::try_from(block_index + 1)
+            .map_err(|err| format!("invalid sparse block marker: {err}"))?;
+        let block = vec![marker; block_size];
+        let offset = (block_index * 2 * block_size) as u64;
+        file.write_all_at(&block, offset)
+            .map_err(|err| format!("write sparse block {block_index} failed: {err}"))?;
+        let start = offset as usize;
+        expected[start..start + block_size].copy_from_slice(&block);
+    }
+    file.sync_all()
+        .map_err(|err| format!("sync sparse parallel-read file failed: {err}"))?;
+    drop(file);
+
+    let barrier = Arc::new(Barrier::new(READERS));
+    let readers = (0..READERS)
+        .map(|reader_id| {
+            let path = path.clone();
+            let expected = expected.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<(), String> {
+                let mut file = fs::File::open(&path)
+                    .map_err(|err| format!("reader {reader_id} open failed: {err}"))?;
+                barrier.wait();
+                let mut actual = Vec::new();
+                file.read_to_end(&mut actual)
+                    .map_err(|err| format!("reader {reader_id} read failed: {err}"))?;
+                if actual != expected {
+                    let first_mismatch = actual
+                        .iter()
+                        .zip(&expected)
+                        .position(|(actual, expected)| actual != expected);
+                    return Err(format!(
+                        "reader {reader_id} got {} bytes instead of {} with first mismatch at {first_mismatch:?}",
+                        actual.len(),
+                        expected.len()
+                    ));
+                }
+                Ok(())
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for (reader_id, reader) in readers.into_iter().enumerate() {
+        reader
+            .join()
+            .map_err(|_| format!("sparse parallel-read worker {reader_id} panicked"))??;
     }
 
     Ok(())
