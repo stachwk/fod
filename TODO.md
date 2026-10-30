@@ -96,6 +96,10 @@ Reading guide:
   `EPERM` for `mkdir()` and did not check `rmdir()`. These gaps are now covered:
   mode-000 parent operations assert exact `EACCES`, and a writable parent on a
   read-only replica asserts exact `EROFS` for both `mkdir()` and `rmdir()`.
+  `test_directories.sh` also checks exact `ELOOP` when either operation
+  traverses a symlink loop in its parent and exact `ENAMETOOLONG` when the final
+  component exceeds `NAME_MAX`; neither operation may create or remove an
+  entry in these cases.
   Linux v6.17 source review confirms that VFS handles `rmdir(.)` as `EINVAL`,
   `rmdir(..)` as `ENOTEMPTY`, root/mountpoint removal as `EBUSY`, and a final
   symlink as `ENOTDIR` before calling FUSE; VFS also checks destination
