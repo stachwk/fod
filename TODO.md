@@ -14,6 +14,17 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Concurrent FUSE flush and `ftruncate()` could fail with false `EBUSY`.**
+  A threaded mounted regression raced positioned `write()` with `ftruncate()`
+  on cloned descriptors for 24 rounds. The trace showed FLUSH and SETATTR
+  validating the same active write lease in separate PostgreSQL transactions;
+  `pg_try_advisory_xact_lock` rejected one despite both operations having the
+  valid owner token. The same race could persist a stale per-handle buffer over
+  the truncate result. Persistence now waits on the per-file advisory
+  transaction lock, and write/flush/fsync/ftruncate/release callbacks serialize
+  access to one handle's buffered state. The 24-round test and complete
+  `mount_smoke` suite passed on 2026-10-30. Cross-host write/truncate ordering
+  remains in the POSIX audit.
 - [x] **An unchanged-write check could trust stale replica bytes.** The write
   callback compared a candidate overwrite through the replica-routed slice
   reader and returned success without persistence if those old bytes matched.

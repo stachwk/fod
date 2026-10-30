@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use support::{block_size_from_config, unique_suffix, MountedFs};
+use support::{MountedFs, block_size_from_config, unique_suffix};
 
 fn metadata_times(path: &Path) -> Result<(i64, i64, i64, i64), String> {
     let meta = fs::metadata(path).map_err(|err| err.to_string())?;
@@ -849,6 +849,84 @@ fn concurrent_threads_rename_one_source_to_distinct_destinations() -> Result<(),
         if present_destinations != 1 {
             return Err(format!(
                 "expected exactly one destination in round {round}, found {present_destinations}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn concurrent_write_and_truncate_leave_a_serializable_file() -> Result<(), String> {
+    const ROUNDS: usize = 24;
+    const WORKERS: usize = 2;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-write-truncate-race",
+        &[("FOD_FUSE_EVENT_THREADS", WORKERS.to_string())],
+    )?;
+
+    for round in 0..ROUNDS {
+        let path = mounted.mountpoint.join(format!(
+            "write-truncate-race-{}-{round}.bin",
+            unique_suffix()
+        ));
+        fs::write(&path, b"seed")
+            .map_err(|err| format!("seed write/truncate race file failed: {err}"))?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|err| format!("open write/truncate race file failed: {err}"))?;
+        let writer_file = file
+            .try_clone()
+            .map_err(|err| format!("clone race writer handle failed: {err}"))?;
+        let truncate_file = file
+            .try_clone()
+            .map_err(|err| format!("clone race truncate handle failed: {err}"))?;
+        let barrier = Arc::new(Barrier::new(WORKERS));
+        let writer_barrier = Arc::clone(&barrier);
+        let writer = thread::spawn(move || -> Result<(), String> {
+            writer_barrier.wait();
+            writer_file
+                .write_at(b"AB", 0)
+                .map_err(|err| format!("concurrent pwrite failed: {err}"))
+                .and_then(|written| {
+                    if written == 2 {
+                        Ok(())
+                    } else {
+                        Err(format!("concurrent pwrite was short: {written}/2"))
+                    }
+                })
+        });
+        let truncate_barrier = Arc::clone(&barrier);
+        let truncater = thread::spawn(move || -> Result<(), String> {
+            truncate_barrier.wait();
+            truncate_file
+                .set_len(1)
+                .map_err(|err| format!("concurrent ftruncate failed: {err}"))
+        });
+
+        let write_result = writer
+            .join()
+            .map_err(|_| format!("write worker panicked in round {round}"))?;
+        if let Err(err) = write_result {
+            return Err(format!("{err}\n{}", mounted.log_tail(120)));
+        }
+        let truncate_result = truncater
+            .join()
+            .map_err(|_| format!("truncate worker panicked in round {round}"))?;
+        if let Err(err) = truncate_result {
+            return Err(format!("{err}\n{}", mounted.log_tail(120)));
+        }
+        file.sync_all()
+            .map_err(|err| format!("sync race file failed in round {round}: {err}"))?;
+
+        let actual =
+            fs::read(&path).map_err(|err| format!("read write/truncate result failed: {err}"))?;
+        if actual != b"A" && actual != b"AB" {
+            return Err(format!(
+                "round {round} produced non-serializable write/truncate result: {actual:?}"
             ));
         }
     }

@@ -13226,16 +13226,12 @@ impl DbRepo {
     ) -> Result<(), String> {
         let resource_key = CString::new(format!("fod:write:file:{file_id}"))
             .map_err(|_| "write fence advisory resource contains NUL byte".to_string())?;
-        if !Self::try_advisory_xact_lock_text_on_conn(conn, &resource_key)? {
-            return Err(format!(
-                "{} file_id={} session_id={} owner_key={} token={} advisory_busy",
-                WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX,
-                file_id,
-                fence.session_id,
-                fence.owner_key,
-                fence.file_fencing_token
-            ));
-        }
+        // Concurrent persistence callbacks for the same open handle (for
+        // example FUSE FLUSH racing with SETATTR/ftruncate) share the same
+        // valid lease. Wait for the current transaction, then validate the
+        // fence while holding the advisory lock. A try-lock here incorrectly
+        // turns ordinary same-owner concurrency into EBUSY.
+        Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
 
         let file_id_text = CString::new(file_id.to_string())
             .map_err(|_| "write fence file id contains NUL byte".to_string())?;
@@ -13285,12 +13281,10 @@ impl DbRepo {
     ) -> Result<(), String> {
         let resource_key = CString::new(format!("fod:write:file:{file_id}"))
             .map_err(|_| "legacy write advisory resource contains NUL byte".to_string())?;
-        if !Self::try_advisory_xact_lock_text_on_conn(conn, &resource_key)? {
-            return Err(format!(
-                "{} file_id={} missing_fence advisory_busy",
-                WRITE_OWNERSHIP_FENCE_REJECTED_PREFIX, file_id
-            ));
-        }
+        // Serialize the lease check with ownership acquisition and other
+        // persistence. A try-lock can report a false EBUSY for a concurrent
+        // operation that is already authorized by the same lease.
+        Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
         let file_id_text = CString::new(file_id.to_string())
             .map_err(|_| "legacy write file id contains NUL byte".to_string())?;
         let sql = CString::new(

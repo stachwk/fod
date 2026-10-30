@@ -1643,6 +1643,7 @@ pub struct FodFuse {
     path_to_inode: RwLock<HashMap<String, u64>>,
     lookup_refs: Mutex<HashMap<u64, u64>>,
     fh_table: Arc<Mutex<HashMap<u64, FileHandleState>>>,
+    handle_operation_locks: Mutex<HashMap<u64, Arc<Mutex<()>>>>,
     directory_fh_table: Mutex<HashMap<u64, Arc<Mutex<DirectoryHandleState>>>>,
     write_ownership_gate: Mutex<()>,
     pub(crate) write_states: Mutex<HashMap<u64, WriteState>>,
@@ -1805,6 +1806,7 @@ impl FodFuse {
             path_to_inode: RwLock::new(path_to_inode),
             lookup_refs: Mutex::new(HashMap::new()),
             fh_table: Arc::new(Mutex::new(HashMap::new())),
+            handle_operation_locks: Mutex::new(HashMap::new()),
             directory_fh_table: Mutex::new(HashMap::new()),
             write_ownership_gate: Mutex::new(()),
             write_states: Mutex::new(HashMap::new()),
@@ -5325,6 +5327,9 @@ impl FodFuse {
         if let Ok(mut guard) = self.write_states.lock() {
             guard.remove(&fh);
         }
+        if let Ok(mut guard) = self.handle_operation_locks.lock() {
+            guard.remove(&fh);
+        }
         if let Some(file_id) = removed_state.as_ref().and_then(|state| state.file_id) {
             if let (Some(session_id), Some(repo)) = (self.session_id, self.client_session_repo()) {
                 if let Err(err) = repo.release_file_open_lease(session_id, fh) {
@@ -5371,6 +5376,14 @@ impl FodFuse {
 
     fn remove_handle_state(&self, fh: u64) {
         let _ = self.take_handle_state(fh);
+    }
+
+    fn handle_operation_lock(&self, fh: u64) -> Arc<Mutex<()>> {
+        let mut locks = self
+            .handle_operation_locks
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        Arc::clone(locks.entry(fh).or_default())
     }
 
     fn flush_write_state_for_handle(&self, fh: u64) -> Result<bool, libc::c_int> {
@@ -7335,6 +7348,10 @@ impl Filesystem for FodFuse {
         reply: ReplyEmpty,
     ) {
         let fh = fh.0;
+        let operation_lock = self.handle_operation_lock(fh);
+        let _operation_guard = operation_lock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let lock_owner = lock_owner.0;
         let _write_profile = self.start_fuse_write_profile();
         if self.file_handle_state_for_handle(fh).is_none() {
@@ -7386,6 +7403,10 @@ impl Filesystem for FodFuse {
         reply: ReplyEmpty,
     ) {
         let fh = fh.0;
+        let operation_lock = self.handle_operation_lock(fh);
+        let _operation_guard = operation_lock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let _write_profile = self.start_fuse_write_profile();
         if self.file_handle_state_for_handle(fh).is_none() {
             fuse_reply_error!(reply, EBADF);
@@ -7780,6 +7801,10 @@ impl Filesystem for FodFuse {
         reply: ReplyEmpty,
     ) {
         let fh = fh.0;
+        let operation_lock = self.handle_operation_lock(fh);
+        let _operation_guard = operation_lock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let lock_owner = lock_owner.map(|owner| owner.0);
         let _write_profile = self.start_fuse_write_profile();
         debug!(
@@ -7843,6 +7868,13 @@ impl Filesystem for FodFuse {
     ) {
         let ino = ino.0;
         let fh = fh.map(|handle| handle.0);
+        let operation_lock = size
+            .is_some()
+            .then(|| fh.map(|fh| self.handle_operation_lock(fh)))
+            .flatten();
+        let _operation_guard = operation_lock.as_ref().map(|lock| {
+            lock.lock().unwrap_or_else(|err| err.into_inner())
+        });
         let subject = self.request_identity(req);
         let _write_profile = size.is_some().then(|| self.start_fuse_write_profile());
         if self.read_only
@@ -9233,6 +9265,10 @@ impl Filesystem for FodFuse {
             false,
         );
         self.record_write_admission_elapsed(admission_started.elapsed());
+        let operation_lock = self.handle_operation_lock(fh);
+        let _operation_guard = operation_lock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let preflight_started = Instant::now();
         if self.read_only {
             self.record_write_preflight_elapsed(preflight_started.elapsed());
