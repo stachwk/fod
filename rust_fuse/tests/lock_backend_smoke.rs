@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use support::{MountedFs, db_repo, resolve_file_id, unique_suffix};
+use support::{db_repo, mountpoint_ready, resolve_file_id, try_unmount, unique_suffix, MountedFs};
 
 extern "C" fn ignore_signal(_signal: libc::c_int) {}
 
@@ -509,6 +509,64 @@ fn malformed_active_range_lease_returns_eio_from_getlk() -> Result<(), String> {
     if rc != -1 || observed_errno != Some(libc::EIO) {
         return Err(format!(
             "F_GETLK on malformed active range lease should fail with EIO, got rc={rc} errno={observed_errno:?}"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn busy_mount_drop_preserves_shared_namespace_entries() -> Result<(), String> {
+    if skip_without_root() {
+        return Ok(());
+    }
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let mount = MountedFs::start_with_role("lock-busy-drop-primary", "primary", &[])?;
+    let suffix = unique_suffix();
+    let sentinel_name = format!("lock-busy-drop-{suffix}");
+    let sentinel_path = mount.mountpoint.join(&sentinel_name);
+    fs::create_dir(&sentinel_path).map_err(|err| format!("create sentinel failed: {err}"))?;
+    let workspace = mount.workspace.clone();
+    let mountpoint = mount.mountpoint.clone();
+    let mut cwd_holder = std::process::Command::new("sleep")
+        .arg("60")
+        .current_dir(&mountpoint)
+        .spawn()
+        .map_err(|err| format!("start mount cwd holder failed: {err}"))?;
+
+    // A process cwd inside the mount makes normal unmount return EBUSY. Drop
+    // must preserve the workspace instead of recursively deleting through the
+    // still-mounted shared namespace.
+    drop(mount);
+    let workspace_preserved = workspace.exists();
+    let mount_still_attached = mountpoint_ready(&mountpoint);
+
+    let _ = cwd_holder.kill();
+    let _ = cwd_holder.wait();
+    let detached_after_cwd_exit = try_unmount(&mountpoint);
+    if detached_after_cwd_exit {
+        let _ = fs::remove_dir_all(&workspace);
+    }
+    if !workspace_preserved || !mount_still_attached || !detached_after_cwd_exit {
+        return Err(format!(
+            "busy mount cleanup did not preserve and later detach the workspace: preserved={workspace_preserved} attached_after_drop={mount_still_attached} detached_after_cwd_exit={detached_after_cwd_exit}"
+        ));
+    }
+
+    let observer = MountedFs::start_with_role("lock-busy-drop-observer", "primary", &[])?;
+    let observed_path = observer.mountpoint.join(&sentinel_name);
+    let sentinel_preserved = observed_path.is_dir();
+    if sentinel_preserved {
+        fs::remove_dir(&observed_path)
+            .map_err(|err| format!("remove verified sentinel failed: {err}"))?;
+    }
+    drop(observer);
+    if !sentinel_preserved {
+        return Err(format!(
+            "test mount cleanup removed shared namespace sentinel {sentinel_name}"
         ));
     }
     Ok(())

@@ -333,7 +333,7 @@ pub fn mountpoint_ready(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-pub fn try_unmount(path: &Path) {
+pub fn try_unmount(path: &Path) -> bool {
     for program in ["fusermount3", "fusermount", "umount"] {
         let mut command = Command::new(program);
         if program == "umount" {
@@ -343,9 +343,10 @@ pub fn try_unmount(path: &Path) {
         }
         let _ = command.status();
         if !mountpoint_ready(path) {
-            break;
+            return true;
         }
     }
+    false
 }
 
 pub fn tail_log(path: &Path, max_lines: usize) -> String {
@@ -535,8 +536,16 @@ impl Drop for MountedFs {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        try_unmount(&self.mountpoint);
         print_profile_io_summaries_if_enabled(&self.log_path);
+        if !try_unmount(&self.mountpoint) {
+            eprintln!(
+                "FOD test mount remains attached; preserving its workspace to avoid walking into the mounted filesystem: mountpoint={} workspace={} log={}",
+                self.mountpoint.display(),
+                self.workspace.display(),
+                self.log_path.display()
+            );
+            return;
+        }
         let _ = fs::remove_dir_all(&self.workspace);
     }
 }
