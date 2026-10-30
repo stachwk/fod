@@ -41,7 +41,9 @@ The multithreaded namespace suite also races parent-directory creation against
 child-file and child-directory creation for 24 fresh names of each type. Each
 child create must either succeed after the parent is available or return
 `ENOENT`; the final path state must match the syscall result. The case is part
-of `make test-fuse-multithreaded-tasks`.
+of `make test-fuse-multithreaded-tasks`. On FOD 3.4.373, this regression and
+the eight other `mount_smoke` tests matching `concurrent_` passed in
+`release-lto` against a fresh disposable PostgreSQL database on 2026-10-30.
 The permissions regression invokes libc `opendir()` as `nobody` on a mode-000
 directory and checks exact `EACCES`; the mounted ACL and permissions tests pass.
 
