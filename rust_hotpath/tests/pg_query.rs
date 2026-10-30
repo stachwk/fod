@@ -28,15 +28,51 @@ fn selected_env_value(primary: &str, legacy: &str, default: &str) -> String {
 }
 
 fn conninfo_from_env() -> String {
+    conninfo_for_database(&selected_env_value(
+        "FOD_PG_DBNAME",
+        "POSTGRES_DB",
+        "foddbname",
+    ))
+}
+
+fn conninfo_for_database(dbname: &str) -> String {
     let host = selected_env_value("FOD_PG_HOST", "POSTGRES_HOST", "127.0.0.1");
     let port = selected_env_value("FOD_PG_PORT", "POSTGRES_PORT", "5432");
-    let dbname = selected_env_value("FOD_PG_DBNAME", "POSTGRES_DB", "foddbname");
     let user = selected_env_value("FOD_PG_USER", "POSTGRES_USER", "foduser");
     let password = selected_env_value("FOD_PG_PASSWORD", "POSTGRES_PASSWORD", "cichosza");
     format!(
         "host='{}' port='{}' dbname='{}' user='{}' password='{}'",
         host, port, dbname, user, password
     )
+}
+
+struct TemporaryDatabase {
+    admin_repo: DbRepo,
+    name: String,
+}
+
+impl TemporaryDatabase {
+    fn create() -> Result<Self, String> {
+        let admin_repo = repo_with_runtime()?;
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| err.to_string())?
+            .as_nanos();
+        let name = format!("fod_query_fault_{}_{}", std::process::id(), suffix);
+        admin_repo.exec(&format!("CREATE DATABASE {name}"))?;
+        Ok(Self { admin_repo, name })
+    }
+}
+
+impl Drop for TemporaryDatabase {
+    fn drop(&mut self) {
+        if let Err(err) = self
+            .admin_repo
+            .exec(&format!("DROP DATABASE IF EXISTS {} WITH (FORCE)", self.name))
+        {
+            eprintln!("temporary PostgreSQL database cleanup failed: {err}");
+        }
+    }
 }
 
 fn repo_with_runtime() -> Result<DbRepo, String> {
@@ -1593,6 +1629,37 @@ fn live_pg_query_helpers_work() {
     assert!(repo.count_files().unwrap() > 0);
     assert!(repo.count_directories().unwrap() > 0);
     let _ = repo.total_data_size().unwrap();
+}
+
+#[test]
+fn count_file_blocks_query_failure_is_not_zero() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let repo = DbRepo::with_runtime(&conninfo_for_database(&temporary_db.name), &runtime)?;
+
+    repo.exec("CREATE SCHEMA fod")?;
+    repo.exec(
+        "CREATE TABLE fod.files (id_file BIGINT PRIMARY KEY, data_object_id BIGINT NOT NULL)",
+    )?;
+    repo.exec("CREATE TABLE fod.data_blocks (data_object_id BIGINT NOT NULL)")?;
+    repo.exec("INSERT INTO fod.files VALUES (17, 29)")?;
+    repo.exec("INSERT INTO fod.data_blocks VALUES (29), (29)")?;
+
+    assert_eq!(repo.count_file_blocks(17)?, 2);
+    repo.exec(
+        "ALTER TABLE fod.data_blocks RENAME COLUMN data_object_id TO data_object_id_fault_probe",
+    )?;
+    let error = repo
+        .count_file_blocks(17)
+        .expect_err("a failed block-count query must not be reported as zero");
+    assert!(
+        error.contains("SQLSTATE 42703"),
+        "expected PostgreSQL undefined-column error with SQLSTATE 42703, got: {error}"
+    );
+
+    Ok(())
 }
 
 #[test]
