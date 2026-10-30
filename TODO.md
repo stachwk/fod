@@ -188,6 +188,9 @@ Reading guide:
   malformed-row regressions for these paths remain pending. A related copy-on-
   write reference-count parse fallback was removed: malformed counts now fail
   the transaction instead of defaulting to zero and deleting a data object.
+  Names-only directory snapshots now return `EIO` when a child metadata query
+  fails instead of silently omitting that name; a mounted PostgreSQL fault
+  regression remains pending.
 - [ ] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition now rejects requested and persisted types outside the supported
   shared (`1`) and exclusive (`2`) values; malformed persisted values no longer

@@ -5930,7 +5930,15 @@ impl Filesystem for FodFuse {
                         .directory_entry_metadata_for_id_and_name(directory_id, &name)
                     {
                         Ok(Some(entry)) => entry,
-                        Ok(None) | Err(_) => continue,
+                        Ok(None) => continue,
+                        Err(err) => {
+                            warn!(
+                                "FOD readdir child metadata lookup failed path={} name={} directory_id={:?} err={}",
+                                path, name, directory_id, err
+                            );
+                            fuse_reply_error!(reply, EIO);
+                            return;
+                        }
                     };
                     let kind = match entry.kind.as_str() {
                         "dir" => FileType::Directory,
