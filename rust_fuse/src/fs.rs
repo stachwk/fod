@@ -3936,7 +3936,9 @@ impl FodFuse {
                     repo.count_file_links(file_id).map_err(|_| EIO)?
                 }
                 "file" => repo.count_file_links(raw_inode).map_err(|_| EIO)?,
-                "dir" => 2 + repo.count_directory_subdirs(raw_inode).map_err(|_| EIO)?,
+                "dir" => 2u64
+                    .checked_add(repo.count_directory_subdirs(raw_inode).map_err(|_| EIO)?)
+                    .ok_or(EOVERFLOW)?,
                 _ => 1,
             };
             FileAttr {
@@ -3949,7 +3951,7 @@ impl FodFuse {
                 crtime: Self::parse_time(&chg_date)?,
                 kind,
                 perm,
-                nlink: nlink.try_into().unwrap_or(u32::MAX),
+                nlink: Self::fuse_nlink(nlink)?,
                 uid,
                 gid,
                 rdev,
@@ -4040,7 +4042,7 @@ impl FodFuse {
                 crtime: Self::parse_time(&chg_date)?,
                 kind,
                 perm,
-                nlink: nlink.try_into().unwrap_or(u32::MAX),
+                nlink: Self::fuse_nlink(nlink)?,
                 uid,
                 gid,
                 rdev,
@@ -4129,6 +4131,10 @@ impl FodFuse {
         1 + allocated_bytes.saturating_sub(1) / STAT_BLOCK_BYTES
     }
 
+    fn fuse_nlink(nlink: u64) -> Result<u32, libc::c_int> {
+        u32::try_from(nlink).map_err(|_| EOVERFLOW)
+    }
+
     fn lookup_path(&self, path: &str) -> Result<Option<ParsedAttrs>, libc::c_int> {
         let path = Self::normalize_path(path);
         if path == "/" {
@@ -4156,7 +4162,8 @@ impl FodFuse {
             .ok_or(ENOENT)?;
         let child_dirs = authority.count_root_directory_children().map_err(|_| EIO)?;
         attrs.file_attr.ino = INodeNo::ROOT;
-        attrs.file_attr.nlink = (2 + child_dirs).try_into().unwrap_or(u32::MAX);
+        let root_nlink = 2u64.checked_add(child_dirs).ok_or(EOVERFLOW)?;
+        attrs.file_attr.nlink = Self::fuse_nlink(root_nlink)?;
         Ok(attrs)
     }
 
@@ -10838,6 +10845,16 @@ mod tests {
         assert_eq!(parse_file_mode("0o4755"), Ok(0o4755));
         assert_eq!(parse_file_mode("10000"), Err(crate::errno::EIO));
         assert_eq!(parse_file_mode("broken"), Err(crate::errno::EIO));
+    }
+
+    #[test]
+    fn fuse_nlink_reports_unrepresentable_link_counts() {
+        assert_eq!(FodFuse::fuse_nlink(0), Ok(0));
+        assert_eq!(FodFuse::fuse_nlink(u32::MAX as u64), Ok(u32::MAX));
+        assert_eq!(
+            FodFuse::fuse_nlink(u32::MAX as u64 + 1),
+            Err(crate::errno::EOVERFLOW)
+        );
     }
 
     #[test]

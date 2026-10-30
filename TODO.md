@@ -1472,6 +1472,17 @@ Status: active design direction, but the main decisions below are already taken.
 
 ### POSIX Conformance Audit
 
+- [x] **`stat()` nie może po cichu obcinać `st_nlink` poza limitem FUSE.**
+  `fuse_attr.nlink` ma 32 bity (`include/uapi/linux/fuse.h`, Linux v6.17),
+  podczas gdy FOD zlicza linki w `u64`. `attrs_for_path_from_repo()` i
+  `attrs_for_open_file_id()` wcześniej zastępowały większą wartość przez
+  `u32::MAX`; `root_attr()` robił to samo dla liczby podkatalogów. Wszystkie
+  trzy ścieżki zwracają teraz `EOVERFLOW`, a sumowanie `2 + child_dirs` jest
+  sprawdzane na przepełnienie. Test jednostkowy `fuse_nlink_reports_unrepresentable_link_counts`
+  pokrywa `u32::MAX` i pierwszą nieprzedstawialną wartość. Test zamontowany
+  z miliardami wpisów nie jest praktyczny; pozostałe `stat()` pola/źródła
+  overflow nadal wymagają audytu. Zob. [macierz errno](docs/POSIX_ERRNO_MATRIX.md).
+
 - [ ] Complete the [POSIX conformance audit](docs/POSIX_CONFORMANCE_AUDIT.md) for FOD's declared filesystem API. The audit defines POSIX.1-2024 Issue 8 as its baseline, identifies Linux/FUSE extensions separately, and starts a requirement matrix. Review exact normative sections and optional/XSI applicability; classify each requirement as pending, pass, fail, not implemented, or not applicable; map it to implementation evidence and a regression or `pjdfstest` case. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
 - [x] **Keep `chmod()` and access ACL entries synchronized.** A mounted ACL regression first reproduced the defect on FOD 3.4.378: `chmod 0640` changed inode mode while leaving `ACL_USER_OBJ` and `ACL_MASK` stale. With `FUSE_POSIX_ACL` enabled, FOD now updates the owner entry plus the mask (or `ACL_GROUP_OBJ` when no mask exists) and other entry in the same PostgreSQL transaction as the inode mode change. `pg_query::chmod_updates_access_acl_and_mode_in_one_transaction` checks named-entry ACLs on files and directories and the no-mask form; `test_acl_mount_option.py` verifies the mounted file and directory behavior. Both tests passed on FOD 3.4.379 in `release-lto` against a fresh disposable PostgreSQL database on Linux 6.17/libfuse 3.17.4 on 2026-10-30. Linux v6.17's FUSE ACL code assigns inode-permission updates to userspace ([source](https://github.com/torvalds/linux/blob/v6.17/fs/fuse/acl.c#L116-L124)); its POSIX ACL chmod implementation defines the corresponding ACL entry changes ([source](https://github.com/torvalds/linux/blob/v6.17/fs/posix_acl.c#L506-L545)).
 - [x] **P07 inherit setgid parent ownership and directory mode.** Source review of Linux v6.17 `inode_init_owner()` confirms that children inherit the GID of a setgid parent and child directories always inherit `S_ISGID`; FOD previously assigned the requesting process GID and stripped setgid from every non-root mkdir. Creation now reads and locks the authoritative parent row in the same PostgreSQL namespace transaction, applies inherited GID to regular files, directories, symlinks and special files, and propagates setgid to child directories. `test_ownership_inheritance.py` passed on FOD 3.4.380 against a fresh disposable PostgreSQL 16.15 database on Linux 6.17/libfuse 3.17.4; it covers nested directories, files, symlinks, FIFOs, and umask-created objects. Linux source: [v6.17 `inode_init_owner()`](https://github.com/torvalds/linux/blob/v6.17/fs/inode.c#L2540-L2567).
