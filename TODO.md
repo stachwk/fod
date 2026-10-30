@@ -570,8 +570,13 @@ Reading guide:
   `utimensat` and checks them through `stat`, then corrupts persisted `size`,
   `mode`, `uid`, `gid` and `modification_date` one field at a time. Each
   malformed metadata row returns `EIO` from the FUSE metadata path; the test
-  restores the original row after each injection. The existing unit regression
-  verifies unknown special-file types fail closed. The full isolated
+  restores the original row after each injection. It also injects octal `10000`
+  and requires `EIO`; PostgreSQL mode lookup and path/open FUSE attribute
+  parsing enforce the permission-bit range `0o0000–0o7777`. Rust regressions
+  cover both decoders. The mounted `10000` case is added but awaits execution
+  against an isolated/up-to-date database because current schema upgrade is
+  blocked by active FOD sessions. The existing unit regression verifies
+  unknown special-file types fail closed. The full isolated
   primary/replica suite passed on 2026-10-30; results are in
   `artifacts/integration/unlink-primary-authority-20261030T104648Z/results.json`.
   Malformed PostgreSQL query results and missing hardlink/link-count rows remain

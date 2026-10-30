@@ -340,8 +340,11 @@ impl DbRepo {
                                         .to_string();
                                     if mode.is_empty() {
                                         Err("file mode is empty".to_string())
-                                    } else if u32::from_str_radix(&mode, 8).is_err() {
-                                        Err("file mode is not a valid octal value".to_string())
+                                    } else if !matches!(
+                                        u32::from_str_radix(&mode, 8),
+                                        Ok(value) if value <= 0o7777
+                                    ) {
+                                        Err("file mode is not octal or exceeds 0o7777".to_string())
                                     } else {
                                         Ok(Some(mode))
                                     }

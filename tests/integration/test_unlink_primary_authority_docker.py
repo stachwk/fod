@@ -545,6 +545,33 @@ def main():
                 )
         results["malformed_metadata_fields_return_eio"] = sorted(malformed_fields)
 
+        original_mode = query(
+            primary,
+            "SELECT mode FROM fod.files WHERE name=%s AND NOT unlinked",
+            (malformed_name,),
+        )[0][0]
+        try:
+            execute(
+                primary,
+                "UPDATE fod.files SET mode=%s WHERE name=%s AND NOT unlinked",
+                ("10000", malformed_name),
+            )
+            try:
+                os.stat(malformed_metadata_file)
+            except OSError as exc:
+                assert exc.errno == errno.EIO, (
+                    f"out-of-range mode returned errno {exc.errno}"
+                )
+            else:
+                raise AssertionError("out-of-range persisted mode was projected as valid")
+        finally:
+            execute(
+                primary,
+                "UPDATE fod.files SET mode=%s WHERE name=%s AND NOT unlinked",
+                (original_mode, malformed_name),
+            )
+        results["out_of_range_file_mode_returns_eio"] = True
+
         # Ownership on a paused replica cannot authorize chmod/chown on primary.
         seed(ma / "permission-file")
         os.link(ma / "permission-file", ma / "permission-alias")

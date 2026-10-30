@@ -352,8 +352,10 @@ rerun `mkfs.fod upgrade`; they must unmount all FOD hosts before starting an
 upgrade.
 
 PostgreSQL file-mode lookups return `None` only when the path has no matching
-row. NULL, empty, non-octal, or malformed mode results fail as
-metadata errors instead of being presented as a missing path. Broader
+row. NULL, empty, non-octal, malformed, or out-of-range modes (above `0o7777`)
+fail as metadata errors instead of being presented as a missing path or
+projected with file-type bits as permissions. FUSE validates path and open-file
+attribute modes against the same bound. Broader
 fault-injection coverage for malformed persisted rows remains in the
 [unresolved findings](../TODO.md#unresolved-findings).
 Namespace lookup and directory-entry metadata decoders reject entity ID zero;

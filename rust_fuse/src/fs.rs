@@ -77,6 +77,14 @@ const IOCTL_FS_IOC_FSGETXATTR: u32 = libc::_IOR::<[u8; IOCTL_FSXATTR_BYTES]>('X'
 const IOCTL_FS_IOC_FSSETXATTR: u32 = libc::_IOW::<[u8; IOCTL_FSXATTR_BYTES]>('X' as u32, 32) as u32;
 const IOCTL_FSXATTR_BYTES: usize = 28;
 
+fn parse_file_mode(mode: &str) -> Result<u16, libc::c_int> {
+    let mode = u16::from_str_radix(mode.trim_start_matches("0o"), 8).map_err(|_| EIO)?;
+    if mode > 0o7777 {
+        return Err(EIO);
+    }
+    Ok(mode)
+}
+
 type SharedBlockRows = Vec<(u64, Arc<[u8]>)>;
 type RecentWriteBlockKey = (u64, u64);
 
@@ -3814,7 +3822,7 @@ impl FodFuse {
             } else {
                 FileType::RegularFile
             };
-            let perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).map_err(|_| EIO)?;
+            let perm = parse_file_mode(&mode)?;
             let mut rdev = 0;
             if obj_type == "hardlink" {
                 let file_id = repo
@@ -3920,7 +3928,7 @@ impl FodFuse {
         let allocated_bytes = fields[9].parse::<u64>().map_err(|_| EIO)?;
 
         let mut kind = FileType::RegularFile;
-        let perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).map_err(|_| EIO)?;
+        let perm = parse_file_mode(&mode)?;
         let mut rdev = 0;
         if let Some((special_type, major, minor)) = authority
             .get_special_file_metadata(raw_inode)
@@ -10679,7 +10687,7 @@ impl Filesystem for FodFuse {
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_degraded_snapshot, client_session_hostname, ioctl_is_mutating,
+        assemble_degraded_snapshot, client_session_hostname, ioctl_is_mutating, parse_file_mode,
         readdir_child_entries_to_skip, should_update_atime, AtimePolicy, FodFuse,
         SetattrMutationFlags, WriteState,
     };
@@ -10688,6 +10696,14 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn persisted_file_mode_rejects_type_bits_and_malformed_values() {
+        assert_eq!(parse_file_mode("640"), Ok(0o640));
+        assert_eq!(parse_file_mode("0o4755"), Ok(0o4755));
+        assert_eq!(parse_file_mode("10000"), Err(crate::errno::EIO));
+        assert_eq!(parse_file_mode("broken"), Err(crate::errno::EIO));
+    }
 
     #[test]
     fn readdir_offsets_resume_after_the_last_cookie() {

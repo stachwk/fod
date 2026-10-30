@@ -2366,6 +2366,15 @@ fn file_mode_lookup_rejects_malformed_metadata() -> Result<(), String> {
             }
         }
 
+        repo.exec(&format!("UPDATE files SET mode = '10000' WHERE id_file = {file_id}"))?;
+        match authority.get_file_mode_value(&path) {
+            Err(error) if error.contains("0o7777") => {}
+            Err(error) => return Err(format!("unexpected out-of-range mode error: {error}")),
+            Ok(value) => {
+                return Err(format!("out-of-range file mode was accepted: {value:?}"));
+            }
+        }
+
         if authority.get_file_mode_value("/missing_file_mode_probe")?.is_some() {
             return Err("missing file mode lookup returned a value".to_string());
         }
