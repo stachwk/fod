@@ -398,6 +398,70 @@ fn primary_uses_pg_leases_and_replica_stays_memory_backed() -> Result<(), String
 }
 
 #[test]
+fn getlk_reports_zero_length_lock_through_eof() -> Result<(), String> {
+    if skip_without_root() {
+        return Ok(());
+    }
+    if !Path::new("/dev/fuse").exists() {
+        eprintln!("skipping lock backend smoke: /dev/fuse is unavailable in this environment");
+        return Ok(());
+    }
+
+    let primary_a = MountedFs::start_with_role("lock-eof-primary-a", "primary", &[])?;
+    let suffix = unique_suffix();
+    let dir_path = primary_a.mountpoint.join(format!("lock-eof-{suffix}"));
+    let file_path = dir_path.join("payload.txt");
+    fs::create_dir(&dir_path).map_err(|err| format!("create_dir failed: {err}"))?;
+    fs::write(&file_path, b"lock-through-eof").map_err(|err| format!("write failed: {err}"))?;
+
+    let fd_a = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&file_path)
+        .map_err(|err| format!("open primary A failed: {err}"))?;
+    let lock_start = 7;
+    let mut eof_lock = flock(libc::F_WRLCK as i16, lock_start, 0);
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut eof_lock).map_err(|err| {
+        format!(
+            "primary A setlk through EOF failed: {err}\n{}",
+            primary_a.log_tail(200)
+        )
+    })?;
+
+    let primary_b = MountedFs::start_with_role("lock-eof-primary-b", "primary", &[])?;
+    let fd_b = OpenOptions::new()
+        .read(true)
+        .open(
+            primary_b
+                .mountpoint
+                .join(format!("lock-eof-{suffix}/payload.txt")),
+        )
+        .map_err(|err| format!("open primary B failed: {err}\n{}", primary_b.log_tail(200)))?;
+    let observed = query_lock_range(fd_b.as_raw_fd(), libc::F_WRLCK as i16, lock_start + 1, 0)?;
+    if observed.l_type != libc::F_WRLCK as i16 {
+        return Err(format!(
+            "F_GETLK should report the conflicting EOF lock, got l_type={}",
+            observed.l_type
+        ));
+    }
+    if observed.l_start != lock_start || observed.l_len != 0 {
+        return Err(format!(
+            "F_GETLK should preserve EOF range as l_start={lock_start}, l_len=0; got l_start={}, l_len={}",
+            observed.l_start, observed.l_len
+        ));
+    }
+
+    let mut unlock = flock(libc::F_UNLCK as i16, lock_start, 0);
+    fcntl_lock(fd_a.as_raw_fd(), libc::F_SETLK, &mut unlock)
+        .map_err(|err| format!("primary A EOF unlock failed: {err}"))?;
+    drop(fd_b);
+    drop(fd_a);
+    drop(primary_b);
+    drop(primary_a);
+    Ok(())
+}
+
+#[test]
 fn primary_mounts_conflict_on_range_lock_across_hosts() -> Result<(), String> {
     if skip_without_root() {
         return Ok(());

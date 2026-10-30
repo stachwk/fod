@@ -200,8 +200,9 @@ Reading guide:
 - [ ] **Verify `F_GETLK` reports locks extending to EOF.** An unbounded
   PostgreSQL range was represented internally as `None` but the FUSE reply
   converted it to end offset `0`, truncating the reported conflict. It now uses
-  the maximum `loff_t` offset supported by Linux FUSE. Add a mounted regression
-  querying a conflicting lock whose length is zero (through EOF).
+  the maximum `loff_t` offset supported by Linux FUSE. A mounted two-primary
+  regression now queries a conflicting zero-length lock through EOF and checks
+  the returned `l_start` and `l_len`; runtime verification remains pending.
 - [ ] **Verify malformed POSIX range-lease rows fail closed.** The decoder now
   rejects unknown lock types, offsets outside the PostgreSQL `BIGINT`/Linux
   `loff_t` range, reversed ranges and malformed fields; a unit regression covers
