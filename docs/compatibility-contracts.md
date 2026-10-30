@@ -9,6 +9,14 @@ Reviewed base: commit `ea6a1bc` (`FOD 3.2.33`) and refreshed by later planning
 and `fsync` documentation commits. The current release version remains sourced
 from `fod_version.txt`.
 
+## Supported Build Architectures
+
+FOD binaries and packages are built for 64-bit and wider userspace
+architectures only. 32-bit binaries, packages and build targets are not part of
+the supported product matrix and must not be produced or published. Platform
+and ABI checks in the release process must follow this boundary; 32-bit-only
+POSIX behavior is documented as outside supported-platform coverage.
+
 ## Rust Toolchain
 
 - Minimum supported Rust version: 1.85.

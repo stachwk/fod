@@ -39,6 +39,15 @@ valid replacement for filesystem operation ordering.
 
 See `docs/FOD_ARCHITECTURE_INVARIANTS.md`.
 
+## Supported build architectures
+
+Build and package FOD only for 64-bit and wider userspace architectures. Do not
+create, compile, package, publish or add CI targets for 32-bit FOD binaries.
+Keep build instructions, release artifacts and platform support documentation
+consistent with this boundary. POSIX findings that apply only to a 32-bit ABI
+must be recorded as outside FOD's supported platform matrix; verify applicable
+overflow behavior on supported 64-bit and wider targets instead.
+
 ## Linux errno centralization
 
 `rust_fuse/src/errno.rs` is the single source of truth for Linux errno values

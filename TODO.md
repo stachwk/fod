@@ -261,24 +261,23 @@ Reading guide:
   with `EIO`. Mounted char/block-node checks covered minor values above 255 and
   the ABI boundary and compared `stat().st_rdev` major/minor; both special-node
   cases passed against temporary PostgreSQL 17.11.
-- [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
+- [ ] **P02 directory-stream errno needs remaining boundary verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's
   legacy compat `getdents` has its own inode-width check, while `getdents64`
   carries a 64-bit inode. `EBADF` for a closed descriptor is rejected by the
   kernel before FUSE; FOD's `EBADF` handles only an invalid FUSE directory
   handle. POSIX `ENOENT` for an invalid stream position is conditional; FOD
-  treats an out-of-range cookie as end-of-stream, with saturating conversion
-  so a 64-bit cookie cannot wrap on a 32-bit `usize`. Run mounted checks on each
-  supported narrow-inode ABI and verify `EOVERFLOW` conversion. The mounted
-  snapshot regression now traverses 512 initial entries and checks direct libc
-  `opendir()`/`readdir()` EOF, successful `closedir()`, and `ENOENT` from
-  `opendir()` for a missing path, and `EMFILE` after exhausting the process
-  descriptor limit; system-wide `ENFILE` and failure-path `closedir()` remain
-  unverified. This x86_64 host cannot link a 32-bit test binary: `gcc -m32`
-  reports missing `Scrt1.o`, `crti.o` and 32-bit `libgcc`; `qemu-i386` is not
-  installed. Run the `EOVERFLOW` case on a native narrow-inode Linux runner or
-  provide a working multilib/QEMU test environment before closing the ABI gap.
+  treats an out-of-range cookie as end-of-stream with a saturating conversion.
+  FOD supports userspace architectures with pointer width 64 bits or greater,
+  so 32-bit `ino_t` conversion coverage is outside the supported matrix. The
+  mounted snapshot regression now traverses 512 initial entries and checks
+  direct libc `opendir()`/`readdir()` EOF, successful `closedir()`, and `ENOENT`
+  from `opendir()` for a missing path, plus `EMFILE` after exhausting the process
+  descriptor limit. System-wide `ENFILE` and failure-path `closedir()` remain
+  unverified. Keep the remaining in-scope `ENFILE`, `closedir()` and namespace
+  errno checks on supported 64-bit-and-wider systems; do not provision or build
+  a 32-bit FOD target for the narrow-inode `EOVERFLOW` case.
   See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **P02 directory-stream snapshot behavior still needs ABI and descriptor checks.** FOD
@@ -298,8 +297,9 @@ Reading guide:
   POSIX leaves visibility of additions/removals unspecified, so the test does
   not require either membership outcome before rewind. The regression uses 512
   initial child entries and checks the libc stream boundary, including `EMFILE`.
-  Narrow-ABI `EOVERFLOW`, system-wide `ENFILE` and failure-path `closedir()`
-  behavior remain to be covered.
+  32-bit narrow-ABI `EOVERFLOW` is outside the supported architecture matrix;
+  system-wide `ENFILE` and failure-path `closedir()` behavior remain to be
+  covered on supported systems.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
