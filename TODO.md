@@ -169,8 +169,9 @@ Reading guide:
   xattrs/config. The lock-range snapshot query also treated a failed result as
   an empty lock list, which could hide conflicts; it now returns the PostgreSQL
   error instead. The affected read paths now check result status, and shared
-  helpers capture `result_error()` (including SQLSTATE) before clearing the
-  result. PostgreSQL fault-injection regressions for these paths remain pending.
+  helpers and block-read decoders capture `result_error()` (including SQLSTATE)
+  before clearing the result. PostgreSQL fault-injection regressions for these
+  paths remain pending.
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's

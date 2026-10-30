@@ -8,11 +8,11 @@
 use super::{
     conn_error, exec_params, exec_prepared_params, exec_prepared_params_with_result_format,
     fetch_first_row_texts, fetch_single_text, fetch_single_text_option, fod_profile_io_enabled,
-    fod_profile_result_decode_observe, normalize_block_bytes, DbRepo, PGresult, PQclear,
-    PQexecParams, PQgetisnull, PQgetlength, PQgetvalue, PQnfields, PQntuples, PQresultErrorMessage,
+    fod_profile_result_decode_observe, normalize_block_bytes, result_error, DbRepo, PGresult,
+    PQclear, PQexecParams, PQgetisnull, PQgetlength, PQgetvalue, PQnfields, PQntuples,
     PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
 };
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::os::raw::c_int;
 use std::sync::Arc;
 use std::time::Instant;
@@ -104,7 +104,7 @@ unsafe fn fetch_single_block_binary(
                 })
             }
         }
-        _ => Err("unexpected PostgreSQL result status".to_string()),
+        _ => Err(result_error(res)),
     };
     PQclear(res);
     result
@@ -149,7 +149,7 @@ unsafe fn fetch_block_range_rows_shared(
                 Ok(blocks)
             }
         }
-        _ => Err("unexpected PostgreSQL result status".to_string()),
+        _ => Err(result_error(res)),
     })();
     if let Some(started) = started {
         fod_profile_result_decode_observe(
@@ -171,16 +171,7 @@ unsafe fn decode_generation_block_snapshot(
 ) -> Result<GeneratedSharedBlockRows, String> {
     let result = (|| {
         if PQresultStatus(res) != PGRES_TUPLES_OK {
-            let message_ptr = PQresultErrorMessage(res);
-            let message = if message_ptr.is_null() {
-                "unknown PostgreSQL query error".to_string()
-            } else {
-                CStr::from_ptr(message_ptr)
-                    .to_string_lossy()
-                    .trim()
-                    .to_string()
-            };
-            return Err(format!("generation block snapshot query failed: {message}"));
+            return Err(result_error(res));
         }
         if PQnfields(res) != 4 {
             return Err("generation block snapshot column count mismatch".to_string());
@@ -266,21 +257,11 @@ unsafe fn fetch_block_range_with_size_rows_shared(
             blocks.sort_unstable_by_key(|(index, _)| *index);
             Ok(Some((file_size, blocks)))
         }
-        status => {
-            let message_ptr = PQresultErrorMessage(res);
-            let message = if message_ptr.is_null() {
-                "unknown PostgreSQL result error".to_string()
-            } else {
-                CStr::from_ptr(message_ptr)
-                    .to_string_lossy()
-                    .trim()
-                    .to_string()
-            };
-            Err(format!(
-                "fused file read PostgreSQL status={} error={}",
-                status, message
-            ))
-        }
+        status => Err(format!(
+            "fused file read PostgreSQL status={} error={}",
+            status,
+            result_error(res)
+        )),
     })();
     if let Some(started) = started {
         fod_profile_result_decode_observe(
