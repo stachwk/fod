@@ -123,6 +123,17 @@ def main() -> None:
                     "nobody could not create the xattr test value in mode-777 directory: "
                     f"stdout={xattr_setup.stdout!r} stderr={xattr_setup.stderr!r}"
                 )
+            owner_payload_setup = run_as_nobody(
+                "import pathlib, sys; "
+                "pathlib.Path(sys.argv[1]).write_bytes(b'parent search truncate payload')",
+                owner_file,
+            )
+            if owner_payload_setup.returncode != 0:
+                raise AssertionError(
+                    "nobody could not prepare the truncate payload: "
+                    f"stdout={owner_payload_setup.stdout!r} "
+                    f"stderr={owner_payload_setup.stderr!r}"
+                )
             metadata_owner_file = directory / "metadata-owner"
             metadata_owner_file.write_text("owner metadata\n", encoding="utf-8")
             metadata_owner_file.chmod(0o666)
@@ -205,7 +216,7 @@ else:
             readonly_file = directory / "nobody-readonly"
             readonly_setup = run_as_nobody(
                 "import os, pathlib, sys; "
-                "pathlib.Path(sys.argv[1]).touch(); "
+                "pathlib.Path(sys.argv[1]).write_bytes(b'readonly truncate payload'); "
                 "os.chmod(sys.argv[1], 0o444)",
                 readonly_file,
             )
@@ -223,12 +234,25 @@ else:
                     "nobody could not create the directory test entry in mode-777 directory: "
                     f"stdout={owner_mkdir.stdout!r} stderr={owner_mkdir.stderr!r}"
                 )
-            assert_permission_error(
+            assert_errno_from_nobody(
                 run_as_nobody(
-                    "import os, sys; os.truncate(sys.argv[1], 0)", readonly_file
+                    """
+import errno
+import os
+import sys
+try:
+    os.truncate(sys.argv[1], 0)
+except OSError as error:
+    print(error.errno)
+else:
+    print(0)
+""",
+                    readonly_file,
                 ),
+                errno.EACCES,
                 "truncate of a read-only file",
             )
+            assert readonly_file.read_bytes() == b"readonly truncate payload"
             assert_permission_error(
                 run_as_nobody(
                     "import sys; open(sys.argv[1], 'wb').close()", readonly_file
@@ -332,12 +356,27 @@ else:
                 run_as_nobody("import os, sys; os.utime(sys.argv[1], None)", owner_file),
                 "utimens of an owned file through mode-000 directory",
             )
-            assert_permission_error(
+            assert_errno_from_nobody(
                 run_as_nobody(
-                    "import os, sys; open(sys.argv[1], 'r+b').truncate()", owner_file
+                    """
+import errno
+import os
+import sys
+try:
+    os.truncate(sys.argv[1], 0)
+except OSError as error:
+    print(error.errno)
+else:
+    print(0)
+""",
+                    owner_file,
                 ),
+                errno.EACCES,
                 "truncate of an owned file through mode-000 directory",
             )
+            directory.chmod(0o777)
+            assert owner_file.read_bytes() == b"parent search truncate payload"
+            directory.chmod(0)
             for label, script in (
                 (
                     "getxattr",
@@ -364,7 +403,8 @@ else:
                 "rmdir_denied=1 chmod_denied=1 utimens_denied=1 truncate_denied=1 "
                 "nonowner_chmod_chown_errno=EPERM "
                 "access_real_uid=1 root_x_ok=0,1 "
-                "open_trunc_denied=1 readonly_truncate_denied=1 "
+                "open_trunc_denied=1 readonly_truncate_errno=EACCES "
+                "parent_truncate_errno=EACCES "
                 "getxattr_denied=1 listxattr_denied=1 setxattr_denied=1 "
                 "removexattr_denied=1"
             )

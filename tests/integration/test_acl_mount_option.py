@@ -19,6 +19,8 @@ import time
 import uuid
 from pathlib import Path
 
+import psycopg2
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -293,14 +295,37 @@ def assert_mutations_denied_to_nobody(path: Path) -> None:
     )
 
     before = path.stat()
+    before_payload = b"acl payload\n"
     expected_size = len(b"acl payload\n")
     truncate_result = subprocess.run(
-        ["sudo", "-n", "-u", "nobody", "truncate", "-s", "0", str(path)],
+        [
+            "sudo",
+            "-n",
+            "-u",
+            "nobody",
+            "python3",
+            "-c",
+            """
+import os
+import sys
+try:
+    os.truncate(sys.argv[1], 0)
+except OSError as error:
+    print(error.errno)
+else:
+    print(0)
+""",
+            str(path),
+        ],
         check=False,
         capture_output=True,
         text=True,
     )
-    assert truncate_result.returncode != 0, "ACL-denied truncate unexpectedly succeeded"
+    assert truncate_result.returncode == 0 and truncate_result.stdout.strip() == str(errno.EACCES), (
+        "ACL-denied truncate returned "
+        f"errno={truncate_result.stdout.strip()!r}, expected {errno.EACCES}; "
+        f"stderr={truncate_result.stderr!r}"
+    )
 
     timestamp_result = subprocess.run(
         ["sudo", "-n", "-u", "nobody", "touch", "-d", "@1234567890", str(path)],
@@ -312,6 +337,31 @@ def assert_mutations_denied_to_nobody(path: Path) -> None:
     after = path.stat()
     assert after.st_size == expected_size, (expected_size, after.st_size)
     assert after.st_mtime_ns == before.st_mtime_ns, (before.st_mtime_ns, after.st_mtime_ns)
+    connection = psycopg2.connect(
+        host=os.environ.get("FOD_PG_HOST") or os.environ.get("POSTGRES_HOST") or "127.0.0.1",
+        port=int(os.environ.get("FOD_PG_PORT") or os.environ.get("POSTGRES_PORT") or "5432"),
+        dbname=os.environ.get("FOD_PG_DBNAME") or os.environ.get("POSTGRES_DB") or "foddbname",
+        user=os.environ.get("FOD_PG_USER") or os.environ.get("POSTGRES_USER") or "foduser",
+        password=os.environ.get("FOD_PG_PASSWORD") or os.environ.get("POSTGRES_PASSWORD") or "cichosza",
+    )
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT d.file_size, encode(b.data, 'hex') "
+                "FROM fod.files f "
+                "JOIN fod.data_objects d ON d.id_data_object = f.data_object_id "
+                "JOIN fod.data_blocks b "
+                "  ON b.data_object_id = d.id_data_object AND b._order = 0 "
+                "WHERE f.name = %s AND NOT f.unlinked",
+                (path.name,),
+            )
+            state = cursor.fetchone()
+        assert state is not None, f"ACL-denied truncate removed payload for {path.name}"
+        database_size, block_hex = state
+        assert database_size == expected_size, (expected_size, database_size)
+        assert bytes.fromhex(block_hex).startswith(before_payload)
+    finally:
+        connection.close()
 
     omit_times = subprocess.run(
         [
@@ -530,6 +580,7 @@ def main() -> None:
 
                 print(
                     "OK acl-mount-option utimens_invalid_nsec=EINVAL "
+                    "acl_denied_truncate_errno=EACCES "
                     "parent_namespace_create_unlink_rmdir_rename=EACCES"
                 )
             finally:

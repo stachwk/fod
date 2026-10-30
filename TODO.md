@@ -14,6 +14,25 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`truncate()` odrzuca brak uprawnień z dokładnym `EACCES`.**
+  `test_path_search_permissions.py` sprawdza, że użytkownik `nobody` dostaje
+  dokładne `EACCES`, gdy plik nie ma prawa zapisu lub katalog nadrzędny nie
+  pozwala na wyszukiwanie. `test_acl_mount_option.py` potwierdza ten sam errno
+  dla ACL odmawiającego prawa zapisu. Pierwszy przebieg obu testów na FOD
+  3.4.353 potwierdził exact `EACCES`. Przy dodaniu asercji zachowania payloadu
+  kolejny przebieg zatrzymał się w setupie: test próbował zapisać jako root do
+  pliku należącego do `nobody`, a aktywne FUSE ACL zwróciło `EACCES` przed
+  właściwą asercją. Payload przygotowuje teraz `nobody`; drugi przebieg
+  potwierdził `EACCES`, ale kontrola payloadu przez ścieżkę FUSE jest zabroniona
+  przez testowaną ACL. W test harness poprawiono dwa błędy setupu/kontroli:
+  payload właściciela `nobody` tworzy teraz `nobody`, a test bez ACL przywraca
+  tryb katalogu tylko na czas kontroli bajtów; test ACL porównuje stan payloadu
+  bezpośrednio w PostgreSQL, bo FUSE słusznie odmawia odczytu pod tą ACL.
+  `test_path_search_permissions.py` i `test_acl_mount_option.py` przeszły
+  2026-10-30 na FOD 3.4.353 w osobnych jednorazowych bazach PostgreSQL;
+  asercje potwierdziły dokładne `EACCES`, niezmienione bajty i rozmiar.
+  Obie bazy zostały usunięte. Pozostają testy `EINTR`, limitu rozmiaru i błędu I/O.
+
 - [x] **Konkurujący `truncate(path)` nie zmienia pliku z aktywnym lease'em innego mounta.**
   Rozszerzono `test_stale_writer_fencing.py`: mount A utrzymuje prawidłowy
   lease zapisu, a mount B próbuje skrócić ten sam plik przez `truncate()`.

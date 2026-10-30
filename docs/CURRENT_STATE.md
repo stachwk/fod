@@ -424,6 +424,7 @@ The runtime contract is:
   holds a valid lease, without changing the payload, PostgreSQL file size,
   lease owner or fencing token; verified on FOD 3.4.352 against an isolated
   PostgreSQL database on 2026-10-30;
+- path-based `truncate()` checks write/search permissions through FOD's mode and POSIX ACL authorization path; mounted tests verify exact `EACCES` for a non-writable file, a non-searchable parent and a denying ACL, while preserving payload and size;
 - writable `open`, `O_TRUNC`, `create` and path-based `truncate`/`setattr`
   participate in the same ownership/fencing contract;
 - writable mounts require `FUSE_ATOMIC_O_TRUNC`; a kernel that cannot negotiate
