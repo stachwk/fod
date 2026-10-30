@@ -66,4 +66,8 @@ duplicating them here.
 Recent authority-audit increment: identical-write suppression and the
 non-adoption `copy_file_range` path now read source bytes from primary. A
 paused-replica regression verifies both behaviors against PostgreSQL payload
-rows. Continue the remaining mutation-precondition audit.
+rows. Truncate-boundary planning now reads its previous EOF from primary too;
+the two-mount regression pauses replica replay, extends on primary, then
+extends through the replica-routed mount and verifies preserved bytes via FUSE
+and in the primary payload row. Continue the remaining mutation-precondition
+audit; this closes one stale-read path, not the entire authority audit.

@@ -219,6 +219,70 @@ def main():
         b = FODMount(str(ROOT)); mounts.append(b)
         b.start(str(mb))
 
+        # Truncate's zero-fill planning must use the primary size, not an old
+        # size replayed on the read replica. Extending from a stale short EOF
+        # would otherwise zero bytes committed on primary after that EOF.
+        truncate_file_a = ma / "stale-replica-truncate-boundary"
+        truncate_file_b = mb / truncate_file_a.name
+        block_size = int(query(
+            primary,
+            "SELECT value::bigint FROM fod.config WHERE key = 'block_size'",
+        )[0][0])
+        if block_size % 2:
+            raise AssertionError(f"block size must be even for this regression: {block_size}")
+        old_eof = block_size // 2
+        truncate_file_a.write_bytes(b"A" * old_eof)
+        barrier()
+        assert truncate_file_b.read_bytes() == b"A" * old_eof
+        pause()
+        with truncate_file_a.open("r+b", buffering=0) as handle:
+            extension = b"B" * block_size
+            assert os.pwrite(handle.fileno(), extension, old_eof) == len(extension)
+            os.fsync(handle.fileno())
+        new_eof = 2 * block_size
+        with truncate_file_b.open("r+b", buffering=0) as handle:
+            os.ftruncate(handle.fileno(), new_eof)
+            os.fsync(handle.fileno())
+        expected_truncate = (
+            b"A" * old_eof
+            + extension
+            + b"\0" * (new_eof - old_eof - len(extension))
+        )
+        actual_truncate = truncate_file_a.read_bytes()
+        if actual_truncate != expected_truncate:
+            mismatch = next(
+                (
+                    index
+                    for index, (actual, expected) in enumerate(
+                        zip(actual_truncate, expected_truncate)
+                    )
+                    if actual != expected
+                ),
+                None,
+            )
+            raise AssertionError(
+                "truncate extension used stale replica EOF or changed primary bytes: "
+                f"actual_len={len(actual_truncate)} "
+                f"expected_len={len(expected_truncate)} mismatch={mismatch}"
+            )
+        persisted_truncate = query(
+            primary,
+            "SELECT substring(b.data FROM 1 FOR %s) "
+            "FROM fod.files f JOIN fod.data_blocks b "
+            "ON b.data_object_id=f.data_object_id AND b._order=0 "
+            "WHERE f.name=%s AND NOT f.unlinked",
+            (block_size, truncate_file_a.name),
+        )[0][0]
+        if persisted_truncate is not None:
+            persisted_truncate = bytes(persisted_truncate)
+        if persisted_truncate != expected_truncate[:block_size]:
+            raise AssertionError(
+                "truncate boundary payload differs in primary: "
+                f"actual={persisted_truncate!r} expected={expected_truncate[:block_size]!r}"
+            )
+        results["truncate_extension_uses_primary_eof_after_replica_lag"] = True
+        resume()
+
         # The unchanged-write fast path may skip persistence only after reading
         # the comparison bytes from the write authority. A paused replica still
         # has the old value while primary already has the newer bytes.

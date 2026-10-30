@@ -2,9 +2,9 @@
 // Licensed under BSL 1.1
 
 use crate::errno::persist_error_errno;
+use crate::errno::EIO;
 use crate::fs::{FodFuse, PersistFileBlocksProfileInput};
 use crate::write_payload::WritePayloadState;
-use crate::errno::EIO;
 use log::{debug, warn};
 use rust_hotpath::pg::{FileWriteAuthorization, PersistBlockRow, WritePersistenceFence};
 use rust_hotpath::{
@@ -325,13 +325,16 @@ impl FodFuse {
             return self.trim_existing_block_at_eof(state, new_size, block_size);
         }
 
-        let persisted_size = self.repo.file_size(state.file_id).map_err(|err| {
-            warn!(
-                "FOD truncate previous size lookup failed file_id={} err={}",
-                state.file_id, err
-            );
-            EIO
-        })?;
+        let persisted_size = self
+            .repo
+            .file_size_authoritative(state.file_id)
+            .map_err(|err| {
+                warn!(
+                    "FOD truncate previous size lookup failed file_id={} err={}",
+                    state.file_id, err
+                );
+                EIO
+            })?;
         let previous_size = persisted_size.unwrap_or(new_size);
 
         if previous_size < new_size {

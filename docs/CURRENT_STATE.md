@@ -347,7 +347,11 @@ unchanged-slice comparison. A stale replica match must never suppress a real
 write or supply old bytes to a copy. The mounted primary/replica regression
 pauses replay, changes the source on primary, then verifies both an overwrite
 and a partial `copy_file_range` through another mount directly in PostgreSQL.
-The broader mutation-authority audit remains active.
+Truncate-boundary planning also obtains the previous EOF from primary. A
+separate regression pauses standby replay, extends a file on primary, then
+extends it through a replica-routed mount and checks both visible contents and
+the primary payload row. It passed on 2026-10-30. The broader
+mutation-authority audit remains active.
 
 ## POSIX byte-range locks
 

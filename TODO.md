@@ -14,6 +14,17 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Granica bloku przy rozszerzeniu truncate używała rozmiaru z opóźnionej repliki.**
+  `prepare_truncate_boundary_blocks()` pobierało poprzedni EOF przez zwykły
+  read lane. Jeśli primary rozszerzył plik, a replica nie odtworzyła jeszcze
+  WAL, truncate z mountu czytającego z repliki mogło potraktować aktualne dane
+  jako przestrzeń do wyzerowania. Odczyt planujący granicę korzysta teraz z
+  `file_size_authoritative()`. Regresja w
+  `test_unlink_primary_authority_docker.py` zatrzymuje replay, rozszerza plik na
+  primary, wykonuje dalsze rozszerzenie z drugiego mountu i sprawdza wynik
+  przez FUSE oraz payload bloku w PostgreSQL primary. Przeszła 2026-10-30;
+  artefakt: `artifacts/integration/unlink-primary-authority-20261030T184010Z/`.
+
 - [x] **Operacje metadanych odrzucają zamknięty deskryptor.**
   `test_lseek.py` sprawdza dokładne `EBADF` dla `fstat()`, `fchmod()`, `fchown()`
   i `futimens()` oraz potwierdza,

@@ -460,6 +460,13 @@ using those results as mutation input could overwrite newer bytes after a
 replica lagged behind a committed writer. Existing write ownership and fencing
 serialize competing writers, while the authoritative read supplies the newest
 committed block before local edits are persisted.
+The old file size used to plan a truncate boundary is also mutation input.
+`prepare_truncate_boundary_blocks()` now reads it through
+`file_size_authoritative()`. The mounted regression pauses standby replay after
+the file grows on primary, then extends it through the replica-routed mount and
+checks both the visible bytes and the stored primary block. It passed on
+2026-10-30 in `test_unlink_primary_authority_docker.py` (artifact:
+`artifacts/integration/unlink-primary-authority-20261030T184010Z/`).
 Write and copy planning also reads current file sizes from the write authority.
 Copy source blocks and destination blocks used for deduplication are likewise
 read from primary. A replica's stale size or payload could otherwise make a
