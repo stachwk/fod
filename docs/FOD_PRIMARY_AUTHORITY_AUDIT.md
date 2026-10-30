@@ -260,7 +260,7 @@ parent ACL checks for creation and namespace removal/movement.
 | `fallocate` hole punching, clone/copy adoption | Primary persistence APIs with a write fence | Hole-punch fencing regression passed; adoption also validates its destination fence in the primary transaction |
 | Open/client sessions, ownership and heartbeat | `with_control_connection` -> the same primary targets; normal read-only mounts use a writable control repo | Remote open/unlink/recreate test passed with distinct inode generations and old-handle writes isolated from the replacement |
 | `rename` / replace | Primary transaction with destination/file locks and source/target revalidation | Source inspection confirms transaction guards; test details are recorded below |
-| `lookup`/`opendir` and namespace parent identity | Current parent inode is verified against primary metadata before resolving children or opening a directory snapshot | `lookup` rejects a cached parent path whose current directory inode differs; `opendir` now checks the requested inode against primary before snapshot creation. `readdir` continues from its per-open snapshot, which remains read-routed. `unlink`/`rmdir` also compare the resolved entry's parent ID. A two-mount stale-inode `opendir` regression remains pending. |
+| `lookup`/`opendir` and namespace parent identity | Current parent inode is verified against primary metadata before resolving children or opening a directory snapshot | `lookup` rejects a cached parent path whose current directory inode differs; `opendir` checks the requested inode against primary before snapshot creation. The handle retains its PostgreSQL directory ID, used for initial/rewind snapshots, names-mode child metadata and atime writes, so path reuse cannot redirect an old handle. Snapshot reads remain routed by the configured read repository. `unlink`/`rmdir` also compare the resolved entry's parent ID. Two-mount stale-inode and open-handle remove/recreate regressions remain pending. |
 | `create`, mkdir, mknod, link, symlink | Shared destination advisory lock, cross-table vacancy check and parent write/search authorization in the primary insertion transaction | All 40 root/nested cross-type conflicts, concurrent creators and directory/FIFO ID separation passed; parent authorization and inode identity are checked against primary metadata |
 | `rmdir` | Primary namespace/row locks, sticky-bit check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
 | Sticky bit on unlink/rmdir/rename | Parent/victim owner row locks inside the primary mutation transaction | Concurrent parent permission commit and nine stale-replica cases passed |
@@ -526,8 +526,12 @@ could therefore let a stale FUSE directory inode open and snapshot the
 replacement directory. `opendir()` now validates the inode/path pair through
 the primary-backed `authoritative_entry_attrs_for_ino()` before creating the
 configured read snapshot. The snapshot remains read-routed after this identity
-check. A mounted two-mount regression is still required; the source-level fix
-has not been validated at runtime.
+check. A follow-up review found that refreshing an already-open stream by path
+could also attach a replacement directory on rewind. FOD now keeps the
+PostgreSQL directory ID on the handle and uses it for snapshots, names-mode
+child lookups and atime updates. A mounted two-mount regression covering stale
+`opendir()` and remove/recreate during an open stream/rewind is still required;
+the source-level fixes have not been validated at runtime.
 
 These items are source-review findings and test gaps; do not describe them as
 additional reproduced data-loss cases.

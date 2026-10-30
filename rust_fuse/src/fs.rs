@@ -297,6 +297,8 @@ struct FileHandleState {
 struct DirectoryHandleState {
     ino: u64,
     path: String,
+    directory_id: Option<u64>,
+    attrs: FileAttr,
     parent_ino: u64,
     entries: DirectoryEntrySnapshot,
     highest_requested_offset: u64,
@@ -4160,6 +4162,38 @@ impl FodFuse {
         );
     }
 
+    fn touch_directory_access_time_by_id(
+        &self,
+        directory_id: u64,
+        file_attr: &FileAttr,
+    ) -> Option<SystemTime> {
+        if self.read_only || !should_update_atime(self.atime_policy, true, file_attr) {
+            return None;
+        }
+        if self.atime_policy == AtimePolicy::Default {
+            if let Ok(age) = Self::current_time().duration_since(file_attr.atime) {
+                if age < ATIME_TOUCH_INTERVAL {
+                    return None;
+                }
+            }
+        }
+        let now = Self::current_time();
+        let atime = Self::system_time_to_db_string(now);
+        match self
+            .repo
+            .update_directory_access_date(directory_id, &atime)
+        {
+            Ok(()) => Some(now),
+            Err(err) => {
+                warn!(
+                    "FOD directory atime touch failed directory_id={} err={}",
+                    directory_id, err
+                );
+                None
+            }
+        }
+    }
+
     fn touch_access_time(&self, path: &str, file_attr: &FileAttr) {
         // A read-only mount is observation-only. Never emit automatic
         // metadata DML to a PostgreSQL physical replica.
@@ -5636,14 +5670,19 @@ impl Filesystem for FodFuse {
 
     fn opendir(&self, req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
         let ino = ino.0;
-        let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
+        let (path, parsed_attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
             Ok(value) => value,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        let attrs = attrs.file_attr;
+        let directory_id = if ino == ROOT_INO {
+            None
+        } else {
+            Some(parsed_attrs.xattr_owner_id)
+        };
+        let attrs = parsed_attrs.file_attr;
         if attrs.kind != FileType::Directory {
             fuse_reply_error!(reply, ENOTDIR);
             return;
@@ -5665,7 +5704,10 @@ impl Filesystem for FodFuse {
         let metadata_profile_enabled = fod_fuse_profile_metadata_cache_enabled();
         let snapshot_started = metadata_profile_enabled.then(Instant::now);
         let entries = if fod_fuse_readdir_batch_metadata_enabled() {
-            match self.repo.list_directory_entry_metadata(&path) {
+            match self
+                .repo
+                .list_directory_entry_metadata_for_id(directory_id)
+            {
                 Ok(entries) => DirectoryEntrySnapshot::Metadata(entries),
                 Err(err) => {
                     warn!("FOD opendir metadata snapshot failed path={} err={}", path, err);
@@ -5674,7 +5716,7 @@ impl Filesystem for FodFuse {
                 }
             }
         } else {
-            match self.repo.list_directory_entries_blob(&path) {
+            match self.repo.list_directory_entries_blob_for_id(directory_id) {
                 Ok(Some(blob)) => DirectoryEntrySnapshot::Names(Self::decode_nul_fields(&blob)),
                 Ok(None) => DirectoryEntrySnapshot::Names(Vec::new()),
                 Err(err) => {
@@ -5704,6 +5746,8 @@ impl Filesystem for FodFuse {
         let state = DirectoryHandleState {
             ino,
             path,
+            directory_id,
+            attrs,
             parent_ino,
             entries,
             highest_requested_offset: 0,
@@ -5735,7 +5779,7 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EBADF);
             return;
         };
-        let (path, parent_ino, entries) = {
+        let (path, directory_id, parent_ino, entries) = {
             let mut state = state.lock().unwrap_or_else(|err| err.into_inner());
             if state.ino != ino {
                 fuse_reply_error!(reply, EBADF);
@@ -5745,7 +5789,10 @@ impl Filesystem for FodFuse {
             // per-open snapshot once so a restarted stream sees current names.
             if offset == 0 && state.highest_requested_offset > 0 {
                 state.entries = if fod_fuse_readdir_batch_metadata_enabled() {
-                    match self.repo.list_directory_entry_metadata(&state.path) {
+                    match self
+                        .repo
+                        .list_directory_entry_metadata_for_id(state.directory_id)
+                    {
                         Ok(entries) => DirectoryEntrySnapshot::Metadata(entries),
                         Err(err) => {
                             warn!(
@@ -5757,7 +5804,10 @@ impl Filesystem for FodFuse {
                         }
                     }
                 } else {
-                    match self.repo.list_directory_entries_blob(&state.path) {
+                    match self
+                        .repo
+                        .list_directory_entries_blob_for_id(state.directory_id)
+                    {
                         Ok(Some(blob)) => {
                             DirectoryEntrySnapshot::Names(Self::decode_nul_fields(&blob))
                         }
@@ -5775,7 +5825,12 @@ impl Filesystem for FodFuse {
                 state.highest_requested_offset = 0;
             }
             state.highest_requested_offset = state.highest_requested_offset.max(offset);
-            (state.path.clone(), state.parent_ino, state.entries.clone())
+            (
+                state.path.clone(),
+                state.directory_id,
+                state.parent_ino,
+                state.entries.clone(),
+            )
         };
         self.log_request_start(
             req_id,
@@ -5828,16 +5883,32 @@ impl Filesystem for FodFuse {
                     .enumerate()
                     .skip(readdir_child_entries_to_skip(offset))
                 {
-                    let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
-                    let attrs = match self.lookup_path(&child_path) {
-                        Ok(Some(attrs)) => attrs.file_attr,
+                    let entry = match self
+                        .repo
+                        .directory_entry_metadata_for_id_and_name(directory_id, &name)
+                    {
+                        Ok(Some(entry)) => entry,
                         Ok(None) | Err(_) => continue,
                     };
+                    let kind = match entry.kind.as_str() {
+                        "dir" => FileType::Directory,
+                        "symlink" => FileType::Symlink,
+                        "file" | "hardlink" => entry
+                            .special_type
+                            .as_deref()
+                            .map(Self::file_type_from_special)
+                            .unwrap_or(FileType::RegularFile),
+                        _ => continue,
+                    };
+                    let inode =
+                        self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
                     if fod_fuse_readdir_register_paths_enabled() {
-                        self.register_path(&child_path, attrs.ino.0);
+                        let child_path =
+                            Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
+                        self.register_path(&child_path, inode);
                     }
                     emitted = emitted.saturating_add(1);
-                    if reply.add(attrs.ino, (index + 3) as u64, attrs.kind, name) {
+                    if reply.add(INodeNo(inode), (index + 3) as u64, kind, name) {
                         break;
                     }
                 }
@@ -5855,8 +5926,25 @@ impl Filesystem for FodFuse {
             self.atime_policy,
             AtimePolicy::NoAtime | AtimePolicy::Nodiratime
         ) {
-            if let Ok(Some(attrs)) = self.attrs_for_path(&path) {
-                self.touch_access_time(&path, &attrs.file_attr);
+            if let Some(directory_id) = directory_id {
+                let state = self
+                    .directory_fh_table
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .get(&fh.0)
+                    .cloned();
+                if let Some(state) = state {
+                    let mut state = state.lock().unwrap_or_else(|err| err.into_inner());
+                    if let Some(atime) =
+                        self.touch_directory_access_time_by_id(directory_id, &state.attrs)
+                    {
+                        state.attrs.atime = atime;
+                    }
+                }
+            } else if let Ok(Some(current_attrs)) = self.attrs_for_path(&path) {
+                if current_attrs.file_attr.ino.0 == ino {
+                    self.touch_access_time(&path, &current_attrs.file_attr);
+                }
             }
         }
         reply.ok();

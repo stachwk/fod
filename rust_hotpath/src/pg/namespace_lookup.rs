@@ -580,6 +580,13 @@ impl DbRepo {
             DirectoryLookup::Directory(id) => Some(id),
             DirectoryLookup::Missing => return Ok(Vec::new()),
         };
+        self.list_directory_entry_metadata_for_id(parent_id)
+    }
+
+    pub fn list_directory_entry_metadata_for_id(
+        &self,
+        parent_id: Option<u64>,
+    ) -> Result<Vec<DirectoryEntryMetadata>, String> {
         let (sql, params) = if let Some(parent_id) = parent_id {
             (
                 CString::new(
@@ -653,6 +660,13 @@ impl DbRepo {
             DirectoryLookup::Directory(id) => Some(id),
             DirectoryLookup::Missing => return Ok(None),
         };
+        self.list_directory_entries_blob_for_id(parent_id)
+    }
+
+    pub fn list_directory_entries_blob_for_id(
+        &self,
+        parent_id: Option<u64>,
+    ) -> Result<Option<Vec<u8>>, String> {
         let (sql, params) = if let Some(parent_id) = parent_id {
             (
                 CString::new(
@@ -695,6 +709,57 @@ impl DbRepo {
             let res = exec_params(conn, &sql, &param_refs)?;
             let names = fetch_first_column_texts(res)?;
             Ok(Some(join_nul_text(&names)))
+        })
+    }
+
+    pub fn directory_entry_metadata_for_id_and_name(
+        &self,
+        parent_id: Option<u64>,
+        name: &str,
+    ) -> Result<Option<DirectoryEntryMetadata>, String> {
+        let parent_id = CString::new(parent_id.unwrap_or(0).to_string())
+            .map_err(|_| "directory id contains NUL byte".to_string())?;
+        let name = CString::new(name).map_err(|_| "entry name contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "
+            SELECT name, kind, entry_id, inode_seed, special_type
+            FROM (
+                SELECT f.name, 'file'::text AS kind, f.id_file AS entry_id,
+                       f.inode_seed, COALESCE(sf.file_type, '') AS special_type
+                FROM files f
+                LEFT JOIN special_files sf ON sf.id_file = f.id_file
+                WHERE COALESCE(f.id_directory, 0) = $1 AND NOT f.unlinked
+                UNION ALL
+                SELECT h.name, 'hardlink'::text, h.id_hardlink, f.inode_seed,
+                       COALESCE(sf.file_type, '')
+                FROM hardlinks h
+                JOIN files f ON f.id_file = h.id_file
+                LEFT JOIN special_files sf ON sf.id_file = f.id_file
+                WHERE COALESCE(h.id_directory, 0) = $1 AND NOT f.unlinked
+                UNION ALL
+                SELECT d.name, 'dir'::text, d.id_directory, d.inode_seed, ''::text
+                FROM directories d
+                WHERE COALESCE(d.id_parent, 0) = $1 AND d.name != '/'
+                UNION ALL
+                SELECT s.name, 'symlink'::text, s.id_symlink, s.inode_seed, ''::text
+                FROM symlinks s
+                WHERE COALESCE(s.id_parent, 0) = $1
+            ) entries
+            WHERE name = $2
+            ORDER BY kind
+            LIMIT 1
+            ",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+
+        self.with_read_connection(|conn| unsafe {
+            let rows = fetch_rows_text(exec_params(conn, &sql, &[&parent_id, &name])?)?;
+            let mut entries = parse_directory_entry_metadata_rows(rows)?;
+            Ok(if entries.is_empty() {
+                None
+            } else {
+                Some(entries.remove(0))
+            })
         })
     }
 

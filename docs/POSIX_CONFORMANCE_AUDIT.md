@@ -215,14 +215,16 @@ incoming offset. The mounted small-buffer regression uses 64-byte
 
 POSIX.1-2024 `readdir()` explicitly leaves unspecified whether an entry added
 or removed after the latest `opendir()` or `rewinddir()` is returned by a later
-call. FOD now pins an ordered entry snapshot to each `opendir()` handle, uses it
-for continuation requests, refreshes it when cookie zero rewinds an already
-iterated stream, and releases it in `releasedir()`. This prevents membership
-changes on another mount from shifting positional cookies during continuation.
-No regression should assert whether a newly added or removed name appears
-before rewind. Mounted continuation, concurrent mutation and rewind coverage
-remain open; P02 stays Pending until those regressions and the libc/kernel/FUSE
-error attribution work are complete. See [POSIX.1-2024 `readdir()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/readdir.html).
+call. FOD now pins an ordered entry snapshot to each `opendir()` handle and the
+PostgreSQL directory ID captured for that handle. Continuation and rewind use
+that ID; names-mode child metadata and directory atime updates do too. Rewind
+refreshes the snapshot when cookie zero restarts an iterated stream, and
+`releasedir()` frees the state. Thus path reuse after remote remove/recreate
+cannot redirect an old handle to a replacement directory. No regression should
+assert whether a newly added or removed name appears before rewind. Mounted
+continuation, concurrent mutation, rewind and remove/recreate coverage remain
+open; P02 stays Pending until those regressions and the libc/kernel/FUSE error
+attribution work are complete. See [POSIX.1-2024 `readdir()`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/readdir.html).
 
 The POSIX `readdir()` errors cross several layers. POSIX requires `EOVERFLOW`
 when a value cannot fit the returned `struct dirent`; for FOD, the inode number

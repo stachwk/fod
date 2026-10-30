@@ -135,11 +135,15 @@ Reading guide:
   remote remove/recreate at that path, the old FUSE inode could open the
   replacement directory and snapshot its names. `opendir()` now validates the
   inode/path identity through `authoritative_entry_attrs_for_ino()` before
-  taking its configured read snapshot. Add a two-mount remove/recreate
-  regression verifying that stale-inode `opendir()` fails and a fresh lookup
-  opens the replacement. Source-level fix is in place; mounted reproduction is
-  not yet verified. The directory snapshot remains read-routed by the
-  configured repository after identity validation.
+  taking its configured read snapshot. Directory handles now retain the
+  PostgreSQL directory ID: initial and rewind snapshots, names-mode child
+  lookups and directory atime updates use that ID, so a remote replacement at
+  the same path cannot be attached to the old handle. Add a two-mount
+  remove/recreate regression verifying that stale-inode `opendir()` fails,
+  readdir/rewind on an already-open old handle never lists the replacement,
+  and a fresh lookup opens it. Source-level fixes are in place; mounted
+  reproduction is not yet verified. Snapshot reads remain on the configured
+  read route, consistent with the mount's read-routing policy.
 - [ ] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
   mutations.** `errno.rs` maps PostgreSQL `53100` (`disk_full`) to `ENOSPC` in
   both persistence and namespace error mappers. File-block persistence also
@@ -170,12 +174,15 @@ Reading guide:
   now pins an ordered PostgreSQL snapshot to each `opendir()` handle (full
   metadata by default, names when `FOD_READDIR_BATCH_METADATA=0`), uses it for
   continuation requests, refreshes it on `rewinddir()` (cookie zero
-  after stream progress), and releases it in `releasedir()`. This prevents
-  positional cookies from shifting when another mount changes directory
-  membership. Verify continuation and rewind with mounted FUSE operations,
-  including concurrent add/remove and large directories; POSIX leaves
-  visibility of additions/removals unspecified, so assert stable unaffected
-  entries and no cookie-induced repeats/skips rather than membership policy.
+  after stream progress), binds each snapshot to the PostgreSQL directory ID
+  captured at `opendir()`, and releases it in `releasedir()`. Names-mode child
+  lookups and atime updates use the same ID. This prevents positional cookies
+  from shifting when another mount changes directory membership and prevents
+  an old handle from switching to a replacement directory at the same path.
+  Verify continuation, rewind and remove/recreate with mounted FUSE operations,
+  including concurrent add/remove and large directories; POSIX leaves visibility
+  of additions/removals unspecified, so assert stable unaffected entries and
+  no cookie-induced repeats/skips rather than membership policy.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
