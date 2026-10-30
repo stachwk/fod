@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import errno
+import io
 import json
 import os
 from pathlib import Path
@@ -156,6 +158,35 @@ def main():
                 )
                 barrier()
 
+        def expect_startup_failure_with_renamed_config_value():
+            execute(
+                primary,
+                "ALTER TABLE fod.config RENAME COLUMN value TO value_fault_probe",
+            )
+            try:
+                barrier()
+                broken_mount = FODMount(str(ROOT))
+                mounts.append(broken_mount)
+                mountpoint = temp / "config-read-fault"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    try:
+                        broken_mount.start(str(mountpoint))
+                    except RuntimeError:
+                        pass
+                    else:
+                        raise AssertionError(
+                            "mount started despite a failed PostgreSQL config read"
+                        )
+                log = broken_mount.config.log_file.read_text(encoding="utf-8")
+                assert "SQLSTATE 42703" in log, log[-4000:]
+                assert 'column "value" does not exist' in log, log[-4000:]
+            finally:
+                execute(
+                    primary,
+                    "ALTER TABLE fod.config RENAME COLUMN value_fault_probe TO value",
+                )
+                barrier()
+
         def visible(name):
             return query(primary, "SELECT (SELECT count(*) FROM fod.files WHERE name=%s AND NOT unlinked) + (SELECT count(*) FROM fod.hardlinks WHERE name=%s)", (name, name))[0][0]
 
@@ -187,6 +218,9 @@ def main():
                 os.environ.pop("FOD_READDIR_BATCH_METADATA", None)
             else:
                 os.environ["FOD_READDIR_BATCH_METADATA"] = previous_batch_metadata
+
+        expect_startup_failure_with_renamed_config_value()
+        results["startup_config_query_failure_aborts_mount"] = True
 
         link_count_fault_file = ma / "link-count-query-fault"
         seed(link_count_fault_file)
