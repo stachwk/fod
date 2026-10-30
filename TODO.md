@@ -14,6 +14,14 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Sprawdzono `pwrite()` przy przepełnieniu maksymalnego `off_t`.**
+  `test_lseek.py` próbuje dwubajtowego `pwrite()` od `OFF_T_MAX`; na zamontowanym
+  FOD Linux zwraca `EINVAL`, zachowuje offset deskryptora i nie zmienia pliku.
+  Źródło Linux v6.17 `rw_verify_area()` potwierdza, że ten overflow jest
+  odrzucany przed callbackiem systemu plików, więc FOD nie może zmienić errno.
+  POSIX matrix rejestruje różnicę wobec `EFBIG` opisanego dla limitu rozmiaru;
+  to zachowanie należy traktować jako warstwę Linux, nie FOD. Test
+  `make test-lseek` przeszedł na FOD 3.4.317 (2026-10-30).
 - [x] **`truncate()` i `ftruncate()` aktualizują `mtime` oraz `ctime`.**
   `test_truncate_shrink_block_boundary.py` sprawdza oba znaczniki po
   skróceniu ścieżką oraz po skróceniu i rozszerzeniu przez deskryptor. Przed

@@ -8,6 +8,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import os
+import struct
 import stat
 import tempfile
 import time
@@ -137,6 +138,26 @@ def main() -> None:
             finally:
                 os.close(fd)
             assert negative_positioned_io_path.read_bytes() == b"unchanged"
+
+            off_t_overflow_path = dir_path / "off-t-overflow-pwrite.txt"
+            off_t_overflow_path.write_bytes(b"unchanged")
+            fd = os.open(off_t_overflow_path, os.O_RDWR)
+            try:
+                assert os.lseek(fd, 2, os.SEEK_SET) == 2
+                off_t_max = (1 << (8 * struct.calcsize("P") - 1)) - 1
+                try:
+                    os.pwrite(fd, b"XY", off_t_max)
+                except OSError as error:
+                    # Linux rw_verify_area() rejects pos + count signed
+                    # overflow before dispatching the operation to FUSE.
+                    assert error.errno == errno.EINVAL, error.errno
+                else:
+                    raise AssertionError("pwrite beyond signed off_t succeeded")
+                assert os.lseek(fd, 0, os.SEEK_CUR) == 2
+            finally:
+                os.close(fd)
+            assert off_t_overflow_path.read_bytes() == b"unchanged"
+            print("OK pwrite signed off_t overflow errno=EINVAL unchanged=1")
 
             fd = os.open(positioned_io_path, os.O_WRONLY)
             try:
