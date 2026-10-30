@@ -142,17 +142,18 @@ Reading guide:
   the negative lookup cache, and passed on 2026-10-30. See
   [`runtime configuration`](docs/runtime-configuration.md#entry_timeout_seconds)
   and [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
-- [ ] **Investigate `utimens_noop` ctime change in the FUSE profile smoke test.**
-  On 2026-10-30, `cargo test -p fod-rust-fuse --offline` failed
-  `profile_smoke::utimens_noop` because the file ctime changed after
-  `utimensat()` was called with the file's existing atime/mtime; the isolated
-  rerun reproduced the same failure. This is outside the cache-timeout change.
-  The failing assertion establishes the observable result, but the test
-  currently provides no syscall trace or FUSE callback values, so the cause is
-  undetermined. Capture before/after kernel timestamps and the `SETATTR` request
-  fields, then compare Linux and FOD no-op timestamp semantics before changing
-  the callback or expectation. See
-  [`profile smoke test`](rust_fuse/tests/profile_smoke.rs).
+- [x] **Align the `utimens` same-value test with POSIX ctime semantics.** On
+  2026-10-30, `profile_smoke::utimens_noop` failed because it expected ctime to
+  stay unchanged when `utimensat()` was given the existing atime and mtime.
+  POSIX requires a successful `utimensat()` to mark ctime for update, and Linux
+  v6.17 sets `ATTR_CTIME` for this operation. FOD's PostgreSQL update was
+  correct; the test's “no-op” expectation was wrong. It now verifies that the
+  requested atime/mtime remain unchanged and ctime does not move backwards for
+  files and directories. The POSIX rule is documented in the
+  [Open Group futimens specification](https://pubs.opengroup.org/onlinepubs/9799919799/functions/futimens.html);
+  Linux implementation evidence is in
+  [`fs/utimes.c`](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git/+/refs/tags/v6.17/fs/utimes.c#44)
+  and [`fs/attr.c`](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git/+/refs/tags/v6.17/fs/attr.c).
 - [x] **Mounted stale-inode directory replacement regression.** On
   2026-10-30, source review found that `opendir()` fetched attributes through
   the replica-routed repository without checking whether the locally cached

@@ -439,7 +439,7 @@ fn copy_block_crc_table() -> Result<(), String> {
 }
 
 #[test]
-fn utimens_noop() -> Result<(), String> {
+fn utimens_preserves_explicit_atime_mtime() -> Result<(), String> {
     let _guard = profile_smoke_lock();
     let mounted = MountedFs::start("utimens-noop")?;
     let suffix = unique_suffix();
@@ -470,8 +470,8 @@ fn utimens_noop() -> Result<(), String> {
     if (same_mtime, same_mtime_nsec) != (before_mtime, before_mtime_nsec) {
         return Err("file mtime changed on no-op utimens".to_string());
     }
-    if (same_ctime, same_ctime_nsec) != (before_ctime, before_ctime_nsec) {
-        return Err("file ctime changed on no-op utimens".to_string());
+    if (same_ctime, same_ctime_nsec) < (before_ctime, before_ctime_nsec) {
+        return Err("file ctime went backwards on utimens".to_string());
     }
 
     utimens(
@@ -517,8 +517,8 @@ fn utimens_noop() -> Result<(), String> {
     if (same_dir_mtime, same_dir_mtime_nsec) != (dir_mtime, dir_mtime_nsec) {
         return Err("dir mtime changed on no-op utimens".to_string());
     }
-    if (same_dir_ctime, same_dir_ctime_nsec) != (dir_ctime, dir_ctime_nsec) {
-        return Err("dir ctime changed on no-op utimens".to_string());
+    if (same_dir_ctime, same_dir_ctime_nsec) < (dir_ctime, dir_ctime_nsec) {
+        return Err("dir ctime went backwards on utimens".to_string());
     }
 
     utimens(
