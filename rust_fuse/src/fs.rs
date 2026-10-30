@@ -5636,24 +5636,14 @@ impl Filesystem for FodFuse {
 
     fn opendir(&self, req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
         let ino = ino.0;
-        let path = match self.entry_path_for_ino(ino) {
-            Ok(path) => path,
+        let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
+            Ok(value) => value,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        let attrs = match self.attrs_for_path(&path) {
-            Ok(Some(attrs)) => attrs.file_attr,
-            Ok(None) => {
-                fuse_reply_error!(reply, ENOENT);
-                return;
-            }
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
-            }
-        };
+        let attrs = attrs.file_attr;
         if attrs.kind != FileType::Directory {
             fuse_reply_error!(reply, ENOTDIR);
             return;

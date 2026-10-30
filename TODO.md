@@ -128,6 +128,18 @@ Reading guide:
   get/list behavior, plus `fgetxattr(user.*)` on an open-unlinked inode with
   ACLs enabled, before closing the finding. See
   [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
+- [ ] **Mounted stale-inode directory-open regression is still missing.** On
+  2026-10-30, source review found that `opendir()` fetched attributes through
+  the replica-routed repository without checking whether the locally cached
+  path still resolved to the requested directory inode on primary. After a
+  remote remove/recreate at that path, the old FUSE inode could open the
+  replacement directory and snapshot its names. `opendir()` now validates the
+  inode/path identity through `authoritative_entry_attrs_for_ino()` before
+  taking its configured read snapshot. Add a two-mount remove/recreate
+  regression verifying that stale-inode `opendir()` fails and a fresh lookup
+  opens the replacement. Source-level fix is in place; mounted reproduction is
+  not yet verified. The directory snapshot remains read-routed by the
+  configured repository after identity validation.
 - [ ] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
   mutations.** `errno.rs` maps PostgreSQL `53100` (`disk_full`) to `ENOSPC` in
   both persistence and namespace error mappers. File-block persistence also

@@ -260,7 +260,7 @@ parent ACL checks for creation and namespace removal/movement.
 | `fallocate` hole punching, clone/copy adoption | Primary persistence APIs with a write fence | Hole-punch fencing regression passed; adoption also validates its destination fence in the primary transaction |
 | Open/client sessions, ownership and heartbeat | `with_control_connection` -> the same primary targets; normal read-only mounts use a writable control repo | Remote open/unlink/recreate test passed with distinct inode generations and old-handle writes isolated from the replacement |
 | `rename` / replace | Primary transaction with destination/file locks and source/target revalidation | Source inspection confirms transaction guards; test details are recorded below |
-| `lookup`/`readdir` and namespace parent identity | Current parent inode is verified against primary metadata before resolving children or mutating its namespace | Namespace callbacks reject a cached parent path whose current directory inode differs; `unlink`/`rmdir` also compare the resolved entry's parent ID |
+| `lookup`/`opendir` and namespace parent identity | Current parent inode is verified against primary metadata before resolving children or opening a directory snapshot | `lookup` rejects a cached parent path whose current directory inode differs; `opendir` now checks the requested inode against primary before snapshot creation. `readdir` continues from its per-open snapshot, which remains read-routed. `unlink`/`rmdir` also compare the resolved entry's parent ID. A two-mount stale-inode `opendir` regression remains pending. |
 | `create`, mkdir, mknod, link, symlink | Shared destination advisory lock, cross-table vacancy check and parent write/search authorization in the primary insertion transaction | All 40 root/nested cross-type conflicts, concurrent creators and directory/FIFO ID separation passed; parent authorization and inode identity are checked against primary metadata |
 | `rmdir` | Primary namespace/row locks, sticky-bit check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
 | Sticky bit on unlink/rmdir/rename | Parent/victim owner row locks inside the primary mutation transaction | Concurrent parent permission commit and nine stale-replica cases passed |
@@ -516,6 +516,18 @@ This closes the source-identified stale-path selection path, but no mounted
 replacement-race regression was run; add one before treating the behavior as
 runtime-verified. Confidence: high for the source-level mechanism and fix;
 runtime reproduction remains unverified.
+
+### Directory open after remote path replacement
+
+Source review on 2026-10-30 found that `opendir()` obtained attributes through
+the replica-routed repository and did not confirm that its cached path still
+resolved to the requested directory inode on primary. A remote remove/recreate
+could therefore let a stale FUSE directory inode open and snapshot the
+replacement directory. `opendir()` now validates the inode/path pair through
+the primary-backed `authoritative_entry_attrs_for_ino()` before creating the
+configured read snapshot. The snapshot remains read-routed after this identity
+check. A mounted two-mount regression is still required; the source-level fix
+has not been validated at runtime.
 
 These items are source-review findings and test gaps; do not describe them as
 additional reproduced data-loss cases.
