@@ -126,8 +126,9 @@ Reading guide:
   ABIs. See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **P02 directory-stream snapshot behavior needs mounted regressions.** FOD
-  now pins an ordered PostgreSQL entry snapshot to each `opendir()` handle, uses
-  it for continuation requests, refreshes it on `rewinddir()` (cookie zero
+  now pins an ordered PostgreSQL snapshot to each `opendir()` handle (full
+  metadata by default, names when `FOD_READDIR_BATCH_METADATA=0`), uses it for
+  continuation requests, refreshes it on `rewinddir()` (cookie zero
   after stream progress), and releases it in `releasedir()`. This prevents
   positional cookies from shifting when another mount changes directory
   membership. Verify continuation and rewind with mounted FUSE operations,

@@ -121,6 +121,11 @@ fn fod_fuse_profile_metadata_cache_enabled() -> bool {
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_PROFILE_METADATA_CACHE", false))
 }
 
+fn fod_fuse_readdir_batch_metadata_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_BATCH_METADATA", true))
+}
+
 fn fod_fuse_readdir_register_paths_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env_var_truthy_with_legacy_alias("FOD_READDIR_REGISTER_PATHS", false))
@@ -288,8 +293,14 @@ struct DirectoryHandleState {
     ino: u64,
     path: String,
     parent_ino: u64,
-    entries: Vec<DirectoryEntryMetadata>,
+    entries: DirectoryEntrySnapshot,
     highest_requested_offset: u64,
+}
+
+#[derive(Clone)]
+enum DirectoryEntrySnapshot {
+    Metadata(Vec<DirectoryEntryMetadata>),
+    Names(Vec<String>),
 }
 
 struct LockHeartbeatHandle {
@@ -5609,12 +5620,24 @@ impl Filesystem for FodFuse {
         }
         let metadata_profile_enabled = fod_fuse_profile_metadata_cache_enabled();
         let snapshot_started = metadata_profile_enabled.then(Instant::now);
-        let entries = match self.repo.list_directory_entry_metadata(&path) {
-            Ok(entries) => entries,
-            Err(err) => {
-                warn!("FOD opendir snapshot failed path={} err={}", path, err);
-                fuse_reply_error!(reply, EIO);
-                return;
+        let entries = if fod_fuse_readdir_batch_metadata_enabled() {
+            match self.repo.list_directory_entry_metadata(&path) {
+                Ok(entries) => DirectoryEntrySnapshot::Metadata(entries),
+                Err(err) => {
+                    warn!("FOD opendir metadata snapshot failed path={} err={}", path, err);
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
+            }
+        } else {
+            match self.repo.list_directory_entries_blob(&path) {
+                Ok(Some(blob)) => DirectoryEntrySnapshot::Names(Self::decode_nul_fields(&blob)),
+                Ok(None) => DirectoryEntrySnapshot::Names(Vec::new()),
+                Err(err) => {
+                    warn!("FOD opendir name snapshot failed path={} err={}", path, err);
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
             }
         };
         if let Some(started) = snapshot_started {
@@ -5677,17 +5700,34 @@ impl Filesystem for FodFuse {
             // Cookie zero after any stream progress is a rewind. Refresh the
             // per-open snapshot once so a restarted stream sees current names.
             if offset == 0 && state.highest_requested_offset > 0 {
-                match self.repo.list_directory_entry_metadata(&state.path) {
-                    Ok(entries) => state.entries = entries,
-                    Err(err) => {
-                        warn!(
-                            "FOD readdir rewind snapshot failed path={} err={}",
-                            state.path, err
-                        );
-                        fuse_reply_error!(reply, EIO);
-                        return;
+                state.entries = if fod_fuse_readdir_batch_metadata_enabled() {
+                    match self.repo.list_directory_entry_metadata(&state.path) {
+                        Ok(entries) => DirectoryEntrySnapshot::Metadata(entries),
+                        Err(err) => {
+                            warn!(
+                                "FOD readdir rewind metadata snapshot failed path={} err={}",
+                                state.path, err
+                            );
+                            fuse_reply_error!(reply, EIO);
+                            return;
+                        }
                     }
-                }
+                } else {
+                    match self.repo.list_directory_entries_blob(&state.path) {
+                        Ok(Some(blob)) => {
+                            DirectoryEntrySnapshot::Names(Self::decode_nul_fields(&blob))
+                        }
+                        Ok(None) => DirectoryEntrySnapshot::Names(Vec::new()),
+                        Err(err) => {
+                            warn!(
+                                "FOD readdir rewind name snapshot failed path={} err={}",
+                                state.path, err
+                            );
+                            fuse_reply_error!(reply, EIO);
+                            return;
+                        }
+                    }
+                };
                 state.highest_requested_offset = 0;
             }
             state.highest_requested_offset = state.highest_requested_offset.max(offset);
@@ -5708,29 +5748,55 @@ impl Filesystem for FodFuse {
             reply.ok();
             return;
         }
-        for (index, entry) in entries
-            .into_iter()
-            .enumerate()
-            .skip(readdir_child_entries_to_skip(offset))
-        {
-            let kind = match entry.kind.as_str() {
-                "dir" => FileType::Directory,
-                "symlink" => FileType::Symlink,
-                "file" | "hardlink" => entry
-                    .special_type
-                    .as_deref()
-                    .map(Self::file_type_from_special)
-                    .unwrap_or(FileType::RegularFile),
-                _ => continue,
-            };
-            let inode = self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
-            if fod_fuse_readdir_register_paths_enabled() {
-                let child_path = Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
-                self.register_path(&child_path, inode);
+        match entries {
+            DirectoryEntrySnapshot::Metadata(entries) => {
+                for (index, entry) in entries
+                    .into_iter()
+                    .enumerate()
+                    .skip(readdir_child_entries_to_skip(offset))
+                {
+                    let kind = match entry.kind.as_str() {
+                        "dir" => FileType::Directory,
+                        "symlink" => FileType::Symlink,
+                        "file" | "hardlink" => entry
+                            .special_type
+                            .as_deref()
+                            .map(Self::file_type_from_special)
+                            .unwrap_or(FileType::RegularFile),
+                        _ => continue,
+                    };
+                    let inode =
+                        self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
+                    if fod_fuse_readdir_register_paths_enabled() {
+                        let child_path =
+                            Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
+                        self.register_path(&child_path, inode);
+                    }
+                    emitted = emitted.saturating_add(1);
+                    if reply.add(INodeNo(inode), (index + 3) as u64, kind, entry.name) {
+                        break;
+                    }
+                }
             }
-            emitted = emitted.saturating_add(1);
-            if reply.add(INodeNo(inode), (index + 3) as u64, kind, entry.name) {
-                break;
+            DirectoryEntrySnapshot::Names(names) => {
+                for (index, name) in names
+                    .into_iter()
+                    .enumerate()
+                    .skip(readdir_child_entries_to_skip(offset))
+                {
+                    let child_path = Self::join_path(&path, OsStr::from_bytes(name.as_bytes()));
+                    let attrs = match self.lookup_path(&child_path) {
+                        Ok(Some(attrs)) => attrs.file_attr,
+                        Ok(None) | Err(_) => continue,
+                    };
+                    if fod_fuse_readdir_register_paths_enabled() {
+                        self.register_path(&child_path, attrs.ino.0);
+                    }
+                    emitted = emitted.saturating_add(1);
+                    if reply.add(attrs.ino, (index + 3) as u64, attrs.kind, name) {
+                        break;
+                    }
+                }
             }
         }
         if fod_fuse_profile_metadata_cache_enabled() {
