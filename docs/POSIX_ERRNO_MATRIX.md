@@ -63,9 +63,12 @@ FOD został wywołany:
   `chmod()` i `utime()` podążają do katalogu. Zmiana praw i czasu dotyczy celu,
   a czas symlinku pozostaje bez zmian. `truncate()` zwraca `EISDIR`,
   `readlink()` `EINVAL`, a `rename()` `ENOTDIR`.
-  Końcowy symlink z ukośnikiem do pliku zwraca `ENOTDIR` dla `lstat()`,
-  `unlink()`, `rmdir()`, `truncate()`, `chmod()` i `utime()`; plik i symlink
-  pozostają bez zmian.
+  Końcowy symlink z ukośnikiem do pliku zwraca `ENOTDIR` dla `stat()`,
+  `open()`, `lstat()`, `unlink()`, `rmdir()`, `truncate()`, `chmod()`,
+  `chown()`, `utime()`, `readlink()`, `statvfs()`, źródła hardlinku i obu stron
+  `rename()`; `mkdir()`, cel hardlinku i cel symlinku zwracają `EEXIST`,
+  a libc `access()` zwraca `-1`/`ENOTDIR`. Symlink, plik docelowy i źródło
+  rename pozostają bez zmian.
   Dla wiszącego symlinku z ukośnikiem Linux zwraca `ENOENT` dla operacji
   wymagających celu (`stat()`, `lstat()`, `open()`, `truncate()`, `chmod()`,
   `utime()`, `readlink()`, `statvfs()` i `link()`), `EEXIST` dla `mkdir()` i

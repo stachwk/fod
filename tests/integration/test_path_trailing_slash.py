@@ -181,47 +181,107 @@ def main() -> None:
 
             file_link = directory / "regular-file-link"
             os.symlink(file_path.name, file_link)
+            file_link_slash = f"{file_link}/"
             expect_errno(
-                lambda: os.stat(f"{file_link}/"),
+                lambda: os.stat(file_link_slash),
                 errno.ENOTDIR,
                 "stat symlink to regular file/",
             )
             expect_errno(
-                lambda: os.open(f"{file_link}/", os.O_RDONLY),
+                lambda: os.open(file_link_slash, os.O_RDONLY),
                 errno.ENOTDIR,
                 "open symlink to regular file/",
             )
             expect_errno(
-                lambda: os.lstat(f"{file_link}/"),
+                lambda: os.lstat(file_link_slash),
                 errno.ENOTDIR,
                 "lstat symlink to regular file/",
             )
             expect_errno(
-                lambda: os.unlink(f"{file_link}/"),
+                lambda: os.unlink(file_link_slash),
                 errno.ENOTDIR,
                 "unlink symlink to regular file/",
             )
             expect_errno(
-                lambda: os.rmdir(f"{file_link}/"),
+                lambda: os.rmdir(file_link_slash),
                 errno.ENOTDIR,
                 "rmdir symlink to regular file/",
             )
             expect_errno(
-                lambda: os.truncate(f"{file_link}/", 0),
+                lambda: os.truncate(file_link_slash, 0),
                 errno.ENOTDIR,
                 "truncate symlink to regular file/",
             )
             expect_errno(
-                lambda: os.chmod(f"{file_link}/", 0o600),
+                lambda: os.chmod(file_link_slash, 0o600),
                 errno.ENOTDIR,
                 "chmod symlink to regular file/",
             )
             expect_errno(
-                lambda: os.utime(f"{file_link}/", None),
+                lambda: os.utime(file_link_slash, None),
                 errno.ENOTDIR,
                 "utime symlink to regular file/",
             )
+            for operation_name, operation, expected_errno in (
+                ("mkdir", lambda: os.mkdir(file_link_slash), errno.EEXIST),
+                (
+                    "chown",
+                    lambda: os.chown(file_link_slash, -1, -1),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "readlink",
+                    lambda: os.readlink(file_link_slash),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "statvfs",
+                    lambda: os.statvfs(file_link_slash),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "link source",
+                    lambda: os.link(file_link_slash, directory / "symlink-slash-link"),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "link destination",
+                    lambda: os.link(rename_source, file_link_slash),
+                    errno.EEXIST,
+                ),
+                (
+                    "symlink destination",
+                    lambda: os.symlink("unused", file_link_slash),
+                    errno.EEXIST,
+                ),
+                (
+                    "rename source",
+                    lambda: os.rename(file_link_slash, directory / "renamed-symlink"),
+                    errno.ENOTDIR,
+                ),
+                (
+                    "rename destination",
+                    lambda: os.rename(rename_source, file_link_slash),
+                    errno.ENOTDIR,
+                ),
+            ):
+                expect_errno(
+                    operation,
+                    expected_errno,
+                    f"{operation_name} symlink to regular file/",
+                )
+            ctypes.set_errno(0)
+            access_result = libc.access(os.fsencode(file_link_slash), os.F_OK)
+            access_error = ctypes.get_errno()
+            assert access_result == -1 and access_error == errno.ENOTDIR, (
+                "access symlink to regular file/",
+                access_result,
+                access_error,
+            )
             assert file_link.is_symlink() and file_path.read_bytes() == b"not a directory"
+            assert rename_source.read_bytes() == b"rename source"
+            assert not (directory / "symlink-slash-link").exists()
+            assert not (directory / "renamed-symlink").exists()
 
             dangling_link = directory / "dangling-directory-link"
             os.symlink("missing-target", dangling_link)
@@ -377,7 +437,8 @@ def main() -> None:
                 "OK pathname empty_path=ENOENTx17 access=ENOENT "
                 "trailing_slash_file=ENOTDIRx14,EEXISTx3 "
                 "access=ENOTDIR "
-                "symlink_file=ENOTDIRx8 symlink_directory=accepted "
+                "symlink_file=ENOTDIRx14,EEXISTx3 access=ENOTDIR "
+                "symlink_directory=accepted "
                 "dangling_slash=ENOENTx9,EEXISTx2,ENOTDIRx3 "
                 "slash_symlink_dir=mkdir:EEXIST,unlink:ENOTDIR,rmdir:ENOTDIR "
                 "chmod_target=0o711 utime_target=exact truncate:EISDIR "
