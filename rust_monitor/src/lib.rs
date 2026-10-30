@@ -2355,6 +2355,107 @@ mod logical_task_admission_tests {
     }
 
     #[test]
+    fn concurrent_admission_respects_capacity_while_multiple_workers_finish() {
+        const CAPACITY: usize = 3;
+        const WAITERS: usize = 9;
+
+        let gate = Arc::new(LogicalTaskAdmissionGate::new(CAPACITY as u64));
+        let tracker = tracker();
+        let mut active = (0..CAPACITY)
+            .map(|_| gate.observe_task(&tracker, 64, true))
+            .collect::<Vec<_>>();
+        let (admitted_tx, admitted_rx) = mpsc::channel();
+        let mut release = Vec::with_capacity(WAITERS);
+        let mut workers = Vec::with_capacity(WAITERS);
+
+        for id in 0..WAITERS {
+            let worker_gate = Arc::clone(&gate);
+            let tracker = Arc::clone(&tracker);
+            let admitted = admitted_tx.clone();
+            let (release_tx, release_rx) = mpsc::channel();
+            release.push(Some(release_tx));
+            workers.push(
+                thread::Builder::new()
+                    .name(format!("fod-concurrent-waiter-{id}"))
+                    .stack_size(WORKER_STACK_BYTES)
+                    .spawn(move || {
+                        let (permit, observation) = worker_gate.observe_task(&tracker, 128, true);
+                        admitted.send(id).expect("send admitted waiter id");
+                        release_rx
+                            .recv_timeout(Duration::from_secs(5))
+                            .expect("waiter release timed out");
+                        if id % 3 == 0 {
+                            observation.fail();
+                        } else {
+                            observation.complete(1, 128);
+                        }
+                        drop(permit);
+                    })
+                    .expect("spawn concurrent admission waiter"),
+            );
+            wait_for_next_ticket(&gate, (CAPACITY + id + 1) as u64);
+        }
+        drop(admitted_tx);
+
+        let queued = tracker.queue_snapshot().expect("queued task snapshot");
+        assert_eq!(queued.admitted_tasks, (CAPACITY + WAITERS) as u64);
+        assert_eq!(queued.queued_tasks, WAITERS as u64);
+        assert_eq!(queued.active_tasks, CAPACITY as u64);
+        assert_eq!(queued.peak_active_tasks, CAPACITY as u64);
+        assert_eq!(queued.peak_queued_tasks, WAITERS as u64);
+
+        for id in 0..WAITERS {
+            if id < CAPACITY {
+                let (permit, observation) = active.remove(0);
+                observation.complete(1, 64);
+                drop(permit);
+            } else {
+                release[id - CAPACITY]
+                    .take()
+                    .expect("previously admitted waiter release")
+                    .send(())
+                    .expect("release active waiter");
+            }
+
+            let admitted = admitted_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("next waiter was not admitted");
+            assert_eq!(admitted, id, "waiters must be served in ticket order");
+            let snapshot = tracker.queue_snapshot().expect("active task snapshot");
+            assert_eq!(snapshot.active_tasks, CAPACITY as u64);
+            assert_eq!(snapshot.peak_active_tasks, CAPACITY as u64);
+        }
+
+        for sender in release[WAITERS - CAPACITY..].iter_mut() {
+            sender
+                .take()
+                .expect("last active waiter release")
+                .send(())
+                .expect("release last active waiter");
+        }
+        for worker in workers {
+            worker.join().expect("concurrent admission waiter panicked");
+        }
+
+        let finished = tracker.queue_snapshot().expect("finished task snapshot");
+        assert_eq!(finished.admitted_tasks, (CAPACITY + WAITERS) as u64);
+        assert_eq!(finished.completed_tasks, (CAPACITY + WAITERS) as u64);
+        assert_eq!(finished.failed_tasks, 3);
+        assert_eq!(finished.queued_tasks, 0);
+        assert_eq!(finished.active_tasks, 0);
+        assert_eq!(finished.active_transactions, 0);
+        assert_eq!(finished.payload_in_flight_bytes, 0);
+        assert_eq!(finished.accounting_errors, 0);
+
+        let throughput = tracker.throughput_snapshot().expect("task throughput");
+        assert_eq!(throughput.completed_files, (CAPACITY + WAITERS - 3) as u64);
+        assert_eq!(
+            throughput.completed_bytes,
+            CAPACITY as u64 * 64 + (WAITERS - 3) as u64 * 128
+        );
+    }
+
+    #[test]
     #[ignore = "diagnostic 500-waiter targeted FIFO wake benchmark"]
     fn fifo_targeted_wake_benchmark_500_waiters() {
         let gate = Arc::new(LogicalTaskAdmissionGate::new(1));
