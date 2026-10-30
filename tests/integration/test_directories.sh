@@ -43,12 +43,14 @@ fi
 
 not_a_directory="${dir}/rmdir-file-${suffix}"
 printf 'rmdir target file\n' >"${not_a_directory}"
-python3 - "${not_a_directory}" "${dir}" <<'PY'
+not_a_directory_link="${dir}/rmdir-symlink-${suffix}"
+python3 - "${not_a_directory}" "${dir}" "${not_a_directory_link}" <<'PY'
 import errno
 import os
 import sys
 
-file_path, nonempty_dir = sys.argv[1:]
+file_path, nonempty_dir, symlink_path = sys.argv[1:]
+os.symlink(nonempty_dir, symlink_path)
 missing_parent = os.path.join(nonempty_dir, "missing-parent")
 for path, expected, label in (
     (nonempty_dir, errno.EISDIR, "unlink directory"),
@@ -57,6 +59,7 @@ for path, expected, label in (
     (os.path.join(missing_parent, "new-directory"), errno.ENOENT, "mkdir missing parent"),
     (os.path.join(missing_parent, "child"), errno.ENOENT, "rmdir missing parent"),
     (file_path, errno.ENOTDIR, "rmdir regular file"),
+    (symlink_path, errno.ENOTDIR, "rmdir symlink to directory"),
     (os.path.join(file_path, "child"), errno.ENOTDIR, "mkdir parent is regular file"),
     (os.path.join(file_path, "child"), errno.ENOTDIR, "rmdir parent is regular file"),
     (nonempty_dir, errno.ENOTEMPTY, "rmdir non-empty directory"),
@@ -74,6 +77,10 @@ for path, expected, label in (
         assert error.errno == expected, (label, error.errno, expected)
     else:
         raise AssertionError(f"{label} unexpectedly succeeded")
+
+assert os.path.islink(symlink_path), "rmdir symlink unexpectedly removed the symlink"
+assert os.path.isdir(nonempty_dir), "rmdir symlink unexpectedly affected its target"
+os.unlink(symlink_path)
 
 child_file = os.path.join(file_path, "child-file")
 try:
@@ -146,7 +153,7 @@ except OSError as error:
 else:
     raise AssertionError("listdir on closed descriptor unexpectedly succeeded")
 PY
-rm -f "${not_a_directory}"
+rm -f "${not_a_directory}" "${not_a_directory_link}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY child_entry_parent_errors=1 directory_fd_repeat=1"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EEXIST,EISDIR,ENOENT,ENOTDIR,ENOTEMPTY rmdir_symlink=ENOTDIR child_entry_parent_errors=1 directory_fd_repeat=1"
