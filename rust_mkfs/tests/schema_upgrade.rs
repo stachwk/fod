@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 30;
+const SCHEMA_VERSION: u64 = 31;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -185,6 +185,27 @@ fn assert_latest_payload_schema(conn: &DbConn) {
     let matches = conn
         .query_exists(
             "SELECT
+                EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'fod'
+                      AND table_name = 'schema_version'
+                      AND column_name = 'schema_number'
+                      AND is_nullable = 'NO'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'fod'
+                      AND table_name = 'schema_version'
+                      AND column_name = 'minimum_client_version'
+                      AND is_nullable = 'NO'
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'fod'
+                      AND table_name = 'schema_version'
+                      AND column_name = 'version'
+                )
+                AND
                 (
                     SELECT COUNT(*)
                     FROM information_schema.columns
@@ -339,7 +360,7 @@ fn prepare_version_16_payload_fixture(conn: &DbConn) {
          ALTER TABLE copy_block_crc DROP CONSTRAINT copy_block_crc_pkey;
          CREATE UNIQUE INDEX idx_copy_block_crc_object_order
              ON copy_block_crc (data_object_id, _order);
-         UPDATE schema_version SET version = 16, applied_at = NOW();"
+         UPDATE schema_version SET schema_number = 16, applied_at = NOW();"
     ))
     .expect("prepare schema version 16 block payload fixture");
 }
@@ -486,10 +507,39 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_eq!(guard_note.as_deref(), Some("guard"));
 
     let version = conn
-        .query_scalar_u64("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
+        .query_scalar_u64("SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1")
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
+    let minimum_client_version = conn
+        .query_scalar_text("SELECT minimum_client_version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
+        .expect("minimum client version query")
+        .expect("minimum client version row");
+    assert_eq!(minimum_client_version, env!("CARGO_PKG_VERSION"));
+
+    conn.exec("UPDATE schema_version SET minimum_client_version = '99.0.0'")
+        .expect("raise minimum client version for downgrade guard test");
+    let downgrade = run_mkfs(
+        "upgrade",
+        &["--schema-admin-password", &schema_password],
+        &envs,
+    );
+    let downgrade_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&downgrade.stdout),
+        String::from_utf8_lossy(&downgrade.stderr)
+    );
+    assert!(!downgrade.status.success(), "{downgrade_output}");
+    assert!(
+        downgrade_output.contains("cannot lower database minimum client version 99.0.0"),
+        "{downgrade_output}"
+    );
+    conn.exec(&format!(
+        "UPDATE schema_version SET minimum_client_version = {}",
+        DbConn::quote_literal(env!("CARGO_PKG_VERSION"))
+    ))
+    .expect("restore minimum client version after downgrade guard test");
+
     assert_latest_payload_schema(&conn);
 
     let admin_count = conn
@@ -551,7 +601,7 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert_eq!(guard_note.as_deref(), Some("guard"));
 
     let version = conn
-        .query_scalar_u64("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
+        .query_scalar_u64("SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1")
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
@@ -702,7 +752,7 @@ fn schema_upgrade_non_destructive_password_protected() {
     assert!(table_exists(&conn, "fod", "schema_admin").expect("schema_admin exists"));
     assert!(table_exists(&conn, "fod", "lock_range_leases").expect("lock_range_leases exists"));
     let version = conn
-        .query_scalar_u64("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
+        .query_scalar_u64("SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1")
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
@@ -774,10 +824,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 30",
+        "FOD schema version: 31",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 30",
+        "Latest migration version: 31",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -811,12 +861,17 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0028: 0028_namespace_parent_timestamps.sql",
         "0029: 0029_posix_lock_wait_graph.sql",
         "0030: 0030_posix_lock_wait_process_identity.sql",
+        "0031: 0031_minimum_client_version.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
             "missing needle in status_after_init: {needle}\n\n{status_after_init}"
         );
     }
+    assert!(status_after_init.contains(&format!(
+        "FOD minimum client version: {}",
+        env!("CARGO_PKG_VERSION")
+    )));
 
     conn.exec("DELETE FROM schema_version")
         .expect("delete schema_version");
@@ -830,10 +885,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 30",
+        "Latest migration version: 31",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -862,7 +917,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
     ))
     .expect("restore schema_admin");
     conn.exec(&format!(
-        "INSERT INTO schema_version (version, applied_at) VALUES ({}, NOW())",
+        "INSERT INTO schema_version (schema_number, applied_at) VALUES ({}, NOW())",
         SCHEMA_VERSION
     ))
     .expect("restore schema_version");
@@ -962,7 +1017,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "DROP TABLE fod.monitor_session_stats;
          CREATE INDEX idx_data_blocks_data_object_id
              ON fod.data_blocks (data_object_id);
-         UPDATE fod.schema_version SET version = 21, applied_at = NOW();",
+         UPDATE fod.schema_version SET schema_number = 21, applied_at = NOW();",
     )
     .expect("prepare schema version 21 with legacy redundant data_blocks index");
     assert!(
@@ -978,7 +1033,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 30"),
+        status_before_text.contains("Latest migration version: 31"),
         "{status_before_text}"
     );
     assert!(
@@ -991,7 +1046,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     );
     assert!(
         status_before_text
-            .contains("Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030"),
+            .contains("Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031"),
         "{status_before_text}"
     );
 
@@ -1009,7 +1064,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert_upgrade_message(&String::from_utf8_lossy(&upgrade.stdout));
 
     let version = conn
-        .query_scalar_u64("SELECT version FROM fod.schema_version ORDER BY applied_at DESC LIMIT 1")
+        .query_scalar_u64("SELECT schema_number FROM fod.schema_version ORDER BY applied_at DESC LIMIT 1")
         .expect("version")
         .expect("schema version");
     assert_eq!(version, SCHEMA_VERSION);
@@ -1037,7 +1092,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 30"),
+        status_broken_text.contains("FOD schema version: 31"),
         "{status_broken_text}"
     );
     assert!(

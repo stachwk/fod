@@ -626,7 +626,7 @@ Reading guide:
     - Current note: the new `libfod.so` plus `libfod.h` is a separate command-surface aggregate over installed FOD commands. It does not revive the old hotpath shared library, and FOD tools do not depend on it at runtime.
   - [x] Add `libpq` client/server runtime version diagnostics without replacing the current PostgreSQL architecture.
     - Historical note: both manual `libpq` bindings now declare `PQlibVersion()` and `PQserverVersion()`. `mkfs.fod status` reports the runtime client and server numbers plus the server's `SHOW server_version` string; `fod-rust-fuse` records the same data once during startup through the existing pooled repository connection. Major-version relation is informational only, and compatibility is reported as `connected`; no new version gate or support-range claim is introduced.
-  - [x] Write the storage-format versioning ADR before adding any new format marker or schema column. Accepted in `docs/adr/storage-format-versioning.md`; schema version remains the only persisted compatibility marker until an incompatible payload interpretation requires a distinct format marker.
+  - [x] Write the storage-format versioning ADR before adding any new format marker or schema column. Accepted in `docs/adr/storage-format-versioning.md`; the decision distinguishes schema shape, minimum client release, and payload format.
   - [x] Inventory the existing compatibility diagnostics and keep their individual trust boundaries explicit before aggregation.
     - Tracking note (2026-09-08): the remaining aggregation work is represented by the parent task above; this nested duplicate is closed.
   - [x] Revisit `fuser 0.18.0` compatibility as a separate capability-maintenance pass.

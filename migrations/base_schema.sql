@@ -116,8 +116,9 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER NOT NULL,
-    applied_at TIMESTAMP NOT NULL
+    schema_number INTEGER NOT NULL,
+    applied_at TIMESTAMP NOT NULL,
+    minimum_client_version TEXT NOT NULL DEFAULT '0.0.0'
 );
 
 CREATE TABLE IF NOT EXISTS schema_admin (

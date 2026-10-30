@@ -296,9 +296,18 @@ also pass.
 
 ## Database schema and primary-authoritative mutations
 
-Current PostgreSQL schema version is 30; the migration manifest in
+Current PostgreSQL schema version is 31; the migration manifest in
 `rust_mkfs/src/main.rs` is authoritative. Earlier schema numbers below identify
 the migrations that introduced particular contracts.
+
+The `schema_version.minimum_client_version` value is a monotonic FOD release
+floor written by `mkfs.fod init` and `mkfs.fod upgrade`. Primary and replica
+mounts read the same replicated value and reject an older client before
+starting FUSE operations. The migration also renames the schema-number column,
+so pre-gate clients that query its old name fail startup instead of silently
+skipping the check. A later release may mount without raising the floor; the
+floor moves only when an operator runs the schema command with that release.
+See the [versioning ADR](adr/storage-format-versioning.md).
 
 Primary authority requirements are defined by
 [FOD_ARCHITECTURE_INVARIANTS.md](FOD_ARCHITECTURE_INVARIANTS.md). A dated audit

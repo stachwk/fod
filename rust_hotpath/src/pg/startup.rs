@@ -17,6 +17,7 @@ pub struct StartupSnapshot {
     pub block_size: Option<u32>,
     pub is_in_recovery: bool,
     pub schema_version: Option<u32>,
+    pub minimum_client_version: Option<String>,
     pub schema_is_initialized: bool,
 }
 
@@ -69,9 +70,10 @@ impl DbRepo {
     }
 
     unsafe fn schema_version_on_conn(conn: *mut PGconn) -> Result<Option<u32>, String> {
-        let sql =
-            CString::new("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1")
-                .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "SELECT COALESCE(to_jsonb(schema_row)->>'schema_number', to_jsonb(schema_row)->>'version') FROM schema_version AS schema_row ORDER BY applied_at DESC LIMIT 1",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let value = query_scalar_text_on_conn(conn, &sql)?;
         if value.trim().is_empty() {
             return Ok(None);
@@ -127,7 +129,9 @@ impl DbRepo {
         Ok((schema_is_initialized, is_in_recovery))
     }
 
-    unsafe fn startup_initialized_values_on_conn(conn: *mut PGconn) -> Result<(u32, u32), String> {
+    unsafe fn startup_initialized_values_on_conn(
+        conn: *mut PGconn,
+    ) -> Result<(u32, u32, String), String> {
         // Drugie zapytanie jest wykonywane dopiero po potwierdzeniu schematu.
         // EXISTS rozroznia brak rekordu config od obecnego, ale pustego rekordu,
         // aby zachowac komunikaty i walidacje z poprzedniej implementacji.
@@ -138,8 +142,14 @@ impl DbRepo {
                 (EXISTS (SELECT 1 FROM config WHERE key = 'max_fs_size_bytes'))::text, \
                 COALESCE((SELECT value::text FROM config WHERE key = 'max_fs_size_bytes' LIMIT 1), ''), \
                 COALESCE((\
-                    SELECT version::text \
-                    FROM schema_version \
+                    SELECT COALESCE(to_jsonb(schema_row)->>'schema_number', to_jsonb(schema_row)->>'version') \
+                    FROM schema_version AS schema_row \
+                    ORDER BY applied_at DESC \
+                    LIMIT 1\
+                ), ''), \
+                COALESCE((\
+                    SELECT to_jsonb(schema_row)->>'minimum_client_version' \
+                    FROM schema_version AS schema_row \
                     ORDER BY applied_at DESC \
                     LIMIT 1\
                 ), '')",
@@ -149,9 +159,9 @@ impl DbRepo {
         let row = rows
             .first()
             .ok_or_else(|| "initialized startup values query returned no rows".to_string())?;
-        if row.len() < 5 {
+        if row.len() < 6 {
             return Err(format!(
-                "initialized startup values query returned {} columns, expected at least 5",
+                "initialized startup values query returned {} columns, expected at least 6",
                 row.len()
             ));
         }
@@ -191,7 +201,14 @@ impl DbRepo {
             .parse::<u32>()
             .map_err(|err| format!("invalid schema version returned by PostgreSQL: {err}"))?;
 
-        Ok((block_size, schema_version))
+        let minimum_client_version = row[5].trim();
+        if minimum_client_version.is_empty() {
+            return Err(
+                "initialized FOD schema has no minimum client version; run `mkfs.fod upgrade`"
+                    .to_string(),
+            );
+        }
+        Ok((block_size, schema_version, minimum_client_version.to_string()))
     }
 
     unsafe fn startup_snapshot_on_conn(
@@ -208,16 +225,19 @@ impl DbRepo {
                 block_size: None,
                 is_in_recovery,
                 schema_version: None,
+                minimum_client_version: None,
                 schema_is_initialized: false,
             });
         }
 
-        let (block_size, schema_version) = Self::startup_initialized_values_on_conn(conn)?;
+        let (block_size, schema_version, minimum_client_version) =
+            Self::startup_initialized_values_on_conn(conn)?;
 
         Ok(StartupSnapshot {
             block_size: Some(block_size),
             is_in_recovery,
             schema_version: Some(schema_version),
+            minimum_client_version: Some(minimum_client_version),
             schema_is_initialized: true,
         })
     }

@@ -865,7 +865,10 @@ fn startup_snapshot_matches_individual_live_queries() -> Result<(), String> {
     }
 
     if !schema_is_initialized {
-        if snapshot.block_size.is_some() || snapshot.schema_version.is_some() {
+        if snapshot.block_size.is_some()
+            || snapshot.schema_version.is_some()
+            || snapshot.minimum_client_version.is_some()
+        {
             return Err(
                 "uninitialized startup snapshot unexpectedly contains schema values".to_string(),
             );
@@ -882,6 +885,11 @@ fn startup_snapshot_matches_individual_live_queries() -> Result<(), String> {
     let schema_version = repo
         .schema_version()?
         .ok_or_else(|| "missing schema version in comparison test".to_string())?;
+    let minimum_client_version = repo
+        .query_scalar_text(
+            "SELECT minimum_client_version FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+        )?
+        .ok_or_else(|| "missing minimum client version in comparison test".to_string())?;
 
     if snapshot.block_size != Some(block_size) {
         return Err(format!(
@@ -893,6 +901,12 @@ fn startup_snapshot_matches_individual_live_queries() -> Result<(), String> {
         return Err(format!(
             "startup snapshot schema_version mismatch: snapshot={:?} helper={schema_version}",
             snapshot.schema_version
+        ));
+    }
+    if snapshot.minimum_client_version.as_deref() != Some(minimum_client_version.as_str()) {
+        return Err(format!(
+            "startup snapshot minimum_client_version mismatch: snapshot={:?} helper={minimum_client_version}",
+            snapshot.minimum_client_version
         ));
     }
 

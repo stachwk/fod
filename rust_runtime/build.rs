@@ -16,4 +16,5 @@ fn main() {
         panic!("fod_version.txt is empty");
     }
     println!("cargo:rustc-env=FOD_VERSION_LABEL=FOD {version}");
+    println!("cargo:rustc-env=FOD_VERSION={version}");
 }

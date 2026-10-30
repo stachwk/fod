@@ -387,6 +387,10 @@ fn log_mount_status(input: MountStatusLogInput<'_>) {
         snapshot.schema_version,
         snapshot.schema_is_initialized
     );
+    info!(
+        "FOD minimum client version={:?}",
+        snapshot.minimum_client_version
+    );
     info!("FOD mountpoint={}", mountpoint.display());
     info!(
         "FOD core role={} profile={:?} force_read_only={} log_level={} use_rust_fuse={} pool_max_connections={}",
@@ -493,6 +497,10 @@ pub fn mount_fuse(
                 .to_string(),
         );
     }
+    let minimum_client_version = snapshot.minimum_client_version.as_deref().ok_or_else(|| {
+        "database is missing its minimum FOD client version; run `mkfs.fod upgrade`".to_string()
+    })?;
+    fod_rust_runtime::validate_fod_client_version(minimum_client_version)?;
 
     if settings.degraded_read_only {
         if !snapshot.is_in_recovery {

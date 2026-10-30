@@ -14,11 +14,14 @@ FOD has three version domains with different purposes:
 - the semantic storage format used to interpret file payload and ownership
   rows.
 
-The release version changes for every repository commit. It is not a database
-compatibility marker. The schema version records which ordered migrations have
-been applied. A storage-format boundary is narrower: it exists only when
-persisted payload cannot be interpreted safely by both sides of an upgrade
-without an explicit conversion or compatibility decision.
+The release version changes for every repository commit. It is not implicitly
+a database compatibility marker. The schema version records which ordered
+migrations have been applied. A `minimum_client_version` records which FOD
+releases may mount after the latest `mkfs.fod init` or `mkfs.fod upgrade`; it is
+raised monotonically by that command and replicated with the schema-version
+row. A storage-format boundary is narrower: it exists only when persisted
+payload cannot be interpreted safely by both sides of an upgrade without an
+explicit conversion or compatibility decision.
 
 At the time this decision was accepted, schema version 21 was the database
 shape and migration gate. The current version is maintained by the migration
@@ -27,13 +30,17 @@ ownership is rooted in `data_objects`; `data_blocks` and `copy_block_crc` refer
 to the object; migration 20 converts remaining `data_extents` rows to canonical
 `data_blocks`; migration 21 drops the retired `data_extents` table;
 payload-capacity reservations are control records rather than file data; and immutable index catalogue
-snapshots are part of the schema contract. There is no separate storage-format
-column or marker today.
+snapshots are part of the schema contract. No separate storage-format marker
+was needed for these migrations.
 
 ## Decision
 
-Keep the schema version as the only persisted compatibility marker until a
-measured change requires a distinct storage-format marker.
+Keep the schema version as the authority for database shape and storage
+interpretation. Store a separate minimum FOD client release in the same
+`schema_version` row to prevent older client releases from mounting after an
+explicit database initialization or upgrade. This release floor advances only
+through `mkfs.fod init` or `mkfs.fod upgrade`; ordinary release bumps do not
+implicitly change it.
 
 Every schema change must:
 
@@ -42,12 +49,18 @@ Every schema change must:
 - define whether existing rows need conversion, validation, or no data change;
 - update strict latest-shape recovery checks;
 - include fresh-init, supported-upgrade, status, and remount/readback coverage;
-- reject an unsupported newer schema rather than attempting a legacy fallback.
+- reject an unsupported newer schema rather than attempting a legacy fallback;
+- write the current FOD release as `minimum_client_version` when publishing the
+  schema-version row, and reject attempts by an older `mkfs` to lower that
+  floor;
+- break startup of pre-gate clients by renaming the schema-number column so
+  those clients cannot silently ignore the release floor.
 
 Introduce a separate storage-format marker only when a schema version cannot
 fully describe how payload bytes or ownership relationships must be
-interpreted. Examples include incompatible block encoding, compression,
-encryption, immutable chunk manifests, or a payload layout that requires
+interpreted. The client-release floor does not replace schema migration checks
+or claim binary payload incompatibility. Examples include incompatible block
+encoding, compression, encryption, immutable chunk manifests, or a payload layout that requires
 multiple readers during migration.
 
 If a separate marker becomes necessary, its design must define:
@@ -78,4 +91,5 @@ updating this ADR or replacing it with a more specific accepted decision.
 
 At schema version 21 no new storage-format marker was required because the
 ordered migrations fully defined the legacy extent conversion and table
-removal. This remains the decision unless a later accepted ADR supersedes it.
+removal. The current release floor is a client admission check, not a second
+description of payload format.

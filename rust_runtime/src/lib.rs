@@ -34,6 +34,48 @@ pub const FOD_SCHEMA_NAME: &str = "fod";
 pub const FOD_SEARCH_PATH: &str = "fod";
 // Version is sourced from ../fod_version.txt via rust_runtime/build.rs.
 pub const FOD_VERSION_LABEL: &str = env!("FOD_VERSION_LABEL");
+pub const FOD_VERSION: &str = env!("FOD_VERSION");
+
+pub fn compare_fod_client_versions(left: &str, right: &str) -> Result<std::cmp::Ordering, String> {
+    fn parse(value: &str) -> Result<(u64, u64, u64), String> {
+        let mut parts = value.trim().split('.');
+        let major = parts
+            .next()
+            .ok_or_else(|| format!("invalid FOD client version {value:?}"))?
+            .parse::<u64>()
+            .map_err(|err| format!("invalid FOD client version {value:?}: {err}"))?;
+        let minor = parts
+            .next()
+            .ok_or_else(|| format!("invalid FOD client version {value:?}"))?
+            .parse::<u64>()
+            .map_err(|err| format!("invalid FOD client version {value:?}: {err}"))?;
+        let patch = parts
+            .next()
+            .ok_or_else(|| format!("invalid FOD client version {value:?}"))?
+            .parse::<u64>()
+            .map_err(|err| format!("invalid FOD client version {value:?}: {err}"))?;
+        if parts.next().is_some() {
+            return Err(format!("invalid FOD client version {value:?}"));
+        }
+        Ok((major, minor, patch))
+    }
+
+    Ok(parse(left)?.cmp(&parse(right)?))
+}
+
+pub fn validate_fod_client_version(minimum: &str) -> Result<(), String> {
+    validate_client_version(FOD_VERSION, minimum)
+}
+
+pub fn validate_client_version(client: &str, minimum: &str) -> Result<(), String> {
+    match compare_fod_client_versions(client, minimum)? {
+        std::cmp::Ordering::Less => Err(format!(
+            "FOD client version {} is older than the database minimum client version {}; run `mkfs.fod upgrade` with a current FOD client before mounting",
+            client, minimum
+        )),
+        _ => Ok(()),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostgresVersionDiagnostics {
@@ -2266,5 +2308,40 @@ mod postgres_version_diagnostics_tests {
         assert_eq!(diagnostics.server_version, "16.14 (Ubuntu)");
         assert_eq!(diagnostics.major_relation, "client-newer");
         assert_eq!(diagnostics.compatibility_label(), "connected");
+    }
+}
+
+#[cfg(test)]
+mod fod_client_version_tests {
+    use super::{compare_fod_client_versions, validate_client_version};
+    use std::cmp::Ordering;
+
+    #[test]
+    fn compares_numeric_release_components() {
+        assert_eq!(
+            compare_fod_client_versions("3.10.0", "3.9.99").unwrap(),
+            Ordering::Greater
+        );
+        assert_eq!(
+            compare_fod_client_versions("3.4.327", "3.4.327").unwrap(),
+            Ordering::Equal
+        );
+        assert_eq!(
+            compare_fod_client_versions("3.4.326", "3.4.327").unwrap(),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_client_release_versions() {
+        assert!(compare_fod_client_versions("3.4", "3.4.0").is_err());
+        assert!(compare_fod_client_versions("3.4.1-rc1", "3.4.0").is_err());
+    }
+
+    #[test]
+    fn rejects_clients_below_the_database_floor_and_accepts_newer_clients() {
+        assert!(validate_client_version("3.4.326", "3.4.327").is_err());
+        assert!(validate_client_version("3.4.327", "3.4.327").is_ok());
+        assert!(validate_client_version("3.5.0", "3.4.327").is_ok());
     }
 }

@@ -17,7 +17,7 @@ use std::path::Path;
 use config::{load_config_parser, load_runtime_config, resolve_config_path};
 use pg::DbConn;
 use pg_config::{make_conninfo, resolve_pg_connection_params};
-use runtime::{FOD_SCHEMA_NAME, FOD_SEARCH_PATH};
+use runtime::{compare_fod_client_versions, FOD_SCHEMA_NAME, FOD_SEARCH_PATH, FOD_VERSION};
 use schema_admin::{
     ensure_schema_admin_secret, format_schema_admin_source_message, schema_admin_secret_exists,
     schema_admin_secret_required_message, verify_existing_schema_admin_secret,
@@ -25,9 +25,9 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 30;
+const SCHEMA_VERSION: u64 = 31;
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_FILES: [&str; 30] = [
+const MIGRATION_FILES: [&str; 31] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -58,9 +58,10 @@ const MIGRATION_FILES: [&str; 30] = [
     "0028_namespace_parent_timestamps.sql",
     "0029_posix_lock_wait_graph.sql",
     "0030_posix_lock_wait_process_identity.sql",
+    "0031_minimum_client_version.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 30] = [
+const MIGRATION_DESCRIPTIONS: [&str; 31] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -91,6 +92,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 30] = [
     "Update directory timestamps with namespace changes, including root",
     "Track blocking POSIX lock dependencies for cross-mount deadlock detection",
     "Use host and process identity for cross-mount POSIX lock wait graphs",
+    "Persist the minimum compatible FOD client release",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -282,6 +284,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0030_posix_lock_wait_process_identity.sql"
         )),
+        31 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0031_minimum_client_version.sql"
+        )),
         _ => "",
     }
 }
@@ -318,6 +324,7 @@ fn migration_description(version: u64) -> &'static str {
         28 => MIGRATION_DESCRIPTIONS[27],
         29 => MIGRATION_DESCRIPTIONS[28],
         30 => MIGRATION_DESCRIPTIONS[29],
+        31 => MIGRATION_DESCRIPTIONS[30],
         _ => "Migration",
     }
 }
@@ -354,6 +361,7 @@ fn migration_filename(version: u64) -> &'static str {
         28 => MIGRATION_FILES[27],
         29 => MIGRATION_FILES[28],
         30 => MIGRATION_FILES[29],
+        31 => MIGRATION_FILES[30],
         _ => "unknown.sql",
     }
 }
@@ -430,8 +438,28 @@ fn read_schema_version(conn: &DbConn) -> Result<Option<u64>, String> {
     ))? {
         return Ok(None);
     }
-    conn.query_scalar_u64(&format!(
-        "SELECT version FROM {} ORDER BY applied_at DESC LIMIT 1",
+    conn.query_scalar_text(&format!(
+        "SELECT COALESCE(to_jsonb(version_row)->>'schema_number', to_jsonb(version_row)->>'version') FROM {} AS version_row ORDER BY applied_at DESC LIMIT 1",
+        quote_schema_qualified_ident(FOD_SCHEMA_NAME, "schema_version")
+    ))?
+    .map(|value| {
+        value
+            .parse::<u64>()
+            .map_err(|err| format!("invalid FOD schema version: {err}"))
+    })
+    .transpose()
+}
+
+fn read_minimum_client_version(conn: &DbConn) -> Result<Option<String>, String> {
+    if !conn.query_exists(&format!(
+        "SELECT to_regclass({}) IS NOT NULL",
+        quote_schema_regclass(FOD_SCHEMA_NAME, "schema_version")
+    ))? {
+        return Ok(None);
+    }
+
+    conn.query_scalar_text(&format!(
+        "SELECT to_jsonb(version_row)->>'minimum_client_version' FROM {} AS version_row ORDER BY applied_at DESC LIMIT 1",
         quote_schema_qualified_ident(FOD_SCHEMA_NAME, "schema_version")
     ))
 }
@@ -479,6 +507,20 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                 WHERE to_regclass(format('fod.%I', name)) IS NULL
             )
             AND to_regprocedure('fod.fod_prune_client_session_lock_leases()') IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'fod'
+                  AND table_name = 'schema_version'
+                  AND column_name = 'schema_number'
+                  AND is_nullable = 'NO'
+            )
+            AND EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'fod'
+                  AND table_name = 'schema_version'
+                  AND column_name = 'minimum_client_version'
+                  AND is_nullable = 'NO'
+            )
             AND (
                 SELECT COUNT(*)
                 FROM information_schema.columns
@@ -676,11 +718,36 @@ fn ensure_fod_privileges(conn: &DbConn, db_user: &str) -> Result<(), String> {
 }
 
 fn write_schema_version(conn: &DbConn, version: u64) -> Result<(), String> {
-    conn.exec("DELETE FROM schema_version")?;
-    conn.exec(&format!(
-        "INSERT INTO schema_version (version, applied_at) VALUES ({}, NOW())",
-        version
-    ))
+    conn.exec("BEGIN")?;
+    let result = (|| {
+        // Serialize concurrent mkfs writers before reading the current floor.
+        conn.query_scalar_text("SELECT pg_advisory_xact_lock(1180124246)::text")?;
+        if let Some(minimum_client_version) = conn.query_scalar_text(
+            "SELECT minimum_client_version FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+        )? {
+            if compare_fod_client_versions(FOD_VERSION, &minimum_client_version)?
+                == std::cmp::Ordering::Less
+            {
+                return Err(format!(
+                    "FOD client {FOD_VERSION} cannot lower database minimum client version {minimum_client_version}"
+                ));
+            }
+        }
+        conn.exec(&format!(
+            "DELETE FROM schema_version; \
+             INSERT INTO schema_version (schema_number, applied_at, minimum_client_version) VALUES ({}, NOW(), {})",
+            version,
+            DbConn::quote_literal(FOD_VERSION)
+        ))
+    })();
+
+    match result {
+        Ok(()) => conn.exec("COMMIT"),
+        Err(err) => {
+            let _ = conn.exec("ROLLBACK");
+            Err(err)
+        }
+    }
 }
 
 fn run_sql_commands_user(conn: &DbConn, sql_commands: &str, db_user: &str) -> Result<(), String> {
@@ -998,6 +1065,13 @@ fn main() {
                 }
             };
             let current_version = fod_version;
+            let minimum_client_version = match read_minimum_client_version(&conn) {
+                Ok(version) => version,
+                Err(err) => {
+                    eprintln!("FOD client compatibility diagnostics unavailable: {}", err);
+                    std::process::exit(1);
+                }
+            };
             let latest_version = latest_migration_version();
             let pending_versions: Vec<u64> =
                 ((current_version.unwrap_or(0) + 1)..=latest_version).collect();
@@ -1099,6 +1173,7 @@ fn main() {
                     "schema": {
                         "name": FOD_SCHEMA_NAME,
                         "version": current_version,
+                        "minimum_client_version": minimum_client_version,
                         "latest_migration_version": latest_version,
                         "objects_present": fod_exists,
                         "latest_shape": latest_shape,
@@ -1141,6 +1216,10 @@ fn main() {
                     postgres_versions.compatibility_label()
                 );
                 println!("FOD schema name: {}", FOD_SCHEMA_NAME);
+                println!(
+                    "FOD minimum client version: {}",
+                    minimum_client_version.as_deref().unwrap_or("unavailable")
+                );
                 println!(
                     "FOD schema version: {}",
                     schema_version_label(current_version)
