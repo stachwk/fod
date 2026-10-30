@@ -193,7 +193,9 @@ Reading guide:
   rejects malformed numeric fields with `EIO`, and fails if a hardlink lacks
   its backing file or an open file's link-count row. Add mounted `mkdir/chmod`
   checks for `0644` and a decoder regression for malformed metadata before
-  closing this finding.
+  closing this finding. Timestamp projection now preserves pre-epoch dates and
+  rejects malformed values; add a mounted `utimensat/fstat` regression before
+  treating timestamp projection as verified.
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's

@@ -2588,27 +2588,45 @@ impl FodFuse {
         }
     }
 
-    fn parse_time(value: &str) -> SystemTime {
+    fn parse_time(value: &str) -> Result<SystemTime, libc::c_int> {
         let value = value.trim();
         if value.is_empty() {
-            return UNIX_EPOCH;
+            return Err(EIO);
         }
         let normalized = value.replace('T', " ");
         let naive_formats = ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"];
         for fmt in naive_formats {
             if let Ok(naive) = NaiveDateTime::parse_from_str(&normalized, fmt) {
                 let dt = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
-                return SystemTime::UNIX_EPOCH
-                    + Duration::from_secs(dt.timestamp().max(0) as u64)
-                    + Duration::from_nanos(dt.timestamp_subsec_nanos() as u64);
+                return Self::system_time_from_unix_parts(
+                    dt.timestamp(),
+                    dt.timestamp_subsec_nanos(),
+                )
+                .ok_or(EIO);
             }
         }
         if let Ok(dt) = DateTime::parse_from_rfc3339(&value.replace(' ', "T")) {
-            return SystemTime::UNIX_EPOCH
-                + Duration::from_secs(dt.timestamp().max(0) as u64)
-                + Duration::from_nanos(dt.timestamp_subsec_nanos() as u64);
+            return Self::system_time_from_unix_parts(
+                dt.timestamp(),
+                dt.timestamp_subsec_nanos(),
+            )
+            .ok_or(EIO);
         }
-        UNIX_EPOCH
+        Err(EIO)
+    }
+
+    fn system_time_from_unix_parts(seconds: i64, nanoseconds: u32) -> Option<SystemTime> {
+        if seconds >= 0 {
+            return UNIX_EPOCH.checked_add(Duration::new(seconds as u64, nanoseconds));
+        }
+
+        let absolute_seconds = seconds.unsigned_abs();
+        let since_epoch = if nanoseconds == 0 {
+            Duration::from_secs(absolute_seconds)
+        } else {
+            Duration::new(absolute_seconds.checked_sub(1)?, 1_000_000_000 - nanoseconds)
+        };
+        UNIX_EPOCH.checked_sub(since_epoch)
     }
 
     fn file_type_from_special(special_type: &str) -> FileType {
@@ -3722,10 +3740,10 @@ impl FodFuse {
                 ino: INodeNo(inode),
                 size: target.len() as u64,
                 blocks: self.block_count(target.len() as u64, "symlink"),
-                atime: Self::parse_time(&acc_date),
-                mtime: Self::parse_time(&mod_date),
-                ctime: Self::parse_time(&chg_date),
-                crtime: Self::parse_time(&chg_date),
+                atime: Self::parse_time(&acc_date)?,
+                mtime: Self::parse_time(&mod_date)?,
+                ctime: Self::parse_time(&chg_date)?,
+                crtime: Self::parse_time(&chg_date)?,
                 kind: FileType::Symlink,
                 perm: 0o777,
                 nlink: 1,
@@ -3792,10 +3810,10 @@ impl FodFuse {
                 ino: INodeNo(inode),
                 size,
                 blocks: self.block_count(allocated_bytes, &obj_type),
-                atime: Self::parse_time(&acc_date),
-                mtime: Self::parse_time(&mod_date),
-                ctime: Self::parse_time(&chg_date),
-                crtime: Self::parse_time(&chg_date),
+                atime: Self::parse_time(&acc_date)?,
+                mtime: Self::parse_time(&mod_date)?,
+                ctime: Self::parse_time(&chg_date)?,
+                crtime: Self::parse_time(&chg_date)?,
                 kind,
                 perm,
                 nlink: nlink.try_into().unwrap_or(u32::MAX),
@@ -3883,10 +3901,10 @@ impl FodFuse {
                 ino: INodeNo(inode),
                 size,
                 blocks: self.block_count(allocated_bytes, "file"),
-                atime: Self::parse_time(&acc_date),
-                mtime: Self::parse_time(&mod_date),
-                ctime: Self::parse_time(&chg_date),
-                crtime: Self::parse_time(&chg_date),
+                atime: Self::parse_time(&acc_date)?,
+                mtime: Self::parse_time(&mod_date)?,
+                ctime: Self::parse_time(&chg_date)?,
+                crtime: Self::parse_time(&chg_date)?,
                 kind,
                 perm,
                 nlink: nlink.try_into().unwrap_or(u32::MAX),
@@ -4273,8 +4291,16 @@ impl FodFuse {
         if self.read_only {
             return;
         }
-        let atime = Self::parse_time(&metadata.access_date);
-        let mtime = Self::parse_time(&metadata.modification_date);
+        let (atime, mtime) = match (
+            Self::parse_time(&metadata.access_date),
+            Self::parse_time(&metadata.modification_date),
+        ) {
+            (Ok(atime), Ok(mtime)) => (atime, mtime),
+            _ => {
+                warn!("FOD read metadata contains an invalid timestamp file_id={}", file_id);
+                return;
+            }
+        };
         if !self
             .atime_policy
             .should_update(false, &FileReadMetadataTime { atime, mtime })
