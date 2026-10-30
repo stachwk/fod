@@ -258,10 +258,12 @@ Reading guide:
   an old handle from switching to a replacement directory at the same path.
   A two-mount remove/recreate regression now verifies an old open handle does
   not expose the replacement after rewind and that fresh lookup sees the new
-  inode. Verify continuation, concurrent add/remove and large directories with
-  mounted FUSE operations; POSIX leaves visibility of additions/removals
-  unspecified, so assert stable unaffected entries and no cookie-induced
-  repeats/skips rather than membership policy.
+  inode. `test_readdir_snapshot_multimount.py` reads in small chunks while a
+  second mount removes and adds names, checks stable unaffected entries and
+  duplicate-free continuation, then confirms rewind refreshes the snapshot.
+  POSIX leaves visibility of additions/removals unspecified, so the test does
+  not require either membership outcome before rewind. Larger directory sizes
+  and libc/ABI boundary behavior remain to be covered.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
