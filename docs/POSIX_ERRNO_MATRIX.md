@@ -17,7 +17,9 @@ sprawdzenia w P12.
 `test_path_search_permissions.py` checks libc `opendir()` as an unprivileged
 user against a mode-000 directory and requires exact `EACCES`, separately from
 its `os.listdir()`/`readdir()` permission assertion. The mounted regression
-passed against an isolated database; details are recorded in [`TODO.md`](../TODO.md).
+passed on FOD 3.4.374 in `release-lto` against a fresh disposable PostgreSQL
+16.15 database on Linux 6.17/libfuse 3.17.4; details are recorded in
+[`TODO.md`](../TODO.md).
 
 | Interfejs | POSIX: wymagane błędy w zakresie FOD | POSIX: warunkowe, `may fail` lub XSI | Dowody FOD i otwarte sprawdzenia |
 | --- | --- | --- | --- |

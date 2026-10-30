@@ -312,11 +312,13 @@ Reading guide:
   where that restriction does not apply.
   `test_path_search_permissions.py` also calls libc `opendir()` as `nobody` on
   a mode-000 directory and checks exact `EACCES`; this isolates the directory
-  stream API boundary from `os.listdir()`/`readdir()` behavior. The mounted
-  target could not run here: schema initialization refused its upgrade because
-  three FOD client sessions were active. The new FUSE assertion remains
-  unverified until it runs against an isolated/up-to-date test database; active
-  mounts were left untouched.
+  stream API boundary from `os.listdir()`/`readdir()` behavior. An earlier run
+  against the shared database could not upgrade while three FOD client
+  sessions were active. On 2026-10-30 the complete test passed on FOD 3.4.374
+  in `release-lto` against a fresh disposable PostgreSQL 16.15 database on
+  Linux 6.17/libfuse 3.17.4, including exact `EACCES` from libc `opendir()`,
+  `mkdir()` and `rmdir()`. The temporary database was dropped; existing mounts
+  were left untouched.
   Linux v6.17 source review confirms that VFS handles `rmdir(.)` as `EINVAL`,
   `rmdir(..)` as `ENOTEMPTY`, root/mountpoint removal as `EBUSY`, and a final
   symlink as `ENOTDIR` before calling FUSE; VFS also checks destination
