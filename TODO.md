@@ -14,7 +14,7 @@ Reading guide:
 
 ## Unresolved findings
 
-- [x] **Root `access(X_OK)` używa bitu wykonywania z opóźnionej repliki.**
+- [x] **Callback FUSE `access(X_OK)` używał bitu wykonywania z opóźnionej repliki.**
   Callback `FodFuse::access` pobierał początkowe atrybuty przez zwykły read
   routing, a następnie stosował wyjątek Linuxa wymagający co najmniej jednego
   bitu wykonywania dla root. `acl_allows()` odświeżał metadane z primary, lecz
@@ -25,6 +25,29 @@ Reading guide:
   tryby w PostgreSQL i wymaga odmowy `os.access(X_OK)` na mouncie z
   `FOD_DEFAULT_PERMISSIONS=0`. Cały test primary/replica przeszedł na FOD
   3.4.383 dnia 2026-10-30; artefakty: `artifacts/integration/unlink-primary-authority-20261030T225902Z/`.
+
+- [x] **`default_permissions` omijało primary-authoritative sprawdzenie prawa przejścia rodzica.**
+  Dwumountowa regresja w `test_unlink_primary_authority_docker.py` odtwarza
+  katalog `0711` dla `nobody`, zatrzymuje replay, zmienia primary na `0700` i
+  próbuje otworzyć czytelny plik potomny z mountu `FOD_DEFAULT_PERMISSIONS=1`.
+  Przed poprawką open zwrócił sukces (`errno=0`): `lookup()`/`opendir()` oraz
+  wspólny `check_path_search_permissions()` polegały na kernelowym prechecku,
+  który widział opóźniony tryb. Sprawdzenie FOD korzysta teraz zawsze z
+  autorytatywnej ACL/mode, niezależnie od kernelowej opcji. Test primary/replica
+  przeszedł na FOD 3.4.384 dnia 2026-10-31; artefakty:
+  `artifacts/integration/unlink-primary-authority-20261030T231016Z/`.
+
+- [ ] **`access(X_OK)` nadal może raportować stary tryb przy kernelowym `default_permissions`.**
+  W diagnostycznym przebiegu z FOD 3.4.383, primary/replica replay zatrzymanym
+  po zmianie trybu `0100` na `0000`, testowy mount z
+  `FOD_DEFAULT_PERMISSIONS=1` zwrócił `os.access(X_OK) == true` dla root;
+  `FUSE_ACCESS` callback nie jest wywoływany w tym kernelowym trybie
+  uprawnień. Z mountem `FOD_DEFAULT_PERMISSIONS=0` ten sam check zwraca odmowę.
+  Operacje `lookup`, `opendir` i `open` są teraz sprawdzane przez FOD, ale wynik
+  samego `access()` pozostaje oparty na atrybutach kernela i może być nieaktualny
+  do wygaśnięcia cache. Wpływ ogranicza się do odpowiedzi advisory `access()`;
+  następny krok: określić obsługiwany kontrakt cache albo wymusić primary-backed
+  permission refresh, nie osłabiając istniejącego `allow_other` i ACL.
 
 - [ ] **Minimalny Linux/libfuse FOD nie ma walidacji montowanego end-to-end.**
   `rust_fuse/src/platform_requirements.rs` odrzuca Linux starszy niż 4.18.0 i

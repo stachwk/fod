@@ -77,6 +77,7 @@ def main():
         FOD_PG_PRIMARY_HOSTS=f"127.0.0.1:{primary_port}",
         FOD_PG_REPLICA_HOSTS=f"127.0.0.1:{replica_port}",
         FOD_PG_REPLICA_READ_ROUTING_ENABLED="0", FOD_ROLE="primary",
+        FOD_ALLOW_OTHER="1",
         FOD_ATIME_POLICY="noatime", FOD_METADATA_CACHE_TTL_SECONDS="0",
         FOD_READ_CACHE_BLOCKS="0", FOD_FOPEN_DIRECT_IO="1",
         FOD_SCHEMA_ADMIN_PASSWORD="unlink-authority-test-admin",
@@ -253,6 +254,55 @@ def main():
         if os.access(root_access_b, os.X_OK):
             raise AssertionError("root access(X_OK) trusted execute bits on the lagged replica")
         results["root_x_ok_access_uses_primary_mode"] = True
+        resume()
+
+        previous_default_permissions = os.environ.get("FOD_DEFAULT_PERMISSIONS")
+        os.environ["FOD_DEFAULT_PERMISSIONS"] = "1"
+        md = temp / "d"
+        d = FODMount(str(ROOT)); mounts.append(d)
+        d.start(str(md))
+        if previous_default_permissions is None:
+            os.environ.pop("FOD_DEFAULT_PERMISSIONS", None)
+        else:
+            os.environ["FOD_DEFAULT_PERMISSIONS"] = previous_default_permissions
+
+        # Even with kernel default_permissions enabled, the FUSE open callback
+        # must recheck parent search rights against primary. Linux can accept a
+        # stale cached directory mode while the read replica is paused.
+        temp.chmod(0o755)
+        search_dir_a = ma / "stale-parent-search-authority"
+        search_dir_d = md / search_dir_a.name
+        search_dir_a.mkdir()
+        search_dir_a.chmod(0o711)
+        search_file_d = search_dir_d / "readable-file"
+        search_file_a = search_dir_a / search_file_d.name
+        search_file_a.write_text("visible before revoke\n")
+        search_file_a.chmod(0o644)
+        barrier()
+        before_revoke = subprocess.run(
+            [
+                "sudo", "-n", "-u", "nobody", "python3", "-c",
+                "import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_text().strip())",
+                str(search_file_d),
+            ], capture_output=True, text=True, check=False,
+        )
+        assert before_revoke.returncode == 0, before_revoke.stderr
+        pause()
+        search_dir_a.chmod(0o700)
+        after_revoke = subprocess.run(
+            [
+                "sudo", "-n", "-u", "nobody", "python3", "-c",
+                "import sys;\ntry: open(sys.argv[1], 'rb').close()\nexcept OSError as e: print(e.errno)\nelse: print(0)",
+                str(search_file_d),
+            ], capture_output=True, text=True, check=False,
+        )
+        if after_revoke.returncode != 0 or after_revoke.stdout.strip() != str(errno.EACCES):
+            raise AssertionError(
+                "FUSE open ignored primary parent-search revocation with "
+                f"default_permissions: rc={after_revoke.returncode} "
+                f"stdout={after_revoke.stdout!r} stderr={after_revoke.stderr!r}"
+            )
+        results["default_permissions_open_rechecks_primary_parent_search"] = True
         resume()
 
         # Truncate's zero-fill planning must use the primary size, not an old

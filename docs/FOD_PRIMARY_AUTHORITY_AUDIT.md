@@ -15,8 +15,13 @@ still require the reviews listed at the end.
 Mutation SQL and authoritative session/ownership operations use the primary
 connection targets in a role-routed writable mount. FUSE `access()` now also
 loads request inode attributes from primary before applying the root `X_OK`
-execute-bit rule; a paused-replica regression covers a remote permission
-change. Unlink now revalidates the
+execute-bit rule when FUSE handles permission checks; a paused-replica regression
+covers it. Parent search checks in `lookup`, `open`, path `getattr` and `opendir`
+now also run through FOD when kernel `default_permissions` is enabled, so stale
+kernel prechecks cannot authorize those operations after a remote permission
+revocation. With kernel `default_permissions` enabled, Linux-side `access()`
+may still return an advisory result from cached attributes; that remaining
+case is tracked in [`TODO.md`](../TODO.md). Unlink now revalidates the
 namespace and decides link/open/unlink/purge outcomes in one primary transaction.
 The full mounted unlink regression passes with replica replay paused. Other
 FUSE mutation preconditions still use replica-routed or cached reads, so this
@@ -278,7 +283,7 @@ parent ACL checks for creation and namespace removal/movement.
 | `rmdir` | Primary namespace/row locks, sticky-bit check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
 | Sticky bit on unlink/rmdir/rename | Parent/victim owner row locks inside the primary mutation transaction | Concurrent parent permission commit and nine stale-replica cases passed |
 | chmod/chown | Locked primary inode, seed check and authorization in the same update transaction | Concurrent chown and stale-replica owner rejection passed; partial owner fields preserved |
-| Access checks, timestamps, symlink lookup, open-handle stat/setattr, xattrs, mutating ioctl, lock identity | Primary update/persistence APIs; read-only callbacks reject mutations | FUSE access/open checks resolve current inode owner, group, mode and file identity from primary; `getattr`, `setattr` and file-handle ioctl attributes use current metadata from primary and remain bound to the handle's file ID; `link` verifies its inode against primary metadata before selecting the source file ID; `read`/`write` enforce descriptor modes and unknown handles fail closed instead of resolving by path; `flush`/`fsync` reject unknown handles; lock resource keys, write-ownership parent IDs, atime target IDs, symlink targets and `getlk`/`setlk` type checks resolve on primary; xattrs check namespace permissions; clone ioctls and `copy_file_range` validate source/destination access modes |
+| Access checks, timestamps, symlink lookup, open-handle stat/setattr, xattrs, mutating ioctl, lock identity | Primary update/persistence APIs; read-only callbacks reject mutations | FUSE access/open checks resolve current inode owner, group, mode and file identity from primary; parent search/ directory-read checks remain active alongside kernel `default_permissions`; `getattr`, `setattr` and file-handle ioctl attributes use current metadata from primary and remain bound to the handle's file ID; `link` verifies its inode against primary metadata before selecting the source file ID; `read`/`write` enforce descriptor modes and unknown handles fail closed instead of resolving by path; `flush`/`fsync` reject unknown handles; lock resource keys, write-ownership parent IDs, atime target IDs, symlink targets and `getlk`/`setlk` type checks resolve on primary; xattrs check namespace permissions; clone ioctls and `copy_file_range` validate source/destination access modes |
 | Explicit degraded replica-only mount | Read-only FUSE mount with mutation guards | It deliberately does not acquire/renew primary-backed leases or grant write ownership |
 
 `DbRepoLanes` gives the write repository primary connection targets and a

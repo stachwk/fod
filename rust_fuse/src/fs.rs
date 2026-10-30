@@ -1640,7 +1640,6 @@ pub struct FodFuse {
     reloadable_runtime: Arc<RwLock<RuntimeReloadableSettings>>,
     pub read_only: bool,
     degraded_read_only: bool,
-    default_permissions: bool,
     pub use_fuse_context: bool,
     pub fopen_direct_io: bool,
     pub selinux_enabled: bool,
@@ -1745,7 +1744,6 @@ impl FodFuse {
             security,
             atime_policy,
             read_only,
-            default_permissions,
             degraded_read_only,
             use_fuse_context,
             fopen_direct_io,
@@ -1803,7 +1801,6 @@ impl FodFuse {
             reloadable_runtime: Arc::new(RwLock::new(runtime.reloadable_settings())),
             read_only,
             degraded_read_only,
-            default_permissions,
             use_fuse_context,
             fopen_direct_io,
             selinux_enabled: security.selinux_enabled,
@@ -3034,9 +3031,6 @@ impl FodFuse {
         path: &str,
         subject: &SubjectIdentity,
     ) -> Result<(), libc::c_int> {
-        if self.default_permissions {
-            return Ok(());
-        }
         let normalized = Self::normalize_path(path);
         let components: Vec<&str> = normalized
             .split('/')
@@ -5661,28 +5655,26 @@ impl Filesystem for FodFuse {
             return;
         }
         let subject = self.request_identity(req);
-        if !self.default_permissions {
-            let parent_attrs = match self.attrs_for_path(&parent_path) {
-                Ok(Some(attrs)) => attrs,
-                Ok(None) => {
-                    fuse_reply_error!(reply, ENOENT);
-                    return;
-                }
-                Err(errno) => {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
-            };
-            match self.acl_allows(&parent_path, &parent_attrs.file_attr, libc::X_OK, &subject) {
-                Ok(true) => {}
-                Ok(false) => {
-                    fuse_reply_error!(reply, EACCES);
-                    return;
-                }
-                Err(errno) => {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
+        let parent_attrs = match self.attrs_for_path(&parent_path) {
+            Ok(Some(attrs)) => attrs,
+            Ok(None) => {
+                fuse_reply_error!(reply, ENOENT);
+                return;
+            }
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
+        match self.acl_allows(&parent_path, &parent_attrs.file_attr, libc::X_OK, &subject) {
+            Ok(true) => {}
+            Ok(false) => {
+                fuse_reply_error!(reply, EACCES);
+                return;
+            }
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
             }
         }
         let child_path = Self::join_path(&parent_path, name);
@@ -5822,18 +5814,16 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, ENOTDIR);
             return;
         }
-        if !self.default_permissions {
-            let subject = self.request_identity(req);
-            match self.acl_allows(&path, &attrs, libc::R_OK, &subject) {
-                Ok(true) => {}
-                Ok(false) => {
-                    fuse_reply_error!(reply, EACCES);
-                    return;
-                }
-                Err(errno) => {
-                    fuse_reply_error!(reply, errno);
-                    return;
-                }
+        let subject = self.request_identity(req);
+        match self.acl_allows(&path, &attrs, libc::R_OK, &subject) {
+            Ok(true) => {}
+            Ok(false) => {
+                fuse_reply_error!(reply, EACCES);
+                return;
+            }
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
             }
         }
         let metadata_profile_enabled = fod_fuse_profile_metadata_cache_enabled();
