@@ -1,6 +1,6 @@
 # POSIX conformance audit
 
-Status as of FOD 3.4.388 (`1aaf627`, 2026-10-31): **requirement audit in progress; no
+Status reviewed at FOD 3.4.389 (`d1ab57e`, 2026-10-31): **requirement audit in progress; no
 general POSIX conformance claim**.
 
 The initial matrix marks only the tested standard `lseek()` and sparse
@@ -24,6 +24,11 @@ test on FOD 3.4.387 also verifies that a caught signal interrupts a blocked
 `statvfs()` call with `EINTR` (P11/P12). Linux 6.17 and libfuse 3.17.4 are the
 latest recorded mounted stack; Linux 4.18/libfuse3 3.0 remain declared minimums
 without a minimum-stack end-to-end run.
+
+The current source/documentation review is at FOD 3.4.389. This version adds
+the x86_64 `statvfs()` overflow classification; the latest functional mounted
+evidence remains the individually versioned cases listed in the matrix and
+ledger below. A documentation review does not upgrade any Pending area.
 
 For the compact three-layer status, read
 [`compatibility-contracts.md`](compatibility-contracts.md). Linux/FUSE runtime

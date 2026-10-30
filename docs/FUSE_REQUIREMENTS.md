@@ -1,7 +1,8 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd FOD 3.4.387 (`ddd26c9`) z bieżącym testem
-przerwania `statvfs()`.
+Stan dokumentu: 2026-10-31, przegląd kodu FOD 3.4.389 (`d1ab57e`). Najnowsze
+przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.389.
 
 Ten dokument opisuje aktualny kontrakt uruchomieniowy Linux/FUSE, jego
 walidację oraz ograniczenia. Nie jest deklaracją zgodności POSIX. Status
@@ -68,10 +69,15 @@ callback FOD został wywołany. Dokładne przykłady i przypisanie errno są w
 
 | Stan w FOD | Obszary |
 | --- | --- |
-| Implementowane i objęte testami | init, lookup/forget/getattr, readdir/readlink/statfs (w tym `EINTR` dla przerwanego `statvfs()`), xattr, access, poll, open/read/write/release, POSIX/flock locks, flush/fsync, setattr, namespace, copy_file_range, regular `mknod`/FIFO, symlink/link; tworzenie węzłów urządzeń nie jest wspierane |
-| Implementowane, lecz dowody nie pokrywają całego kontraktu | ioctl, bmap, wybrane tryby fallocate, callback lseek dla SEEK_DATA/SEEK_HOLE |
-| Brak jawnej implementacji FOD | destroy, batch_forget, readdirplus, fsyncdir; katalogi używają domyślnego zachowania warstwy fuser zamiast własnych callbacków opendir/releasedir |
+| Implementowane i objęte testami wybranych zachowań | init, lookup/forget/getattr, opendir/readdir/releasedir, readlink/statfs (w tym `EINTR` dla przerwanego `statvfs()`), xattr, access, poll, open/create/read/write/release, POSIX/flock locks, flush/fsync, setattr, namespace, copy_file_range, regular `mknod`/FIFO, symlink/link; tworzenie węzłów urządzeń nie jest wspierane |
+| Implementowane, lecz dowody nie pokrywają całego kontraktu | ioctl, bmap, wybrane tryby fallocate, callback lseek dla SEEK_DATA/SEEK_HOLE; obecność callbacku nie oznacza pełnej zgodności POSIX ani kompletnego pokrycia błędów |
+| Brak jawnej implementacji FOD | destroy, batch_forget, readdirplus, fsyncdir |
 | Brak callbacku w używanym wysokopoziomowym API fuser | natywne SYNCFS, TMPFILE i STATX |
+
+Callbacki `opendir()` i `releasedir()` są jawnie zaimplementowane w
+`rust_fuse/src/fs.rs`; `opendir()` sprawdza typ katalogu i prawo odczytu, a
+`releasedir()` zwalnia stan uchwytu. Wcześniejsza wersja tej tabeli błędnie
+zaliczała je do domyślnego zachowania `fuser`.
 
 Zwykłe `SEEK_SET`, `SEEK_CUR` i `SEEK_END` obsługuje kernel na podstawie
 atrybutów inode; FOD implementuje callback dla sparse `SEEK_DATA` i

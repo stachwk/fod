@@ -5,8 +5,10 @@ release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed base: commit `1aaf627` (`FOD 3.4.388`), including the mounted
-`statvfs()` signal-interruption regression.
+Reviewed base: commit `d1ab57e` (`FOD 3.4.389`). The latest mounted
+`statvfs()` signal-interruption regression cited below passed on FOD 3.4.387;
+3.4.389 adds the ABI-specific overflow classification, not a functional
+filesystem change.
 
 ## Overall filesystem compatibility status
 
@@ -20,8 +22,8 @@ claim.
 | Area | Implemented boundary | Verification status |
 | --- | --- | --- |
 | POSIX filesystem API | Broad Linux filesystem operations, metadata, permissions, namespace changes, regular-file locks and FIFO behavior | Issue 8 audit remains open: 2 `lseek()` case groups are Pass and 12 areas remain Pending. No overall POSIX conformance claim is made. P07 includes paused-replica checks for `open()` denial and `access(X_OK)` refresh with kernel `default_permissions`; `statvfs()` now has a mounted `EINTR` regression. The detailed P01-P12 ledger owns remaining work. |
-| Linux kernel/VFS | Linux-only runtime; startup rejects kernels older than 4.18.0. VFS may handle or reject operations before FUSE dispatch. | Preflight boundary has unit coverage. Mounted evidence is concentrated on Linux 6.17; end-to-end execution on the declared minimum kernel has not been recorded. Linux-specific behavior, including VFS errno short-circuits, is attributed separately from FOD callbacks. |
-| FUSE/libfuse | `fuser 0.18.0`, explicit libfuse3 backend, userspace protocol ceiling 7.40, runtime protocol/capability negotiation | Mounted evidence uses Linux 6.17/libfuse 3.17.4. The declared libfuse3 3.0.0 floor has preflight coverage but no recorded minimum-version mount matrix. Callback coverage and omissions are listed below; `FUSE_INTERRUPT` now returns `EINTR` for pending `statfs` replies and blocked POSIX lock waits. |
+| Linux kernel/VFS | Linux-only runtime; startup rejects kernels older than 4.18.0. Linux VFS performs pathname, descriptor, permission and syscall work before or after FUSE callbacks. | Version-gate unit tests cover the declared floor. Recorded mounted evidence is concentrated on Linux 6.17; no end-to-end run on Linux 4.18 is recorded. Known Linux-specific differences and short-circuit behavior are attributed in the POSIX errno matrix. |
+| FUSE/libfuse | `fuser 0.18.0`, explicit libfuse3 backend, userspace protocol ceiling 7.40, runtime protocol/capability negotiation | Mounted evidence uses Linux 6.17/libfuse 3.17.4. The declared libfuse3 3.0.0 floor has preflight coverage but no minimum-version mount run. Writable mounts require negotiated `FUSE_ATOMIC_O_TRUNC`; POSIX/flock locking capabilities are requested and ACL capability is conditional. `FUSE_INTERRUPT` interruption is tested for blocked `statfs` and POSIX lock requests. Callback coverage and omissions are listed below. |
 | Product platform | 64-bit and wider userspace only | 32-bit binaries and ABI targets are outside the support matrix. |
 
 This summary deliberately distinguishes a declared runtime floor from tested
@@ -82,10 +84,15 @@ POSIX behavior is documented as outside supported-platform coverage.
 
 | Status | Operations |
 | --- | --- |
-| Explicit and exercised | init, lookup, forget, getattr, readdir, readlink, statfs, xattr operations, access, poll, open, POSIX/flock locking, flush, fsync, read, release, setattr, namespace operations, write, copy_file_range, mknod, symlink, link |
+| Explicit and tested for selected behavior | init, lookup, forget, getattr, opendir/readdir/releasedir, readlink, statfs, xattr operations, access, poll, open/create, POSIX/flock locking, flush, fsync, read/write/release, setattr, namespace operations, copy_file_range, mknod, symlink, link |
 | Explicit but not comprehensively exercised | ioctl, bmap, fallocate (supported mode subset), lseek (`SEEK_DATA`/`SEEK_HOLE`) |
-| Not explicitly implemented | destroy, batch_forget, opendir, readdirplus, releasedir, fsyncdir |
+| Not explicitly implemented | destroy, batch_forget, readdirplus, fsyncdir |
 | Not exposed by the inspected high-level API | native SYNCFS, TMPFILE, STATX callbacks |
+
+`opendir()` checks the directory and read permission and creates FOD directory
+handle state; `releasedir()` drops that state. These callbacks exist in
+`rust_fuse/src/fs.rs`; their presence alone does not imply complete POSIX
+directory-stream conformance. `readdir()` has separate mounted coverage.
 
 Syscall success through a kernel or library fallback is not proof that FOD
 implements the corresponding callback.
