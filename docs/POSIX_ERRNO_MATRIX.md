@@ -73,9 +73,10 @@ FOD został wywołany:
   rename pozostają bez zmian.
   Dla wiszącego symlinku z ukośnikiem Linux zwraca `ENOENT` dla operacji
   wymagających celu (`stat()`, `lstat()`, `open()`, `truncate()`, `chmod()`,
-  `utime()`, `readlink()`, `statvfs()` i `link()`), `EEXIST` dla `mkdir()` i
-  nowego celu `symlink()`, oraz `ENOTDIR` dla `unlink()`, `rmdir()` i `rename()`.
-  Test potwierdza, że pierwotny symlink pozostaje.
+  `chown()`, `utime()`, `readlink()`, `statvfs()`, źródła hardlinku i
+  `access()`), `EEXIST` dla `mkdir()` i celów hardlinku/symlinku, oraz
+  `ENOTDIR` dla `unlink()`, `rmdir()` i źródła/celu `rename()`. Test potwierdza,
+  że pierwotny symlink i źródło rename pozostają.
 - POSIX [XBD pathname resolution](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html) leaves exactly two leading slashes implementation-defined and requires more than two to behave as one. Linux/FOD tests confirm paths beginning `//` and `///` both resolve to the same mounted file as a single leading slash.
 - Linux v6.17 `chmod_common()` ogranicza argument `mode` przez `S_IALLUGO` i
   zachowuje istniejące bity typu inode. Montowany probe FOD z `mode=0o10000`

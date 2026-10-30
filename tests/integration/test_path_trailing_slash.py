@@ -292,6 +292,7 @@ def main() -> None:
                 ("open", lambda: os.open(dangling_slash, os.O_RDONLY)),
                 ("truncate", lambda: os.truncate(dangling_slash, 0)),
                 ("chmod", lambda: os.chmod(dangling_slash, 0o600)),
+                ("chown", lambda: os.chown(dangling_slash, -1, -1)),
                 ("utime", lambda: os.utime(dangling_slash, None)),
                 ("readlink", lambda: os.readlink(dangling_slash)),
                 ("statvfs", lambda: os.statvfs(dangling_slash)),
@@ -315,6 +316,11 @@ def main() -> None:
                 errno.EEXIST,
                 "symlink destination dangling symlink/",
             )
+            expect_errno(
+                lambda: os.link(rename_source, dangling_slash),
+                errno.EEXIST,
+                "link destination dangling symlink/",
+            )
             for operation_name, operation in (
                 ("unlink", lambda: os.unlink(dangling_slash)),
                 ("rmdir", lambda: os.rmdir(dangling_slash)),
@@ -330,8 +336,22 @@ def main() -> None:
                     errno.ENOTDIR,
                     f"{operation_name} dangling symlink/",
                 )
+            expect_errno(
+                lambda: os.rename(rename_source, dangling_slash),
+                errno.ENOTDIR,
+                "rename destination dangling symlink/",
+            )
+            ctypes.set_errno(0)
+            access_result = libc.access(os.fsencode(dangling_slash), os.F_OK)
+            access_error = ctypes.get_errno()
+            assert access_result == -1 and access_error == errno.ENOENT, (
+                "access dangling symlink/",
+                access_result,
+                access_error,
+            )
             assert dangling_link.is_symlink()
             assert os.readlink(dangling_link) == "missing-target"
+            assert rename_source.read_bytes() == b"rename source"
 
             trailing_directory = directory / "created-with-slash"
             os.mkdir(f"{trailing_directory}/")
@@ -467,7 +487,7 @@ def main() -> None:
                 "access=ENOTDIR "
                 "symlink_file=ENOTDIRx14,EEXISTx3 access=ENOTDIR "
                 "symlink_directory=accepted "
-                "dangling_slash=ENOENTx9,EEXISTx2,ENOTDIRx3 "
+                "dangling_slash=ENOENTx10,EEXISTx3,ENOTDIRx4 access=ENOENT "
                 "slash_symlink_dir=statvfs:ok,chown:ok,access:ok,link:EPERM "
                 "mkdir/link/symlink_dest:EEXIST,unlink/rmdir/rename:ENOTDIR "
                 "chmod_target=0o711 utime_target=exact truncate:EISDIR "
