@@ -101,7 +101,11 @@ Reading guide:
   component exceeds `NAME_MAX`; neither operation may create or remove an
   entry in these cases.
   It now also verifies Linux VFS returns `EBUSY` when asked to remove the
-  mounted FUSE root.
+  mounted FUSE root. `test_permissions.py` now calls `unlink()` and `rmdir()`
+  directly as `nobody` in a sticky directory and asserts exact `EPERM`; the
+  former shell-command checks accepted any failure and did not establish errno.
+  The POSIX errno matrix no longer lists sticky-directory errors for `mkdir()`,
+  where that restriction does not apply.
   Linux v6.17 source review confirms that VFS handles `rmdir(.)` as `EINVAL`,
   `rmdir(..)` as `ENOTEMPTY`, root/mountpoint removal as `EBUSY`, and a final
   symlink as `ENOTDIR` before calling FUSE; VFS also checks destination

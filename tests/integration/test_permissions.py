@@ -20,8 +20,33 @@ if str(ROOT) not in sys.path:
 from tests.integration.fod_mount import FODMount
 
 
-def _run_as_nobody(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["sudo", "-n", "-u", "nobody", *args], check=False)
+def _assert_errno_as_nobody(operation: str, path: Path, expected_errno: int) -> None:
+    script = """
+import os
+import sys
+
+operation, path = sys.argv[1:]
+try:
+    getattr(os, operation)(path)
+except OSError as error:
+    print(error.errno)
+else:
+    raise SystemExit(f"{operation} unexpectedly succeeded")
+"""
+    result = subprocess.run(
+        ["sudo", "-n", "-u", "nobody", sys.executable, "-c", script, operation, str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, (operation, path, result.returncode, result.stderr)
+    actual_errno = int(result.stdout.strip())
+    assert actual_errno == expected_errno, (
+        operation,
+        path,
+        errno.errorcode.get(actual_errno, actual_errno),
+        errno.errorcode.get(expected_errno, expected_errno),
+    )
 
 
 def _chgrp(path: Path, gid: int, *, follow_symlinks: bool = True) -> None:
@@ -72,11 +97,8 @@ def main() -> None:
 
             os.chmod(sticky_file, 0o600)
 
-            unlink_attempt = _run_as_nobody("rm", "-f", str(sticky_file))
-            assert unlink_attempt.returncode != 0, "expected sticky-bit unlink by other user to fail"
-
-            rmdir_attempt = _run_as_nobody("rmdir", str(sticky_subdir))
-            assert rmdir_attempt.returncode != 0, "expected sticky-bit rmdir by other user to fail"
+            _assert_errno_as_nobody("unlink", sticky_file, errno.EPERM)
+            _assert_errno_as_nobody("rmdir", sticky_subdir, errno.EPERM)
 
             sticky_file.unlink()
             sticky_subdir.rmdir()
