@@ -10544,6 +10544,23 @@ mod tests {
         assert_eq!(legacy[0].pid, 0);
     }
 
+    #[test]
+    fn malformed_lock_records_fail_closed() {
+        for blob in [
+            b"41\t3\t7\t19\t1234".as_slice(),
+            b"41\t1\t9223372036854775808\t\t1234",
+            b"41\t2\t7\t9223372036854775808\t1234",
+            b"41\t1\t19\t7\t1234",
+            b"41\t1\t7\t19\t1234\textra",
+            b"41\t1\t7",
+        ] {
+            assert!(matches!(
+                FodFuse::lock_records_from_blob(blob),
+                Err(errno) if errno == crate::errno::EIO
+            ));
+        }
+    }
+
     fn file_attr(kind: FileType, atime_age_secs: u64, mtime_age_secs: u64) -> FileAttr {
         let now = SystemTime::now();
         FileAttr {
