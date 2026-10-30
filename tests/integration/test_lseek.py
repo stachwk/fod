@@ -160,6 +160,25 @@ def main() -> None:
             assert descriptor_metadata_path.read_bytes() == b"unchanged"
             print("OK fstat/fchmod/fchown/futimens closed descriptor errno=EBADF unchanged=1")
 
+            closed_ftruncate_path = dir_path / "closed-ftruncate.txt"
+            closed_ftruncate_payload = b"unchanged ftruncate payload"
+            closed_ftruncate_path.write_bytes(closed_ftruncate_payload)
+            closed_ftruncate_before = closed_ftruncate_path.stat()
+            closed_ftruncate_fd = os.open(closed_ftruncate_path, os.O_RDWR)
+            os.close(closed_ftruncate_fd)
+            try:
+                os.ftruncate(closed_ftruncate_fd, 0)
+            except OSError as error:
+                assert error.errno == errno.EBADF, error.errno
+            else:
+                raise AssertionError("ftruncate accepted a closed fd")
+            closed_ftruncate_after = closed_ftruncate_path.stat()
+            assert closed_ftruncate_after.st_size == closed_ftruncate_before.st_size
+            assert closed_ftruncate_after.st_mtime_ns == closed_ftruncate_before.st_mtime_ns
+            assert closed_ftruncate_after.st_ctime_ns == closed_ftruncate_before.st_ctime_ns
+            assert closed_ftruncate_path.read_bytes() == closed_ftruncate_payload
+            print("OK ftruncate closed descriptor errno=EBADF unchanged=1")
+
             negative_positioned_io_path = dir_path / "negative-positioned-io.txt"
             negative_positioned_io_path.write_bytes(b"unchanged")
             fd = os.open(negative_positioned_io_path, os.O_RDWR)
@@ -336,7 +355,8 @@ def main() -> None:
             print(
                 "OK lseek/mount append_after_seek=1 pread_pwrite_offset=1 "
                 "dup_shared_offset=1 eof_short_read=1 zero_write=1 "
-                "zero_read=1 pwrite_beyond_eof=1 descriptor_metadata=1 "
+                "zero_read=1 pwrite_beyond_eof=1 ftruncate_closed_fd=1 "
+                "descriptor_metadata=1 "
                 "descriptor_flags=1 access_mode_errors=1 "
                 "negative_pread_pwrite=1"
             )

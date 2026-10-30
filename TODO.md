@@ -14,6 +14,12 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`ftruncate()` na zamkniętym deskryptorze zwraca `EBADF` bez zmiany pliku.**
+  `test_lseek.py` sprawdza dokładny errno i porównuje rozmiar, mtime, ctime oraz
+  payload przed i po wywołaniu. Potwierdza to walidację deskryptora po stronie
+  Linux przed dispatch do FUSE. Test przeszedł 2026-10-30 na FOD 3.4.355 na
+  jednorazowej bazie PostgreSQL, którą usunięto po przebiegu.
+
 - [x] **`truncate()` odrzuca brak uprawnień z dokładnym `EACCES`.**
   `test_path_search_permissions.py` sprawdza, że użytkownik `nobody` dostaje
   dokładne `EACCES`, gdy plik nie ma prawa zapisu lub katalog nadrzędny nie
