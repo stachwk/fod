@@ -7,7 +7,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -436,6 +436,81 @@ fn concurrent_threads_create_write_and_read_independent_files() -> Result<(), St
                 actual.len()
             ));
         }
+    }
+
+    let shared_file_path = dir_path.join("parallel-same-file-writes.bin");
+    let shared_file_size = WORKERS * PAYLOAD_LEN;
+    fs::write(&shared_file_path, vec![0; shared_file_size])
+        .map_err(|err| format!("initialize shared write target failed: {err}"))?;
+    let mut expected_shared_file = vec![0; shared_file_size];
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let writers = (0..WORKERS)
+        .map(|worker_id| {
+            let path = shared_file_path.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<(usize, Vec<u8>), String> {
+                let marker = u8::try_from(worker_id + 1)
+                    .map_err(|err| format!("invalid shared-file marker: {err}"))?;
+                let payload = vec![marker; PAYLOAD_LEN];
+                let offset = worker_id * PAYLOAD_LEN;
+                barrier.wait();
+                let file = OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .map_err(|err| format!("shared-file writer {worker_id} open failed: {err}"))?;
+                file.write_all_at(&payload, offset as u64).map_err(|err| {
+                    format!("shared-file writer {worker_id} write_at failed: {err}")
+                })?;
+                file.sync_all()
+                    .map_err(|err| format!("shared-file writer {worker_id} sync failed: {err}"))?;
+                Ok((offset, payload))
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for writer in writers {
+        let (offset, payload) = writer
+            .join()
+            .map_err(|_| "shared-file writer thread panicked".to_string())??;
+        expected_shared_file[offset..offset + payload.len()].copy_from_slice(&payload);
+    }
+    let actual_shared_file = fs::read(&shared_file_path)
+        .map_err(|err| format!("read shared-file write result failed: {err}"))?;
+    if actual_shared_file != expected_shared_file {
+        return Err(format!(
+            "parallel writes to one file produced incorrect data: expected {} bytes, got {}",
+            expected_shared_file.len(),
+            actual_shared_file.len()
+        ));
+    }
+
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let readers = (0..WORKERS)
+        .map(|worker_id| {
+            let path = shared_file_path.clone();
+            let expected = expected_shared_file.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<(), String> {
+                barrier.wait();
+                let file = fs::File::open(&path)
+                    .map_err(|err| format!("shared-file reader {worker_id} open failed: {err}"))?;
+                let mut actual = Vec::new();
+                file.take((expected.len() + 1) as u64)
+                    .read_to_end(&mut actual)
+                    .map_err(|err| format!("shared-file reader {worker_id} read failed: {err}"))?;
+                if actual != expected {
+                    return Err(format!(
+                        "shared-file reader {worker_id} observed incorrect data"
+                    ));
+                }
+                Ok(())
+            })
+        })
+        .collect::<Vec<_>>();
+    for reader in readers {
+        reader
+            .join()
+            .map_err(|_| "shared-file reader thread panicked".to_string())??;
     }
 
     let shared_path = dir_path.join("same-name-race.bin");
