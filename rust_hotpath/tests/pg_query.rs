@@ -4342,6 +4342,7 @@ fn inode_permission_changes_authorize_locked_owner_and_preserve_fields() -> Resu
         let mut change = InodePermissionChange {
             actor_uid: 1000,
             actor_groups: &[1000, 2000],
+            use_posix_acl: false,
             mode: Some(0o6755),
             uid: None,
             gid: Some(2000),
@@ -4395,6 +4396,159 @@ fn inode_permission_changes_authorize_locked_owner_and_preserve_fields() -> Resu
 }
 
 #[test]
+fn chmod_updates_access_acl_and_mode_in_one_transaction() -> Result<(), String> {
+    use fod_rust_hotpath::pg::{InodePermissionChange, InodePermissionOutcome};
+    let _guard = ENV_LOCK.lock().unwrap();
+    let fixture = NamespaceFixture::new()?;
+    let file_id = fixture.file_id.unwrap();
+    let seed = fixture.repo.query_scalar_text(&format!(
+        "SELECT inode_seed FROM files WHERE id_file={file_id}"
+    ))?;
+    let acl_with_named_user = |owner: u16, mask: u16| {
+        let mut acl = 2u32.to_le_bytes().to_vec();
+        for (tag, permissions, id) in [
+            (0x0001u16, owner, u32::MAX),
+            (0x0002, 0o6, 3000),
+            (0x0004, 0o0, u32::MAX),
+            (0x0010, mask, u32::MAX),
+            (0x0020, 0o0, u32::MAX),
+        ] {
+            acl.extend_from_slice(&tag.to_le_bytes());
+            acl.extend_from_slice(&permissions.to_le_bytes());
+            acl.extend_from_slice(&id.to_le_bytes());
+        }
+        acl
+    };
+    let initial_acl = acl_with_named_user(0o0, 0o6);
+    fixture.repo.store_posix_acl_for_owner(
+        "file",
+        file_id,
+        "system.posix_acl_access",
+        &initial_acl,
+        Some(0o060),
+        false,
+        false,
+        1000,
+    )?;
+
+    assert_eq!(
+        fixture.repo.change_inode_permissions(
+            "file",
+            file_id,
+            &seed,
+            &InodePermissionChange {
+                actor_uid: 1000,
+                actor_groups: &[1000],
+                use_posix_acl: true,
+                mode: Some(0o640),
+                uid: None,
+                gid: None,
+            },
+        )?,
+        InodePermissionOutcome::Changed
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .query_scalar_text(&format!("SELECT mode FROM files WHERE id_file={file_id}"))?,
+        "640"
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .fetch_xattr_value_for_owner("file", file_id, "system.posix_acl_access")?,
+        Some(acl_with_named_user(0o6, 0o4))
+    );
+
+    let directory_id = fixture.directory_id;
+    let directory_seed = fixture.repo.query_scalar_text(&format!(
+        "SELECT inode_seed FROM directories WHERE id_directory={directory_id}"
+    ))?;
+    fixture.repo.store_posix_acl_for_owner(
+        "dir",
+        directory_id,
+        "system.posix_acl_access",
+        &initial_acl,
+        Some(0o060),
+        false,
+        false,
+        1000,
+    )?;
+    assert_eq!(
+        fixture.repo.change_inode_permissions(
+            "dir",
+            directory_id,
+            &directory_seed,
+            &InodePermissionChange {
+                actor_uid: 1000,
+                actor_groups: &[1000],
+                use_posix_acl: true,
+                mode: Some(0o750),
+                uid: None,
+                gid: None,
+            },
+        )?,
+        InodePermissionOutcome::Changed
+    );
+    assert_eq!(
+        fixture.repo.query_scalar_text(&format!(
+            "SELECT mode FROM directories WHERE id_directory={directory_id}"
+        ))?,
+        "750"
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .fetch_xattr_value_for_owner("dir", directory_id, "system.posix_acl_access")?,
+        Some(acl_with_named_user(0o7, 0o5))
+    );
+
+    let acl_without_named_entries = |owner: u16, group: u16, other: u16| {
+        let mut acl = 2u32.to_le_bytes().to_vec();
+        for (tag, permissions) in [(0x0001u16, owner), (0x0004, group), (0x0020, other)] {
+            acl.extend_from_slice(&tag.to_le_bytes());
+            acl.extend_from_slice(&permissions.to_le_bytes());
+            acl.extend_from_slice(&u32::MAX.to_le_bytes());
+        }
+        acl
+    };
+    let basic_acl = acl_without_named_entries(0o0, 0o6, 0o0);
+    fixture.repo.store_posix_acl_for_owner(
+        "file",
+        file_id,
+        "system.posix_acl_access",
+        &basic_acl,
+        Some(0o060),
+        false,
+        false,
+        1000,
+    )?;
+    assert_eq!(
+        fixture.repo.change_inode_permissions(
+            "file",
+            file_id,
+            &seed,
+            &InodePermissionChange {
+                actor_uid: 1000,
+                actor_groups: &[1000],
+                use_posix_acl: true,
+                mode: Some(0o754),
+                uid: None,
+                gid: None,
+            },
+        )?,
+        InodePermissionOutcome::Changed
+    );
+    assert_eq!(
+        fixture
+            .repo
+            .fetch_xattr_value_for_owner("file", file_id, "system.posix_acl_access")?,
+        Some(acl_without_named_entries(0o7, 0o5, 0o4))
+    );
+    Ok(())
+}
+
+#[test]
 fn chmod_waits_for_concurrent_chown_and_rejects_previous_owner() -> Result<(), String> {
     use fod_rust_hotpath::pg::{InodePermissionChange, InodePermissionOutcome};
     let _guard = ENV_LOCK.lock().unwrap();
@@ -4430,6 +4584,7 @@ fn chmod_waits_for_concurrent_chown_and_rejects_previous_owner() -> Result<(), S
             &InodePermissionChange {
                 actor_uid: 1000,
                 actor_groups: &[1000],
+                use_posix_acl: false,
                 mode: Some(0o777),
                 uid: None,
                 gid: None,

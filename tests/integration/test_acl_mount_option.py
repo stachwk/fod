@@ -75,13 +75,22 @@ def build_posix_acl(user_perm: int, group_perm: int, other_perm: int) -> bytes:
     return bytes(acl)
 
 
-def build_named_user_acl(uid: int, permissions: int) -> bytes:
+def build_named_user_acl(
+    uid: int,
+    permissions: int,
+    *,
+    user_obj: int = 0o0,
+    mask: int | None = None,
+    other: int = 0o0,
+) -> bytes:
+    if mask is None:
+        mask = permissions
     acl = bytearray(struct.pack("<I", 0x0002))
-    acl.extend(struct.pack("<HHI", 0x0001, 0o0, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0001, user_obj & 0o7, 0xFFFFFFFF))
     acl.extend(struct.pack("<HHI", 0x0002, permissions & 0o7, uid))
     acl.extend(struct.pack("<HHI", 0x0004, 0o0, 0xFFFFFFFF))
-    acl.extend(struct.pack("<HHI", 0x0010, permissions & 0o7, 0xFFFFFFFF))
-    acl.extend(struct.pack("<HHI", 0x0020, 0o0, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0010, mask & 0o7, 0xFFFFFFFF))
+    acl.extend(struct.pack("<HHI", 0x0020, other & 0o7, 0xFFFFFFFF))
     return bytes(acl)
 
 
@@ -553,6 +562,42 @@ def main() -> None:
                 assert os.access(file_path, os.R_OK)
                 assert os.access(file_path, os.W_OK)
                 assert not os.access(file_path, os.X_OK)
+
+                chmod_acl_path = mountpoint / f"acl-chmod-{suffix}.txt"
+                chmod_acl_path.write_bytes(b"chmod ACL payload\n")
+                nobody_uid = pwd.getpwnam("nobody").pw_uid
+                named_acl = build_named_user_acl(nobody_uid, 0o6)
+                os.setxattr(chmod_acl_path, "system.posix_acl_access", named_acl)
+                assert stat.S_IMODE(chmod_acl_path.stat().st_mode) == 0o060
+                os.chmod(chmod_acl_path, 0o640)
+                expected_chmod_acl = build_named_user_acl(
+                    nobody_uid, 0o6, user_obj=0o6, mask=0o4
+                )
+                actual_chmod_acl = os.getxattr(
+                    chmod_acl_path, "system.posix_acl_access"
+                )
+                assert actual_chmod_acl == expected_chmod_acl, (
+                    actual_chmod_acl.hex(),
+                    expected_chmod_acl.hex(),
+                )
+                assert stat.S_IMODE(chmod_acl_path.stat().st_mode) == 0o640
+
+                chmod_acl_dir = mountpoint / f"acl-chmod-dir-{suffix}"
+                chmod_acl_dir.mkdir()
+                os.setxattr(chmod_acl_dir, "system.posix_acl_access", named_acl)
+                assert stat.S_IMODE(chmod_acl_dir.stat().st_mode) == 0o060
+                os.chmod(chmod_acl_dir, 0o750)
+                expected_chmod_dir_acl = build_named_user_acl(
+                    nobody_uid, 0o6, user_obj=0o7, mask=0o5
+                )
+                actual_chmod_dir_acl = os.getxattr(
+                    chmod_acl_dir, "system.posix_acl_access"
+                )
+                assert actual_chmod_dir_acl == expected_chmod_dir_acl, (
+                    actual_chmod_dir_acl.hex(),
+                    expected_chmod_dir_acl.hex(),
+                )
+                assert stat.S_IMODE(chmod_acl_dir.stat().st_mode) == 0o750
 
                 acl_dir_path = mountpoint / f"acl-default-{suffix}"
                 acl_dir_path.mkdir()

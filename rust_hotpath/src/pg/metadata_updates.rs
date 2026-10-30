@@ -5,11 +5,11 @@
 //! File content generation belongs to content mutations, not metadata updates.
 
 use super::{
-    exec_command_params, exec_params, fetch_first_row_texts, parse_persisted_posix_mode, DbRepo,
-    PGconn,
+    DbRepo, PGconn, exec_command_params, exec_params, fetch_first_row_texts,
+    parse_persisted_posix_mode,
 };
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use std::ffi::CString;
 
 #[derive(Clone, Copy)]
@@ -259,6 +259,7 @@ pub(super) unsafe fn validate_file_write_authorization_on_conn(
 pub struct InodePermissionChange<'a> {
     pub actor_uid: u32,
     pub actor_groups: &'a [u32],
+    pub use_posix_acl: bool,
     pub mode: Option<u32>,
     pub uid: Option<u32>,
     pub gid: Option<u32>,
@@ -414,6 +415,21 @@ impl DbRepo {
             // Linux clears privilege bits on file chown; directories retain them.
             if kind == "file" && (change.uid.is_some() || change.gid.is_some()) {
                 mode &= !0o6000;
+            }
+            if change.mode.is_some() && change.use_posix_acl && matches!(kind, "file" | "dir") {
+                let acl_rows = tx.query_rows_text(&format!(
+                    "SELECT encode(value, 'base64') FROM xattrs WHERE owner_kind='{kind}' AND owner_id={id} AND name='system.posix_acl_access'"
+                ))?;
+                if let Some(encoded) = acl_rows.first().and_then(|row| row.first()) {
+                    let acl = BASE64_STANDARD
+                        .decode(encoded.trim())
+                        .map_err(|err| format!("invalid POSIX ACL payload: {err}"))?;
+                    let chmod_acl = super::xattrs::chmod_access_acl(&acl, mode)?;
+                    let encoded_acl = BASE64_STANDARD.encode(chmod_acl);
+                    tx.exec(&format!(
+                        "UPDATE xattrs SET value=decode('{encoded_acl}', 'base64') WHERE owner_kind='{kind}' AND owner_id={id} AND name='system.posix_acl_access'"
+                    ))?;
+                }
             }
             let mode_update = if kind == "symlink" {
                 String::new()

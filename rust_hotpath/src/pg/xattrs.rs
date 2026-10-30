@@ -5,19 +5,76 @@
 //! Keep path resolution here; connection routing and SQL execution stay in `pg`.
 
 use super::{
-    exec_command_params, exec_params, fetch_first_row_texts, is_retryable_connection_error,
-    parse_persisted_posix_mode, replayable_sql_error, result_error, sql_is_replayable_command,
-    DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus,
-    PGRES_TUPLES_OK,
+    DbRepo, PGRES_TUPLES_OK, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples,
+    PQresultStatus, exec_command_params, exec_params, fetch_first_row_texts,
+    is_retryable_connection_error, parse_persisted_posix_mode, replayable_sql_error, result_error,
+    sql_is_replayable_command,
 };
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use std::ffi::CString;
 
 pub(super) struct InheritedPosixAcl {
     pub(super) access_acl: Vec<u8>,
     pub(super) default_acl: Option<Vec<u8>>,
     pub(super) mode: u32,
+}
+
+/// Apply chmod's owner, group-class and other bits to an existing access ACL.
+/// With named entries, the group-class bits represent `ACL_MASK`; otherwise
+/// they represent `ACL_GROUP_OBJ`.
+pub(super) fn chmod_access_acl(value: &[u8], mode: u32) -> Result<Vec<u8>, String> {
+    if value.len() < 4 || (value.len() - 4) % 8 != 0 {
+        return Err("invalid POSIX ACL xattr length".to_string());
+    }
+    if u32::from_le_bytes(value[..4].try_into().unwrap()) != 2 {
+        return Err("unsupported POSIX ACL xattr version".to_string());
+    }
+
+    let owner = ((mode >> 6) & 0o7) as u16;
+    let group = ((mode >> 3) & 0o7) as u16;
+    let other = (mode & 0o7) as u16;
+    let mut acl = value.to_vec();
+    let mut user_obj = false;
+    let mut group_obj = None;
+    let mut has_mask = false;
+    let mut other_entry = false;
+    let mut has_named_entry = false;
+
+    for (index, entry) in acl[4..].chunks_exact_mut(8).enumerate() {
+        let tag = u16::from_le_bytes(entry[0..2].try_into().unwrap());
+        let permissions = u16::from_le_bytes(entry[2..4].try_into().unwrap());
+        if permissions & !0o7 != 0 {
+            return Err("invalid POSIX ACL permission bits".to_string());
+        }
+        match tag {
+            0x0001 if !user_obj => {
+                user_obj = true;
+                entry[2..4].copy_from_slice(&owner.to_le_bytes());
+            }
+            0x0002 | 0x0008 => has_named_entry = true,
+            0x0004 if group_obj.is_none() => group_obj = Some(index),
+            0x0010 if !has_mask => {
+                has_mask = true;
+                entry[2..4].copy_from_slice(&group.to_le_bytes());
+            }
+            0x0020 if !other_entry => {
+                other_entry = true;
+                entry[2..4].copy_from_slice(&other.to_le_bytes());
+            }
+            _ => return Err("invalid or duplicate POSIX ACL entry".to_string()),
+        }
+    }
+
+    if !user_obj || group_obj.is_none() || !other_entry || (has_named_entry && !has_mask) {
+        return Err("incomplete POSIX ACL xattr".to_string());
+    }
+    if !has_mask {
+        let group_obj = group_obj.unwrap();
+        let offset = 4 + group_obj * 8 + 2;
+        acl[offset..offset + 2].copy_from_slice(&group.to_le_bytes());
+    }
+    Ok(acl)
 }
 
 fn xattr_owner_table(owner_kind: &str) -> Result<(&'static str, &'static str), String> {

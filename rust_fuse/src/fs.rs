@@ -8133,6 +8133,7 @@ impl Filesystem for FodFuse {
             let change = InodePermissionChange {
                 actor_uid: subject.uid,
                 actor_groups: &groups,
+                use_posix_acl: self.acl_enabled,
                 mode,
                 uid,
                 gid,
