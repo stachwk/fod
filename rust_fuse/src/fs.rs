@@ -2932,6 +2932,31 @@ impl FodFuse {
         }
     }
 
+    fn acl_allows_for_attrs(
+        &self,
+        attrs: &ParsedAttrs,
+        mode: i32,
+        subject: &SubjectIdentity,
+    ) -> Result<bool, libc::c_int> {
+        if !self.acl_enabled {
+            return Ok(self.can_access(subject, &attrs.file_attr, mode));
+        }
+        let authority = self.repo.authoritative_view();
+        let acl_value = authority
+            .fetch_xattr_value_for_owner(
+                &attrs.xattr_owner_kind,
+                attrs.xattr_owner_id,
+                "system.posix_acl_access",
+            )
+            .map_err(|_| EIO)?;
+        if let Some(value) = acl_value {
+            let entries = Self::parse_posix_acl_xattr(&value)?;
+            Ok(self.acl_permission_from_entries(subject, &entries, &attrs.file_attr, mode))
+        } else {
+            Ok(self.can_access(subject, &attrs.file_attr, mode))
+        }
+    }
+
     fn check_path_search_permissions(
         &self,
         path: &str,
@@ -6184,7 +6209,7 @@ impl Filesystem for FodFuse {
                 fuse_reply_error!(reply, ENODATA);
                 return;
             }
-            match self.acl_allows(&path, &attrs.file_attr, libc::R_OK, &subject) {
+            match self.acl_allows_for_attrs(&attrs, libc::R_OK, &subject) {
                 Ok(true) => {}
                 Ok(false) => {
                     fuse_reply_error!(reply, ENODATA);

@@ -508,7 +508,10 @@ primary and reject an inode/path mismatch before addressing xattrs by that
 verified owner ID. For a still-open file whose path was unlinked or
 replaced, they bind to the open file ID instead. Hardlinks resolve to their
 underlying file ID, and the root directory retains owner ID 0. The xattr
-mutation transaction then locks that owner row as before.
+mutation transaction then locks that owner row as before. `user.*` reads
+evaluate read permission using the same verified attributes and fetch the
+access ACL by owner ID, including the open-unlinked case, rather than trying to
+re-resolve a vanished pathname.
 This closes the source-identified stale-path selection path, but no mounted
 replacement-race regression was run; add one before treating the behavior as
 runtime-verified. Confidence: high for the source-level mechanism and fix;

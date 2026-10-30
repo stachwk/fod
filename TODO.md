@@ -125,7 +125,8 @@ Reading guide:
   Confidence
   is high for the code-path fix; no mounted race/replacement reproduction was
   run. Add a two-mount deterministic replacement case covering set/remove and
-  get/list behavior before closing the finding. See
+  get/list behavior, plus `fgetxattr(user.*)` on an open-unlinked inode with
+  ACLs enabled, before closing the finding. See
   [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
 - [ ] **Finish PostgreSQL SQLSTATE-to-errno coverage for writes and namespace
   mutations.** `errno.rs` maps PostgreSQL `53100` (`disk_full`) to `ENOSPC` in
