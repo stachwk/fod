@@ -14,6 +14,12 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`truncate()` i `ftruncate()` aktualizują `mtime` oraz `ctime`.**
+  `test_truncate_shrink_block_boundary.py` sprawdza oba znaczniki po
+  skróceniu ścieżką oraz po skróceniu i rozszerzeniu przez deskryptor. Przed
+  operacjami deskryptorowymi test czeka 10 ms, aby rozróżnić znaczniki przy
+  mikrosekundowej rozdzielczości PostgreSQL. `make test-truncate-shrink-block-boundary`
+  przeszedł na FOD 3.4.316 (2026-10-30).
 - [x] **Stary uchwyt nie może wykonać `ftruncate()` po cross-mount takeover.**
   `test_stale_writer_fencing.py` odbiera lease mountowi A, pozwala mountowi B
   przejąć plik z wyższym fencing tokenem i zapisuje zwycięski payload. Następnie

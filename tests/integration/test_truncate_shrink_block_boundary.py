@@ -20,6 +20,23 @@ if str(ROOT) not in sys.path:
 from tests.integration.fod_mount import FODMount
 
 
+def assert_truncate_times_advanced(
+    before: os.stat_result,
+    after: os.stat_result,
+    label: str,
+) -> None:
+    if after.st_mtime_ns <= before.st_mtime_ns:
+        raise AssertionError(
+            f"{label} did not advance mtime: "
+            f"before={before.st_mtime_ns} after={after.st_mtime_ns}"
+        )
+    if after.st_ctime_ns <= before.st_ctime_ns:
+        raise AssertionError(
+            f"{label} did not advance ctime: "
+            f"before={before.st_ctime_ns} after={after.st_ctime_ns}"
+        )
+
+
 def assert_shrink_extend_zero_fill(
     file_path: Path,
     payload: bytes,
@@ -65,11 +82,16 @@ def main() -> None:
 
             old_mtime_ns = (time.time_ns() - 60_000_000_000) // 1000 * 1000
             os.utime(file_path, ns=(old_mtime_ns, old_mtime_ns))
+            before_truncate = file_path.stat()
+            time.sleep(0.01)
 
             os.truncate(file_path, block_size)
             truncated_stat = file_path.stat()
             assert truncated_stat.st_size == block_size
             assert truncated_stat.st_mtime_ns > old_mtime_ns
+            assert_truncate_times_advanced(
+                before_truncate, truncated_stat, "path truncate shrink"
+            )
 
             os.truncate(file_path, block_size * 2)
             assert file_path.stat().st_size == block_size * 2
@@ -113,14 +135,26 @@ def main() -> None:
             try:
                 seek_offset = 12
                 assert os.lseek(fd, seek_offset, os.SEEK_SET) == seek_offset
+                before_shrink = os.fstat(fd)
+                time.sleep(0.01)
                 os.ftruncate(fd, 5)
+                after_shrink = os.fstat(fd)
+                assert_truncate_times_advanced(
+                    before_shrink, after_shrink, "ftruncate shrink"
+                )
                 assert os.lseek(fd, 0, os.SEEK_CUR) == seek_offset
-                assert os.fstat(fd).st_size == 5
+                assert after_shrink.st_size == 5
                 assert os.read(fd, 1) == b""
 
+                before_extend = os.fstat(fd)
+                time.sleep(0.01)
                 os.ftruncate(fd, 9)
+                after_extend = os.fstat(fd)
+                assert_truncate_times_advanced(
+                    before_extend, after_extend, "ftruncate extend"
+                )
                 assert os.lseek(fd, 0, os.SEEK_CUR) == seek_offset
-                assert os.fstat(fd).st_size == 9
+                assert after_extend.st_size == 9
                 assert os.pread(fd, 9, 0) == descriptor_payload[:5] + (b"\x00" * 4)
             finally:
                 os.close(fd)
