@@ -1121,6 +1121,33 @@ fn null_file_unlinked_flag_is_not_reported_as_missing() -> Result<(), String> {
 }
 
 #[test]
+fn count_file_links_does_not_report_link_for_missing_file() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let file_id = repo.create_file(
+        None,
+        &unique_name("count_missing_links"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("count_missing_links_seed"),
+    )?;
+    let links_before_purge = repo.count_file_links(file_id);
+    let cleanup = repo.purge_primary_file(file_id);
+    let links_before_purge = links_before_purge?;
+    cleanup?;
+    if links_before_purge != 1 {
+        return Err("new file did not report one link".to_string());
+    }
+    match repo.count_file_links(file_id) {
+        Err(_) => Ok(()),
+        Ok(links) => Err(format!(
+            "missing file was reported with {links} link(s)"
+        )),
+    }
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

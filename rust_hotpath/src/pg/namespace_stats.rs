@@ -12,8 +12,12 @@ use std::ffi::CString;
 
 impl DbRepo {
     pub fn count_file_links(&self, file_id: u64) -> Result<u64, String> {
-        let sql = CString::new("SELECT 1 + COUNT(*) FROM hardlinks WHERE id_file = $1")
-            .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql = CString::new(
+            "SELECT 1 + COUNT(h.id_hardlink) \
+             FROM files f LEFT JOIN hardlinks h ON h.id_file = f.id_file \
+             WHERE f.id_file = $1 GROUP BY f.id_file",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
 

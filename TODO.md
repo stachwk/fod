@@ -414,6 +414,10 @@ Reading guide:
   report `st_nlink=1` for a corrupted row; it now validates the persisted flag
   before returning the link count. The same regression reproduced `Some(1)`
   for NULL before the fix and verifies that the decoder now errors.
+  `count_file_links()` also used to return `1` for an absent file because its
+  aggregate did not join `files`; it now returns no row and fails the count
+  decode. `count_file_links_does_not_report_link_for_missing_file` reproduced
+  and verifies this case.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
