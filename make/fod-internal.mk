@@ -1726,7 +1726,10 @@ test-mount-workflow: build-runtime venv up
 test-mount-root-permissions: reset
 	@ADMP_TRACE_ENV="$(ADMP_TRACE_ENV)" POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_SCHEMA_ADMIN_PASSWORD=$(FOD_SCHEMA_ADMIN_PASSWORD) FOD_SELINUX=$(FOD_SELINUX) FOD_ACL=$(FOD_ACL) FOD_DEFAULT_PERMISSIONS=$(FOD_DEFAULT_PERMISSIONS) FOD_ATIME_POLICY=$(FOD_ATIME_POLICY) FOD_LAZYTIME=$(FOD_LAZYTIME) FOD_SYNC=$(FOD_SYNC) FOD_DIRSYNC=$(FOD_DIRSYNC) VENV_PYTHON=$(VENV_PYTHON) bash tests/integration/test_mount_root_permissions.sh
 
-.PHONY: test-root-directory-metadata-multimount test-readdir-small-buffers test-readdir-snapshot-multimount test-path-search-permissions
+.PHONY: test-client-version-gate test-root-directory-metadata-multimount test-readdir-small-buffers test-readdir-snapshot-multimount test-path-search-permissions
+test-client-version-gate: build-runtime venv init
+	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_client_version_gate.py
+
 test-root-directory-metadata-multimount: build-runtime venv init
 	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_root_directory_metadata_multimount.py
 
