@@ -422,7 +422,11 @@ Reading guide:
   an error for a vanished file rather than fabricating a hole result. The
   `null_data_object_id_is_not_reported_as_missing_file` and
   `sparse_seek_does_not_treat_missing_file_as_hole` regressions reproduced
-  both old results and verify fail-closed handling.
+  both old results and verify fail-closed handling. `file_read_metadata()` also
+  used to return a successful snapshot with an empty timestamp when PostgreSQL
+  supplied NULL; it now requires exactly four columns and rejects an empty
+  timestamp field. `file_read_metadata_rejects_null_timestamp` reproduced the
+  empty `access_date` and verifies rejection.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

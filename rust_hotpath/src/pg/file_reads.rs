@@ -452,13 +452,25 @@ impl DbRepo {
             if row.is_empty() {
                 return Ok(None);
             }
-            if row.len() < 4 {
-                return Err("file read metadata row is missing fields".to_string());
+            if row.len() != 4 {
+                return Err(format!(
+                    "invalid file read metadata row: expected 4 columns, got {}",
+                    row.len()
+                ));
             }
             let size = row[0]
                 .trim()
                 .parse::<u64>()
                 .map_err(|_| "invalid file size value".to_string())?;
+            for (field, value) in [
+                ("access_date", &row[1]),
+                ("modification_date", &row[2]),
+                ("change_date", &row[3]),
+            ] {
+                if value.trim().is_empty() {
+                    return Err(format!("file read metadata {field} is empty"));
+                }
+            }
             Ok(Some(FileReadMetadata {
                 size,
                 access_date: row[1].clone(),

@@ -1220,6 +1220,54 @@ fn sparse_seek_does_not_treat_missing_file_as_hole() -> Result<(), String> {
 }
 
 #[test]
+fn file_read_metadata_rejects_null_timestamp() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let file_id = repo.create_file(
+        None,
+        &unique_name("null_read_metadata_timestamp"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("null_read_metadata_timestamp_seed"),
+    )?;
+    let mut not_null_dropped = false;
+
+    let result = (|| {
+        repo.exec("ALTER TABLE files ALTER COLUMN access_date DROP NOT NULL")?;
+        not_null_dropped = true;
+        repo.exec(&format!(
+            "UPDATE files SET access_date = NULL WHERE id_file = {file_id}"
+        ))?;
+        match repo.file_read_metadata(file_id) {
+            Err(error) if error.to_ascii_lowercase().contains("access_date") => {}
+            Err(error) => return Err(format!("unexpected read-metadata error: {error}")),
+            Ok(value) => {
+                return Err(format!(
+                    "NULL access_date was returned as read metadata: {value:?}"
+                ));
+            }
+        }
+        Ok(())
+    })();
+
+    let cleanup = (|| {
+        if not_null_dropped {
+            repo.exec(&format!(
+                "UPDATE files SET access_date = NOW() WHERE id_file = {file_id}"
+            ))?;
+            repo.exec("ALTER TABLE files ALTER COLUMN access_date SET NOT NULL")?;
+        }
+        repo.purge_primary_file(file_id)
+    })();
+    result.and(cleanup)?;
+    if repo.file_read_metadata(file_id)?.is_some() {
+        return Err("purged file still had read metadata".to_string());
+    }
+    Ok(())
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
