@@ -222,8 +222,11 @@ Reading guide:
   return an error for NULL or malformed IDs rather than treating them as a
   missing entry; xattr path lookup no longer substitutes ID 0 for a missing
   directory ID. Special-file metadata decoding now rejects NULL/malformed rows
-  and frees every `PGresult` on parse failures. Additional PostgreSQL
-  fault-injection and malformed-row regressions remain pending. A related
+  and frees every `PGresult` on parse failures. The
+  `special_file_metadata_decoder_rejects_malformed_values` regression verifies
+  valid decoding and rejects NULL, empty type or nonnumeric major/minor values.
+  Broader PostgreSQL fault-injection and malformed-row regressions remain
+  pending. A related
   copy-on-write reference-count parse fallback was removed: malformed counts
   now fail the transaction instead of defaulting to zero and deleting a data
   object.

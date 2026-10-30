@@ -124,6 +124,63 @@ fn parse_directory_entry_metadata_rows(
         .collect()
 }
 
+fn parse_special_file_metadata_values(
+    file_type: Option<&str>,
+    rdev_major: Option<&str>,
+    rdev_minor: Option<&str>,
+) -> Result<(String, u32, u32), String> {
+    let (Some(file_type), Some(rdev_major), Some(rdev_minor)) = (file_type, rdev_major, rdev_minor)
+    else {
+        return Err("special file metadata contains NULL fields".to_string());
+    };
+    let file_type = file_type.trim();
+    if file_type.is_empty() {
+        return Err("special file metadata has an empty file type".to_string());
+    }
+    let rdev_major = rdev_major
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| "invalid special file major".to_string())?;
+    let rdev_minor = rdev_minor
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| "invalid special file minor".to_string())?;
+    Ok((file_type.to_string(), rdev_major, rdev_minor))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_special_file_metadata_values;
+
+    #[test]
+    fn special_file_metadata_decoder_rejects_malformed_values() {
+        assert_eq!(
+            parse_special_file_metadata_values(Some("char"), Some("12"), Some("34")),
+            Ok(("char".to_string(), 12, 34))
+        );
+        assert!(
+            parse_special_file_metadata_values(None, Some("12"), Some("34"))
+                .unwrap_err()
+                .contains("NULL fields")
+        );
+        assert!(
+            parse_special_file_metadata_values(Some(""), Some("12"), Some("34"))
+                .unwrap_err()
+                .contains("empty file type")
+        );
+        assert!(
+            parse_special_file_metadata_values(Some("char"), Some("invalid"), Some("34"))
+                .unwrap_err()
+                .contains("invalid special file major")
+        );
+        assert!(
+            parse_special_file_metadata_values(Some("char"), Some("12"), Some("invalid"))
+                .unwrap_err()
+                .contains("invalid special file minor")
+        );
+    }
+}
+
 impl DbRepo {
     /// Resolve the entire directory path. The logical root and a missing path
     /// both return `None`; namespace callers must distinguish them before using
@@ -407,10 +464,6 @@ impl DbRepo {
                     PQclear(res);
                     return Err("special file metadata row is missing fields".to_string());
                 }
-                if (0..3).any(|column| PQgetisnull(res, 0, column) != 0) {
-                    PQclear(res);
-                    return Err("special file metadata contains NULL fields".to_string());
-                }
                 let file_type_ptr = PQgetvalue(res, 0, 0);
                 let major_ptr = PQgetvalue(res, 0, 1);
                 let minor_ptr = PQgetvalue(res, 0, 2);
@@ -418,20 +471,17 @@ impl DbRepo {
                     PQclear(res);
                     return Err("special file metadata contains null field pointers".to_string());
                 }
-                let file_type = CStr::from_ptr(file_type_ptr).to_string_lossy().to_string();
-                let parsed = (|| {
-                    let rdev_major = CStr::from_ptr(major_ptr)
-                        .to_string_lossy()
-                        .trim()
-                        .parse::<u32>()
-                        .map_err(|_| "invalid special file major".to_string())?;
-                    let rdev_minor = CStr::from_ptr(minor_ptr)
-                        .to_string_lossy()
-                        .trim()
-                        .parse::<u32>()
-                        .map_err(|_| "invalid special file minor".to_string())?;
-                    Ok((file_type, rdev_major, rdev_minor))
-                })();
+                let file_type = (PQgetisnull(res, 0, 0) == 0)
+                    .then(|| CStr::from_ptr(file_type_ptr).to_string_lossy());
+                let major = (PQgetisnull(res, 0, 1) == 0)
+                    .then(|| CStr::from_ptr(major_ptr).to_string_lossy());
+                let minor = (PQgetisnull(res, 0, 2) == 0)
+                    .then(|| CStr::from_ptr(minor_ptr).to_string_lossy());
+                let parsed = parse_special_file_metadata_values(
+                    file_type.as_deref(),
+                    major.as_deref(),
+                    minor.as_deref(),
+                );
                 PQclear(res);
                 parsed.map(Some)
             };
