@@ -75,6 +75,24 @@ def file_lease_snapshot() -> tuple[int, int, int]:
     return int(token_text), int(session_text), int(file_id_text)
 
 
+def file_state_snapshot(file_id: int) -> tuple[int, bytes]:
+    raw = psql_scalar(
+        f"""
+        SELECT d.file_size::text || '|' ||
+               encode(substring(b.data FROM 1 FOR {BLOCK_SIZE}), 'hex')
+        FROM fod.files f
+        JOIN fod.data_objects d ON d.id_data_object = f.data_object_id
+        JOIN fod.data_blocks b
+          ON b.data_object_id = d.id_data_object AND b._order = 0
+        WHERE f.id_file = {file_id}
+        """
+    )
+    if not raw:
+        raise AssertionError(f"primary file payload missing for file_id={file_id}")
+    size_text, payload_hex = raw.split("|", 1)
+    return int(size_text), bytes.fromhex(payload_hex)
+
+
 def revoke_write_ownership(session_id: int, file_id: int) -> None:
     raw = psql_scalar(
         f"""
@@ -186,6 +204,48 @@ def main() -> None:
                     f"lease session mismatch: mount_a={session_a} lease={lease_session_a}"
                 )
 
+            # A valid write lease on mount A must keep a pathname truncate on
+            # mount B from changing the same PostgreSQL-authoritative file.
+            # Check the errno and both payload and lease state before the
+            # later, deliberately injected fencing-token takeover.
+            competing_truncate_errno: int | None = None
+            try:
+                os.truncate(path_b, BLOCK_SIZE // 2)
+            except OSError as exc:
+                competing_truncate_errno = exc.errno
+                if competing_truncate_errno != errno.EBUSY:
+                    raise
+
+            if competing_truncate_errno != errno.EBUSY:
+                raise AssertionError(
+                    "competing path truncate errno="
+                    f"{competing_truncate_errno}, expected EBUSY"
+                )
+            payload_after_competing_truncate = path_b.read_bytes()
+            if payload_after_competing_truncate != b"S" * BLOCK_SIZE:
+                raise AssertionError(
+                    "competing path truncate changed the lease owner's payload: "
+                    f"len={len(payload_after_competing_truncate)} "
+                    f"prefix={payload_after_competing_truncate[:16]!r}"
+                )
+            lease_after_competing_truncate = file_lease_snapshot()
+            if lease_after_competing_truncate != (token_a, session_a, file_id):
+                raise AssertionError(
+                    "competing path truncate changed active ownership: "
+                    f"before={(token_a, session_a, file_id)} "
+                    f"after={lease_after_competing_truncate}"
+                )
+            authoritative_size, authoritative_payload = file_state_snapshot(file_id)
+            if (authoritative_size, authoritative_payload) != (
+                BLOCK_SIZE,
+                b"S" * BLOCK_SIZE,
+            ):
+                raise AssertionError(
+                    "competing path truncate changed PostgreSQL-authoritative state: "
+                    f"size={authoritative_size} payload_len={len(authoritative_payload)} "
+                    f"prefix={authoritative_payload[:16]!r}"
+                )
+
             df_before = assert_df_responsive(mount_a_dir, "before_revoke")
 
             # Test kontrolowany: odbierz tylko ownership, daemon FUSE pozostaje zywy.
@@ -285,6 +345,7 @@ def main() -> None:
                 f"session_a={session_a} "
                 f"token_a={token_a} token_b={token_b} "
                 f"takeover_elapsed_ms={takeover_elapsed * 1000.0:.3f} "
+                f"competing_truncate_errno={competing_truncate_errno} "
                 f"stale_ftruncate_errno={stale_ftruncate_errno} "
                 f"stale_write_errno={stale_write_errno} "
                 f"stale_fsync_errno={stale_fsync_errno} "

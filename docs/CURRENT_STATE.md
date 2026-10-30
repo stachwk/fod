@@ -420,6 +420,10 @@ The runtime contract is:
   authoritative clock;
 - monotonic fencing tokens protect persistence after lease loss or takeover;
 - stale writers are rejected before PostgreSQL payload persistence;
+- a competing pathname `truncate()` on mount B returns `EBUSY` while mount A
+  holds a valid lease, without changing the payload, PostgreSQL file size,
+  lease owner or fencing token; verified on FOD 3.4.352 against an isolated
+  PostgreSQL database on 2026-10-30;
 - writable `open`, `O_TRUNC`, `create` and path-based `truncate`/`setattr`
   participate in the same ownership/fencing contract;
 - writable mounts require `FUSE_ATOMIC_O_TRUNC`; a kernel that cannot negotiate

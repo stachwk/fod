@@ -14,6 +14,19 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Konkurujący `truncate(path)` nie zmienia pliku z aktywnym lease'em innego mounta.**
+  Rozszerzono `test_stale_writer_fencing.py`: mount A utrzymuje prawidłowy
+  lease zapisu, a mount B próbuje skrócić ten sam plik przez `truncate()`.
+  Test wymaga dokładnego `EBUSY`, niezmienionych 4096 bajtów oraz tego samego
+  właściciela i tokenu lease'a, a rozmiar i payload odczytuje bezpośrednio z
+  PostgreSQL. Ten przypadek uzupełnia wcześniejszy test `ftruncate()` ze
+  starego uchwytu po przejęciu lease'a. `test_stale_writer_fencing.py`
+  przeszedł 2026-10-30 na FOD 3.4.352 na jednorazowej bazie PostgreSQL:
+  `competing_truncate_errno=16`, rozmiar i payload pozostały niezmienione,
+  token i właściciel lease'a nie zmieniły się, a baza tymczasowa została
+  usunięta. To potwierdza odmowę konkurencyjnej mutacji, ale nie zastępuje
+  osobnego testu kolejności rzeczywiście równoczesnego zapisu i truncate.
+
 - [x] **Równoczesne odczyty nie uszkadzają sparse pliku przy równoległym pobieraniu bloków.**
   `mount_smoke::concurrent_read_tasks_on_sparse_file_preserve_parallel_block_ranges`
   tworzy 16 zapisanych bloków oddzielonych dziurami, ustawia 4 workerów
