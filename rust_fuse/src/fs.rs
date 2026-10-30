@@ -2600,9 +2600,14 @@ impl FodFuse {
         hash
     }
 
-    fn stable_inode(&self, obj_type: &str, inode_seed: &str, entry_id: u64) -> u64 {
-        if inode_seed.is_empty() {
-            return self.logical_inode(obj_type, entry_id);
+    fn stable_inode(
+        &self,
+        obj_type: &str,
+        inode_seed: &str,
+        entry_id: u64,
+    ) -> Result<u64, libc::c_int> {
+        if inode_seed.trim().is_empty() {
+            return Err(EIO);
         }
         let normalized_obj_type = if obj_type == "hardlink" {
             "file"
@@ -2612,9 +2617,9 @@ impl FodFuse {
         let payload = format!("{normalized_obj_type}:{inode_seed}");
         let inode = Self::hash_inode64(payload.as_bytes()) & i64::MAX as u64;
         if inode == 0 {
-            self.logical_inode(obj_type, entry_id)
+            Ok(self.logical_inode(obj_type, entry_id))
         } else {
-            inode
+            Ok(inode)
         }
     }
 
@@ -3799,7 +3804,7 @@ impl FodFuse {
             let uid = fields[6].parse::<u32>().map_err(|_| EIO)?;
             let gid = fields[7].parse::<u32>().map_err(|_| EIO)?;
             let inode_seed = fields[8].clone();
-            let inode = self.stable_inode(&obj_type, &inode_seed, raw_inode);
+            let inode = self.stable_inode(&obj_type, &inode_seed, raw_inode)?;
             FileAttr {
                 ino: INodeNo(inode),
                 size: target.len() as u64,
@@ -3857,7 +3862,7 @@ impl FodFuse {
                     rdev = Self::encode_fuse_rdev(major, minor)?;
                 }
             }
-            let inode = self.stable_inode(&obj_type, &inode_seed, raw_inode);
+            let inode = self.stable_inode(&obj_type, &inode_seed, raw_inode)?;
             let nlink = match obj_type.as_str() {
                 "hardlink" => {
                     let file_id = repo
@@ -3956,7 +3961,7 @@ impl FodFuse {
             .file_link_count_for_stat(raw_inode)
             .map_err(|_| EIO)?
             .ok_or(EIO)?;
-        let inode = self.stable_inode("file", &inode_seed, raw_inode);
+        let inode = self.stable_inode("file", &inode_seed, raw_inode)?;
         Ok(Some(ParsedAttrs {
             inode_seed,
             xattr_owner_kind: "file".to_string(),
@@ -5985,8 +5990,17 @@ impl Filesystem for FodFuse {
                             return;
                         }
                     };
-                    let inode =
-                        self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
+                    let inode = match self.stable_inode(
+                        &entry.kind,
+                        &entry.inode_seed,
+                        entry.entry_id,
+                    ) {
+                        Ok(inode) => inode,
+                        Err(errno) => {
+                            fuse_reply_error!(reply, errno);
+                            return;
+                        }
+                    };
                     if fod_fuse_readdir_register_paths_enabled() {
                         let child_path =
                             Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));
@@ -6033,8 +6047,17 @@ impl Filesystem for FodFuse {
                             return;
                         }
                     };
-                    let inode =
-                        self.stable_inode(&entry.kind, &entry.inode_seed, entry.entry_id);
+                    let inode = match self.stable_inode(
+                        &entry.kind,
+                        &entry.inode_seed,
+                        entry.entry_id,
+                    ) {
+                        Ok(inode) => inode,
+                        Err(errno) => {
+                            fuse_reply_error!(reply, errno);
+                            return;
+                        }
+                    };
                     if fod_fuse_readdir_register_paths_enabled() {
                         let child_path =
                             Self::join_path(&path, OsStr::from_bytes(entry.name.as_bytes()));

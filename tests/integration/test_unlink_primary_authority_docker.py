@@ -292,6 +292,7 @@ def main():
             "uid": -1,
             "gid": -1,
             "modification_date": "infinity",
+            "inode_seed": "",
         }
         for field, malformed_value in malformed_fields.items():
             original_value = query(

@@ -1702,6 +1702,48 @@ fn directory_count_query_failures_are_not_empty() -> Result<(), String> {
 }
 
 #[test]
+fn directory_entry_metadata_rejects_missing_required_fields() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let repo = DbRepo::with_runtime(&conninfo_for_database(&temporary_db.name), &runtime)?;
+
+    repo.exec("CREATE SCHEMA fod")?;
+    repo.exec(
+        "CREATE TABLE fod.directories (name TEXT, id_parent BIGINT, id_directory BIGINT, inode_seed TEXT)",
+    )?;
+    repo.exec(
+        "CREATE TABLE fod.files (name TEXT, id_directory BIGINT, unlinked BOOLEAN, id_file BIGINT, inode_seed TEXT)",
+    )?;
+    repo.exec("CREATE TABLE fod.special_files (id_file BIGINT, file_type TEXT)")?;
+    repo.exec(
+        "CREATE TABLE fod.hardlinks (name TEXT, id_directory BIGINT, id_hardlink BIGINT, id_file BIGINT)",
+    )?;
+    repo.exec(
+        "CREATE TABLE fod.symlinks (name TEXT, id_parent BIGINT, id_symlink BIGINT, inode_seed TEXT)",
+    )?;
+
+    repo.exec("INSERT INTO fod.files VALUES ('null-seed', NULL, FALSE, 17, NULL)")?;
+    let null_seed_error = repo
+        .list_directory_entry_metadata_for_id(None)
+        .expect_err("NULL inode seed must be rejected");
+    assert!(
+        null_seed_error.contains("empty inode seed"),
+        "{null_seed_error}"
+    );
+
+    repo.exec("TRUNCATE fod.files")?;
+    repo.exec("INSERT INTO fod.files VALUES (NULL, NULL, FALSE, 18, 'valid-seed')")?;
+    let null_name_error = repo
+        .list_directory_entry_metadata_for_id(None)
+        .expect_err("NULL entry name must be rejected");
+    assert!(null_name_error.contains("empty name"), "{null_name_error}");
+
+    Ok(())
+}
+
+#[test]
 fn unlink_preserves_alias_and_rejects_stale_binding_and_unsafe_purge() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

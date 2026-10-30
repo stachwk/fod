@@ -93,10 +93,22 @@ fn parse_directory_entry_metadata_rows(
             if row.len() < 5 {
                 return Err("directory entry metadata row is missing fields".to_string());
             }
+            if row[0].is_empty() {
+                return Err("directory entry metadata row has an empty name".to_string());
+            }
+            if !matches!(row[1].as_str(), "file" | "hardlink" | "dir" | "symlink") {
+                return Err(format!(
+                    "directory entry metadata row has an invalid kind: {}",
+                    row[1]
+                ));
+            }
             let entry_id = row[2]
                 .trim()
                 .parse::<u64>()
                 .map_err(|err| format!("invalid directory entry id: {err}"))?;
+            if row[3].trim().is_empty() {
+                return Err("directory entry metadata row has an empty inode seed".to_string());
+            }
             let special_type = match row[4].trim() {
                 "" => None,
                 value => Some(value.to_string()),

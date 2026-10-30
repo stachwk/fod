@@ -254,6 +254,13 @@ Reading guide:
   regressions: they verify empty and non-empty directory results, then inject an
   undefined-column error and require SQLSTATE `42703` instead of `false` or zero.
   The expanded `make test-rust-pg-query` suite passed on 2026-10-30 (41 tests).
+  Directory metadata decoding now rejects empty names, unsupported entry kinds
+  and empty inode seeds. A temporary-database regression feeds NULL name and
+  inode-seed fields through the real query decoder; a mounted regression also
+  confirms `stat()` returns `EIO` when persisted `files.inode_seed` is empty.
+  The Rust query suite passed on 2026-10-30 (42 tests); mounted evidence is
+  `artifacts/integration/unlink-primary-authority-20261030T112245Z/results.json`
+  (`malformed_metadata_fields_return_eio` includes `inode_seed`).
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
