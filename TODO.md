@@ -83,16 +83,24 @@ Reading guide:
   `artifacts/integration/client-version-gate-replica-20261030T163703Z/`,
   `artifacts/integration/client-version-gate-replica-20261030T163722Z/`, and
   `artifacts/integration/client-version-gate-replica-20261030T163817Z/`.
-- [ ] **Schema upgrade does not fence concurrent or newly starting mounts.**
-  `apply_migration()` commits each migration before the final call to
-  `write_schema_version()` updates `schema_number` and `minimum_client_version`.
-  If an upgrade fails between migrations, or a mount starts while migration is
-  in progress, the database can expose a partially upgraded schema with the
-  previous client floor. Design a durable upgrade-in-progress state that is
-  published before the first migration, blocks mount admission on primary and
-  replica endpoints, survives an interrupted upgrade, and is cleared atomically
-  with publishing the final schema version and client floor. Add failure and
-  concurrent-mount regressions before closing this item.
+- [x] **Schema upgrades gate new mounts and refuse active client sessions.**
+  `mkfs.fod upgrade` takes a PostgreSQL session advisory lock, checks active
+  client sessions, installs a database trigger against legacy session inserts,
+  raises `minimum_client_version`, and sets `schema_version.upgrade_in_progress`
+  in one transaction before the migration loop. Mount session registration
+  takes the corresponding shared transaction lock and rechecks the marker.
+  Runtime builds enforce their required schema number, so a lagging physical
+  standby also rejects the new release. The final schema number, client floor,
+  and cleared marker publish atomically. A failure injected into the final
+  schema-version write leaves the marker set; a later upgrade clears it. The
+  migration test also covers schema 31 upgrade, active-session refusal, old
+  session insert rejection, and concurrent migrator refusal. `make
+  test-schema-upgrade` passed; all 44 `pg_query` tests passed on an isolated
+  database; `make test-client-version-gate-replica` passed for upgrade marker,
+  required schema and client-floor gates on primary and physical standby
+  (artifact: `artifacts/integration/client-version-gate-replica-20261030T165941Z/`).
+  Operators must still unmount FOD on every host before upgrading; existing
+  processes cannot be terminated by the admission gate.
 - [x] **The non-adoption `copy_file_range()` path read source bytes from a
   lagging replica.** Source inspection found that its block-copy branch still
   called the ordinary replica-routed slice reader even though copy input must

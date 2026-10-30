@@ -118,7 +118,8 @@ CREATE TABLE IF NOT EXISTS config (
 CREATE TABLE IF NOT EXISTS schema_version (
     schema_number INTEGER NOT NULL,
     applied_at TIMESTAMP NOT NULL,
-    minimum_client_version TEXT NOT NULL DEFAULT '0.0.0'
+    minimum_client_version TEXT NOT NULL DEFAULT '0.0.0',
+    upgrade_in_progress BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS schema_admin (
@@ -389,6 +390,29 @@ CREATE TABLE IF NOT EXISTS client_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_client_sessions_expires
     ON client_sessions (lease_expires_at);
+
+CREATE OR REPLACE FUNCTION fod_reject_client_session_during_schema_upgrade()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF COALESCE((
+        SELECT upgrade_in_progress
+        FROM schema_version
+        ORDER BY applied_at DESC
+        LIMIT 1
+    ), FALSE) THEN
+        RAISE EXCEPTION 'FOD schema upgrade is in progress or was interrupted';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_fod_client_session_schema_upgrade ON client_sessions;
+CREATE TRIGGER trg_fod_client_session_schema_upgrade
+BEFORE INSERT ON client_sessions
+FOR EACH ROW
+EXECUTE FUNCTION fod_reject_client_session_during_schema_upgrade();
 
 CREATE TABLE IF NOT EXISTS client_session_owner_keys (
     session_id BIGINT NOT NULL REFERENCES client_sessions(session_id) ON DELETE CASCADE,

@@ -7935,6 +7935,28 @@ impl DbRepo {
             transactional_replay_confirmed(
                 conn,
                 |conn| {
+                    let admission_lock = CString::new(
+                        "SELECT pg_advisory_xact_lock_shared(1180124246)::text",
+                    )
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    query_scalar_text_on_conn(conn, &admission_lock)?;
+                    let upgrade_state_sql = CString::new(
+                        "SELECT COALESCE((\
+                            SELECT to_jsonb(schema_row)->>'upgrade_in_progress' \
+                            FROM schema_version AS schema_row \
+                            ORDER BY applied_at DESC LIMIT 1\
+                         ), 'false')",
+                    )
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let upgrade_state = query_scalar_text_on_conn(conn, &upgrade_state_sql)?;
+                    if matches!(
+                        upgrade_state.trim().to_ascii_lowercase().as_str(),
+                        "t" | "true" | "1" | "on"
+                    ) {
+                        return Err(
+                            "FOD schema upgrade is in progress or was interrupted; rerun `mkfs.fod upgrade` before mounting".to_string(),
+                        );
+                    }
                     let request_token_params = [&request_token];
                     let existing_token_res =
                         exec_params(conn, &sql_lookup_request_token, &request_token_params)?;

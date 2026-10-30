@@ -116,6 +116,23 @@ make docker-deploy-systemd-restart MASTERS=1 SLAVES=2
 
 This is deliberately different from reinstall/upgrade. The full restart executes the stop path and recreates running Compose containers while preserving persistent volumes.
 
+## Database schema upgrade
+
+Unmount FOD from every host before changing the database schema. Then run
+`mkfs.fod upgrade` with the current client and schema-admin credentials. The
+command refuses to start while unexpired FOD client sessions remain. It raises
+the database client-version floor and publishes an upgrade-in-progress marker
+before applying migrations; new mounts are rejected until the final schema
+version and marker are committed together. If the process is interrupted,
+rerun `mkfs.fod upgrade` with the current client to resume and clear the gate.
+
+Afterward, check `mkfs.fod status`: the schema must be ready, the minimum
+client version must be the expected release, and `FOD schema upgrade in
+progress` must be `no`. A new client also rejects primary or standby endpoints
+whose schema version is below its compiled requirement while a physical
+standby catches up. Keep all old FOD clients unmounted during that replay
+window; a client that predates this gate cannot inspect the new marker.
+
 ## FOD-only lifecycle
 
 ```bash

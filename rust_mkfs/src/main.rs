@@ -17,7 +17,10 @@ use std::path::Path;
 use config::{load_config_parser, load_runtime_config, resolve_config_path};
 use pg::DbConn;
 use pg_config::{make_conninfo, resolve_pg_connection_params};
-use runtime::{compare_fod_client_versions, FOD_SCHEMA_NAME, FOD_SEARCH_PATH, FOD_VERSION};
+use runtime::{
+    compare_fod_client_versions, FOD_REQUIRED_SCHEMA_VERSION, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
+    FOD_VERSION,
+};
 use schema_admin::{
     ensure_schema_admin_secret, format_schema_admin_source_message, schema_admin_secret_exists,
     schema_admin_secret_required_message, verify_existing_schema_admin_secret,
@@ -25,9 +28,10 @@ use schema_admin::{
 use tls::generate_client_tls_pair;
 
 use version::FOD_VERSION_LABEL;
-const SCHEMA_VERSION: u64 = 31;
+const SCHEMA_VERSION: u64 = 32;
+const _: () = assert!(SCHEMA_VERSION as u32 == FOD_REQUIRED_SCHEMA_VERSION);
 const STATUS_JSON_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_FILES: [&str; 31] = [
+const MIGRATION_FILES: [&str; 32] = [
     "0001_base.sql",
     "0002_schema_admin.sql",
     "0003_schema_version_sql.sql",
@@ -59,9 +63,10 @@ const MIGRATION_FILES: [&str; 31] = [
     "0029_posix_lock_wait_graph.sql",
     "0030_posix_lock_wait_process_identity.sql",
     "0031_minimum_client_version.sql",
+    "0032_schema_upgrade_state.sql",
 ];
 
-const MIGRATION_DESCRIPTIONS: [&str; 31] = [
+const MIGRATION_DESCRIPTIONS: [&str; 32] = [
     "Base schema and initial FOD tables",
     "Schema admin secret table",
     "Schema version tracking table",
@@ -93,6 +98,7 @@ const MIGRATION_DESCRIPTIONS: [&str; 31] = [
     "Track blocking POSIX lock dependencies for cross-mount deadlock detection",
     "Use host and process identity for cross-mount POSIX lock wait graphs",
     "Persist the minimum compatible FOD client release",
+    "Gate FOD mounts while schema migrations are incomplete",
 ];
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -288,6 +294,10 @@ fn migration_sql(version: u64) -> &'static str {
             env!("CARGO_MANIFEST_DIR"),
             "/../migrations/0031_minimum_client_version.sql"
         )),
+        32 => include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../migrations/0032_schema_upgrade_state.sql"
+        )),
         _ => "",
     }
 }
@@ -325,6 +335,7 @@ fn migration_description(version: u64) -> &'static str {
         29 => MIGRATION_DESCRIPTIONS[28],
         30 => MIGRATION_DESCRIPTIONS[29],
         31 => MIGRATION_DESCRIPTIONS[30],
+        32 => MIGRATION_DESCRIPTIONS[31],
         _ => "Migration",
     }
 }
@@ -362,6 +373,7 @@ fn migration_filename(version: u64) -> &'static str {
         29 => MIGRATION_FILES[28],
         30 => MIGRATION_FILES[29],
         31 => MIGRATION_FILES[30],
+        32 => MIGRATION_FILES[31],
         _ => "unknown.sql",
     }
 }
@@ -464,6 +476,22 @@ fn read_minimum_client_version(conn: &DbConn) -> Result<Option<String>, String> 
     ))
 }
 
+fn read_schema_upgrade_in_progress(conn: &DbConn) -> Result<bool, String> {
+    if !conn.query_exists(&format!(
+        "SELECT to_regclass({}) IS NOT NULL",
+        quote_schema_regclass(FOD_SCHEMA_NAME, "schema_version")
+    ))? {
+        return Ok(false);
+    }
+    conn.query_scalar_bool(
+        "SELECT COALESCE((\
+            SELECT (to_jsonb(version_row)->>'upgrade_in_progress')::boolean \
+            FROM fod.schema_version AS version_row \
+            ORDER BY applied_at DESC LIMIT 1\
+        ), FALSE)",
+    )
+}
+
 fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
     conn.query_exists(
         "SELECT
@@ -520,6 +548,20 @@ fn latest_schema_shape_matches(conn: &DbConn) -> Result<bool, String> {
                   AND table_name = 'schema_version'
                   AND column_name = 'minimum_client_version'
                   AND is_nullable = 'NO'
+            )
+            AND EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'fod'
+                  AND table_name = 'schema_version'
+                  AND column_name = 'upgrade_in_progress'
+                  AND is_nullable = 'NO'
+            )
+            AND to_regprocedure('fod.fod_reject_client_session_during_schema_upgrade()') IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM pg_trigger
+                WHERE tgrelid = 'fod.client_sessions'::regclass
+                  AND tgname = 'trg_fod_client_session_schema_upgrade'
+                  AND NOT tgisinternal
             )
             AND (
                 SELECT COUNT(*)
@@ -717,6 +759,110 @@ fn ensure_fod_privileges(conn: &DbConn, db_user: &str) -> Result<(), String> {
     )
 }
 
+fn acquire_schema_upgrade_lock(conn: &DbConn) -> Result<(), String> {
+    let acquired = conn
+        .query_scalar_text("SELECT pg_try_advisory_lock(1180124246)::text")?
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "t" | "true" | "1"
+            )
+        })
+        .unwrap_or(false);
+    if acquired {
+        Ok(())
+    } else {
+        Err("another mkfs.fod schema upgrade is already running".to_string())
+    }
+}
+
+fn begin_schema_upgrade(conn: &DbConn) -> Result<(), String> {
+    conn.exec("BEGIN")?;
+    let result = (|| {
+        let has_legacy_version_column = conn.query_exists(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+             WHERE table_schema = 'fod' AND table_name = 'schema_version' AND column_name = 'version')",
+        )?;
+        let has_schema_number_column = conn.query_exists(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+             WHERE table_schema = 'fod' AND table_name = 'schema_version' AND column_name = 'schema_number')",
+        )?;
+        if has_legacy_version_column && !has_schema_number_column {
+            conn.exec("ALTER TABLE fod.schema_version RENAME COLUMN version TO schema_number")?;
+        }
+        conn.exec(
+            "ALTER TABLE fod.schema_version \
+             ADD COLUMN IF NOT EXISTS minimum_client_version TEXT NOT NULL DEFAULT '0.0.0'",
+        )?;
+        conn.exec(
+            "ALTER TABLE fod.schema_version \
+             ADD COLUMN IF NOT EXISTS upgrade_in_progress BOOLEAN NOT NULL DEFAULT FALSE",
+        )?;
+
+        if conn.query_exists("SELECT to_regclass('fod.client_sessions') IS NOT NULL")? {
+            let active_sessions = || {
+                conn.query_scalar_u64(
+                    "SELECT COUNT(*) FROM fod.client_sessions WHERE lease_expires_at > NOW()",
+                )
+                .map(|count| count.unwrap_or(0))
+            };
+            let active_count_before_guard = active_sessions()?;
+            if active_count_before_guard != 0 {
+                return Err(format!(
+                    "cannot upgrade FOD schema while {active_count_before_guard} client session(s) are active; unmount every FOD mount and retry"
+                ));
+            }
+            conn.exec(
+                "CREATE OR REPLACE FUNCTION fod.fod_reject_client_session_during_schema_upgrade() \
+                 RETURNS trigger LANGUAGE plpgsql AS $$ \
+                 BEGIN \
+                    IF COALESCE((SELECT upgrade_in_progress FROM fod.schema_version ORDER BY applied_at DESC LIMIT 1), FALSE) THEN \
+                        RAISE EXCEPTION 'FOD schema upgrade is in progress or was interrupted'; \
+                    END IF; \
+                    RETURN NEW; \
+                 END; \
+                 $$; \
+                 DROP TRIGGER IF EXISTS trg_fod_client_session_schema_upgrade ON fod.client_sessions; \
+                 CREATE TRIGGER trg_fod_client_session_schema_upgrade \
+                 BEFORE INSERT ON fod.client_sessions FOR EACH ROW \
+                 EXECUTE FUNCTION fod.fod_reject_client_session_during_schema_upgrade()",
+            )?;
+            let active_count_after_guard = active_sessions()?;
+            if active_count_after_guard != 0 {
+                return Err(format!(
+                    "cannot upgrade FOD schema while {active_count_after_guard} client session(s) are active; unmount every FOD mount and retry"
+                ));
+            }
+        }
+
+        if let Some(minimum_client_version) = conn.query_scalar_text(
+            "SELECT minimum_client_version FROM fod.schema_version ORDER BY applied_at DESC LIMIT 1",
+        )? {
+            if compare_fod_client_versions(FOD_VERSION, &minimum_client_version)?
+                == std::cmp::Ordering::Less
+            {
+                return Err(format!(
+                    "FOD client {FOD_VERSION} cannot lower database minimum client version {minimum_client_version}"
+                ));
+            }
+        }
+        conn.exec(&format!(
+            "UPDATE fod.schema_version \
+             SET minimum_client_version = {}, upgrade_in_progress = TRUE",
+            DbConn::quote_literal(FOD_VERSION)
+        ))?;
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => conn.exec("COMMIT"),
+        Err(err) => {
+            let _ = conn.exec("ROLLBACK");
+            Err(err)
+        }
+    }
+}
+
 fn write_schema_version(conn: &DbConn, version: u64) -> Result<(), String> {
     conn.exec("BEGIN")?;
     let result = (|| {
@@ -735,7 +881,9 @@ fn write_schema_version(conn: &DbConn, version: u64) -> Result<(), String> {
         }
         conn.exec(&format!(
             "DELETE FROM schema_version; \
-             INSERT INTO schema_version (schema_number, applied_at, minimum_client_version) VALUES ({}, NOW(), {})",
+             INSERT INTO schema_version \
+                (schema_number, applied_at, minimum_client_version, upgrade_in_progress) \
+             VALUES ({}, NOW(), {}, FALSE)",
             version,
             DbConn::quote_literal(FOD_VERSION)
         ))
@@ -947,6 +1095,10 @@ fn main() {
                 eprintln!("{}", err);
                 std::process::exit(1);
             }
+            if let Err(err) = acquire_schema_upgrade_lock(&conn) {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
             let current_version = match read_schema_version(&conn) {
                 Ok(version) => version,
                 Err(err) => {
@@ -962,6 +1114,10 @@ fn main() {
                     );
                     std::process::exit(1);
                 }
+            }
+            if let Err(err) = begin_schema_upgrade(&conn) {
+                eprintln!("{}", err);
+                std::process::exit(1);
             }
             let recovered_latest_shape = if current_version.is_none() {
                 match latest_schema_shape_matches(&conn) {
@@ -1072,6 +1228,13 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let upgrade_in_progress = match read_schema_upgrade_in_progress(&conn) {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("FOD schema upgrade diagnostics unavailable: {}", err);
+                    std::process::exit(1);
+                }
+            };
             let latest_version = latest_migration_version();
             let pending_versions: Vec<u64> =
                 ((current_version.unwrap_or(0) + 1)..=latest_version).collect();
@@ -1103,6 +1266,7 @@ fn main() {
             };
             let ready = fod_exists
                 && current_version == Some(latest_version)
+                && !upgrade_in_progress
                 && secret_present
                 && latest_shape;
             let block_size_bytes = match read_storage_config_value(&conn, "block_size") {
@@ -1174,6 +1338,7 @@ fn main() {
                         "name": FOD_SCHEMA_NAME,
                         "version": current_version,
                         "minimum_client_version": minimum_client_version,
+                        "upgrade_in_progress": upgrade_in_progress,
                         "latest_migration_version": latest_version,
                         "objects_present": fod_exists,
                         "latest_shape": latest_shape,
@@ -1219,6 +1384,10 @@ fn main() {
                 println!(
                     "FOD minimum client version: {}",
                     minimum_client_version.as_deref().unwrap_or("unavailable")
+                );
+                println!(
+                    "FOD schema upgrade in progress: {}",
+                    if upgrade_in_progress { "yes" } else { "no" }
                 );
                 println!(
                     "FOD schema version: {}",

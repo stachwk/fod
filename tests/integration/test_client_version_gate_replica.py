@@ -178,6 +178,64 @@ def main() -> None:
                 time.sleep(0.05)
             raise AssertionError(f"physical standby did not replay primary LSN {lsn}")
 
+        def reject_mounts(gate_name, expected_message):
+            with tempfile.TemporaryDirectory(
+                prefix=f"fod-client-version-gate-{gate_name}-", dir=temporary_root
+            ) as mount_temp:
+                for role, port in (("primary", primary_port), ("replica", replica_port)):
+                    os.environ["FOD_ROLE"] = role
+                    if role == "replica":
+                        os.environ["FOD_DEGRADED_READONLY_ENABLED"] = "1"
+                    else:
+                        os.environ.pop("FOD_DEGRADED_READONLY_ENABLED", None)
+
+                    launcher = FODMount(str(ROOT), role=role)
+                    mounts.append(launcher)
+                    mountpoint = Path(mount_temp) / role
+                    try:
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            launcher.start(
+                                str(mountpoint),
+                                log_prefix=f"/tmp/fod-client-version-{gate_name}-{role}",
+                            )
+                    except RuntimeError as error:
+                        if "exited before becoming ready" not in str(error):
+                            raise
+                    else:
+                        raise AssertionError(
+                            f"gate={gate_name} role={role} unexpectedly mounted"
+                        )
+
+                    assert launcher.config is not None
+                    log = launcher.config.log_file.read_text(encoding="utf-8")
+                    (artifacts / f"mount-{gate_name}-{role}.log").write_text(
+                        log, encoding="utf-8"
+                    )
+                    expected_authority = f"127.0.0.1:{port}"
+                    if expected_message not in log:
+                        raise AssertionError(
+                            f"gate={gate_name} role={role} failed unexpectedly; "
+                            f"expected {expected_message!r}\n{log[-6000:]}"
+                        )
+                    if expected_authority not in log:
+                        raise AssertionError(
+                            f"role={role} did not report selected endpoint {expected_authority}\n{log[-6000:]}"
+                        )
+                    expected_observed_role = (
+                        'observed_role=Some("replica")'
+                        if role == "replica"
+                        else 'observed_role=Some("primary-writable")'
+                    )
+                    if expected_observed_role not in log:
+                        raise AssertionError(
+                            f"role={role} did not confirm expected PostgreSQL role {expected_observed_role}\n{log[-6000:]}"
+                        )
+                    if FODMount._is_mountpoint(mountpoint):
+                        raise AssertionError(
+                            f"role={role} left a mount attached after admission rejection"
+                        )
+                    results[f"{gate_name}_{role}_rejected"] = True
+
         wait_for_replica_barrier()
         original_version = query(
             primary,
@@ -185,6 +243,44 @@ def main() -> None:
         )[0][0]
         if not original_version:
             raise AssertionError("initialized schema has no minimum client version")
+
+        execute(
+            primary,
+            "UPDATE fod.schema_version SET upgrade_in_progress = TRUE",
+        )
+        barrier_lsn = wait_for_replica_barrier()
+        replicated_upgrade_state = query(
+            replica,
+            "SELECT upgrade_in_progress FROM fod.schema_version ORDER BY applied_at DESC LIMIT 1",
+        )[0][0]
+        if not replicated_upgrade_state:
+            raise AssertionError("physical standby did not replay upgrade-in-progress gate")
+        results["upgrade_gate_replicated_lsn"] = barrier_lsn
+        reject_mounts(
+            "upgrade-in-progress",
+            "FOD schema upgrade is in progress or was interrupted",
+        )
+        execute(
+            primary,
+            "UPDATE fod.schema_version SET upgrade_in_progress = FALSE",
+        )
+        wait_for_replica_barrier()
+
+        execute(
+            primary,
+            "UPDATE fod.schema_version SET schema_number = 31",
+        )
+        wait_for_replica_barrier()
+        reject_mounts(
+            "required-schema-version",
+            f"FOD client {(ROOT / 'fod_version.txt').read_text(encoding='utf-8').strip()} "
+            "requires database schema 32",
+        )
+        execute(
+            primary,
+            "UPDATE fod.schema_version SET schema_number = 32",
+        )
+        wait_for_replica_barrier()
 
         execute(
             primary,
@@ -205,60 +301,10 @@ def main() -> None:
             "primary_flush_lsn": barrier_lsn,
         }
 
-        with tempfile.TemporaryDirectory(
-            prefix="fod-client-version-gate-mounts-", dir=temporary_root
-        ) as mount_temp:
-            for role, port in (("primary", primary_port), ("replica", replica_port)):
-                os.environ["FOD_ROLE"] = role
-                if role == "replica":
-                    os.environ["FOD_DEGRADED_READONLY_ENABLED"] = "1"
-                else:
-                    os.environ.pop("FOD_DEGRADED_READONLY_ENABLED", None)
-
-                launcher = FODMount(str(ROOT), role=role)
-                mounts.append(launcher)
-                mountpoint = Path(mount_temp) / role
-                try:
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        launcher.start(
-                            str(mountpoint),
-                            log_prefix=f"/tmp/fod-client-version-physical-{role}",
-                        )
-                except RuntimeError as error:
-                    if "exited before becoming ready" not in str(error):
-                        raise
-                else:
-                    raise AssertionError(f"role={role} mounted below the client floor")
-
-                assert launcher.config is not None
-                log = launcher.config.log_file.read_text(encoding="utf-8")
-                (artifacts / f"mount-{role}.log").write_text(log, encoding="utf-8")
-                expected_message = (
-                    "older than the database minimum client version 99.0.0"
-                )
-                expected_authority = f"127.0.0.1:{port}"
-                if expected_message not in log:
-                    raise AssertionError(
-                        f"role={role} failed for an unexpected reason; expected {expected_message!r}\n{log[-6000:]}"
-                    )
-                if expected_authority not in log:
-                    raise AssertionError(
-                        f"role={role} did not report selected endpoint {expected_authority}\n{log[-6000:]}"
-                    )
-                expected_observed_role = (
-                    'observed_role=Some("replica")'
-                    if role == "replica"
-                    else 'observed_role=Some("primary-writable")'
-                )
-                if expected_observed_role not in log:
-                    raise AssertionError(
-                        f"role={role} did not confirm expected PostgreSQL role {expected_observed_role}\n{log[-6000:]}"
-                    )
-                if FODMount._is_mountpoint(mountpoint):
-                    raise AssertionError(
-                        f"role={role} left a mount attached after version rejection"
-                    )
-                results[f"{role}_rejected"] = True
+        reject_mounts(
+            "minimum-client-version",
+            "older than the database minimum client version 99.0.0",
+        )
 
         execute(
             primary,

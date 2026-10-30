@@ -313,6 +313,18 @@ release may mount without raising the floor; the floor moves only when an
 operator runs the schema command with that release.
 See the [versioning ADR](adr/storage-format-versioning.md).
 
+FOD 3.4.331 requires schema version 32. Before applying migrations,
+`mkfs.fod upgrade` raises the database client floor and sets
+`schema_version.upgrade_in_progress` transactionally. Mount admission checks
+that marker; client-session registration uses a shared PostgreSQL advisory
+lock, while upgrades hold its exclusive counterpart and refuse to proceed when
+unexpired FOD sessions exist. A PostgreSQL trigger also rejects legacy client
+session inserts while the gate is set. The final schema number, release floor,
+and cleared marker publish in one transaction. A physical standby below schema 32
+rejects the new client until WAL replay catches up. Interrupted upgrades leave
+the marker set so operators can rerun `mkfs.fod upgrade`; they must unmount all
+FOD hosts before starting an upgrade.
+
 Primary authority requirements are defined by
 [FOD_ARCHITECTURE_INVARIANTS.md](FOD_ARCHITECTURE_INVARIANTS.md). A dated audit
 reported one reproduced hardlink/unlink data-loss case and additional mutation

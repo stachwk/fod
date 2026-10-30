@@ -391,6 +391,11 @@ fn log_mount_status(input: MountStatusLogInput<'_>) {
         "FOD minimum client version={:?}",
         snapshot.minimum_client_version
     );
+    info!(
+        "FOD schema upgrade in progress={} required_schema_version={}",
+        snapshot.schema_upgrade_in_progress,
+        fod_rust_runtime::FOD_REQUIRED_SCHEMA_VERSION
+    );
     info!("FOD mountpoint={}", mountpoint.display());
     info!(
         "FOD core role={} profile={:?} force_read_only={} log_level={} use_rust_fuse={} pool_max_connections={}",
@@ -501,6 +506,21 @@ pub fn mount_fuse(
         "database is missing its minimum FOD client version; run `mkfs.fod upgrade`".to_string()
     })?;
     fod_rust_runtime::validate_fod_client_version(minimum_client_version)?;
+    let schema_version = snapshot.schema_version.unwrap_or_default();
+    if schema_version < fod_rust_runtime::FOD_REQUIRED_SCHEMA_VERSION {
+        return Err(format!(
+            "FOD client {} requires database schema {}; run `mkfs.fod upgrade` (database schema is {})",
+            fod_rust_runtime::FOD_VERSION,
+            fod_rust_runtime::FOD_REQUIRED_SCHEMA_VERSION,
+            schema_version
+        ));
+    }
+    if snapshot.schema_upgrade_in_progress {
+        return Err(
+            "FOD schema upgrade is in progress or was interrupted; rerun `mkfs.fod upgrade` before mounting"
+                .to_string(),
+        );
+    }
 
     if settings.degraded_read_only {
         if !snapshot.is_in_recovery {

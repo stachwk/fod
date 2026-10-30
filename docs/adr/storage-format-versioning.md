@@ -60,6 +60,14 @@ Every schema change must:
 - establish the floor from the client that runs `mkfs.fod init`, then advance
   it to the client that successfully runs `mkfs.fod upgrade`; all primary and
   replica mounts read the same replicated database value;
+- set `upgrade_in_progress` and raise the client floor before applying
+  migrations; retain the gate after an interrupted upgrade and clear it in the
+  same transaction that publishes the final schema number and client floor;
+- serialize upgrade processes with a PostgreSQL advisory lock, serialize new
+  client-session registration against that lock, and refuse upgrades while
+  unexpired client sessions exist;
+- declare the minimum schema version required by each runtime build, so a
+  replica that has not replayed the required schema cannot admit that client;
 - break startup of pre-gate clients by renaming the schema-number column so
   those clients cannot silently ignore the release floor.
 
@@ -85,6 +93,10 @@ FOD does not maintain permanent backward-compatibility branches in the runtime.
 An older supported database must be upgraded by `mkfs.fod upgrade` before
 mounting with code that requires a newer schema or format. Downgrade is not
 supported unless a future ADR defines and tests an explicit reverse migration.
+Before an upgrade, operators must unmount FOD on every host. The database gate
+rejects new mounts and checks tracked active sessions; it cannot terminate
+already-running clients that predate the gate or are connected to a standby
+that has not replayed the gate yet.
 
 ## Consequences
 

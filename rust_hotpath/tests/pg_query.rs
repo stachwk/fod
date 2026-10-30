@@ -868,6 +868,7 @@ fn startup_snapshot_matches_individual_live_queries() -> Result<(), String> {
         if snapshot.block_size.is_some()
             || snapshot.schema_version.is_some()
             || snapshot.minimum_client_version.is_some()
+            || snapshot.schema_upgrade_in_progress
         {
             return Err(
                 "uninitialized startup snapshot unexpectedly contains schema values".to_string(),
@@ -885,11 +886,16 @@ fn startup_snapshot_matches_individual_live_queries() -> Result<(), String> {
     let schema_version = repo
         .schema_version()?
         .ok_or_else(|| "missing schema version in comparison test".to_string())?;
-    let minimum_client_version = repo
-        .query_scalar_text(
-            "SELECT minimum_client_version FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+    let minimum_client_version = repo.query_scalar_text(
+        "SELECT minimum_client_version FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+    )?;
+    let schema_upgrade_in_progress = matches!(
+        repo.query_scalar_text(
+            "SELECT upgrade_in_progress::text FROM schema_version ORDER BY applied_at DESC LIMIT 1",
         )?
-        .ok_or_else(|| "missing minimum client version in comparison test".to_string())?;
+        .trim(),
+        "t" | "true" | "1"
+    );
 
     if snapshot.block_size != Some(block_size) {
         return Err(format!(
@@ -909,8 +915,49 @@ fn startup_snapshot_matches_individual_live_queries() -> Result<(), String> {
             snapshot.minimum_client_version
         ));
     }
+    if snapshot.schema_upgrade_in_progress != schema_upgrade_in_progress {
+        return Err(format!(
+            "startup snapshot upgrade state mismatch: snapshot={} helper={schema_upgrade_in_progress}",
+            snapshot.schema_upgrade_in_progress
+        ));
+    }
 
     Ok(())
+}
+
+#[test]
+fn client_session_registration_rechecks_schema_upgrade_gate() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    repo.exec("UPDATE schema_version SET upgrade_in_progress = TRUE")?;
+
+    let registration = repo.register_client_session(
+        "schema-upgrade-gate-test",
+        "/mnt/fod-schema-upgrade-gate-test",
+        "primary",
+        "postgres",
+        u64::from(std::process::id()),
+        30,
+    );
+    let clear_gate = repo.exec("UPDATE schema_version SET upgrade_in_progress = FALSE");
+    clear_gate?;
+
+    match registration {
+        Err(error) if error.contains("FOD schema upgrade is in progress or was interrupted") => {
+            Ok(())
+        }
+        Err(error) => Err(format!(
+            "client session registration failed for the wrong reason: {error}"
+        )),
+        Ok(session_id) => {
+            let _ = repo.exec(&format!(
+                "DELETE FROM client_sessions WHERE session_id = {session_id}"
+            ));
+            Err(format!(
+                "client session {session_id} registered while schema upgrade gate was set"
+            ))
+        }
+    }
 }
 
 #[test]

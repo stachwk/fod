@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 static DB_LOCK: Mutex<()> = Mutex::new(());
-const SCHEMA_VERSION: u64 = 31;
+const SCHEMA_VERSION: u64 = 32;
 const VERSION_ONE_SCHEMA_SQL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../migrations/0001_base.sql"
@@ -849,10 +849,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD version: FOD ",
         "FOD schema name: fod",
         "Canonical FOD storage schema: fod",
-        "FOD schema version: 31",
+        "FOD schema version: 32",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 31",
+        "Latest migration version: 32",
         "Schema admin secret: present",
         "FOD ready: yes",
         "Pending migrations: none",
@@ -887,6 +887,7 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "0029: 0029_posix_lock_wait_graph.sql",
         "0030: 0030_posix_lock_wait_process_identity.sql",
         "0031: 0031_minimum_client_version.sql",
+        "0032: 0032_schema_upgrade_state.sql",
     ] {
         assert!(
             status_after_init.contains(needle),
@@ -897,6 +898,175 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "FOD minimum client version: {}",
         env!("CARGO_PKG_VERSION")
     )));
+    assert!(status_after_init.contains("FOD schema upgrade in progress: no"));
+
+    conn.exec(
+        "ALTER TABLE schema_version DROP COLUMN upgrade_in_progress; \
+         UPDATE schema_version SET schema_number = 31",
+    )
+    .expect("prepare pre-gate schema 31 fixture");
+    let upgrade_from_schema_31 = run_mkfs(
+        "upgrade",
+        &["--schema-admin-password", &schema_password],
+        &envs,
+    );
+    assert!(
+        upgrade_from_schema_31.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&upgrade_from_schema_31.stdout),
+        String::from_utf8_lossy(&upgrade_from_schema_31.stderr)
+    );
+    let restored_upgrade_gate_column = conn
+        .query_exists(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+             WHERE table_schema = 'fod' AND table_name = 'schema_version' \
+               AND column_name = 'upgrade_in_progress')",
+        )
+        .expect("check restored schema upgrade gate column");
+    assert!(restored_upgrade_gate_column);
+    assert_eq!(
+        conn.query_scalar_u64(
+            "SELECT schema_number FROM schema_version ORDER BY applied_at DESC LIMIT 1"
+        )
+        .expect("schema version after v31 upgrade")
+        .expect("schema version row after v31 upgrade"),
+        SCHEMA_VERSION
+    );
+    assert!(!conn
+        .query_scalar_bool(
+            "SELECT upgrade_in_progress FROM schema_version ORDER BY applied_at DESC LIMIT 1"
+        )
+        .expect("gate after v31 upgrade"));
+
+    conn.exec(
+        "ALTER TABLE client_sessions ADD COLUMN IF NOT EXISTS request_token TEXT; \
+         INSERT INTO client_sessions \
+            (host_name, mountpoint, mount_mode, lock_backend, pid, request_token, lease_expires_at, heartbeat_at) \
+         VALUES ('schema-upgrade-test', '/mnt/fod-test', 'primary', 'postgres', 1, 'schema-upgrade-active-session', NOW() + INTERVAL '1 minute', NOW())",
+    )
+    .expect("create active client session fixture");
+    let blocked_by_active_session = run_mkfs(
+        "upgrade",
+        &["--schema-admin-password", &schema_password],
+        &envs,
+    );
+    let blocked_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&blocked_by_active_session.stdout),
+        String::from_utf8_lossy(&blocked_by_active_session.stderr)
+    );
+    assert!(
+        !blocked_by_active_session.status.success(),
+        "{blocked_output}"
+    );
+    assert!(
+        blocked_output.contains("cannot upgrade FOD schema while 1 client session(s) are active"),
+        "{blocked_output}"
+    );
+    let gate_after_active_session_rejection = conn
+        .query_scalar_bool(
+            "SELECT upgrade_in_progress FROM schema_version ORDER BY applied_at DESC LIMIT 1"
+        )
+        .expect("read gate after active session rejection");
+    assert!(!gate_after_active_session_rejection);
+    conn.exec("DELETE FROM client_sessions WHERE request_token = 'schema-upgrade-active-session'")
+        .expect("remove active client session fixture");
+
+    conn.exec(
+        "CREATE FUNCTION fod.fod_test_fail_schema_version_publish() \
+         RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN RAISE EXCEPTION 'injected schema-version publish failure'; END; $$; \
+         CREATE TRIGGER trg_fod_test_fail_schema_version_publish \
+         BEFORE INSERT ON fod.schema_version FOR EACH ROW \
+         EXECUTE FUNCTION fod.fod_test_fail_schema_version_publish()",
+    )
+    .expect("install schema-version publish failure fixture");
+    let interrupted_upgrade = run_mkfs(
+        "upgrade",
+        &["--schema-admin-password", &schema_password],
+        &envs,
+    );
+    let interrupted_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&interrupted_upgrade.stdout),
+        String::from_utf8_lossy(&interrupted_upgrade.stderr)
+    );
+    assert!(
+        !interrupted_upgrade.status.success(),
+        "{interrupted_output}"
+    );
+    assert!(
+        interrupted_output.contains("injected schema-version publish failure"),
+        "{interrupted_output}"
+    );
+    assert!(conn
+        .query_scalar_bool(
+            "SELECT upgrade_in_progress FROM schema_version ORDER BY applied_at DESC LIMIT 1"
+        )
+        .expect("gate must remain set after failed version publish"));
+    conn.exec(
+        "DROP TRIGGER trg_fod_test_fail_schema_version_publish ON fod.schema_version; \
+         DROP FUNCTION fod.fod_test_fail_schema_version_publish()",
+    )
+    .expect("remove schema-version publish failure fixture");
+    let old_client_session_insert = conn
+        .exec(
+            "INSERT INTO client_sessions \
+                (host_name, mountpoint, mount_mode, lock_backend, pid, lease_expires_at, heartbeat_at) \
+             VALUES ('old-client-test', '/mnt/old-client', 'primary', 'postgres', 2, NOW() + INTERVAL '1 minute', NOW())",
+        )
+        .expect_err("database trigger must reject registrations during schema upgrade");
+    assert!(
+        old_client_session_insert.contains("FOD schema upgrade is in progress or was interrupted"),
+        "{old_client_session_insert}"
+    );
+    let status_upgrade_in_progress =
+        String::from_utf8(run_mkfs("status", &[], &envs).stdout).expect("status output");
+    assert!(status_upgrade_in_progress.contains("FOD schema upgrade in progress: yes"));
+    assert!(status_upgrade_in_progress.contains("FOD ready: no"));
+    let recover_upgrade = run_mkfs(
+        "upgrade",
+        &["--schema-admin-password", &schema_password],
+        &envs,
+    );
+    assert!(
+        recover_upgrade.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&recover_upgrade.stdout),
+        String::from_utf8_lossy(&recover_upgrade.stderr)
+    );
+    let upgrade_in_progress = conn
+        .query_scalar_bool(
+            "SELECT upgrade_in_progress FROM schema_version ORDER BY applied_at DESC LIMIT 1"
+        )
+        .expect("read recovered schema upgrade state");
+    assert!(
+        !upgrade_in_progress,
+        "successful upgrade must clear the gate"
+    );
+
+    conn.query_scalar_text("SELECT pg_advisory_lock(1180124246)::text")
+        .expect("hold schema upgrade advisory lock");
+    let concurrent_upgrade = run_mkfs(
+        "upgrade",
+        &["--schema-admin-password", &schema_password],
+        &envs,
+    );
+    let concurrent_upgrade_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&concurrent_upgrade.stdout),
+        String::from_utf8_lossy(&concurrent_upgrade.stderr)
+    );
+    assert!(
+        !concurrent_upgrade.status.success(),
+        "{concurrent_upgrade_output}"
+    );
+    assert!(
+        concurrent_upgrade_output.contains("another mkfs.fod schema upgrade is already running"),
+        "{concurrent_upgrade_output}"
+    );
+    conn.query_scalar_text("SELECT pg_advisory_unlock(1180124246)::text")
+        .expect("release schema upgrade advisory lock");
 
     conn.exec("DELETE FROM schema_version")
         .expect("delete schema_version");
@@ -910,10 +1080,10 @@ fn schema_status_reports_version_secret_and_pending_migrations() {
         "Canonical FOD storage schema: fod",
         "Active schema: fod",
         "fod objects: yes",
-        "Latest migration version: 31",
+        "Latest migration version: 32",
         "Schema admin secret: present",
         "FOD ready: no",
-        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031",
+        "Pending migrations: 0001, 0002, 0003, 0004, 0005, 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013, 0014, 0015, 0016, 0017, 0018, 0019, 0020, 0021, 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032",
     ] {
         assert!(
             status_without_version.contains(needle),
@@ -1058,7 +1228,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text.contains("Latest migration version: 31"),
+        status_before_text.contains("Latest migration version: 32"),
         "{status_before_text}"
     );
     assert!(
@@ -1070,8 +1240,9 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
         "{status_before_text}"
     );
     assert!(
-        status_before_text
-            .contains("Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031"),
+        status_before_text.contains(
+            "Pending migrations: 0022, 0023, 0024, 0025, 0026, 0027, 0028, 0029, 0030, 0031, 0032"
+        ),
         "{status_before_text}"
     );
 
@@ -1117,7 +1288,7 @@ fn schema_21_upgrade_applies_monitor_stats_and_status_checks_latest_shape() {
     assert!(status_broken.status.success());
     let status_broken_text = String::from_utf8_lossy(&status_broken.stdout);
     assert!(
-        status_broken_text.contains("FOD schema version: 31"),
+        status_broken_text.contains("FOD schema version: 32"),
         "{status_broken_text}"
     );
     assert!(

@@ -18,6 +18,7 @@ pub struct StartupSnapshot {
     pub is_in_recovery: bool,
     pub schema_version: Option<u32>,
     pub minimum_client_version: Option<String>,
+    pub schema_upgrade_in_progress: bool,
     pub schema_is_initialized: bool,
 }
 
@@ -131,7 +132,7 @@ impl DbRepo {
 
     unsafe fn startup_initialized_values_on_conn(
         conn: *mut PGconn,
-    ) -> Result<(u32, u32, String), String> {
+    ) -> Result<(u32, u32, String, bool), String> {
         // Drugie zapytanie jest wykonywane dopiero po potwierdzeniu schematu.
         // EXISTS rozroznia brak rekordu config od obecnego, ale pustego rekordu,
         // aby zachowac komunikaty i walidacje z poprzedniej implementacji.
@@ -152,16 +153,22 @@ impl DbRepo {
                     FROM schema_version AS schema_row \
                     ORDER BY applied_at DESC \
                     LIMIT 1\
-                ), '')",
+                ), ''), \
+                COALESCE((\
+                    SELECT to_jsonb(schema_row)->>'upgrade_in_progress' \
+                    FROM schema_version AS schema_row \
+                    ORDER BY applied_at DESC \
+                    LIMIT 1\
+                ), 'false')",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let rows = query_rows_text_on_conn(conn, &sql)?;
         let row = rows
             .first()
             .ok_or_else(|| "initialized startup values query returned no rows".to_string())?;
-        if row.len() < 6 {
+        if row.len() < 7 {
             return Err(format!(
-                "initialized startup values query returned {} columns, expected at least 6",
+                "initialized startup values query returned {} columns, expected at least 7",
                 row.len()
             ));
         }
@@ -208,7 +215,16 @@ impl DbRepo {
                     .to_string(),
             );
         }
-        Ok((block_size, schema_version, minimum_client_version.to_string()))
+        let schema_upgrade_in_progress = matches!(
+            row[6].trim().to_ascii_lowercase().as_str(),
+            "t" | "true" | "1" | "on"
+        );
+        Ok((
+            block_size,
+            schema_version,
+            minimum_client_version.to_string(),
+            schema_upgrade_in_progress,
+        ))
     }
 
     unsafe fn startup_snapshot_on_conn(
@@ -226,11 +242,12 @@ impl DbRepo {
                 is_in_recovery,
                 schema_version: None,
                 minimum_client_version: None,
+                schema_upgrade_in_progress: false,
                 schema_is_initialized: false,
             });
         }
 
-        let (block_size, schema_version, minimum_client_version) =
+        let (block_size, schema_version, minimum_client_version, schema_upgrade_in_progress) =
             Self::startup_initialized_values_on_conn(conn)?;
 
         Ok(StartupSnapshot {
@@ -238,6 +255,7 @@ impl DbRepo {
             is_in_recovery,
             schema_version: Some(schema_version),
             minimum_client_version: Some(minimum_client_version),
+            schema_upgrade_in_progress,
             schema_is_initialized: true,
         })
     }
