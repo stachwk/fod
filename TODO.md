@@ -14,6 +14,12 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Wątki tworzące różne typy pod tą samą nazwą mają jednego zwycięzcę.**
+  Nowy test `concurrent_file_and_directory_create_at_same_name_have_one_winner`
+  uruchamia 16 wyścigów między `create_new()` pliku i `mkdir()`. Sprawdza dokładnie
+  jedną udaną operację, `EEXIST` dla konkurenta oraz typ i zawartość zwycięskiego
+  obiektu.
+
 - [x] **Sprawdzono `pwrite()` przy przepełnieniu maksymalnego `off_t`.**
   `test_lseek.py` próbuje dwubajtowego `pwrite()` od `OFF_T_MAX`; na zamontowanym
   FOD Linux zwraca `EINVAL`, zachowuje offset deskryptora i nie zmienia pliku.

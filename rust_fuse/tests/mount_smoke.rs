@@ -678,6 +678,95 @@ fn concurrent_threads_create_write_and_read_independent_files() -> Result<(), St
 }
 
 #[test]
+fn concurrent_file_and_directory_create_at_same_name_have_one_winner() -> Result<(), String> {
+    const ROUNDS: usize = 16;
+    const WORKERS: usize = 2;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-file-directory-create-race",
+        &[("FOD_FUSE_EVENT_THREADS", WORKERS.to_string())],
+    )?;
+    let root = mounted
+        .mountpoint
+        .join(format!("file-directory-races-{}", unique_suffix()));
+    fs::create_dir(&root).map_err(|err| format!("create race directory failed: {err}"))?;
+
+    for round in 0..ROUNDS {
+        let name = format!("same-name-{round}");
+        let file_path = root.join(&name);
+        let directory_path = root.join(&name);
+        let file_create_path = file_path.clone();
+        let barrier = Arc::new(Barrier::new(WORKERS));
+
+        let file_barrier = Arc::clone(&barrier);
+        let file_creator = thread::spawn(move || {
+            file_barrier.wait();
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&file_create_path)
+            {
+                Ok(mut file) => {
+                    file.write_all(b"file-winner")?;
+                    file.sync_all()?;
+                    Ok(true)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                Err(error) => Err(error),
+            }
+        });
+
+        let directory_barrier = Arc::clone(&barrier);
+        let directory_creator = thread::spawn(move || {
+            directory_barrier.wait();
+            match fs::create_dir(&directory_path) {
+                Ok(()) => Ok(true),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                Err(error) => Err(error),
+            }
+        });
+
+        let file_won = file_creator
+            .join()
+            .map_err(|_| format!("file creator panicked in round {round}"))?
+            .map_err(|err| format!("file creator failed in round {round}: {err}"))?;
+        let directory_won = directory_creator
+            .join()
+            .map_err(|_| format!("directory creator panicked in round {round}"))?
+            .map_err(|err| format!("directory creator failed in round {round}: {err}"))?;
+
+        if usize::from(file_won) + usize::from(directory_won) != 1 {
+            return Err(format!(
+                "round {round} expected exactly one create winner, file={file_won} directory={directory_won}"
+            ));
+        }
+
+        let metadata = fs::symlink_metadata(&file_path)
+            .map_err(|err| format!("inspect create-race winner in round {round}: {err}"))?;
+        if file_won {
+            if !metadata.file_type().is_file() {
+                return Err(format!(
+                    "file create winner has wrong type in round {round}"
+                ));
+            }
+            let payload = fs::read(&file_path)
+                .map_err(|err| format!("read create-race file winner in round {round}: {err}"))?;
+            if payload != b"file-winner" {
+                return Err(format!(
+                    "file create winner has wrong contents in round {round}"
+                ));
+            }
+        } else if !metadata.file_type().is_dir() {
+            return Err(format!(
+                "directory create winner has wrong type in round {round}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn concurrent_threads_append_complete_records_to_one_file() -> Result<(), String> {
     const WORKERS: usize = 8;
     const APPENDS_PER_WORKER: usize = 32;
