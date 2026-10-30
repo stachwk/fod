@@ -4487,6 +4487,14 @@ impl FodFuse {
         fh
     }
 
+    fn new_inode_seed(&self, object_type: &str) -> Result<String, libc::c_int> {
+        let session_id = self.session_id.ok_or(EIO)?;
+        Ok(format!(
+            "fod:{object_type}:{session_id}:{}",
+            self.next_handle()
+        ))
+    }
+
     fn current_time() -> SystemTime {
         SystemTime::now()
     }
@@ -4870,6 +4878,7 @@ impl FodFuse {
             );
             return Err(EIO);
         }
+        let inode_seed = self.new_inode_seed("file")?;
 
         let ownership_repo = self.client_session_repo().ok_or(EIO)?;
         let owner_key = fh;
@@ -4974,7 +4983,7 @@ impl FodFuse {
                 mode,
                 uid,
                 gid,
-                &path,
+                &inode_seed,
                 supplementary_groups,
             ) {
                 Ok(file_id) => (file_id, true),
@@ -8197,6 +8206,16 @@ impl Filesystem for FodFuse {
         );
         let target_name = name.to_string_lossy();
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
+        // A path-derived seed would give a remove/recreate at the same name
+        // the same FUSE inode. Pair the mount's PostgreSQL-assigned session ID
+        // with its local monotonic counter to preserve object generations.
+        let inode_seed = match self.new_inode_seed("directory") {
+            Ok(seed) => seed,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let create_result = if self.acl_enabled {
             self.repo.create_directory_with_default_acl(
                 parent_id,
@@ -8204,7 +8223,7 @@ impl Filesystem for FodFuse {
                 mode,
                 subject.uid,
                 subject.gid,
-                &child_path,
+                &inode_seed,
                 &supplementary_groups,
             )
         } else {
@@ -8214,7 +8233,7 @@ impl Filesystem for FodFuse {
                 mode,
                 subject.uid,
                 subject.gid,
-                &child_path,
+                &inode_seed,
                 &supplementary_groups,
             )
         };
@@ -8991,13 +9010,20 @@ impl Filesystem for FodFuse {
                 }
             }
         } else {
+            let inode_seed = match self.new_inode_seed("file") {
+                Ok(seed) => seed,
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            };
             let file_id = match self.create_file_for_subject(
                 parent_id,
                 name.to_string_lossy().as_ref(),
                 mode,
                 subject.uid,
                 subject.gid,
-                &child_path,
+                &inode_seed,
                 &supplementary_groups,
             ) {
                 Ok(file_id) => file_id,
@@ -10171,13 +10197,20 @@ impl Filesystem for FodFuse {
                 mode &= !(libc::S_ISUID | libc::S_ISGID);
             }
             let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
+            let inode_seed = match self.new_inode_seed("file") {
+                Ok(seed) => seed,
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            };
             match self.create_file_for_subject(
                 parent_id,
                 name.to_string_lossy().as_ref(),
                 mode,
                 subject.uid,
                 subject.gid,
-                &child_path,
+                &inode_seed,
                 &supplementary_groups,
             ) {
                 Ok(_) => match self.lookup_path_from_authority(&child_path) {
@@ -10228,6 +10261,13 @@ impl Filesystem for FodFuse {
         };
         let (rdev_major, rdev_minor) = Self::decode_fuse_rdev(rdev);
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
+        let inode_seed = match self.new_inode_seed(file_kind) {
+            Ok(seed) => seed,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let create_result = if self.acl_enabled {
             self.repo.create_special_file_with_default_acl(
                 parent_id,
@@ -10235,7 +10275,7 @@ impl Filesystem for FodFuse {
                 mode,
                 subject.uid,
                 subject.gid,
-                &child_path,
+                &inode_seed,
                 file_kind,
                 rdev_major,
                 rdev_minor,
@@ -10248,7 +10288,7 @@ impl Filesystem for FodFuse {
                 mode,
                 subject.uid,
                 subject.gid,
-                &child_path,
+                &inode_seed,
                 file_kind,
                 rdev_major,
                 rdev_minor,
@@ -10310,7 +10350,13 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let inode_seed = child_path.as_str();
+        let inode_seed = match self.new_inode_seed("symlink") {
+            Ok(seed) => seed,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
         let create_result = if self.acl_enabled {
             self.repo.create_symlink_for_subject_with_acl(
@@ -10319,7 +10365,7 @@ impl Filesystem for FodFuse {
                 &target.to_string_lossy(),
                 subject.uid,
                 subject.gid,
-                inode_seed,
+                &inode_seed,
                 &supplementary_groups,
             )
         } else {
@@ -10329,7 +10375,7 @@ impl Filesystem for FodFuse {
                 &target.to_string_lossy(),
                 subject.uid,
                 subject.gid,
-                inode_seed,
+                &inode_seed,
                 &supplementary_groups,
             )
         };

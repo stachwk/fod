@@ -126,22 +126,28 @@ Reading guide:
   get/list, set/remove and `fgetxattr(user.*)` on an open-unlinked inode with
   ACLs enabled; it passed against a temporary PostgreSQL 17.11 instance. See
   [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
-- [ ] **Mounted stale-inode directory-open regression is still missing.** On
+- [x] **Mounted stale-inode directory replacement regression.** On
   2026-10-30, source review found that `opendir()` fetched attributes through
   the replica-routed repository without checking whether the locally cached
   path still resolved to the requested directory inode on primary. After a
   remote remove/recreate at that path, the old FUSE inode could open the
   replacement directory and snapshot its names. `opendir()` now validates the
   inode/path identity through `authoritative_entry_attrs_for_ino()` before
-  taking its configured read snapshot. Directory handles now retain the
-  PostgreSQL directory ID: initial and rewind snapshots, names-mode child
-  lookups and directory atime updates use that ID, so a remote replacement at
-  the same path cannot be attached to the old handle. Add a two-mount
-  remove/recreate regression verifying that stale-inode `opendir()` fails,
-  readdir/rewind on an already-open old handle never lists the replacement,
-  and a fresh lookup opens it. Source-level fixes are in place; mounted
-  reproduction is not yet verified. Snapshot reads remain on the configured
-  read route, consistent with the mount's read-routing policy.
+  taking its configured read snapshot. Review and the mounted regression then
+  exposed the underlying generation alias: FUSE-created directories used their
+  path as `inode_seed`, so a replacement reused the deleted object's inode
+  number and passed the identity check. FUSE-created files, directories,
+  symlinks and special files now use persisted generation seeds built from
+  the PostgreSQL-assigned mount session ID and mount-local monotonic counter.
+  Directory handles retain
+  that PostgreSQL ID for initial and rewind snapshots, names-mode child
+  lookups and atime updates. The two-mount regression verifies that reopening
+  cannot bind a replacement to the old inode, rewind on an old open handle
+  never lists replacement entries, and a fresh mount sees the replacement
+  under a different inode. It passed against an isolated PostgreSQL 17.11
+  instance. Snapshot reads remain on the configured read route, consistent
+  with the mount's read-routing policy. Concurrent membership changes and
+  large-directory cookie behavior remain in the P02 work below.
 - [ ] **Create callbacks need a replica-lag regression.** `mkdir`, `create`,
   `mknod`, `symlink` and `link` previously checked destination existence via
   the ordinary read route before entering their PostgreSQL-authoritative
@@ -239,7 +245,7 @@ Reading guide:
   behavior; current host checks only `getdents64()` after descriptor close.
   See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
-- [ ] **P02 directory-stream snapshot behavior needs mounted regressions.** FOD
+- [ ] **P02 directory-stream snapshot behavior needs more mounted regressions.** FOD
   now pins an ordered PostgreSQL snapshot to each `opendir()` handle (full
   metadata by default, names when `FOD_READDIR_BATCH_METADATA=0`), uses it for
   continuation requests, refreshes it on `rewinddir()` (cookie zero
@@ -248,10 +254,12 @@ Reading guide:
   lookups and atime updates use the same ID. This prevents positional cookies
   from shifting when another mount changes directory membership and prevents
   an old handle from switching to a replacement directory at the same path.
-  Verify continuation, rewind and remove/recreate with mounted FUSE operations,
-  including concurrent add/remove and large directories; POSIX leaves visibility
-  of additions/removals unspecified, so assert stable unaffected entries and
-  no cookie-induced repeats/skips rather than membership policy.
+  A two-mount remove/recreate regression now verifies an old open handle does
+  not expose the replacement after rewind and that fresh lookup sees the new
+  inode. Verify continuation, concurrent add/remove and large directories with
+  mounted FUSE operations; POSIX leaves visibility of additions/removals
+  unspecified, so assert stable unaffected entries and no cookie-induced
+  repeats/skips rather than membership policy.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
