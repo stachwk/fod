@@ -236,8 +236,13 @@ Reading guide:
   injects failures into `xattrs.value` and `xattrs.name` reads, confirming
   `getxattr()` and `listxattr()` return `EIO`; evidence:
   `artifacts/integration/unlink-primary-authority-20261030T105549Z/results.json`
-  (`xattr_read_query_failures_return_eio: true`). Fault injection for config
-  reads, count helpers, and other malformed/missing rows remains pending.
+  (`xattr_read_query_failures_return_eio: true`). Config reads, block-count
+  queries, and other malformed/missing rows remain pending. The hardlink-count
+  query now has a separate regression that breaks only `hardlinks.id_file` after
+  a new file is visible on the replica, then checks that `stat()` returns
+  `EIO`. The full two-mount primary/replica suite passed on 2026-10-30; evidence:
+  `artifacts/integration/unlink-primary-authority-20261030T110115Z/results.json`
+  (`link_count_query_failure_returns_eio: true`).
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
   shared (`1`) and exclusive (`2`) values. A backend regression now seeds an

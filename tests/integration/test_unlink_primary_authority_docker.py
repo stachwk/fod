@@ -131,6 +131,7 @@ def main():
                 ("files", "inode_seed"),
                 ("xattrs", "name"),
                 ("xattrs", "value"),
+                ("hardlinks", "id_file"),
             }:
                 raise AssertionError(f"unapproved fault-injection column: {table}.{column}")
             fault_column = f"{column}_fault_probe"
@@ -186,6 +187,17 @@ def main():
                 os.environ.pop("FOD_READDIR_BATCH_METADATA", None)
             else:
                 os.environ["FOD_READDIR_BATCH_METADATA"] = previous_batch_metadata
+
+        link_count_fault_file = ma / "link-count-query-fault"
+        seed(link_count_fault_file)
+        barrier()
+        expect_eio_with_renamed_column(
+            "hardlinks",
+            "id_file",
+            lambda: os.stat(mc / link_count_fault_file.name),
+            "getattr link-count query",
+        )
+        results["link_count_query_failure_returns_eio"] = True
 
         readdir_fault_dir = ma / "readdir-child-query-fault"
         readdir_fault_dir.mkdir()
