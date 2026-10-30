@@ -1498,9 +1498,11 @@ fn startup_snapshot_matches_individual_live_queries() -> Result<(), String> {
 }
 
 #[test]
-fn client_session_registration_rechecks_schema_upgrade_gate() -> Result<(), String> {
+fn client_session_registration_rechecks_schema_upgrade_and_client_version_gates(
+) -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
+    repo.ensure_client_session_schema()?;
     repo.exec("UPDATE schema_version SET upgrade_in_progress = TRUE")?;
 
     let registration = repo.register_client_session(
@@ -1527,6 +1529,43 @@ fn client_session_registration_rechecks_schema_upgrade_gate() -> Result<(), Stri
             ));
             Err(format!(
                 "client session {session_id} registered while schema upgrade gate was set"
+            ))
+        }
+    }?;
+
+    let original_minimum_client_version = repo
+        .query_scalar_text(
+            "SELECT minimum_client_version FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+        )?
+        .trim()
+        .to_string();
+    repo.exec("UPDATE schema_version SET minimum_client_version = '99.0.0'")?;
+    let stale_registration = repo.register_client_session(
+        "stale-client-version-gate-test",
+        "/mnt/fod-stale-client-version-gate-test",
+        "primary",
+        "postgres",
+        u64::from(std::process::id()),
+        30,
+    );
+    let restore_floor = repo.exec(&format!(
+        "UPDATE schema_version SET minimum_client_version = '{}'",
+        original_minimum_client_version.replace('\'', "''")
+    ));
+    restore_floor?;
+    match stale_registration {
+        Err(error) if error.contains("older than the database minimum client version 99.0.0") => {
+            Ok(())
+        }
+        Err(error) => Err(format!(
+            "client session registration failed for the wrong client-version reason: {error}"
+        )),
+        Ok(session_id) => {
+            let _ = repo.exec(&format!(
+                "DELETE FROM client_sessions WHERE session_id = {session_id}"
+            ));
+            Err(format!(
+                "client session {session_id} registered below minimum client version 99.0.0"
             ))
         }
     }

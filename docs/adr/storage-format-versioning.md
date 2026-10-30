@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted on 2026-07-18.
+Accepted on 2026-07-18; replica-admission rules amended on 2026-10-30.
 
 ## Context
 
@@ -19,11 +19,18 @@ a database compatibility marker. The schema version records which ordered
 migrations have been applied. A `minimum_client_version` records which FOD
 releases may mount after the latest `mkfs.fod init` or `mkfs.fod upgrade`; it is
 raised monotonically by that command and replicated with the schema-version
-row. The database is the authority for this decision: clients compare their
-own FOD release with the value read from the database endpoint they selected.
-They do not infer compatibility from the FOD release running on a PostgreSQL
-primary, a standby, or another FOD mount. A storage-format boundary is
-narrower: it exists only when persisted
+row. The database is the authority for this decision: primary mounts compare
+against the primary, and replica mounts obtain the current compatibility gate
+from the writable primary at startup while continuing to use the standby for
+read operations. A normal replica mount fails closed if that primary cannot be
+reached, because a lagging standby may not yet have replayed a new client floor
+or an active schema-upgrade marker. The explicit degraded read-only mode can
+operate without the primary and then uses the standby's last replayed floor;
+that mode cannot know about a newer primary value until WAL catches up. The
+replica's own schema version is still checked separately, so a new client
+cannot use a standby that has not replayed the schema it requires. FOD does not
+infer compatibility from the release running on another FOD mount. A
+storage-format boundary is narrower: it exists only when persisted
 payload cannot be interpreted safely by both sides of an upgrade without an
 explicit conversion or compatibility decision.
 
@@ -65,9 +72,15 @@ Every schema change must:
   same transaction that publishes the final schema number and client floor;
 - serialize upgrade processes with a PostgreSQL advisory lock, serialize new
   client-session registration against that lock, and refuse upgrades while
-  unexpired client sessions exist;
+  unexpired client sessions exist; each registration must also re-read and
+  validate `minimum_client_version` under the shared lock so a stale startup
+  snapshot cannot admit a client after the floor has advanced;
 - declare the minimum schema version required by each runtime build, so a
   replica that has not replayed the required schema cannot admit that client;
+- validate replica-mount client floors and upgrade markers against the writable
+  primary at startup; require role-aware primary and replica endpoints and fail
+  closed when the primary is unavailable, except in explicit degraded
+  read-only mode, which uses only the replayed replica state;
 - break startup of pre-gate clients by renaming the schema-number column so
   those clients cannot silently ignore the release floor.
 
@@ -95,8 +108,10 @@ mounting with code that requires a newer schema or format. Downgrade is not
 supported unless a future ADR defines and tests an explicit reverse migration.
 Before an upgrade, operators must unmount FOD on every host. The database gate
 rejects new mounts and checks tracked active sessions; it cannot terminate
-already-running clients that predate the gate or are connected to a standby
-that has not replayed the gate yet.
+already-running clients that predate the gate. Normal replica mounts require
+the primary to be reachable for the admission check, but reads remain routed to
+the configured standby. Degraded read-only mounts can run without the primary
+and may use a stale compatibility floor until replay catches up.
 
 ## Consequences
 

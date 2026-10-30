@@ -131,6 +131,7 @@ def main() -> None:
     results = {}
     primary = None
     replica = None
+    replica_replay_paused = False
     temporary_root = Path(tempfile.mkdtemp(prefix="fod-client-version-gate-replica-"))
     try:
         started = compose(
@@ -236,6 +237,104 @@ def main() -> None:
                         )
                     results[f"{gate_name}_{role}_rejected"] = True
 
+        def reject_replica_without_primary(gate_name, env_overrides, expected_message):
+            changed_keys = set(env_overrides) | {
+                "FOD_DEGRADED_READONLY_ENABLED",
+                "FOD_ROLE",
+            }
+            previous = {key: os.environ.get(key) for key in changed_keys}
+            os.environ.update(env_overrides)
+            os.environ["FOD_ROLE"] = "replica"
+            os.environ.pop("FOD_DEGRADED_READONLY_ENABLED", None)
+            try:
+                with tempfile.TemporaryDirectory(
+                    prefix=f"fod-client-version-gate-{gate_name}-",
+                    dir=temporary_root,
+                ) as mount_temp:
+                    launcher = FODMount(str(ROOT), role="replica")
+                    mountpoint = Path(mount_temp) / "replica"
+                    try:
+                        try:
+                            with contextlib.redirect_stdout(io.StringIO()):
+                                launcher.start(
+                                    str(mountpoint),
+                                    log_prefix=f"/tmp/fod-client-version-{gate_name}-replica",
+                                )
+                        except RuntimeError as error:
+                            if "exited before becoming ready" not in str(error):
+                                raise
+                        else:
+                            raise AssertionError(
+                                f"gate={gate_name} replica unexpectedly mounted"
+                            )
+
+                        assert launcher.config is not None
+                        log = launcher.config.log_file.read_text(encoding="utf-8")
+                        (artifacts / f"mount-{gate_name}-replica.log").write_text(
+                            log, encoding="utf-8"
+                        )
+                        if expected_message not in log:
+                            raise AssertionError(
+                                f"gate={gate_name} failed for an unexpected reason; "
+                                f"expected {expected_message!r}\n{log[-6000:]}"
+                            )
+                        if FODMount._is_mountpoint(mountpoint):
+                            raise AssertionError(
+                                f"gate={gate_name} left a mount attached"
+                            )
+                        results[f"{gate_name}_replica_rejected"] = True
+                    finally:
+                        launcher.stop()
+            finally:
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+        def allow_degraded_replica_without_primary():
+            changed_keys = {
+                "FOD_DEGRADED_READONLY_ENABLED",
+                "FOD_PG_PRIMARY_HOSTS",
+                "FOD_ROLE",
+            }
+            previous = {key: os.environ.get(key) for key in changed_keys}
+            os.environ["FOD_DEGRADED_READONLY_ENABLED"] = "1"
+            os.environ["FOD_PG_PRIMARY_HOSTS"] = "127.0.0.1:1"
+            os.environ["FOD_ROLE"] = "replica"
+            try:
+                with tempfile.TemporaryDirectory(
+                    prefix="fod-client-version-gate-degraded-",
+                    dir=temporary_root,
+                ) as mount_temp:
+                    launcher = FODMount(str(ROOT), role="replica")
+                    mountpoint = Path(mount_temp) / "replica"
+                    try:
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            launcher.start(
+                                str(mountpoint),
+                                log_prefix="/tmp/fod-client-version-degraded-replica",
+                            )
+                        assert launcher.config is not None
+                        log = launcher.config.log_file.read_text(encoding="utf-8")
+                        (artifacts / "mount-degraded-primary-unavailable-replica.log").write_text(
+                            log, encoding="utf-8"
+                        )
+                        if "admission uses the standby's replayed compatibility state" not in log:
+                            raise AssertionError(
+                                "degraded mount did not report use of the replayed local compatibility gate\n"
+                                + log[-6000:]
+                            )
+                        results["degraded_replica_without_primary_mounted"] = True
+                    finally:
+                        launcher.stop()
+            finally:
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
         wait_for_replica_barrier()
         original_version = query(
             primary,
@@ -282,23 +381,35 @@ def main() -> None:
         )
         wait_for_replica_barrier()
 
+        execute(replica, "SELECT pg_wal_replay_pause()")
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if query(replica, "SELECT pg_is_wal_replay_paused()")[0][0]:
+                replica_replay_paused = True
+                break
+            time.sleep(0.05)
+        if not replica_replay_paused:
+            raise AssertionError("physical standby did not pause WAL replay")
         execute(
             primary,
             "UPDATE fod.schema_version SET minimum_client_version = %s",
             ("99.0.0",),
         )
-        barrier_lsn = wait_for_replica_barrier()
         replicated_version = query(
             replica,
             "SELECT minimum_client_version FROM fod.schema_version ORDER BY applied_at DESC LIMIT 1",
         )[0][0]
-        if replicated_version != "99.0.0":
+        if replicated_version != original_version:
             raise AssertionError(
-                f"standby floor={replicated_version!r}; expected replicated floor '99.0.0'"
+                "standby should retain its old floor while replay is paused: "
+                f"expected {original_version!r}, got {replicated_version!r}"
             )
-        results["replicated_floor"] = {
+        results["paused_replica_floor"] = {
             "version": replicated_version,
-            "primary_flush_lsn": barrier_lsn,
+            "primary_floor": "99.0.0",
+            "primary_flush_lsn": query(
+                primary, "SELECT pg_current_wal_flush_lsn()::text"
+            )[0][0],
         }
 
         reject_mounts(
@@ -311,8 +422,16 @@ def main() -> None:
             "UPDATE fod.schema_version SET minimum_client_version = %s",
             (original_version,),
         )
+        execute(replica, "SELECT pg_wal_replay_resume()")
+        replica_replay_paused = False
         wait_for_replica_barrier()
         results["restored_floor"] = original_version
+        reject_replica_without_primary(
+            "primary-unavailable",
+            {"FOD_PG_PRIMARY_HOSTS": "127.0.0.1:1"},
+            "replica mount requires an available writable PostgreSQL primary",
+        )
+        allow_degraded_replica_without_primary()
         print(json.dumps(results, sort_keys=True), flush=True)
     finally:
         for index, launcher in enumerate(reversed(mounts)):
@@ -321,6 +440,9 @@ def main() -> None:
                 launcher.stop()
                 if log_file.exists():
                     shutil.copyfile(log_file, artifacts / f"mount-cleanup-{index}.log")
+        if replica_replay_paused and replica is not None:
+            with contextlib.suppress(Exception):
+                execute(replica, "SELECT pg_wal_replay_resume()")
         for connection in connections:
             connection.close()
         shutil.rmtree(temporary_root)

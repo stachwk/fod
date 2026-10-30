@@ -296,34 +296,44 @@ also pass.
 
 ## Database schema and primary-authoritative mutations
 
-Current PostgreSQL schema version is 31; the migration manifest in
+Current PostgreSQL schema version is 32; the migration manifest in
 `rust_mkfs/src/main.rs` is authoritative. Earlier schema numbers below identify
 the migrations that introduced particular contracts.
 
 The `schema_version.minimum_client_version` value is a monotonic FOD release
-floor written by `mkfs.fod init` and `mkfs.fod upgrade`. Primary and replica
-mounts read the same replicated value and reject an older client before
-starting FUSE operations; `test_client_version_gate.py` verifies rejection
-from both primary and replica mount roles against a local database, and
-`test_client_version_gate_replica.py` verifies that the same replicated floor
-is enforced when a replica-role mount reads from a physical PostgreSQL standby.
+floor written by `mkfs.fod init` and `mkfs.fod upgrade`. Primary mounts read it
+from the primary. Replica mounts check the current floor and upgrade marker on
+the writable primary at startup while keeping file reads on the standby; they
+fail closed if the primary is unavailable. Explicit degraded read-only mounts
+may run without primary and use the standby's last replayed floor until WAL
+catches up. Replica mounts require role-aware primary/replica endpoints. Their
+local schema version is checked separately to reject a standby that has not
+replayed the required migration.
+`test_client_version_gate_replica.py` verifies rejection from both endpoints,
+including while standby WAL replay is paused and its local client floor remains
+old; it also covers primary unavailability in normal and degraded read-only
+modes.
 The migration also renames the schema-number column, so pre-gate clients that
 query its old name fail startup instead of silently skipping the check. A later
 release may mount without raising the floor; the floor moves only when an
 operator runs the schema command with that release.
 See the [versioning ADR](adr/storage-format-versioning.md).
 
-FOD 3.4.331 requires schema version 32. Before applying migrations,
+Since FOD 3.4.331, the runtime requires schema version 32. Before applying migrations,
 `mkfs.fod upgrade` raises the database client floor and sets
 `schema_version.upgrade_in_progress` transactionally. Mount admission checks
 that marker; client-session registration uses a shared PostgreSQL advisory
 lock, while upgrades hold its exclusive counterpart and refuse to proceed when
 unexpired FOD sessions exist. A PostgreSQL trigger also rejects legacy client
 session inserts while the gate is set. The final schema number, release floor,
-and cleared marker publish in one transaction. A physical standby below schema 32
-rejects the new client until WAL replay catches up. Interrupted upgrades leave
-the marker set so operators can rerun `mkfs.fod upgrade`; they must unmount all
-FOD hosts before starting an upgrade.
+and cleared marker publish in one transaction. A physical standby below schema
+32 rejects the new client until WAL replay catches up. Replica startup reads the
+client floor and upgrade marker from the writable primary, so WAL lag cannot
+admit an outdated client. Client-session registration also rechecks both gates
+under the shared advisory lock, closing the race between the startup snapshot
+and session creation. Interrupted upgrades leave the marker set so operators can
+rerun `mkfs.fod upgrade`; they must unmount all FOD hosts before starting an
+upgrade.
 
 Primary authority requirements are defined by
 [FOD_ARCHITECTURE_INVARIANTS.md](FOD_ARCHITECTURE_INVARIANTS.md). A dated audit

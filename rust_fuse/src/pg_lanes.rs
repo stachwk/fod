@@ -16,6 +16,7 @@ use fod_rust_runtime::{
 };
 use rust_hotpath::pg::{
     DbRepo, DbRepoConnectionTarget, DbRepoConnectionTargetRequirement, DbRepoConnectionTargets,
+    StartupSnapshot,
 };
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -238,6 +239,7 @@ struct EndpointRoutingResolution {
     replica_read_targets: Option<Arc<DbRepoConnectionTargets>>,
     replica_read_target_count: usize,
     read_only_telemetry_targets: Option<Arc<DbRepoConnectionTargets>>,
+    primary_admission_snapshot: Option<StartupSnapshot>,
 }
 
 fn quote_conninfo_value(value: &str) -> String {
@@ -484,6 +486,7 @@ fn resolve_endpoint_routing(
             replica_read_targets: None,
             replica_read_target_count: 0,
             read_only_telemetry_targets: None,
+            primary_admission_snapshot: None,
         });
     }
 
@@ -501,6 +504,8 @@ fn resolve_endpoint_routing(
     validate_unique_writable_endpoint(&snapshots)?;
 
     let mount_role = effective_mount_role(runtime)?;
+    let degraded_read_only =
+        env_var_truthy_with_legacy_alias("FOD_DEGRADED_READONLY_ENABLED", false);
     let selected = select_endpoint_for_mount(&config, mount_role, &snapshots)?;
     let requested_runtime_failover = settings.runtime_failover_enabled && !selected.read_only;
     let connection_targets = build_connection_targets(
@@ -552,6 +557,50 @@ fn resolve_endpoint_routing(
     } else {
         None
     };
+    let primary_admission_snapshot = if selected.read_only {
+        match read_only_telemetry_targets.as_ref() {
+            Some(targets) => {
+                let primary_repo = DbRepo::with_runtime_connection_targets(
+                    Arc::clone(targets),
+                    runtime,
+                )
+                .map_err(|err| {
+                    format!(
+                        "replica mount could not connect to the authoritative PostgreSQL primary for FOD compatibility validation: {err}"
+                    )
+                })?;
+                let snapshot = primary_repo.startup_snapshot().map_err(|err| {
+                    format!(
+                        "replica mount could not read authoritative FOD compatibility state from PostgreSQL primary: {err}"
+                    )
+                })?;
+                if snapshot.is_in_recovery {
+                    return Err(
+                        "replica mount selected a non-authoritative PostgreSQL standby for FOD compatibility validation; a writable primary is required".to_string(),
+                    );
+                }
+                if !snapshot.schema_is_initialized || snapshot.minimum_client_version.is_none() {
+                    return Err(
+                        "replica mount requires an initialized FOD schema and minimum client version on the authoritative PostgreSQL primary; run `mkfs.fod init` or `mkfs.fod upgrade`".to_string(),
+                    );
+                }
+                Some(snapshot)
+            }
+            None if degraded_read_only => {
+                log::warn!(
+                    "FOD degraded read-only mount cannot reach a writable primary; admission uses the last replayed replica version floor and upgrade marker"
+                );
+                None
+            }
+            None => {
+                return Err(
+                    "replica mount requires an available writable PostgreSQL primary to validate the authoritative FOD client-version and schema-upgrade gates".to_string(),
+                );
+            }
+        }
+    } else {
+        None
+    };
     Ok(EndpointRoutingResolution {
         connection_targets,
         health,
@@ -563,6 +612,7 @@ fn resolve_endpoint_routing(
         replica_read_targets,
         replica_read_target_count,
         read_only_telemetry_targets,
+        primary_admission_snapshot,
     })
 }
 
@@ -604,6 +654,7 @@ pub struct DbRepoLanes {
     replica_read_routing_enabled: bool,
     replica_read_target_count: usize,
     read_only_telemetry_repo: Option<DbRepo>,
+    primary_admission_snapshot: Option<StartupSnapshot>,
 }
 
 impl DbRepoLanes {
@@ -757,7 +808,49 @@ impl DbRepoLanes {
             replica_read_routing_enabled: routing.replica_read_target_count > 0,
             replica_read_target_count: routing.replica_read_target_count,
             read_only_telemetry_repo,
+            primary_admission_snapshot: routing.primary_admission_snapshot,
         })
+    }
+
+    fn apply_primary_admission_snapshot(
+        &self,
+        replica_snapshot: &mut StartupSnapshot,
+    ) -> Result<(), String> {
+        if !self.selected_read_only {
+            if replica_snapshot.is_in_recovery {
+                return Err(
+                    "mount connected to a PostgreSQL standby without role-aware endpoint routing; configure both primary_hosts and replica_hosts so FOD can verify client compatibility against the primary".to_string(),
+                );
+            }
+            return Ok(());
+        }
+        let primary_snapshot = self.primary_admission_snapshot.as_ref().ok_or_else(|| {
+            "replica mount has no authoritative PostgreSQL primary compatibility snapshot"
+                .to_string()
+        });
+        let primary_snapshot = match primary_snapshot {
+            Ok(snapshot) => snapshot,
+            Err(_) if env_var_truthy_with_legacy_alias("FOD_DEGRADED_READONLY_ENABLED", false) => {
+                if !replica_snapshot.is_in_recovery {
+                    return Err(
+                        "degraded read-only compatibility fallback requires PostgreSQL standby recovery state".to_string(),
+                    );
+                }
+                log::warn!(
+                    "FOD degraded read-only admission uses the standby's replayed compatibility state because the writable primary is unavailable"
+                );
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        };
+        replica_snapshot.minimum_client_version = primary_snapshot.minimum_client_version.clone();
+        replica_snapshot.schema_upgrade_in_progress = primary_snapshot.schema_upgrade_in_progress;
+        log::info!(
+            "FOD replica admission uses authoritative primary compatibility state: minimum_client_version={:?} schema_upgrade_in_progress={}",
+            primary_snapshot.minimum_client_version,
+            primary_snapshot.schema_upgrade_in_progress
+        );
+        Ok(())
     }
 
     pub fn repo_for(&self, purpose: PgConnectionPurpose) -> &DbRepo {
@@ -983,7 +1076,7 @@ pub fn mount_with_lanes(
         ));
     }
     log::debug!("FOD reading startup snapshot through control lane");
-    let snapshot = match control_repo.startup_snapshot() {
+    let mut snapshot = match control_repo.startup_snapshot() {
         Ok(snapshot) => snapshot,
         Err(err) => {
             let _ = lanes.record_connection_failure(&err);
@@ -995,6 +1088,16 @@ pub fn mount_with_lanes(
             return Err(format!("failed to read startup snapshot: {err}"));
         }
     };
+    if let Err(err) = lanes.apply_primary_admission_snapshot(&mut snapshot) {
+        log_lane_observability(
+            "startup-failed",
+            &observability_repositories,
+            &process_rss_peak,
+        );
+        return Err(format!(
+            "failed to validate FOD replica admission against the PostgreSQL primary: {err}"
+        ));
+    }
     log::debug!("FOD startup snapshot={:?}", snapshot);
     log_lane_observability(
         "post-startup",

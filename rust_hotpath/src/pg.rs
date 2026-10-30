@@ -29,10 +29,10 @@ use fod_rust_monitor::{
 };
 use fod_rust_runtime::{
     duration_to_micros, env_var_truthy_with_legacy_alias, postgres_session_setup_sql,
-    request_token as generate_request_token, DataObjectSwapCleanup, PersistBlockTransport,
-    PostgresRuntimeRequirements, PostgresVersionDiagnostics, RuntimeConfig, RuntimePayloadSettings,
-    RuntimeStorageSettings, RuntimeTransactionSettings, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
-    MIN_POSTGRES_SERVER_VERSION_NUM, POSTGRES_REQUIREMENT_SETTINGS_SQL,
+    request_token as generate_request_token, validate_fod_client_version, DataObjectSwapCleanup,
+    PersistBlockTransport, PostgresRuntimeRequirements, PostgresVersionDiagnostics, RuntimeConfig,
+    RuntimePayloadSettings, RuntimeStorageSettings, RuntimeTransactionSettings, FOD_SCHEMA_NAME,
+    FOD_SEARCH_PATH, MIN_POSTGRES_SERVER_VERSION_NUM, POSTGRES_REQUIREMENT_SETTINGS_SQL,
 };
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -8051,6 +8051,22 @@ impl DbRepo {
                             "FOD schema upgrade is in progress or was interrupted; rerun `mkfs.fod upgrade` before mounting".to_string(),
                         );
                     }
+                    let minimum_client_version_sql = CString::new(
+                        "SELECT COALESCE((\
+                            SELECT to_jsonb(schema_row)->>'minimum_client_version' \
+                            FROM schema_version AS schema_row \
+                            ORDER BY applied_at DESC LIMIT 1\
+                         ), '')",
+                    )
+                    .map_err(|_| "SQL contains NUL byte".to_string())?;
+                    let minimum_client_version =
+                        query_scalar_text_on_conn(conn, &minimum_client_version_sql)?;
+                    if minimum_client_version.trim().is_empty() {
+                        return Err(
+                            "database is missing its minimum FOD client version; run `mkfs.fod upgrade` before mounting".to_string(),
+                        );
+                    }
+                    validate_fod_client_version(minimum_client_version.trim())?;
                     let request_token_params = [&request_token];
                     let existing_token_res =
                         exec_params(conn, &sql_lookup_request_token, &request_token_params)?;
