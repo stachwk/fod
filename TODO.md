@@ -14,6 +14,16 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`readlink()` nie może zwrócić celu nowego symlinka przez ścieżkę starego inode.**
+  Callback używa ścieżki zapamiętanej dla inode, ale wcześniej sprawdzał tylko,
+  czy ta ścieżka wskazuje obecnie symlink. Po zdalnym usunięciu i ponownym
+  utworzeniu tej samej nazwy mógł więc odczytać cel obiektu zastępczego.
+  `readlink()` weryfikuje teraz inode przez primary i pobiera cel oraz aktualizuje
+  atime po niezmiennym ID symlinka. `test_stale_inode_readlink.py` na dwóch
+  mountach potwierdza `ENOENT` dla starego inode i poprawny cel po świeżym
+  mountcie; test przeszedł 2026-10-30 na jednorazowej bazie schematu 32.
+  Test ma target `make test-stale-inode-readlink`.
+
 - [x] **`ftruncate()` na zamkniętym deskryptorze zwraca `EBADF` bez zmiany pliku.**
   `test_lseek.py` sprawdza dokładny errno i porównuje rozmiar, mtime, ctime oraz
   payload przed i po wywołaniu. Potwierdza to walidację deskryptora po stronie

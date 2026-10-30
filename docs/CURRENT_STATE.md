@@ -24,15 +24,17 @@ uses 4 workers, 16 stored blocks separated by holes and 8 simultaneous readers;
 all readers verify both payload and zero-filled holes. It passed on FOD 3.4.350
 against a disposable initialized database.
 The mounted `concurrent_threads_run_multiple_copy_file_range_tasks` regression
-is designed to start 32 copy tasks together across 8 FUSE event threads and
-check every destination byte-for-byte. It compiles, but its schema-32 mounted
-run returned `EIO` while creating the first source, before copy execution. An
-existing concurrent create/write/read regression returned the same error. The
-cause is unresolved and tracked in [`TODO.md`](../TODO.md); this test is not yet
-verified end to end.
-The permissions regression now invokes libc `opendir()` as `nobody` on a
-mode-000 directory and checks exact `EACCES`; its FUSE run is pending an
-isolated/up-to-date test database.
+starts 32 copy tasks together across 8 FUSE event threads and checks every
+destination byte-for-byte. On FOD 3.4.366, writable `CREATE` was fixed to strip
+the file-type bits included in FUSE's mode argument before persisting POSIX
+permission bits. The same stress run exposed and fixed missing whitespace in
+the recursive directory-rename cycle query. Both the concurrent
+create/write/read and 32-task copy tests pass against a disposable schema-32
+database on Linux 6.17/libfuse 3.17.4. `FOD_TEST_CONFIG` isolates Rust FUSE
+tests from a developer's shared database. Older failed test attempts left
+test-owned mount artifacts documented in [`TODO.md`](../TODO.md).
+The permissions regression invokes libc `opendir()` as `nobody` on a mode-000
+directory and checks exact `EACCES`; the mounted ACL and permissions tests pass.
 
 Logical-task admission has multithreaded unit coverage for FIFO order, capacity
 limits, queue progress as tasks finish, and balanced completion/failure metrics.
@@ -59,6 +61,10 @@ protection, transactional inode chmod/chown and sticky-bit authorization,
 passing mounted regressions and further mutation-precondition review.
 Its findings must be resolved and validated before claiming complete
 primary-authoritative mutation coverage.
+`readlink()` also validates the requested symlink inode against the current
+primary-resolved path before returning a target; a stale inode cannot follow a
+replacement symlink at the same name. The two-mount regression is
+`test_stale_inode_readlink.py` (`make test-stale-inode-readlink`).
 
 PostgreSQL schema 30 includes transactional per-file content generations and
 the cross-mount POSIX lock wait graph.

@@ -4273,6 +4273,26 @@ impl FodFuse {
         }
     }
 
+    fn touch_symlink_access_time_by_id(&self, symlink_id: u64, file_attr: &FileAttr) {
+        if self.read_only || !should_update_atime(self.atime_policy, false, file_attr) {
+            return;
+        }
+        if self.atime_policy == AtimePolicy::Default {
+            if let Ok(age) = Self::current_time().duration_since(file_attr.atime) {
+                if age < ATIME_TOUCH_INTERVAL {
+                    return;
+                }
+            }
+        }
+        let atime = Self::system_time_to_db_string(Self::current_time());
+        if let Err(err) = self.repo.update_symlink_access_date(symlink_id, &atime) {
+            warn!(
+                "FOD symlink atime touch failed symlink_id={} err={}",
+                symlink_id, err
+            );
+        }
+    }
+
     fn touch_access_time(&self, path: &str, file_attr: &FileAttr) {
         // A read-only mount is observation-only. Never emit automatic
         // metadata DML to a PostgreSQL physical replica.
@@ -6130,43 +6150,29 @@ impl Filesystem for FodFuse {
     fn readlink(&self, req: &Request, ino: INodeNo, reply: ReplyData) {
         let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
-        let path = match self.path_for_inode(ino) {
-            Some(path) => path,
-            None => {
-                fuse_reply_error!(reply, ENOENT);
+        let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
+            Ok(value) => value,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
                 return;
             }
         };
+        if attrs.file_attr.kind != FileType::Symlink || attrs.xattr_owner_kind != "symlink" {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        }
         let subject = self.request_identity(req);
         if let Err(errno) = self.check_path_search_permissions(&path, &subject) {
             fuse_reply_error!(reply, errno);
             return;
         }
         let authority = self.repo.authoritative_view();
-        match authority.resolve_path(&path) {
-            Ok(resolved) => {
-                if let Some("symlink") = resolved.kind.as_deref() {
-                    let symlink_id = match resolved.entry_id {
-                        Some(value) => value,
-                        None => {
-                            fuse_reply_error!(reply, ENOENT);
-                            return;
-                        }
-                    };
-                    match authority.load_symlink_target(symlink_id) {
-                        Ok(Some(target)) => {
-                            if let Ok(Some(attrs)) = self.lookup_path(&path) {
-                                self.touch_access_time(&path, &attrs.file_attr);
-                            }
-                            self.reply_data_profiled(reply, target.as_bytes())
-                        }
-                        Ok(None) => fuse_reply_error!(reply, ENOENT),
-                        Err(_) => fuse_reply_error!(reply, EIO),
-                    }
-                } else {
-                    fuse_reply_error!(reply, ENOENT);
-                }
+        match authority.load_symlink_target(attrs.xattr_owner_id) {
+            Ok(Some(target)) => {
+                self.touch_symlink_access_time_by_id(attrs.xattr_owner_id, &attrs.file_attr);
+                self.reply_data_profiled(reply, target.as_bytes())
             }
+            Ok(None) => fuse_reply_error!(reply, ENOENT),
             Err(_) => fuse_reply_error!(reply, EIO),
         }
     }

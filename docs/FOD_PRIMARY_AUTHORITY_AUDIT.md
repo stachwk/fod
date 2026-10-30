@@ -587,5 +587,23 @@ FUSE-created object inode seeds combine the PostgreSQL-assigned mount session
 ID with a mount-local monotonic counter and are persisted on each object.
 The regression passed against an isolated PostgreSQL 17.11 instance.
 
+### `readlink()` after remote symlink replacement
+
+Source review found that `readlink()` resolved the cached inode path on primary
+but checked only that the current object at that path was a symlink. If another
+mount removed and recreated the same name, the stale inode could therefore
+receive the replacement symlink's target. The callback now obtains
+primary-resolved attributes through `authoritative_entry_attrs_for_ino()`,
+requires the requested inode to still identify a symlink, and fetches its target
+by the verified PostgreSQL symlink ID. Automatic atime updates use that same ID
+instead of resolving the path a second time.
+
+`test_stale_inode_readlink.py` keeps mount B's entry cache alive while mount A
+replaces the symlink. The old inode must return `ENOENT`; after remount, the
+replacement returns its exact target. The two-mount regression passed on FOD
+3.4.367 against a fresh schema-32 database inside a private mount namespace.
+The public test target is `make test-stale-inode-readlink`. This closes this
+specific stale-symlink path; other mutation preconditions remain under review.
+
 These items are source-review findings and test gaps; do not describe them as
 additional reproduced data-loss cases.
