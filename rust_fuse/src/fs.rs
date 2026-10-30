@@ -2638,6 +2638,19 @@ impl FodFuse {
         }
     }
 
+    fn decode_fuse_rdev(rdev: u32) -> (u32, u32) {
+        let major = (rdev >> 8) & 0x0fff;
+        let minor = (rdev & 0x00ff) | ((rdev >> 12) & 0x0fff00);
+        (major, minor)
+    }
+
+    fn encode_fuse_rdev(major: u32, minor: u32) -> Result<u32, libc::c_int> {
+        if major > 0x0fff || minor > 0x0fffff {
+            return Err(EIO);
+        }
+        Ok((major << 8) | (minor & 0x00ff) | ((minor & 0x0fff00) << 12))
+    }
+
     fn directory_entry_file_type(
         entry_kind: &str,
         special_type: Option<&str>,
@@ -3804,14 +3817,14 @@ impl FodFuse {
                     repo.get_special_file_metadata(file_id).map_err(|_| EIO)?
                 {
                     kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
-                    rdev = ((major as u64) << 8) | (minor as u64);
+                    rdev = Self::encode_fuse_rdev(major, minor)?;
                 }
             } else if obj_type == "file" {
                 if let Some((special_type, major, minor)) =
                     repo.get_special_file_metadata(raw_inode).map_err(|_| EIO)?
                 {
                     kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
-                    rdev = ((major as u64) << 8) | (minor as u64);
+                    rdev = Self::encode_fuse_rdev(major, minor)?;
                 }
             }
             let inode = self.stable_inode(&obj_type, &inode_seed, raw_inode);
@@ -3840,7 +3853,7 @@ impl FodFuse {
                 nlink: nlink.try_into().unwrap_or(u32::MAX),
                 uid,
                 gid,
-                rdev: rdev.try_into().unwrap_or(u32::MAX),
+                rdev,
                 flags: 0,
                 blksize: self.block_size as u32,
             }
@@ -3900,13 +3913,13 @@ impl FodFuse {
 
         let mut kind = FileType::RegularFile;
         let perm = u16::from_str_radix(mode.trim_start_matches("0o"), 8).map_err(|_| EIO)?;
-        let mut rdev = 0_u64;
+        let mut rdev = 0;
         if let Some((special_type, major, minor)) = authority
             .get_special_file_metadata(raw_inode)
             .map_err(|_| EIO)?
         {
             kind = Self::file_type_from_special(&special_type).ok_or(EIO)?;
-            rdev = ((major as u64) << 8) | (minor as u64);
+            rdev = Self::encode_fuse_rdev(major, minor)?;
         }
 
         let nlink = authority
@@ -3931,7 +3944,7 @@ impl FodFuse {
                 nlink: nlink.try_into().unwrap_or(u32::MAX),
                 uid,
                 gid,
-                rdev: rdev.try_into().unwrap_or(u32::MAX),
+                rdev,
                 flags: 0,
                 blksize: self.block_size as u32,
             },
@@ -10213,6 +10226,7 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EINVAL);
             return;
         };
+        let (rdev_major, rdev_minor) = Self::decode_fuse_rdev(rdev);
         let supplementary_groups = subject.groups.iter().copied().collect::<Vec<_>>();
         let create_result = if self.acl_enabled {
             self.repo.create_special_file_with_default_acl(
@@ -10223,8 +10237,8 @@ impl Filesystem for FodFuse {
                 subject.gid,
                 &child_path,
                 file_kind,
-                libc::major(rdev as libc::dev_t) as u32,
-                libc::minor(rdev as libc::dev_t) as u32,
+                rdev_major,
+                rdev_minor,
                 &supplementary_groups,
             )
         } else {
@@ -10236,8 +10250,8 @@ impl Filesystem for FodFuse {
                 subject.gid,
                 &child_path,
                 file_kind,
-                libc::major(rdev as libc::dev_t) as u32,
-                libc::minor(rdev as libc::dev_t) as u32,
+                rdev_major,
+                rdev_minor,
                 &supplementary_groups,
             )
         };

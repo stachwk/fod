@@ -218,6 +218,11 @@ Reading guide:
   treating timestamp projection as verified. Unknown special-file types now
   return `EIO` instead of appearing as regular files; add a malformed-type
   decoder regression.
+- [ ] **Verify Linux FUSE device-number round trips for `mknod`.** The callback
+  now decodes the kernel's 12-bit-major/20-bit-minor `new_encode_dev` value and
+  FUSE attrs encode it in the same format; unrepresentable database values now
+  fail with `EIO`. Add mounted char/block-node checks with minor values above
+  255 and near the ABI boundary, then compare `stat().st_rdev` major/minor.
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's
