@@ -254,6 +254,9 @@ Reading guide:
   regressions: they verify empty and non-empty directory results, then inject an
   undefined-column error and require SQLSTATE `42703` instead of `false` or zero.
   The expanded `make test-rust-pg-query` suite passed on 2026-10-30 (41 tests).
+  `count_directory_subdirs()` and `count_root_directory_children()` now also
+  verify valid counts and reject an undefined-column query with SQLSTATE
+  `42703`; `make test-rust-pg-query` passed on 2026-10-30 (43 tests).
   Directory metadata decoding now rejects empty names, unsupported entry kinds
   and empty inode seeds. A temporary-database regression feeds NULL name and
   inode-seed fields through the real query decoder; a mounted regression also

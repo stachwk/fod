@@ -1702,6 +1702,42 @@ fn directory_count_query_failures_are_not_empty() -> Result<(), String> {
 }
 
 #[test]
+fn directory_link_count_query_failures_are_not_zero() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let repo = DbRepo::with_runtime(&conninfo_for_database(&temporary_db.name), &runtime)?;
+
+    repo.exec("CREATE SCHEMA fod")?;
+    repo.exec("CREATE TABLE fod.directories (id_parent BIGINT, name TEXT NOT NULL)")?;
+    repo.exec(
+        "INSERT INTO fod.directories VALUES (NULL, '/'), (NULL, 'top-level'), (41, 'child')",
+    )?;
+
+    assert_eq!(repo.count_directory_subdirs(41)?, 1);
+    assert_eq!(repo.count_root_directory_children()?, 1);
+
+    repo.exec("ALTER TABLE fod.directories RENAME COLUMN id_parent TO id_parent_fault_probe")?;
+    let subdirectory_error = repo
+        .count_directory_subdirs(41)
+        .expect_err("a failed subdirectory query must not be reported as zero");
+    assert!(
+        subdirectory_error.contains("SQLSTATE 42703"),
+        "expected PostgreSQL undefined-column error, got: {subdirectory_error}"
+    );
+    let root_child_error = repo
+        .count_root_directory_children()
+        .expect_err("a failed root child query must not be reported as zero");
+    assert!(
+        root_child_error.contains("SQLSTATE 42703"),
+        "expected PostgreSQL undefined-column error, got: {root_child_error}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn directory_entry_metadata_rejects_missing_required_fields() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let temporary_db = TemporaryDatabase::create()?;
