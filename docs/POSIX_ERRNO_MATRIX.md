@@ -51,6 +51,9 @@ FOD został wywołany:
   `rmdir()`. Dla końcowego symlinku do katalogu z ukośnikiem test sprawdza
   `mkdir()`=`EEXIST` oraz `unlink()`/`rmdir()`=`ENOTDIR`, potwierdzając, że
   symlink i katalog docelowy pozostają; `stat()` i `open()` podążają do katalogu.
+  Końcowy symlink z ukośnikiem do pliku zwraca `ENOTDIR` dla `lstat()`,
+  `unlink()`, `rmdir()`, `truncate()`, `chmod()` i `utime()`; plik i symlink
+  pozostają bez zmian.
 - Linux v6.17 `chmod_common()` ogranicza argument `mode` przez `S_IALLUGO` i
   zachowuje istniejące bity typu inode. Montowany probe FOD z `mode=0o10000`
   (bit `S_IFIFO`) zakończył się sukcesem i ustawił prawa na `0o000`. POSIX

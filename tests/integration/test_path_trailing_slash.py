@@ -77,6 +77,37 @@ def main() -> None:
                 errno.ENOTDIR,
                 "open symlink to regular file/",
             )
+            expect_errno(
+                lambda: os.lstat(f"{file_link}/"),
+                errno.ENOTDIR,
+                "lstat symlink to regular file/",
+            )
+            expect_errno(
+                lambda: os.unlink(f"{file_link}/"),
+                errno.ENOTDIR,
+                "unlink symlink to regular file/",
+            )
+            expect_errno(
+                lambda: os.rmdir(f"{file_link}/"),
+                errno.ENOTDIR,
+                "rmdir symlink to regular file/",
+            )
+            expect_errno(
+                lambda: os.truncate(f"{file_link}/", 0),
+                errno.ENOTDIR,
+                "truncate symlink to regular file/",
+            )
+            expect_errno(
+                lambda: os.chmod(f"{file_link}/", 0o600),
+                errno.ENOTDIR,
+                "chmod symlink to regular file/",
+            )
+            expect_errno(
+                lambda: os.utime(f"{file_link}/", None),
+                errno.ENOTDIR,
+                "utime symlink to regular file/",
+            )
+            assert file_link.is_symlink() and file_path.read_bytes() == b"not a directory"
 
             trailing_directory = directory / "created-with-slash"
             os.mkdir(f"{trailing_directory}/")
@@ -140,7 +171,7 @@ def main() -> None:
             )
             print(
                 "OK pathname empty_path=ENOENTx5 trailing slash file=ENOTDIR "
-                "symlink_file=ENOTDIR symlink_directory=accepted "
+                "symlink_file=ENOTDIRx8 symlink_directory=accepted "
                 "slash_symlink_dir=mkdir:EEXIST,unlink:ENOTDIR,rmdir:ENOTDIR "
                 "dotdot_repeated_separator=1 name_max_boundary=1 "
                 "non_utf8_create=EILSEQ"
