@@ -13808,8 +13808,12 @@ impl DbRepo {
 
                     let params = [&dst_data_object_id];
                     let res = exec_params(conn, &sql_count_dst_references, &params)?;
-                    let remaining_dst_references =
-                        fetch_single_text(res)?.trim().parse::<u64>().unwrap_or(0);
+                    let remaining_dst_references = fetch_single_text(res)?
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|err| {
+                            format!("invalid destination data-object reference count: {err}")
+                        })?;
 
                     if remaining_dst_references == 0 {
                         let params = [&dst_data_object_id];

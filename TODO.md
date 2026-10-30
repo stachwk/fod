@@ -185,7 +185,9 @@ Reading guide:
   missing entry; xattr path lookup no longer substitutes ID 0 for a missing
   directory ID. Special-file metadata decoding now rejects NULL/malformed rows
   and frees every `PGresult` on parse failures. PostgreSQL fault-injection and
-  malformed-row regressions for these paths remain pending.
+  malformed-row regressions for these paths remain pending. A related copy-on-
+  write reference-count parse fallback was removed: malformed counts now fail
+  the transaction instead of defaulting to zero and deleting a data object.
 - [ ] **Metadata projection must preserve restrictive directory modes.** Source
   review found that directory mode `0644` was rewritten to `0755` in FUSE
   attributes, and malformed size/uid/gid/mode values could be replaced by
