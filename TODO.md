@@ -401,6 +401,11 @@ Reading guide:
   operation now errors instead; `rename_replace_rejects_missing_target_data_object`
   reproduced the old deletion and verifies the source and target bindings stay
   unchanged.
+  Symlink target decoding previously trimmed valid target whitespace and
+  conflated SQL `NULL` or an empty target with a missing link. `readlink` now
+  preserves target bytes and rejects NULL/empty targets; symlink metadata uses
+  the same fail-closed validation. `symlink_null_target_is_not_reported_as_missing_or_empty`
+  checks the exact whitespace case and both malformed target values.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

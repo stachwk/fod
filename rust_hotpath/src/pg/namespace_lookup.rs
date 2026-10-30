@@ -7,7 +7,7 @@
 
 use super::{
     conn_error, exec_params, exec_prepared_params, fetch_first_column_texts, fetch_first_row_texts,
-    fetch_rows_text, fetch_single_text, join_nul_text, result_error, DbRepo, PQclear, PQgetisnull,
+    fetch_rows_text, join_nul_text, result_error, DbRepo, PQclear, PQgetisnull,
     PQgetvalue, PQnfields, PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
 };
 use std::ffi::{CStr, CString};
@@ -427,13 +427,34 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let params = [&symlink_id];
             let res = exec_prepared_params(conn, PreparedStatement::LoadSymlinkTarget, &params)?;
-            let text = fetch_single_text(res)?;
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(trimmed.to_string()))
-            }
+            let target = match PQresultStatus(res) {
+                PGRES_TUPLES_OK => {
+                    let rows = PQntuples(res);
+                    let cols = PQnfields(res);
+                    if rows == 0 {
+                        Ok(None)
+                    } else if rows != 1 || cols != 1 {
+                        Err("invalid symlink target row returned by PostgreSQL".to_string())
+                    } else if PQgetisnull(res, 0, 0) != 0 {
+                        Err("symlink target is NULL".to_string())
+                    } else {
+                        let value = PQgetvalue(res, 0, 0);
+                        if value.is_null() {
+                            Err("symlink target value is missing".to_string())
+                        } else {
+                            let target = CStr::from_ptr(value).to_string_lossy().to_string();
+                            if target.is_empty() {
+                                Err("symlink target is empty".to_string())
+                            } else {
+                                Ok(Some(target))
+                            }
+                        }
+                    }
+                }
+                _ => Err(result_error(res)),
+            };
+            PQclear(res);
+            target
         })
     }
 
@@ -862,15 +883,40 @@ impl DbRepo {
                 } else {
                     match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
-                            let row = fetch_first_row_texts(res)?;
-                            if row.is_empty() {
-                                Ok(None)
+                            let symlink_target_validation =
+                                if kind == "symlink" && PQntuples(res) > 0 {
+                                    if PQntuples(res) != 1 || PQnfields(res) != 8 {
+                                        Err("invalid symlink metadata row returned by PostgreSQL"
+                                            .to_string())
+                                    } else if PQgetisnull(res, 0, 1) != 0 {
+                                        Err("symlink metadata target is NULL".to_string())
+                                    } else {
+                                        let target = PQgetvalue(res, 0, 1);
+                                        if target.is_null() {
+                                            Err("symlink metadata target is missing".to_string())
+                                        } else if CStr::from_ptr(target).to_bytes().is_empty() {
+                                            Err("symlink metadata target is empty".to_string())
+                                        } else {
+                                            Ok(())
+                                        }
+                                    }
+                                } else {
+                                    Ok(())
+                                };
+                            if let Err(error) = symlink_target_validation {
+                                PQclear(res);
+                                Err(error)
                             } else {
-                                let mut output = Vec::new();
-                                output.extend_from_slice(kind.as_bytes());
-                                output.push(0);
-                                output.extend_from_slice(&join_nul_text(&row));
-                                Ok(Some(output))
+                                let row = fetch_first_row_texts(res)?;
+                                if row.is_empty() {
+                                    Ok(None)
+                                } else {
+                                    let mut output = Vec::new();
+                                    output.extend_from_slice(kind.as_bytes());
+                                    output.push(0);
+                                    output.extend_from_slice(&join_nul_text(&row));
+                                    Ok(Some(output))
+                                }
                             }
                         }
                         _ => {

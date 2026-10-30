@@ -973,6 +973,87 @@ fn rename_replace_rejects_missing_target_data_object() -> Result<(), String> {
 }
 
 #[test]
+fn symlink_null_target_is_not_reported_as_missing_or_empty() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let name = unique_name("null_symlink_target");
+    let symlink_id = repo.create_symlink(
+        None,
+        &name,
+        "  valid-target  ",
+        1000,
+        1000,
+        &unique_name("null_symlink_target_seed"),
+    )?;
+    let path = format!("/{name}");
+    let mut target_not_null_dropped = false;
+
+    let result = (|| {
+        if repo.load_symlink_target(symlink_id)?.as_deref() != Some("  valid-target  ") {
+            return Err("readlink did not preserve target whitespace".to_string());
+        }
+        repo.exec("ALTER TABLE symlinks ALTER COLUMN target DROP NOT NULL")?;
+        target_not_null_dropped = true;
+        repo.exec(&format!(
+            "UPDATE symlinks SET target = NULL WHERE id_symlink = {symlink_id}"
+        ))?;
+
+        match repo.load_symlink_target(symlink_id) {
+            Err(error) if error.contains("NULL") => {}
+            Err(error) => return Err(format!("unexpected readlink target error: {error}")),
+            Ok(target) => {
+                return Err(format!(
+                    "NULL symlink target was treated as an ordinary result: {target:?}"
+                ));
+            }
+        }
+        match repo.fetch_path_attrs_blob(&path) {
+            Err(error) if error.contains("NULL") => {}
+            Err(error) => return Err(format!("unexpected symlink metadata error: {error}")),
+            Ok(attrs) => {
+                return Err(format!(
+                    "NULL symlink target produced an attribute blob: {}",
+                    attrs.is_some()
+                ));
+            }
+        }
+
+        repo.exec(&format!(
+            "UPDATE symlinks SET target = '' WHERE id_symlink = {symlink_id}"
+        ))?;
+        match repo.load_symlink_target(symlink_id) {
+            Err(error) if error.contains("empty") => {}
+            Err(error) => return Err(format!("unexpected empty-target error: {error}")),
+            Ok(target) => {
+                return Err(format!(
+                    "empty symlink target was treated as an ordinary result: {target:?}"
+                ));
+            }
+        }
+        match repo.fetch_path_attrs_blob(&path) {
+            Err(error) if error.contains("empty") => {}
+            Err(error) => return Err(format!("unexpected empty-target metadata error: {error}")),
+            Ok(attrs) => {
+                return Err(format!(
+                    "empty symlink target produced an attribute blob: {}",
+                    attrs.is_some()
+                ));
+            }
+        }
+        Ok(())
+    })();
+
+    let cleanup = (|| {
+        repo.delete_symlink_entry(symlink_id)?;
+        if target_not_null_dropped {
+            repo.exec("ALTER TABLE symlinks ALTER COLUMN target SET NOT NULL")?;
+        }
+        Ok(())
+    })();
+    result.and(cleanup)
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
