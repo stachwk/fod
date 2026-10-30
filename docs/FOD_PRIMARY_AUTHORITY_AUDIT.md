@@ -284,6 +284,12 @@ main pool, and `with_control_connection` uses a control lane of that same
 authority. Calling a method a read operation does not make it safe for replica
 routing if its answer selects a later mutation.
 
+Create/open rollback cleanup follows the same rule. It now asks the primary
+transaction to promote a current hardlink first; when none is promoted, the
+primary purge transaction rechecks hardlinks and open leases while holding the
+file-lifecycle lock. A replica-routed link count no longer selects between
+these mutations.
+
 Legacy single-DSN repositories use the `Any` target requirement rather than
 role-aware target validation. A PostgreSQL physical standby rejects ordinary
 filesystem DML, but the legacy path does not itself establish that an arbitrary

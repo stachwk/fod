@@ -3605,28 +3605,18 @@ impl FodFuse {
 
 
     fn remove_primary_file_or_promote_hardlink(&self, file_id: u64) -> Result<(), String> {
-        match self.repo.count_file_links(file_id) {
-            Ok(links) if links > 1 => self
-                .repo
-                .promote_hardlink_to_primary(file_id)
-                .map(|_| ())
-                .map_err(|err| {
-                    warn!(
-                        "FOD promote_hardlink_to_primary failed file_id={} err={}",
-                        file_id, err
-                    );
-                    err
-                }),
-            Ok(_) => self.repo.purge_primary_file(file_id).map_err(|err| {
+        match self.repo.promote_hardlink_to_primary(file_id) {
+            Ok(true) => Ok(()),
+            Ok(false) => self.repo.purge_primary_file(file_id).map_err(|err| {
                 warn!(
-                    "FOD purge_primary_file failed file_id={} err={}",
+                    "FOD purge_primary_file failed after no hardlink promotion file_id={} err={}",
                     file_id, err
                 );
                 err
             }),
             Err(err) => {
                 warn!(
-                    "FOD count_file_links failed file_id={} err={}",
+                    "FOD promote_hardlink_to_primary failed file_id={} err={}",
                     file_id, err
                 );
                 Err(err)

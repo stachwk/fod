@@ -352,6 +352,10 @@ separate regression pauses standby replay, extends a file on primary, then
 extends it through a replica-routed mount and checks both visible contents and
 the primary payload row. It passed on 2026-10-30. The broader
 mutation-authority audit remains active.
+Create/open rollback cleanup now attempts hardlink promotion on the primary
+before purging. A no-promotion result falls through to primary purge, which
+rechecks surviving links and active leases under the file-lifecycle lock; a
+replica-routed link count no longer selects the cleanup operation.
 
 ## POSIX byte-range locks
 

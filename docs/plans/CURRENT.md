@@ -71,3 +71,6 @@ the two-mount regression pauses replica replay, extends on primary, then
 extends through the replica-routed mount and verifies preserved bytes via FUSE
 and in the primary payload row. Continue the remaining mutation-precondition
 audit; this closes one stale-read path, not the entire authority audit.
+Create/open rollback cleanup also stopped choosing promotion versus purge from
+replica-routed link counts: primary promotion is attempted first, then primary
+purge rechecks links and leases under the lifecycle lock.
