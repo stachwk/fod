@@ -170,8 +170,9 @@ Reading guide:
   an empty lock list, which could hide conflicts; it now returns the PostgreSQL
   error instead. The affected read paths now check result status, and shared
   helpers and block-read decoders capture `result_error()` (including SQLSTATE)
-  before clearing the result. PostgreSQL fault-injection regressions for these
-  paths remain pending.
+  before clearing the result. Namespace ID lookups now return an error for NULL
+  or malformed IDs rather than treating them as a missing entry. PostgreSQL
+  fault-injection and malformed-row regressions for these paths remain pending.
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's

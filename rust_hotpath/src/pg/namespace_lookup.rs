@@ -7,8 +7,8 @@
 
 use super::{
     conn_error, exec_params, exec_prepared_params, fetch_first_column_texts, fetch_first_row_texts,
-    fetch_rows_text, fetch_single_text, join_nul_text, result_error, DbRepo, PQclear, PQgetvalue,
-    PQnfields, PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
+    fetch_rows_text, fetch_single_text, join_nul_text, result_error, DbRepo, PQclear, PQgetisnull,
+    PQgetvalue, PQnfields, PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
 };
 use std::ffi::{CStr, CString};
 
@@ -32,6 +32,31 @@ enum DirectoryLookup {
     Root,
     Directory(u64),
     Missing,
+}
+
+unsafe fn parse_optional_namespace_id(
+    res: *mut super::PGresult,
+    description: &str,
+) -> Result<Option<u64>, String> {
+    if PQntuples(res) < 1 {
+        return Ok(None);
+    }
+    if PQnfields(res) < 1 {
+        return Err(format!("{description} row is missing its id column"));
+    }
+    if PQgetisnull(res, 0, 0) != 0 {
+        return Err(format!("{description} returned a NULL id"));
+    }
+    let value_ptr = PQgetvalue(res, 0, 0);
+    if value_ptr.is_null() {
+        return Err(format!("{description} returned a null id pointer"));
+    }
+    let value = CStr::from_ptr(value_ptr).to_string_lossy();
+    value
+        .trim()
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|err| format!("{description} returned an invalid id: {err}"))
 }
 
 fn parse_directory_entry_metadata_rows(
@@ -77,22 +102,9 @@ impl DbRepo {
                 } else {
                     match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
-                                None
-                            } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    None
-                                } else {
-                                    let value =
-                                        CStr::from_ptr(value_ptr).to_string_lossy().to_string();
-                                    value.trim().parse::<u64>().ok()
-                                }
-                            };
+                            let value = parse_optional_namespace_id(res, "directory lookup");
                             PQclear(res);
-                            Ok(value)
+                            value
                         }
                         _ => {
                             let error = result_error(res);
@@ -152,22 +164,9 @@ impl DbRepo {
                 } else {
                     match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
-                                None
-                            } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    None
-                                } else {
-                                    let value =
-                                        CStr::from_ptr(value_ptr).to_string_lossy().to_string();
-                                    value.trim().parse::<u64>().ok()
-                                }
-                            };
+                            let value = parse_optional_namespace_id(res, "file lookup");
                             PQclear(res);
-                            Ok(value)
+                            value
                         }
                         _ => {
                             let error = result_error(res);
@@ -280,22 +279,9 @@ impl DbRepo {
                 } else {
                     match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
-                                None
-                            } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    None
-                                } else {
-                                    let value =
-                                        CStr::from_ptr(value_ptr).to_string_lossy().to_string();
-                                    value.trim().parse::<u64>().ok()
-                                }
-                            };
+                            let value = parse_optional_namespace_id(res, "hardlink lookup");
                             PQclear(res);
-                            Ok(value)
+                            value
                         }
                         _ => {
                             let error = result_error(res);
@@ -323,22 +309,9 @@ impl DbRepo {
                 } else {
                     match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
-                                None
-                            } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    None
-                                } else {
-                                    let value =
-                                        CStr::from_ptr(value_ptr).to_string_lossy().to_string();
-                                    value.trim().parse::<u64>().ok()
-                                }
-                            };
+                            let value = parse_optional_namespace_id(res, "hardlink target lookup");
                             PQclear(res);
-                            Ok(value)
+                            value
                         }
                         _ => {
                             let error = result_error(res);
@@ -453,22 +426,9 @@ impl DbRepo {
                 } else {
                     match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 1 {
-                                None
-                            } else {
-                                let value_ptr = PQgetvalue(res, 0, 0);
-                                if value_ptr.is_null() {
-                                    None
-                                } else {
-                                    let value =
-                                        CStr::from_ptr(value_ptr).to_string_lossy().to_string();
-                                    value.trim().parse::<u64>().ok()
-                                }
-                            };
+                            let value = parse_optional_namespace_id(res, "symlink lookup");
                             PQclear(res);
-                            Ok(value)
+                            value
                         }
                         _ => {
                             let error = result_error(res);
