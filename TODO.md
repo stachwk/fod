@@ -115,17 +115,16 @@ Reading guide:
   distinction and root `X_OK` cases with and without execute bits before
   closing P07. See the
   [`permissions and identity audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
-- [ ] **Verify stale-inode xattr behavior on mounted FUSE.** Source review
+- [x] **Verify stale-inode xattr behavior on mounted FUSE.** Source review
   found that xattr callbacks resolved the request's inode through a cached path
   without confirming that the path still resolved to that inode. After a
   remote remove/recreate, this could expose or mutate the replacement object's
   xattrs. The callbacks now verify the inode against metadata resolved from
   the primary and use that xattr owner ID; if the old inode remains open after
   unlink/replacement, they use the open handle's primary-resolved `file_id`.
-  Confidence
-  is high for the code-path fix. A two-mount regression now covers get/list,
-  set/remove and `fgetxattr(user.*)` on an open-unlinked inode with ACLs enabled;
-  mounted execution remains pending. See
+  Confidence is high for the code-path fix. A two-mount regression covers
+  get/list, set/remove and `fgetxattr(user.*)` on an open-unlinked inode with
+  ACLs enabled; it passed against a temporary PostgreSQL 17.11 instance. See
   [`xattr stale-path review`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md#xattr-callbacks-and-stale-inode-to-path-mappings).
 - [ ] **Mounted stale-inode directory-open regression is still missing.** On
   2026-10-30, source review found that `opendir()` fetched attributes through
@@ -196,12 +195,12 @@ Reading guide:
   shared (`1`) and exclusive (`2`) values; malformed persisted values no longer
   become type `0` and bypass conflict checks. Add a regression that seeds an
   invalid active lease and confirms another acquisition returns an error.
-- [ ] **Verify `F_GETLK` reports locks extending to EOF.** An unbounded
+- [x] **Verify `F_GETLK` reports locks extending to EOF.** An unbounded
   PostgreSQL range was represented internally as `None` but the FUSE reply
   converted it to end offset `0`, truncating the reported conflict. It now uses
-  the maximum `loff_t` offset supported by Linux FUSE. A mounted two-primary
-  regression now queries a conflicting zero-length lock through EOF and checks
-  the returned `l_start` and `l_len`; runtime verification remains pending.
+  the maximum `loff_t` offset supported by Linux FUSE. The mounted two-primary
+  regression queried a conflicting zero-length lock through EOF and confirmed
+  the returned `l_start` and `l_len` against temporary PostgreSQL 17.11.
 - [ ] **Verify malformed POSIX range-lease rows fail closed.** The decoder now
   rejects unknown lock types, offsets outside the PostgreSQL `BIGINT`/Linux
   `loff_t` range, reversed ranges and malformed fields; a unit regression covers
@@ -220,13 +219,12 @@ Reading guide:
   return `EIO` instead of appearing as regular files; a unit regression verifies
   the decoder and directory-entry conversion fail closed. Add a malformed
   database-row regression to verify the full metadata path.
-- [ ] **Verify Linux FUSE device-number round trips for `mknod`.** The callback
-  now decodes the kernel's 12-bit-major/20-bit-minor `new_encode_dev` value and
-  FUSE attrs encode it in the same format; unrepresentable database values now
-  fail with `EIO`. Mounted char/block-node checks now cover minor values above
-  255 and the ABI boundary and compare `stat().st_rdev` major/minor. They remain
-  unverified because the local PostgreSQL server rejected the configured
-  `foduser` credentials; rerun `make test-mknod` with the intended test DB.
+- [x] **Verify Linux FUSE device-number round trips for `mknod`.** The callback
+  decodes the kernel's 12-bit-major/20-bit-minor `new_encode_dev` value and FUSE
+  attrs encode it in the same format; unrepresentable database values fail
+  with `EIO`. Mounted char/block-node checks covered minor values above 255 and
+  the ABI boundary and compared `stat().st_rdev` major/minor; both special-node
+  cases passed against temporary PostgreSQL 17.11.
 - [ ] **P02 directory-stream errno needs ABI-level verification.** Source review
   maps POSIX `readdir()` errors to the libc/ABI boundary: `EOVERFLOW` can occur
   when a wide FUSE inode number is converted to a narrower `ino_t`; Linux's
