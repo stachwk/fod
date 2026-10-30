@@ -59,6 +59,32 @@ unsafe fn parse_optional_namespace_id(
         .map_err(|err| format!("{description} returned an invalid id: {err}"))
 }
 
+unsafe fn parse_optional_resolved_entry(
+    res: *mut super::PGresult,
+) -> Result<Option<(String, u64)>, String> {
+    if PQntuples(res) < 1 {
+        return Ok(None);
+    }
+    if PQnfields(res) < 2 {
+        return Err("path lookup row is missing fields".to_string());
+    }
+    if PQgetisnull(res, 0, 0) != 0 || PQgetisnull(res, 0, 1) != 0 {
+        return Err("path lookup returned a NULL kind or id".to_string());
+    }
+    let kind_ptr = PQgetvalue(res, 0, 0);
+    let entry_ptr = PQgetvalue(res, 0, 1);
+    if kind_ptr.is_null() || entry_ptr.is_null() {
+        return Err("path lookup returned a null field pointer".to_string());
+    }
+    let kind = CStr::from_ptr(kind_ptr).to_string_lossy().to_string();
+    let entry_text = CStr::from_ptr(entry_ptr).to_string_lossy();
+    let entry_id = entry_text
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| format!("path lookup returned an invalid entry id: {err}"))?;
+    Ok(Some((kind, entry_id)))
+}
+
 fn parse_directory_entry_metadata_rows(
     rows: Vec<Vec<String>>,
 ) -> Result<Vec<DirectoryEntryMetadata>, String> {
@@ -492,27 +518,9 @@ impl DbRepo {
                 } else {
                     match PQresultStatus(res) {
                         PGRES_TUPLES_OK => {
-                            let rows = PQntuples(res);
-                            let cols = PQnfields(res);
-                            let value = if rows < 1 || cols < 2 {
-                                None
-                            } else {
-                                let kind_ptr = PQgetvalue(res, 0, 0);
-                                let entry_ptr = PQgetvalue(res, 0, 1);
-                                if kind_ptr.is_null() || entry_ptr.is_null() {
-                                    None
-                                } else {
-                                    let kind =
-                                        CStr::from_ptr(kind_ptr).to_string_lossy().to_string();
-                                    let entry_id = CStr::from_ptr(entry_ptr)
-                                        .to_string_lossy()
-                                        .parse::<u64>()
-                                        .ok();
-                                    entry_id.map(|entry_id| (kind, entry_id))
-                                }
-                            };
+                            let value = parse_optional_resolved_entry(res);
                             PQclear(res);
-                            Ok(value)
+                            value
                         }
                         _ => {
                             let error = result_error(res);

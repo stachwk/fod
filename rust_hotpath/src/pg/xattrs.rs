@@ -260,7 +260,12 @@ impl DbRepo {
                 Some(entry_id) => ("file", entry_id),
                 None => return Ok(None),
             },
-            Some("dir") => ("dir", resolved.entry_id.unwrap_or(0)),
+            Some("dir") => (
+                "dir",
+                resolved
+                    .entry_id
+                    .ok_or_else(|| "directory lookup returned no id".to_string())?,
+            ),
             Some("symlink") => match resolved.entry_id {
                 Some(entry_id) => ("symlink", entry_id),
                 None => return Ok(None),
