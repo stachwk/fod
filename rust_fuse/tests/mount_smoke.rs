@@ -1656,6 +1656,97 @@ fn create_file_and_directory_parent_missing() -> Result<(), String> {
 }
 
 #[test]
+fn concurrent_parent_directory_create_and_child_entry_create_are_serializable() -> Result<(), String>
+{
+    const ROUNDS: usize = 24;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-parent-child-create",
+        &[("FOD_FUSE_EVENT_THREADS", "2".to_string())],
+    )?;
+    let root = mounted
+        .mountpoint
+        .join(format!("parent-child-create-{}", unique_suffix()));
+    fs::create_dir(&root).map_err(|err| format!("create test root failed: {err}"))?;
+
+    for child_kind in ["file", "directory"] {
+        for round in 0..ROUNDS {
+            let parent = root.join(format!("parent-{child_kind}-{round}"));
+            let child = parent.join("child-entry");
+            let barrier = Arc::new(Barrier::new(3));
+
+            let mkdir_parent = parent.clone();
+            let mkdir_barrier = Arc::clone(&barrier);
+            let mkdir_worker = thread::spawn(move || {
+                mkdir_barrier.wait();
+                fs::create_dir(&mkdir_parent)
+            });
+
+            let create_child = child.clone();
+            let create_barrier = Arc::clone(&barrier);
+            let child_is_directory = child_kind == "directory";
+            let child_worker = thread::spawn(move || {
+                create_barrier.wait();
+                if child_is_directory {
+                    fs::create_dir(&create_child)
+                } else {
+                    OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&create_child)
+                        .map(drop)
+                }
+            });
+
+            barrier.wait();
+            mkdir_worker
+                .join()
+                .map_err(|_| format!("mkdir worker panicked for {child_kind} round {round}"))?
+                .map_err(|err| {
+                    format!("mkdir parent failed for {child_kind} round {round}: {err}")
+                })?;
+            let child_result = child_worker.join().map_err(|_| {
+                format!("child-create worker panicked for {child_kind} round {round}")
+            })?;
+
+            let child_created = match child_result {
+                Ok(()) => true,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+                Err(err) => {
+                    return Err(format!(
+                        "{child_kind} create returned unexpected error in round {round}: {err}"
+                    ));
+                }
+            };
+
+            if !parent.is_dir() {
+                return Err(format!(
+                    "parent directory missing for {child_kind} round {round}"
+                ));
+            }
+            let child_metadata = fs::symlink_metadata(&child);
+            if child_created {
+                let metadata = child_metadata.map_err(|err| {
+                    format!("created {child_kind} missing after round {round}: {err}")
+                })?;
+                if metadata.is_dir() != (child_kind == "directory") {
+                    return Err(format!(
+                        "created child has wrong type for {child_kind} round {round}"
+                    ));
+                }
+            } else if !matches!(child_metadata, Err(ref err) if err.kind() == std::io::ErrorKind::NotFound)
+            {
+                return Err(format!(
+                    "child path should be absent after ENOENT for {child_kind} round {round}: {child_metadata:?}"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn truncate_rename() -> Result<(), String> {
     let mounted = MountedFs::start_without_init("truncate-rename")?;
     let suffix = unique_suffix();

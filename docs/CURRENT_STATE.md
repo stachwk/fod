@@ -37,6 +37,11 @@ The eight-thread `concurrent_threads_unlink_and_replace_many_open_file_tasks`
 regression runs 32 unlink/recreate tasks together and verifies each old open
 descriptor still reads its original inode while each pathname reads a distinct
 replacement inode.
+The multithreaded namespace suite also races parent-directory creation against
+child-file and child-directory creation for 24 fresh names of each type. Each
+child create must either succeed after the parent is available or return
+`ENOENT`; the final path state must match the syscall result. The case is part
+of `make test-fuse-multithreaded-tasks`.
 The permissions regression invokes libc `opendir()` as `nobody` on a mode-000
 directory and checks exact `EACCES`; the mounted ACL and permissions tests pass.
 
