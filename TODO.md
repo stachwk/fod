@@ -53,8 +53,13 @@ Reading guide:
   `rust_fuse/src/platform_requirements.rs` odrzuca Linux starszy niż 4.18.0 i
   libfuse3 starsze niż 3.0.0; test jednostkowy sprawdza granice parsera i
   walidatora. Najnowsze zapisane dowody mounted używają Linux 6.17/libfuse
-  3.17.4. Nie wykazano błędu działania na minimum, ale też nie potwierdzono
-  pełnego zestawu minimalnych ABI/protokołu na tej parze. Wpływ: próg runtime
+  3.17.4. Kontrola środowiska 2026-10-31 wykazała bieżący kernel
+  `6.17.0-41-generic`, libfuse 3.17.4 i dostępne `/dev/fuse`; zainstalowane
+  moduły jąder zaczynają się od 5.8, obrazy `/boot/vmlinuz-*` są z 6.17,
+  a `qemu-system-x86_64` nie jest dostępne.
+  Bieżący host nie pozwala więc uruchomić walidacji na Linux 4.18. Nie wykazano
+  błędu działania na minimum, ale też nie potwierdzono pełnego zestawu
+  minimalnych ABI/protokołu na tej parze. Wpływ: próg runtime
   jest zadeklarowany i fail-closed, lecz nie jest jeszcze macierzą wspieranych,
   end-to-end przetestowanych hostów. Następny krok: uruchomić reprezentatywny
   mount/regression gate na Linux 4.18 i libfuse3 3.0 w zgodnym środowisku albo

@@ -1,6 +1,6 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, FOD 3.4.385, reviewed commit `a7c67cd`.
+Stan dokumentu: 2026-10-31, FOD 3.4.386, reviewed commit `7b1c980`.
 
 Ten dokument opisuje aktualny kontrakt uruchomieniowy Linux/FUSE, jego
 walidację oraz ograniczenia. Nie jest deklaracją zgodności POSIX. Status
@@ -95,7 +95,10 @@ Test jednostkowy preflight sprawdza granicę wersji 4.18.0 oraz odrzucenie
 starszego/nieparsowalnego jądra i libfuse poniżej 3.0.0.
 
 Nie ma obecnie udokumentowanej macierzy end-to-end dla minimalnych wersji
-Linux/libfuse ani wielu dystrybucji. Zamknięcie tej luki wymaga uruchomienia
+Linux/libfuse ani wielu dystrybucji. Sprawdzony 2026-10-31 host działa na
+Linux `6.17.0-41-generic` i libfuse 3.17.4; `/dev/fuse` jest dostępne, ale
+lokalnie nie ma kernela 4.18 ani `qemu-system-x86_64`, więc nie można z niego
+uruchomić minimalnego kernela w VM. Zamknięcie tej luki wymaga uruchomienia
 zamontowanego zestawu na najstarszej wspieranej parze albo podniesienia
 deklarowanego minimum do najstarszej pary faktycznie zweryfikowanej.
 

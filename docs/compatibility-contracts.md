@@ -5,7 +5,7 @@ release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed base: commit `a7c67cd` (`FOD 3.4.385`). This inventory records the
+Reviewed base: commit `7b1c980` (`FOD 3.4.386`). This inventory records the
 implementation and evidence available at that commit.
 
 ## Overall filesystem compatibility status

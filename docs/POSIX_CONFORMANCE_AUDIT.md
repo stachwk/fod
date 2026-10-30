@@ -1,6 +1,6 @@
 # POSIX conformance audit
 
-Status as of FOD 3.4.385 (`a7c67cd`, 2026-10-31): **requirement audit in progress; no
+Status as of FOD 3.4.386 (`7b1c980`, 2026-10-31): **requirement audit in progress; no
 general POSIX conformance claim**.
 
 The initial matrix marks only the tested standard `lseek()` and sparse
