@@ -517,6 +517,31 @@ fn schema_upgrade_non_destructive_password_protected() {
         .expect("minimum client version row");
     assert_eq!(minimum_client_version, env!("CARGO_PKG_VERSION"));
 
+    conn.exec("UPDATE schema_version SET minimum_client_version = '0.0.0'")
+        .expect("lower minimum client version for upgrade-floor test");
+    let upgrade_current = run_mkfs(
+        "upgrade",
+        &["--schema-admin-password", &schema_password],
+        &envs,
+    );
+    assert!(
+        upgrade_current.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&upgrade_current.stdout),
+        String::from_utf8_lossy(&upgrade_current.stderr)
+    );
+    let upgraded_minimum_client_version = conn
+        .query_scalar_text(
+            "SELECT minimum_client_version FROM schema_version ORDER BY applied_at DESC LIMIT 1",
+        )
+        .expect("upgraded minimum client version query")
+        .expect("upgraded minimum client version row");
+    assert_eq!(
+        upgraded_minimum_client_version,
+        env!("CARGO_PKG_VERSION"),
+        "upgrade must set the database client floor to the upgrading client's release"
+    );
+
     conn.exec("UPDATE schema_version SET minimum_client_version = '99.0.0'")
         .expect("raise minimum client version for downgrade guard test");
     let downgrade = run_mkfs(

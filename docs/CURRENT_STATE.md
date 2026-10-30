@@ -304,11 +304,13 @@ The `schema_version.minimum_client_version` value is a monotonic FOD release
 floor written by `mkfs.fod init` and `mkfs.fod upgrade`. Primary and replica
 mounts read the same replicated value and reject an older client before
 starting FUSE operations; `test_client_version_gate.py` verifies rejection
-from both primary and replica mount roles. The migration also renames the
-schema-number column, so pre-gate clients that query its old name fail startup
-instead of silently skipping the check. A later release may mount without
-raising the floor; the floor moves only when an operator runs the schema
-command with that release.
+from both primary and replica mount roles against a local database, and
+`test_client_version_gate_replica.py` verifies that the same replicated floor
+is enforced when a replica-role mount reads from a physical PostgreSQL standby.
+The migration also renames the schema-number column, so pre-gate clients that
+query its old name fail startup instead of silently skipping the check. A later
+release may mount without raising the floor; the floor moves only when an
+operator runs the schema command with that release.
 See the [versioning ADR](adr/storage-format-versioning.md).
 
 Primary authority requirements are defined by

@@ -66,6 +66,33 @@ Reading guide:
   resulting `data_blocks` bytes directly on primary. It passed on 2026-10-30
   in `test_unlink_primary_authority_docker.py` (artifact:
   `artifacts/integration/unlink-primary-authority-20261030T141413Z/results.json`).
+- [x] **Client-version gate is enforced on a physical PostgreSQL standby.**
+  The first test attempts exposed two harness defects: Compose did not receive
+  the selected `55621`/`55622` ports and fell back to `55441`, already allocated
+  by `fod-deploy`; after fixing that, cleanup read `launcher.config` after
+  `FODMount.stop()` cleared it. Both were fixed, and the disposable cluster
+  left no containers behind. The passing `make test-client-version-gate-replica`
+  run initialized schema 31 on a physical primary, waited for a primary flush
+  LSN to replay, read `minimum_client_version='99.0.0'` from the standby, then
+  attempted mounts against both endpoints. Logs confirm the primary endpoint
+  was `primary-writable`, the replica endpoint was in recovery, and both clients
+  failed before mounting with the expected minimum-version error. The test
+  restored the original floor before destroying the cluster. This is test
+  harness repair evidence, not a reproduced FOD behavior defect. Artifacts:
+  `artifacts/integration/client-version-gate-replica-20261030T163605Z/`,
+  `artifacts/integration/client-version-gate-replica-20261030T163703Z/`,
+  `artifacts/integration/client-version-gate-replica-20261030T163722Z/`, and
+  `artifacts/integration/client-version-gate-replica-20261030T163817Z/`.
+- [ ] **Schema upgrade does not fence concurrent or newly starting mounts.**
+  `apply_migration()` commits each migration before the final call to
+  `write_schema_version()` updates `schema_number` and `minimum_client_version`.
+  If an upgrade fails between migrations, or a mount starts while migration is
+  in progress, the database can expose a partially upgraded schema with the
+  previous client floor. Design a durable upgrade-in-progress state that is
+  published before the first migration, blocks mount admission on primary and
+  replica endpoints, survives an interrupted upgrade, and is cleared atomically
+  with publishing the final schema version and client floor. Add failure and
+  concurrent-mount regressions before closing this item.
 - [x] **The non-adoption `copy_file_range()` path read source bytes from a
   lagging replica.** Source inspection found that its block-copy branch still
   called the ordinary replica-routed slice reader even though copy input must

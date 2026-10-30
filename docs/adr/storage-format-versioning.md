@@ -19,7 +19,11 @@ a database compatibility marker. The schema version records which ordered
 migrations have been applied. A `minimum_client_version` records which FOD
 releases may mount after the latest `mkfs.fod init` or `mkfs.fod upgrade`; it is
 raised monotonically by that command and replicated with the schema-version
-row. A storage-format boundary is narrower: it exists only when persisted
+row. The database is the authority for this decision: clients compare their
+own FOD release with the value read from the database endpoint they selected.
+They do not infer compatibility from the FOD release running on a PostgreSQL
+primary, a standby, or another FOD mount. A storage-format boundary is
+narrower: it exists only when persisted
 payload cannot be interpreted safely by both sides of an upgrade without an
 explicit conversion or compatibility decision.
 
@@ -53,6 +57,9 @@ Every schema change must:
 - write the current FOD release as `minimum_client_version` when publishing the
   schema-version row, and reject attempts by an older `mkfs` to lower that
   floor;
+- establish the floor from the client that runs `mkfs.fod init`, then advance
+  it to the client that successfully runs `mkfs.fod upgrade`; all primary and
+  replica mounts read the same replicated database value;
 - break startup of pre-gate clients by renaming the schema-number column so
   those clients cannot silently ignore the release floor.
 
