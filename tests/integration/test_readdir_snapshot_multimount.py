@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import os
 import platform
 import sys
@@ -62,6 +63,56 @@ def assert_no_duplicates(names: list[str], stream: str) -> None:
         raise AssertionError(f"{stream} repeated directory entries: {duplicates}")
 
 
+def check_libc_directory_stream(path: Path, expected_entries: int) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.opendir.argtypes = [ctypes.c_char_p]
+    libc.opendir.restype = ctypes.c_void_p
+    libc.readdir.argtypes = [ctypes.c_void_p]
+    libc.readdir.restype = ctypes.c_void_p
+    libc.closedir.argtypes = [ctypes.c_void_p]
+    libc.closedir.restype = ctypes.c_int
+
+    ctypes.set_errno(0)
+    stream = libc.opendir(os.fsencode(path))
+    if not stream:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(path))
+
+    count = 0
+    try:
+        while True:
+            ctypes.set_errno(0)
+            entry = libc.readdir(stream)
+            if not entry:
+                error = ctypes.get_errno()
+                if error:
+                    raise OSError(error, os.strerror(error), str(path))
+                break
+            count += 1
+    finally:
+        ctypes.set_errno(0)
+        if libc.closedir(stream) != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error), str(path))
+
+    if count != expected_entries:
+        raise AssertionError(
+            f"libc readdir returned {count} entries, expected {expected_entries}"
+        )
+
+    missing_path = path / f"missing-{uuid.uuid4().hex}"
+    ctypes.set_errno(0)
+    missing_stream = libc.opendir(os.fsencode(missing_path))
+    error = ctypes.get_errno()
+    if missing_stream:
+        libc.closedir(missing_stream)
+        raise AssertionError(f"libc opendir unexpectedly opened {missing_path}")
+    if error != errno.ENOENT:
+        raise AssertionError(
+            f"libc opendir errno={error}, expected ENOENT ({errno.ENOENT})"
+        )
+
+
 def main() -> None:
     launcher_a = FODMount(str(ROOT), role="primary")
     launcher_b = FODMount(str(ROOT), role="primary")
@@ -83,9 +134,9 @@ def main() -> None:
             path_a = mount_a / f"entries-{uuid.uuid4().hex}"
             path_b = mount_b / path_a.name
             path_a.mkdir()
-            stable = {f"stable-{index:02d}" for index in range(24)}
-            removed = {f"removed-{index:02d}" for index in range(24)}
-            added = {f"added-{index:02d}" for index in range(12)}
+            stable = {f"stable-{index:03d}" for index in range(256)}
+            removed = {f"removed-{index:03d}" for index in range(256)}
+            added = {f"added-{index:03d}" for index in range(128)}
             for name in stable | removed:
                 (path_a / name).touch()
 
@@ -128,6 +179,7 @@ def main() -> None:
                     f"missing={sorted(expected_after_rewind - actual_after_rewind)} "
                     f"extra={sorted(actual_after_rewind - expected_after_rewind)}"
                 )
+            check_libc_directory_stream(path_b, len(expected_after_rewind) + 2)
         finally:
             if dir_fd is not None:
                 os.close(dir_fd)
@@ -143,7 +195,10 @@ def main() -> None:
             if started_a:
                 launcher_a.stop()
 
-    print("OK: cross-mount membership changes preserve the open stream; rewind refreshes it")
+    print(
+        "OK: 512-entry cross-mount snapshot has stable continuation, rewind refresh, "
+        "and direct libc readdir/errno coverage"
+    )
 
 
 if __name__ == "__main__":

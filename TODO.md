@@ -243,11 +243,14 @@ Reading guide:
   handle. POSIX `ENOENT` for an invalid stream position is conditional; FOD
   treats an out-of-range cookie as end-of-stream, with saturating conversion
   so a 64-bit cookie cannot wrap on a 32-bit `usize`. Run mounted checks on each
-  supported narrow-inode ABI and confirm libc `closedir()`/`readdir()` error
-  behavior; current host checks only `getdents64()` after descriptor close.
+  supported narrow-inode ABI and verify `EOVERFLOW` conversion. The mounted
+  snapshot regression now traverses 512 initial entries and checks direct libc
+  `opendir()`/`readdir()` EOF, successful `closedir()`, and `ENOENT` from
+  `opendir()` for a missing path; descriptor-limit and failure-path coverage
+  remains open.
   See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
-- [ ] **P02 directory-stream snapshot behavior needs more mounted regressions.** FOD
+- [ ] **P02 directory-stream snapshot behavior still needs ABI and descriptor checks.** FOD
   now pins an ordered PostgreSQL snapshot to each `opendir()` handle (full
   metadata by default, names when `FOD_READDIR_BATCH_METADATA=0`), uses it for
   continuation requests, refreshes it on `rewinddir()` (cookie zero
@@ -262,8 +265,9 @@ Reading guide:
   second mount removes and adds names, checks stable unaffected entries and
   duplicate-free continuation, then confirms rewind refreshes the snapshot.
   POSIX leaves visibility of additions/removals unspecified, so the test does
-  not require either membership outcome before rewind. Larger directory sizes
-  and libc/ABI boundary behavior remain to be covered.
+  not require either membership outcome before rewind. The regression uses 512
+  initial child entries and checks the libc stream boundary. Narrow-ABI
+  `EOVERFLOW` and descriptor-limit behavior remain to be covered.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
   host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
