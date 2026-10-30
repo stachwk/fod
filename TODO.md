@@ -1045,6 +1045,7 @@ Status: active design direction, but the main decisions below are already taken.
 ### POSIX Conformance Audit
 
 - [ ] Complete the [POSIX conformance audit](docs/POSIX_CONFORMANCE_AUDIT.md) for FOD's declared filesystem API. The audit defines POSIX.1-2024 Issue 8 as its baseline, identifies Linux/FUSE extensions separately, and starts a requirement matrix. Review exact normative sections and optional/XSI applicability; classify each requirement as pending, pass, fail, not implemented, or not applicable; map it to implementation evidence and a regression or `pjdfstest` case. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
+- [x] **Check overlong full paths for directory mutations.** `test_directories.sh` now constructs paths longer than Linux `PATH_MAX` from components within `NAME_MAX` and asserts exact `ENAMETOOLONG` for both `mkdir()` and `rmdir()`; the mounted test passed on 2026-10-30. Linux rejects these paths before dispatching the FUSE callback. P01 still needs empty-component and per-operation final-component review.
 - [x] **Verify `rmdir()` on a symlink to a directory.** `test_directories.sh`
   now requires exact `ENOTDIR` and confirms both the symlink and target remain.
   The mounted regression passed on 2026-10-30; references are recorded in

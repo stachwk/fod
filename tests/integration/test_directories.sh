@@ -58,6 +58,10 @@ os.symlink("loop-a", loop_b)
 missing_parent = os.path.join(nonempty_dir, "missing-parent")
 name_max = os.pathconf(nonempty_dir, "PC_NAME_MAX")
 long_component = "n" * (name_max + 1)
+path_max = os.pathconf(mountpoint, "PC_PATH_MAX")
+long_path = mountpoint
+while len(os.fsencode(long_path)) <= path_max:
+    long_path = os.path.join(long_path, "p" * min(name_max, 128))
 for path, expected, label in (
     (nonempty_dir, errno.EISDIR, "unlink directory"),
     (os.path.join(nonempty_dir, "missing-unlink-target"), errno.ENOENT, "unlink missing path"),
@@ -74,6 +78,8 @@ for path, expected, label in (
     (os.path.join(loop_a, "child"), errno.ELOOP, "rmdir symlink loop in parent"),
     (os.path.join(nonempty_dir, long_component), errno.ENAMETOOLONG, "mkdir component over NAME_MAX"),
     (os.path.join(nonempty_dir, long_component), errno.ENAMETOOLONG, "rmdir component over NAME_MAX"),
+    (long_path, errno.ENAMETOOLONG, "mkdir path over PATH_MAX"),
+    (long_path, errno.ENAMETOOLONG, "rmdir path over PATH_MAX"),
     (mountpoint, errno.EBUSY, "rmdir mounted filesystem root"),
     (nonempty_dir, errno.ENOTEMPTY, "rmdir non-empty directory"),
     (nonempty_dir, errno.EEXIST, "mkdir existing directory"),
@@ -171,4 +177,4 @@ PY
 rm -f "${not_a_directory}" "${not_a_directory_link}"
 rmdir "${dir}"
 
-echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EBUSY,EEXIST,EISDIR,EINVAL,ELOOP,ENAMETOOLONG,ENOENT,ENOTDIR,ENOTEMPTY rmdir_dotdot=ENOTEMPTY rmdir_symlink=ENOTDIR child_entry_parent_errors=1 directory_fd_repeat=1"
+echo "OK directories/mkdir/rmdir/stat/ls/unlink-dir errno=EBADF,EBUSY,EEXIST,EISDIR,EINVAL,ELOOP,ENAMETOOLONG,ENOENT,ENOTDIR,ENOTEMPTY rmdir_dotdot=ENOTEMPTY mkdir_pathmax=ENAMETOOLONG rmdir_pathmax=ENAMETOOLONG rmdir_symlink=ENOTDIR child_entry_parent_errors=1 directory_fd_repeat=1"
