@@ -225,8 +225,15 @@ Reading guide:
   write reference-count parse fallback was removed: malformed counts now fail
   the transaction instead of defaulting to zero and deleting a data object.
   Names-only directory snapshots now return `EIO` when a child metadata query
-  fails instead of silently omitting that name; a mounted PostgreSQL fault
-  regression remains pending.
+  fails instead of silently omitting that name. On 2026-10-30, the two-mount
+  `test_unlink_primary_authority_docker.py` paused-replica suite opened a
+  names-only snapshot, renamed `files.inode_seed` after `opendir`, and verified
+  that the failing per-child PostgreSQL query surfaces as `EIO` from directory
+  iteration; restoring the column and the rest of the suite passed. Evidence:
+  `artifacts/integration/unlink-primary-authority-20261030T105137Z/results.json`
+  (`names_snapshot_child_query_failure_returns_eio: true`). Fault injection
+  for xattr/config reads, count helpers, and malformed/missing rows remains
+  pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported
   shared (`1`) and exclusive (`2`) values. A backend regression now seeds an

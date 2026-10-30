@@ -146,6 +146,51 @@ def main():
         b = FODMount(str(ROOT)); mounts.append(b)
         b.start(str(mb))
 
+        previous_batch_metadata = os.environ.get("FOD_READDIR_BATCH_METADATA")
+        os.environ["FOD_READDIR_BATCH_METADATA"] = "0"
+        mc = temp / "c"
+        c = FODMount(str(ROOT)); mounts.append(c)
+        try:
+            c.start(str(mc))
+        finally:
+            if previous_batch_metadata is None:
+                os.environ.pop("FOD_READDIR_BATCH_METADATA", None)
+            else:
+                os.environ["FOD_READDIR_BATCH_METADATA"] = previous_batch_metadata
+
+        readdir_fault_dir = ma / "readdir-child-query-fault"
+        readdir_fault_dir.mkdir()
+        seed(readdir_fault_dir / "child")
+        barrier()
+        readdir_fault_fd = os.open(mc / readdir_fault_dir.name, os.O_RDONLY | os.O_DIRECTORY)
+        schema_column_renamed = False
+        try:
+            execute(
+                primary,
+                "ALTER TABLE fod.files RENAME COLUMN inode_seed TO inode_seed_query_fault",
+            )
+            schema_column_renamed = True
+            barrier()
+            try:
+                os.listdir(readdir_fault_fd)
+            except OSError as exc:
+                assert exc.errno == errno.EIO, (
+                    f"names-mode child metadata query returned errno {exc.errno}"
+                )
+            else:
+                raise AssertionError(
+                    "names-mode readdir hid a PostgreSQL child metadata query failure"
+                )
+        finally:
+            if schema_column_renamed:
+                execute(
+                    primary,
+                    "ALTER TABLE fod.files RENAME COLUMN inode_seed_query_fault TO inode_seed",
+                )
+                barrier()
+            os.close(readdir_fault_fd)
+        results["names_snapshot_child_query_failure_returns_eio"] = True
+
         restrictive_directory = ma / "projection-mode-0644"
         restrictive_directory.mkdir()
         os.chmod(restrictive_directory, 0o644)
