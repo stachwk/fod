@@ -417,7 +417,12 @@ Reading guide:
   `count_file_links()` also used to return `1` for an absent file because its
   aggregate did not join `files`; it now returns no row and fails the count
   decode. `count_file_links_does_not_report_link_for_missing_file` reproduced
-  and verifies this case.
+  and verifies this case. `file_data_object_id()` now also rejects a NULL
+  foreign key instead of treating the row as missing, and sparse seek reports
+  an error for a vanished file rather than fabricating a hole result. The
+  `null_data_object_id_is_not_reported_as_missing_file` and
+  `sparse_seek_does_not_treat_missing_file_as_hole` regressions reproduced
+  both old results and verify fail-closed handling.
   Other malformed/missing rows remain pending.
 - [x] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
   acquisition rejects requested and persisted types outside the supported

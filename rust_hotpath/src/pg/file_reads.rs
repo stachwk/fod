@@ -322,11 +322,7 @@ impl DbRepo {
         }
 
         let Some(data_object_id) = self.file_data_object_id(file_id)? else {
-            return if seek_data {
-                Ok(None)
-            } else {
-                Ok(Some(offset))
-            };
+            return Err("file data object is missing during sparse seek".to_string());
         };
 
         let current_block = offset / block_size;

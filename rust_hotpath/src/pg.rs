@@ -6267,14 +6267,36 @@ impl DbRepo {
         unsafe {
             let params = [&file_id];
             let res = exec_prepared_params(conn, PreparedStatement::FileDataObjectId, &params)?;
-            let text = fetch_single_text(res)?;
-            if text.is_empty() {
-                return Ok(None);
+            if res.is_null() {
+                return Err(conn_error(conn));
             }
-            let value = text
-                .parse::<u64>()
-                .map_err(|_| "invalid data_object_id value".to_string())?;
-            Ok(Some(value))
+            let result = match PQresultStatus(res) {
+                PGRES_TUPLES_OK => {
+                    let rows = PQntuples(res);
+                    let cols = PQnfields(res);
+                    if rows == 0 {
+                        Ok(None)
+                    } else if rows != 1 || cols != 1 {
+                        Err("invalid file data-object row returned by PostgreSQL".to_string())
+                    } else if PQgetisnull(res, 0, 0) != 0 {
+                        Err("file data_object_id is NULL".to_string())
+                    } else {
+                        let value = PQgetvalue(res, 0, 0);
+                        if value.is_null() {
+                            Err("file data_object_id value is missing".to_string())
+                        } else {
+                            CStr::from_ptr(value)
+                                .to_string_lossy()
+                                .parse::<u64>()
+                                .map(Some)
+                                .map_err(|_| "invalid data_object_id value".to_string())
+                        }
+                    }
+                }
+                _ => Err(result_error(res)),
+            };
+            PQclear(res);
+            result
         }
     }
 

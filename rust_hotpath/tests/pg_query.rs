@@ -1148,6 +1148,78 @@ fn count_file_links_does_not_report_link_for_missing_file() -> Result<(), String
 }
 
 #[test]
+fn null_data_object_id_is_not_reported_as_missing_file() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let file_id = repo.create_file(
+        None,
+        &unique_name("null_data_object_id"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("null_data_object_id_seed"),
+    )?;
+    let data_object_id = repo
+        .file_data_object_id(file_id)?
+        .ok_or_else(|| "new file has no data object".to_string())?;
+    let mut not_null_dropped = false;
+
+    let result = (|| {
+        repo.exec("ALTER TABLE files ALTER COLUMN data_object_id DROP NOT NULL")?;
+        not_null_dropped = true;
+        repo.exec(&format!(
+            "UPDATE files SET data_object_id = NULL WHERE id_file = {file_id}"
+        ))?;
+        match repo.file_data_object_id(file_id) {
+            Err(error) if error.to_ascii_lowercase().contains("null") => {}
+            Err(error) => return Err(format!("unexpected data-object error: {error}")),
+            Ok(value) => {
+                return Err(format!(
+                    "NULL data_object_id was treated as an ordinary result: {value:?}"
+                ));
+            }
+        }
+        Ok(())
+    })();
+
+    let cleanup = (|| {
+        if not_null_dropped {
+            repo.exec(&format!(
+                "UPDATE files SET data_object_id = {data_object_id} WHERE id_file = {file_id}"
+            ))?;
+            repo.exec("ALTER TABLE files ALTER COLUMN data_object_id SET NOT NULL")?;
+        }
+        repo.purge_primary_file(file_id)
+    })();
+    result.and(cleanup)?;
+    if repo.file_data_object_id(file_id)?.is_some() {
+        return Err("purged file still had a data object".to_string());
+    }
+    Ok(())
+}
+
+#[test]
+fn sparse_seek_does_not_treat_missing_file_as_hole() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let repo = repo_with_runtime()?;
+    let file_id = repo.create_file(
+        None,
+        &unique_name("sparse_seek_missing"),
+        0o644,
+        1000,
+        1000,
+        &unique_name("sparse_seek_missing_seed"),
+    )?;
+    repo.purge_primary_file(file_id)?;
+    match repo.sparse_seek_blockwise(file_id, 4096, 0, 4096, false) {
+        Err(_) => Ok(()),
+        Ok(value) => Err(format!(
+            "missing file was treated as a valid sparse-file hole: {value:?}"
+        )),
+    }
+}
+
+#[test]
 fn startup_snapshot_uses_single_connection_acquisition() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;
