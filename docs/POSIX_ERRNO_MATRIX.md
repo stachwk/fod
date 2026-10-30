@@ -80,6 +80,14 @@ FOD został wywołany:
   namespace nadal może używać `conn_error()` albo zwracać błędy domenowe bez
   SQLSTATE; pełny przegląd i deterministyczna weryfikacja awarii backendu
   pozostają otwarte.
+- Linux v6.17 obsługuje `FIONREAD` dla zwykłego pliku w `do_vfs_ioctl()` i
+  zwraca `i_size - f_pos` przed przekazaniem polecenia do callbacku FUSE.
+  Pozycja deskryptora nie występuje w żądaniu ioctl FUSE, więc callback
+  userspace nie może sam odtworzyć tej wartości dla dowolnego współdzielonego
+  deskryptora. Gałąź FOD `FIONREAD` nie stanowi zatem implementacji semantyki
+  zwykłego pliku na tym jądrze; istniejący test zamontowany sprawdza wynik
+  syscalla przy pozycji zero. Źródło: Linux v6.17
+  [`fs/ioctl.c`](https://github.com/torvalds/linux/blob/v6.17/fs/ioctl.c#L2439-L2446).
 - Baza FOD przechowuje nazwy w PostgreSQL `text`, więc nazwa z bajtami spoza
   UTF-8 nie może być zachowana. `validate_component_name()` zwraca dla niej
   `EILSEQ` przed użyciem `to_string_lossy()`, co zapobiega utworzeniu lub
