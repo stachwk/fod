@@ -148,9 +148,39 @@ def cross_directory_move_updates_parent_link_counts(
         if observed != 3:
             raise AssertionError(f"{parent}: st_nlink={observed}, expected 3 after move")
 
+    replacement_source = source_parent / "child-replacement"
+    replacement_source_other = source_parent_other / "child-replacement"
+    replacement_target = destination_parent / "target-child"
+    replacement_target_other = destination_parent_other / "target-child"
+    replacement_source.mkdir()
+    replacement_target.mkdir()
+
+    for parent in (source_parent, source_parent_other):
+        if parent.stat().st_nlink != 3:
+            raise AssertionError(f"{parent}: expected replacement source st_nlink=3")
+    for parent in (destination_parent, destination_parent_other):
+        if parent.stat().st_nlink != 4:
+            raise AssertionError(f"{parent}: expected replacement target st_nlink=4")
+
+    os.replace(replacement_source_other, replacement_target_other)
+
+    for parent in (source_parent, source_parent_other):
+        observed = parent.stat().st_nlink
+        if observed != 2:
+            raise AssertionError(
+                f"{parent}: st_nlink={observed}, expected 2 after directory replacement"
+            )
+    for parent in (destination_parent, destination_parent_other):
+        observed = parent.stat().st_nlink
+        if observed != 4:
+            raise AssertionError(
+                f"{parent}: st_nlink={observed}, expected 4 after directory replacement"
+            )
+
     print(
         "OK rename-cross-directory-parent-link-counts "
-        "source=3->2 destination=2->3 observed_on_both_mounts=1"
+        "move=source:3->2,destination:2->3 "
+        "replace=source:3->2,destination:4->4 observed_on_both_mounts=1"
     )
 
 

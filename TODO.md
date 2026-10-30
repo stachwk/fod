@@ -1028,8 +1028,9 @@ Status: active design direction, but the main decisions below are already taken.
 - [ ] Complete the [POSIX conformance audit](docs/POSIX_CONFORMANCE_AUDIT.md) for FOD's declared filesystem API. The audit defines POSIX.1-2024 Issue 8 as its baseline, identifies Linux/FUSE extensions separately, and starts a requirement matrix. Review exact normative sections and optional/XSI applicability; classify each requirement as pending, pass, fail, not implemented, or not applicable; map it to implementation evidence and a regression or `pjdfstest` case. Fix applicable gaps in sequenced changes and record the verified support boundary in `docs/compatibility-contracts.md`. Do not claim general POSIX compliance until every in-scope requirement has evidence and all exclusions are documented.
 - [x] **Verify directory link counts after cross-parent `rename()`.** The
   two-mount `test_rename_directory_transactional.py` regression moves a child
-  directory and checks that the source/destination parents' `st_nlink` values
-  change from 3/2 to 2/3 through both mounts. It sets
+  directory and replaces an existing empty child directory across parents. It
+  checks `st_nlink` changes from 3/2 to 2/3 on a move and from 3/4 to 2/4 on
+  replacement, through both mounts. It sets
   `FOD_ATTR_TIMEOUT_SECONDS=0` because the default one-second FUSE attribute
   cache can otherwise return a valid pre-rename `st_nlink`. The full
   `release-lto` test passed on 2026-10-30 after building
