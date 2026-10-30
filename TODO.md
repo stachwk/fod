@@ -14,6 +14,13 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Równoczesne odczyty nie uszkadzają sparse pliku przy równoległym pobieraniu bloków.**
+  `mount_smoke::concurrent_read_tasks_on_sparse_file_preserve_parallel_block_ranges`
+  tworzy 16 zapisanych bloków oddzielonych dziurami, ustawia 4 workerów
+  odczytu i uruchamia 8 czytelników jednocześnie. Każdy sprawdza pełną
+  zawartość, w tym wyzerowane luki. Test przeszedł 2026-10-30 na FOD 3.4.350
+  w osobnej bazie ze świeżym schematem; tymczasowa baza została usunięta.
+
 - [x] **Granica bloku przy rozszerzeniu truncate używała rozmiaru z opóźnionej repliki.**
   `prepare_truncate_boundary_blocks()` pobierało poprzedni EOF przez zwykły
   read lane. Jeśli primary rozszerzył plik, a replica nie odtworzyła jeszcze

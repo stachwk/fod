@@ -17,6 +17,13 @@ FOD is Rust-backed end to end:
 
 PostgreSQL owns durable filesystem metadata, payload, shared lock/session state and replication.
 
+`FOD_WORKERS_READ` parallelizes reads when uncached stored blocks fall into
+multiple disjoint ranges and meet `FOD_WORKERS_READ_MIN_BLOCKS`. The mounted
+`concurrent_read_tasks_on_sparse_file_preserve_parallel_block_ranges` test
+uses 4 workers, 16 stored blocks separated by holes and 8 simultaneous readers;
+all readers verify both payload and zero-filled holes. It passed on FOD 3.4.350
+against a disposable initialized database.
+
 Writable mounts use a zero FUSE attribute-cache TTL even if
 `FOD_ATTR_TIMEOUT_SECONDS` requests a positive value. Linux computes an
 `O_APPEND` write offset from its local inode size before sending the request to
