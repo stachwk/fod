@@ -1990,8 +1990,7 @@ test-multi-open-unique-handles: init
 	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke multi_open_unique_handles
 
 test-fuse-multithreaded-tasks: init
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke concurrent_threads_create_write_and_read_independent_files -- --nocapture
-	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke concurrent_parent_directory_create_and_child_entry_create_are_serializable -- --nocapture
+	@POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) $(CARGO_TEST_FUSE) --test mount_smoke concurrent_ -- --nocapture --test-threads=1
 
 
 test-version: test-mkfs-config-suite

@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use support::{block_size_from_config, unique_suffix, MountedFs};
+use support::{MountedFs, block_size_from_config, unique_suffix};
 
 fn renameat2_with_flags(old: &Path, new: &Path, flags: u32) -> io::Result<()> {
     let old = CString::new(old.as_os_str().as_bytes())
@@ -1085,6 +1085,94 @@ fn concurrent_threads_append_complete_records_to_one_file() -> Result<(), String
 
     if observed.iter().flatten().any(|present| !present) {
         return Err("concurrent append omitted one or more task records".to_string());
+    }
+
+    Ok(())
+}
+
+#[test]
+fn concurrent_threads_write_through_cloned_shared_offset_handles() -> Result<(), String> {
+    const WORKERS: usize = 8;
+    const WRITES_PER_WORKER: usize = 64;
+    const RECORD_LEN: usize = 16;
+
+    let mounted = MountedFs::start_with_env(
+        "concurrent-shared-offset-writes",
+        &[("FOD_FUSE_EVENT_THREADS", WORKERS.to_string())],
+    )?;
+    let path = mounted
+        .mountpoint
+        .join(format!("shared-offset-{}.bin", unique_suffix()));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|err| format!("create shared-offset file failed: {err}"))?;
+
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let writers = (0..WORKERS)
+        .map(|worker_id| {
+            let file = file
+                .try_clone()
+                .map_err(|err| format!("clone shared-offset handle failed: {err}"))?;
+            let barrier = Arc::clone(&barrier);
+            Ok(thread::spawn(move || -> Result<(), String> {
+                let mut file = file;
+                barrier.wait();
+                for task_id in 0..WRITES_PER_WORKER {
+                    let mut record = [0u8; RECORD_LEN];
+                    record[..8].copy_from_slice(&(worker_id as u64).to_le_bytes());
+                    record[8..].copy_from_slice(&(task_id as u64).to_le_bytes());
+                    let written = file.write(&record).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} write failed: {err}")
+                    })?;
+                    if written != RECORD_LEN {
+                        return Err(format!(
+                            "worker {worker_id} task {task_id} wrote a partial record: {written}/{RECORD_LEN} bytes"
+                        ));
+                    }
+                }
+                Ok(())
+            }))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    for writer in writers {
+        writer
+            .join()
+            .map_err(|_| "shared-offset writer thread panicked".to_string())??;
+    }
+    file.sync_all()
+        .map_err(|err| format!("sync shared-offset writes failed: {err}"))?;
+
+    let actual =
+        fs::read(&path).map_err(|err| format!("read shared-offset result failed: {err}"))?;
+    let expected_len = WORKERS * WRITES_PER_WORKER * RECORD_LEN;
+    if actual.len() != expected_len {
+        return Err(format!(
+            "shared-offset writes produced {} bytes; expected {expected_len}",
+            actual.len()
+        ));
+    }
+
+    let mut observed = vec![vec![false; WRITES_PER_WORKER]; WORKERS];
+    for (record_index, record) in actual.chunks_exact(RECORD_LEN).enumerate() {
+        let worker_id = u64::from_le_bytes(record[..8].try_into().unwrap()) as usize;
+        let task_id = u64::from_le_bytes(record[8..].try_into().unwrap()) as usize;
+        if worker_id >= WORKERS || task_id >= WRITES_PER_WORKER {
+            return Err(format!(
+                "shared-offset record {record_index} has unexpected identity ({worker_id}, {task_id})"
+            ));
+        }
+        if std::mem::replace(&mut observed[worker_id][task_id], true) {
+            return Err(format!(
+                "shared-offset record ({worker_id}, {task_id}) appeared more than once"
+            ));
+        }
+    }
+    if observed.iter().flatten().any(|present| !present) {
+        return Err("shared-offset writes omitted one or more task records".to_string());
     }
 
     Ok(())
