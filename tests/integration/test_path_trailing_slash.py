@@ -227,6 +227,12 @@ def main() -> None:
             assert os.stat(normalized).st_ino == file_path.stat().st_ino
             with open(normalized, "rb") as normalized_file:
                 assert normalized_file.read() == b"not a directory"
+            absolute_suffix = file_path.as_posix().lstrip("/")
+            for leading_slashes in ("//", "///"):
+                leading_slash_path = f"{leading_slashes}{absolute_suffix}"
+                assert os.stat(leading_slash_path).st_ino == file_path.stat().st_ino
+                with open(leading_slash_path, "rb") as repeated_slash_file:
+                    assert repeated_slash_file.read() == b"not a directory"
 
             name_max = os.pathconf(directory, "PC_NAME_MAX")
             assert name_max >= 255, name_max
@@ -259,7 +265,7 @@ def main() -> None:
                 "dangling_slash=ENOENTx9,EEXISTx2,ENOTDIRx3 "
                 "slash_symlink_dir=mkdir:EEXIST,unlink:ENOTDIR,rmdir:ENOTDIR "
                 "chmod_target=0o711 utime_target=exact truncate:EISDIR "
-                "readlink:EINVAL rename:ENOTDIR "
+                "readlink:EINVAL rename:ENOTDIR leading_slashes=//,/// "
                 "dotdot_repeated_separator=1 name_max_boundary=1 "
                 "non_utf8_create=EILSEQ"
             )

@@ -62,6 +62,7 @@ FOD został wywołany:
   `utime()`, `readlink()`, `statvfs()` i `link()`), `EEXIST` dla `mkdir()` i
   nowego celu `symlink()`, oraz `ENOTDIR` dla `unlink()`, `rmdir()` i `rename()`.
   Test potwierdza, że pierwotny symlink pozostaje.
+- POSIX [XBD pathname resolution](https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html) leaves exactly two leading slashes implementation-defined and requires more than two to behave as one. Linux/FOD tests confirm paths beginning `//` and `///` both resolve to the same mounted file as a single leading slash.
 - Linux v6.17 `chmod_common()` ogranicza argument `mode` przez `S_IALLUGO` i
   zachowuje istniejące bity typu inode. Montowany probe FOD z `mode=0o10000`
   (bit `S_IFIFO`) zakończył się sukcesem i ustawił prawa na `0o000`. POSIX
