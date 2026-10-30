@@ -123,8 +123,16 @@ def main() -> None:
             closed_fd = os.open(descriptor_metadata_path, os.O_RDONLY)
             os.close(closed_fd)
             for operation in (
+                lambda: os.fstat(closed_fd),
                 lambda: os.fchmod(closed_fd, 0o600),
                 lambda: os.fchown(closed_fd, -1, -1),
+                lambda: os.utime(
+                    closed_fd,
+                    ns=(
+                        descriptor_metadata_before.st_atime_ns,
+                        descriptor_metadata_before.st_mtime_ns,
+                    ),
+                ),
             ):
                 try:
                     operation()
@@ -140,8 +148,17 @@ def main() -> None:
                 descriptor_metadata_before.st_uid,
                 descriptor_metadata_before.st_gid,
             )
+            assert (
+                descriptor_metadata_after.st_atime_ns,
+                descriptor_metadata_after.st_mtime_ns,
+                descriptor_metadata_after.st_ctime_ns,
+            ) == (
+                descriptor_metadata_before.st_atime_ns,
+                descriptor_metadata_before.st_mtime_ns,
+                descriptor_metadata_before.st_ctime_ns,
+            )
             assert descriptor_metadata_path.read_bytes() == b"unchanged"
-            print("OK fchmod/fchown closed descriptor errno=EBADF unchanged=1")
+            print("OK fstat/fchmod/fchown/futimens closed descriptor errno=EBADF unchanged=1")
 
             negative_positioned_io_path = dir_path / "negative-positioned-io.txt"
             negative_positioned_io_path.write_bytes(b"unchanged")

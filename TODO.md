@@ -14,9 +14,10 @@ Reading guide:
 
 ## Unresolved findings
 
-- [x] **`fchmod()` i `fchown()` odrzucają zamknięty deskryptor.**
-  `test_lseek.py` sprawdza dokładne `EBADF` dla obu wywołań i potwierdza,
-  że tryb, właściciel, grupa oraz zawartość pliku nie ulegają zmianie. Linux
+- [x] **Operacje metadanych odrzucają zamknięty deskryptor.**
+  `test_lseek.py` sprawdza dokładne `EBADF` dla `fstat()`, `fchmod()`, `fchown()`
+  i `futimens()` oraz potwierdza,
+  że tryb, właściciel, grupa, znaczniki czasu i zawartość pliku nie ulegają zmianie. Linux
   wykonuje tę walidację przed callbackiem FUSE.
 
 - [x] **Wątki tworzące różne typy pod tą samą nazwą mają jednego zwycięzcę.**
