@@ -9039,6 +9039,9 @@ impl DbRepo {
         lease_ttl_seconds: u64,
         resource_lock_id: i64,
     ) -> Result<bool, String> {
+        if !matches!(requested_type, 1 | 2) {
+            return Err(format!("unsupported flock lock type: {requested_type}"));
+        }
         self.ensure_lock_schema_ready()?;
         let session_id = self.session_id_for_owner_key_text(owner_key)?;
         let request_token_value = generate_request_token("flock-lease");
@@ -9155,11 +9158,18 @@ impl DbRepo {
                     let res = exec_params(conn, &conflict_sql, &conflict_params)?;
                     let conflict = fetch_single_text(res)?;
                     if !conflict.trim().is_empty() {
-                        let other_type = conflict.trim().parse::<i32>().unwrap_or(0);
+                        let other_type = conflict.trim().parse::<i32>().map_err(|err| {
+                            format!("invalid active flock lease type: {err}")
+                        })?;
+                        if !matches!(other_type, 1 | 2) {
+                            return Err(format!(
+                                "unsupported active flock lease type: {other_type}"
+                            ));
+                        }
                         let blocked = match requested_type_value {
                             1 => other_type == 2,
                             2 => other_type == 1 || other_type == 2,
-                            _ => false,
+                            _ => unreachable!("requested flock type validated above"),
                         };
                         if blocked {
                             let did_grant = CString::new("false")

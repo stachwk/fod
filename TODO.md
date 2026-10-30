@@ -188,6 +188,11 @@ Reading guide:
   malformed-row regressions for these paths remain pending. A related copy-on-
   write reference-count parse fallback was removed: malformed counts now fail
   the transaction instead of defaulting to zero and deleting a data object.
+- [ ] **Verify invalid PostgreSQL `flock` lease types fail closed.** Lease
+  acquisition now rejects requested and persisted types outside the supported
+  shared (`1`) and exclusive (`2`) values; malformed persisted values no longer
+  become type `0` and bypass conflict checks. Add a regression that seeds an
+  invalid active lease and confirms another acquisition returns an error.
 - [ ] **Metadata projection must preserve restrictive directory modes.** Source
   review found that directory mode `0644` was rewritten to `0755` in FUSE
   attributes, and malformed size/uid/gid/mode values could be replaced by
