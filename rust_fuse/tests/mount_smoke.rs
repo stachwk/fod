@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use support::{block_size_from_config, unique_suffix, MountedFs};
+use support::{MountedFs, block_size_from_config, unique_suffix};
 
 fn metadata_times(path: &Path) -> Result<(i64, i64, i64, i64), String> {
     let meta = fs::metadata(path).map_err(|err| err.to_string())?;
@@ -582,6 +582,80 @@ fn concurrent_threads_create_write_and_read_independent_files() -> Result<(), St
         worker
             .join()
             .map_err(|_| "concurrent namespace worker panicked".to_string())??;
+    }
+
+    const TASK_ITERATIONS: usize = 12;
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let task_workers = (0..WORKERS)
+        .map(|worker_id| {
+            let parent = dir_path.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || -> Result<(), String> {
+                barrier.wait();
+                for task_id in 0..TASK_ITERATIONS {
+                    let source = parent.join(format!("task-{worker_id}-{task_id}.tmp"));
+                    let destination = parent.join(format!("task-{worker_id}-{task_id}.bin"));
+                    let marker = u8::try_from(worker_id + 1)
+                        .map_err(|err| format!("invalid task worker marker: {err}"))?;
+                    let payload = vec![marker; PAYLOAD_LEN + task_id];
+
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&source)
+                        .map_err(|err| {
+                            format!("worker {worker_id} task {task_id} create failed: {err}")
+                        })?;
+                    file.write_all(&payload).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} write failed: {err}")
+                    })?;
+                    file.sync_all().map_err(|err| {
+                        format!("worker {worker_id} task {task_id} sync failed: {err}")
+                    })?;
+                    drop(file);
+
+                    fs::rename(&source, &destination).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} rename failed: {err}")
+                    })?;
+                    let actual = fs::read(&destination).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} read failed: {err}")
+                    })?;
+                    if actual != payload {
+                        return Err(format!(
+                            "worker {worker_id} task {task_id} payload mismatch: expected {} bytes, got {}",
+                            payload.len(),
+                            actual.len()
+                        ));
+                    }
+                    fs::remove_file(&destination).map_err(|err| {
+                        format!("worker {worker_id} task {task_id} unlink failed: {err}")
+                    })?;
+                }
+                Ok(())
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for worker in task_workers {
+        worker
+            .join()
+            .map_err(|_| "repeated concurrent file-task worker panicked".to_string())??;
+    }
+
+    let leftover_task_files = fs::read_dir(&dir_path)
+        .map_err(|err| format!("read task directory after file tasks failed: {err}"))?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("task-")
+        })
+        .map(|entry| entry.file_name())
+        .collect::<Vec<_>>();
+    if !leftover_task_files.is_empty() {
+        return Err(format!(
+            "concurrent file tasks left entries behind: {leftover_task_files:?}"
+        ));
     }
 
     let leftover_namespace_dirs = fs::read_dir(&dir_path)
