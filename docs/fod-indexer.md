@@ -240,7 +240,7 @@ The dry run should report:
 - optional inode and device ids when available.
 
 Materialization writes into a per-run root directory inside FOD named `index-source-<source id>-import-<plan id>`, keeps the source tree untouched, and writes each canonical payload once while reusing the canonical data object for duplicate references.
-If a non-dry-run materialize fails after the import root has been created, the command now attempts a best-effort rollback automatically. `fod-indexer cleanup-failed --plan <id>` remains the manual fallback if that rollback cannot finish. Cleanup accepts plans marked `materialize_failed` or `materialize_cleaned`; it refuses a plan still marked `materialize_running`, because the importer may still be creating files while cleanup scans and deletes the tree. Recovery of a process crash that leaves a plan running requires a durable materialization lease and is not automatic yet; see `TODO.md`.
+After it records the import plan as `materialize_running`, the command routes fallible setup and import operations through the same failure handler. It marks the plan failed and attempts a best-effort rollback. `fod-indexer cleanup-failed --plan <id>` remains the manual fallback if that rollback cannot finish. Cleanup accepts plans marked `materialize_failed` or `materialize_cleaned`; it refuses a plan still marked `materialize_running`, because the importer may still be creating files while cleanup scans and deletes the tree. Recovery of a process crash that leaves a plan running requires a durable, transaction-checked fencing lease and is not automatic yet; see `TODO.md`.
 The rollback contract is pinned by a failure-path smoke that forces a partial materialize failure and verifies that the import root disappears again.
 
 ## Cleanup
@@ -248,7 +248,7 @@ The rollback contract is pinned by a failure-path smoke that forces a partial ma
 `clean --source <name>` compares the current source tree with the indexed rows for that source and removes stale file entries that no longer exist. The command also removes dependent import-plan entries that reference those stale files and refreshes duplicate-set metadata after a real cleanup.
 
 Use `--dry-run` first if you want to preview which rows would be removed without touching PostgreSQL. If the source root itself is gone, the cleanup treats the source as fully orphaned and removes the indexed rows for that source.
-Use `cleanup-failed --plan <id>` when a failed materialization still needs manual cleanup or when you want to re-run the rollback after an interrupted automatic attempt.
+Use `cleanup-failed --plan <id>` when a failed materialization still needs manual cleanup or when you want to re-run the rollback after an interrupted automatic attempt. Cleanup refuses to remove imported files that have hardlink aliases outside the import tree, because deleting their backing file rows would cascade-delete those aliases. For shared data objects, cleanup subtracts the references it removes atomically; if an exclusive object's reference count changed, cleanup aborts the transaction instead of deleting it. These guards may leave the plan in `materialize_failed` for an operator to resolve; they preserve the outside namespace and payload.
 
 Hidden dotfiles, zero-length files, and common cache/build directories are skipped during scan, hash, plan, materialize, and cleanup view rebuilding. That keeps paths such as `.bashrc`, `.venv`, `.git`, `node_modules`, `target`, `build`, and similar cache trees out of the index.
 
