@@ -1042,3 +1042,6 @@ FOD 3.4.504 routes the remaining manual PostgreSQL boolean decoders in
 directory unlink, file unlink, payload emptiness, xattr existence and POSIX ACL
 existence through the strict boolean parser; unknown result text now aborts the
 transaction rather than acting as false.
+FOD 3.4.505 routes session, hardlink, symlink, parent-directory and deferred
+unlink file IDs through the shared positive-ID decoder before using those
+values in lifecycle or namespace operations.

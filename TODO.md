@@ -2538,3 +2538,11 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   namespace or privilege decisions. Formatting and hotpath crate compilation
   pass; database-backed fault injection still requires an isolated schema-38
   database on the verified FOD 32 KiB build.
+
+## FOD 3.4.505 — validate remaining lifecycle and namespace IDs
+
+- [x] Decode PostgreSQL-returned session, hardlink, symlink, parent-directory
+  and deferred-unlink file IDs as positive identifiers before using them.
+  Zero could otherwise flow into lease, promotion or namespace operations.
+  Hotpath compilation and formatting pass; operation tests need the verified
+  FOD 32 KiB server and an isolated schema-38 database.

@@ -6471,7 +6471,7 @@ impl DbRepo {
         if rows.len() != 4 {
             return Err("invalid parent ACL metadata row".to_string());
         }
-        let directory_id = rows[0].parse::<u64>().map_err(|err| err.to_string())?;
+        let directory_id = parse_positive_u64_text(&rows[0], "parent ACL directory ID")?;
         let owner_uid = rows[1].parse::<u32>().map_err(|err| err.to_string())?;
         let owner_gid = rows[2].parse::<u32>().map_err(|err| err.to_string())?;
         let mode = parse_persisted_posix_mode(&rows[3])?;
@@ -8437,9 +8437,8 @@ impl DbRepo {
                     let existing_token = fetch_single_text_option(existing_token_res)?;
                     match existing_token {
                         Some(session_id_text) => {
-                            let session_id = session_id_text
-                                .parse::<u64>()
-                                .map_err(|_| "invalid client session id value".to_string())?;
+                            let session_id =
+                                parse_positive_u64_text(&session_id_text, "client session ID")?;
                             if session_id > i64::MAX as u64 {
                                 return Err("invalid client session id value".to_string());
                             }
@@ -8461,13 +8460,8 @@ impl DbRepo {
                     ];
                     let res = exec_params(conn, &sql, &params)?;
                     let session_id = fetch_single_text(res)?;
-                    if session_id.trim().is_empty() {
-                        return Err("failed to create client session".to_string());
-                    }
-                    let session_id = session_id
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|_| "invalid client session id value".to_string())?;
+                    let session_id =
+                        parse_positive_u64_text(&session_id, "created client session ID")?;
                     if session_id > i64::MAX as u64 {
                         return Err("invalid client session id value".to_string());
                     }
@@ -10951,10 +10945,7 @@ impl DbRepo {
             if chosen.len() < 3 {
                 return Err("hardlink promotion lookup returned incomplete row".to_string());
             }
-            let hardlink_id = chosen[0]
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| "invalid hardlink id value".to_string())?;
+            let hardlink_id = parse_positive_u64_text(&chosen[0], "hardlink promotion ID")?;
             let hardlink_id_param = CString::new(hardlink_id.to_string())
                 .map_err(|_| "hardlink id contains NUL byte".to_string())?;
             let promoted_name = CString::new(chosen[2].as_str())
@@ -10964,7 +10955,9 @@ impl DbRepo {
                 let params = [&promoted_name, &file_id_param];
                 exec_command_params(conn, &sql_update_root, &params)?;
             } else {
-                let promoted_parent = CString::new(chosen[1].trim())
+                let parent_id =
+                    parse_positive_u64_text(&chosen[1], "hardlink parent directory ID")?;
+                let promoted_parent = CString::new(parent_id.to_string())
                     .map_err(|_| "hardlink parent id contains NUL byte".to_string())?;
                 let params = [&promoted_parent, &promoted_name, &file_id_param];
                 exec_command_params(conn, &sql_update_nested, &params)?;
@@ -11790,9 +11783,7 @@ impl DbRepo {
                 else {
                     return Ok(());
                 };
-                let file_id = file_id
-                    .parse::<u64>()
-                    .map_err(|_| "invalid hardlink file id".to_string())?;
+                let file_id = parse_positive_u64_text(&file_id, "hardlink file ID")?;
                 Self::lock_file_lifecycle_on_conn(conn, file_id)?;
                 exec_command_params(conn, &sql, &params)
             })
@@ -11953,11 +11944,8 @@ impl DbRepo {
             else {
                 return Err(NAMESPACE_SOURCE_CHANGED.to_string());
             };
-            let symlink_id_num = symlink_id
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| "invalid symlink id".to_string())?;
-            let symlink_id = CString::new(symlink_id.trim())
+            let symlink_id_num = parse_positive_u64_text(&symlink_id, "symlink ID")?;
+            let symlink_id = CString::new(symlink_id_num.to_string())
                 .map_err(|_| "symlink id contains NUL byte".to_string())?;
             if fetch_single_text_option(exec_params(tx.conn, &lock_inode, &[&symlink_id])?)?
                 .is_none()
@@ -15390,10 +15378,7 @@ impl DbRepo {
 
         let mut purged = 0_u64;
         for file_id in file_ids {
-            let file_id = file_id
-                .trim()
-                .parse::<u64>()
-                .map_err(|_| "invalid deferred unlink file id".to_string())?;
+            let file_id = parse_positive_u64_text(&file_id, "deferred unlink file ID")?;
             self.purge_primary_file(file_id)?;
             purged = purged.saturating_add(1);
         }
