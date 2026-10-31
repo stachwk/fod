@@ -1883,3 +1883,14 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   6.17.0-41-generic, libfuse3 3.18.2 and PostgreSQL 16.15.
 - [ ] P08 remains Pending for untested rename error precedence, permissions,
   limits and broader namespace cross-mount cases.
+
+
+## FOD 3.4.432 — cover FIFO rename pairs
+
+- [x] Extend `test_rename_directory_transactional.py` with FIFO-over-regular
+  file and regular-file-over-FIFO replacement. Verify the resulting object type,
+  payload where applicable, source removal, and committed visibility on both
+  mounts. The full suite passed on Linux 6.17.0-41-generic, libfuse3 3.18.2 and
+  PostgreSQL 16.15; its disposable test database was dropped afterward.
+- [ ] P08 remains Pending for additional supported file-type pairs, rename
+  permission/error-precedence cases, and broader cross-mount checks.

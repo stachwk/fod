@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import errno
 import os
+import stat
 import tempfile
 import time
 import uuid
@@ -65,6 +66,30 @@ def wait_for_symlink(path: Path, expected_target: str) -> None:
     raise AssertionError(
         f"{path}: expected symlink target {expected_target!r}, observed={observed!r}"
     )
+
+
+def wait_for_fifo(path: Path) -> None:
+    deadline = time.monotonic() + WAIT_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            if stat.S_ISFIFO(path.lstat().st_mode):
+                return
+        except OSError:
+            pass
+        time.sleep(0.05)
+    raise AssertionError(f"{path}: expected FIFO")
+
+
+def wait_for_regular_file(path: Path) -> None:
+    deadline = time.monotonic() + WAIT_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            if stat.S_ISREG(path.lstat().st_mode):
+                return
+        except OSError:
+            pass
+        time.sleep(0.05)
+    raise AssertionError(f"{path}: expected regular file")
 
 
 def expect_replace_errno(
@@ -404,6 +429,42 @@ def file_and_symlink_type_pairings(mount_a: Path, mount_b: Path) -> None:
     )
 
 
+def fifo_file_type_pairings(mount_a: Path, mount_b: Path) -> None:
+    suffix = uuid.uuid4().hex
+
+    fifo_source = mount_a / f"rename-fifo-file-source-{suffix}"
+    fifo_source_other = mount_b / fifo_source.name
+    regular_target = mount_b / f"rename-fifo-file-target-{suffix}"
+    regular_target_other = mount_a / regular_target.name
+    os.mkfifo(fifo_source, 0o600)
+    regular_target.write_bytes(b"replaced-by-fifo")
+    wait_for_fifo(fifo_source_other)
+    wait_for_bytes(regular_target, b"replaced-by-fifo")
+    os.replace(fifo_source_other, regular_target)
+    wait_for_absent(fifo_source)
+    wait_for_absent(fifo_source_other)
+    wait_for_fifo(regular_target)
+    wait_for_fifo(regular_target_other)
+
+    file_source = mount_a / f"rename-file-fifo-source-{suffix}"
+    file_source_other = mount_b / file_source.name
+    fifo_target = mount_b / f"rename-file-fifo-target-{suffix}"
+    fifo_target_other = mount_a / fifo_target.name
+    file_source.write_bytes(b"replaced-by-file")
+    os.mkfifo(fifo_target, 0o600)
+    wait_for_bytes(file_source_other, b"replaced-by-file")
+    wait_for_fifo(fifo_target_other)
+    os.replace(file_source_other, fifo_target)
+    wait_for_absent(file_source)
+    wait_for_absent(file_source_other)
+    wait_for_regular_file(fifo_target)
+    wait_for_regular_file(fifo_target_other)
+    wait_for_bytes(fifo_target, b"replaced-by-file")
+    wait_for_bytes(fifo_target_other, b"replaced-by-file")
+
+    print("OK rename-fifo-file-pairings fifo_over_file=success file_over_fifo=success")
+
+
 def descendant_is_rejected(mount_a: Path, mount_b: Path) -> None:
     suffix = uuid.uuid4().hex
     root = mount_a / f"rename-dir-cycle-{suffix}"
@@ -509,6 +570,7 @@ def main() -> None:
             missing_source_preserves_destination(mount_a, mount_b)
             type_mismatch_errors(mount_a, mount_b)
             file_and_symlink_type_pairings(mount_a, mount_b)
+            fifo_file_type_pairings(mount_a, mount_b)
             descendant_is_rejected(mount_a, mount_b)
             rollback_after_target_removal(mount_a, mount_b, barrier_dir)
 

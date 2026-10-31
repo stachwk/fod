@@ -7,7 +7,7 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: FOD 3.4.431. FOD 3.4.415 raised the enforced Linux
+Reviewed source baseline: FOD 3.4.432. FOD 3.4.415 raised the enforced Linux
 minimum to 6.17.0; FOD 3.4.422 raised the libfuse3 minimum to 3.18.2, with
 mounted validation on 3.18.2 and 3.18.3. This release makes kernel-version
 parsing reject malformed numeric fields while retaining distribution suffixes
@@ -25,8 +25,10 @@ including `EMFILE` from both `open()` and `opendir()` under the process
 descriptor limit; P02 remains Pending. FOD 3.4.430 adds passing mounted
 `rename()` tests for file/symlink replacement pairings and rollback preservation.
 FOD 3.4.431 extends these tests with explicit cross-mount visibility checks for
-committed changes and preservation after rejected changes; P08 remains Pending
-for its remaining POSIX requirements and error cases. The preceding release
+committed changes and preservation after rejected changes. FOD 3.4.432 adds
+FIFO-over-file and file-over-FIFO cases, checking type and cross-mount
+visibility; P08 remains Pending for its remaining POSIX requirements and error
+cases. The preceding release
 implements and verifies Linux FUSE killpriv handling for write, truncate,
 `O_TRUNC` and ACL updates; these changes do not close a broader POSIX matrix
 area.
