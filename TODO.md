@@ -26,6 +26,13 @@ Reading guide:
   pełnej obsługi potrzebna byłaby reprezentacja bajtowa w schemacie, poza tym
   zakresem poprawienia aliasowania.
 
+- [ ] **Dodaj regresję dla nie-UTF-8 ścieżki pliku konfiguracyjnego.**
+  `expand_user()` rozwija teraz prefiks `~/` operując na komponentach `Path`,
+  więc nie rekonstruuje ścieżki z `to_string_lossy()` i zachowuje bajty
+  nie-UTF-8 w sufiksie. Dodać test jednostkowy dla suffixu z nie-UTF-8 oraz
+  przypadków `~`, zwykłej ścieżki względnej i absolutnej, sprawdzając że
+  rozwijany jest wyłącznie prefiks tyldy ukośnika.
+
 - [x] **Do not treat external `dirfd()` closure as a POSIX `closedir()` test.**
   The directory-stream regression had closed the descriptor returned by
   `dirfd()` and then required `closedir()` to return `EBADF`, incorrectly

@@ -3,7 +3,8 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -805,13 +806,22 @@ pub fn env_var_truthy(name: &str) -> bool {
 }
 
 pub fn expand_user(path: &Path) -> PathBuf {
-    let raw = path.to_string_lossy();
-    if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
+    let mut components = path.components();
+    let Some(Component::Normal(first)) = components.next() else {
+        return path.to_path_buf();
+    };
+    if first != "~" {
+        return path.to_path_buf();
     }
-    PathBuf::from(raw.as_ref())
+
+    let rest = components.as_path();
+    if rest.as_os_str().is_empty() && path.as_os_str() != OsStr::new("~/") {
+        return path.to_path_buf();
+    }
+    if let Some(home) = env::var_os("HOME") {
+        return PathBuf::from(home).join(rest);
+    }
+    path.to_path_buf()
 }
 
 pub fn resolve_path(value: &str, config_dir: &Path) -> String {
