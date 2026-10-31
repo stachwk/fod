@@ -14,6 +14,15 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Zweryfikować indeksowane kolumny tekstowe dla maksymalnego rozmiaru wpisu B-tree.**
+  `index_files.path` jest częścią indeksu unikalnego razem z `id_index_source`,
+  a `index_catalog_snapshot_files.path` ma indeks B-tree. Zmiana `TEXT` na
+  `VARCHAR(n)` nie rozwiązuje limitu rozmiaru wpisu indeksu PostgreSQL;
+  ustalić, jakie długości ścieżek może wytworzyć indeksator i czy potrzebny
+  jest inny klucz indeksu (np. skrót z kontrolą kolizji). Nie skracać ścieżek
+  ani nie dodawać arbitralnego limitu bez sprawdzenia kontraktu i istniejących
+  danych.
+
 - [ ] **Dokończyć audyt rozmiarów identyfikatorów i reprezentacji `mode` w SQL.**
   `docs/SQL_SCHEMA_LIMIT_AUDIT.md` dokumentuje, że klucze `SERIAL` i wiele
   relacyjnych `INTEGER` nadal ograniczają obiekty do zakresu signed 32-bit,

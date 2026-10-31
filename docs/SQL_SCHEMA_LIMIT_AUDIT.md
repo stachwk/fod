@@ -6,6 +6,9 @@ Limit w kodzie klienta nie jest automatycznie ograniczeniem PostgreSQL: do
 ochrony przed bezpośrednimi zapisami i wyścigami między mountami potrzebny jest
 również warunek w bazie.
 
+Audyt objął także użycie `TEXT` w schemacie świeżej bazy, migracjach
+historycznych oraz dynamicznym SQL używanym przez Rust.
+
 ## Wyniki
 
 | Dane | Definicja / limit SQL | Wniosek |
@@ -19,7 +22,11 @@ również warunek w bazie.
 | Liczniki referencji, grup i zadań indeksatora | `BIGINT` plus ograniczenia nieujemności | Rust przechowuje je jako `u64`; `INTEGER` ograniczał je do `2^31-1`. Schema 34 poszerza `reference_count`, `file_count` oraz liczniki planów importu. PostgreSQL `BIGINT` nadal ma maksimum `2^63-1`, więc wartości `u64` powyżej tej granicy nie są obsługiwane. |
 | Klucze `SERIAL` i relacyjne kolumny `INTEGER` | `SERIAL`/`INTEGER` | Pozostają signed 32-bit; pojedyncza tabela może osiągnąć maksymalnie `2^31-1` automatycznych identyfikatorów. Konwersja wymaga wspólnej migracji kluczy głównych i wszystkich kluczy obcych, więc pozostaje osobną decyzją. |
 | `mode` w plikach i katalogach | `VARCHAR(6)` | Ogranicza wyłącznie liczbę znaków; nie waliduje składni ani semantyki trybu. |
-| `symlinks.target` i większość tekstowych metadanych | `TEXT` | Brak limitu długości w schemacie; wymóg długości wejściowej musi być egzekwowany w ścieżce operacji, jeśli dotyczy danej wartości. |
+| `symlinks.target`, ścieżki i korzenie źródeł indeksatora, ścieżka mountu, filtr źródeł, komunikaty błędów | `TEXT` | Zmienna długość jest częścią domeny tych danych. `TEXT` nie rezerwuje maksymalnej długości; PostgreSQL przechowuje rzeczywistą wartość i może kompresować duże wartości. Nie zastępować arbitralnym `VARCHAR(n)`. |
+| `inode_seed`, tokeny żądań (także tabele lease/session tworzone przez dynamiczny SQL) | `TEXT` | Wartości są generowane przez FOD i/lub kod wywołujący; wymagają ewentualnie osobnego limitu kontraktu, ale `VARCHAR(n)` nie zmniejszy zajętości dla tych samych danych. |
+| `password_hash`, `password_salt`, `minimum_client_version` | `TEXT` | Rozmiar zależy od wybranego formatu hasha/soli i wersjonowania klienta. Ustalanie limitu ma sens tylko razem z walidacją formatu i wspieranych algorytmów. |
+| `status`, `kind`, `file_kind`, `scan_status`, `hash_status`, `hash_algorithm`, `action` | `TEXT` | To pola o małym lub kontrolowanym zbiorze wartości. Ograniczenie ich listy przez `CHECK` może poprawić walidację danych, ale `VARCHAR(n)` nie przyniesie oszczędności miejsca. Wartości SQL i Rust powinny być kontrolowane wspólnie. |
+| Zmienne lokalne funkcji PL/pgSQL oraz staging tables indeksatora | `TEXT` | Nie są trwałymi kolumnami schematu. Typ stagingu powinien pozostać zgodny z docelową kolumną. |
 
 Migracje 0033–0034 i świeży schemat sprawdzają zakresy nazw i wartości
 numerycznych. Test migracji
@@ -43,3 +50,20 @@ Kolumny `mode VARCHAR(6)` również ograniczają tylko długość znakową, nie 
 POSIX. Te pozycje są zapisane w
 [`TODO.md`](../TODO.md); audyt nie certyfikuje pełnej zgodności POSIX ani
 wszystkich wejść SQL.
+
+## Wniosek dla `TEXT` i `VARCHAR`
+
+W PostgreSQL `TEXT` oraz `VARCHAR` przechowują tę samą treść w ten sam sposób;
+`VARCHAR(n)` nie przydziela z góry `n` znaków ani nie zmniejsza zajętości
+wiersza czy indeksu. Limit długości dodaje kontrolę przy zapisie i może
+odrzucić prawidłowe dane, jeśli `n` nie wynika z kontraktu. Dokumentacja
+PostgreSQL stwierdza brak różnicy wydajności między tymi typami, poza kilkoma
+dodatkowymi cyklami CPU dla sprawdzenia limitu: [Character Types — PostgreSQL](https://www.postgresql.org/docs/current/datatype-character.html).
+
+W przejrzanych schematach nie znaleziono kolumny `TEXT`, której zamiana na
+`VARCHAR(n)` uzasadniałaby się oszczędnością zasobów. Ograniczenia długości
+należy dodawać tam, gdzie wynikają z Linux/POSIX lub formatu konkretnego pola;
+powinny wtedy być wyrażone właściwą walidacją, zwykle bajtową dla ścieżek, a
+nie arbitralnym limitem znaków. Osobnym problemem są duże wartości `TEXT`
+używane jako klucze indeksów B-tree: wymagają analizy limitu wielkości wpisu
+indeksu i sposobu indeksowania, a nie zmiany typu na `VARCHAR`.
