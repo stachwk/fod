@@ -38,6 +38,15 @@ cross-table name collision instead of silently selecting one. The
 corruption and verifies both direct symlink lookup and path resolution fail
 closed; all 67 `pg_query` tests passed on the disposable 32KiB database.
 
+FOD 3.4.466 closes and releases PostgreSQL connections if a database callback
+panics while the connection is checked out. The original panic continues to
+unwind; the connection is not returned to the pool in an open transaction.
+`panicking_transaction_releases_its_postgres_connection` reproduced the leaked
+session before the fix and verifies that the session count returns to baseline
+and the repository remains usable afterward. The full 68-test `pg_query`
+suite passed on a fresh disposable PostgreSQL 16.15 database with
+`BLCKSZ=32KiB`.
+
 FOD 3.4.430 adds passing mounted `rename()` coverage for file/symlink
 replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
 FOD 3.4.431 extends these checks to verify committed namespace changes and

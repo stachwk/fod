@@ -859,7 +859,14 @@ Reading guide:
   `duplicate_symlink_namespace_rows_are_rejected` regression first reproduced
   the defect, then passed for both direct symlink lookup and `resolve_path`;
   the full 67-test `pg_query` suite passed on the verified disposable 32KiB
-  database.
+  database. FOD 3.4.466 also fixes a connection-pool leak when a callback
+  panics while holding a PostgreSQL connection: the operation slot is released
+  and the raw connection is closed before the original panic resumes. The new
+  regression observed `pg_stat_activity` grow from zero to one session before
+  the fix and verifies it returns to baseline afterward. Panic cleanup is
+  applied to both primary and replica read callbacks. All 68 `pg_query` tests
+  passed on a fresh disposable PostgreSQL 16.15 database with the verified
+  `BLCKSZ=32KiB` build.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

@@ -43,6 +43,7 @@ use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io::Read;
 use std::os::raw::{c_char, c_int, c_uint};
+use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -5467,8 +5468,14 @@ impl DbRepo {
                 }
             }
 
-            match f(conn) {
-                Ok(value) => {
+            let result = catch_unwind(AssertUnwindSafe(|| f(conn)));
+            match result {
+                Err(payload) => {
+                    let _ = pool.release_failed_operation(started.elapsed());
+                    unsafe { PQfinish(conn) };
+                    resume_unwind(payload);
+                }
+                Ok(Ok(value)) => {
                     let elapsed = started.elapsed();
                     let current_generation = targets.generation()?;
                     match pool.return_cached(
@@ -5489,7 +5496,7 @@ impl DbRepo {
                     self.replica_consistency.record_replica_read();
                     return Ok(value);
                 }
-                Err(_) => {
+                Ok(Err(_)) => {
                     let _ = pool.release_failed_operation(started.elapsed());
                     unsafe { PQfinish(conn) };
                     let _ = targets.mark_operation_connection_failure(generation);
@@ -5580,10 +5587,18 @@ impl DbRepo {
             let operation_started = Instant::now();
             let _transaction_pool_scope =
                 CurrentTransactionPoolScope::enter(Arc::clone(&self.pool), lane);
-            let result = f(conn);
+            let result = catch_unwind(AssertUnwindSafe(|| f(conn)));
             let operation_elapsed = operation_started.elapsed();
             match result {
-                Ok(value) => {
+                Err(payload) => {
+                    let _ = self.pool.release_failed_operation(operation_elapsed);
+                    unsafe {
+                        PQfinish(conn);
+                    }
+                    drop(primary_operation_guard);
+                    resume_unwind(payload);
+                }
+                Ok(Ok(value)) => {
                     if lane == ConnectionLane::Write {
                         self.refresh_primary_wal_lsn(conn);
                     }
@@ -5608,7 +5623,7 @@ impl DbRepo {
                     }
                     return Ok(value);
                 }
-                Err(err) => {
+                Ok(Err(err)) => {
                     let replayable = err.starts_with(REPLAYABLE_SQL_ERROR_PREFIX);
                     let err = strip_replayable_sql_error(err);
                     let pool_result = self.pool.release_failed_operation(operation_elapsed);

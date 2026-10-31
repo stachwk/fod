@@ -7,6 +7,7 @@ use fod_rust_hotpath::pg::{
 };
 use fod_rust_runtime::{DataObjectSwapCleanup, RuntimeConfig};
 use std::env;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2563,6 +2564,46 @@ fn dropping_db_repo_closes_cached_postgres_connections() -> Result<(), String> {
         return Err(format!(
             "dropping DbRepo left cached PostgreSQL connections open: before={before}, after={after}"
         ));
+    }
+    Ok(())
+}
+
+#[test]
+fn panicking_transaction_releases_its_postgres_connection() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let observer = repo_with_runtime()?;
+    let repo = repo_with_runtime()?;
+    let count_other_connections = |repo: &DbRepo| -> Result<u64, String> {
+        repo.query_scalar_text(
+            "SELECT COUNT(*)::text FROM pg_stat_activity \
+             WHERE datname = current_database() AND usename = current_user \
+               AND pid <> pg_backend_pid()",
+        )?
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| format!("invalid PostgreSQL connection count: {err}"))
+    };
+
+    let before = count_other_connections(&observer)?;
+    let panic_result: std::thread::Result<Result<(), String>> =
+        catch_unwind(AssertUnwindSafe(|| {
+            repo.with_transaction(|transaction| {
+                transaction.query_scalar_text("SELECT pg_backend_pid()")?;
+                panic!("intentional panic to verify PostgreSQL connection cleanup");
+            })
+        }));
+    if panic_result.is_ok() {
+        return Err("transaction callback panic was swallowed".to_string());
+    }
+
+    let after = count_other_connections(&observer)?;
+    if after != before {
+        return Err(format!(
+            "panicking transaction left a PostgreSQL session open: before={before}, after={after}"
+        ));
+    }
+    if repo.query_scalar_text("SELECT 1")?.trim() != "1" {
+        return Err("repository was unusable after transaction callback panic".to_string());
     }
     Ok(())
 }
