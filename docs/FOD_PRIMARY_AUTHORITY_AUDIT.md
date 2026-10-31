@@ -763,3 +763,17 @@ the name from a second mount, then resumes the request. It verifies `ENOENT`
 and unchanged replacement bytes. The full test passed on FOD 3.4.453 in
 `release-lto`, Linux 6.17.0-41-generic, libfuse3 3.18.3 and PostgreSQL 16.15
 with `BLCKSZ=32KiB`; the temporary test database was dropped afterward.
+
+### `poll()` for an open file after remote unlink
+
+The `poll()` callback received a file handle but looked up attributes through
+the inode's former pathname. When another mount unlinked that name, polling the
+still-open descriptor returned `POLLERR`, even though `pread()` continued to
+read the retained inode. The callback now resolves attributes by the handle's
+`file_id`. Regular files report readable at EOF as well, where a read returns
+zero bytes.
+
+`test_poll.py` reproduced `POLLERR` (mask `8`) on the old implementation. Its
+mounted checks now cover empty-file EOF readiness, the open-unlinked descriptor
+and the read-only mount; the full test passed on FOD 3.4.454 with PostgreSQL
+16.15 `BLCKSZ=32KiB` and libfuse3 3.18.3.

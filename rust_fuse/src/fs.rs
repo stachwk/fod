@@ -7137,8 +7137,23 @@ impl Filesystem for FodFuse {
     ) {
         let ino = ino.0;
         let fh = fh.0;
-        let (path, attrs) = match self.entry_attrs_for_ino(ino) {
-            Ok(path) => path,
+        let handle = match self.file_handle_state_for_handle(fh) {
+            Some(handle) => handle,
+            None => {
+                fuse_reply_error!(reply, EBADF);
+                return;
+            }
+        };
+        let Some(file_id) = handle.file_id else {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        };
+        let (path, attrs) = match self.attrs_for_open_file_id(file_id) {
+            Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => (handle.path, attrs),
+            Ok(_) => {
+                fuse_reply_error!(reply, ENOENT);
+                return;
+            }
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
@@ -7148,24 +7163,14 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, ENOTTY);
             return;
         }
-        let size = match self.write_state_for_handle(fh) {
-            Ok(Some(state)) => state.file_size,
-            Ok(None) => attrs.file_attr.size,
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
-            }
-        };
-        let mut revents = 0u32;
-        if size > 0 {
-            revents |= POLLIN as u32;
-        }
+        // A regular file is readable even at EOF; a read then returns zero.
+        let mut revents = POLLIN as u32;
         if !self.read_only {
             revents |= POLLOUT as u32;
         }
         debug!(
-            "FOD poll path={} fh={} size={} revents={:#x}",
-            path, fh, size, revents
+            "FOD poll path={} fh={} file_id={} revents={:#x}",
+            path, fh, file_id, revents
         );
         reply.poll(PollEvents::from_bits_retain(revents));
     }

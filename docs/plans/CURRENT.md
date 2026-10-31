@@ -97,6 +97,12 @@ concurrent unlink/recreate returns `ENOENT` for the stale inode instead of
 opening the replacement. The full create/write ownership test passed on Linux
 6.17.0-41/libfuse3 3.18.3 against PostgreSQL 16.15 with `BLCKSZ=32KiB`; see the
 [primary-authority audit](../FOD_PRIMARY_AUTHORITY_AUDIT.md).
+
+FOD 3.4.454 makes `poll()` use the open handle's file ID and keeps regular-file
+read readiness true at EOF. The mounted `test_poll.py` reproduced `POLLERR`
+after remote unlink before the fix and now passes for empty files, open-unlinked
+descriptors, and a read-only mount on PostgreSQL 16.15 `BLCKSZ=32KiB`/libfuse3
+3.18.3.
 Create/open rollback cleanup also stopped choosing promotion versus purge from
 replica-routed link counts: primary promotion is attempted first, then primary
 purge rechecks links and leases under the lifecycle lock.

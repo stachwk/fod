@@ -33,6 +33,12 @@ the stale open now returns `ENOENT` instead of opening the replacement. The
 full create/write ownership test passed against PostgreSQL 16.15 built with
 `BLCKSZ=32KiB`, Linux 6.17.0-41 and libfuse3 3.18.3.
 
+FOD 3.4.454 binds `poll()` metadata to the open handle's `file_id`, preserving
+read readiness after a remote unlink. Regular files also report read readiness
+at EOF. Mounted coverage for an empty file, an open-unlinked descriptor, and a
+read-only mount passed against PostgreSQL 16.15 with `BLCKSZ=32KiB` and
+libfuse3 3.18.3.
+
 FOD 3.4.452 binds `mkdir`, `mknod`, `symlink` and `link` replies to the
 PostgreSQL-committed entry or source file ID. A two-mount regression replaces
 the path between commit and reply; deleted originals return `EIO`, and hardlink

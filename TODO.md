@@ -14,6 +14,16 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`poll()` zachowuje tożsamość deskryptora i zgłasza EOF jako gotowość do odczytu.**
+  Callback używał `ino`/ścieżki mimo otrzymania `fh`; po zdalnym `unlink`
+  otwartego pliku regresja `test_poll.py` dostała `POLLERR` (mask `8`) zamiast
+  `POLLIN`, choć `pread()` nadal zwracał oryginalny payload. `poll()` pobiera
+  teraz atrybuty po `FileHandleState.file_id`, a zwykły plik jest czytelny
+  także na EOF. Test obejmuje pusty plik i otwarty, zdalnie odłączony deskryptor.
+  `test_poll.py` przeszedł po poprawce na PostgreSQL 16.15 z
+  `BLCKSZ=32KiB`, libfuse3 3.18.3; w teście działały dwa mounty zapisu i mount
+  tylko do odczytu.
+
 - [x] **`create()` nie może zwrócić inode zastępcy po wyścigu unlink/recreate.**
   Po zatwierdzeniu nowego pliku FUSE pobierało atrybuty ponownie po ścieżce,
   mimo że uchwyt już wskazywał konkretne `file_id`. Drugi mount mógł w tym
