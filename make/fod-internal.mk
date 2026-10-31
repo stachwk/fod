@@ -1767,7 +1767,8 @@ test-readdir-small-buffers: build-runtime venv init
 	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_readdir_small_buffers.py
 
 test-readdir-snapshot-multimount: build-runtime venv init
-	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_readdir_snapshot_multimount.py
+	@CARGO_TARGET_DIR="$(CURDIR)/target/integration-test-hooks" cargo build --manifest-path Cargo.toml -p fod-rust-fuse --profile release-lto --features integration-test-hooks --bin fod-rust-fuse
+	@FOD_RUST_FUSE_BIN="$(CURDIR)/target/integration-test-hooks/release-lto/fod-rust-fuse" FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_readdir_snapshot_multimount.py
 
 test-path-search-permissions: build-runtime venv init
 	@FOD_BOOTSTRAP_BIN=$(abspath $(FOD_BOOTSTRAP_RUNTIME_BIN)) FOD_MKFS_BIN=$(abspath $(FOD_MKFS_RUNTIME_BIN)) POSTGRES_DB=$(POSTGRES_DB) POSTGRES_USER=$(POSTGRES_USER) POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) $(VENV_PYTHON) tests/integration/test_path_search_permissions.py

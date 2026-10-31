@@ -30,7 +30,9 @@ def getdents64_number() -> int:
     return number
 
 
-def read_chunk(libc: ctypes.CDLL, fd: int, buffer: ctypes.Array[ctypes.c_char]) -> list[str]:
+def read_records(
+    libc: ctypes.CDLL, fd: int, buffer: ctypes.Array[ctypes.c_char]
+) -> list[tuple[str, int]]:
     count = libc.syscall(getdents64_number(), fd, buffer, len(buffer))
     if count == 0:
         return []
@@ -38,16 +40,21 @@ def read_chunk(libc: ctypes.CDLL, fd: int, buffer: ctypes.Array[ctypes.c_char]) 
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error))
 
-    names: list[str] = []
+    records: list[tuple[str, int]] = []
     position = 0
     while position < count:
+        inode = int.from_bytes(buffer.raw[position : position + 8], "little")
         record_length = int.from_bytes(buffer.raw[position + 16 : position + 18], "little")
         if record_length < 20 or position + record_length > count:
             raise AssertionError(f"invalid getdents64 record length {record_length}")
         name_bytes = buffer.raw[position + 19 : position + record_length].split(b"\0", 1)[0]
-        names.append(os.fsdecode(name_bytes))
+        records.append((os.fsdecode(name_bytes), inode))
         position += record_length
-    return names
+    return records
+
+
+def read_chunk(libc: ctypes.CDLL, fd: int, buffer: ctypes.Array[ctypes.c_char]) -> list[str]:
+    return [name for name, _ in read_records(libc, fd, buffer)]
 
 
 def drain(libc: ctypes.CDLL, fd: int, buffer: ctypes.Array[ctypes.c_char]) -> list[str]:
@@ -153,10 +160,14 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="fod-readdir-snapshot-multimount-") as temp_dir:
         mount_a = Path(temp_dir) / "mount-a"
         mount_b = Path(temp_dir) / "mount-b"
+        hook_dir = Path(temp_dir) / "opendir-hook"
+        hook_dir.mkdir()
         started_a = False
         started_b = False
         dir_fd: int | None = None
         path_a: Path | None = None
+        previous_hook_dir = os.environ.get("FOD_TEST_OPENDIR_FORGET_PARENT_PATH_DIR")
+        os.environ["FOD_TEST_OPENDIR_FORGET_PARENT_PATH_DIR"] = str(hook_dir)
         try:
             launcher_a.start(str(mount_a), log_prefix="/tmp/fod-readdir-snapshot-a")
             started_a = True
@@ -166,6 +177,38 @@ def main() -> None:
             path_a = mount_a / f"entries-{uuid.uuid4().hex}"
             path_b = mount_b / path_a.name
             path_a.mkdir()
+
+            identity_root = mount_a / f"identity-{uuid.uuid4().hex}"
+            identity_root.mkdir()
+            parent = identity_root / "parent"
+            child = parent / "child"
+            child.mkdir(parents=True)
+            expected_parent_ino = parent.stat().st_ino
+            (hook_dir / "target").write_text(
+                f"/{identity_root.name}/parent/child", encoding="utf-8"
+            )
+            parent_fd = os.open(child, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                libc = ctypes.CDLL(None, use_errno=True)
+                libc.syscall.restype = ctypes.c_long
+                parent_records: list[tuple[str, int]] = []
+                parent_buffer = ctypes.create_string_buffer(128)
+                while records := read_records(libc, parent_fd, parent_buffer):
+                    parent_records.extend(records)
+                actual_parent_ino = next(
+                    (inode for name, inode in parent_records if name == ".."), None
+                )
+                if actual_parent_ino != expected_parent_ino:
+                    raise AssertionError(
+                        "nested readdir returned the wrong inode for '..': "
+                        f"got={actual_parent_ino}, expected={expected_parent_ino}"
+                    )
+            finally:
+                os.close(parent_fd)
+            if not (hook_dir / "fired").is_file():
+                raise AssertionError("opendir parent-cache eviction hook did not run")
+            (hook_dir / "target").unlink()
+
             stable = {f"stable-{index:03d}" for index in range(256)}
             removed = {f"removed-{index:03d}" for index in range(256)}
             added = {f"added-{index:03d}" for index in range(128)}
@@ -222,13 +265,18 @@ def main() -> None:
                     path_a.rmdir()
                 except OSError:
                     pass
+            if previous_hook_dir is None:
+                os.environ.pop("FOD_TEST_OPENDIR_FORGET_PARENT_PATH_DIR", None)
+            else:
+                os.environ["FOD_TEST_OPENDIR_FORGET_PARENT_PATH_DIR"] = previous_hook_dir
             if started_b:
                 launcher_b.stop()
             if started_a:
                 launcher_a.stop()
 
     print(
-        "OK: 512-entry cross-mount snapshot has stable continuation, rewind refresh, "
+        "OK: nested '..' inode survives parent-cache eviction; 512-entry cross-mount "
+        "snapshot has stable continuation, rewind refresh, "
         "open/opendir EMFILE, valid libc closedir, and readdir/errno coverage"
     )
 

@@ -53,6 +53,13 @@ PostgreSQL. It now propagates source-attribute read errors before committing
 the rename instead of proceeding with `ROOT_INO` as a fallback that could
 poison local inode-to-path state.
 
+FOD 3.4.458 derives the `..` entry's inode in `opendir()` from the directory's
+parent ID in PostgreSQL and reads the parent's inode by ID from the primary.
+A mounted regression evicts the local parent-path cache immediately before
+opening a nested directory and verifies the `getdents64()` `d_ino` for `..`.
+The full readdir snapshot/descriptor-limit test passed on PostgreSQL 16.15 with
+`BLCKSZ=32KiB`, Linux 6.17.0-41-generic and libfuse3 3.18.3.
+
 FOD 3.4.454 binds `poll()` metadata to the open handle's `file_id`, preserving
 read readiness after a remote unlink. Regular files also report read readiness
 at EOF. Mounted coverage for an empty file, an open-unlinked descriptor, and a

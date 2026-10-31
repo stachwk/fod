@@ -14,6 +14,17 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`opendir()` nie może zwracać inode roota jako `d_ino` wpisu `..` po utracie mapy rodzica.**
+  Callback brał inode rodzica wyłącznie z lokalnego cache ścieżek i w razie
+  braku mapowania podstawiał `ROOT_INO`. Regresja montowana celowo usuwa wpis
+  rodzica z cache przed `opendir()` zagnieżdżonego katalogu i sprawdza inode
+  `..` z `getdents64()`. `opendir()` pobiera teraz ID rodzica z rekordu
+  katalogu w PostgreSQL, a inode rodzica po tym ID z primary. Pełny
+  `test_readdir_snapshot_multimount.py` przeszedł na FOD 3.4.458, PostgreSQL
+  16.15 z `BLCKSZ=32KiB`, Linux 6.17.0-41-generic i libfuse3 3.18.3; baza
+  tymczasowa została usunięta. Sprawdzono też kompilację `release-lto` z
+  `integration-test-hooks` i `cargo check` dla obu zmienionych pakietów.
+
 - [x] **`rename()` nie może kontynuować po błędzie odczytu inode źródła.**
   Callback ignorował błąd odczytu atrybutów źródła i podstawiał `ROOT_INO` do
   aktualizacji lokalnej mapy ścieżek po commicie `rename`. Mogło to usunąć

@@ -5213,6 +5213,44 @@ impl FodFuse {
         }
     }
 
+    #[cfg(feature = "integration-test-hooks")]
+    fn test_opendir_forget_parent_path(
+        &self,
+        path: &str,
+        parent_path: &str,
+    ) -> Result<(), libc::c_int> {
+        let Ok(barrier_dir) = std::env::var("FOD_TEST_OPENDIR_FORGET_PARENT_PATH_DIR") else {
+            return Ok(());
+        };
+        if barrier_dir.trim().is_empty() {
+            return Ok(());
+        }
+
+        let barrier_dir = PathBuf::from(barrier_dir);
+        let target = match fs::read_to_string(barrier_dir.join("target")) {
+            Ok(value) => value,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                warn!(
+                    "FOD test opendir parent-cache target read failed path={} err={}",
+                    path, err
+                );
+                return Err(EIO);
+            }
+        };
+        if target == path {
+            self.remove_cached_path(parent_path);
+            fs::write(barrier_dir.join("fired"), b"parent path cache evicted").map_err(|err| {
+                warn!(
+                    "FOD test opendir parent-cache marker write failed path={} err={}",
+                    path, err
+                );
+                EIO
+            })?;
+        }
+        Ok(())
+    }
+
     // Integration-test-only deterministic rename race hook.
     // This code is absent from normal production builds.
     #[cfg(feature = "integration-test-hooks")]
@@ -6408,14 +6446,56 @@ impl Filesystem for FodFuse {
             self.metadata_profile_readdir_total_us
                 .fetch_add(elapsed, Ordering::Relaxed);
         }
-        let parent_path = path
-            .rsplit_once('/')
-            .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
-            .unwrap_or("/");
         let parent_ino = if ino == ROOT_INO {
             ROOT_INO
         } else {
-            self.inode_for_path(parent_path).unwrap_or(ROOT_INO)
+            #[cfg(feature = "integration-test-hooks")]
+            {
+                let parent_path = path
+                    .rsplit_once('/')
+                    .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+                    .unwrap_or("/");
+                if let Err(errno) = self.test_opendir_forget_parent_path(&path, parent_path) {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            }
+
+            let Some(directory_id) = directory_id else {
+                fuse_reply_error!(reply, EIO);
+                return;
+            };
+            let authority = self.repo.authoritative_view();
+            let parent_id = match authority.fetch_directory_parent_id(directory_id) {
+                Ok(parent_id) => parent_id,
+                Err(err) => {
+                    warn!(
+                        "FOD opendir parent directory lookup failed directory_id={} err={}",
+                        directory_id, err
+                    );
+                    fuse_reply_error!(reply, EIO);
+                    return;
+                }
+            };
+            if parent_id == 0 {
+                ROOT_INO
+            } else {
+                match self.attrs_for_entry_id_from_repo(&authority, "dir", parent_id) {
+                    Ok(Some(parent_attrs))
+                        if parent_attrs.file_attr.kind == FileType::Directory =>
+                    {
+                        parent_attrs.file_attr.ino.0
+                    }
+                    Ok(Some(_)) | Ok(None) => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                }
+            }
         };
         let fh = self.next_handle();
         let state = DirectoryHandleState {

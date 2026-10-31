@@ -192,6 +192,28 @@ mod tests {
 }
 
 impl DbRepo {
+    /// Return the committed parent directory ID, using 0 for the logical root.
+    pub fn fetch_directory_parent_id(&self, directory_id: u64) -> Result<u64, String> {
+        let sql = CString::new(
+            "SELECT COALESCE(id_parent, 0)::text FROM directories WHERE id_directory = $1",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let directory_id = CString::new(directory_id.to_string())
+            .map_err(|_| "directory id contains NUL byte".to_string())?;
+
+        self.with_read_connection(|conn| unsafe {
+            let params = [&directory_id];
+            let row = fetch_first_row_texts(exec_params(conn, &sql, &params)?)?;
+            let parent_id = row
+                .first()
+                .ok_or_else(|| format!("directory {directory_id:?} does not exist"))?;
+            parent_id
+                .trim()
+                .parse::<u64>()
+                .map_err(|err| format!("directory parent id is invalid: {err}"))
+        })
+    }
+
     /// Resolve the entire directory path. The logical root and a missing path
     /// both return `None`; namespace callers must distinguish them before using
     /// SQL NULL as the parent of root-level entries.
