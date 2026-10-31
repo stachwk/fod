@@ -296,6 +296,23 @@ deterministyczną regresję dwóch transakcji. Wymagany wynik: po każdej
 serializacji `reference_count` odpowiada liczbie referencji `files`, a żaden
 żywy plik nie traci payloadu. Szczegóły i zadanie są w `TODO.md`.
 
+### TX-03E — cleanup importu usuwał zewnętrzne aliasy hardlinku (guard dodany)
+
+Analiza `rust_indexer/src/cleanup.rs` wykazała, że cleanup kasuje wiersz
+`files`, a FK `hardlinks.id_file REFERENCES files(id_file) ON DELETE CASCADE`
+usuwa przy tym także hardlink umieszczony poza importowanym katalogiem. To
+powodowało utratę zewnętrznego wpisu namespace przy czyszczeniu nieudanego
+importu.
+
+FOD 3.4.513 sprawdza aliasy po zdobyciu blokad `fod:open:file:<id>` dla plików
+importu. Tworzenie hardlinku bierze ten sam klucz i blokadę wiersza pliku,
+więc nowy alias nie może powstać pomiędzy sprawdzeniem i usunięciem. Jeśli
+istnieje alias poza poddrzewem, cleanup kończy się błędem
+`FOD_INDEXER_CLEANUP_EXTERNAL_HARDLINK`; transakcja nie kasuje pliku ani aliasu.
+Regresja zewnętrznego aliasu i zachowania payloadu pozostaje do dodania oraz
+uruchomienia. Jest to źródłowo potwierdzony mechanizm; nie wykonano jeszcze
+reprodukcji runtime.
+
 - Wszystkie mutacje `indexer cleanup` mają udokumentowany porządek blokad,
   spójność ze stanem lease i jedną transakcję na **jednym backendzie PG**.
 - Zdefiniowano, które operacje importu i legacy wymagają zaufanej zdolności,

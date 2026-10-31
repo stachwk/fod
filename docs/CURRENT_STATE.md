@@ -4,6 +4,14 @@ This document is the compact canonical description of the **current** FOD archit
 
 The authoritative release version is stored in `../fod_version.txt`.
 
+FOD 3.4.513 makes failed-import cleanup refuse deletion when an imported file
+has a hardlink alias outside the import subtree. Deleting the backing
+`files` row cascades to all `hardlinks`; cleanup now checks for external aliases
+after acquiring the per-file lifecycle advisory locks shared with `link()`.
+This prevents cleanup from silently removing an unrelated namespace entry.
+The direct database regression remains pending; see TX-03E in
+[`FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`](FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md).
+
 Current POSIX/Linux/FUSE support status is summarized in
 [`compatibility-contracts.md`](compatibility-contracts.md). The POSIX audit is
 still in progress and does not claim general POSIX conformance. The enforced

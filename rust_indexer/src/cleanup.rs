@@ -210,6 +210,49 @@ fn reject_cleanup_during_active_write_lease(
     Ok(())
 }
 
+fn reject_cleanup_with_external_hardlink(
+    repo: &DbRepoTransaction<'_>,
+    root_name: &str,
+) -> Result<(), String> {
+    let rows = repo.query_rows_text(&format!(
+        "
+        WITH RECURSIVE subtree AS (
+            SELECT id_directory
+            FROM directories
+            WHERE id_parent IS NULL AND name = {}
+            UNION ALL
+            SELECT d.id_directory
+            FROM directories d
+            JOIN subtree s ON d.id_parent = s.id_directory
+        )
+        SELECT h.id_hardlink, h.id_file
+        FROM files f
+        JOIN subtree file_parent ON file_parent.id_directory = f.id_directory
+        JOIN hardlinks h ON h.id_file = f.id_file
+        WHERE h.id_directory IS NULL
+           OR NOT EXISTS (
+                SELECT 1 FROM subtree alias_parent
+                WHERE alias_parent.id_directory = h.id_directory
+           )
+        ORDER BY h.id_hardlink
+        LIMIT 1
+        ",
+        sql_quote_literal(root_name),
+    ))?;
+    match rows.as_slice() {
+        [] => Ok(()),
+        [_] => {
+            let row = require_single_exact_row(&rows, 2, "external import hardlink")?;
+            let hardlink_id = parse_positive_u64(&row[0], "hardlink ID")?;
+            let file_id = parse_positive_u64(&row[1], "hardlink file ID")?;
+            Err(format!(
+                "FOD_INDEXER_CLEANUP_EXTERNAL_HARDLINK hardlink_id={hardlink_id} file_id={file_id}"
+            ))
+        }
+        _ => Err("external hardlink lookup returned too many rows".to_string()),
+    }
+}
+
 fn collect_data_object_file_ids(
     repo: &DbRepoTransaction<'_>,
     data_object_id: u64,
@@ -299,6 +342,9 @@ pub fn cleanup_failed_materialization(
             let directory_rows = collect_directory_rows(tx, root_name)?;
             let file_rows = collect_file_rows(tx, root_name)?;
             reject_cleanup_during_active_write_lease(tx, &file_rows)?;
+            // Hardlink creation takes the same per-file lifecycle advisory lock.
+            // Once held, no new alias can race this check and the following DELETE.
+            reject_cleanup_with_external_hardlink(tx, root_name)?;
             let subtree_file_ids: BTreeSet<u64> =
                 file_rows.iter().map(|row| row.0).collect();
             let mut file_ids_by_data_object: BTreeMap<u64, Vec<u64>> = BTreeMap::new();

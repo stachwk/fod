@@ -39,6 +39,15 @@ Reading guide:
   dwóch transakcji sprawdzający dokładny licznik i payload każdego żywego pliku.
   Szczegóły TX-03D: `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
+- [ ] **Dodać regresję zewnętrznego hardlinku dla cleanup importu.**
+  FOD 3.4.513 odmawia cleanup, jeśli plik z importowanego drzewa ma alias
+  hardlink poza tym drzewem. Bez tej kontroli `DELETE files` uruchamiał
+  `ON DELETE CASCADE` i usuwał również zewnętrzny wpis. Sprawdzenie wykonuje
+  się po zdobyciu blokad cyklu życia plików, które współdzieli z `link()`.
+  Dodać test potwierdzający odmowę oraz zachowanie aliasu i payloadu; testu
+  jeszcze nie uruchomiono. Szczegóły TX-03E w
+  `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
+
 - [ ] **Uruchomić montowany test dwóch mountów dla wyścigu źródła `link()`.**
   FOD 3.4.475 przekazuje do transakcji PostgreSQL dokładny wpis źródłowy
   `(kind, entry_id, parent_id, name)` i odrzuca go, jeśli inny host usunął lub
@@ -2630,3 +2639,13 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   Runtime reproduction and a two-transaction regression remain pending; no
   code fix is claimed. See TX-03D in
   `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
+
+## FOD 3.4.513 — refuse cleanup that would delete external hardlinks
+
+- [x] Detect hardlink aliases outside the failed import subtree before cleanup
+  deletes imported `files` rows. The foreign-key cascade would otherwise erase
+  those external namespace entries. The check runs after cleanup acquires the
+  same per-file lifecycle advisory locks as hardlink creation, closing the
+  check/delete race for new aliases. `cargo fmt --all --check`,
+  `cargo check --offline -p fod-rust-indexer` and `git diff --check` pass;
+  a direct database regression remains pending.
