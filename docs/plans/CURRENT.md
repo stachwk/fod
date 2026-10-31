@@ -79,5 +79,7 @@ Schema 35 replaces unbounded indexer text B-tree keys with digest candidate
 indexes, full-value comparisons and PostgreSQL advisory serialization. The
 long-path integration regression passed with a 3000-byte source name and
 3041-byte path, including scan and snapshot readback; the schema-upgrade test
-also passed. See [`SQL_SCHEMA_LIMIT_AUDIT.md`](../SQL_SCHEMA_LIMIT_AUDIT.md) and
-[`TODO.md`](../../TODO.md) for the implementation and evidence.
+also passed. The compatibility PG8 build reproduced a 3216-byte B-tree key
+failure at the 2704-byte limit, while the digest-index test passed on both PG8
+and the default PG32 build. See [`SQL_SCHEMA_LIMIT_AUDIT.md`](../SQL_SCHEMA_LIMIT_AUDIT.md)
+and [`TODO.md`](../../TODO.md) for the implementation and evidence.

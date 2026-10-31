@@ -77,10 +77,20 @@ plików. Ścieżka jest kluczem unikalnym `(id_index_source, path)` w
 `(id_catalog_snapshot, path)`. PostgreSQL ogranicza rozmiar pojedynczego wpisu
 B-tree do około jednej trzeciej strony, po ewentualnej kompresji TOAST:
 [B-Tree Indexes — PostgreSQL](https://www.postgresql.org/docs/current/btree.html).
-Przy typowej stronie 8 KiB może więc wystąpić rozbieżność między poprawną
-ścieżką plikową a dopuszczalnym rozmiarem wpisu indeksu. FOD nie wymaga
-konkretnego `BLCKSZ`, a serwer referencyjny projektu używa 32 KiB, więc ryzyko
-zależy od konfiguracji serwera i kompresowalności ścieżki. Migracja 0035
+Domyślny obraz PostgreSQL FOD jest kompilowany z `BLCKSZ=32KiB`; wariant
+`BLCKSZ=8KiB` pozostaje dostępny dla zgodności i porównań. Budowę opisują
+[`docker/postgres-blocksize/Dockerfile`](../docker/postgres-blocksize/Dockerfile)
+i [`scripts/publish_postgres_fod_32k.sh`](../scripts/publish_postgres_fod_32k.sh):
+Dockerfile przekazuje `--with-blocksize=32`, inicjalizuje tymczasowy klaster i
+sprawdza `postgres -C block_size`; skrypt publikacji powtarza weryfikację
+wyniku. Uruchomiony lokalnie obraz `ghcr.io/stachwk/postgres-16-fod-32k:16`
+zwrócił `32768` dla `SHOW block_size`, a `pg_config --configure` zawiera
+`--with-blocksize=32`.
+
+Ścieżka plikowa ok. 3 KiB nie przekracza limitu wpisu PG32, ale na wariancie
+PG8 bezpośredni test B-tree odrzucił wpis 3216-bajtowy przy maksimum 2704
+bajtów. Długie nazwy źródeł nie mają takiego limitu wynikającego z `PATH_MAX`,
+więc mogą przekroczyć limit także na większej stronie. Migracja 0035
 zastępuje pełne klucze tekstowe indeksami kandydatów opartymi o `md5()`; kod
 transakcyjny nadal porównuje pełną nazwę/ścieżkę bajtowo i serializuje
 konkurencyjne zapisy blokadami advisory w PostgreSQL, więc skrót nie jest
@@ -89,5 +99,6 @@ którego nie używały zapytania filtrujące substring i stronicowane po ID,
 usunięto; indeks źródła snapshotu również nie przechowuje już pełnego tekstu.
 Test migracji upgrade oraz regresja indeksatora przechodzą. Regresja zapisuje
 źródło 3000-bajtowe, skanuje ścieżkę 3041-bajtową, tworzy snapshot i odczytuje
-pełną ścieżkę; działa na osobnej, tymczasowej bazie i nie wymaga montowania
-FUSE. Szczegóły implementacji i wyniki weryfikacji są w [`TODO.md`](../TODO.md).
+pełną ścieżkę zarówno na domyślnym PG32, jak i na PG8. Działa na osobnej,
+tymczasowej bazie i nie wymaga montowania FUSE. Szczegóły implementacji i
+wyniki weryfikacji są w [`TODO.md`](../TODO.md).

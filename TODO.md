@@ -22,9 +22,13 @@ Reading guide:
   kod porównuje pełne wartości z `COLLATE "C"` i serializuje zapisy blokadami
   advisory w PostgreSQL. Dodano regresję `tests/integration/test_fod_indexer_long_paths.py`
   dla 3000-bajtowej nazwy źródła oraz ścieżki przekraczającej limit wpisu
-  typowej strony 8 KiB. `make test-fod-indexer-long-paths` zakończył się
-  sukcesem: `source_name_bytes=3000 path_bytes=3041`, a test utworzył snapshot
-  i odczytał pełną ścieżkę. Test działa na dedykowanej tymczasowej bazie,
+  typowej strony 8 KiB. FOD domyślnie używa PostgreSQL kompilowanego z
+  `BLCKSZ=32KiB` (`--with-blocksize=32`); uruchomiony obraz potwierdził
+  `SHOW block_size=32768`. Obraz PG8 jest wariantem zgodnościowym. Bezpośrednia
+  próba indeksowania niekompresowalnego wpisu 3216-bajtowego na PG8 odrzuciła go
+  przy limicie 2704 bajtów; regresja indeksatora z digestem przeszła na obu
+  wariantach z `source_name_bytes=3000 path_bytes=3041`, tworzeniem snapshotu
+  i pełnym odczytem ścieżki. Test Make działa na dedykowanej tymczasowej bazie,
   sprzątanej po uruchomieniu, i nie buduje ani nie montuje frontendu FUSE.
   `make test-schema-upgrade` również przeszedł na izolowanej bazie, potwierdzając
   upgrade do schema 35. Początkowe próby na głównej bazie nie mogły wykonać

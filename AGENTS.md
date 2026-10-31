@@ -54,6 +54,18 @@ fresh-install schemas, upgrade migrations and runtime-created SQL structures
 consistent, and never rewrite an already published migration to change its
 effect; add a new migration instead. See `docs/SQL_SCHEMA_LIMIT_AUDIT.md`.
 
+## PostgreSQL page-size policy
+
+FOD's default and target PostgreSQL image is built with compile-time
+`BLCKSZ=32KiB` using `docker/postgres-blocksize/Dockerfile` and
+`scripts/publish_postgres_fod_32k.sh`. The standard `BLCKSZ=8KiB` build remains
+available for compatibility and comparison; it is not the deployment default.
+When reviewing page-size-dependent limits, indexes or SQL storage behavior,
+verify the selected image and build argument, the compiled
+`pg_config --configure` value, and runtime `SHOW block_size`. Evaluate both 32KiB and 8KiB
+where the 8KiB compatibility variant is in scope; do not report an 8KiB limit
+as the default FOD deployment limit.
+
 ## Supported build architectures
 
 Build and package FOD only for 64-bit and wider userspace architectures. Do not
