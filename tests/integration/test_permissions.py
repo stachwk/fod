@@ -195,9 +195,65 @@ def main() -> None:
             assert sticky_rename_source.read_bytes() == b"sticky rename source"
             assert sticky_rename_target.read_bytes() == b"sticky rename target"
 
+            create_file_as_nobody = (
+                "import pathlib, sys; "
+                "pathlib.Path(sys.argv[1]).write_bytes(bytes.fromhex(sys.argv[2]))"
+            )
+            rename_as_nobody = "import os, sys; os.rename(sys.argv[1], sys.argv[2])"
+            nobody_owned_source_only = sticky_dir / "nobody-owned-source.txt"
+            root_owned_target = sticky_dir / "root-owned-target.txt"
+            _run_as_nobody(
+                create_file_as_nobody,
+                nobody_owned_source_only,
+                b"source owner only".hex(),
+            )
+            root_owned_target.write_bytes(b"unowned target stays")
+            _assert_errno_as_nobody(
+                "rename", errno.EPERM, nobody_owned_source_only, root_owned_target
+            )
+            assert nobody_owned_source_only.read_bytes() == b"source owner only"
+            assert root_owned_target.read_bytes() == b"unowned target stays"
+
+            root_owned_source = sticky_dir / "root-owned-source.txt"
+            nobody_owned_target_only = sticky_dir / "nobody-owned-target.txt"
+            root_owned_source.write_bytes(b"unowned source stays")
+            _run_as_nobody(
+                create_file_as_nobody,
+                nobody_owned_target_only,
+                b"target owner only".hex(),
+            )
+            _assert_errno_as_nobody(
+                "rename", errno.EPERM, root_owned_source, nobody_owned_target_only
+            )
+            assert root_owned_source.read_bytes() == b"unowned source stays"
+            assert nobody_owned_target_only.read_bytes() == b"target owner only"
+
+            nobody_owned_source = sticky_dir / "nobody-owned-source-success.txt"
+            nobody_owned_target = sticky_dir / "nobody-owned-target-success.txt"
+            _run_as_nobody(
+                create_file_as_nobody,
+                nobody_owned_source,
+                b"both entries owned".hex(),
+            )
+            _run_as_nobody(
+                create_file_as_nobody,
+                nobody_owned_target,
+                b"replace target".hex(),
+            )
+            _run_as_nobody(
+                rename_as_nobody, nobody_owned_source, str(nobody_owned_target)
+            )
+            assert not os.path.lexists(nobody_owned_source)
+            assert nobody_owned_target.read_bytes() == b"both entries owned"
+
             sticky_file.unlink()
             sticky_rename_source.unlink()
             sticky_rename_target.unlink()
+            root_owned_target.unlink()
+            nobody_owned_source_only.unlink()
+            root_owned_source.unlink()
+            nobody_owned_target_only.unlink()
+            nobody_owned_target.unlink()
             sticky_subdir.rmdir()
             os.chmod(sticky_dir, 0o755)
             sticky_dir.rmdir()

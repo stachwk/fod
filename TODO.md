@@ -1903,3 +1903,13 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   6.17.0-41-generic, libfuse3 3.18.2 and PostgreSQL 16.15.
 - [ ] P08 remains Pending for other rename permission and error-precedence
   cases, limits, and broader cross-mount coverage.
+
+
+## FOD 3.4.434 — verify sticky-directory rename owner exceptions
+
+- [x] Verify Linux checks sticky-directory rename authority on both entries:
+  owning only the source or only the destination returns `EPERM`, while owning
+  both permits rename. The mounted permission suite passed on Linux
+  6.17.0-41-generic, libfuse3 3.18.2 and PostgreSQL 16.15.
+- [ ] P08 remains Pending for other rename permission/error-precedence cases,
+  limits, and broader cross-mount coverage.
