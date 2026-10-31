@@ -1,67 +1,96 @@
-# TX03J — spojnosc odczytow miedzy montowaniami FOD
+# TX03J — spójność odczytów między montowaniami FOD
 
 Document role: topic review/specification supporting the
 [current implementation queue](plans/CURRENT.md). Implemented capabilities are
 summarized in [CURRENT_STATE.md](CURRENT_STATE.md); see the
 [documentation map](README.md#correctness-reviews-and-evidence) for related reviews.
 
-## Punkt wyjscia (2026-10-16)
+## Status i diagnoza (aktualizacja 2026-10-31)
 
-TX03I.3 potwierdzil poprawne przejecie write ownership (stary token 3205,
-nowy 3206), odrzucenie stale renew/release i zgodnosc danych w montowaniu B
-oraz w nowym montowaniu C. Wczesniej uzyte montowanie A odczytalo poprzednie
-dane (`stale_read_on_a=1`). To jest osobny problem spojnosci odczytow,
-nie dowod niepoprawnego fencing.
+TX03I.3 potwierdził poprawne przejęcie write ownership (stary token 3205,
+nowy 3206), odrzucenie nieaktualnych renew/release i zgodność danych w
+montowaniu B oraz w nowym montowaniu C. Wcześniej używane montowanie A
+odczytało poprzednie dane (`stale_read_on_a=1`). To osobny problem spójności
+odczytów, a nie dowód niepoprawnego fencing.
+
+Późniejsza macierz TX03J.1 potwierdziła stare dane w A w sześciu
+konfiguracjach, także po dwóch sekundach; B i świeży mount C widziały nowe
+dane. Macierz ustala objaw i odrzuca samo opóźnienie jako wyjaśnienie, ale nie
+izoluje jeszcze jednoznacznie warstwy źródłowej ani nie stanowi dowodu, że
+winny jest wyłącznie page cache jądra.
+
+Stan implementacji:
+
+- PostgreSQL przechowuje `files.content_generation`; zmiany zawartości są
+  wersjonowane w transakcji zmieniającej plik.
+- Odczyt ze snapshotem generacji istnieje i jest używany w jawnym trybie
+  degraded read-only. Nie jest jeszcze włączony w zwykłej ścieżce odczytu z
+  cache.
+- Lokalny cache bloków odrzuca teraz fill rozpoczęty przed lokalnym
+  unieważnieniem; wymaga to jeszcze deterministycznej walidacji runtime.
+- Zdalny trwały dziennik zdarzeń, zwykły runtime listener FUSE i selektywne
+  unieważnianie cache jądra nie są zaimplementowane. `fsync()` nie czeka dziś
+  na potwierdzenia innych mountów.
+
+Kod potwierdza tę granicę: standardowy start mounta używa `fuser_mount()`, a
+obsługa `Notifier` jest obecnie tworzona tylko w specjalnej ścieżce
+integration-test hook. Callback `fsync()` opróżnia lokalny stan zapisu i
+odpowiada; nie wykonuje między-mount bariery.
 
 ## Wymagany kontrakt
 
-PostgreSQL pozostaje autorytatywnym stanem zawartosci i ownership.
-Po zakonczonym `fsync` na montowaniu B nowe otwarcie pliku w A ma
-odczytac zatwierdzone dane zgodnie z przyjetym modelem spojnosci.
-Stare uchwyty i semantyka niezatwierdzonych zapisow sa testowane oddzielnie.
-FOD nie powinien obiecywac natychmiastowej koherencji dla juz
-zbuforowanych stron jadra bez mechanizmu ich uniewazniania.
+PostgreSQL pozostaje autorytatywnym źródłem zawartości, generacji i kolejności
+operacji. Po udanym `fsync()` na montowaniu B odczyt z innego aktywnego
+montowania rozpoczęty po powrocie `fsync()` ma widzieć zatwierdzone dane B,
+również gdy kernel cache jest włączony. Dotyczy to montowań na tym samym i na
+różnych hostach. Zachowanie już trwających odczytów, otwartych mapowań i
+niezatwierdzonych lokalnych zapisów wymaga jawnego określenia w implementacji
+i testach; nie wolno odrzucać buforów zapisu w reakcji na zdalne zdarzenie.
 
-## Etapy
+## Kolejne bramy implementacji
 
-1. **TX03J.1 — diagnoza**: powtorzyc A -> B na dwoch montowaniach,
-   rozdzielic natychmiastowy i opozniony odczyt A oraz swiezy mount C.
-   Porownac zwykle FUSE, tryb `FOD_FOPEN_DIRECT_IO=1` oraz odczyt
-   przy wylaczonym wewnetrznym read cache (`FOD_READ_CACHE_BLOCKS=0`).
-   Nie zmieniac zachowania produkcyjnego przed uzyskaniem wynikow.
-2. **TX03J.2 — implementacja**: zidentyfikowac warstwe odpowiedzialna
-   (kernel page cache vs read block cache vs metadata cache) i przygotowac
-   bezpieczny tryb koherencji z wersjonowaniem w PostgreSQL lub
-   odpowiednia walidacja/inwalidacja przy otwarciu/odczycie.
-   Rozwazyc kompromis wydajnosciowy. Nie stosowac globalnego
-   `direct_io` bez decyzji o zgodnosci i kosztach.
-3. **TX03J.3 — testy**: macierz dwoch mountow, mount C, ponowne open,
-   dotychczasowy fd, fsync i rozne rozmiary pliku; potwierdzic brak
-   regresji TX03G / TX03I.1 / TX03I.2 / TX03I.3 oraz pomiar wydajnosci.
-4. **TX03J.4 — multi-host**: powtorzyc po obu stronach oddzielnych hostow,
-   sprawdzic TTL, recovery po rozlaczeniu oraz obciazenie PostgreSQL.
+1. **J2a — pełna lokalizacja źródła nieaktualnych danych.** Połączyć
+   obserwację `file_id`, `data_object_id`, generacji i bloków z cache procesu,
+   metadanymi FUSE i cache jądra. Nie zmieniać zachowania produkcyjnego na
+   podstawie samej korelacji z `direct_io` lub TTL.
+2. **J2b — ścieżka odczytu.** Zintegrować generację z normalnym odczytem;
+   dla ścisłego kontraktu wybór i walidacja danych muszą opierać się na
+   primary. Chronić także in-flight fills przed publikacją starszej generacji.
+3. **J2c — trwałe zdarzenia i invalidacja.** Dodać PostgreSQL outbox,
+   ustalony zestaw aktywnych mountów, selektywne invalidacje Rust/FUSE oraz
+   replay po reconnect. Zanim kod uzna ACK, zdefiniować dokładnie, co
+   potwierdza odpowiedź `Notifier` i jak bariera uwzględnia in-flight reads.
+   `LISTEN/NOTIFY` może być wyłącznie wskazówką do pobrania trwałych zdarzeń.
+4. **J3 — regresje i wydajność.** Macierz dwóch mountów: nowe `open`, ponowny
+   odczyt starego fd, `fsync()`, różne rozmiary pliku, równoległe zapisy,
+   utrata zdarzenia i reconnect. Nie zamykać obszaru na podstawie samej
+   zgodności mountów B/C.
+5. **J4 — wiele hostów.** Powtórzyć macierz na oddzielnych hostach, mierzyć
+   opóźnienia ACK, obciążenie PostgreSQL, odzyskiwanie sesji i działanie przy
+   utracie łączności.
 
 ### Granica sukcesu zapisu i invalidacji
 
 Samo `LISTEN/NOTIFY` ani walidacja generacji w callbacku FUSE nie zapewnia
-silnego kontraktu: kernel moze obsluzyc odczyt z page cache bez wywolania
-daemona, a powiadomienie moze dotrzec do innego mountu po powrocie `fsync()`.
-Poniewaz decyzja projektu wymaga widocznosci zatwierdzonego zapisu po udanym
-`fsync()`, potrzebna jest bariera potwierdzen invalidacji:
+silnego kontraktu: kernel może obsłużyć odczyt z page cache bez wywołania
+daemona, a asynchroniczne powiadomienie może dotrzeć do innego mountu po
+powrocie `fsync()`. Zatwierdzona decyzja projektu wymaga więc bariery
+potwierdzeń invalidacji:
 
-1. `fsync()` odczytuje z primary zatwierdzona generacje pliku i granice zdarzen
-   invalidacji objeta bariera.
-2. Kazdy aktywny mount zarejestrowany przed ta granica musi odebrac trwale
-   zdarzenie dla `file_id`, wyczyscic tylko lokalne cache tego pliku, wyslac
-   `FUSE_NOTIFY_INVAL_INODE` dla znanego inode i zapisac ACK po przyjeciu
-   invalidacji przez kernel.
-3. `fsync()` moze zwrocic sukces dopiero, gdy ACK obejma wszystkie mounty
-   uczestniczace w barierze. Nieosiagalny mount lub brak ACK oznacza brak
-   potwierdzenia spojnosci i nie moze zostac uznany za sukces `fsync()`.
-   Dane moga byc juz trwale zapisane w PostgreSQL mimo bledu odpowiedzi.
+1. `fsync()` odczytuje z primary zatwierdzoną generację pliku i granicę zdarzeń
+   invalidacji objętą barierą.
+2. Każdy aktywny mount zarejestrowany przed tą granicą musi odebrać trwałe
+   zdarzenie dla `file_id`, wyczyścić tylko lokalne cache tego pliku, wysłać
+   `FUSE_NOTIFY_INVAL_INODE` dla znanego inode i zapisać ACK dopiero po
+   potwierdzonym zakończeniu invalidacji w kernelu oraz obsłużeniu starszych
+   operacji odczytu.
+3. `fsync()` może zwrócić sukces dopiero, gdy ACK obejmą wszystkie mounty
+   uczestniczące w barierze. Nieosiągalny mount lub brak ACK oznacza brak
+   potwierdzenia spójności i nie może zostać uznany za sukces `fsync()`.
+   Dane mogą być już trwale zapisane w PostgreSQL mimo błędu odpowiedzi.
 4. Mount uruchomiony po granicy nie ma starego page cache z poprzedniej sesji;
-   mount odzyskujacy polaczenie musi odtworzyc trwale zdarzenia przed
-   udostepnieniem odczytow.
+   mount odzyskujący połączenie musi odtworzyć trwałe zdarzenia przed
+   udostępnieniem odczytów.
 
 Zdarzenia i ACK musza byc autorytatywne w PostgreSQL. `NOTIFY` moze jedynie
 przyspieszac ich dostarczenie. Invalidacja pozostaje per-file; globalne
@@ -70,10 +99,10 @@ i wdrozenia, nie obecna gwarancja FOD.
 
 ## Kryterium zamkniecia
 
-Nie zamykamy TX03J po samym poprawnym fencing. Nowe odczyty z A musza
-zwracac dane B zgodnie z jawnie udokumentowanym kontraktem i testy
-regresyjne musza przechodzic. Wynik diagnostyczny z niespojnym A
-pozostaje FAIL/OPEN nawet gdy testy ownership sa PASS.
+Nie zamykamy TX03J po samym poprawnym fencing. Odczyty z A rozpoczęte po
+udanym `fsync()` w B muszą zwracać zatwierdzone dane B zgodnie z kontraktem,
+a wymagane regresje muszą przechodzić. Wynik diagnostyczny z nieaktualnym A
+pozostaje FAIL/OPEN nawet gdy testy ownership są PASS.
 
 ## Decyzja architektoniczna (zatwierdzona)
 

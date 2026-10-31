@@ -25,6 +25,17 @@ Reading guide:
   invalidacji ani cache jądra. Szczegóły TX03J w
   [`docs/tx03j-generation-audit.md`](docs/tx03j-generation-audit.md).
 
+- [ ] **Dokończyć koherencję cache między mountami (TX03J).** PostgreSQL ma
+  generację zawartości, a lokalny cache odrzuca fill sprzed lokalnej invalidacji;
+  nie ma jednak trwałego outboxa invalidacji, dostarczenia zdarzeń do aktywnych
+  sesji, zwykłej ścieżki `Notifier` w mount runtime ani bariery ACK w `fsync()`.
+  Źródło potwierdza, że start produkcyjnego mounta używa `fuser_mount()`,
+  `Notifier` występuje tylko w integration-test hook, a `fsync()` opróżnia
+  wyłącznie lokalny stan zapisu. Przy projektowaniu bariery określić semantykę
+  ACK po stronie kernela i uwzględnić starsze operacje odczytu, które mogą
+  ponownie opublikować dane w cache. Kontrakt, status i bramy opisuje
+  [`docs/TX03J_CROSS_MOUNT_CACHE_COHERENCE.md`](docs/TX03J_CROSS_MOUNT_CACHE_COHERENCE.md).
+
 - [ ] **Uruchomić regresję nie-UTF-8 nazw źródłowych indeksatora.**
   `relative_source_path()` wcześniej używało `to_string_lossy()`, przez co
   niepoprawne bajty nazwy mogły aliasować poprawną nazwę U+FFFD, a późniejszy
