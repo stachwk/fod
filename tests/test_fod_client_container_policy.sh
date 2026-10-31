@@ -10,9 +10,10 @@ PUBLISH="${ROOT}/scripts/publish_fod_client.sh"
 MAKEFILE="${ROOT}/Makefile"
 RELEASE_MK="${ROOT}/make/fod-deploy-release.mk"
 README="${ROOT}/docker/fod-client/README.md"
+LIBFUSE_BUILD="${ROOT}/docker/libfuse/build_libfuse3.sh"
 VERSION="$(tr -d '[:space:]' < "${ROOT}/fod_version.txt")"
 
-for file in "${DOCKERFILE}" "${DOCKERIGNORE}" "${PREFLIGHT}" "${ENTRYPOINT}" "${PUBLISH}" "${MAKEFILE}" "${RELEASE_MK}" "${README}"; do
+for file in "${DOCKERFILE}" "${DOCKERIGNORE}" "${PREFLIGHT}" "${ENTRYPOINT}" "${PUBLISH}" "${MAKEFILE}" "${RELEASE_MK}" "${README}" "${LIBFUSE_BUILD}"; do
     [[ -r "${file}" ]] || { echo "Missing ${file}" >&2; exit 1; }
 done
 
@@ -26,7 +27,9 @@ for pattern in \
     'ARG FOD_IMAGE_VARIANT=fuse1' \
     'ARG POSTGRES_CLIENT_MAJOR=16' \
     'libpq-dev' \
-    'libfuse3-dev' \
+    'ARG FOD_LIBFUSE_VERSION=3.18.3' \
+    'COPY --from=libfuse-builder /tmp/fuse3_*.deb /tmp/fuse3.deb' \
+    '/tmp/fuse3.deb' \
     'libcap2-bin' \
     'util-linux' \
     'package_root=/src/fod/target/packages-docker' \
@@ -55,6 +58,15 @@ for pattern in \
     'org.fod.apparmor.policy="host-managed"' \
     'ENTRYPOINT ["/usr/local/bin/fod-container-entrypoint"]'; do
     grep -Fq -- "${pattern}" "${DOCKERFILE}" || { echo "Missing FOD client Docker policy: ${pattern}" >&2; exit 1; }
+done
+
+for pattern in \
+    '3.18.3)' \
+    'bcd19582c5e30f7fe45dd86a5540e998590aa01903afc7ebcbeea6c8ac5421ee' \
+    'meson setup' \
+    'dpkg-deb --build' \
+    'libfuse3 4 fuse3 (>= %s)'; do
+    grep -Fq -- "${pattern}" "${LIBFUSE_BUILD}" || { echo "Missing pinned libfuse build/package policy: ${pattern}" >&2; exit 1; }
 done
 
 for pattern in \

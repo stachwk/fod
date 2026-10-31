@@ -83,6 +83,19 @@ their renamed volumes prevent an old 8 KiB cluster from being opened with the
 32 KiB server. Both stacks were started on 2026-10-31; the SELinux/ACL server
 and all three HA-chain nodes reported `--with-blocksize=32` and `32768`.
 
+FOD 3.4.473 documents and verifies the PostgreSQL page-size build contract:
+the selected official image supplies the base, matching PostgreSQL source is
+recompiled with `--with-blocksize=32`, and the resulting custom binaries under
+`/opt/postgresql-custom` are checked through both `pg_config` and live
+`SHOW block_size`. The published PostgreSQL 16.15 image returned `32768`.
+
+FOD 3.4.474 fixes the Debian Bookworm client build's libfuse mismatch: the
+client now builds upstream libfuse 3.18.3 from a SHA-256-pinned archive and
+installs a local Debian package carrying the correct ELF dependency metadata
+in both build and runtime stages. The complete client image build and image
+preflight passed; the host-level mount tests still require a host with libfuse
+3.18.2 or newer and working FUSE capabilities.
+
 FOD 3.4.470 checks an initialized database's schema version before preparing
 current-client SQL statements. An old schema now fails with the required
 `mkfs.fod upgrade` instruction instead of a secondary undefined-table SQL

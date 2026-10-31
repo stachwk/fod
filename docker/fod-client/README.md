@@ -46,7 +46,7 @@ After `docker login ghcr.io`:
 make docker-fod-client-publish
 ```
 
-The image build verifies that FOD binaries, `libpq`, PostgreSQL 16 client tools, `fuse3`, `capsh`, and `findmnt` are available, while server-side commands such as `postgres`, `initdb`, and `pg_ctl` remain absent.
+The image builds upstream libfuse 3.18.3 from its SHA-256-pinned release archive and installs the resulting Debian package in both build and runtime stages. This avoids Bookworm's older packaged libfuse while preserving package dependency metadata. The image build verifies that FOD binaries, `libpq`, PostgreSQL 16 client tools, `fuse3`, `capsh`, and `findmnt` are available, while server-side commands such as `postgres`, `initdb`, and `pg_ctl` remain absent.
 
 ## Runtime contract
 

@@ -8,22 +8,44 @@
 ARG FOD_BUILDER_IMAGE=rust:1.98.0-bookworm
 ARG FOD_RUNTIME_IMAGE=debian:bookworm-slim
 
-FROM ${FOD_BUILDER_IMAGE} AS builder
+FROM ${FOD_BUILDER_IMAGE} AS libfuse-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
-WORKDIR /src/fod
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential \
       ca-certificates \
+      curl \
+      meson \
+      ninja-build \
+      pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY docker/libfuse/build_libfuse3.sh /usr/local/src/build_libfuse3.sh
+ARG FOD_LIBFUSE_VERSION=3.18.3
+RUN FOD_LIBFUSE_VERSION="${FOD_LIBFUSE_VERSION}" sh /usr/local/src/build_libfuse3.sh
+
+FROM ${FOD_BUILDER_IMAGE} AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
+ENV LD_LIBRARY_PATH="/usr/local/lib"
+WORKDIR /src/fod
+
+COPY --from=libfuse-builder /tmp/fuse3_*.deb /tmp/fuse3.deb
+
+RUN apt-get update \
+ && apt-get remove -y fuse3 libfuse3-dev libfuse3-3 \
+ && apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
       dpkg-dev \
-      fuse3 \
       git \
-      libfuse3-dev \
       libpq-dev \
       make \
       pkg-config \
+      /tmp/fuse3.deb \
  && rm -rf /var/lib/apt/lists/*
 
 COPY . .
@@ -48,6 +70,9 @@ ARG FOD_IMAGE_VARIANT=fuse1
 ARG POSTGRES_CLIENT_MAJOR=16
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LD_LIBRARY_PATH="/usr/local/lib"
+
+COPY --from=libfuse-builder /tmp/fuse3_*.deb /tmp/fuse3.deb
 
 COPY --from=builder /tmp/fod-client.deb /tmp/fod-client.deb
 COPY docker/fod-client/fod-container-preflight.sh /usr/local/bin/fod-container-preflight
@@ -55,7 +80,7 @@ COPY docker/fod-client/fod-container-entrypoint.sh /usr/local/bin/fod-container-
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl fuse3 gnupg libcap2-bin util-linux; \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg libcap2-bin util-linux /tmp/fuse3.deb; \
     install -d -m0755 /usr/share/postgresql-common/pgdg; \
     curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
       | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg; \
@@ -66,7 +91,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
       /tmp/fod-client.deb \
       "postgresql-client-${POSTGRES_CLIENT_MAJOR}"; \
-    rm -f /tmp/fod-client.deb; \
+    rm -f /tmp/fod-client.deb /tmp/fuse3.deb; \
     rm -rf /var/lib/apt/lists/*; \
     chmod 0755 /usr/local/bin/fod-container-preflight /usr/local/bin/fod-container-entrypoint; \
     command -v fod-bootstrap; \
@@ -105,7 +130,9 @@ RUN set -eux; \
         if grep -Fq 'not found' /tmp/fod-ldd.txt; then exit 1; fi; \
     done; \
     rm -f /tmp/fod-ldd.txt; \
-    if [ -f /etc/fuse.conf ] && ! grep -q '^user_allow_other$' /etc/fuse.conf; then \
+    install -d -m0755 /etc; \
+    touch /etc/fuse.conf; \
+    if ! grep -q '^user_allow_other$' /etc/fuse.conf; then \
       printf '%s\n' user_allow_other >> /etc/fuse.conf; \
     fi; \
     fod-container-preflight --image-only

@@ -1,10 +1,10 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.436. Najnowsze
-przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.436. Zmiana w
-3.4.415 podniosła wymagane minimum jądra do Linux 6.17.0; nie dostarczyła
-nowego zamontowanego przebiegu POSIX.
+Stan dokumentu: 2026-10-31, przegląd wymagań i buildów do FOD 3.4.474.
+Najnowsze przywołane testy funkcjonalne pochodzą z wersji wskazanych przy
+konkretnych przypadkach; nie oznacza to pełnego testu całej macierzy dla FOD
+3.4.474. Zmiana w 3.4.415 podniosła wymagane minimum jądra do Linux 6.17.0; nie
+dostarczyła nowego zamontowanego przebiegu POSIX.
 
 Ten dokument opisuje aktualny kontrakt uruchomieniowy Linux/FUSE, jego
 walidację oraz ograniczenia. Nie jest deklaracją zgodności POSIX. Status
@@ -38,6 +38,13 @@ GHSA-qxv7-xrc2-qmfx](https://github.com/libfuse/libfuse/security/advisories/GHSA
 io_uring use-after-free dotyczy 3.18.0–3.18.1 i został naprawiony w 3.18.2.
 FOD używa standardowego `/dev/fuse` transportu; mimo to próg nie dopuszcza
 wersji biblioteki z tym błędem. Aktualnym sprawdzonym wydaniem jest 3.18.3.
+
+Obraz klienta FOD buduje libfuse 3.18.3 z oficjalnego archiwum release,
+weryfikowanego przypiętą sumą SHA-256. Zbudowana biblioteka i narzędzia są
+instalowane jako lokalna paczka Debiana w etapach build i runtime. Jest to
+potrzebne, ponieważ bazowy Debian Bookworm dostarcza starsze libfuse 3.14;
+nie należy traktować wersji systemowej z obrazu bazowego jako zależności
+spełniającej wymagania FOD.
 
 Linux 6.16 i starsze wydania są poza deklarowanym zakresem i preflight odrzuca
 je przed połączeniem z bazą danych i uruchomieniem mounta. Minimalna
