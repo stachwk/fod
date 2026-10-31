@@ -424,6 +424,29 @@ pub fn cleanup_failed_materialization(
                 shared_data_objects_preserved = shared_data_objects_preserved.saturating_add(1);
             }
 
+            // Deterministic TX-03D interleaving: let a separate committed
+            // transaction add another file reference after cleanup classified
+            // shared objects, but before cleanup applies its reference deltas.
+            #[cfg(debug_assertions)]
+            if std::env::var("FOD_TX03D_AFTER_REFERENCE_SCAN_PAUSE")
+                .ok()
+                .as_deref()
+                == Some("1")
+            {
+                let dbname = tx.query_scalar_text("SELECT current_database()")?;
+                if !dbname.ends_with("_test") {
+                    return Err("TX03D pause requires isolated _test database".to_string());
+                }
+                eprintln!("TX03D_AFTER_REFERENCE_SCAN_READY plan_id={plan_id}");
+                let mut resume = String::new();
+                std::io::stdin()
+                    .read_line(&mut resume)
+                    .map_err(|err| format!("TX03D pause could not read resume signal: {err}"))?;
+                if resume.trim() != "resume" {
+                    return Err("TX03D pause received an invalid resume signal".to_string());
+                }
+            }
+
             for (file_id, _, _, _) in &file_rows {
                 tx.exec(&format!("DELETE FROM files WHERE id_file = {file_id}"))?;
             }

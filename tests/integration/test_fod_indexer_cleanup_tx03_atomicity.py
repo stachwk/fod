@@ -155,6 +155,23 @@ def wait_until_cleanup_blocked(observer, blocker_pid: int, process, timeout: flo
     raise AssertionError("TX-03A did not observe a blocked cleanup plan lock before timeout")
 
 
+def wait_for_checkpoint(process, marker: str, timeout: float) -> None:
+    if process.stderr is None:
+        raise AssertionError("cleanup worker has no stderr pipe")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise AssertionError(
+                f"cleanup exited before checkpoint {marker!r} rc={process.returncode}\n"
+                f"stdout={stdout}\nstderr={stderr}"
+            )
+        readable, _, _ = select.select([process.stderr], [], [], 0.2)
+        if readable and marker in process.stderr.readline():
+            return
+    raise AssertionError(f"cleanup did not reach checkpoint {marker!r}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -171,6 +188,10 @@ def main() -> None:
     parser.add_argument(
         "--concurrent-cleanup", action="store_true",
         help="TX-03C: run two independent cleanup processes on the same plan",
+    )
+    parser.add_argument(
+        "--concurrent-reference-increment", action="store_true",
+        help="TX-03D: add a shared-object file reference after cleanup scans survivors",
     )
     parser.add_argument(
         "--kill-before-commit",
@@ -194,11 +215,16 @@ def main() -> None:
     process = None
     second_process = None
     source_registered = False
+    tx03d_external_names: list[str] = []
+    tx03d_data_object_id: int | None = None
+    tx03d_payload = f"TX03 shared payload {source_name}".encode()
     try:
-        write_tree(
-            source_dir,
-            {"first.txt": b"TX03 first payload", "second.txt": b"TX03 second payload"},
+        source_files = (
+            {"first.txt": tx03d_payload, "second.txt": tx03d_payload}
+            if args.concurrent_reference_increment
+            else {"first.txt": b"TX03 first payload", "second.txt": b"TX03 second payload"}
         )
+        write_tree(source_dir, source_files)
         # Readiness check precedes all mutations. In particular, this test
         # must not initialize or upgrade a real FOD schema.
         with psycopg2.connect(**dsn) as conn:
@@ -222,6 +248,8 @@ def main() -> None:
         )
         source_registered = True
         direct_indexer(binary, dsn, ["scan", "--source", source_name])
+        if args.concurrent_reference_increment:
+            direct_indexer(binary, dsn, ["hash", "--source", source_name])
         direct_indexer(binary, dsn, ["materialize", "--source", source_name])
 
         observer = psycopg2.connect(**dsn)
@@ -258,6 +286,153 @@ def main() -> None:
                 """,
                 (plan_id,),
             )
+
+        if args.concurrent_reference_increment:
+            imported_rows = []
+            with observer.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id_file, data_object_id
+                    FROM files
+                    WHERE id_directory = (
+                        SELECT id_directory FROM directories
+                        WHERE id_parent IS NULL AND name = %s
+                    )
+                    ORDER BY id_file
+                    """,
+                    (root_name,),
+                )
+                imported_rows = [(int(row[0]), int(row[1])) for row in cur.fetchall()]
+            if len(imported_rows) != 2 or imported_rows[0][1] != imported_rows[1][1]:
+                raise AssertionError(
+                    f"TX-03D expected two files sharing one object: {imported_rows}"
+                )
+            tx03d_data_object_id = imported_rows[0][1]
+            tx03d_external_names = [
+                f"tx03d-survivor-{plan_id}",
+                f"tx03d-concurrent-{plan_id}",
+            ]
+            with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
+                cur.execute("SET search_path TO fod, public")
+                cur.execute(
+                    """
+                    INSERT INTO files (
+                        data_object_id, id_directory, name, size, mode, uid, gid,
+                        inode_seed, modification_date, access_date, change_date, creation_date
+                    )
+                    SELECT data_object_id, NULL, %s, size, mode, uid, gid, %s,
+                           modification_date, access_date, change_date, creation_date
+                    FROM files WHERE id_file = %s
+                    RETURNING id_file
+                    """,
+                    (tx03d_external_names[0], f"tx03d-{plan_id}-survivor", imported_rows[0][0]),
+                )
+                if cur.fetchone() is None:
+                    raise AssertionError("TX-03D could not create initial shared survivor")
+                cur.execute(
+                    """
+                    UPDATE data_objects
+                    SET reference_count = reference_count + 1
+                    WHERE id_data_object = %s
+                    """,
+                    (tx03d_data_object_id,),
+                )
+                if cur.rowcount != 1:
+                    raise AssertionError("TX-03D failed to count the initial shared survivor")
+
+            env = os.environ.copy()
+            env.pop("DATABASE_URL", None)
+            env["FOD_INDEXER_CONNINFO"] = make_dsn(**dsn)
+            env["FOD_PG_DBNAME"] = dsn["dbname"]
+            env["POSTGRES_DB"] = dsn["dbname"]
+            env["FOD_TX03D_AFTER_REFERENCE_SCAN_PAUSE"] = "1"
+            process = subprocess.Popen(
+                [str(binary), "cleanup-failed", "--plan", str(plan_id)],
+                cwd=ROOT,
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            wait_for_checkpoint(
+                process,
+                f"TX03D_AFTER_REFERENCE_SCAN_READY plan_id={plan_id}",
+                args.timeout,
+            )
+
+            with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
+                cur.execute("SET search_path TO fod, public")
+                cur.execute(
+                    """
+                    INSERT INTO files (
+                        data_object_id, id_directory, name, size, mode, uid, gid,
+                        inode_seed, modification_date, access_date, change_date, creation_date
+                    )
+                    SELECT data_object_id, NULL, %s, size, mode, uid, gid, %s,
+                           modification_date, access_date, change_date, creation_date
+                    FROM files WHERE id_file = %s
+                    RETURNING id_file
+                    """,
+                    (tx03d_external_names[1], f"tx03d-{plan_id}-concurrent", imported_rows[0][0]),
+                )
+                if cur.fetchone() is None:
+                    raise AssertionError("TX-03D could not create concurrent shared reference")
+                cur.execute(
+                    """
+                    UPDATE data_objects
+                    SET reference_count = reference_count + 1
+                    WHERE id_data_object = %s
+                    """,
+                    (tx03d_data_object_id,),
+                )
+                if cur.rowcount != 1:
+                    raise AssertionError("TX-03D failed to count concurrent shared reference")
+
+            stdout, stderr = process.communicate(
+                input="resume\n", timeout=args.timeout
+            )
+            returncode = process.returncode
+            process = None
+            if returncode:
+                raise AssertionError(
+                    f"TX-03D cleanup failed rc={returncode}\n{stdout}\n{stderr}"
+                )
+
+            actual_count = int(
+                scalar(
+                    observer,
+                    "SELECT reference_count FROM data_objects WHERE id_data_object = %s",
+                    (tx03d_data_object_id,),
+                )
+            )
+            file_count = int(
+                scalar(
+                    observer,
+                    "SELECT COUNT(*) FROM files WHERE data_object_id = %s",
+                    (tx03d_data_object_id,),
+                )
+            )
+            payload = bytes(
+                scalar(
+                    observer,
+                    "SELECT data FROM data_blocks WHERE data_object_id = %s AND _order = 0",
+                    (tx03d_data_object_id,),
+                )
+            )
+            if actual_count != 2 or file_count != 2:
+                raise AssertionError(
+                    f"TX-03D reference mismatch count={actual_count} files={file_count}"
+                )
+            if payload != tx03d_payload:
+                raise AssertionError(f"TX-03D surviving payload changed: {payload!r}")
+            if root_file_count(observer, root_name) != 0:
+                raise AssertionError("TX-03D cleanup left imported file rows")
+            if plan_status(observer, plan_id) != "materialize_cleaned":
+                raise AssertionError("TX-03D cleanup did not mark plan cleaned")
+            print("TX03D_REFCOUNT_RACE=PASS count=2 files=2 payload=preserved")
+            return
 
         if args.crash_after_delete:
             # Test wykorzystuje punkt kontrolny w debug Rust, a nie blokade planu.
@@ -459,10 +634,12 @@ def main() -> None:
         # a failed pre-COMMIT assertion might unintentionally allow cleanup
         # to commit while the failure handler is tearing down the fixture.
         if second_process is not None:
-            second_process.kill()
+            if second_process.poll() is None:
+                second_process.kill()
             second_process.communicate()
         if process is not None:
-            process.kill()
+            if process.poll() is None:
+                process.kill()
             process.communicate()
         if blocker is not None:
             try:
@@ -472,6 +649,34 @@ def main() -> None:
         if observer is not None:
             observer.close()
         try:
+            if tx03d_external_names and tx03d_data_object_id is not None:
+                with psycopg2.connect(**dsn) as conn, conn.cursor() as cur:
+                    cur.execute("SET search_path TO fod, public")
+                    cur.execute(
+                        "DELETE FROM files WHERE id_directory IS NULL AND name = ANY(%s)",
+                        (tx03d_external_names,),
+                    )
+                    # Restore this isolated fixture from its surviving file rows,
+                    # even when the regression correctly exposed a stale counter.
+                    cur.execute(
+                        """
+                        UPDATE data_objects d
+                        SET reference_count = (
+                                SELECT COUNT(*) FROM files f
+                                WHERE f.data_object_id = d.id_data_object
+                            ),
+                            modification_date = NOW()
+                        WHERE d.id_data_object = %s
+                        """,
+                        (tx03d_data_object_id,),
+                    )
+                    cur.execute(
+                        """
+                        DELETE FROM data_objects
+                        WHERE id_data_object = %s AND reference_count = 0
+                        """,
+                        (tx03d_data_object_id,),
+                    )
             if source_registered:
                 cleanup_indexer_sources(dsn, [source_name])
         finally:

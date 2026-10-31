@@ -30,18 +30,20 @@ Reading guide:
   Szczegóły ryzyka TX-03C w
   `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
-- [ ] **Dodać regresję współbieżnej adopcji i cleanup licznika obiektu.**
+- [ ] **Uruchomić regresję współbieżnej adopcji i cleanup licznika obiektu.**
   FOD 3.4.514 zastępuje zapis starej liczby referencji atomowym odjęciem liczby
   usuwanych plików. PostgreSQL serializuje tę arytmetykę na wierszu obiektu, więc
   równoległy przyrost nie jest nadpisywany. Usunięcie obiektu, który uznano za
   wyłączny, jest warunkowe względem licznika oczekiwanego; zmiana powoduje
-  rollback zamiast skasowania potencjalnie używanego obiektu. Źródłowy
-  interleaving jest zidentyfikowany, ale regresji dwóch transakcji jeszcze nie
-  uruchomiono. Test ma sprawdzać dokładny licznik oraz zachowanie payloadu dla
-  każdego żywego pliku. Szczegóły TX-03D:
+  rollback zamiast skasowania potencjalnie używanego obiektu. Tryb
+  `--concurrent-reference-increment` w
+  `test_fod_indexer_cleanup_tx03_atomicity.py` dodaje testowy punkt pauzy po
+  skanie referencji, a następnie dopisuje drugą referencję w osobnej
+  transakcji. Test nie został jeszcze uruchomiony. Ma sprawdzać dokładny
+  licznik oraz zachowanie payloadu dla każdego żywego pliku. Szczegóły TX-03D:
   `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
-- [ ] **Dodać regresję zewnętrznego hardlinku dla cleanup importu.**
+- [ ] **Uruchomić regresję zewnętrznego hardlinku dla cleanup importu.**
   FOD 3.4.513 odmawia cleanup, jeśli plik z importowanego drzewa ma alias
   hardlink poza tym drzewem. Bez tej kontroli `DELETE files` uruchamiał
   `ON DELETE CASCADE` i usuwał również zewnętrzny wpis. Sprawdzenie wykonuje

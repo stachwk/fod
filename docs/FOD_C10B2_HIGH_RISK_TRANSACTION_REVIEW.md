@@ -184,6 +184,13 @@ Nowy `tests/integration/test_fod_indexer_cleanup_tx03_atomicity.py`:
 6. W razie błędu kończy proces cleanup **przed** zwolnieniem blokady,
    wycofuje transakcję blokującą i usuwa wyłącznie unikalne zasoby testu.
 
+Tryb TX-03D `--concurrent-reference-increment` dodatkowo hashuje dwa identyczne
+pliki, tworzy zewnętrzną referencję i zatrzymuje cleanup po odczycie listy
+survivorów. Osobna zatwierdzona transakcja dodaje kolejną referencję do tego
+samego obiektu; po wznowieniu cleanup test wymaga `reference_count=2`, dwóch
+żywych plików i zachowanego payloadu. Ten tryb wymaga tak samo jawnej,
+odizolowanej bazy zakończonej `_test`.
+
 Przebieg:
 
 ```bash
@@ -312,11 +319,12 @@ wycofuje całą transakcję. Nie wprowadzono dodatkowych blokad obiektu przed
 usunięciem plików: wszystkie wiersze `files` są kasowane przed arytmetycznymi
 aktualizacjami współdzielonych liczników, zgodnie z kolejnością unlink/write.
 
-Poprawka wynika z semantyki atomowych aktualizacji wiersza PostgreSQL; runtime
-reprodukcja i deterministyczny test dwóch transakcji pozostają do wykonania.
-Test powinien sprawdzić, że licznik jest równy faktycznym referencjom `files`
-po każdej kolejności oraz że payload każdego żywego pliku jest zachowany.
-Szczegóły są w `TODO.md`.
+`tests/integration/test_fod_indexer_cleanup_tx03_atomicity.py
+--concurrent-reference-increment` dodaje deterministyczną pauzę po klasyfikacji
+referencji cleanupu, zatwierdza dodanie drugiego pliku w niezależnej
+transakcji, a następnie wznawia cleanup. Test sprawdza, czy licznik odpowiada
+obu żywym plikom i czy payload nadal istnieje. Test nie został jeszcze
+uruchomiony; runtime reprodukcja pozostaje otwarta. Szczegóły są w `TODO.md`.
 
 ### TX-03E — cleanup importu usuwał zewnętrzne aliasy hardlinku (guard dodany)
 
