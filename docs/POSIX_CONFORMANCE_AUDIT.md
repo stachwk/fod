@@ -1,11 +1,18 @@
 # POSIX conformance audit
 
-Status reviewed through source baseline FOD 3.4.436 (2026-10-31):
+Status reviewed through source baseline FOD 3.4.439 (2026-10-31):
 **requirement audit in progress; no general POSIX conformance claim**. Recent
 work adds Linux/FUSE killpriv evidence for P07, but does not close a full POSIX
 matrix area. The enforced Linux minimum is 6.17.0 and the enforced libfuse3
 minimum is 3.18.2; focused mounted regressions passed with libfuse3 3.18.2 and
 3.18.3.
+
+FOD 3.4.439 adds mounted transaction-failure coverage for replacement
+`rename()`: PostgreSQL SQLSTATE `53100` maps to `ENOSPC`, `58030` maps to
+`EIO`, and source/target payloads remain unchanged after rollback. The focused
+regression passed on Linux 6.17.0-41-generic/libfuse3 3.18.2/PostgreSQL 16.15
+against an isolated database. P08 remains Pending for its other
+error-precedence, permission, limit and cross-mount cases.
 
 FOD 3.4.434 expands the sticky-directory regression: Linux independently checks
 rename permission for source and destination. `nobody` gets `EPERM` when it owns

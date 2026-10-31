@@ -1967,5 +1967,19 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   The test passed on runtime FOD 3.4.437/Linux 6.17.0-41-generic/libfuse3
   3.18.2/PostgreSQL 16.15 using an isolated database, which was dropped after
   the run.
-- [ ] P08 remains Pending for remaining rename permission/error precedence,
-  `EIO`, limit and `ENOSPC` evidence.
+- [ ] P08 remains Pending for remaining rename permission/error precedence and
+  limit evidence.
+
+## FOD 3.4.439 — verify PostgreSQL errors during `rename()`
+
+- [x] Extend the mounted PostgreSQL error-mapping regression so SQLSTATE
+  `53100` from replacement of a regular-file target returns `ENOSPC`, and
+  SQLSTATE `58030` returns `EIO`. In both cases the failed transaction leaves
+  source and target payloads unchanged. The fault-injection trigger on
+  `data_blocks` is installed after rename fixtures are persisted; installing it
+  earlier caused their close-time flushes to fail and left legitimate active
+  write leases, masking the intended rename SQLSTATE with `EBUSY`. The focused
+  test passed on Linux 6.17.0-41-generic/libfuse3 3.18.2/PostgreSQL 16.15 with
+  an isolated database, which was dropped after the run.
+- [ ] P08 remains Pending for remaining rename permission/error-precedence,
+  limit and broader operation coverage.

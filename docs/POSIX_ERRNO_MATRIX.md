@@ -136,7 +136,9 @@ FOD został wywołany:
   `PQclear()`. [`test-postgres-enospc`](../rust_fuse/tests/postgres_error_mapping.rs)
   wymusza SQLSTATE `53100` i potwierdza `ENOSPC` dla `mkdir()` oraz `fsync()`;
   wymusza też SQLSTATE `58030` i potwierdza `EIO` dla `mkdir()`/`rmdir()` wraz
-  z wycofaniem nieudanej zmiany namespace.
+  z wycofaniem nieudanej zmiany namespace. Dla `rename()` test potwierdza
+  `ENOSPC` przy SQLSTATE `53100` i `EIO` przy `58030`; po obu błędach payload
+  źródła i celu pozostaje bez zmian.
 - Linux v6.17 obsługuje `FIONREAD` dla zwykłego pliku w `do_vfs_ioctl()` i
   zwraca `i_size - f_pos` przed przekazaniem polecenia do callbacku FUSE.
   Pozycja deskryptora nie występuje w żądaniu ioctl FUSE, więc callback
