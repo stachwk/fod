@@ -222,10 +222,10 @@ directories and symlinks, and rejected combined updates without partial writes.
 FUSE unit tests passed 69/69.
 
 The two-mount `release-lto` / `integration-test-hooks` suite passed with replica
-replay paused: a primary ownership change prevents the replica's previous owner
-from chmod/chown of files, hardlinks, directories and symlinks. The same run
-passed the existing permission/sticky/chown compatibility test and all earlier
-namespace/unlink/rmdir regressions:
+replay paused. A primary ownership change prevents the replica's previous owner
+from using `chmod()`/`chown()` on files, hardlinks, directories and symlinks.
+The same run passed the existing permission/sticky/chown compatibility test and
+all earlier namespace/unlink/rmdir regressions:
 `artifacts/integration/unlink-primary-authority-20261026T200613Z/`.
 That compatibility test alone did not establish transactional sticky-bit or
 ACL ordering. FOD 3.4.53 adds sticky-bit transactions and regressions below.
@@ -613,11 +613,11 @@ configured read snapshot. The snapshot remains read-routed after this identity
 check. A follow-up review found that refreshing an already-open stream by path
 could also attach a replacement directory on rewind. FOD now keeps the
 PostgreSQL directory ID on the handle and uses it for snapshots, names-mode
-child lookups and atime updates. A mounted two-mount regression covering stale
-`opendir()` and remove/recreate during an open stream/rewind now have a
-two-mount regression. It verifies a replacement cannot reuse the old
-FUSE-created directory inode, an already-open old handle stays bound to its
-PostgreSQL directory ID through rewind, and a fresh mount sees the replacement.
+child lookups and atime updates. A mounted two-mount regression covers stale
+`opendir()` and remove/recreate during an open stream/rewind. It verifies a
+replacement cannot reuse the old FUSE-created directory inode, the existing
+handle remains bound to its PostgreSQL directory ID through rewind, and a fresh
+mount sees the replacement.
 FUSE-created object inode seeds combine the PostgreSQL-assigned mount session
 ID with a mount-local monotonic counter and are persisted on each object.
 The regression passed against an isolated PostgreSQL 17.11 instance.

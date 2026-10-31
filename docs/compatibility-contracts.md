@@ -13,9 +13,9 @@ The POSIX audit remains open; the preceding copy-source fencing fix improves
 multi-host data correctness but does not close a POSIX audit area. The latest
 POSIX-specific mounted evidence remains the individually versioned cases
 recorded in the [POSIX audit](POSIX_CONFORMANCE_AUDIT.md). The mounted
-`test_readdir_snapshot_multimount.py` regression now verifies `EMFILE` from
-`open()` and `opendir()` on FOD 3.4.398; its valid `closedir()` success path is
-also covered. An earlier probe that closed a stream's `dirfd()` and observed
+`test_readdir_snapshot_multimount.py` regression passed on FOD 3.4.411 and
+verifies `EMFILE` from `open()` and `opendir()` plus the valid `closedir()`
+success path. An earlier probe that closed a stream's `dirfd()` and observed
 `EBADF` was removed from the POSIX test because POSIX defines that use as
 undefined behavior. No new POSIX area is marked Pass.
 
