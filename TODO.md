@@ -118,22 +118,19 @@ Reading guide:
   przeszedł na FOD 3.4.385 dnia 2026-10-31; artefakty:
   `artifacts/integration/unlink-primary-authority-20261030T232728Z/`.
 
-- [ ] **Minimalna wersja libfuse3 nie ma walidacji montowanego end-to-end.**
-  `rust_fuse/src/platform_requirements.rs` wymaga teraz Linux 6.17.0 lub
-  nowszego oraz libfuse3 3.0.0 lub nowszego; test jednostkowy sprawdza
-  akceptację 6.17.0 oraz odrzucenie Linux 4.18.0 i 6.16.99. Minimum jądra
-  podniesiono do najstarszej głównej wersji obecnej w zapisanych testach
-  montowanych. Kontrola
-  środowiska 2026-10-31 wykazała bieżący kernel
-  `6.17.0-41-generic`, libfuse 3.17.4 i dostępne `/dev/fuse`; zainstalowane
-  moduły jąder zaczynają się od 5.8, obrazy `/boot/vmlinuz-*` są z 6.17,
-  a `qemu-system-x86_64` nie jest dostępne.
-  Potwierdzony stos używa libfuse3 3.17.4, więc nie zweryfikowano jeszcze
-  minimalnego libfuse3 3.0.0 ani pełnej kombinacji minimalnych wersji. Wpływ:
-  próg runtime pozostaje egzekwowany i fail-closed, ale nie stanowi macierzy
-  wszystkich wspieranych hostów. Następny krok: uruchomić reprezentatywny
-  mount/regression gate na Linux 6.17/libfuse3 3.0 albo podnieść minimum
-  libfuse3 do najstarszej wersji faktycznie zweryfikowanej.
+- [x] **Ustalono i zamontowanie zweryfikowano minimalną wersję libfuse3.**
+  Runtime preflight wymaga Linux 6.17.0; runtime i build wymagają libfuse3
+  3.18.2 lub nowszego.
+  Pełna wersja jest parsowana z `fuse_pkgversion()`, bo `fuse_version()` nie
+  zawiera patch level; niespójne i nieparsowalne metadane są odrzucane.
+  libfuse 3.18.2 jest pierwszym wydaniem poprawiającym upstreamowy UAF
+  GHSA-qxv7-xrc2-qmfx; zweryfikowano go oraz 3.18.3 przez izolowane buildy
+  upstream. Na Linux 6.17.0-41 z obiema wersjami przeszło `test_destroy.py`,
+  a `test_permissions.py` przeszło na 3.18.2 i 3.18.3. Testy obejmują mount,
+  unmount/remount, odczyt/zapis, uprawnienia, truncate i killpriv. Biblioteka
+  systemowa hosta pozostała 3.17.4; testy uruchomiono na izolowanych
+  bibliotekach i helperach, bez podmiany instalacji systemowej. Pełna macierz
+  dystrybucji i innych kombinacji Linux/libfuse pozostaje poza tym zadaniem.
 
 - [x] **Zapis i skracanie pliku respektują `RLIMIT_FSIZE` na mountcie FUSE.**
   `test_lseek.py` ustawia w osobnym procesie limit 4096 bajtów, żąda zapisu
@@ -853,14 +850,11 @@ Reading guide:
   setup mismatch, not a filesystem failure. System-wide `ENFILE` and remaining
   namespace errno checks are still open.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
-- [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
-  host currently has libfuse3/fusermount3 3.17.4; upstream 3.18.3 includes
-  security and lifecycle fixes worth adopting. Upgrade the development/test
-  environment and verify FOD mount, unmount, multi-threaded shutdown, and
-  integration behavior on that release. Keep the project's minimum supported
-  version at 3.0.0 unless FOD starts using an API or behavior that requires a
-  higher floor; updating libfuse does not by itself add missing FUSE callbacks
-  such as `remap_file_range`.
+- [x] **Podniesiono wspierany baseline libfuse3 do poprawionego wydania.**
+  Runtime, build `vendor/fuser`, pakiety DEB i RPM wymagają co najmniej 3.18.2;
+  środowisko testowe sprawdziło także najnowsze upstreamowe 3.18.3. Zmiana
+  nie dodaje brakujących callbacków `fuser`, takich jak `remap_file_range`;
+  dystrybucje i pozostałe kombinacje kernel/libfuse wymagają osobnej macierzy.
 - [ ] **Intermittent whole-object sharing failure in `test-df`.** On
   2026-10-29, one mounted run completed the 65,536-byte `copy_file_range()`
   with correct file contents but found different PostgreSQL

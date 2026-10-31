@@ -25,7 +25,7 @@ License: BSL-1.1
 URL: $FOD_PACKAGE_URL
 %global debug_package %{nil}
 Requires: bash
-Requires: fuse3
+Requires: fuse3 >= 3.18.2
 
 %description
 FOD provides a Rust FUSE filesystem backed by PostgreSQL storage.

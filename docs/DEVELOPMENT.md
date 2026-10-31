@@ -20,6 +20,12 @@ toolchain is newer than the workspace minimum version.
 Production-style optimized builds use the `release-lto` profile where the
 relevant packaging/deployment paths require it.
 
+FOD's Linux FUSE build requires `pkg-config fuse3 >= 3.18.2`. The runtime also
+checks the full loaded libfuse version before connecting to PostgreSQL; older
+libraries fail startup. This floor includes the upstream io_uring fix shipped
+in 3.18.2. See [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md) for the test
+matrix and compatibility boundaries.
+
 Rust FUSE integration tests read `fod_config.ini` by default. Set
 `FOD_TEST_CONFIG` to a separate INI file to isolate their PostgreSQL database;
 the same file is passed to the spawned FOD tools. This is useful for tests

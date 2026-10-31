@@ -1,8 +1,8 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.421. Najnowsze
+Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.422. Najnowsze
 przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.421. Zmiana w
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.422. Zmiana w
 3.4.415 podniosła wymagane minimum jądra do Linux 6.17.0; nie dostarczyła
 nowego zamontowanego przebiegu POSIX.
 
@@ -18,18 +18,26 @@ Kod `rust_fuse/src/platform_requirements.rs` wymusza przed połączeniem z bazą
 i próbą montowania wersje:
 
 - Linux 6.17.0 lub nowszy;
-- libfuse3 3.0.0 lub nowszy;
+- libfuse3 3.18.2 lub nowszy;
 
 Do samego mounta host musi ponadto udostępniać `/dev/fuse` i zgodne narzędzie
 montujące, zwykle `fusermount3`; brak któregoś z tych elementów zakończy
 uruchomienie na etapie tworzenia sesji/mounta.
 
 Nieparsowalna albo starsza wersja jądra oraz za stara libfuse kończą start
-błędem. To jest deklarowany próg runtime i kontrola w kodzie. Testy montowane
-działają na Linux `6.17.0-41-generic`, więc minimalna linia jądra ma pokrycie;
-nie zweryfikowano jednak pary z libfuse3 3.0.0. Nie należy interpretować progu
-preflight jako macierzy przetestowanych dystrybucji. Użyta w testach libfuse3
-3.17.4 jest nowsza od zadeklarowanego minimum.
+błędem. FOD sprawdza pełną wersję `fuse_pkgversion()`, ponieważ `fuse_version()`
+zwraca tylko major/minor i nie odróżnia poprawek w ramach 3.18. Testy montowane
+działają na Linux `6.17.0-41-generic` z libfuse3 3.18.2 i 3.18.3. Na obu
+wersjach przeszły testy montowania, odmontowania, zapisu i ponownego odczytu;
+na 3.18.2 przeszły także uprawnienia, `truncate()`/`O_TRUNC` i killpriv.
+Testowano izolowane buildy upstream, bez podmiany systemowej biblioteki.
+Nie należy interpretować tych przebiegów jako macierzy dystrybucji.
+
+Minimum 3.18.2 uwzględnia upstreamowy [advisory
+GHSA-qxv7-xrc2-qmfx](https://github.com/libfuse/libfuse/security/advisories/GHSA-qxv7-xrc2-qmfx):
+io_uring use-after-free dotyczy 3.18.0–3.18.1 i został naprawiony w 3.18.2.
+FOD używa standardowego `/dev/fuse` transportu; mimo to próg nie dopuszcza
+wersji biblioteki z tym błędem. Aktualnym sprawdzonym wydaniem jest 3.18.3.
 
 Linux 6.16 i starsze wydania są poza deklarowanym zakresem i preflight odrzuca
 je przed uruchomieniem mounta. Minimalna deklarowana wersja to Linux 6.17.0;
@@ -132,19 +140,19 @@ Mounted regresja `statvfs()` blokuje zapytanie na tabeli PostgreSQL, wysyła
 przechwycony `SIGUSR1` i potwierdza `EINTR`; Linux dokumentuje, że FUSE
 userspace może odpowiedzieć `EINTR` na pierwotne żądanie po `FUSE_INTERRUPT`
 ([opis zachowania](https://github.com/torvalds/linux/blob/v6.17/Documentation/filesystems/fuse/fuse.rst)).
-Test jednostkowy preflight sprawdza granicę wersji 6.17.0 oraz odrzucenie
-starszego/nieparsowalnego jądra i libfuse poniżej 3.0.0.
+Test jednostkowy preflight sprawdza granicę wersji 6.17.0 i 3.18.2 oraz
+odrzucenie starszego/nieparsowalnego jądra i libfuse, w tym 3.18.1 oraz
+nieparsowalnych lub niespójnych metadanych wersji.
 Montowane regresje `test-symlink.sh` i `test_xattr.py` sprawdzają także, że
 niepoprawny UTF-8 w celu symlinka i nazwie xattr kończy się `EILSEQ` bez
 aliasowania poprawnego wejścia z U+FFFD.
 
-Nie ma obecnie udokumentowanej macierzy end-to-end dla minimalnych wersji
-Linux/libfuse ani wielu dystrybucji. Sprawdzony 2026-10-31 host działa na
-Linux `6.17.0-41-generic` i libfuse 3.17.4; `/dev/fuse` jest dostępne.
-Weryfikuje to mount na deklarowanej linii jądra, ale nie na minimalnym libfuse3
-3.0.0. Nie ma lokalnie środowiska pozwalającego uruchomić tę minimalną wersję
-libfuse. Pozostaje uruchomić montowany zestaw na Linux 6.17/libfuse3 3.0 albo
-podnieść minimalną wersję libfuse do najstarszej faktycznie zweryfikowanej.
+Pełna macierz end-to-end dla wielu wersji Linux/libfuse i dystrybucji pozostaje
+poza pokryciem. Host systemowy nadal ma libfuse 3.17.4, ale testowe buildy
+upstream 3.18.2 i 3.18.3 zainstalowano izolowanie pod `/var/tmp`; zamontowane
+testy uruchomiono z tymi bibliotekami i helperami. Minimum runtime/build
+ustawiono na najstarszą wersję objętą poprawką bezpieczeństwa i sprawdzoną
+montowanym testem.
 
 ## Rozmiar requestu i strojenie
 
@@ -169,6 +177,7 @@ gwarancją wydajności na aktualnym kernelu.
 
 - [Linux kernel: FUSE technical documentation](https://docs.kernel.org/filesystems/fuse/)
 - [libfuse: userspace reference implementation and API documentation](https://github.com/libfuse/libfuse)
+- [libfuse releases](https://github.com/libfuse/libfuse/releases), including tested 3.18.2 and 3.18.3
 - [Linux v6.17: nagłówek protokołu FUSE i negocjacja wersji](https://github.com/torvalds/linux/blob/v6.17/include/uapi/linux/fuse.h)
 - Implementacja preflight: `rust_fuse/src/platform_requirements.rs`.
 - Negocjacja i diagnostyka: `rust_fuse/src/compatibility.rs`.

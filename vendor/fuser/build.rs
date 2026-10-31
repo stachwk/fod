@@ -48,7 +48,7 @@ fn main() {
 
 fn configure_libfuse3() -> Result<(), pkg_config::Error> {
     pkg_config::Config::new()
-        .atleast_version("3.0.0")
+        .atleast_version("3.18.2")
         .probe("fuse3")?;
     println!("cargo::rustc-cfg=fuser_mount_impl=\"libfuse3\"");
     Ok(())

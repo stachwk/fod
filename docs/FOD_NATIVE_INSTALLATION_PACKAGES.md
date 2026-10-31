@@ -40,6 +40,11 @@ Rust 1.98.0
 FOD_CARGO_PROFILE=release-lto
 ```
 
+The build requires `pkg-config fuse3 >= 3.18.2`. Generated DEB and RPM packages
+also require the `fuse3` package at version 3.18.2 or newer, matching FOD's
+runtime preflight. libfuse 3.18.0–3.18.1 contain an upstream io_uring
+use-after-free and are below the supported floor.
+
 The generated ELF dependency requirements describe the host used for the native build. For example, a package built against a newer FUSE SONAME is not automatically suitable for an older Ubuntu/RHEL release. Distributable packages should therefore be built and tested on each supported target release, or on the oldest intentionally supported release when ABI compatibility permits it.
 
 ## Package contents
@@ -77,7 +82,7 @@ A dedicated `fod` service account is intentionally deferred. Introducing one req
 
 See [FOD_RUNTIME_PRIVILEGE_POLICY.md](FOD_RUNTIME_PRIVILEGE_POLICY.md) for the authoritative policy.
 
-For Debian packages `/etc/fod/fod_config.ini` is declared in `DEBIAN/conffiles`. For RPM it is `%config(noreplace)`, so a locally edited configuration is preserved across upgrades. Debian package dependencies for ELF libraries are generated with `dpkg-shlibdeps`; this also avoids hard-coding a specific Ubuntu FUSE library package name when the distribution changes SONAME packages. Because the package installs `libfod.so` into the dynamic-linker library path, the Debian package also declares the `activate-noawait ldconfig` trigger. On RHEL/Rocky 8 and newer, glibc transaction file triggers update the `ldconfig` cache, so no package-specific RPM scriptlet is added. RPM keeps automatic ELF dependency generation and adds explicit `bash` and `fuse3` runtime requirements.
+For Debian packages `/etc/fod/fod_config.ini` is declared in `DEBIAN/conffiles`. For RPM it is `%config(noreplace)`, so a locally edited configuration is preserved across upgrades. Debian package dependencies for ELF libraries are generated with `dpkg-shlibdeps`; this also avoids hard-coding a specific Ubuntu FUSE library package name when the distribution changes SONAME packages. The package additionally requires `fuse3 >= 3.18.2`, matching the runtime preflight. Because the package installs `libfod.so` into the dynamic-linker library path, the Debian package also declares the `activate-noawait ldconfig` trigger. On RHEL/Rocky 8 and newer, glibc transaction file triggers update the `ldconfig` cache, so no package-specific RPM scriptlet is added. RPM keeps automatic ELF dependency generation and adds explicit `bash` and versioned `fuse3` runtime requirements.
 
 ## Debian staging and permissions
 

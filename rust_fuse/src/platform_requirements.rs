@@ -4,7 +4,9 @@
 use std::ffi::CStr;
 
 pub(crate) const MIN_LINUX_KERNEL: (u32, u32, u32) = (6, 17, 0);
-pub(crate) const MIN_LIBFUSE_VERSION: i32 = 300;
+pub(crate) const MIN_LIBFUSE_VERSION: (u32, u32, u32) = (3, 18, 2);
+const MIN_LIBFUSE_VERSION_NUMERIC: i32 =
+    (MIN_LIBFUSE_VERSION.0 as i32) * 100 + MIN_LIBFUSE_VERSION.1 as i32;
 
 unsafe extern "C" {
     fn fuse_version() -> libc::c_int;
@@ -23,13 +25,14 @@ pub(crate) fn validate_runtime_requirements() -> Result<(), String> {
         }
     };
 
-    validate_versions(&kernel_release, libfuse_version)?;
+    validate_versions(&kernel_release, libfuse_version, &libfuse_package)?;
     log::info!(
-        "FOD host requirements: linux_kernel={} minimum_linux_kernel={} libfuse={} libfuse_numeric={} minimum_libfuse=3.0.0",
+        "FOD host requirements: linux_kernel={} minimum_linux_kernel={} libfuse={} libfuse_numeric={} minimum_libfuse={}",
         kernel_release,
         format_version(MIN_LINUX_KERNEL),
         libfuse_package,
         libfuse_version,
+        format_version(MIN_LIBFUSE_VERSION),
     );
     Ok(())
 }
@@ -48,7 +51,11 @@ fn current_kernel_release() -> Result<String, String> {
         .into_owned())
 }
 
-fn validate_versions(kernel_release: &str, libfuse_version: i32) -> Result<(), String> {
+fn validate_versions(
+    kernel_release: &str,
+    libfuse_version: i32,
+    libfuse_package: &str,
+) -> Result<(), String> {
     let kernel = parse_kernel_version(kernel_release).ok_or_else(|| {
         format!(
             "cannot parse Linux kernel release {kernel_release:?}; FOD requires Linux {} or newer",
@@ -61,11 +68,30 @@ fn validate_versions(kernel_release: &str, libfuse_version: i32) -> Result<(), S
             format_version(MIN_LINUX_KERNEL)
         ));
     }
-    if libfuse_version < MIN_LIBFUSE_VERSION {
+    if libfuse_version < MIN_LIBFUSE_VERSION_NUMERIC {
         return Err(format!(
-            "libfuse {}.{} is too old; FOD requires libfuse3 3.0.0 or newer",
+            "libfuse {}.{} is too old; FOD requires libfuse3 {} or newer",
             libfuse_version.div_euclid(100),
-            libfuse_version.rem_euclid(100)
+            libfuse_version.rem_euclid(100),
+            format_version(MIN_LIBFUSE_VERSION),
+        ));
+    }
+    let parsed_libfuse_version = parse_libfuse_version(libfuse_package).ok_or_else(|| {
+        format!(
+            "cannot parse libfuse package version {libfuse_package:?}; FOD requires libfuse3 {} or newer",
+            format_version(MIN_LIBFUSE_VERSION)
+        )
+    })?;
+    if parsed_libfuse_version < MIN_LIBFUSE_VERSION {
+        return Err(format!(
+            "libfuse3 {libfuse_package} is too old; FOD requires libfuse3 {} or newer",
+            format_version(MIN_LIBFUSE_VERSION)
+        ));
+    }
+    if libfuse_version != (parsed_libfuse_version.0 as i32) * 100 + parsed_libfuse_version.1 as i32
+    {
+        return Err(format!(
+            "libfuse version metadata is inconsistent: numeric={libfuse_version} package={libfuse_package:?}"
         ));
     }
     Ok(())
@@ -88,6 +114,27 @@ fn parse_kernel_version(release: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
+fn parse_libfuse_version(version: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch_with_suffix = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let patch_digits = patch_with_suffix
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>();
+    let suffix = &patch_with_suffix[patch_digits.len()..];
+    if patch_digits.is_empty()
+        || (!suffix.is_empty() && !suffix.starts_with('-') && !suffix.starts_with('+'))
+    {
+        return None;
+    }
+    Some((major, minor, patch_digits.parse::<u32>().ok()?))
+}
+
 fn format_version(version: (u32, u32, u32)) -> String {
     format!("{}.{}.{}", version.0, version.1, version.2)
 }
@@ -104,24 +151,36 @@ mod tests {
             Some((4, 18, 0))
         );
         assert_eq!(parse_kernel_version("6.12-amd64"), Some((6, 12, 0)));
-        assert!(validate_versions("6.17.0", 300).is_ok());
-        assert!(validate_versions("6.17.0-41-generic", 300).is_ok());
-        assert!(validate_versions("6.18.0", 300).is_ok());
+        assert!(validate_versions("6.17.0", 318, "3.18.2").is_ok());
+        assert!(validate_versions("6.17.0-41-generic", 318, "3.18.3").is_ok());
+        assert!(validate_versions("6.18.0", 319, "3.19.0-1").is_ok());
     }
 
     #[test]
     fn rejects_old_or_unparseable_kernel_and_old_libfuse() {
-        assert!(validate_versions("4.18.0", 317)
+        assert!(validate_versions("4.18.0", 318, "3.18.2")
             .unwrap_err()
             .contains("requires Linux 6.17.0 or newer"));
-        assert!(validate_versions("6.16.99", 317)
+        assert!(validate_versions("6.16.99", 318, "3.18.2")
             .unwrap_err()
             .contains("too old"));
-        assert!(validate_versions("not-a-kernel", 317)
+        assert!(validate_versions("not-a-kernel", 318, "3.18.2")
             .unwrap_err()
             .contains("cannot parse"));
-        assert!(validate_versions("6.17.0", 299)
+        assert!(validate_versions("6.17.0", 317, "3.17.4")
             .unwrap_err()
             .contains("libfuse"));
+        assert!(validate_versions("6.17.0", 318, "3.18.1")
+            .unwrap_err()
+            .contains("3.18.2 or newer"));
+        assert!(validate_versions("6.17.0", 318, "unknown")
+            .unwrap_err()
+            .contains("cannot parse libfuse package version"));
+        assert!(validate_versions("6.17.0", 318, "3.19.0")
+            .unwrap_err()
+            .contains("inconsistent"));
+        assert!(parse_libfuse_version("3x.18.2").is_none());
+        assert!(parse_libfuse_version("3.18.2suffix").is_none());
+        assert!(parse_libfuse_version("3.18.2-1ubuntu").is_some());
     }
 }

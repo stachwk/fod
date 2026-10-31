@@ -55,7 +55,7 @@ Section: utils
 Priority: optional
 Architecture: $arch
 Maintainer: $FOD_PACKAGE_MAINTAINER
-Depends: $deps, bash, fuse3
+Depends: $deps, bash, fuse3 (>= 3.18.2)
 Homepage: $FOD_PACKAGE_URL
 Description: PostgreSQL-backed FUSE filesystem
  FOD provides a Rust FUSE filesystem backed by PostgreSQL storage.

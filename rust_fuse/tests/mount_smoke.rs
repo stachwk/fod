@@ -90,7 +90,7 @@ fn reports_negotiated_fuse_compatibility() -> Result<(), String> {
         "linux_kernel=",
         "minimum_linux_kernel=6.17.0",
         "libfuse=",
-        "minimum_libfuse=3.0.0",
+        "minimum_libfuse=3.18.2",
     ] {
         if !host_requirements_line.contains(field) {
             return Err(format!(
