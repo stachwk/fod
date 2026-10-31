@@ -7,11 +7,13 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: FOD 3.4.422. FOD 3.4.415 raised the enforced Linux
-minimum to 6.17.0; this release raises the libfuse3 minimum to 3.18.2, with
-mounted validation on 3.18.2 and 3.18.3. It also implements and verifies Linux
-FUSE killpriv handling for write, truncate, `O_TRUNC` and ACL updates; it
-closes no broader POSIX matrix area.
+Reviewed source baseline: FOD 3.4.423. FOD 3.4.415 raised the enforced Linux
+minimum to 6.17.0; FOD 3.4.422 raised the libfuse3 minimum to 3.18.2, with
+mounted validation on 3.18.2 and 3.18.3. This release makes kernel-version
+parsing reject malformed numeric fields while retaining distribution suffixes.
+The preceding release also implements and verifies Linux FUSE killpriv
+handling for write, truncate, `O_TRUNC` and ACL updates; none of these changes
+closes a broader POSIX matrix area.
 The POSIX audit remains open; the preceding copy-source fencing fix improves
 multi-host data correctness but does not close a POSIX audit area. The latest
 POSIX-specific mounted evidence remains the individually versioned cases

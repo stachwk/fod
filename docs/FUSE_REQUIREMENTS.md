@@ -1,8 +1,8 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.422. Najnowsze
+Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.423. Najnowsze
 przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.422. Zmiana w
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.423. Zmiana w
 3.4.415 podniosła wymagane minimum jądra do Linux 6.17.0; nie dostarczyła
 nowego zamontowanego przebiegu POSIX.
 
@@ -42,7 +42,10 @@ wersji biblioteki z tym błędem. Aktualnym sprawdzonym wydaniem jest 3.18.3.
 Linux 6.16 i starsze wydania są poza deklarowanym zakresem i preflight odrzuca
 je przed uruchomieniem mounta. Minimalna deklarowana wersja to Linux 6.17.0;
 wartość 4.18 w historycznym raporcie strojenia FUSE opisuje wyłącznie ówczesne
-wymaganie i nie jest aktualną deklaracją.
+wymaganie i nie jest aktualną deklaracją. Parser akceptuje numeryczne pola
+major/minor/patch oraz typowe sufiksy dystrybucji po `-` lub `+`; odrzuca
+uszkodzone pola takie jak `6.17malformed.0` zamiast interpretować ich prefiks
+numeryczny jako prawidłową wersję.
 
 Pakiet musi też dostarczać SONAME/ABI libfuse zgodny z binarium. Numer wersji
 sprawdzany przez FOD nie zastępuje kontroli zależności ELF.
@@ -140,9 +143,10 @@ Mounted regresja `statvfs()` blokuje zapytanie na tabeli PostgreSQL, wysyła
 przechwycony `SIGUSR1` i potwierdza `EINTR`; Linux dokumentuje, że FUSE
 userspace może odpowiedzieć `EINTR` na pierwotne żądanie po `FUSE_INTERRUPT`
 ([opis zachowania](https://github.com/torvalds/linux/blob/v6.17/Documentation/filesystems/fuse/fuse.rst)).
-Test jednostkowy preflight sprawdza granicę wersji 6.17.0 i 3.18.2 oraz
-odrzucenie starszego/nieparsowalnego jądra i libfuse, w tym 3.18.1 oraz
-nieparsowalnych lub niespójnych metadanych wersji.
+Test jednostkowy preflight sprawdza granicę wersji 6.17.0 i 3.18.2, odrzucenie
+starszego/nieparsowalnego jądra i libfuse, w tym 3.18.1 oraz nieparsowalnych
+lub niespójnych metadanych wersji. Dla kernela sprawdza również zachowanie
+dystrybucyjnych sufiksów i odrzucenie wadliwych pól numerycznych.
 Montowane regresje `test-symlink.sh` i `test_xattr.py` sprawdzają także, że
 niepoprawny UTF-8 w celu symlinka i nazwie xattr kończy się `EILSEQ` bez
 aliasowania poprawnego wejścia z U+FFFD.

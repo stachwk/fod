@@ -98,20 +98,40 @@ fn validate_versions(
 }
 
 fn parse_kernel_version(release: &str) -> Option<(u32, u32, u32)> {
-    let mut parts = release.split('.');
-    let numeric_prefix = |value: &str| {
-        let digits = value
-            .chars()
-            .take_while(|character| character.is_ascii_digit())
-            .collect::<String>();
-        (!digits.is_empty())
-            .then(|| digits.parse::<u32>().ok())
-            .flatten()
+    let (major_text, remaining) = release.split_once('.')?;
+    let major = major_text.parse::<u32>().ok()?;
+    let (minor_with_suffix, patch_with_suffix) = match remaining.split_once('.') {
+        Some((minor, patch)) => (minor, Some(patch)),
+        None => (remaining, None),
     };
-    let major = numeric_prefix(parts.next()?)?;
-    let minor = numeric_prefix(parts.next()?)?;
-    let patch = parts.next().and_then(numeric_prefix).unwrap_or(0);
+    let (minor_text, minor_suffix) = split_numeric_component(minor_with_suffix)?;
+    if !valid_kernel_version_suffix(minor_suffix) || minor_text.is_empty() {
+        return None;
+    }
+    let minor = minor_text.parse::<u32>().ok()?;
+    let patch = match patch_with_suffix {
+        Some(value) => {
+            let (patch_text, suffix) = split_numeric_component(value)?;
+            if patch_text.is_empty() || !valid_kernel_version_suffix(suffix) {
+                return None;
+            }
+            patch_text.parse::<u32>().ok()?
+        }
+        None => 0,
+    };
     Some((major, minor, patch))
+}
+
+fn split_numeric_component(value: &str) -> Option<(&str, &str)> {
+    let digits_len = value.bytes().take_while(u8::is_ascii_digit).count();
+    if digits_len == 0 {
+        return None;
+    }
+    Some(value.split_at(digits_len))
+}
+
+fn valid_kernel_version_suffix(suffix: &str) -> bool {
+    suffix.is_empty() || suffix.starts_with('-') || suffix.starts_with('+')
 }
 
 fn parse_libfuse_version(version: &str) -> Option<(u32, u32, u32)> {
@@ -151,6 +171,14 @@ mod tests {
             Some((4, 18, 0))
         );
         assert_eq!(parse_kernel_version("6.12-amd64"), Some((6, 12, 0)));
+        assert_eq!(
+            parse_kernel_version("4.18.0-553.el8_10.x86_64"),
+            Some((4, 18, 0))
+        );
+        assert_eq!(parse_kernel_version("6.17.0+custom"), Some((6, 17, 0)));
+        assert_eq!(parse_kernel_version("6.17malformed.0"), None);
+        assert_eq!(parse_kernel_version("6.17.0malformed"), None);
+        assert_eq!(parse_kernel_version("6.17."), None);
         assert!(validate_versions("6.17.0", 318, "3.18.2").is_ok());
         assert!(validate_versions("6.17.0-41-generic", 318, "3.18.3").is_ok());
         assert!(validate_versions("6.18.0", 319, "3.19.0-1").is_ok());
