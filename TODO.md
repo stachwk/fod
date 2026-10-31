@@ -964,6 +964,12 @@ Reading guide:
   regression and all 72 `pg_query` tests passed on an isolated PostgreSQL 16.15
   database after verifying `--with-blocksize=32` and live
   `SHOW block_size=32768`; the disposable database was dropped afterward.
+  FOD 3.4.482 also replaces the manual lock-range state decoder, which accepted
+  extra columns and converted every SQL NULL to an empty field. It now requires
+  exactly five columns and rejects NULLs; SQL explicitly coalesces the one
+  nullable `range_end` field to preserve the open-ended-lock encoding. The
+  decoder regression and all 10 `lock_manager` tests passed on verified
+  PostgreSQL 16.15 `BLCKSZ=32KiB`; the isolated test database was dropped.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

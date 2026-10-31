@@ -2977,47 +2977,78 @@ unsafe fn fetch_optional_single_row_texts_with_expected_columns(
 }
 
 unsafe fn fetch_rows_text(res: *mut PGresult) -> Result<Vec<Vec<String>>, String> {
+    fetch_rows_text_with_expected_columns(res, None)
+}
+
+unsafe fn fetch_rows_text_exact(
+    res: *mut PGresult,
+    expected_columns: usize,
+    description: &str,
+) -> Result<Vec<Vec<String>>, String> {
+    fetch_rows_text_with_expected_columns(res, Some((expected_columns, description)))
+}
+
+unsafe fn fetch_rows_text_with_expected_columns(
+    res: *mut PGresult,
+    expected_columns: Option<(usize, &str)>,
+) -> Result<Vec<Vec<String>>, String> {
     let result = match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if cols < 1 {
+            if let Some((expected, description)) = expected_columns {
+                if cols as usize != expected {
+                    Err(format!(
+                        "invalid PostgreSQL {description} result: expected {expected} columns, got {cols}"
+                    ))
+                } else if rows == 0 {
+                    Ok(Vec::new())
+                } else {
+                    decode_rows_text(res, rows, cols)
+                }
+            } else if cols < 1 {
                 Err("invalid PostgreSQL row result: expected at least 1 column, got 0".to_string())
             } else if rows == 0 {
                 Ok(Vec::new())
             } else {
-                (|| {
-                    let mut values = Vec::with_capacity(rows as usize);
-                    for row in 0..rows {
-                        let mut current = Vec::with_capacity(cols as usize);
-                        for col in 0..cols {
-                            if PQgetisnull(res, row, col) != 0 {
-                                return Err(format!(
-                                    "invalid PostgreSQL row result: NULL at row {}, column {}",
-                                    row + 1,
-                                    col + 1
-                                ));
-                            }
-                            let value_ptr = PQgetvalue(res, row, col);
-                            if value_ptr.is_null() {
-                                return Err(format!(
-                                    "invalid PostgreSQL row result: null value pointer at row {}, column {}",
-                                    row + 1,
-                                    col + 1
-                                ));
-                            }
-                            current.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
-                        }
-                        values.push(current);
-                    }
-                    Ok(values)
-                })()
+                decode_rows_text(res, rows, cols)
             }
         }
         _ => Err(result_error(res)),
     };
     PQclear(res);
     result
+}
+
+unsafe fn decode_rows_text(
+    res: *mut PGresult,
+    rows: c_int,
+    cols: c_int,
+) -> Result<Vec<Vec<String>>, String> {
+    let mut values = Vec::with_capacity(rows as usize);
+    for row in 0..rows {
+        let mut current = Vec::with_capacity(cols as usize);
+        for col in 0..cols {
+            if PQgetisnull(res, row, col) != 0 {
+                return Err(format!(
+                    "invalid PostgreSQL row result: NULL at row {}, column {}",
+                    row + 1,
+                    col + 1
+                ));
+            }
+            let value_ptr = PQgetvalue(res, row, col);
+            if value_ptr.is_null() {
+                return Err(format!(
+                    "invalid PostgreSQL row result: null value pointer at row {}, column {}",
+                    row + 1,
+                    col + 1
+                ));
+            }
+            current.push(CStr::from_ptr(value_ptr).to_string_lossy().to_string());
+        }
+        values.push(current);
+    }
+    Ok(values)
 }
 
 unsafe fn fetch_first_column_texts(res: *mut PGresult) -> Result<Vec<String>, String> {
@@ -9919,7 +9950,7 @@ impl DbRepo {
         self.ensure_lock_schema_ready()?;
         let sql = CString::new(
             "
-            SELECT owner_key, lock_type, range_start, range_end, lock_pid
+            SELECT owner_key, lock_type, range_start, COALESCE(range_end::text, ''), lock_pid
             FROM lock_range_leases
             WHERE resource_kind = $1
               AND resource_id = $2
@@ -9935,65 +9966,19 @@ impl DbRepo {
         self.with_control_connection(|conn| unsafe {
             let params = [&resource_kind, &resource_id];
             let res = exec_params(conn, &sql, &params)?;
-            if PQresultStatus(res) != PGRES_TUPLES_OK {
-                let error = result_error(res);
-                PQclear(res);
-                return Err(error);
-            }
-            let rows = PQntuples(res);
-            let cols = PQnfields(res);
-            if cols < 5 {
-                PQclear(res);
-                return Err("invalid lock range row returned by PostgreSQL".to_string());
-            }
+            let rows = fetch_rows_text_exact(res, 5, "lock range")?;
             let mut output = Vec::new();
-            if rows >= 1 {
-                for row in 0..rows {
-                    if row > 0 {
-                        output.push(b'\n');
+            for (index, row) in rows.iter().enumerate() {
+                if index > 0 {
+                    output.push(b'\n');
+                }
+                for (field_index, field) in row.iter().enumerate() {
+                    if field_index > 0 {
+                        output.push(b'\t');
                     }
-                    let owner_ptr = PQgetvalue(res, row, 0);
-                    let type_ptr = PQgetvalue(res, row, 1);
-                    let start_ptr = PQgetvalue(res, row, 2);
-                    let end_ptr = PQgetvalue(res, row, 3);
-                    let pid_ptr = PQgetvalue(res, row, 4);
-                    let owner = if owner_ptr.is_null() {
-                        String::new()
-                    } else {
-                        CStr::from_ptr(owner_ptr).to_string_lossy().to_string()
-                    };
-                    let lock_type = if type_ptr.is_null() {
-                        String::new()
-                    } else {
-                        CStr::from_ptr(type_ptr).to_string_lossy().to_string()
-                    };
-                    let start = if start_ptr.is_null() {
-                        String::new()
-                    } else {
-                        CStr::from_ptr(start_ptr).to_string_lossy().to_string()
-                    };
-                    let end = if end_ptr.is_null() {
-                        String::new()
-                    } else {
-                        CStr::from_ptr(end_ptr).to_string_lossy().to_string()
-                    };
-                    let pid = if pid_ptr.is_null() {
-                        String::new()
-                    } else {
-                        CStr::from_ptr(pid_ptr).to_string_lossy().to_string()
-                    };
-                    output.extend_from_slice(owner.as_bytes());
-                    output.push(b'\t');
-                    output.extend_from_slice(lock_type.as_bytes());
-                    output.push(b'\t');
-                    output.extend_from_slice(start.as_bytes());
-                    output.push(b'\t');
-                    output.extend_from_slice(end.as_bytes());
-                    output.push(b'\t');
-                    output.extend_from_slice(pid.as_bytes());
+                    output.extend_from_slice(field.as_bytes());
                 }
             }
-            PQclear(res);
             Ok(output)
         })
     }
@@ -15816,6 +15801,15 @@ mod tests {
                 }
                 fetch_rows_text(res)
             };
+            let query_exact_rows = |sql: &str| -> Result<Vec<Vec<String>>, String> {
+                let sql = CString::new(sql)
+                    .map_err(|_| "test exact rows SQL contains NUL".to_string())?;
+                let res = PQexec(conn, sql.as_ptr());
+                if res.is_null() {
+                    return Err(conn_error(conn));
+                }
+                fetch_rows_text_exact(res, 5, "test lock range")
+            };
 
             let result = (|| {
                 if query_row("SELECT 'first'::text, 'second'::text")?
@@ -15884,6 +15878,34 @@ mod tests {
                 }
                 if query_rows("SELECT ''::text")? != vec![vec![String::new()]] {
                     return Err("multirow decoder changed valid empty text".to_string());
+                }
+                if query_exact_rows(
+                    "SELECT 'owner'::text, '1'::text, '0'::text, ''::text, '123'::text",
+                )? != vec![vec![
+                    "owner".to_string(),
+                    "1".to_string(),
+                    "0".to_string(),
+                    "".to_string(),
+                    "123".to_string(),
+                ]] {
+                    return Err("exact multirow decoder changed a valid row".to_string());
+                }
+                if !query_exact_rows(
+                    "SELECT 'owner'::text, '1'::text, '0'::text, ''::text, '123'::text WHERE FALSE",
+                )?
+                .is_empty()
+                {
+                    return Err("exact multirow decoder changed empty result".to_string());
+                }
+                for sql in [
+                    "SELECT 1::text, 2::text, 3::text, 4::text WHERE FALSE",
+                    "SELECT NULL::text, '1'::text, '0'::text, ''::text, '123'::text",
+                ] {
+                    if query_exact_rows(sql).is_ok() {
+                        return Err(format!(
+                            "exact multirow decoder accepted malformed result: {sql}"
+                        ));
+                    }
                 }
                 for sql in [
                     "SELECT NULL::text",

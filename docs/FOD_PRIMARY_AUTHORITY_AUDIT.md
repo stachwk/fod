@@ -904,3 +904,9 @@ symlink promotion. The generic wrapper is now test-only. The focused decoder
 regression and all 72 `pg_query` tests passed against an isolated PostgreSQL
 16.15 database after confirming `--with-blocksize=32` and runtime
 `SHOW block_size=32768`; the temporary database was dropped.
+FOD 3.4.482 replaces the manual lock-range lease decoder with an exact
+five-column multirow decoder that rejects SQL NULLs. The query explicitly
+coalesces nullable `range_end`, preserving the empty-field encoding for an
+open-ended lock. The row-decoder regression and all 10 `lock_manager` tests
+passed on the verified 32 KiB PostgreSQL build; the disposable database was
+dropped.
