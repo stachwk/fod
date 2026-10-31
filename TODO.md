@@ -33,6 +33,14 @@ Reading guide:
   przypadków `~`, zwykłej ścieżki względnej i absolutnej, sprawdzając że
   rozwijany jest wyłącznie prefiks tyldy ukośnika.
 
+- [ ] **Dodaj regresję dla nazw ścieżek zakończonych białymi znakami.**
+  `normalize_path()` używało `trim()`, które usuwało końcowe spacje i inne
+  białe znaki z ostatniego komponentu, kierując operację na inną ścieżkę.
+  Normalizacja zachowuje teraz białe znaki i zmienia wyłącznie separatory.
+  Dodać test montowany tworzący jednocześnie `name` i `name `, sprawdzający
+  lookup, odczyt, rename i unlink bez aliasowania; uwzględnić również końcowy
+  tabulator oraz spację w katalogu nadrzędnym.
+
 - [x] **Do not treat external `dirfd()` closure as a POSIX `closedir()` test.**
   The directory-stream regression had closed the descriptor returned by
   `dirfd()` and then required `closedir()` to return `EBADF`, incorrectly

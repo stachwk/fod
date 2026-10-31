@@ -2589,7 +2589,9 @@ impl FodFuse {
     }
 
     fn normalize_path(path: &str) -> String {
-        let mut value = path.trim().to_string();
+        // Whitespace is valid pathname data. Normalize separators only; trim()
+        // would redirect names whose final component ends in whitespace.
+        let mut value = path.to_string();
         if value.is_empty() {
             return "/".to_string();
         }
