@@ -71,6 +71,14 @@ Additional regressions verify that unwinding a worker releases its admission
 slot for a queued task and that dropping an unfinished observation records a
 failure while balancing active-transaction and payload counters.
 
+The per-handle write-state map treats a poisoned mutex as `EIO` across read,
+write, flush, truncate, `getattr`, `FIONREAD`, `poll` and `copy_file_range` paths.
+It no longer reports a missing buffer or silently drops state updates when the
+lock is poisoned. `write()` takes its target and sibling buffers atomically and
+restores their prior merged state if block preparation fails. A deterministic
+unit test covers the `EIO` mapping. This is a process-local error boundary;
+PostgreSQL remains the durable authority.
+
 Writable mounts use a zero FUSE attribute-cache TTL even if
 `FOD_ATTR_TIMEOUT_SECONDS` requests a positive value. Linux computes an
 `O_APPEND` write offset from its local inode size before sending the request to

@@ -12,7 +12,12 @@ use rust_hotpath::{
     PersistPlanInput,
 };
 use std::collections::BTreeMap;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
+
+pub(crate) fn lock_or_eio<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, libc::c_int> {
+    mutex.lock().map_err(|_| EIO)
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct WriteState {
@@ -667,25 +672,17 @@ impl FodFuse {
         Ok(current)
     }
 
-    pub(crate) fn write_state_for_handle(&self, fh: u64) -> Option<WriteState> {
+    pub(crate) fn write_state_for_handle(
+        &self,
+        fh: u64,
+    ) -> Result<Option<WriteState>, libc::c_int> {
         let started = Instant::now();
-        let result = self.write_states.lock();
+        let result = lock_or_eio(&self.write_states);
         self.record_write_state_lock_elapsed(started.elapsed());
-        result.ok().and_then(|guard| {
-            guard
-                .get(&fh)
-                .map(|state| self.clone_write_state_profiled(state))
-        })
-    }
-
-    pub(crate) fn take_write_state_for_handle(&self, fh: u64) -> Option<WriteState> {
-        // Wyjmij stan zapisu bez klonowania calego bufora.
-        // To jest wazne dla malych zapisow 4K, bo klonowanie narastajacego
-        // BTreeMap<u64, Vec<u8>> przy kazdym write() robi koszt O(n^2).
-        let started = Instant::now();
-        let result = self.write_states.lock();
-        self.record_write_state_lock_elapsed(started.elapsed());
-        result.ok().and_then(|mut guard| guard.remove(&fh))
+        let guard = result?;
+        Ok(guard
+            .get(&fh)
+            .map(|state| self.clone_write_state_profiled(state)))
     }
 
     pub(crate) fn write_state_has_pending_changes(state: &WriteState) -> bool {
@@ -723,13 +720,12 @@ impl FodFuse {
             )
     }
 
-    pub(crate) fn update_write_state(&self, fh: u64, state: WriteState) {
+    pub(crate) fn update_write_state(&self, fh: u64, state: WriteState) -> Result<(), libc::c_int> {
         let started = Instant::now();
-        let result = self.write_states.lock();
+        let result = lock_or_eio(&self.write_states);
         self.record_write_state_lock_elapsed(started.elapsed());
-        if let Ok(mut guard) = result {
-            guard.insert(fh, state);
-        }
+        result?.insert(fh, state);
+        Ok(())
     }
 
     pub(crate) fn flush_pending_write_states_for_file_except(
@@ -743,7 +739,7 @@ impl FodFuse {
         // bajty zapisane chwile wczesniej przez inny uchwyt.
         let pending = {
             let started = Instant::now();
-            let result = self.write_states.lock();
+            let result = lock_or_eio(&self.write_states);
             self.record_write_state_lock_elapsed(started.elapsed());
             let guard = result.map_err(|_| EIO)?;
             guard
@@ -760,31 +756,30 @@ impl FodFuse {
         for (fh, mut state) in pending {
             self.flush_write_state(&mut state)?;
             if Self::write_state_has_pending_changes(&state) {
-                self.update_write_state(fh, state);
+                self.update_write_state(fh, state)?;
             } else {
                 let started = Instant::now();
-                let result = self.write_states.lock();
+                let result = lock_or_eio(&self.write_states);
                 self.record_write_state_lock_elapsed(started.elapsed());
-                if let Ok(mut guard) = result {
-                    guard.remove(&fh);
-                }
+                result?.remove(&fh);
             }
         }
 
         Ok(())
     }
 
-    pub(crate) fn drain_pending_write_states_for_file_except(
+    pub(crate) fn take_write_states_for_file_except(
         &self,
         file_id: u64,
         except_fh: u64,
-    ) -> Result<Vec<(u64, WriteState)>, libc::c_int> {
+    ) -> Result<(Option<WriteState>, Vec<(u64, WriteState)>), libc::c_int> {
         // Dla write() lepiej scalic bufory w pamieci niz przepychac je przez DB.
         // Dzieki temu drugi uchwyt widzi czesciowy blok zapisany przez pierwszy uchwyt.
         let started = Instant::now();
-        let result = self.write_states.lock();
+        let result = lock_or_eio(&self.write_states);
         self.record_write_state_lock_elapsed(started.elapsed());
         let mut guard = result.map_err(|_| EIO)?;
+        let target = guard.remove(&except_fh);
         let handles = guard
             .iter()
             .filter(|(fh, state)| {
@@ -795,10 +790,11 @@ impl FodFuse {
             .map(|(fh, _)| *fh)
             .collect::<Vec<_>>();
 
-        Ok(handles
+        let siblings = handles
             .into_iter()
             .filter_map(|fh| guard.remove(&fh).map(|state| (fh, state)))
-            .collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        Ok((target, siblings))
     }
 
     pub(crate) fn merge_write_state_into(
@@ -833,13 +829,12 @@ impl FodFuse {
         }
     }
 
-    pub(crate) fn remove_write_state(&self, fh: u64) {
+    pub(crate) fn remove_write_state(&self, fh: u64) -> Result<(), libc::c_int> {
         let started = Instant::now();
-        let result = self.write_states.lock();
+        let result = lock_or_eio(&self.write_states);
         self.record_write_state_lock_elapsed(started.elapsed());
-        if let Ok(mut guard) = result {
-            guard.remove(&fh);
-        }
+        result?.remove(&fh);
+        Ok(())
     }
 }
 
@@ -871,5 +866,19 @@ mod tests {
     fn multiple_handles_still_require_visibility_flush() {
         assert!(FodFuse::write_visibility_requires_flush(2, false));
         assert!(FodFuse::write_visibility_requires_flush(2, true));
+    }
+
+    #[test]
+    fn poisoned_write_state_mutex_returns_eio() {
+        let mutex = std::sync::Arc::new(Mutex::new(()));
+        let poisoner = std::sync::Arc::clone(&mutex);
+        let result = std::thread::spawn(move || {
+            let _guard = poisoner.lock().expect("mutex starts healthy");
+            panic!("poison write state mutex for regression test");
+        })
+        .join();
+
+        assert!(result.is_err());
+        assert_eq!(lock_or_eio(&mutex).err(), Some(EIO));
     }
 }

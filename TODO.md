@@ -1826,3 +1826,18 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   - Closure note (2026-09-08): FOD 3.4.16 later reduced the measured 4 KiB read profile to one file-read metadata call while preserving the correctness boundary. Reopen only for a new measured regression.
 - [x] Continue the remaining measured 128 MiB block-only persist bottleneck after FOD 3.2.78: the final profile still has two COPY calls totaling about `1020 ms`, one append-only `data_blocks` merge at about `142 ms`, and one remaining `ON CONFLICT` merge at about `355 ms`; next analyze whether the second 64 MiB flush can be proven append-only/disjoint before changing the merge shape.
   - Closure note (2026-09-08): this 3.2.78 profile is historical and was superseded by later block-only, 32 KiB storage-block and FOD 3.4.x read/write measurements. Any new persist optimization must start from a fresh current baseline rather than continue this old timing breakdown.
+
+## FOD 3.4.427 — poisoned per-handle write-state map
+
+- [x] Treat a poisoned write-state mutex as `EIO` in reads, writes, flushes,
+  truncate, metadata-size overlays, `FIONREAD`, `poll` and `copy_file_range`.
+  Previously, lock poisoning could be converted to `None` or silently ignored,
+  allowing a callback to fall back to older PostgreSQL data or report success
+  without publishing its updated local state. The shared `lock_or_eio()` helper
+  now rejects poisoned access, all state update/removal results are propagated,
+  and handle cleanup logs if it cannot remove state. `write()` now takes its
+  target and sibling buffers under one lock and restores the prior merged state
+  if preparing the requested block update fails. A deterministic unit test
+  verifies the poisoned-lock to `EIO` mapping. This closes the local error
+  mapping gap only; it does not claim recovery or cross-host persistence after a
+  process panic.

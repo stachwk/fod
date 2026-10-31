@@ -61,7 +61,7 @@ use crate::read_cache::{
     FileCacheGenerationGate, ReadBlockCache, ReadFillCoordinator, ReadSequenceState,
 };
 use crate::startup::FodFuseSettings;
-pub(crate) use crate::write_buffer::{ReadCopyDestinationSlice, WriteState};
+pub(crate) use crate::write_buffer::{lock_or_eio, ReadCopyDestinationSlice, WriteState};
 
 const ROOT_INO: u64 = 1;
 const REQUEST_PID_GROUPS_CACHE_TTL: Duration = Duration::from_millis(500);
@@ -4110,28 +4110,28 @@ impl FodFuse {
         }))
     }
 
-    fn pending_write_state_for_path(&self, path: &str) -> Option<WriteState> {
+    fn pending_write_state_for_path(&self, path: &str) -> Result<Option<WriteState>, libc::c_int> {
         let handles = self
             .fh_table
             .lock()
-            .ok()?
+            .map_err(|_| EIO)?
             .iter()
             .filter_map(|(fh, handle)| {
                 (handle.path == path && handle.file_id.is_some()).then_some(*fh)
             })
             .collect::<Vec<_>>();
-        let states = self.write_states.lock().ok()?;
+        let states = lock_or_eio(&self.write_states)?;
         let pending = handles
             .iter()
             .filter_map(|fh| states.get(fh))
             .filter(|state| Self::write_state_has_pending_changes(state))
             .collect::<Vec<_>>();
-        pending
+        Ok(pending
             .iter()
             .filter(|state| state.truncate_pending)
             .max_by_key(|state| state.file_size)
             .or_else(|| pending.iter().max_by_key(|state| state.file_size))
-            .map(|state| (*state).clone())
+            .map(|state| (*state).clone()))
     }
 
     fn overlay_pending_write_size(&self, attrs: &mut ParsedAttrs, state: Option<&WriteState>) {
@@ -5483,8 +5483,16 @@ impl FodFuse {
             .lock()
             .ok()
             .and_then(|mut guard| guard.remove(&fh));
-        if let Ok(mut guard) = self.write_states.lock() {
-            guard.remove(&fh);
+        match lock_or_eio(&self.write_states) {
+            Ok(mut guard) => {
+                guard.remove(&fh);
+            }
+            Err(errno) => {
+                warn!(
+                    "FOD handle cleanup could not remove write state fh={} errno={}",
+                    fh, errno
+                );
+            }
         }
         if let Ok(mut guard) = self.handle_operation_locks.lock() {
             guard.remove(&fh);
@@ -5546,7 +5554,7 @@ impl FodFuse {
     }
 
     fn flush_write_state_for_handle(&self, fh: u64) -> Result<bool, libc::c_int> {
-        let Some(mut state) = self.write_state_for_handle(fh) else {
+        let Some(mut state) = self.write_state_for_handle(fh)? else {
             return Ok(false);
         };
         if !Self::write_state_has_pending_changes(&state) {
@@ -5555,9 +5563,9 @@ impl FodFuse {
         self.attach_write_persistence_fence_for_handle(fh, &mut state)?;
         self.flush_write_state(&mut state)?;
         if Self::write_state_has_pending_changes(&state) {
-            self.update_write_state(fh, state);
+            self.update_write_state(fh, state)?;
         } else {
-            self.remove_write_state(fh);
+            self.remove_write_state(fh)?;
         }
         Ok(true)
     }
@@ -5909,7 +5917,13 @@ impl Filesystem for FodFuse {
             if let Some(file_id) = file_id {
                 match self.attrs_for_open_file_id(file_id) {
                     Ok(Some(mut attrs)) => {
-                        let write_state = self.write_state_for_handle(fh);
+                        let write_state = match self.write_state_for_handle(fh) {
+                            Ok(state) => state,
+                            Err(errno) => {
+                                fuse_reply_error!(reply, errno);
+                                return;
+                            }
+                        };
                         self.overlay_pending_write_size(&mut attrs, write_state.as_ref());
                         reply.attr(&self.attr_cache_ttl_live(), &attrs.file_attr);
                         return;
@@ -5965,7 +5979,13 @@ impl Filesystem for FodFuse {
                         fuse_reply_error!(reply, errno);
                         return;
                     }
-                    let write_state = self.pending_write_state_for_path(&path);
+                    let write_state = match self.pending_write_state_for_path(&path) {
+                        Ok(state) => state,
+                        Err(errno) => {
+                            fuse_reply_error!(reply, errno);
+                            return;
+                        }
+                    };
                     self.overlay_pending_write_size(&mut attrs, write_state.as_ref());
                 }
                 self.register_path(&path, attrs.file_attr.ino.0);
@@ -6937,8 +6957,12 @@ impl Filesystem for FodFuse {
             }
             value if value == libc::FIONREAD as u32 => {
                 let size = match self.write_state_for_handle(fh) {
-                    Some(state) => state.file_size,
-                    None => attrs.file_attr.size,
+                    Ok(Some(state)) => state.file_size,
+                    Ok(None) => attrs.file_attr.size,
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
                 };
                 debug!(
                     "FOD ioctl path={} fh={} cmd={} size={}",
@@ -6978,10 +7002,14 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, ENOTTY);
             return;
         }
-        let size = self
-            .write_state_for_handle(fh)
-            .map(|state| state.file_size)
-            .unwrap_or(attrs.file_attr.size);
+        let size = match self.write_state_for_handle(fh) {
+            Ok(Some(state)) => state.file_size,
+            Ok(None) => attrs.file_attr.size,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let mut revents = 0u32;
         if size > 0 {
             revents |= POLLIN as u32;
@@ -7168,7 +7196,10 @@ impl Filesystem for FodFuse {
                 fuse_reply_error!(reply, errno);
                 return;
             }
-            self.remove_write_state(fh);
+            if let Err(errno) = self.remove_write_state(fh) {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
             debug!(
                 "FOD req={} op=open atomic_truncate path={} file_id={} fh={}",
                 req_id, path, file_id, fh
@@ -7700,7 +7731,20 @@ impl Filesystem for FodFuse {
         // resolves the file's CURRENT data_object_id and blocks together,
         // without trusting this mount's previously read block maps.
         // Preserve read-your-own-writes when this handle has pending changes.
-        if Self::strict_cross_mount_reads_enabled() && self.write_state_for_handle(fh).is_none() {
+        let mut write_state = match self.write_state_for_handle(fh) {
+            Ok(state) => state,
+            Err(errno) => {
+                self.log_request_error(
+                    req_id,
+                    "read",
+                    errno,
+                    format!("file_id={} write_state", file_id),
+                );
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
+        if Self::strict_cross_mount_reads_enabled() && write_state.is_none() {
             match self.read_noatime_direct_uncached(file_id, offset, size) {
                 Ok(data) => {
                     read_task.complete(0, data.len() as u64);
@@ -7719,7 +7763,7 @@ impl Filesystem for FodFuse {
             return;
         }
         if self.atime_policy == AtimePolicy::NoAtime {
-            if let Some(mut state) = self.write_state_for_handle(fh) {
+            if let Some(mut state) = write_state.take() {
                 let data = match self.read_from_write_state(&mut state, offset, size) {
                     Ok(data) => data,
                     Err(errno) => {
@@ -7768,7 +7812,7 @@ impl Filesystem for FodFuse {
                 None
             }
         };
-        if let Some(mut state) = self.write_state_for_handle(fh) {
+        if let Some(mut state) = write_state.take() {
             let data = match self.read_from_write_state(&mut state, offset, size) {
                 Ok(data) => data,
                 Err(errno) => {
@@ -8174,9 +8218,14 @@ impl Filesystem for FodFuse {
                     fuse_reply_error!(reply, EBADF);
                     return;
                 }
-                let mut state = self
-                    .write_state_for_handle(fh)
-                    .unwrap_or_else(|| Self::new_write_state(file_id, new_size, true));
+                let mut state = match self.write_state_for_handle(fh) {
+                    Ok(Some(state)) => state,
+                    Ok(None) => Self::new_write_state(file_id, new_size, true),
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                };
                 state.file_id = file_id;
                 state.file_size = new_size;
                 state.truncate_pending = true;
@@ -8190,9 +8239,15 @@ impl Filesystem for FodFuse {
                     return;
                 }
                 if Self::write_state_has_pending_changes(&state) {
-                    self.update_write_state(fh, state);
+                    if let Err(errno) = self.update_write_state(fh, state) {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
                 } else {
-                    self.remove_write_state(fh);
+                    if let Err(errno) = self.remove_write_state(fh) {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
                 }
             } else {
                 match self.acl_allows(&path, &current_attrs, libc::W_OK, &subject) {
@@ -9394,7 +9449,10 @@ impl Filesystem for FodFuse {
                 fuse_reply_error!(reply, errno);
                 return;
             }
-            self.remove_write_state(fh);
+            if let Err(errno) = self.remove_write_state(fh) {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
             debug!(
                 "FOD req={} op=create recovered_existing_atomic_truncate path={} file_id={} fh={}",
                 req_id, child_path, file_id, fh
@@ -9585,25 +9643,24 @@ impl Filesystem for FodFuse {
         }
         self.record_write_preflight_elapsed(preflight_started.elapsed());
 
-        let drain_started = Instant::now();
-        let sibling_states_result = self.drain_pending_write_states_for_file_except(file_id, fh);
-        self.record_write_drain_sibling_states_elapsed(drain_started.elapsed());
-        let sibling_states = match sibling_states_result {
+        let take_states_started = Instant::now();
+        let states_result = self.take_write_states_for_file_except(file_id, fh);
+        let take_states_elapsed = take_states_started.elapsed();
+        self.record_write_drain_sibling_states_elapsed(take_states_elapsed);
+        self.record_write_take_state_elapsed(take_states_elapsed);
+        let (existing_state, sibling_states) = match states_result {
             Ok(states) => states,
             Err(errno) => {
                 self.log_request_error(
                     req_id,
                     "write",
                     errno,
-                    format!("file_id={} take pending sibling fh states", file_id),
+                    format!("file_id={} take pending fh states", file_id),
                 );
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        let take_state_started = Instant::now();
-        let existing_state = self.take_write_state_for_handle(fh);
-        self.record_write_take_state_elapsed(take_state_started.elapsed());
         let existing_size = if let Some(state) = existing_state.as_ref() {
             state.file_size
         } else {
@@ -9614,10 +9671,18 @@ impl Filesystem for FodFuse {
                 Ok(size) => size,
                 Err(errno) => {
                     if let Some(existing_state) = existing_state {
-                        self.update_write_state(fh, existing_state);
+                        if let Err(update_errno) = self.update_write_state(fh, existing_state) {
+                            fuse_reply_error!(reply, update_errno);
+                            return;
+                        }
                     }
                     for (sibling_fh, sibling_state) in sibling_states {
-                        self.update_write_state(sibling_fh, sibling_state);
+                        if let Err(update_errno) =
+                            self.update_write_state(sibling_fh, sibling_state)
+                        {
+                            fuse_reply_error!(reply, update_errno);
+                            return;
+                        }
                     }
                     self.log_request_error(
                         req_id,
@@ -9682,9 +9747,15 @@ impl Filesystem for FodFuse {
         state.file_id = file_id;
         state.kill_suidgid |= write_flags.contains(WriteFlags::FUSE_WRITE_KILL_SUIDGID);
         if let Err(errno) = self.attach_write_persistence_fence_for_handle(fh, &mut state) {
-            self.update_write_state(fh, state);
+            if let Err(update_errno) = self.update_write_state(fh, state) {
+                fuse_reply_error!(reply, update_errno);
+                return;
+            }
             for (sibling_fh, sibling_state) in sibling_states {
-                self.update_write_state(sibling_fh, sibling_state);
+                if let Err(update_errno) = self.update_write_state(sibling_fh, sibling_state) {
+                    fuse_reply_error!(reply, update_errno);
+                    return;
+                }
             }
             self.log_request_error(req_id, "write", errno, format!("fh={} fence", fh));
             fuse_reply_error!(reply, errno);
@@ -9696,7 +9767,12 @@ impl Filesystem for FodFuse {
             self.merge_write_state_into(&mut state, sibling_state, self.block_size);
         }
         self.record_write_merge_sibling_states_elapsed(merge_started.elapsed());
+        let state_before_request = self.clone_write_state_profiled(&state);
         if let Err(errno) = self.update_write_buffer(&mut state, offset, data) {
+            if let Err(update_errno) = self.update_write_state(fh, state_before_request) {
+                fuse_reply_error!(reply, update_errno);
+                return;
+            }
             self.log_request_error(req_id, "write", errno, format!("fh={} update", fh));
             fuse_reply_error!(reply, errno);
             return;
@@ -9733,9 +9809,15 @@ impl Filesystem for FodFuse {
         if should_flush_now {
             if let Err(errno) = self.flush_write_state(&mut state) {
                 let state_update_started = Instant::now();
-                self.update_write_state(fh, state);
+                if let Err(update_errno) = self.update_write_state(fh, state) {
+                    fuse_reply_error!(reply, update_errno);
+                    return;
+                }
                 for (sibling_fh, sibling_state) in sibling_states {
-                    self.update_write_state(sibling_fh, sibling_state);
+                    if let Err(update_errno) = self.update_write_state(sibling_fh, sibling_state) {
+                        fuse_reply_error!(reply, update_errno);
+                        return;
+                    }
                 }
                 self.record_write_state_update_elapsed(state_update_started.elapsed());
                 self.log_request_error(req_id, "write", errno, format!("fh={} flush", fh));
@@ -9749,12 +9831,17 @@ impl Filesystem for FodFuse {
         let state_update_started = Instant::now();
         if has_sibling_states {
             let lock_started = Instant::now();
-            let result = self.write_states.lock();
+            let result = lock_or_eio(&self.write_states);
             self.record_write_state_lock_elapsed(lock_started.elapsed());
-            if let Ok(mut guard) = result {
-                for (sibling_fh, _) in sibling_states.iter() {
-                    guard.remove(sibling_fh);
+            let mut guard = match result {
+                Ok(guard) => guard,
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
                 }
+            };
+            for (sibling_fh, _) in sibling_states.iter() {
+                guard.remove(sibling_fh);
             }
         }
 
@@ -9762,13 +9849,21 @@ impl Filesystem for FodFuse {
         // Inaczej read() moze wejsc w read_from_write_state() zamiast czytac normalnie z repo.
         if flushed_now && !Self::write_state_has_pending_changes(&state) {
             let lock_started = Instant::now();
-            let result = self.write_states.lock();
+            let result = lock_or_eio(&self.write_states);
             self.record_write_state_lock_elapsed(lock_started.elapsed());
-            if let Ok(mut guard) = result {
-                guard.remove(&fh);
-            }
+            let mut guard = match result {
+                Ok(guard) => guard,
+                Err(errno) => {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+            };
+            guard.remove(&fh);
         } else {
-            self.update_write_state(fh, state);
+            if let Err(errno) = self.update_write_state(fh, state) {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
         }
         self.record_write_state_update_elapsed(state_update_started.elapsed());
 
@@ -10145,8 +10240,20 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let src_state = self.write_state_for_handle(fh_in);
-        let dst_state = self.write_state_for_handle(fh_out);
+        let src_state = match self.write_state_for_handle(fh_in) {
+            Ok(state) => state,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
+        let dst_state = match self.write_state_for_handle(fh_out) {
+            Ok(state) => state,
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let dst_size = if let Some(state) = dst_state.as_ref() {
             state.file_size
         } else {
@@ -10236,7 +10343,10 @@ impl Filesystem for FodFuse {
                     if let Some(state) = dst_state.as_ref() {
                         let mut state = self.clone_write_state_profiled(state);
                         state.file_size = src_size;
-                        self.update_write_state(fh_out, state);
+                        if let Err(errno) = self.update_write_state(fh_out, state) {
+                            fuse_reply_error!(reply, errno);
+                            return;
+                        }
                     }
                     self.clear_read_cache_for_file(dst_file_id);
                     self.clear_recent_write_blocks_for_file(dst_file_id);
@@ -10408,7 +10518,10 @@ impl Filesystem for FodFuse {
                         fuse_reply_error!(reply, errno);
                         return;
                     }
-                    self.update_write_state(fh_out, state);
+                    if let Err(errno) = self.update_write_state(fh_out, state) {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
                     debug!(
                         "FOD req={} op=copy_file_range dedupe extended size without changed blocks src_file_id={} dst_file_id={} len={}",
                         req_id, src_file_id, dst_file_id, copy_len
@@ -10454,7 +10567,10 @@ impl Filesystem for FodFuse {
                 fuse_reply_error!(reply, errno);
                 return;
             }
-            self.update_write_state(fh_out, state);
+            if let Err(errno) = self.update_write_state(fh_out, state) {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
             debug!(
                 "FOD req={} op=copy_file_range dedupe wrote changed blocks src_file_id={} dst_file_id={} len={}",
                 req_id, src_file_id, dst_file_id, copy_len
@@ -10487,7 +10603,10 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, errno);
             return;
         }
-        self.update_write_state(fh_out, state);
+        if let Err(errno) = self.update_write_state(fh_out, state) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
         debug!(
             "FOD req={} op=copy_file_range completed src_file_id={} dst_file_id={} len={}",
             req_id, src_file_id, dst_file_id, copy_len
