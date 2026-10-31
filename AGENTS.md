@@ -39,6 +39,21 @@ valid replacement for filesystem operation ordering.
 
 See `docs/FOD_ARCHITECTURE_INVARIANTS.md`.
 
+## SQL column type sizing
+
+When creating or changing SQL schemas, choose column types and constraints to
+match the field's actual domain, supported range and expected data size. Avoid
+both undersized types that reject valid FOD data and oversized numeric types
+when a narrower type fully represents the contract. For text, use explicit
+length limits only when they come from a documented filesystem, protocol or
+format constraint; distinguish character limits from byte limits and enforce
+the correct one in PostgreSQL. Do not use `VARCHAR(n)` as a storage
+optimization over PostgreSQL `TEXT`: both store the same values the same way.
+Review indexed text fields for PostgreSQL index-entry limits as well. Keep
+fresh-install schemas, upgrade migrations and runtime-created SQL structures
+consistent, and never rewrite an already published migration to change its
+effect; add a new migration instead. See `docs/SQL_SCHEMA_LIMIT_AUDIT.md`.
+
 ## Supported build architectures
 
 Build and package FOD only for 64-bit and wider userspace architectures. Do not
