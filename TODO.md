@@ -2512,3 +2512,10 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   guard or deferred unlink preservation. Hotpath compilation and formatting
   pass; no PostgreSQL operation was run. Integration coverage requires the
   verified FOD 32 KiB server and a disposable schema-38 database.
+
+## FOD 3.4.502 — reject zero symlink IDs from hardlink lookup
+
+- [x] Resolve the backing symlink ID through the shared positive-ID decoder
+  in `symlink_id_for_hardlink_entry()`. The previous unsigned parse accepted
+  zero, allowing malformed namespace metadata to escape as a valid target ID.
+  The hotpath crate build and formatting pass; no database operation was run.

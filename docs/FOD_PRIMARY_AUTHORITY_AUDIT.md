@@ -1032,3 +1032,5 @@ FOD 3.4.501 routes the remaining file purge and rename-replacement open-lease
 booleans through the strict PostgreSQL boolean decoder. Unknown values now fail
 the transaction instead of being interpreted as “no hardlink” or “no open
 lease”.
+FOD 3.4.502 applies the positive-ID decoder when resolving the backing symlink
+from a symlink-hardlink entry; a corrupt zero target ID now fails the lookup.

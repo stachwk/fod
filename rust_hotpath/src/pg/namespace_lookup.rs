@@ -8,8 +8,9 @@
 use super::{
     conn_error, exec_params, exec_prepared_params, fetch_first_column_texts,
     fetch_optional_single_row_texts_exact, fetch_rows_text, fetch_single_optional_text,
-    join_nul_text, parse_persisted_posix_mode, result_error, DbRepo, PQclear, PQgetisnull,
-    PQgetvalue, PQnfields, PQntuples, PQresultStatus, PreparedStatement, PGRES_TUPLES_OK,
+    join_nul_text, parse_persisted_posix_mode, parse_positive_u64_text, result_error, DbRepo,
+    PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples, PQresultStatus, PreparedStatement,
+    PGRES_TUPLES_OK,
 };
 use std::ffi::{CStr, CString};
 
@@ -687,12 +688,7 @@ impl DbRepo {
         self.with_read_connection(|conn| unsafe {
             let value = fetch_single_optional_text(exec_params(conn, &sql, &[&id])?)?;
             value
-                .map(|value| {
-                    value
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|_| "invalid symlink id for hardlink entry".to_string())
-                })
+                .map(|value| parse_positive_u64_text(&value, "symlink id for hardlink entry"))
                 .transpose()
         })
     }
