@@ -797,13 +797,14 @@ Reading guide:
   mounted snapshot regression now traverses 512 initial entries and checks
   direct libc `opendir()`/`readdir()` EOF, successful `closedir()`, and `ENOENT`
   from `opendir()` for a missing path, plus `EMFILE` for `opendir()` and `open()`
-  after exhausting the process descriptor limit. The regression now asserts that `closedir()` returns
-  `EBADF` after its owned descriptor is closed externally. Its libc helper passed
-  against a local directory, including the new `open()`/`EMFILE` assertion;
-  the two-mount FUSE test could not run because no PostgreSQL server was available. System-wide `ENFILE` and namespace errno
-  checks remain unverified on supported 64-bit-and-wider systems; do not provision
-  or build
-  a 32-bit FOD target for the narrow-inode `EOVERFLOW` case.
+  after exhausting the process descriptor limit. The mounted
+  `test_readdir_snapshot_multimount.py` regression passed on FOD 3.4.398 against
+  an isolated PostgreSQL 16.15 database on Linux 6.17/libfuse3 3.17.4. A former
+  assertion required `closedir()` to return `EBADF` after external closure of
+  `dirfd()`; it was removed because POSIX defines that use as undefined behavior
+  (see the resolved finding above). System-wide `ENFILE` and remaining
+  namespace errno checks are unverified on supported 64-bit-and-wider systems;
+  do not build a 32-bit FOD target for the narrow-inode `EOVERFLOW` case.
   See [`POSIX errno matrix`](docs/POSIX_ERRNO_MATRIX.md)
   and [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#pending-requirement-ledger).
 - [ ] **P02 directory-stream snapshot behavior still needs ABI and descriptor checks.** FOD
@@ -825,13 +826,11 @@ Reading guide:
   initial child entries and checks the libc stream boundary, including `EMFILE`.
   32-bit narrow-ABI `EOVERFLOW` is outside the supported architecture matrix;
   system-wide `ENFILE` remains to be covered on supported systems. The test
-  source used to include a `closedir()` `EBADF` assertion after directly closing
-  the `dirfd()` descriptor; that assertion has been removed because POSIX
-  defines this use as undefined behavior. The mounted test passed on FOD
-  3.4.398 against an isolated database. It covers `open()`/`opendir()` `EMFILE`
-  and valid `closedir()` success. The first attempt used a stale runtime binary
-  and was rerun after rebuilding the current version; this was a test setup
-  mismatch, not a filesystem failure. System-wide `ENFILE` and remaining
+  source's invalid external-`dirfd()` `closedir()` assertion was removed; the
+  mounted test passed on FOD 3.4.398 against an isolated database, covering
+  `open()`/`opendir()` `EMFILE` and successful `closedir()`. The first attempt
+  used a stale runtime binary and was rerun after rebuilding; this was a test
+  setup mismatch, not a filesystem failure. System-wide `ENFILE` and remaining
   namespace errno checks are still open.
   See [`POSIX conformance audit`](docs/POSIX_CONFORMANCE_AUDIT.md#directory-iteration-cookie-finding).
 - [ ] **Evaluate and upgrade the supported libfuse3 baseline.** The development
