@@ -2554,3 +2554,11 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   Invalid text previously became `false`, potentially misclassifying a replica
   or admitting startup during malformed schema state. Formatting and hotpath
   compilation pass; no database operation was run.
+
+## FOD 3.4.507 — validate returned write-lease fencing tokens
+
+- [x] Distinguish a missing heartbeat `RETURNING` row from an empty or invalid
+  token, require returned tokens to be positive and equal the requested
+  fencing token. Previously empty text was treated as a stale lease and any
+  nonempty token as a successful heartbeat. Formatting and hotpath compilation
+  pass; no database operation was run.

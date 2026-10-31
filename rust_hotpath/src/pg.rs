@@ -9398,9 +9398,21 @@ impl DbRepo {
                 ];
                 let destination_res =
                     exec_params(conn, &heartbeat_destination_sql, &destination_params)?;
-                let destination_value =
-                    fetch_single_text_option(destination_res)?.unwrap_or_default();
-                let destination_active = !destination_value.trim().is_empty();
+                let destination_value = fetch_single_optional_text(destination_res)?;
+                let destination_active = match destination_value {
+                    None => false,
+                    Some(value) => {
+                        let returned_token =
+                            parse_positive_u64_text(&value, "destination heartbeat fencing token")?;
+                        if returned_token != lease.destination_fencing_token {
+                            return Err(
+                                "destination heartbeat returned a mismatched fencing token"
+                                    .to_string(),
+                            );
+                        }
+                        true
+                    }
+                };
 
                 if let (Some(file_id_param), Some(file_token_param)) =
                     (file_id_param.as_ref(), file_token_param.as_ref())
@@ -9435,10 +9447,15 @@ impl DbRepo {
                         &lease_ttl,
                     ];
                     let file_res = exec_params(conn, &heartbeat_file_sql, &file_params)?;
-                    let file_value = fetch_single_text_option(file_res)?.unwrap_or_default();
-                    if file_value.trim().is_empty() {
+                    let file_value = fetch_single_optional_text(file_res)?;
+                    let Some(file_value) = file_value else {
+                        return Err("write ownership file lease disappeared during heartbeat".to_string());
+                    };
+                    let returned_token =
+                        parse_positive_u64_text(&file_value, "file heartbeat fencing token")?;
+                    if Some(returned_token) != lease.file_fencing_token {
                         return Err(
-                            "write ownership file lease disappeared during heartbeat".to_string()
+                            "file heartbeat returned a mismatched fencing token".to_string(),
                         );
                     }
                 } else if !destination_active {
@@ -9513,10 +9530,15 @@ impl DbRepo {
                     &lease_ttl,
                 ];
                 let res = exec_params(conn, &heartbeat_file_sql, &params)?;
-                Ok(!fetch_single_text_option(res)?
-                    .unwrap_or_default()
-                    .trim()
-                    .is_empty())
+                let Some(value) = fetch_single_optional_text(res)? else {
+                    return Ok(false);
+                };
+                let returned_token =
+                    parse_positive_u64_text(&value, "file heartbeat fencing token")?;
+                if returned_token != file_fencing_token {
+                    return Err("file heartbeat returned a mismatched fencing token".to_string());
+                }
+                Ok(true)
             })
         })
     }

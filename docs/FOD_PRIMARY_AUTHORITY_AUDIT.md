@@ -1049,3 +1049,8 @@ values in lifecycle or namespace operations.
 FOD 3.4.506 routes PostgreSQL startup recovery, schema/config readiness and
 upgrade-in-progress booleans through the shared strict decoder. Malformed values
 now stop startup validation instead of being interpreted as false.
+
+FOD 3.4.507 validates heartbeat `RETURNING fencing_token` values as positive
+identifiers equal to the requested lease token. A missing row still signals a
+lost lease where expected; malformed, empty, zero or mismatched tokens now fail
+closed.
