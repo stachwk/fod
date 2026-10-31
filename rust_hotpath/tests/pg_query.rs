@@ -3103,6 +3103,61 @@ fn unlinked_open_inode_rejects_new_hardlinks_and_purge_until_last_close() -> Res
 }
 
 #[test]
+fn register_file_open_lease_distinguishes_missing_file_and_session() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let conninfo = conninfo_for_database(&temporary_db.name);
+    let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
+    bootstrap_repo
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (38, NOW())")?;
+    drop(bootstrap_repo);
+
+    let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    repo.ensure_client_session_schema()?;
+
+    let name = unique_name("open_lease_missing_resource");
+    let file_id = repo.create_file(None, &name, 0o644, 1000, 1000, &name)?;
+    let session_id = repo.register_client_session(
+        "open-lease-error-test",
+        &unique_name("mount"),
+        "primary",
+        "postgres_lease",
+        u64::from(std::process::id()),
+        60,
+    )?;
+
+    let result = (|| {
+        let missing_file = repo
+            .register_file_open_lease(0, session_id, 1, 60)
+            .expect_err("missing file must reject the open lease");
+        if !missing_file.contains("FOD_OPEN_FILE_UNAVAILABLE") {
+            return Err(format!(
+                "missing file returned the wrong open-lease error: {missing_file}"
+            ));
+        }
+
+        let missing_session = repo
+            .register_file_open_lease(file_id, 0, 2, 60)
+            .expect_err("missing client session must reject the open lease");
+        if !missing_session.contains("FOD_OPEN_SESSION_INVALID") {
+            return Err(format!(
+                "missing session returned the wrong open-lease error: {missing_session}"
+            ));
+        }
+        Ok(())
+    })();
+
+    let delete_session = repo.exec(&format!(
+        "DELETE FROM client_sessions WHERE session_id = {session_id}"
+    ));
+    let purge_file = repo.purge_primary_file(file_id);
+    result.and(delete_session).and(purge_file)
+}
+
+#[test]
 fn promote_hardlink_to_primary_preserves_the_remaining_path() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let repo = repo_with_runtime()?;

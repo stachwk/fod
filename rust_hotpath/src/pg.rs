@@ -8459,8 +8459,8 @@ impl DbRepo {
                 Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
                 let params = [&file_id, &session_id, &handle_id, &lease_ttl];
                 let res = exec_params(conn, &sql, &params)?;
-                let value = fetch_single_text(res)?;
-                if value.trim().is_empty() {
+                let value = fetch_single_text_option(res)?;
+                if value.is_none() {
                     // The advisory lock serializes this decision with unlink/purge.
                     // A missing file and a missing/expired client session must
                     // never be collapsed into the same filesystem errno.

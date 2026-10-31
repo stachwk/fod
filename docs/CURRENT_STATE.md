@@ -61,6 +61,12 @@ creation and reuse on a disposable database with the legacy schema-version
 gate. The test passed against PostgreSQL 16 with `pg_config --configure`
 reporting `--with-blocksize=32` and live `SHOW block_size = 32768`.
 
+FOD 3.4.469 preserves the distinct missing-file and invalid-session outcomes
+when registering a PostgreSQL open-file lease. The `INSERT ... SELECT ...
+RETURNING` may produce zero rows, so this path uses the optional scalar decoder
+before querying the authoritative reason. Regression coverage exercises both
+outcomes independently.
+
 FOD 3.4.430 adds passing mounted `rename()` coverage for file/symlink
 replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
 FOD 3.4.431 extends these checks to verify committed namespace changes and
