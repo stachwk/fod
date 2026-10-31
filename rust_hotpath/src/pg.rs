@@ -6955,7 +6955,7 @@ impl DbRepo {
         let params = [&data_object_id];
         let res = exec_params(conn, &sql, &params)?;
         let value = fetch_single_text(res)?;
-        Ok(matches!(value.trim(), "t" | "true" | "1"))
+        parse_postgres_bool(&value, "data-object payload emptiness")
     }
 
     unsafe fn data_object_write_target_on_conn(
@@ -12134,7 +12134,7 @@ impl DbRepo {
             }
             Self::require_sticky_removal_on_conn(conn, parent_id, "dir", directory_id, actor_uid)?;
             let children = fetch_single_text(exec_params(conn, &children_sql, &[&id])?)?;
-            if matches!(children.as_str(), "t" | "true") {
+            if parse_postgres_bool(&children, "directory child state")? {
                 return Ok(DirectoryUnlinkOutcome::NotEmpty);
             }
             // Detach unlinked open files before locking the directory row.
@@ -12152,7 +12152,7 @@ impl DbRepo {
                 return Err(NAMESPACE_SOURCE_CHANGED.to_string());
             }
             let children = fetch_single_text(exec_params(conn, &children_sql, &[&id])?)?;
-            if matches!(children.as_str(), "t" | "true") {
+            if parse_postgres_bool(&children, "directory child state")? {
                 return Err(DIRECTORY_NOT_EMPTY.to_string());
             }
             exec_command_params(conn, &delete_sql, &[&id])?;
@@ -15325,13 +15325,13 @@ impl DbRepo {
             Self::require_sticky_removal_on_conn(conn, parent_id, "file", file_id, actor_uid)?;
             let outcome = if primary {
                 let links = fetch_single_text(exec_params(conn, &sql_links, &[&file_id_param])?)?;
-                if matches!(links.as_str(), "true" | "t") {
+                if parse_postgres_bool(&links, "file unlink hardlink state")? {
                     self.remove_primary_file_or_promote_hardlink_on_conn(conn, file_id)?;
                     FileUnlinkOutcome::PromotedHardlink
                 } else {
                     exec_command_params(conn, &sql_hide, &[&hidden_name_param, &file_id_param])?;
                     let open = fetch_single_text(exec_params(conn, &sql_open, &[&file_id_param])?)?;
-                    if matches!(open.as_str(), "true" | "t") {
+                    if parse_postgres_bool(&open, "file unlink active open-lease state")? {
                         FileUnlinkOutcome::Deferred
                     } else {
                         self.purge_primary_file_on_conn(conn, file_id)?;

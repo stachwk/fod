@@ -2529,3 +2529,12 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   and `cargo check --offline -p fod-rust-indexer` pass. No database operation
   was run, so malformed live SQL-result behavior still lacks integration
   coverage against an isolated schema-38 database.
+
+## FOD 3.4.504 — reject malformed PostgreSQL booleans in filesystem decisions
+
+- [x] Replace permissive `matches!(value, "true" | "t")` parsing in directory
+  and file unlink, payload-empty, xattr and ACL decisions with the shared strict
+  parser. Malformed values previously acted as false, risking incorrect
+  namespace or privilege decisions. Formatting and hotpath crate compilation
+  pass; database-backed fault injection still requires an isolated schema-38
+  database on the verified FOD 32 KiB build.

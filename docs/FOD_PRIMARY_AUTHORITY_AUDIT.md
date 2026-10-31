@@ -1038,3 +1038,7 @@ FOD 3.4.503 applies a shared positive-ID decoder to persisted entity IDs across
 indexer source/file/hash/duplicate-set models, file and snapshot catalogues,
 import-plan views, hash grouping and cleanup selections. Nullable scan-run and
 snapshot maximum-file IDs remain nullable, but zero is rejected when present.
+FOD 3.4.504 routes the remaining manual PostgreSQL boolean decoders in
+directory unlink, file unlink, payload emptiness, xattr existence and POSIX ACL
+existence through the strict boolean parser; unknown result text now aborts the
+transaction rather than acting as false.

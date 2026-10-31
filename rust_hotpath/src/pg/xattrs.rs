@@ -6,9 +6,9 @@
 
 use super::{
     exec_command_params, exec_params, fetch_optional_single_row_texts_exact,
-    is_retryable_connection_error, parse_persisted_posix_mode, replayable_sql_error, result_error,
-    sql_is_replayable_command, DbRepo, PQclear, PQgetisnull, PQgetvalue, PQnfields, PQntuples,
-    PQresultStatus, PGRES_TUPLES_OK,
+    is_retryable_connection_error, parse_persisted_posix_mode, parse_postgres_bool,
+    replayable_sql_error, result_error, sql_is_replayable_command, DbRepo, PQclear, PQgetisnull,
+    PQgetvalue, PQnfields, PQntuples, PQresultStatus, PGRES_TUPLES_OK,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -591,7 +591,7 @@ impl DbRepo {
             if present.len() != 1 {
                 return Err("invalid xattr existence result row".to_string());
             }
-            let present = matches!(present[0].as_str(), "t" | "true");
+            let present = parse_postgres_bool(&present[0], "xattr existence")?;
             if create_only && present {
                 return Err("FOD_XATTR_EXISTS".to_string());
             }
@@ -769,7 +769,7 @@ impl DbRepo {
             if acl_exists.len() != 1 {
                 return Err("invalid POSIX ACL existence result row".to_string());
             }
-            let acl_exists = matches!(acl_exists[0].as_str(), "t" | "true");
+            let acl_exists = parse_postgres_bool(&acl_exists[0], "POSIX ACL existence")?;
             if create_only && acl_exists {
                 return Err("FOD_XATTR_EXISTS".to_string());
             }
