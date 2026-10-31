@@ -411,8 +411,6 @@ pub fn materialize_source(
         Some(source.name.as_str()),
     )?;
     let root_name = plan::import_root_name(source.id_source, plan_id);
-    let (root_id, root_created) = ensure_root_directory(repo, &source, &root_name)?;
-    let block_size = load_block_size(repo)?;
     let scanned_files = groups.values().map(|members| members.len() as u64).sum();
     let source_bytes = groups
         .values()
@@ -431,12 +429,19 @@ pub fn materialize_source(
         scanned_files,
         validated_files: scanned_files,
         source_bytes,
-        created_directories: root_created,
         ..MaterializeSummary::default()
     };
     let mut staged_rows: Vec<IndexImportPlanEntryStageRow> = Vec::new();
 
     let result = (|| -> Result<(), String> {
+        // From the moment the durable plan is marked running, every fallible
+        // setup step must use the same failure/rollback path as file creation.
+        // Otherwise a root-directory or configuration error strands the plan
+        // in materialize_running and leaves cleanup permanently blocked.
+        let (root_id, root_created) = ensure_root_directory(repo, &source, &root_name)?;
+        summary.created_directories = summary.created_directories.saturating_add(root_created);
+        let block_size = load_block_size(repo)?;
+
         for ((algorithm, full_hash_hex, file_size), mut members) in groups {
             members.sort_by(|left, right| {
                 canonical_sort_key(&left.file.file).cmp(&canonical_sort_key(&right.file.file))

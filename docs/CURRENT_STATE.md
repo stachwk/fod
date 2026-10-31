@@ -4,6 +4,12 @@ This document is the compact canonical description of the **current** FOD archit
 
 The authoritative release version is stored in `../fod_version.txt`.
 
+FOD 3.4.515 routes failures from root creation and block-size setup through
+the import rollback path after the plan is recorded as running. This closes
+the ordinary error-path leak that could leave a partial import permanently in
+`materialize_running`; process crashes still need durable lease-based recovery.
+The setup-failure regression remains pending.
+
 FOD 3.4.514 updates shared data-object reference counts during failed-import
 cleanup by atomically subtracting the number of deleted file references. The
 conditional update rejects underflow, and exclusive-object deletion checks

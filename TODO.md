@@ -15,15 +15,14 @@ Reading guide:
 ## Unresolved findings
 
 - [ ] **Bezpiecznie odzyskiwać import pozostawiony w `materialize_running`.**
-  `cleanup-failed` odmawia teraz usunięcia drzewa, gdy proces importera może
-  nadal je tworzyć; blokada wiersza planu nie zatrzymuje operacji importu
-  wykonywanych w osobnych transakcjach. Awaria procesu może więc pozostawić
-  częściowe drzewo i plan w stanie `materialize_running`. Zaprojektować trwały
+  `cleanup-failed` odmawia usunięcia drzewa, gdy plan pozostaje
+  `materialize_running`. FOD 3.4.515 obejmuje już błędy setupu po zapisaniu
+  planu wspólną ścieżką rollback, ale twarde zakończenie procesu nadal może
+  pozostawić częściowy import w tym stanie. Zaprojektować trwały
   lease/właściciela planu z wygaśnięciem i kontrolowanym przejęciem po
-  potwierdzeniu braku aktywnego importera. Do tego czasu nie zmieniać ręcznie
-  statusu planu bez potwierdzenia, że żaden importer go nie wykonuje. Kod:
-  `rust_indexer/src/cleanup.rs`; dodać i uruchomić regresję odmowy cleanup dla
-  aktywnego planu. Szczegóły ryzyka TX-03C w
+  potwierdzeniu braku aktywnego importera. Nie zmieniać ręcznie statusu planu
+  bez potwierdzenia, że żaden importer go nie wykonuje. Dodać regresje setup
+  failure i odmowy cleanup aktywnego planu. Szczegóły ryzyka TX-03C w
   `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
 
 - [ ] **Dodać regresję współbieżnej adopcji i cleanup licznika obiektu.**
@@ -2657,3 +2656,12 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   a concurrent count change aborts the transaction. Formatting and indexer
   compilation pass; a deterministic two-transaction regression remains
   pending.
+
+## FOD 3.4.515 — roll back materialization setup failures
+
+- [x] Move fallible root-directory setup and block-size loading inside the
+  materialization failure handler. Ordinary errors after persisting a running
+  plan now mark it failed and invoke cleanup instead of leaving a partial root
+  with a permanently running plan. Abrupt process termination still requires a
+  durable import lease/recovery protocol. Formatting and indexer compilation
+  pass; the setup-failure regression remains pending.

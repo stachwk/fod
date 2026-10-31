@@ -278,6 +278,13 @@ rozwiązuje odzyskiwania po awarii procesu, który pozostawił plan w stanie
 kontrolowane przejęcie po jego wygaśnięciu. Regresja bezpośrednio sprawdzająca
 odmowę dla aktywnego planu pozostaje do dodania i uruchomienia.
 
+FOD 3.4.515 przenosi `ensure_root_directory()` i `load_block_size()` do tej
+samej obsługi błędu co tworzenie plików. Błąd tych kroków po zapisaniu planu
+próbuje teraz zapisać `materialize_failed` i wywołać cleanup. To zamyka zwykłe
+błędy setupu, ale nie odzyskuje planu po nagłym zakończeniu procesu. Nadal
+potrzebne są regresje dla błędu setupu i aktywnego planu oraz osobny protokół
+lease/odzyskiwania po crashu.
+
 ### TX-03D — wyścig licznika współdzielonego obiektu (poprawka, test otwarty)
 
 Analiza kodu 2026-10-31 wykazała, że cleanup wylicza listę plików spoza
