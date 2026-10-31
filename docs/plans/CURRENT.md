@@ -16,6 +16,11 @@ long-term proposals belong in [ROADMAP.md](../../ROADMAP.md).
 | 6 | Quantify clock-skew and queue-order evidence | The [time requirements](../POSTGRESQL_REQUIREMENTS.md#3-synchronizacja-czasu-hostów) require monitored NTP synchronization. The shortest effective lock lease is 1 s; validate 100 ms inter-node offset as a candidate against PostgreSQL failover and fencing before adopting a numeric limit. FIFO tickets order waiters within each process, but production telemetry does not correlate tickets with task identities. If historical task order must be diagnosed, add ticket/task correlation locally and authoritative transaction-order evidence across hosts; wall-clock log sorting is insufficient. |
 | 7 | Decide whether any counters need unsigned values beyond signed `BIGINT` | Entity IDs are now `BIGINT`/`BIGSERIAL` through schema 37. PostgreSQL remains signed; only consider `NUMERIC(20,0)` or another representation if a supported FOD contract needs counters above `i64::MAX`. Evidence and domain limits: [SQL schema limit audit](../SQL_SCHEMA_LIMIT_AUDIT.md), [TODO](../../TODO.md). |
 
+The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
+PostgreSQL image and verify the live page size in their healthchecks; both
+stacks were run successfully on 2026-10-31. The explicit 8 KiB variant remains
+limited to compatibility/comparison work.
+
 These priorities do not imply a diagnosed root cause beyond the evidence in
 the linked reviews. Recheck source and existing regressions before choosing a
 fix. Source-review suspicions must stay distinct from reproduced defects.

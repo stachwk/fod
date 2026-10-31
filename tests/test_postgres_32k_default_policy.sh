@@ -10,8 +10,10 @@ STANDALONE_INIT="${ROOT}/docker/postgres-blocksize/standalone-init.sh"
 MAKEFILE="${ROOT}/Makefile"
 INTERNAL_MAKE="${ROOT}/make/fod-internal.mk"
 DECISION="${ROOT}/docs/FOD_POSTGRES_BLCKSZ_32K_DEFAULT_DECISION.md"
+SELINUX_COMPOSE="${ROOT}/docker-compose.selinux-acl.yml"
+HA_CHAIN_COMPOSE="${ROOT}/docker-compose.ha-chain.yml"
 
-for file in "${MAIN_COMPOSE}" "${BENCH_COMPOSE}" "${TMPFS_COMPOSE}" "${DOCKERFILE}" "${STANDALONE_INIT}" "${MAKEFILE}" "${INTERNAL_MAKE}" "${DECISION}"; do
+for file in "${MAIN_COMPOSE}" "${BENCH_COMPOSE}" "${TMPFS_COMPOSE}" "${DOCKERFILE}" "${STANDALONE_INIT}" "${MAKEFILE}" "${INTERNAL_MAKE}" "${DECISION}" "${SELINUX_COMPOSE}" "${HA_CHAIN_COMPOSE}"; do
     [[ -r "${file}" ]] || { echo "Missing ${file}" >&2; exit 1; }
 done
 
@@ -28,6 +30,20 @@ if grep -Fq 'image: postgres:16-alpine' "${MAIN_COMPOSE}"; then
     echo 'Standard PostgreSQL 8K image must not be the default FOD compose image' >&2
     exit 1
 fi
+
+grep -F 'FOD_SELINUX_ACL_POSTGRES_IMAGE:-ghcr.io/stachwk/postgres-16-fod-32k:16.15' "${SELINUX_COMPOSE}" >/dev/null
+grep -F 'FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768' "${SELINUX_COMPOSE}" >/dev/null
+grep -F 'SHOW block_size' "${SELINUX_COMPOSE}" >/dev/null
+grep -F 'fod_pgdata_selinux_acl_32k:' "${SELINUX_COMPOSE}" >/dev/null
+if grep -Fq 'image: postgres:16-alpine' "${SELINUX_COMPOSE}"; then
+    echo 'SELinux/ACL test stack must not use stock PostgreSQL 8K by default' >&2
+    exit 1
+fi
+
+grep -F 'FOD_HA_CHAIN_POSTGRES_IMAGE:-ghcr.io/stachwk/postgres-16-fod-32k:16.15' "${HA_CHAIN_COMPOSE}" >/dev/null
+grep -F 'FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768' "${HA_CHAIN_COMPOSE}" >/dev/null
+grep -F 'SHOW block_size' "${HA_CHAIN_COMPOSE}" >/dev/null
+grep -F 'ha_chain_32k_master_data:' "${HA_CHAIN_COMPOSE}" >/dev/null
 
 grep -F 'ARG POSTGRES_BLOCK_SIZE_KB=32' "${DOCKERFILE}" >/dev/null
 if grep -Fq 'COPY docker/replica-read/' "${DOCKERFILE}"; then

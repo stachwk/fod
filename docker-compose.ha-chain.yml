@@ -1,14 +1,22 @@
 x-postgres-settings: &postgres-settings
   build:
     context: ./docker/replica-read
-  image: fod-ha-chain-postgres:16-alpine
+    args:
+      FOD_POSTGRES_IMAGE: ${FOD_HA_CHAIN_POSTGRES_IMAGE:-ghcr.io/stachwk/postgres-16-fod-32k:16.15}
+  image: fod-ha-chain-postgres:16.15-32k
   environment: &postgres-environment
     POSTGRES_DB: ${POSTGRES_DB:-foddbname}
     POSTGRES_USER: ${POSTGRES_USER:-foduser}
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cichosza}
     PGDATA: /var/lib/postgresql/data/pgdata
+    FOD_EXPECTED_PG_BLOCK_SIZE_BYTES: ${FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768}
   healthcheck:
-    test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+    test:
+      - CMD-SHELL
+      - >-
+        pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
+        test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
+        'SHOW block_size')" = "$$FOD_EXPECTED_PG_BLOCK_SIZE_BYTES"
     interval: 1s
     timeout: 5s
     retries: 90
@@ -34,7 +42,7 @@ services:
     ports:
       - "${HA_CHAIN_BIND_ADDRESS:-127.0.0.1}:${HA_CHAIN_MASTER_PORT:-55471}:5432"
     volumes:
-      - ha_chain_master_data:/var/lib/postgresql/data
+      - ha_chain_32k_master_data:/var/lib/postgresql/data
 
   slave1:
     <<: *postgres-settings
@@ -51,12 +59,14 @@ services:
     ports:
       - "${HA_CHAIN_BIND_ADDRESS:-127.0.0.1}:${HA_CHAIN_SLAVE1_PORT:-55472}:5432"
     volumes:
-      - ha_chain_slave1_data:/var/lib/postgresql/data
+      - ha_chain_32k_slave1_data:/var/lib/postgresql/data
     healthcheck:
       test:
         - CMD-SHELL
         - >-
           pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
+          test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
+          'SHOW block_size')" = "$$FOD_EXPECTED_PG_BLOCK_SIZE_BYTES" &&
           test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
           'SELECT pg_is_in_recovery()')" = "t"
       interval: 1s
@@ -79,12 +89,14 @@ services:
     ports:
       - "${HA_CHAIN_BIND_ADDRESS:-127.0.0.1}:${HA_CHAIN_SLAVE2_PORT:-55473}:5432"
     volumes:
-      - ha_chain_slave2_data:/var/lib/postgresql/data
+      - ha_chain_32k_slave2_data:/var/lib/postgresql/data
     healthcheck:
       test:
         - CMD-SHELL
         - >-
           pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
+          test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
+          'SHOW block_size')" = "$$FOD_EXPECTED_PG_BLOCK_SIZE_BYTES" &&
           test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
           'SELECT pg_is_in_recovery()')" = "t"
       interval: 1s
@@ -93,6 +105,6 @@ services:
       start_period: 3s
 
 volumes:
-  ha_chain_master_data:
-  ha_chain_slave1_data:
-  ha_chain_slave2_data:
+  ha_chain_32k_master_data:
+  ha_chain_32k_slave1_data:
+  ha_chain_32k_slave2_data:

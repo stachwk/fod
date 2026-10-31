@@ -14,6 +14,16 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Domyślne stosy SELinux/ACL i HA-chain muszą używać PostgreSQL 32 KiB.**
+  `docker-compose.selinux-acl.yml` używa teraz obrazu FOD 16.15 z nowym
+  wolumenem i healthcheckiem `SHOW block_size`; `docker-compose.ha-chain.yml`
+  buduje ten sam obraz dla mastera i replik, sprawdza rozmiar stron w
+  healthcheckach i ma osobne wolumeny 32 KiB. Test polityki obejmuje oba pliki.
+  Oba stosy uruchomiono 2026-10-31; SELinux/ACL potwierdził
+  `--with-blocksize=32` oraz `32768`, a master i obie repliki HA-chain
+  przeszły healthcheck i zwróciły te same wartości. Testowe kontenery i ich
+  wolumeny usunięto po weryfikacji.
+
 - [ ] **Uruchomić test końcowego purge po zamknięciu ostatniego uchwytu przy opóźnionej replice.**
   `finalize_deferred_unlink_after_handle_removal()` sprawdza teraz stan
   `unlinked`, lease i purge przez widok primary. Test dwóch mountów

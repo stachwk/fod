@@ -77,6 +77,12 @@ The 2026-10-31 run confirmed `--with-blocksize=32` and `32768` on both database
 services, then stopped before FUSE assertions because the test host provided
 libfuse 3.17 while FOD requires 3.18.2 or newer. See `TODO.md` for rerun status.
 
+FOD 3.4.472 aligns the SELinux/ACL and HA-chain PostgreSQL test stacks with the
+32 KiB FOD build. Their healthchecks require `SHOW block_size = 32768`, and
+their renamed volumes prevent an old 8 KiB cluster from being opened with the
+32 KiB server. Both stacks were started on 2026-10-31; the SELinux/ACL server
+and all three HA-chain nodes reported `--with-blocksize=32` and `32768`.
+
 FOD 3.4.470 checks an initialized database's schema version before preparing
 current-client SQL statements. An old schema now fails with the required
 `mkfs.fod upgrade` instruction instead of a secondary undefined-table SQL

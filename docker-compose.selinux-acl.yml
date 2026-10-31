@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: ${FOD_SELINUX_ACL_POSTGRES_IMAGE:-ghcr.io/stachwk/postgres-16-fod-32k:16.15}
     container_name: ${CONTAINER_POSTGRES_SELINUX_ACL_NAME:-fod-postgres-selinux-acl}
     entrypoint:
       - /bin/sh
@@ -24,12 +24,18 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-foduser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cichosza}
       PGDATA: /var/lib/postgresql/data/pgdata
+      FOD_EXPECTED_PG_BLOCK_SIZE_BYTES: ${FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - fod_pgdata_selinux_acl:/var/lib/postgresql/data
+      - fod_pgdata_selinux_acl_32k:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
+          test "$$(psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Atqc
+          'SHOW block_size')" = "$$FOD_EXPECTED_PG_BLOCK_SIZE_BYTES"
       interval: 2s
       timeout: 5s
       retries: 30
@@ -68,6 +74,6 @@ services:
     command: ["sleep", "infinity"]
 
 volumes:
-  fod_pgdata_selinux_acl:
+  fod_pgdata_selinux_acl_32k:
   fod_cargo_selinux_acl:
   fod_target_selinux_acl:
