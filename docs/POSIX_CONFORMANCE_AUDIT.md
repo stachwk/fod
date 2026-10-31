@@ -1,6 +1,6 @@
 # POSIX conformance audit
 
-Status reviewed at FOD 3.4.394 (2026-10-31): **requirement audit in progress; no
+Status reviewed against source baseline FOD 3.4.395 (2026-10-31): **requirement audit in progress; no
 general POSIX conformance claim**.
 
 The initial matrix marks only the tested standard `lseek()` and sparse
@@ -25,9 +25,11 @@ test on FOD 3.4.387 also verifies that a caught signal interrupts a blocked
 latest recorded mounted stack; Linux 4.18/libfuse3 3.0 remain declared minimums
 without a minimum-stack end-to-end run.
 
-The current source/documentation review is at FOD 3.4.394. The source review
-classified x86_64 `statvfs()` and native `stat()` overflow and fixed silent
-`st_nlink` saturation. This increment adds `open()` `EMFILE` and libc
+The current source/documentation review uses FOD 3.4.395 as its baseline; the
+latest POSIX-specific implementation evidence summarized here is from FOD
+3.4.394. The source review classified x86_64 `statvfs()` and native `stat()`
+overflow and fixed silent `st_nlink` saturation. That increment adds `open()`
+`EMFILE` and libc
 `closedir()` `EBADF` failure-path assertions to the mounted directory-stream
 regression. Their helper passed against a local directory, but the full
 two-mount FUSE test was not run because PostgreSQL was unavailable. The latest functional mounted evidence
@@ -35,7 +37,8 @@ remains the individually versioned cases listed below. The link-count boundary
 has a unit test, not a mounted test. These changes do not upgrade any Pending
 area.
 
-For the compact three-layer status, read
+The documentation-only refresh for FOD 3.4.396 does not change the evidence or
+close any audit row. The canonical three-layer summary is
 [`compatibility-contracts.md`](compatibility-contracts.md). Linux/FUSE runtime
 minimums and the unverified minimum-stack test gap are summarized in
 [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).

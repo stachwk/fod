@@ -5,8 +5,9 @@ release version is sourced from `fod_version.txt` and the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed base: commit `6e2d936` (`FOD 3.4.393`); test/documentation review
-updated for FOD 3.4.394. The latest mounted
+Reviewed source baseline: commit `b592fec` (`FOD 3.4.395`); this documentation
+refresh is recorded in FOD 3.4.396. No runtime behavior changed in this
+refresh. The latest mounted
 `statvfs()` signal-interruption regression cited below passed on FOD 3.4.387;
 3.4.391 fixes `st_nlink` saturation at the FUSE ABI limit; its conversion
 boundary has a unit test but no mounted test with an unrepresentably large link
@@ -17,6 +18,40 @@ helper passed; the two-mount test could not run without PostgreSQL. No new POSIX
 is marked Pass.
 
 ## Overall filesystem compatibility status
+
+### Wniosek w skrócie
+
+FOD jest filesystemem dostępnym przez Linux VFS i FUSE. Zgodność widziana przez
+program zależy łącznie od jądra, uzgodnionego protokołu FUSE/libfuse i callbacków
+FOD. Audyt obejmuje wybrane zachowania, nie certyfikuje całego Linuxa, FUSE ani
+POSIX.
+
+| Obszar | Etap | Co potwierdzono | Co pozostało |
+| --- | --- | --- | --- |
+| POSIX.1-2024 | Audyt wymagań w toku; brak ogólnej deklaracji zgodności | Dwie grupy przypadków `lseek()` mają status Pass: zwykłe pozycjonowanie oraz `SEEK_DATA`/`SEEK_HOLE`. | 12 obszarów P01–P12 pozostaje Pending, ponieważ ich pełny zakres wymagań, błędów lub dowodów nie został zamknięty. Szczegóły i kryteria zamknięcia są w [audycie POSIX](POSIX_CONFORMANCE_AUDIT.md). |
+| Linux kernel/VFS | Zgodność sprawdzona dla wybranych zachowań Linux v6.17 | Testy montowane i przegląd źródeł v6.17 obejmują m.in. rozwiązywanie ścieżek, errno, uprawnienia, deskryptory i skróty VFS przed callbackiem. | Linux 4.18 jest egzekwowanym minimum, ale brak montowanego testu end-to-end na tej wersji. Nie ma pełnej macierzy wersji/dystrybucji ani audytu wszystkich zachowań jądra. |
+| FUSE/libfuse | Frontend działa przez `fuser 0.18.0`/libfuse3; protokół i capability są negocjowane w runtime | Najnowszy zapisany zestaw montowany: Linux 6.17, libfuse3 3.17.4; testy wybranych callbacków, negocjacji i przerwań. | libfuse3 3.0.0 jest egzekwowanym minimum bez testu mounta na tej wersji. Nie wszystkie operacje mają callback FOD; lista implementacji i pominięć niżej oraz w [wymaganiach FUSE](FUSE_REQUIREMENTS.md). |
+
+`Pass` oznacza wyłącznie wskazaną grupę przypadków, a nie cały obszar POSIX.
+Linuxowe zachowanie syscalla nie dowodzi, że request dotarł do callbacku FOD.
+Protokół oferowany przez jądro również nie oznacza, że FOD obsługuje każdą
+operację lub capability.
+
+### Jak czytać dokumentację zgodności
+
+1. Ten dokument jest krótkim stanem i określa granice wsparcia.
+2. [Audyt POSIX](POSIX_CONFORMANCE_AUDIT.md) zawiera macierz wymagań oraz
+   rejestr P01–P12 z dowodami i pozostałymi krokami.
+3. [Wymagania Linux/FUSE](FUSE_REQUIREMENTS.md) opisują minimum uruchomieniowe,
+   negocjację protokołu/capability i testowane kombinacje.
+4. [Macierz errno](POSIX_ERRNO_MATRIX.md) przypisuje przykładowe wyniki do
+   POSIX, Linux VFS, FUSE lub FOD; [referencja errno](ERRNO_REFERENCE.md)
+   definiuje kody używane w Rust.
+
+Szczegółowy audyt jest właścicielem statusu P01–P12, a przewodnik FUSE
+właścicielem minimalnych wersji i zakresu callbacków. Wnioski z innych
+dokumentów powinny linkować do tych właścicieli, zamiast tworzyć równoległe
+liczniki zgodności.
 
 FOD exposes filesystem operations through Linux FUSE. The application-visible
 result is produced by Linux VFS, FUSE protocol/libfuse and FOD callbacks
