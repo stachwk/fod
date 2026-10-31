@@ -1054,3 +1054,7 @@ FOD 3.4.507 validates heartbeat `RETURNING fencing_token` values as positive
 identifiers equal to the requested lease token. A missing row still signals a
 lost lease where expected; malformed, empty, zero or mismatched tokens now fail
 closed.
+
+FOD 3.4.508 also rejects non-positive destination and file fencing tokens at
+write-lease acquisition, before those tokens can enter later heartbeat or
+persistence checks.

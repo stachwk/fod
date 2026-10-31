@@ -9232,22 +9232,19 @@ impl DbRepo {
                 ];
                 let destination_res =
                     exec_params(conn, &upsert_destination_sql, &upsert_destination_params)?;
-                let destination_token =
-                    fetch_single_text(destination_res)?
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|err| format!("invalid destination write fencing token: {err}"))?;
+                let destination_token = parse_positive_u64_text(
+                    &fetch_single_text(destination_res)?,
+                    "destination write fencing token",
+                )?;
 
                 let file_fencing_token = if let Some(file_id_param) = file_id_param.as_ref() {
                     let upsert_file_params =
                         [file_id_param, &session_id, &owner_key_param, &lease_ttl];
                     let file_res = exec_params(conn, &upsert_file_sql, &upsert_file_params)?;
-                    Some(
-                        fetch_single_text(file_res)?
-                            .trim()
-                            .parse::<u64>()
-                            .map_err(|err| format!("invalid file write fencing token: {err}"))?,
-                    )
+                    Some(parse_positive_u64_text(
+                        &fetch_single_text(file_res)?,
+                        "file write fencing token",
+                    )?)
                 } else {
                     None
                 };
