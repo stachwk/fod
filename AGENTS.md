@@ -74,19 +74,27 @@ role, and record the observed value in the test or audit result. Use the
 32KiB FOD build unless the task explicitly targets the 8KiB compatibility
 variant.
 
-The 32KiB build uses the selected official PostgreSQL image as its base, obtains
-the matching PostgreSQL source release, and recompiles it in the builder stage
-with `--with-blocksize=32`. The custom server and extensions built against its
-`pg_config` are installed under `/opt/postgresql-custom`; the stock binaries in
-the base image are not the FOD server. The Docker build verifies the custom
-`pg_config` configuration and a fresh `initdb` cluster's `block_size`, and the
-publisher repeats the version and page-size checks before publishing. For
-in-container checks, use the custom binaries under
-`/opt/postgresql-custom/bin` (or a non-login shell): a login shell may reset
-`PATH` to `/usr/local/bin` and inspect the upstream 8KiB binaries instead of the
-running FOD build. Verify the live server with `SHOW block_size` using the
-configured PostgreSQL role; an image tag or label alone is not evidence of the
-running server's page size.
+Trace the build path used by the task before relying on PostgreSQL-specific
+limits or behavior. The normal 32KiB build entry point is
+`make docker-postgres-32k-build`, which runs
+`scripts/publish_postgres_fod_32k.sh`; that script passes
+`POSTGRES_BLOCK_SIZE_KB=32` to `docker/postgres-blocksize/Dockerfile`. The
+Dockerfile uses the selected official PostgreSQL image as its base, downloads
+the matching PostgreSQL source release, recompiles it with
+`./configure --with-blocksize=32`, and builds extensions against that custom
+`pg_config`. The custom server and extensions are installed under
+`/opt/postgresql-custom`; the base image's stock binaries are not the FOD
+server. The Docker build verifies the custom `pg_config --configure` and a
+fresh `initdb` cluster's `block_size=32768`; the publishing script checks the
+image version and page size again. For Compose or another deployment path,
+inspect its resolved configuration and running container to establish which
+image and binaries are actually selected. Do not treat a repository default or
+a tag/label as proof of the running build. For in-container checks, use the
+custom binaries under `/opt/postgresql-custom/bin` (or a non-login shell): a
+login shell may reset `PATH` to `/usr/local/bin` and inspect the upstream 8KiB
+binaries instead of the running FOD build. Verify the live server with
+`SHOW block_size` using the configured PostgreSQL role; an image tag or label
+alone is not evidence of the running server's page size.
 
 ## Supported build architectures
 
