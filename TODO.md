@@ -2472,3 +2472,11 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   `mkfs` content-generation integration tests refused the shared database name
   `foddbname` before making a connection. FUSE compilation remains unverified:
   this host has libfuse3 3.14.0 but FOD requires at least 3.18.2.
+
+## FOD 3.4.498 — test the complete scalar-boolean result contract
+
+- [x] Factor `mkfs` boolean decoding into a pure result-shape decoder and test
+  valid values, zero/multiple rows, extra columns, SQL NULL, missing value
+  pointers and malformed text. This covers the shape checks independently of
+  a live server. Unit targets, hotpath compilation and version checks pass;
+  no database was used.

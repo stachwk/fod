@@ -1015,3 +1015,7 @@ content-generation integration tests stopped at their dedicated-database-name
 guard (`foddbname`) without connecting. The FUSE crate could not be compiled
 because the installed libfuse3 is 3.14.0 and the project requires 3.18.2 or
 newer; no compilation claim is made for that crate.
+FOD 3.4.498 factors the `mkfs` boolean-cell validation so its pure regression
+also rejects zero/multiple rows, extra columns, SQL NULL, a missing value
+pointer and malformed text. This verifies the whole scalar-result contract
+without relying on the live PostgreSQL endpoint.

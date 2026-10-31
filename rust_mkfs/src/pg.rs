@@ -272,19 +272,17 @@ impl DbConn {
                     let rows = PQntuples(res);
                     let cols = PQnfields(res);
                     if rows != 1 || cols != 1 {
-                        Err(format!(
-                            "PostgreSQL boolean query returned {rows} rows and {cols} columns; expected one row and one column"
-                        ))
-                    } else if PQgetisnull(res, 0, 0) != 0 {
-                        Err("PostgreSQL boolean query returned NULL".to_string())
+                        decode_postgres_bool_result(rows, cols, false, None)
                     } else {
-                        let value = PQgetvalue(res, 0, 0);
-                        if value.is_null() {
-                            Err("PostgreSQL boolean query returned a null value pointer"
-                                .to_string())
+                        let is_null = PQgetisnull(res, 0, 0) != 0;
+                        let value = if is_null {
+                            None
                         } else {
-                            parse_postgres_bool_text(&CStr::from_ptr(value).to_string_lossy())
-                        }
+                            let value = PQgetvalue(res, 0, 0);
+                            (!value.is_null())
+                                .then(|| CStr::from_ptr(value).to_string_lossy().into_owned())
+                        };
+                        decode_postgres_bool_result(rows, cols, is_null, value.as_deref())
                     }
                 }
                 _ => Err(conn_error(self.conn)),
@@ -329,9 +327,28 @@ fn parse_postgres_bool_text(value: &str) -> Result<bool, String> {
     }
 }
 
+fn decode_postgres_bool_result(
+    rows: c_int,
+    cols: c_int,
+    is_null: bool,
+    value: Option<&str>,
+) -> Result<bool, String> {
+    if rows != 1 || cols != 1 {
+        return Err(format!(
+            "PostgreSQL boolean query returned {rows} rows and {cols} columns; expected one row and one column"
+        ));
+    }
+    if is_null {
+        return Err("PostgreSQL boolean query returned NULL".to_string());
+    }
+    let value = value
+        .ok_or_else(|| "PostgreSQL boolean query returned a null value pointer".to_string())?;
+    parse_postgres_bool_text(value)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_postgres_bool_text;
+    use super::{decode_postgres_bool_result, parse_postgres_bool_text};
 
     #[test]
     fn postgres_boolean_decoder_rejects_unknown_values() {
@@ -340,5 +357,19 @@ mod tests {
         for value in ["", "unknown", "null", "2"] {
             assert!(parse_postgres_bool_text(value).is_err());
         }
+    }
+
+    #[test]
+    fn postgres_boolean_result_decoder_rejects_invalid_shape_and_nulls() {
+        assert_eq!(
+            decode_postgres_bool_result(1, 1, false, Some("t")),
+            Ok(true)
+        );
+        assert!(decode_postgres_bool_result(0, 1, false, None).is_err());
+        assert!(decode_postgres_bool_result(2, 1, false, Some("t")).is_err());
+        assert!(decode_postgres_bool_result(1, 2, false, Some("t")).is_err());
+        assert!(decode_postgres_bool_result(1, 1, true, None).is_err());
+        assert!(decode_postgres_bool_result(1, 1, false, None).is_err());
+        assert!(decode_postgres_bool_result(1, 1, false, Some("maybe")).is_err());
     }
 }

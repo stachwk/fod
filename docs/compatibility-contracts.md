@@ -7,14 +7,19 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: FOD 3.4.436. FOD 3.4.415 raised the enforced Linux
-minimum to 6.17.0; FOD 3.4.422 raised the libfuse3 minimum to 3.18.2, with
-mounted validation on 3.18.2 and 3.18.3. This release makes kernel-version
-parsing reject malformed numeric fields while retaining distribution suffixes
-after the final numeric component. FOD 3.4.425 preserves ACL evaluation errors
-from `open()` instead of mapping backend failures to permission denials; FOD
-3.4.426 adds a mounted regression verifying malformed stored ACL data returns
-`EINVAL` from the callback. FOD 3.4.427 maps poisoned per-handle write-state
+Current source version: FOD 3.4.498. POSIX evidence remains individually
+versioned by regression in the [POSIX audit](POSIX_CONFORMANCE_AUDIT.md); the
+current version does not imply that any Pending area is closed. Recent
+PostgreSQL result hardening rejects malformed booleans at lease, fencing,
+schema-admission and indexer-cleanup boundaries; see the
+[primary-authority audit](FOD_PRIMARY_AUTHORITY_AUDIT.md). FOD 3.4.415 raised
+the enforced Linux minimum to 6.17.0; FOD 3.4.422 raised the libfuse3 minimum
+to 3.18.2, with mounted validation on 3.18.2 and 3.18.3. This release makes
+kernel-version parsing reject malformed numeric fields while retaining
+distribution suffixes after the final numeric component. FOD 3.4.425 preserves
+ACL evaluation errors from `open()` instead of mapping backend failures to
+permission denials. FOD 3.4.426 adds a mounted regression verifying malformed
+stored ACL data returns `EINVAL` from the callback. FOD 3.4.427 maps poisoned per-handle write-state
 locks to `EIO` instead of treating them as absent; a deterministic unit
 regression covers this failure boundary. FOD 3.4.428 expands mounted timestamp
 checks for invalid nanoseconds in both `utimensat()` fields and both mixed
