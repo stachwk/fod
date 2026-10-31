@@ -47,6 +47,13 @@ and the repository remains usable afterward. The full 68-test `pg_query`
 suite passed on a fresh disposable PostgreSQL 16.15 database with
 `BLCKSZ=32KiB`.
 
+FOD 3.4.467 preserves the no-conflict/no-longer-owned cases after strict scalar
+decoding: lock acquisition now represents an absent conflict row as an empty
+value, and stale write-lease heartbeats treat zero `RETURNING` rows as lost
+ownership. Lock-range state regressions now assert the persisted `lock_pid`
+field. The complete `fod-rust-hotpath` test suite passed on a fresh disposable
+PostgreSQL 16.15 database with verified `BLCKSZ=32KiB`.
+
 FOD 3.4.430 adds passing mounted `rename()` coverage for file/symlink
 replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
 FOD 3.4.431 extends these checks to verify committed namespace changes and

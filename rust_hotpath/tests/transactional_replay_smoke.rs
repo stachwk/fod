@@ -666,7 +666,7 @@ fn transactional_commit_disconnect_is_replayed_for_lock_range_state_blob() {
     let loaded = direct_repo
         .load_lock_range_state_blob(&resource_kind, resource_id)
         .expect("load lock range state");
-    assert_eq!(loaded, payload.as_bytes());
+    assert_eq!(loaded, b"1001\t1\t0\t5\t0\n1002\t2\t5\t\t0");
 
     direct_repo
         .exec(&format!(
@@ -705,7 +705,7 @@ fn transactional_commit_disconnect_is_replayed_for_replace_lock_range_state_blob
     let loaded = direct_repo
         .load_lock_range_state_blob(&resource_kind, resource_id)
         .expect("load replaced lock range state");
-    assert_eq!(loaded, payload.as_bytes());
+    assert_eq!(loaded, b"1001\t1\t0\t5\t0\n1001\t2\t5\t10\t0");
 
     direct_repo
         .exec(&format!(

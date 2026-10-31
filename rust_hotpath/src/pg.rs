@@ -5388,6 +5388,11 @@ impl DbRepo {
         ) else {
             return self.with_connection(ConnectionLane::Write, f);
         };
+        let discard_connection = |conn, elapsed| {
+            let pool_result = pool.release_failed_operation(elapsed);
+            unsafe { PQfinish(conn) };
+            pool_result
+        };
 
         if self.replica_consistency.force_primary()? {
             self.replica_consistency.record_forced_primary_fallback();
@@ -5439,11 +5444,39 @@ impl DbRepo {
             let started = Instant::now();
             match self.replica_is_caught_up(conn) {
                 Ok(status) if status.caught_up => {
-                    targets.record_replica_replay(generation, status.lag_bytes)?;
+                    if let Err(err) = targets.record_replica_replay(generation, status.lag_bytes) {
+                        return Err(match discard_connection(conn, started.elapsed()) {
+                            Ok(()) => err,
+                            Err(pool_err) => {
+                                format!("{err}; replica connection pool cleanup failed: {pool_err}")
+                            }
+                        });
+                    }
                 }
                 Ok(status) => {
-                    let switched = targets.record_replica_replay(generation, status.lag_bytes)?;
-                    let current_generation = targets.generation()?;
+                    let switched = match targets.record_replica_replay(generation, status.lag_bytes)
+                    {
+                        Ok(value) => value,
+                        Err(err) => {
+                            return Err(match discard_connection(conn, started.elapsed()) {
+                                Ok(()) => err,
+                                Err(pool_err) => format!(
+                                    "{err}; replica connection pool cleanup failed: {pool_err}"
+                                ),
+                            });
+                        }
+                    };
+                    let current_generation = match targets.generation() {
+                        Ok(value) => value,
+                        Err(err) => {
+                            return Err(match discard_connection(conn, started.elapsed()) {
+                                Ok(()) => err,
+                                Err(pool_err) => format!(
+                                    "{err}; replica connection pool cleanup failed: {pool_err}"
+                                ),
+                            });
+                        }
+                    };
                     match pool.return_cached(
                         ConnectionLane::Write,
                         conn,
@@ -5477,7 +5510,17 @@ impl DbRepo {
                 }
                 Ok(Ok(value)) => {
                     let elapsed = started.elapsed();
-                    let current_generation = targets.generation()?;
+                    let current_generation = match targets.generation() {
+                        Ok(value) => value,
+                        Err(err) => {
+                            return Err(match discard_connection(conn, elapsed) {
+                                Ok(()) => err,
+                                Err(pool_err) => format!(
+                                    "{err}; replica connection pool cleanup failed: {pool_err}"
+                                ),
+                            });
+                        }
+                    };
                     match pool.return_cached(
                         ConnectionLane::Write,
                         conn,
@@ -5552,13 +5595,23 @@ impl DbRepo {
 
             let primary_operation_guard =
                 if self.connection_targets.primary_promotion_guard_enabled() {
-                    match self
-                        .connection_targets
-                        .begin_primary_operation(generation)?
-                    {
-                        Some(guard) => Some(guard),
-                        None => {
-                            let current_generation = self.connection_targets.generation()?;
+                    match self.connection_targets.begin_primary_operation(generation) {
+                        Ok(Some(guard)) => Some(guard),
+                        Ok(None) => {
+                            let current_generation = match self.connection_targets.generation() {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    let pool_result =
+                                        self.pool.release_failed_operation(Duration::ZERO);
+                                    unsafe { PQfinish(conn) };
+                                    return Err(match pool_result {
+                                        Ok(()) => err,
+                                        Err(pool_err) => format!(
+                                            "{err}; connection pool cleanup failed: {pool_err}"
+                                        ),
+                                    });
+                                }
+                            };
                             match self.pool.return_cached(
                                 lane,
                                 conn,
@@ -5578,6 +5631,16 @@ impl DbRepo {
                                 }
                             }
                             continue;
+                        }
+                        Err(err) => {
+                            let pool_result = self.pool.release_failed_operation(Duration::ZERO);
+                            unsafe { PQfinish(conn) };
+                            return Err(match pool_result {
+                                Ok(()) => err,
+                                Err(pool_err) => {
+                                    format!("{err}; connection pool cleanup failed: {pool_err}")
+                                }
+                            });
                         }
                     }
                 } else {
@@ -5602,7 +5665,20 @@ impl DbRepo {
                     if lane == ConnectionLane::Write {
                         self.refresh_primary_wal_lsn(conn);
                     }
-                    let current_generation = self.connection_targets.generation()?;
+                    let current_generation = match self.connection_targets.generation() {
+                        Ok(value) => value,
+                        Err(err) => {
+                            let pool_result = self.pool.release_failed_operation(operation_elapsed);
+                            unsafe { PQfinish(conn) };
+                            drop(primary_operation_guard);
+                            return Err(match pool_result {
+                                Ok(()) => err,
+                                Err(pool_err) => {
+                                    format!("{err}; connection pool cleanup failed: {pool_err}")
+                                }
+                            });
+                        }
+                    };
                     match self.pool.return_cached(
                         lane,
                         conn,
@@ -9239,7 +9315,8 @@ impl DbRepo {
                 ];
                 let destination_res =
                     exec_params(conn, &heartbeat_destination_sql, &destination_params)?;
-                let destination_value = fetch_single_text(destination_res)?;
+                let destination_value =
+                    fetch_single_text_option(destination_res)?.unwrap_or_default();
                 let destination_active = !destination_value.trim().is_empty();
 
                 if let (Some(file_id_param), Some(file_token_param)) =
@@ -9278,7 +9355,7 @@ impl DbRepo {
                         &lease_ttl,
                     ];
                     let file_res = exec_params(conn, &heartbeat_file_sql, &file_params)?;
-                    let file_value = fetch_single_text(file_res)?;
+                    let file_value = fetch_single_text_option(file_res)?.unwrap_or_default();
                     if file_value.trim().is_empty() {
                         return Err(
                             "write ownership file lease disappeared during heartbeat".to_string()
@@ -9356,7 +9433,10 @@ impl DbRepo {
                     &lease_ttl,
                 ];
                 let res = exec_params(conn, &heartbeat_file_sql, &params)?;
-                Ok(!fetch_single_text(res)?.trim().is_empty())
+                Ok(!fetch_single_text_option(res)?
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty())
             })
         })
     }
@@ -9523,15 +9603,17 @@ impl DbRepo {
 
                     let conflict_sql = CString::new(
                         "
-                        SELECT lock_type
-                        FROM lock_leases
-                        WHERE resource_kind = $1
-                          AND resource_id = $2
-                          AND lease_kind = $3
-                          AND lease_expires_at > NOW()
-                          AND NOT (session_id = $4 AND owner_key = $5)
-                        ORDER BY session_id, owner_key
-                        LIMIT 1
+                        SELECT COALESCE((
+                            SELECT lock_type::text
+                            FROM lock_leases
+                            WHERE resource_kind = $1
+                              AND resource_id = $2
+                              AND lease_kind = $3
+                              AND lease_expires_at > NOW()
+                              AND NOT (session_id = $4 AND owner_key = $5)
+                            ORDER BY session_id, owner_key
+                            LIMIT 1
+                        ), '')
                         ",
                     )
                     .map_err(|_| "SQL contains NUL byte".to_string())?;
@@ -15373,6 +15455,60 @@ mod tests {
         };
 
         checks
+    }
+
+    #[test]
+    fn with_connection_releases_session_when_target_state_is_poisoned() -> Result<(), String> {
+        let repo = repo_with_global_payload(Arc::new(DbRepoPayloadObservability::default()));
+        let conninfo = CString::new(conninfo())
+            .map_err(|_| "test PostgreSQL connection string contains NUL".to_string())?;
+        let observer = unsafe { PQconnectdb(conninfo.as_ptr()) };
+        if observer.is_null() {
+            return Err("libpq returned a null observer connection".to_string());
+        }
+        if unsafe { PQstatus(observer) } != CONNECTION_OK {
+            let error = conn_error(observer);
+            unsafe { PQfinish(observer) };
+            return Err(error);
+        }
+
+        let query_count = CString::new(
+            "SELECT COUNT(*)::text FROM pg_stat_activity \
+             WHERE datname = current_database() AND usename = current_user \
+               AND pid <> pg_backend_pid()",
+        )
+        .unwrap();
+        let before = unsafe { query_scalar_text_on_conn(observer, &query_count)? }
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid PostgreSQL connection count: {err}"))?;
+        let targets = Arc::clone(&repo.connection_targets);
+        let operation = repo.with_connection(ConnectionLane::Write, |_| {
+            let poison_result = catch_unwind(AssertUnwindSafe(|| {
+                let _state = targets.state.lock().unwrap();
+                panic!("intentional panic to poison target generation state");
+            }));
+            if poison_result.is_ok() {
+                return Err("failed to poison target generation state".to_string());
+            }
+            Ok(())
+        });
+        if operation.is_ok() {
+            unsafe { PQfinish(observer) };
+            return Err("connection operation unexpectedly succeeded".to_string());
+        }
+
+        let after = unsafe { query_scalar_text_on_conn(observer, &query_count)? }
+            .trim()
+            .parse::<u64>()
+            .map_err(|err| format!("invalid PostgreSQL connection count: {err}"))?;
+        unsafe { PQfinish(observer) };
+        if after != before {
+            return Err(format!(
+                "target-state error leaked a checked-out PostgreSQL session: before={before}, after={after}"
+            ));
+        }
+        Ok(())
     }
 
     #[test]

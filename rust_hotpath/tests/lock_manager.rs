@@ -220,7 +220,7 @@ fn range_leases_roundtrip_and_cleanup() {
     let loaded = repo
         .load_lock_range_state_blob("file", rid)
         .expect("load range state");
-    assert_eq!(loaded, payload.as_bytes());
+    assert_eq!(loaded, b"1001\t1\t0\t5\t0\n1002\t2\t5\t\t0");
 
     repo.delete_range_leases("file", rid, None)
         .expect("delete range leases");
@@ -466,7 +466,7 @@ fn expired_client_session_prunes_only_its_owners() {
     let remaining = repo
         .load_lock_range_state_blob("file", rid)
         .expect("load remaining range locks");
-    assert_eq!(remaining, b"1002\t1\t5\t10");
+    assert_eq!(remaining, b"1002\t1\t5\t10\t0");
 
     let session_a_count = repo
         .query_scalar_text(&format!(

@@ -866,7 +866,14 @@ Reading guide:
   the fix and verifies it returns to baseline afterward. Panic cleanup is
   applied to both primary and replica read callbacks. All 68 `pg_query` tests
   passed on a fresh disposable PostgreSQL 16.15 database with the verified
-  `BLCKSZ=32KiB` build.
+  `BLCKSZ=32KiB` build. FOD 3.4.467 corrects callers exposed by the stricter
+  scalar decoder: a no-row flock conflict query now returns an explicit empty
+  scalar, and write-lease heartbeats treat no `RETURNING` row as stale/lost
+  ownership instead of propagating a missing-row error. The lock-manager tests
+  also assert the serialized `lock_pid` field. Full `cargo test -p
+  fod-rust-hotpath -- --test-threads=1` passed against a newly initialized
+  disposable PostgreSQL 16.15 database; the custom build configuration and
+  live `SHOW block_size=32768` were checked, and the database was dropped.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a
