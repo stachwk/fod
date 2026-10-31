@@ -1,8 +1,8 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.426. Najnowsze
+Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.428. Najnowsze
 przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.426. Zmiana w
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.428. Zmiana w
 3.4.415 podniosła wymagane minimum jądra do Linux 6.17.0; nie dostarczyła
 nowego zamontowanego przebiegu POSIX.
 
@@ -40,9 +40,11 @@ FOD używa standardowego `/dev/fuse` transportu; mimo to próg nie dopuszcza
 wersji biblioteki z tym błędem. Aktualnym sprawdzonym wydaniem jest 3.18.3.
 
 Linux 6.16 i starsze wydania są poza deklarowanym zakresem i preflight odrzuca
-je przed uruchomieniem mounta. Minimalna deklarowana wersja to Linux 6.17.0;
-wartość 4.18 w historycznym raporcie strojenia FUSE opisuje wyłącznie ówczesne
-wymaganie i nie jest aktualną deklaracją. Parser akceptuje numeryczne pola
+je przed połączeniem z bazą danych i uruchomieniem mounta. Minimalna
+deklarowana wersja to Linux 6.17.0. Test graniczny potwierdza, że wersja 4.18.0
+jest poprawnie parsowana (także z sufiksem dystrybucji), ale odrzucana jako za
+stara. Wartość 4.18 w historycznym raporcie strojenia FUSE opisuje wyłącznie
+ówczesne wymaganie i nie jest aktualną deklaracją. Parser akceptuje numeryczne pola
 major/minor/patch oraz typowe sufiksy dystrybucji po ostatnim polu numerycznym
 (`-` lub `+`); odrzuca też sufiks wstawiony przed polem patch. Odrzuca
 uszkodzone pola takie jak `6.17malformed.0` zamiast interpretować ich prefiks

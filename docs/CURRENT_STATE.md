@@ -79,6 +79,11 @@ restores their prior merged state if block preparation fails. A deterministic
 unit test covers the `EIO` mapping. This is a process-local error boundary;
 PostgreSQL remains the durable authority.
 
+The mounted timestamp regression checks invalid nanoseconds in both `utimensat`
+fields and verifies that each `UTIME_NOW`/`UTIME_OMIT` order changes only the
+requested timestamp. The broader metadata-and-timestamps POSIX audit remains
+open.
+
 Writable mounts use a zero FUSE attribute-cache TTL even if
 `FOD_ATTR_TIMEOUT_SECONDS` requests a positive value. Linux computes an
 `O_APPEND` write offset from its local inode size before sending the request to

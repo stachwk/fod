@@ -7,7 +7,7 @@ the root Cargo workspace.
 
 Inventory date: `2026-10-31`
 
-Reviewed source baseline: FOD 3.4.427. FOD 3.4.415 raised the enforced Linux
+Reviewed source baseline: FOD 3.4.428. FOD 3.4.415 raised the enforced Linux
 minimum to 6.17.0; FOD 3.4.422 raised the libfuse3 minimum to 3.18.2, with
 mounted validation on 3.18.2 and 3.18.3. This release makes kernel-version
 parsing reject malformed numeric fields while retaining distribution suffixes
@@ -16,8 +16,10 @@ from `open()` instead of mapping backend failures to permission denials; FOD
 3.4.426 adds a mounted regression verifying malformed stored ACL data returns
 `EINVAL` from the callback. FOD 3.4.427 maps poisoned per-handle write-state
 locks to `EIO` instead of treating them as absent; a deterministic unit
-regression covers this failure boundary. It does not change the POSIX matrix
-status.
+regression covers this failure boundary. FOD 3.4.428 expands mounted timestamp
+checks for invalid nanoseconds in both `utimensat()` fields and both mixed
+`UTIME_NOW`/`UTIME_OMIT` orders. It improves P06 evidence without changing the
+POSIX matrix status.
 The preceding release implements and verifies Linux FUSE killpriv handling for
 write, truncate, `O_TRUNC` and ACL updates; these changes do not close a broader
 POSIX matrix area.

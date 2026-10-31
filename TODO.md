@@ -1841,3 +1841,11 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   verifies the poisoned-lock to `EIO` mapping. This closes the local error
   mapping gap only; it does not claim recovery or cross-host persistence after a
   process panic.
+
+## FOD 3.4.428 — timestamp sentinel and range coverage
+
+- [x] Extend the mounted `utimensat()` regression to check negative and
+  out-of-range `tv_nsec` values for both atime and mtime, and both mixed
+  `UTIME_NOW`/`UTIME_OMIT` orders while asserting the omitted timestamp remains
+  unchanged. This closes those specific test gaps only; invalid flags,
+  precision boundaries, and the broader P06 metadata audit remain open.

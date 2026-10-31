@@ -54,12 +54,26 @@ def call_utimensat(path: Path, atime_nsec: int, mtime_nsec: int) -> None:
 
 def assert_invalid_utimensat_nanoseconds(path: Path) -> None:
     before = path.stat()
-    try:
-        call_utimensat(path, 1_000_000_000, 0)
-    except OSError as error:
-        assert error.errno == errno.EINVAL, error.errno
-    else:
-        raise AssertionError("utimensat accepted tv_nsec equal to one billion")
+    invalid_fields = (
+        (1_000_000_000, UTIME_OMIT),
+        (-1, UTIME_OMIT),
+        (UTIME_OMIT, 1_000_000_000),
+        (UTIME_OMIT, -1),
+    )
+    for atime_nsec, mtime_nsec in invalid_fields:
+        try:
+            call_utimensat(path, atime_nsec, mtime_nsec)
+        except OSError as error:
+            assert error.errno == errno.EINVAL, (
+                atime_nsec,
+                mtime_nsec,
+                error.errno,
+            )
+        else:
+            raise AssertionError(
+                "utimensat accepted an invalid tv_nsec value: "
+                f"atime={atime_nsec} mtime={mtime_nsec}"
+            )
     after = path.stat()
     assert after.st_atime_ns == before.st_atime_ns
     assert after.st_mtime_ns == before.st_mtime_ns
@@ -459,17 +473,28 @@ def assert_non_owner_timestamp_rules(path: Path) -> None:
     assert path.stat().st_mtime_ns == after_now, (after_now, path.stat().st_mtime_ns)
 
 
-def assert_partial_omit_preserves_atime(path: Path) -> None:
+def assert_utime_now_omit_field_independence(path: Path) -> None:
     before = path.stat()
     call_utimensat(path, UTIME_OMIT, UTIME_NOW)
-    after = path.stat()
-    assert after.st_atime_ns == before.st_atime_ns, (
+    after_mtime = path.stat()
+    assert after_mtime.st_atime_ns == before.st_atime_ns, (
         before.st_atime_ns,
-        after.st_atime_ns,
+        after_mtime.st_atime_ns,
     )
-    assert after.st_mtime_ns >= before.st_mtime_ns, (
+    assert after_mtime.st_mtime_ns >= before.st_mtime_ns, (
         before.st_mtime_ns,
-        after.st_mtime_ns,
+        after_mtime.st_mtime_ns,
+    )
+
+    call_utimensat(path, UTIME_NOW, UTIME_OMIT)
+    after_atime = path.stat()
+    assert after_atime.st_atime_ns >= after_mtime.st_atime_ns, (
+        after_mtime.st_atime_ns,
+        after_atime.st_atime_ns,
+    )
+    assert after_atime.st_mtime_ns == after_mtime.st_mtime_ns, (
+        after_mtime.st_mtime_ns,
+        after_atime.st_mtime_ns,
     )
 
 
@@ -723,7 +748,7 @@ def main() -> None:
                 timestamp_path = mountpoint / f"acl-timestamp-{suffix}.txt"
                 timestamp_path.write_bytes(b"timestamp payload\n")
                 assert_invalid_utimensat_nanoseconds(timestamp_path)
-                assert_partial_omit_preserves_atime(timestamp_path)
+                assert_utime_now_omit_field_independence(timestamp_path)
                 assert_non_owner_timestamp_rules(timestamp_path)
 
                 print(
