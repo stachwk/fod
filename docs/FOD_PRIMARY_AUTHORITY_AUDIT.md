@@ -91,6 +91,17 @@ the initial link-count read to primary still leaves a check-then-act race.
 
 ## Current unlink implementation and validation
 
+Deferred unlink cleanup after the last handle closes also uses
+`DbRepo::authoritative_view` for the unlinked-state check, active-lease check
+and final purge. The previous read-routed first check could observe a lagging
+replica and leave an unlinked inode behind permanently. The mounted regression
+pauses replica replay between unlink and final close and checks that primary
+purges the inode. The test stack verifies that both PostgreSQL services use
+the FOD PostgreSQL 16.15 build (`--with-blocksize=32`, `SHOW block_size =
+32768`). On 2026-10-31, both PostgreSQL checks passed, but mount startup stopped
+before assertions because the host has libfuse 3.17 and requires 3.18.2 or
+newer; the regression remains pending on a supported host.
+
 `FodFuse::unlink` uses `DbRepo::authoritative_view` for initial resolution and
 permission inputs. `DbRepo::unlink_file_entry` then acquires namespace and file
 lifecycle advisory locks in one primary transaction, revalidates the expected

@@ -177,6 +177,7 @@ def main():
         POSTGRES_PORT=primary_port, FOD_PG_HOST="127.0.0.1", FOD_PG_PORT=primary_port,
         FOD_PG_DBNAME="fod_unlink_authority_test", FOD_PG_USER="foduser",
         FOD_PG_PASSWORD="cichosza", REPLICA_READ_PRIMARY_PORT=primary_port,
+        FOD_EXPECTED_PG_BLOCK_SIZE_BYTES="32768",
         REPLICA_READ_REPLICA_PORT=replica_port, REPLICA_READ_BIND_ADDRESS="127.0.0.1",
         FOD_RUNTIME_PROFILE=os.environ.get("FOD_RUNTIME_PROFILE", "release-lto"),
         FOD_PG_ENDPOINT_ROUTING_ENABLED="1", FOD_PG_RUNTIME_FAILOVER_ENABLED="0",
@@ -203,6 +204,42 @@ def main():
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
 
+    def verify_postgres_build():
+        evidence = []
+        for service in ("primary", "replica"):
+            container_id = compose("ps", "-q", service).stdout.strip()
+            if not container_id:
+                raise AssertionError(f"PostgreSQL service {service} has no container")
+            image = subprocess.run(
+                ["docker", "inspect", "--format", "{{.Config.Image}}", container_id],
+                cwd=ROOT,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            ).stdout.strip()
+            configure = compose(
+                "exec", "-T", service, "/opt/postgresql-custom/bin/pg_config",
+                "--configure",
+            ).stdout.strip()
+            block_size = compose(
+                "exec", "-T", "--user", "postgres", service,
+                "/opt/postgresql-custom/bin/psql", "-U", "foduser", "-d",
+                os.environ["POSTGRES_DB"], "-Atqc", "SHOW block_size",
+            ).stdout.strip()
+            if "--with-blocksize=32" not in configure or block_size != "32768":
+                raise AssertionError(
+                    f"PostgreSQL {service} is not the FOD 32 KiB build: "
+                    f"image={image!r} configure={configure!r} block_size={block_size!r}"
+                )
+            evidence.append(
+                f"service={service}\nimage={image}\n"
+                f"pg_config_configure={configure}\nblock_size={block_size}\n"
+            )
+        (artifacts / "postgres-build.txt").write_text(
+            "\n".join(evidence), encoding="utf-8"
+        )
+
     def connect(port):
         db = psycopg2.connect(
             host="127.0.0.1", port=port, dbname=os.environ["POSTGRES_DB"],
@@ -216,6 +253,7 @@ def main():
     try:
         started = compose("up", "-d", "--wait", "--wait-timeout", "90")
         (artifacts / "compose-start.log").write_text(started.stdout)
+        verify_postgres_build()
         compose(
             "exec", "-T", "--user", "postgres", "primary", "psql", "-U", "foduser",
             "-d", os.environ["POSTGRES_DB"], "-c", "ALTER SYSTEM SET log_lock_waits = on",
@@ -1005,6 +1043,42 @@ def main():
         wait_for(lambda: query(primary, "SELECT count(*) FROM fod.files WHERE id_file=%s", (file_id,))[0][0] == 0, "last close after parent rmdir")
         results["rmdir_preserves_remote_open_unlinked_writer"] = True
         resume()
+
+        # Last-close reclamation must use the primary: replica lag must not
+        # leave an unlinked inode behind after its final open lease is removed.
+        release_path = ma / "release-purges-unlinked-with-lagged-replica"
+        seed(release_path)
+        barrier()
+        release_fd = os.open(mb / release_path.name, os.O_RDWR)
+        release_file_id = query(
+            primary,
+            "SELECT id_file FROM fod.files WHERE name=%s AND NOT unlinked",
+            (release_path.name,),
+        )[0][0]
+        try:
+            pause()
+            release_path.unlink()
+            assert query(
+                primary,
+                "SELECT unlinked FROM fod.files WHERE id_file=%s",
+                (release_file_id,),
+            )[0][0]
+            os.close(release_fd)
+            release_fd = None
+            wait_for(
+                lambda: query(
+                    primary,
+                    "SELECT count(*) FROM fod.files WHERE id_file=%s",
+                    (release_file_id,),
+                )[0][0]
+                == 0,
+                "last close purges unlinked file despite replica lag",
+            )
+        finally:
+            if release_fd is not None:
+                os.close(release_fd)
+            resume()
+        results["last_close_purge_uses_primary_during_replica_lag"] = True
 
         # Keep modifying an uploaded file through its open handle while a
         # second mount recursively removes the containing tree.

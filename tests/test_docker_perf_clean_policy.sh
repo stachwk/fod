@@ -18,7 +18,7 @@ require_line() {
 }
 
 require_line 'PROJECT_PREFIX="${FOD_DOCKER_PERF_PROJECT_PREFIX:-fod-replica-read-}"' "${SCRIPT}"
-require_line 'IMAGE_NAME="${FOD_DOCKER_PERF_IMAGE:-fod-replica-read-postgres:16-alpine}"' "${SCRIPT}"
+require_line 'IMAGE_NAME="${FOD_DOCKER_PERF_IMAGE:-fod-replica-read-postgres:16.15-32k}"' "${SCRIPT}"
 require_line 'FOD_DOCKER_PERF_CLEAN_FORCE' "${SCRIPT}"
 require_line 'FOD_DOCKER_PERF_PRUNE_BUILD_CACHE' "${SCRIPT}"
 require_line 'docker ps --format' "${SCRIPT}"

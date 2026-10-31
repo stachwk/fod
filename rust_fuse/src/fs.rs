@@ -5784,18 +5784,15 @@ impl FodFuse {
         let Some(file_id) = removed_state.and_then(|state| state.file_id) else {
             return Ok(());
         };
-        if self.repo.file_is_unlinked(file_id).map_err(|_| EIO)? != Some(true) {
+        let repo = self.repo.authoritative_view();
+        if repo.file_is_unlinked(file_id).map_err(|_| EIO)? != Some(true) {
             return Ok(());
         }
-        if self
-            .repo
-            .has_active_file_open_leases(file_id)
-            .map_err(|_| EIO)?
-        {
+        if repo.has_active_file_open_leases(file_id).map_err(|_| EIO)? {
             return Ok(());
         }
 
-        self.repo.purge_primary_file(file_id).map_err(|err| {
+        repo.purge_primary_file(file_id).map_err(|err| {
             warn!(
                 "FOD deferred unlink final purge failed file_id={} err={}",
                 file_id, err

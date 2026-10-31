@@ -8,7 +8,7 @@
 set -euo pipefail
 
 PROJECT_PREFIX="${FOD_DOCKER_PERF_PROJECT_PREFIX:-fod-replica-read-}"
-IMAGE_NAME="${FOD_DOCKER_PERF_IMAGE:-fod-replica-read-postgres:16-alpine}"
+IMAGE_NAME="${FOD_DOCKER_PERF_IMAGE:-fod-replica-read-postgres:16.15-32k}"
 FORCE="${FOD_DOCKER_PERF_CLEAN_FORCE:-0}"
 PRUNE_BUILD_CACHE="${FOD_DOCKER_PERF_PRUNE_BUILD_CACHE:-0}"
 

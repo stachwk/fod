@@ -67,6 +67,16 @@ RETURNING` may produce zero rows, so this path uses the optional scalar decoder
 before querying the authoritative reason. Regression coverage exercises both
 outcomes independently.
 
+FOD 3.4.471 checks deferred unlink cleanup against the PostgreSQL primary when
+the last open handle closes. A lagging read replica can no longer suppress the
+final purge of an unlinked inode. The two-mount replica-lag regression is in
+`tests/integration/test_unlink_primary_authority_docker.py`; its Compose stack
+uses the custom PostgreSQL 16.15 `BLCKSZ=32KiB` image and verifies both compiled
+`pg_config --configure` and live `SHOW block_size` before mounting.
+The 2026-10-31 run confirmed `--with-blocksize=32` and `32768` on both database
+services, then stopped before FUSE assertions because the test host provided
+libfuse 3.17 while FOD requires 3.18.2 or newer. See `TODO.md` for rerun status.
+
 FOD 3.4.470 checks an initialized database's schema version before preparing
 current-client SQL statements. An old schema now fails with the required
 `mkfs.fod upgrade` instruction instead of a secondary undefined-table SQL

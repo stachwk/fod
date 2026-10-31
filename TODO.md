@@ -14,6 +14,16 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Uruchomić test końcowego purge po zamknięciu ostatniego uchwytu przy opóźnionej replice.**
+  `finalize_deferred_unlink_after_handle_removal()` sprawdza teraz stan
+  `unlinked`, lease i purge przez widok primary. Test dwóch mountów
+  `last_close_purge_uses_primary_during_replica_lag` jest dodany do
+  `tests/integration/test_unlink_primary_authority_docker.py`; należy go
+  ponowić na hoście z libfuse >= 3.18.2 i uprawnieniami FUSE. Próba 2026-10-31
+  przeszła sprawdzenie obu baz (`--with-blocksize=32`, `SHOW block_size=32768`),
+  ale mount przerwał start, bo host ma libfuse 3.17. Artefakt weryfikacji PG:
+  `artifacts/integration/unlink-primary-authority-20261031T160742Z/`.
+
 - [ ] **Lokalne endpointy PostgreSQL mają starsze schematy niż aktualny kod FOD.**
   Kontener `fod-postgres` na porcie 5432 ma `fod.schema_version=31`, a
   kontenery deploymentu mają wersję 23; brakuje w nich m.in. tabeli

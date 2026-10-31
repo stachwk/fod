@@ -52,10 +52,11 @@ if grep -Eq 'docker[[:space:]]+(system[[:space:]]+)?prune|docker[[:space:]]+volu
     exit 1
 fi
 
-# The normal replica-read lab must remain on the standard PostgreSQL image.
-grep -F 'image: fod-replica-read-postgres:16-alpine' "${PRODUCTION_COMPOSE}" >/dev/null
+# The normal replica-read lab must use FOD's compiled 32 KiB PostgreSQL image.
+grep -F 'FOD_REPLICA_READ_POSTGRES_IMAGE:-ghcr.io/stachwk/postgres-16-fod-32k:16.15' "${PRODUCTION_COMPOSE}" >/dev/null
+grep -F 'FOD_EXPECTED_PG_BLOCK_SIZE_BYTES:-32768' "${PRODUCTION_COMPOSE}" >/dev/null
 if grep -Fq 'postgres-blocksize' "${PRODUCTION_COMPOSE}"; then
-    echo "Benchmark-only PostgreSQL BLCKSZ image leaked into normal replica-read compose" >&2
+    echo "Benchmark-only PostgreSQL image leaked into normal replica-read compose" >&2
     exit 1
 fi
 
