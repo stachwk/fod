@@ -2546,3 +2546,11 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   Zero could otherwise flow into lease, promotion or namespace operations.
   Hotpath compilation and formatting pass; operation tests need the verified
   FOD 32 KiB server and an isolated schema-38 database.
+
+## FOD 3.4.506 — fail closed on malformed PostgreSQL startup booleans
+
+- [x] Route recovery state, schema readiness, required-config existence and
+  upgrade-in-progress values through the shared PostgreSQL boolean decoder.
+  Invalid text previously became `false`, potentially misclassifying a replica
+  or admitting startup during malformed schema state. Formatting and hotpath
+  compilation pass; no database operation was run.

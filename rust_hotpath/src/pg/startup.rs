@@ -5,9 +5,10 @@
 //! keeps all probes on one checked-out authority connection, including before mkfs.
 
 use super::{
-    exec_params, fetch_single_optional_text, postgres_runtime_requirements_on_conn,
-    postgres_version_diagnostics_on_conn, query_rows_text_on_conn, query_scalar_text_on_conn,
-    schema_is_initialized_on_conn, validate_optional_single_row_texts, DbRepo, PGconn,
+    exec_params, fetch_single_optional_text, parse_postgres_bool,
+    postgres_runtime_requirements_on_conn, postgres_version_diagnostics_on_conn,
+    query_rows_text_on_conn, query_scalar_text_on_conn, schema_is_initialized_on_conn,
+    validate_optional_single_row_texts, DbRepo, PGconn,
 };
 use fod_rust_runtime::{
     PostgresRuntimeRequirements, PostgresVersionDiagnostics, FOD_REQUIRED_SCHEMA_VERSION,
@@ -63,10 +64,7 @@ impl DbRepo {
         let sql = CString::new("SELECT pg_is_in_recovery()")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
         let value = query_scalar_text_on_conn(conn, &sql)?;
-        Ok(matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        ))
+        parse_postgres_bool(&value, "PostgreSQL recovery state")
     }
 
     pub fn is_in_recovery(&self) -> Result<bool, String> {
@@ -142,14 +140,9 @@ impl DbRepo {
         let row = validate_optional_single_row_texts(rows, 2, "startup probe")?
             .ok_or_else(|| "startup probe returned no rows".to_string())?;
 
-        let schema_is_initialized = matches!(
-            row[0].trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        );
-        let is_in_recovery = matches!(
-            row[1].trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        );
+        let schema_is_initialized =
+            parse_postgres_bool(&row[0], "startup schema initialization state")?;
+        let is_in_recovery = parse_postgres_bool(&row[1], "startup PostgreSQL recovery state")?;
         Ok((schema_is_initialized, is_in_recovery))
     }
 
@@ -189,10 +182,7 @@ impl DbRepo {
         let row = validate_optional_single_row_texts(rows, 7, "initialized startup values")?
             .ok_or_else(|| "initialized startup values query returned no rows".to_string())?;
 
-        let block_size_present = matches!(
-            row[0].trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        );
+        let block_size_present = parse_postgres_bool(&row[0], "block size config existence")?;
         if !block_size_present {
             return Err("initialized FOD schema is missing config.block_size".to_string());
         }
@@ -204,10 +194,8 @@ impl DbRepo {
             return Err("config.block_size must be greater than zero".to_string());
         }
 
-        let max_fs_size_bytes_present = matches!(
-            row[2].trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        );
+        let max_fs_size_bytes_present =
+            parse_postgres_bool(&row[2], "filesystem size config existence")?;
         if !max_fs_size_bytes_present {
             return Err("initialized FOD schema is missing config.max_fs_size_bytes".to_string());
         }
@@ -231,10 +219,7 @@ impl DbRepo {
                     .to_string(),
             );
         }
-        let schema_upgrade_in_progress = matches!(
-            row[6].trim().to_ascii_lowercase().as_str(),
-            "t" | "true" | "1" | "on"
-        );
+        let schema_upgrade_in_progress = parse_postgres_bool(&row[6], "schema upgrade state")?;
         Ok((
             block_size,
             schema_version,

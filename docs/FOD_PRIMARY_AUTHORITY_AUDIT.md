@@ -1045,3 +1045,7 @@ transaction rather than acting as false.
 FOD 3.4.505 routes session, hardlink, symlink, parent-directory and deferred
 unlink file IDs through the shared positive-ID decoder before using those
 values in lifecycle or namespace operations.
+
+FOD 3.4.506 routes PostgreSQL startup recovery, schema/config readiness and
+upgrade-in-progress booleans through the shared strict decoder. Malformed values
+now stop startup validation instead of being interpreted as false.
