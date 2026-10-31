@@ -76,6 +76,15 @@ pub const FILE_WRITE_ACCESS_DENIED: &str = "FOD_TRUNCATE_WRITE_DENIED";
 pub const FILE_WRITE_TARGET_MISSING: &str = "FOD_TRUNCATE_TARGET_MISSING";
 pub const NAMESPACE_SOURCE_CHANGED: &str = "FOD_NAMESPACE_SOURCE_CHANGED";
 pub const NAMESPACE_PARENT_MISSING_PREFIX: &str = "FOD_NAMESPACE_PARENT_MISSING:";
+const LINK_SOURCE_UNAVAILABLE: &str = "FOD_LINK_SOURCE_UNAVAILABLE";
+
+#[derive(Clone)]
+struct SourceNamespaceBinding {
+    kind: String,
+    entry_id: u64,
+    parent_id: Option<u64>,
+    name: String,
+}
 const REPLICA_SCORE_UNKNOWN_LATENCY_MICROS: u64 = 5_000;
 const REPLICA_SCORE_LATENCY_DIVISOR: u64 = 100;
 const REPLICA_SCORE_LAG_DIVISOR_BYTES: u64 = 4_096;
@@ -6980,29 +6989,9 @@ impl DbRepo {
             ),
             None => None,
         };
-        let hash_dedupe_enabled = content_hash.is_some()
-            && self
-                .schema_version()
-                .ok()
-                .flatten()
-                .map(|version| version >= 6)
-                .unwrap_or(false);
-        let sql_insert_hash = CString::new(
-            "INSERT INTO data_objects (file_size, content_hash, reference_count, creation_date, modification_date) \
-             VALUES ($1, $2, 1, NOW(), NOW()) RETURNING id_data_object",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_insert_null = CString::new(
             "INSERT INTO data_objects (file_size, content_hash, reference_count, creation_date, modification_date) \
              VALUES ($1, NULL, 1, NOW(), NOW()) RETURNING id_data_object",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_lookup_hash = CString::new(
-            "SELECT id_data_object FROM data_objects WHERE file_size = $1 AND content_hash = $2 LIMIT 1",
-        )
-        .map_err(|_| "SQL contains NUL byte".to_string())?;
-        let sql_touch_existing = CString::new(
-            "UPDATE data_objects SET reference_count = reference_count + 1, modification_date = NOW() WHERE id_data_object = $1",
         )
         .map_err(|_| "SQL contains NUL byte".to_string())?;
         let sql_lookup_request_token = CString::new(
@@ -7043,40 +7032,13 @@ impl DbRepo {
                 },
                 |conn| {
                     let value = match content_hash.as_ref() {
-                        Some(content_hash) if hash_dedupe_enabled => {
+                        Some(content_hash) => {
                             let params = [&file_size, content_hash];
                             let res = exec_params(conn, &sql_upsert_hash, &params)?;
                             let text = fetch_single_text(res)?;
                             text.trim()
                                 .parse::<u64>()
                                 .map_err(|_| "invalid id_data_object value".to_string())?
-                        }
-                        Some(content_hash) => {
-                            let params = [&file_size, content_hash];
-                            let res = exec_params(conn, &sql_lookup_hash, &params)?;
-                            match fetch_single_text_option(res)? {
-                                Some(existing) => {
-                                    let existing_id = existing
-                                        .trim()
-                                        .parse::<u64>()
-                                        .map_err(|_| "invalid id_data_object value".to_string())?;
-                                    let existing_id_text = CString::new(existing_id.to_string())
-                                        .map_err(|_| {
-                                            "data object id contains NUL byte".to_string()
-                                        })?;
-                                    let params = [&existing_id_text];
-                                    exec_command_params(conn, &sql_touch_existing, &params)?;
-                                    existing_id
-                                }
-                                None => {
-                                    let params = [&file_size, content_hash];
-                                    let res = exec_params(conn, &sql_insert_hash, &params)?;
-                                    let text = fetch_single_text(res)?;
-                                    text.trim()
-                                        .parse::<u64>()
-                                        .map_err(|_| "invalid id_data_object value".to_string())?
-                                }
-                            }
                         }
                         None => {
                             let params = [&file_size];
@@ -10747,11 +10709,88 @@ impl DbRepo {
         let resource_key = CString::new(format!("fod:open:file:{file_id}"))
             .map_err(|_| "file lifecycle advisory key contains NUL byte".to_string())?;
         Self::advisory_xact_lock_text_on_conn(conn, &resource_key)?;
+        Self::lock_file_lifecycle_row_on_conn(conn, file_id)
+    }
+
+    unsafe fn lock_file_lifecycle_row_on_conn(
+        conn: *mut PGconn,
+        file_id: u64,
+    ) -> Result<bool, String> {
         let sql = CString::new("SELECT id_file FROM files WHERE id_file = $1 FOR UPDATE")
             .map_err(|_| "SQL contains NUL byte".to_string())?;
         let file_id = CString::new(file_id.to_string())
             .map_err(|_| "file id contains NUL byte".to_string())?;
         Ok(fetch_single_text_option(exec_params(conn, &sql, &[&file_id])?)?.is_some())
+    }
+
+    unsafe fn source_namespace_binding_matches_on_conn(
+        conn: *mut PGconn,
+        binding: &SourceNamespaceBinding,
+        backing_id: u64,
+    ) -> Result<bool, String> {
+        let entry_id = CString::new(binding.entry_id.to_string())
+            .map_err(|_| "source entry id contains NUL byte".to_string())?;
+        let parent_id = CString::new(binding.parent_id.unwrap_or(0).to_string())
+            .map_err(|_| "source parent id contains NUL byte".to_string())?;
+        let name = CString::new(binding.name.as_str())
+            .map_err(|_| "source name contains NUL byte".to_string())?;
+        let backing_id = CString::new(backing_id.to_string())
+            .map_err(|_| "source backing id contains NUL byte".to_string())?;
+        let sql = match binding.kind.as_str() {
+            "file" => CString::new(
+                "SELECT id_file FROM files
+                 WHERE id_file=$1 AND COALESCE(id_directory,0)=$2 AND name=$3
+                   AND NOT unlinked AND id_file=$4",
+            ),
+            "hardlink" => CString::new(
+                "SELECT id_hardlink FROM hardlinks
+                 WHERE id_hardlink=$1 AND COALESCE(id_directory,0)=$2 AND name=$3
+                   AND id_file=$4",
+            ),
+            _ => return Ok(false),
+        }
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        Ok(fetch_single_text_option(exec_params(
+            conn,
+            &sql,
+            &[&entry_id, &parent_id, &name, &backing_id],
+        )?)?
+        .is_some())
+    }
+
+    unsafe fn symlink_source_namespace_binding_matches_on_conn(
+        conn: *mut PGconn,
+        binding: &SourceNamespaceBinding,
+        symlink_id: u64,
+    ) -> Result<bool, String> {
+        let entry_id = CString::new(binding.entry_id.to_string())
+            .map_err(|_| "source entry id contains NUL byte".to_string())?;
+        let parent_id = CString::new(binding.parent_id.unwrap_or(0).to_string())
+            .map_err(|_| "source parent id contains NUL byte".to_string())?;
+        let name = CString::new(binding.name.as_str())
+            .map_err(|_| "source name contains NUL byte".to_string())?;
+        let symlink_id = CString::new(symlink_id.to_string())
+            .map_err(|_| "source symlink id contains NUL byte".to_string())?;
+        let sql = match binding.kind.as_str() {
+            "symlink" => CString::new(
+                "SELECT id_symlink FROM symlinks
+                 WHERE id_symlink=$1 AND COALESCE(id_parent,0)=$2 AND name=$3
+                   AND id_symlink=$4",
+            ),
+            "symlink_hardlink" => CString::new(
+                "SELECT id_symlink_hardlink FROM symlink_hardlinks
+                 WHERE id_symlink_hardlink=$1 AND COALESCE(id_parent,0)=$2 AND name=$3
+                   AND id_symlink=$4",
+            ),
+            _ => return Ok(false),
+        }
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        Ok(fetch_single_text_option(exec_params(
+            conn,
+            &sql,
+            &[&entry_id, &parent_id, &name, &symlink_id],
+        )?)?
+        .is_some())
     }
 
     unsafe fn purge_primary_file_on_conn(
@@ -12093,6 +12132,7 @@ impl DbRepo {
             uid,
             gid,
             None,
+            None,
             false,
         )
     }
@@ -12113,6 +12153,7 @@ impl DbRepo {
             uid,
             gid,
             Some((uid, gid, supplementary_groups)),
+            None,
             false,
         )
     }
@@ -12133,6 +12174,67 @@ impl DbRepo {
             uid,
             gid,
             Some((uid, gid, supplementary_groups)),
+            None,
+            true,
+        )
+    }
+
+    pub fn create_hardlink_from_entry_for_subject(
+        &self,
+        source_file_id: u64,
+        source_kind: &str,
+        source_entry_id: u64,
+        source_parent_id: Option<u64>,
+        source_name: &str,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        uid: u32,
+        gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_hardlink_internal(
+            source_file_id,
+            target_parent_id,
+            target_name,
+            uid,
+            gid,
+            Some((uid, gid, supplementary_groups)),
+            Some(SourceNamespaceBinding {
+                kind: source_kind.to_string(),
+                entry_id: source_entry_id,
+                parent_id: source_parent_id,
+                name: source_name.to_string(),
+            }),
+            false,
+        )
+    }
+
+    pub fn create_hardlink_from_entry_for_subject_with_acl(
+        &self,
+        source_file_id: u64,
+        source_kind: &str,
+        source_entry_id: u64,
+        source_parent_id: Option<u64>,
+        source_name: &str,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        uid: u32,
+        gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_hardlink_internal(
+            source_file_id,
+            target_parent_id,
+            target_name,
+            uid,
+            gid,
+            Some((uid, gid, supplementary_groups)),
+            Some(SourceNamespaceBinding {
+                kind: source_kind.to_string(),
+                entry_id: source_entry_id,
+                parent_id: source_parent_id,
+                name: source_name.to_string(),
+            }),
             true,
         )
     }
@@ -12145,6 +12247,7 @@ impl DbRepo {
         uid: u32,
         gid: u32,
         parent_actor: Option<(u32, u32, &[u32])>,
+        source_binding: Option<SourceNamespaceBinding>,
         use_posix_acl: bool,
     ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
@@ -12179,10 +12282,35 @@ impl DbRepo {
         .map_err(|_| "SQL contains NUL byte".to_string())?;
 
         let namespace_key = Self::namespace_serialization_key(target_parent_id, &target_name_text)?;
+        let source_namespace_key = source_binding
+            .as_ref()
+            .map(|source| Self::namespace_serialization_key(source.parent_id, &source.name))
+            .transpose()?;
         let result = self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
-                if !Self::lock_file_lifecycle_on_conn(conn, source_file_id_value)? {
-                    return Err("FOD_LINK_SOURCE_UNAVAILABLE".to_string());
+                if let Some(source_key) = source_namespace_key.as_ref() {
+                    let lifecycle_key = CString::new(format!(
+                        "fod:open:file:{source_file_id_value}"
+                    ))
+                    .map_err(|_| "file lifecycle advisory key contains NUL byte".to_string())?;
+                    let mut keys = vec![source_key, &namespace_key, &lifecycle_key];
+                    keys.sort_unstable();
+                    keys.dedup();
+                    for key in keys {
+                        Self::advisory_xact_lock_text_on_conn(conn, key)?;
+                    }
+                    if !Self::lock_file_lifecycle_row_on_conn(conn, source_file_id_value)? {
+                        return Err(LINK_SOURCE_UNAVAILABLE.to_string());
+                    }
+                    if !Self::source_namespace_binding_matches_on_conn(
+                        conn,
+                        source_binding.as_ref().expect("source binding key exists"),
+                        source_file_id_value,
+                    )? {
+                        return Err(NAMESPACE_SOURCE_CHANGED.to_string());
+                    }
+                } else if !Self::lock_file_lifecycle_on_conn(conn, source_file_id_value)? {
+                    return Err(LINK_SOURCE_UNAVAILABLE.to_string());
                 }
                 let sql_source =
                     CString::new("SELECT id_file FROM files WHERE id_file = $1 AND NOT unlinked")
@@ -12190,9 +12318,11 @@ impl DbRepo {
                 if fetch_single_text_option(exec_params(conn, &sql_source, &[&source_file_id])?)?
                     .is_none()
                 {
-                    return Err("FOD_LINK_SOURCE_UNAVAILABLE".to_string());
+                    return Err(LINK_SOURCE_UNAVAILABLE.to_string());
                 }
-                Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                if source_namespace_key.is_none() {
+                    Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                }
                 if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
                     if use_posix_acl {
                         Self::require_parent_write_search_acl_on_conn(
@@ -12304,6 +12434,7 @@ impl DbRepo {
             target_parent_id,
             target_name,
             None,
+            None,
             false,
         )
     }
@@ -12322,6 +12453,7 @@ impl DbRepo {
             target_parent_id,
             target_name,
             Some((actor_uid, actor_gid, supplementary_groups)),
+            None,
             false,
         )
     }
@@ -12340,6 +12472,63 @@ impl DbRepo {
             target_parent_id,
             target_name,
             Some((actor_uid, actor_gid, supplementary_groups)),
+            None,
+            true,
+        )
+    }
+
+    pub fn create_symlink_hardlink_from_entry_for_subject(
+        &self,
+        symlink_id: u64,
+        source_kind: &str,
+        source_entry_id: u64,
+        source_parent_id: Option<u64>,
+        source_name: &str,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_symlink_hardlink_internal(
+            symlink_id,
+            target_parent_id,
+            target_name,
+            Some((actor_uid, actor_gid, supplementary_groups)),
+            Some(SourceNamespaceBinding {
+                kind: source_kind.to_string(),
+                entry_id: source_entry_id,
+                parent_id: source_parent_id,
+                name: source_name.to_string(),
+            }),
+            false,
+        )
+    }
+
+    pub fn create_symlink_hardlink_from_entry_for_subject_with_acl(
+        &self,
+        symlink_id: u64,
+        source_kind: &str,
+        source_entry_id: u64,
+        source_parent_id: Option<u64>,
+        source_name: &str,
+        target_parent_id: Option<u64>,
+        target_name: &str,
+        actor_uid: u32,
+        actor_gid: u32,
+        supplementary_groups: &[u32],
+    ) -> Result<u64, String> {
+        self.create_symlink_hardlink_internal(
+            symlink_id,
+            target_parent_id,
+            target_name,
+            Some((actor_uid, actor_gid, supplementary_groups)),
+            Some(SourceNamespaceBinding {
+                kind: source_kind.to_string(),
+                entry_id: source_entry_id,
+                parent_id: source_parent_id,
+                name: source_name.to_string(),
+            }),
             true,
         )
     }
@@ -12350,6 +12539,7 @@ impl DbRepo {
         target_parent_id: Option<u64>,
         target_name: &str,
         parent_actor: Option<(u32, u32, &[u32])>,
+        source_binding: Option<SourceNamespaceBinding>,
         use_posix_acl: bool,
     ) -> Result<u64, String> {
         let target_name_text = target_name.to_string();
@@ -12370,13 +12560,35 @@ impl DbRepo {
         )
         .unwrap();
         let namespace_key = Self::namespace_serialization_key(target_parent_id, &target_name_text)?;
+        let source_namespace_key = source_binding
+            .as_ref()
+            .map(|source| Self::namespace_serialization_key(source.parent_id, &source.name))
+            .transpose()?;
         let result = self.with_cached_connection(|conn| unsafe {
             transactional_replayable(conn, |conn| {
-                Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                if let Some(source_key) = source_namespace_key.as_ref() {
+                    let mut keys = vec![source_key, &namespace_key];
+                    keys.sort_unstable();
+                    keys.dedup();
+                    for key in keys {
+                        Self::advisory_xact_lock_text_on_conn(conn, key)?;
+                    }
+                } else {
+                    Self::advisory_xact_lock_text_on_conn(conn, &namespace_key)?;
+                }
                 if fetch_single_text_option(exec_params(conn, &sql_source, &[&symlink_id])?)?
                     .is_none()
                 {
-                    return Err("FOD_LINK_SOURCE_UNAVAILABLE".to_string());
+                    return Err(LINK_SOURCE_UNAVAILABLE.to_string());
+                }
+                if let Some(binding) = source_binding.as_ref() {
+                    if !Self::symlink_source_namespace_binding_matches_on_conn(
+                        conn,
+                        binding,
+                        symlink_id_value,
+                    )? {
+                        return Err(NAMESPACE_SOURCE_CHANGED.to_string());
+                    }
                 }
                 if let Some((actor_uid, actor_gid, actor_groups)) = parent_actor {
                     if use_posix_acl {

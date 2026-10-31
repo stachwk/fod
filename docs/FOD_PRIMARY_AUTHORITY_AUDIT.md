@@ -841,3 +841,29 @@ source path, then requires `EIO`, unchanged source/destination bindings and an
 unchanged source inode. The full mounted `test_create_write_ownership.py`
 passed on FOD 3.4.457, PostgreSQL 16.15 `BLCKSZ=32KiB`, Linux
 6.17.0-41-generic and libfuse3 3.18.3; its disposable database was dropped.
+
+### `link()` source namespace binding
+
+The callback resolved a source path against primary and checked that its
+attributes matched the FUSE inode, but then passed only the backing file or
+symlink ID to the mutation. Between those steps, another mount could remove or
+replace the source name while another hardlink kept the backing row alive.
+The transaction could therefore create a new alias from a source binding that
+no longer existed.
+
+The FUSE path now passes the resolved source kind, entry ID, parent ID and name
+to PostgreSQL. The transaction takes source and target namespace advisory
+locks in sorted order (and the file lifecycle lock for regular files), then
+requires that exact binding still references the expected backing inode before
+inserting the destination alias. This shares lock ordering with rename and
+unlink. `hardlink_creation_rejects_a_removed_source_namespace_binding` uses a
+temporary schema-38 database and verifies both stale regular-hardlink and
+symlink-hardlink source rows are rejected without changing link counts; valid
+current bindings are accepted. It passed against PostgreSQL 16.15 after
+checking `--with-blocksize=32` and live `block_size=32768`.
+The full 72-test `pg_query` suite also passed on that fresh schema-38 database.
+
+The mounted cross-host removal/replacement race has not yet been run. The
+client builder compiled the callback in `release-lto` against the repository's
+pinned libfuse 3.18.3. The local host reports libfuse 3.14.0, below FOD's
+minimum 3.18.2, so mounted race coverage still needs a capable test host.

@@ -743,6 +743,138 @@ fn symlink_hardlink_aliases_resolve_to_the_same_inode() -> Result<(), String> {
 }
 
 #[test]
+fn hardlink_creation_rejects_a_removed_source_namespace_binding() -> Result<(), String> {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temporary_db = TemporaryDatabase::create()?;
+    let mut runtime = RuntimeConfig::from_env()?;
+    runtime.copy_dedupe_min_blocks = runtime.copy_dedupe_min_blocks.max(1);
+    let conninfo = conninfo_for_database(&temporary_db.name);
+    let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
+    bootstrap_repo
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (38, NOW())")?;
+    drop(bootstrap_repo);
+
+    let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
+    repo.ensure_client_session_schema()?;
+    let directory_name = unique_name("stale_hardlink_source");
+    let directory_id =
+        repo.create_directory(None, &directory_name, 0o755, 1000, 1000, &directory_name)?;
+    let file_id = repo.create_file(
+        Some(directory_id),
+        "file",
+        0o644,
+        1000,
+        1000,
+        &unique_name("stale_hardlink_source_file"),
+    )?;
+    let hardlink_id = repo.create_hardlink(file_id, Some(directory_id), "hardlink", 1000, 1000)?;
+    let stale_file_source = ResolvedPath {
+        parent_id: Some(directory_id),
+        kind: Some("hardlink".to_string()),
+        entry_id: Some(hardlink_id),
+    };
+    repo.create_hardlink_from_entry_for_subject(
+        file_id,
+        "hardlink",
+        hardlink_id,
+        Some(directory_id),
+        "hardlink",
+        Some(directory_id),
+        "valid-source-bound-hardlink",
+        1000,
+        1000,
+        &[],
+    )?;
+
+    assert_eq!(
+        repo.unlink_file_entry(
+            file_id,
+            ".fod-stale-link-source",
+            Some(directory_id),
+            "hardlink",
+            1000,
+        )?,
+        FileUnlinkOutcome::RemovedHardlink
+    );
+    let links_before = repo.count_file_links(file_id)?;
+    let result = repo.create_hardlink_from_entry_for_subject(
+        file_id,
+        stale_file_source.kind.as_deref().unwrap(),
+        stale_file_source.entry_id.unwrap(),
+        stale_file_source.parent_id,
+        "hardlink",
+        Some(directory_id),
+        "stale-hardlink-result",
+        1000,
+        1000,
+        &[],
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        fod_rust_hotpath::pg::NAMESPACE_SOURCE_CHANGED
+    );
+    assert_eq!(repo.count_file_links(file_id)?, links_before);
+
+    let symlink_id = repo.create_symlink(
+        Some(directory_id),
+        "symlink",
+        "file",
+        1000,
+        1000,
+        &unique_name("stale_symlink_source"),
+    )?;
+    repo.create_symlink_hardlink_from_entry_for_subject(
+        symlink_id,
+        "symlink",
+        symlink_id,
+        Some(directory_id),
+        "symlink",
+        Some(directory_id),
+        "valid-source-bound-symlink-hardlink",
+        1000,
+        1000,
+        &[],
+    )?;
+    let stale_alias_name = unique_name("removed_symlink_hardlink_source");
+    let stale_alias_id =
+        repo.create_symlink_hardlink(symlink_id, Some(directory_id), &stale_alias_name)?;
+    let stale_symlink_source = ResolvedPath {
+        parent_id: Some(directory_id),
+        kind: Some("symlink_hardlink".to_string()),
+        entry_id: Some(stale_alias_id),
+    };
+    repo.unlink_symlink_hardlink_entry_for_subject_acl(
+        stale_alias_id,
+        Some(directory_id),
+        &stale_alias_name,
+        1000,
+        1000,
+        &[],
+        false,
+    )?;
+    let symlink_links_before = repo.count_symlink_links(symlink_id)?;
+    let result = repo.create_symlink_hardlink_from_entry_for_subject(
+        symlink_id,
+        stale_symlink_source.kind.as_deref().unwrap(),
+        stale_symlink_source.entry_id.unwrap(),
+        stale_symlink_source.parent_id,
+        &stale_alias_name,
+        Some(directory_id),
+        "stale-symlink-hardlink-result",
+        1000,
+        1000,
+        &[],
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        fod_rust_hotpath::pg::NAMESPACE_SOURCE_CHANGED
+    );
+    assert_eq!(repo.count_symlink_links(symlink_id)?, symlink_links_before);
+    Ok(())
+}
+
+#[test]
 fn directory_lookup_rejects_missing_path_components() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let mut fixture = NamespaceFixture::new()?;
@@ -2782,6 +2914,8 @@ fn file_mode_lookup_rejects_null_mode_and_query_failure() -> Result<(), String> 
     let conninfo = conninfo_for_database(&temporary_db.name);
     let bootstrap_repo = DbRepo::with_runtime(&conninfo, &runtime)?;
     bootstrap_repo.exec(include_str!("../../migrations/base_schema.sql"))?;
+    bootstrap_repo
+        .exec("INSERT INTO fod.schema_version (schema_number, applied_at) VALUES (38, NOW())")?;
     drop(bootstrap_repo);
     let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
     repo.exec("ALTER TABLE fod.files ALTER COLUMN mode DROP NOT NULL")?;
@@ -3542,7 +3676,7 @@ fn create_data_object_reuses_matching_hash_and_size() -> Result<(), String> {
 }
 
 #[test]
-fn create_data_object_legacy_hash_lookup_handles_missing_row() -> Result<(), String> {
+fn schema_below_client_floor_is_rejected_before_data_object_mutation() -> Result<(), String> {
     let _guard = ENV_LOCK.lock().unwrap();
     let temporary_db = TemporaryDatabase::create()?;
     let mut runtime = RuntimeConfig::from_env()?;
@@ -3555,34 +3689,18 @@ fn create_data_object_legacy_hash_lookup_handles_missing_row() -> Result<(), Str
     drop(bootstrap_repo);
 
     let repo = DbRepo::with_runtime(&conninfo, &runtime)?;
-    if repo.schema_version()? != Some(5) {
-        return Err("legacy hash test did not initialize schema version 5".to_string());
+    match repo.create_data_object(4096, Some("legacy-hash-schema-gate")) {
+        Err(error)
+            if error.contains("requires database schema 38")
+                && error.contains("database schema is 5") =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(format!(
+            "schema 5 was rejected for the wrong reason: {error}"
+        )),
+        Ok(_) => Err("current client accepted schema 5 for data-object mutation".to_string()),
     }
-
-    let content_hash = format!("hash_{}", unique_name("rust_pg_legacy_hash"));
-    let file_size = 4096;
-    let first_id = repo.create_data_object(file_size, Some(&content_hash))?;
-    let second_id = repo.create_data_object(file_size, Some(&content_hash))?;
-    if first_id != second_id {
-        return Err(format!(
-            "legacy hash lookup created different objects for the same size and hash: {first_id} vs {second_id}"
-        ));
-    }
-
-    let reference_count = repo
-        .query_scalar_text(&format!(
-            "SELECT reference_count FROM data_objects WHERE id_data_object = {first_id}"
-        ))?
-        .trim()
-        .parse::<u64>()
-        .map_err(|err| format!("parse legacy hash reference_count: {err}"))?;
-    if reference_count != 2 {
-        return Err(format!(
-            "expected legacy hash lookup to reuse the object and increment reference_count to 2, got {reference_count}"
-        ));
-    }
-
-    Ok(())
 }
 
 #[test]

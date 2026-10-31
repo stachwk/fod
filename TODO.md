@@ -14,6 +14,18 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Uruchomić montowany test dwóch mountów dla wyścigu źródła `link()`.**
+  FOD 3.4.475 przekazuje do transakcji PostgreSQL dokładny wpis źródłowy
+  `(kind, entry_id, parent_id, name)` i odrzuca go, jeśli inny host usunął lub
+  zastąpił nazwę przed utworzeniem aliasu. Regresja `pg_query` przeszła na
+  PostgreSQL 16.15 z `--with-blocksize=32` i `SHOW block_size=32768`, obejmując
+  hardlink pliku oraz hardlink symlinka, gdy backing inode nadal istnieje.
+  Pozostaje test montowany z deterministycznym wyścigiem na dwóch hostach.
+  Callback skompilowano profilem `release-lto` w builderze z libfuse 3.18.3.
+  Lokalny host ma libfuse 3.14.0, poniżej wymaganego 3.18.2; montowany test
+  wymaga hosta z odpowiednią wersją libfuse i działającymi uprawnieniami FUSE.
+  Szczegóły: [`docs/FOD_PRIMARY_AUTHORITY_AUDIT.md`](docs/FOD_PRIMARY_AUTHORITY_AUDIT.md).
+
 - [x] **Domyślne stosy SELinux/ACL i HA-chain muszą używać PostgreSQL 32 KiB.**
   `docker-compose.selinux-acl.yml` używa teraz obrazu FOD 16.15 z nowym
   wolumenem i healthcheckiem `SHOW block_size`; `docker-compose.ha-chain.yml`

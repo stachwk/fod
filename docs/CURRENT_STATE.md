@@ -54,12 +54,15 @@ ownership. Lock-range state regressions now assert the persisted `lock_pid`
 field. The complete `fod-rust-hotpath` test suite passed on a fresh disposable
 PostgreSQL 16.15 database with verified `BLCKSZ=32KiB`.
 
-FOD 3.4.468 fixes legacy hash-based data-object deduplication: a lookup that
-finds no matching object now inserts one, while a malformed returned ID remains
-an error. `create_data_object_legacy_hash_lookup_handles_missing_row` verifies
-creation and reuse on a disposable database with the legacy schema-version
-gate. The test passed against PostgreSQL 16 with `pg_config --configure`
-reporting `--with-blocksize=32` and live `SHOW block_size = 32768`.
+FOD 3.4.468 fixed hash-based data-object deduplication: a missing hash now
+inserts an object, while a malformed returned ID remains an error. The
+historical test used a schema-5 database. Since FOD 3.4.470 requires schema 38
+before opening current-client connections, that legacy creation path is no
+longer reachable; 3.4.475 removes it and keeps the supported atomic upsert
+path. `create_data_object_reuses_matching_hash_and_size` covers insertion and
+reuse on the supported schema, while
+`schema_below_client_floor_is_rejected_before_data_object_mutation` verifies
+schema 5 is refused before queries run.
 
 FOD 3.4.469 preserves the distinct missing-file and invalid-session outcomes
 when registering a PostgreSQL open-file lease. The `INSERT ... SELECT ...
@@ -95,6 +98,25 @@ installs a local Debian package carrying the correct ELF dependency metadata
 in both build and runtime stages. The complete client image build and image
 preflight passed; the host-level mount tests still require a host with libfuse
 3.18.2 or newer and working FUSE capabilities.
+
+FOD 3.4.475 binds `link()` to the exact source namespace entry validated by
+the callback. The PostgreSQL mutation transaction locks the source and target
+names in sorted order, locks the regular-file lifecycle when applicable, then
+rechecks the source kind, entry ID, parent ID, name and backing inode before
+inserting an alias. A removed hardlink name can no longer be reused through a
+still-live backing inode ID. The focused regression passed on the configured
+PostgreSQL 16.15 build after verifying `pg_config --configure` contains
+`--with-blocksize=32` and the connected server reports `SHOW block_size =
+32768`. A two-mount FUSE race test remains open because the host does not meet
+the repository's libfuse minimum. The complete `pg_query` integration suite
+passed: 72 tests on a fresh schema-38 admin database backed by the verified
+PostgreSQL 16.15 32 KiB server.
+
+FOD 3.4.475 also removes an obsolete data-object hash fallback for schema
+versions below 6. Current clients already reject every schema below 38 during
+connection setup, so this branch could not be reached through a valid runtime
+connection. Hashes now always use the supported atomic upsert, avoiding an
+extra schema lookup and a separate read/insert path.
 
 FOD 3.4.470 checks an initialized database's schema version before preparing
 current-client SQL statements. An old schema now fails with the required

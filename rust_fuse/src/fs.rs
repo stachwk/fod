@@ -11560,6 +11560,18 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, ENOENT);
             return;
         };
+        let Some(source_namespace_entry_id) = source_entry.entry_id else {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        };
+        let Some(source_name) = source_path
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+        else {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        };
         let source_attrs = self.attrs_for_entry_id_from_repo(&authority, source_kind, source_id);
         match source_attrs {
             Ok(Some(attrs)) if attrs.file_attr.ino.0 == ino => {}
@@ -11591,17 +11603,26 @@ impl Filesystem for FodFuse {
         let target_name = newname.to_string_lossy();
         let create_result = if source_kind == "symlink" {
             if self.acl_enabled {
-                self.repo.create_symlink_hardlink_for_subject_with_acl(
-                    source_id,
-                    new_parent_id,
-                    &target_name,
-                    subject.uid,
-                    subject.gid,
-                    &supplementary_groups,
-                )
+                self.repo
+                    .create_symlink_hardlink_from_entry_for_subject_with_acl(
+                        source_id,
+                        source_entry.kind.as_deref().unwrap_or_default(),
+                        source_namespace_entry_id,
+                        source_entry.parent_id,
+                        source_name,
+                        new_parent_id,
+                        &target_name,
+                        subject.uid,
+                        subject.gid,
+                        &supplementary_groups,
+                    )
             } else {
-                self.repo.create_symlink_hardlink_for_subject(
+                self.repo.create_symlink_hardlink_from_entry_for_subject(
                     source_id,
+                    source_entry.kind.as_deref().unwrap_or_default(),
+                    source_namespace_entry_id,
+                    source_entry.parent_id,
+                    source_name,
                     new_parent_id,
                     &target_name,
                     subject.uid,
@@ -11610,8 +11631,12 @@ impl Filesystem for FodFuse {
                 )
             }
         } else if self.acl_enabled {
-            self.repo.create_hardlink_for_subject_with_acl(
+            self.repo.create_hardlink_from_entry_for_subject_with_acl(
                 source_id,
+                source_entry.kind.as_deref().unwrap_or_default(),
+                source_namespace_entry_id,
+                source_entry.parent_id,
+                source_name,
                 new_parent_id,
                 &target_name,
                 subject.uid,
@@ -11619,8 +11644,12 @@ impl Filesystem for FodFuse {
                 &supplementary_groups,
             )
         } else {
-            self.repo.create_hardlink_for_subject(
+            self.repo.create_hardlink_from_entry_for_subject(
                 source_id,
+                source_entry.kind.as_deref().unwrap_or_default(),
+                source_namespace_entry_id,
+                source_entry.parent_id,
+                source_name,
                 new_parent_id,
                 &target_name,
                 subject.uid,
