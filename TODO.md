@@ -1958,3 +1958,14 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   must yield modes `0600`, `0700` and `0600`. The test confirms the parent has
   no default ACL before these operations. Validation runs against Linux
   6.17.0-41-generic, libfuse3 3.18.2 and an isolated PostgreSQL database.
+
+## FOD 3.4.438 — check `rename()` with non-UTF-8 path components
+
+- [x] Extend `test_path_trailing_slash.py` to require exact `EILSEQ` when a
+  rename source or destination contains invalid UTF-8. Keep a valid U+FFFD name
+  at each lossy-conversion alias and assert both payloads remain unchanged.
+  The test passed on runtime FOD 3.4.437/Linux 6.17.0-41-generic/libfuse3
+  3.18.2/PostgreSQL 16.15 using an isolated database, which was dropped after
+  the run.
+- [ ] P08 remains Pending for remaining rename permission/error precedence,
+  `EIO`, limit and `ENOSPC` evidence.

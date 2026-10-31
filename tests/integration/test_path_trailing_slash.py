@@ -85,6 +85,27 @@ def main() -> None:
             assert not (directory / "empty-link-source").exists()
             assert not (directory / "empty-rename-source").exists()
 
+            rename_utf8_source = directory / "rename-source-\uFFFD"
+            rename_utf8_target = directory / "rename-target-\uFFFD"
+            rename_utf8_source.write_bytes(b"valid source")
+            rename_utf8_target.write_bytes(b"valid target")
+            invalid_rename_source = os.fsencode(directory) + b"/rename-source-\xff"
+            invalid_rename_target = os.fsencode(directory) + b"/rename-target-\xff"
+            expect_errno(
+                lambda: os.rename(invalid_rename_source, rename_utf8_target),
+                errno.EILSEQ,
+                "rename source with invalid UTF-8",
+            )
+            expect_errno(
+                lambda: os.rename(rename_utf8_source, invalid_rename_target),
+                errno.EILSEQ,
+                "rename destination with invalid UTF-8",
+            )
+            assert rename_utf8_source.read_bytes() == b"valid source"
+            assert rename_utf8_target.read_bytes() == b"valid target"
+            rename_utf8_source.unlink()
+            rename_utf8_target.unlink()
+
             path_max = os.pathconf(mountpoint, "PC_PATH_MAX")
             overlong_path = "/" + ("x/" * (path_max // 2 + 1))
             assert len(os.fsencode(overlong_path)) > path_max
@@ -587,7 +608,7 @@ def main() -> None:
                 "readlink:EINVAL rename:ENOTDIR leading_slashes=//,/// "
                 "whitespace_names=distinct rename=exact parent_space/tab=exact "
                 "dotdot_repeated_separator=1 name_max_boundary=1 "
-                "non_utf8_create=EILSEQ"
+                "non_utf8_create=EILSEQ rename_non_utf8=EILSEQx2 aliases=0"
             )
         finally:
             launcher.stop()

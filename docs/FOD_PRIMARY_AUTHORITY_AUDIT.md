@@ -582,6 +582,17 @@ full interleaving proof for namespace mutation and does not close the broader
 mutation-precondition audit; deterministic mounted regressions remain the
 evidence for runtime behavior.
 
+FOD 3.4.437 also fixed replacement of an open regular-file target. The rename
+transaction holds the target's PostgreSQL inode-lifecycle advisory lock; the
+shared removal helper now checks active `file_open_leases` before deleting the
+row. If a lease exists, it marks the target unlinked under a private name and
+keeps its inode/data until the last handle release purges it. This is essential
+when the descriptor is open on another mount, whose process-local handle table
+cannot protect the target. `test_rename_directory_transactional.py` verifies
+that the old descriptor keeps its bytes and inode with `st_nlink == 0`, while
+the replacement path becomes visible on both mounts. The test passed on Linux
+6.17.0-41-generic/libfuse3 3.18.2/PostgreSQL 16.15 against a disposable DB.
+
 ### Xattr callbacks and stale inode-to-path mappings
 
 Source review on 2026-10-30 found that `setxattr`, `getxattr`, `listxattr`, and
