@@ -52,13 +52,24 @@ przypadki i sprawdza wynik `644`/`755`. Baza aktywna pozostała nietknięta.
 
 ## Granice i dalsze decyzje
 
-Schema 37 zamyka ograniczenie identyfikatorów do signed 32-bit. Osobną granicą
-pozostaje signed `BIGINT`: liczniki reprezentowane w Rust jako `u64` nie
-obsługują w SQL wartości powyżej `i64::MAX`. Przed zmianą takich liczników
-trzeba wykazać, że przekroczenie jest częścią wymaganego kontraktu; samo `u64`
-w kodzie nie dowodzi potrzeby `NUMERIC(20,0)`. Reprezentacja `mode` ma
-walidację i migrację danych historycznych. Audyt nie certyfikuje pełnej
-zgodności POSIX ani wszystkich wejść SQL.
+Schema 37 zamyka ograniczenie identyfikatorów do signed 32-bit. **Decyzja:
+pozostawić identyfikatory i liczniki w signed `BIGINT`; nie wprowadzać
+`NUMERIC(20,0)` ani kodowania bez znaku bez wymogu kontraktowego.** Rozmiar
+pliku nie przekracza `i64::MAX`, zgodnie z 64-bitowym `off_t`; identyfikatory
+autoinkrementowane są generowane przez PostgreSQL i mają ten sam zakres;
+indeks bloku jest ograniczony rozmiarem pliku; licznik dowiązań musi ponadto
+mieścić się w polu FUSE `st_nlink`, a przekroczenie tego pola zgłasza
+`EOVERFLOW`. Liczniki indeksatora i referencji nie mają obecnie obietnicy
+obsługi wartości powyżej `i64::MAX`. Użycie Rust `u64` ułatwia nieujemne
+arytmetyczne wartości i transport, ale samo w sobie nie poszerza kontraktu
+SQL. Zachowanie `BIGINT` daje natywne porównania, agregacje, indeksy i
+ograniczenia PostgreSQL; wartości spoza jego zakresu są odrzucane zamiast
+zawijać się. Ponownie otworzyć decyzję tylko wtedy, gdy wymaganie FOD jawnie
+obejmie wartości większe niż `i64::MAX` dla konkretnego pola i określi ich
+porządek, agregację, indeksowanie oraz serializację.
+
+Reprezentacja `mode` ma walidację i migrację danych historycznych. Audyt nie
+certyfikuje pełnej zgodności POSIX ani wszystkich wejść SQL.
 
 ### Audyt zakresu identyfikatorów — odczytowy snapshot
 

@@ -235,11 +235,14 @@ Reading guide:
   zmiana typów może blokować i przepisywać indeksy. Szczegóły i wyniki są w
   `docs/SQL_SCHEMA_LIMIT_AUDIT.md`.
 
-- [ ] **Ocenić potrzebę liczników poza signed `BIGINT`.** PostgreSQL `BIGINT`
-  nie reprezentuje pełnej domeny Rust `u64`. Wrócić do `NUMERIC(20,0)` lub
-  innego formatu dopiero po wykazaniu, że kontrakt FOD wymaga wartości powyżej
-  `i64::MAX`; same typy Rust nie są takim dowodem. Rozmiary plików pozostają
-  ograniczone do signed `BIGINT` zgodnie z `off_t`.
+- [x] **Ocenić potrzebę liczników poza signed `BIGINT`.** Decyzja: pozostawić
+  `BIGINT`; obecny kontrakt nie wymaga wartości powyżej `i64::MAX`. Rozmiary
+  plików są ograniczone przez 64-bitowy `off_t`, ID tworzy PostgreSQL, indeksy
+  bloków wynikają z limitu rozmiaru pliku, a `st_nlink` podlega limitowi ABI
+  FUSE i zwraca `EOVERFLOW` przy jego przekroczeniu. Liczniki indeksatora i
+  referencji nie deklarują pełnej domeny Rust `u64`. Sam typ Rust nie uzasadnia
+  `NUMERIC(20,0)`; wrócić do sprawy, jeśli wymaganie konkretnego pola obejmie
+  większy zakres. Szczegóły w `docs/SQL_SCHEMA_LIMIT_AUDIT.md`.
 
 - [x] **Znormalizować tryby POSIX i walidować je w SQL.** Odczytowy audyt bazy
   schema 31 znalazł 800 plików z historycznie zapisanym pełnym `st_mode`;
