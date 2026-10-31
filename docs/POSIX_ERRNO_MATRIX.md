@@ -55,10 +55,11 @@ libfuse3 3.18.2 against a disposable PostgreSQL 16.15 database on 2026-10-31.
 
 [`test_path_trailing_slash.py`](../tests/integration/test_path_trailing_slash.py)
 sprawdza `rename()` na komponencie równym `PC_NAME_MAX` oraz próbę użycia celu
-dłuższego o jeden bajt. Zbyt długi cel zwraca `ENAMETOOLONG`, a plik źródłowy
-pozostaje pod pierwotną nazwą z niezmienionym payloadem; cel graniczny przyjmuje
-payload bez zmian. Test potwierdza wynik syscalla na Linux/FUSE, nie przypisuje
-samodzielnie kontroli długości do konkretnej warstwy.
+dłuższego o jeden bajt zarówno jako źródła, jak i celu. Oba przypadki zwracają
+`ENAMETOOLONG`; plik źródłowy pozostaje pod pierwotną nazwą, a zawartość celu
+nie zmienia się. Cel graniczny przyjmuje payload bez zmian. Test potwierdza
+wynik syscalla na Linux/FUSE, nie przypisuje samodzielnie kontroli długości do
+konkretnej warstwy.
 
 ## Potwierdzone skróty Linux VFS (v6.17)
 

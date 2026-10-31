@@ -1984,6 +1984,13 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
 - [ ] P08 remains Pending for remaining rename permission/error-precedence,
   limit and broader operation coverage.
 
+## FOD 3.4.441 — check `NAME_MAX` on both `rename()` components
+
+- [x] Extend the mounted test to reject an overlong source as well as an
+  overlong destination with `ENAMETOOLONG`. The existing exact-boundary rename
+  still succeeds; failed destination/source calls preserve the source/target
+  payload respectively. P01 and P08 remain Pending for their broader scopes.
+
 ## FOD 3.4.440 — verify `rename()` `NAME_MAX` handling
 
 - [x] Extend the mounted pathname regression to rename a file to a component

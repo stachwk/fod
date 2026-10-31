@@ -559,6 +559,13 @@ def main() -> None:
             max_rename_target = directory / ("s" * name_max)
             os.rename(max_rename_source, max_rename_target)
             assert max_rename_target.read_bytes() == b"rename NAME_MAX boundary"
+            too_long_rename_source = directory / ("t" * (name_max + 1))
+            expect_errno(
+                lambda: os.rename(too_long_rename_source, max_rename_target),
+                errno.ENAMETOOLONG,
+                "rename source longer than NAME_MAX",
+            )
+            assert max_rename_target.read_bytes() == b"rename NAME_MAX boundary"
 
             plain_name = directory / "trailing"
             space_name = directory / "trailing "
@@ -625,7 +632,7 @@ def main() -> None:
                 "readlink:EINVAL rename:ENOTDIR leading_slashes=//,/// "
                 "whitespace_names=distinct rename=exact parent_space/tab=exact "
                 "dotdot_repeated_separator=1 name_max_boundary=1 "
-                f"rename_name_max={name_max},rename_too_long=ENAMETOOLONG,preserved=1 "
+                f"rename_name_max={name_max},source/destination_too_long=ENAMETOOLONG,preserved=1 "
                 "non_utf8_create=EILSEQ rename_non_utf8=EILSEQx2 aliases=0"
             )
         finally:
