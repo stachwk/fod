@@ -31,6 +31,10 @@ nie zweryfikowano jednak pary z libfuse3 3.0.0. Nie należy interpretować progu
 preflight jako macierzy przetestowanych dystrybucji. Użyta w testach libfuse3
 3.17.4 jest nowsza od zadeklarowanego minimum.
 
+Linux 4.18 i starsze wydania są poza deklarowanym zakresem i preflight odrzuca
+je przed uruchomieniem mounta. Wartość 4.18 w historycznym raporcie strojenia
+FUSE opisuje wyłącznie ówczesne wymaganie i nie jest aktualną deklaracją.
+
 Pakiet musi też dostarczać SONAME/ABI libfuse zgodny z binarium. Numer wersji
 sprawdzany przez FOD nie zastępuje kontroli zależności ELF.
 

@@ -111,6 +111,9 @@ mod tests {
 
     #[test]
     fn rejects_old_or_unparseable_kernel_and_old_libfuse() {
+        assert!(validate_versions("4.18.0", 317)
+            .unwrap_err()
+            .contains("requires Linux 6.17.0 or newer"));
         assert!(validate_versions("6.16.99", 317)
             .unwrap_err()
             .contains("too old"));

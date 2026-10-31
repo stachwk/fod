@@ -120,8 +120,9 @@ Reading guide:
 - [ ] **Minimalna wersja libfuse3 nie ma walidacji montowanego end-to-end.**
   `rust_fuse/src/platform_requirements.rs` wymaga teraz Linux 6.17.0 lub
   nowszego oraz libfuse3 3.0.0 lub nowszego; test jednostkowy sprawdza
-  akceptację 6.17.0 i odrzucenie 6.16.99. Minimum jądra podniesiono do
-  najstarszej głównej wersji obecnej w zapisanych testach montowanych. Kontrola
+  akceptację 6.17.0 oraz odrzucenie Linux 4.18.0 i 6.16.99. Minimum jądra
+  podniesiono do najstarszej głównej wersji obecnej w zapisanych testach
+  montowanych. Kontrola
   środowiska 2026-10-31 wykazała bieżący kernel
   `6.17.0-41-generic`, libfuse 3.17.4 i dostępne `/dev/fuse`; zainstalowane
   moduły jąder zaczynają się od 5.8, obrazy `/boot/vmlinuz-*` są z 6.17,
