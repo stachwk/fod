@@ -1,11 +1,17 @@
 # POSIX conformance audit
 
-Status reviewed through source baseline FOD 3.4.430 (2026-10-31):
+Status reviewed through source baseline FOD 3.4.431 (2026-10-31):
 **requirement audit in progress; no general POSIX conformance claim**. Recent
 work adds Linux/FUSE killpriv evidence for P07, but does not close a full POSIX
 matrix area. The enforced Linux minimum is 6.17.0 and the enforced libfuse3
 minimum is 3.18.2; focused mounted regressions passed with libfuse3 3.18.2 and
 3.18.3.
+
+FOD 3.4.431 extends the same `rename()` regression to verify that both
+mounts observe each committed file/symlink replacement, and that both mounts
+continue to observe source and target objects after rejected type-mismatch
+renames. The full mounted suite passed on the same Linux/libfuse/PostgreSQL
+stack; P08 remains Pending for untested error-precedence and permission cases.
 
 FOD 3.4.430 adds mounted `rename()` evidence for file-over-symlink,
 symlink-over-file, symlink-over-symlink, symlink-to-directory-over-directory

@@ -12,7 +12,9 @@ Linux/libfuse minimums and their validation boundary are in
 
 FOD 3.4.430 adds passing mounted `rename()` coverage for file/symlink
 replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
-P08 remains open for the remaining POSIX requirements and error cases.
+FOD 3.4.431 extends these checks to verify committed namespace changes and
+rejected-operation preservation from both mounts. P08 remains open for the
+remaining POSIX requirements and error cases.
 
 ## Runtime architecture
 

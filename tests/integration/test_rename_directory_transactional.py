@@ -297,6 +297,7 @@ def file_and_symlink_type_pairings(mount_a: Path, mount_b: Path) -> None:
     file_source = mount_a / f"rename-file-symlink-source-{suffix}"
     file_source_other = mount_b / file_source.name
     file_target = mount_b / f"rename-file-symlink-target-{suffix}"
+    file_target_other = mount_a / file_target.name
     preserved_target = mount_b / f"rename-file-symlink-data-{suffix}"
     file_source.write_bytes(b"replacement-file")
     preserved_target.write_bytes(b"symlink-target-stays")
@@ -307,14 +308,19 @@ def file_and_symlink_type_pairings(mount_a: Path, mount_b: Path) -> None:
     wait_for_absent(file_source)
     wait_for_bytes(file_target, b"replacement-file")
     wait_for_bytes(preserved_target, b"symlink-target-stays")
+    wait_for_absent(file_source_other)
+    wait_for_bytes(file_target_other, b"replacement-file")
     if file_target.is_symlink():
         raise AssertionError("file-over-symlink rename did not replace the link")
+    if file_target_other.is_symlink():
+        raise AssertionError("mount A still sees the replaced symlink")
 
     symlink_data = mount_a / f"rename-symlink-data-{suffix}"
     symlink_data.write_bytes(b"symlink-source-target")
     symlink_source = mount_a / f"rename-symlink-source-{suffix}"
     symlink_source_other = mount_b / symlink_source.name
     regular_target = mount_b / f"rename-symlink-regular-target-{suffix}"
+    regular_target_other = mount_a / regular_target.name
     symlink_source.symlink_to(symlink_data.name)
     regular_target.write_bytes(b"regular-target-before")
     wait_for_symlink(symlink_source_other, symlink_data.name)
@@ -323,6 +329,8 @@ def file_and_symlink_type_pairings(mount_a: Path, mount_b: Path) -> None:
     wait_for_absent(symlink_source)
     wait_for_symlink(regular_target, symlink_data.name)
     wait_for_bytes(symlink_data, b"symlink-source-target")
+    wait_for_absent(symlink_source_other)
+    wait_for_symlink(regular_target_other, symlink_data.name)
 
     first_link_data = mount_a / f"rename-link-data-a-{suffix}"
     second_link_data = mount_b / f"rename-link-data-b-{suffix}"
@@ -331,6 +339,7 @@ def file_and_symlink_type_pairings(mount_a: Path, mount_b: Path) -> None:
     link_source = mount_a / f"rename-symlink-over-symlink-source-{suffix}"
     link_source_other = mount_b / link_source.name
     link_target = mount_b / f"rename-symlink-over-symlink-target-{suffix}"
+    link_target_other = mount_a / link_target.name
     link_source.symlink_to(first_link_data.name)
     link_target.symlink_to(second_link_data.name)
     wait_for_symlink(link_source_other, first_link_data.name)
@@ -340,11 +349,14 @@ def file_and_symlink_type_pairings(mount_a: Path, mount_b: Path) -> None:
     wait_for_symlink(link_target, first_link_data.name)
     wait_for_bytes(first_link_data, b"link-a")
     wait_for_bytes(second_link_data, b"link-b")
+    wait_for_absent(link_source_other)
+    wait_for_symlink(link_target_other, first_link_data.name)
 
     source_link_to_dir = mount_a / f"rename-link-to-dir-source-{suffix}"
     source_link_to_dir_other = mount_b / source_link_to_dir.name
     source_link_data_dir = mount_a / f"rename-link-to-dir-data-{suffix}"
     empty_dir_target = mount_b / f"rename-link-to-dir-target-{suffix}"
+    empty_dir_target_other = mount_a / empty_dir_target.name
     source_link_data_dir.mkdir()
     source_link_to_dir.symlink_to(source_link_data_dir.name, target_is_directory=True)
     empty_dir_target.mkdir()
@@ -358,12 +370,15 @@ def file_and_symlink_type_pairings(mount_a: Path, mount_b: Path) -> None:
     )
     wait_for_symlink(source_link_to_dir, source_link_data_dir.name)
     wait_for_dir(empty_dir_target)
+    wait_for_symlink(source_link_to_dir_other, source_link_data_dir.name)
+    wait_for_dir(empty_dir_target_other)
     if list(empty_dir_target.iterdir()):
         raise AssertionError("failed symlink-to-directory rename changed target")
 
     source_dir = mount_a / f"rename-dir-over-symlink-source-{suffix}"
     source_dir_other = mount_b / source_dir.name
     target_link = mount_b / f"rename-dir-over-symlink-target-{suffix}"
+    target_link_other = mount_a / target_link.name
     target_data_dir = mount_b / f"rename-dir-over-symlink-data-{suffix}"
     source_dir.mkdir()
     target_data_dir.mkdir()
@@ -379,6 +394,8 @@ def file_and_symlink_type_pairings(mount_a: Path, mount_b: Path) -> None:
     wait_for_dir(source_dir)
     wait_for_symlink(target_link, target_data_dir.name)
     wait_for_dir(target_data_dir)
+    wait_for_dir(source_dir_other)
+    wait_for_symlink(target_link_other, target_data_dir.name)
 
     print(
         "OK rename-file-symlink-pairings file_over_symlink=success "

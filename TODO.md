@@ -1873,3 +1873,13 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   PostgreSQL 16.15; the fault-injected target-removal rollback also passed.
 - [ ] P08 remains Pending: map remaining rename error precedence, permissions,
   limits and cross-mount observation after committed namespace mutations.
+
+## FOD 3.4.431 — verify cross-mount rename visibility
+
+- [x] Extend file/symlink rename-pair tests to observe successful destination
+  changes and source removal through the other mount, and to observe both
+  unchanged objects after type-mismatch failures. The full
+  `test_rename_directory_transactional.py` suite passed on Linux
+  6.17.0-41-generic, libfuse3 3.18.2 and PostgreSQL 16.15.
+- [ ] P08 remains Pending for untested rename error precedence, permissions,
+  limits and broader namespace cross-mount cases.
