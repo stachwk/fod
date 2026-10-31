@@ -949,3 +949,17 @@ single-object queries now require exactly one row and the expected column
 count; missing and duplicate rows are reported instead of silently selecting
 the first. All 35 `fod-indexer` unit tests passed, alongside `cargo check`,
 formatting and `make test-version`.
+FOD 3.4.490 makes the directory-entry metadata decoder require exactly five
+columns and makes `rename()` namespace resolution reject unknown kinds,
+non-positive IDs, extra/multiple rows, and malformed nonempty file IDs. The
+previous `parse::<u64>().ok()` silently converted a corrupt `file_id` into
+`None`, potentially confusing malformed metadata with a directory or symlink.
+Both pure decoder regressions pass. The full hotpath library suite reached 90
+passing tests, but four tests that connect to the configured shared database
+failed its existing schema-31/version-38 guard; no shared schema was changed.
+These unit tests do not establish PostgreSQL runtime or 32 KiB integration
+coverage for this change. The host does not have
+`/opt/postgresql-custom/bin/pg_config`; its `/usr/bin/pg_config` is Ubuntu
+PostgreSQL 17.10 and does not report `--with-blocksize=32`. No live
+`SHOW block_size` check was made, so this host's stock build is not evidence
+for the FOD 32 KiB target.

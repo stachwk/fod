@@ -115,8 +115,11 @@ fn parse_directory_entry_metadata_rows(
 ) -> Result<Vec<DirectoryEntryMetadata>, String> {
     rows.into_iter()
         .map(|row| {
-            if row.len() < 5 {
-                return Err("directory entry metadata row is missing fields".to_string());
+            if row.len() != 5 {
+                return Err(format!(
+                    "directory entry metadata row has {} fields; expected 5",
+                    row.len()
+                ));
             }
             if row[0].is_empty() {
                 return Err("directory entry metadata row has an empty name".to_string());
@@ -181,7 +184,25 @@ fn parse_special_file_metadata_values(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_special_file_metadata_values;
+    use super::{parse_directory_entry_metadata_rows, parse_special_file_metadata_values};
+
+    #[test]
+    fn directory_entry_metadata_decoder_requires_exact_row_width() {
+        let row = || {
+            vec![
+                "name".to_string(),
+                "file".to_string(),
+                "12".to_string(),
+                "seed".to_string(),
+                "".to_string(),
+            ]
+        };
+        assert!(parse_directory_entry_metadata_rows(vec![row()]).is_ok());
+        assert!(parse_directory_entry_metadata_rows(vec![row()[..4].to_vec()]).is_err());
+        let mut extra_column = row();
+        extra_column.push("unexpected".to_string());
+        assert!(parse_directory_entry_metadata_rows(vec![extra_column]).is_err());
+    }
 
     #[test]
     fn special_file_metadata_decoder_rejects_malformed_values() {

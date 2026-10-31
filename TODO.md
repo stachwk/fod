@@ -2381,3 +2381,18 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   with `ENAMETOOLONG`. The rejected call must preserve the source name and
   payload; the boundary-length rename must preserve the payload. This closes
   only this specific P01/P08 case; both audit areas remain Pending.
+
+## FOD 3.4.490 — reject malformed namespace metadata rows
+
+- [x] Require exact five-column directory-entry metadata rows and validate
+  `rename()` resolver rows for cardinality, width, known entry kind, positive
+  IDs and malformed nonempty file IDs. Added pure decoder regressions for
+  short/extra rows, duplicate rows, invalid IDs and the valid empty file-ID
+  representation for non-file entries. Both focused tests pass. The full
+  `fod-rust-hotpath --lib` run passed 90 tests; four tests requiring a database
+  could not run because the configured shared database is schema 31 while this
+  client requires schema 38. The shared database was left untouched; no
+  PostgreSQL integration claim is made for this change. This host lacks
+  `/opt/postgresql-custom/bin/pg_config`; the system `pg_config` is Ubuntu
+  PostgreSQL 17.10 without `--with-blocksize=32`, and no live server
+  `SHOW block_size` value was verified.

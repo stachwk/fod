@@ -4287,6 +4287,43 @@ impl RenameNamespaceSource {
     }
 }
 
+fn parse_resolved_rename_entry(
+    rows: Vec<Vec<String>>,
+) -> Result<Option<(String, u64, Option<u64>)>, ()> {
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    if rows.len() != 1 || rows[0].len() != 3 {
+        return Err(());
+    }
+    let row = &rows[0];
+    if !matches!(
+        row[0].as_str(),
+        "file" | "hardlink" | "symlink" | "symlink_hardlink" | "dir"
+    ) {
+        return Err(());
+    }
+    let entry_id = row[1].trim().parse::<u64>().map_err(|_| ())?;
+    if entry_id == 0 {
+        return Err(());
+    }
+    let file_id = match row[2].trim() {
+        "" => None,
+        value => {
+            let id = value.parse::<u64>().map_err(|_| ())?;
+            if id == 0 {
+                return Err(());
+            }
+            Some(id)
+        }
+    };
+    let is_file_entry = matches!(row[0].as_str(), "file" | "hardlink");
+    if is_file_entry != file_id.is_some() {
+        return Err(());
+    }
+    Ok(Some((row[0].clone(), entry_id, file_id)))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameNamespaceTarget {
     File { file_id: u64 },
@@ -11411,19 +11448,7 @@ impl DbRepo {
                 "t" | "true" | "1" | "on"
             )
         };
-        let parse_resolved =
-            |rows: Vec<Vec<String>>| -> Result<Option<(String, u64, Option<u64>)>, ()> {
-                if rows.is_empty() {
-                    return Ok(None);
-                }
-                if rows.len() != 1 || rows[0].len() < 3 {
-                    return Err(());
-                }
-                let row = &rows[0];
-                let entry_id = row[1].trim().parse::<u64>().map_err(|_| ())?;
-                let file_id = row[2].trim().parse::<u64>().ok();
-                Ok(Some((row[0].clone(), entry_id, file_id)))
-            };
+        let parse_resolved = parse_resolved_rename_entry;
         let matches_source = |resolved: Option<&(String, u64, Option<u64>)>| match resolved {
             Some((kind, entry_id, file_id)) => {
                 kind == source.entry_kind()
@@ -15546,6 +15571,35 @@ mod tests {
     use fod_rust_monitor::DbRepoPayloadObservabilitySnapshot;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn rename_namespace_decoder_rejects_malformed_rows() {
+        let row = |kind: &str, entry_id: &str, file_id: &str| {
+            vec![kind.to_string(), entry_id.to_string(), file_id.to_string()]
+        };
+        assert_eq!(parse_resolved_rename_entry(Vec::new()), Ok(None));
+        assert_eq!(
+            parse_resolved_rename_entry(vec![row("file", "12", "34")]),
+            Ok(Some(("file".to_string(), 12, Some(34))))
+        );
+        assert_eq!(
+            parse_resolved_rename_entry(vec![row("dir", "12", "")]),
+            Ok(Some(("dir".to_string(), 12, None)))
+        );
+        assert!(parse_resolved_rename_entry(vec![row("file", "12", "not-an-id")]).is_err());
+        assert!(parse_resolved_rename_entry(vec![row("file", "12", "0")]).is_err());
+        assert!(parse_resolved_rename_entry(vec![row("file", "0", "34")]).is_err());
+        assert!(parse_resolved_rename_entry(vec![row("unknown", "12", "34")]).is_err());
+        assert!(
+            parse_resolved_rename_entry(vec![row("file", "12", "34"), row("dir", "13", "")])
+                .is_err()
+        );
+        let mut extra_column = row("file", "12", "34");
+        extra_column.push("unexpected".to_string());
+        assert!(parse_resolved_rename_entry(vec![extra_column]).is_err());
+        assert!(parse_resolved_rename_entry(vec![row("file", "12", "")]).is_err());
+        assert!(parse_resolved_rename_entry(vec![row("dir", "12", "34")]).is_err());
+    }
 
     #[test]
     fn optional_row_vector_validator_requires_exact_shape_and_cardinality() {
