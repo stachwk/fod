@@ -66,13 +66,15 @@ verify the selected image and build argument, the compiled
 where the 8KiB compatibility variant is in scope; do not report an 8KiB limit
 as the default FOD deployment limit.
 
-Before each PostgreSQL-backed integration run or page-size-sensitive analysis,
-check which image/build the target service actually uses; do not infer it from
-the repository default or an image tag. Confirm the running endpoint's custom
-`pg_config --configure` and `SHOW block_size` using the configured PostgreSQL
-role, and record the observed value in the test or audit result. Use the
-32KiB FOD build unless the task explicitly targets the 8KiB compatibility
-variant.
+At the start of every PostgreSQL-related task, re-check the repository's
+current build path and the target deployment configuration; do not rely on a
+previous session's notes. Before each PostgreSQL-backed integration run or
+page-size-sensitive analysis, check which image/build the target service
+actually uses; do not infer it from the repository default or an image tag.
+Confirm the running endpoint's custom `pg_config --configure` and
+`SHOW block_size` using the configured PostgreSQL role, and record the observed
+value in the test or audit result. Use the 32KiB FOD build unless the task
+explicitly targets the 8KiB compatibility variant.
 
 Trace the build path used by the task before relying on PostgreSQL-specific
 limits or behavior. The normal 32KiB build entry point is
@@ -96,10 +98,11 @@ binaries instead of the running FOD build. Verify the live server with
 `SHOW block_size` using the configured PostgreSQL role; an image tag or label
 alone is not evidence of the running server's page size.
 
-When continuing PostgreSQL-related work in a later session, re-check this build
-path and, when a target server is available, its actual compiled configuration
-and runtime `SHOW block_size`. Do not rely on a previous session's observation;
-record the verified 32KiB result in the work notes when it affects the task.
+Repeat the build-path check whenever PostgreSQL-related work resumes in a later
+session or switches to another deployment/test target. When a target server is
+available, verify its actual compiled configuration and runtime
+`SHOW block_size`; do not rely on a previous session's observation. Record the
+verified 32KiB result in the work notes when it affects the task.
 
 ## Supported build architectures
 
