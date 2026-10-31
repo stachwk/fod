@@ -67,3 +67,19 @@ powinny wtedy być wyrażone właściwą walidacją, zwykle bajtową dla ścież
 nie arbitralnym limitem znaków. Osobnym problemem są duże wartości `TEXT`
 używane jako klucze indeksów B-tree: wymagają analizy limitu wielkości wpisu
 indeksu i sposobu indeksowania, a nie zmiany typu na `VARCHAR`.
+
+### Potwierdzony przypadek: ścieżki indeksatora
+
+`rust_indexer/src/scan.rs` przechodzi po źródle przez `WalkDir`, zapisuje
+ścieżkę względną i nie nakłada na nią limitu krótszego od możliwości systemu
+plików. Ścieżka jest kluczem unikalnym `(id_index_source, path)` w
+`index_files`; ta sama wartość jest kopiowana do snapshotu z B-tree
+`(id_catalog_snapshot, path)`. PostgreSQL ogranicza rozmiar pojedynczego wpisu
+B-tree do około jednej trzeciej strony, po ewentualnej kompresji TOAST:
+[B-Tree Indexes — PostgreSQL](https://www.postgresql.org/docs/current/btree.html).
+Przy typowej stronie 8 KiB może więc wystąpić rozbieżność między poprawną
+ścieżką plikową a dopuszczalnym rozmiarem wpisu indeksu. FOD nie wymaga
+konkretnego `BLCKSZ`, a serwer referencyjny projektu używa 32 KiB, więc ryzyko
+zależy od konfiguracji serwera i kompresowalności ścieżki. Reprodukcja runtime
+pozostaje do wykonania; pełna diagnoza i bezpieczny kierunek naprawy są w
+[`TODO.md`](../TODO.md).

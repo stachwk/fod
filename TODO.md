@@ -14,14 +14,22 @@ Reading guide:
 
 ## Unresolved findings
 
-- [ ] **Zweryfikować indeksowane kolumny tekstowe dla maksymalnego rozmiaru wpisu B-tree.**
-  `index_files.path` jest częścią indeksu unikalnego razem z `id_index_source`,
-  a `index_catalog_snapshot_files.path` ma indeks B-tree. Zmiana `TEXT` na
-  `VARCHAR(n)` nie rozwiązuje limitu rozmiaru wpisu indeksu PostgreSQL;
-  ustalić, jakie długości ścieżek może wytworzyć indeksator i czy potrzebny
-  jest inny klucz indeksu (np. skrót z kontrolą kolizji). Nie skracać ścieżek
-  ani nie dodawać arbitralnego limitu bez sprawdzenia kontraktu i istniejących
-  danych.
+- [ ] **Obsłużyć długie ścieżki w indeksach indeksatora bez utraty unikalności.**
+  Źródło jest potwierdzone w kodzie: `rust_indexer/src/scan.rs` zapisuje
+  ścieżkę względną z `WalkDir` bez limitu aplikacyjnego; `migrations/base_schema.sql`
+  tworzy unikalny B-tree na `(id_index_source, path)`, a dla snapshotów B-tree
+  na `(id_catalog_snapshot, path)`. PostgreSQL ogranicza wpis B-tree do około
+  jednej trzeciej strony (po ewentualnej kompresji TOAST), więc długi,
+  słabo kompresowalny path może nie przejść skanu albo tworzenia snapshotu na
+  serwerze z typową stroną 8 KiB. Nie wykonano jeszcze reprodukcji runtime;
+  pewność mechanizmu wynika z limitu PostgreSQL i obecnych definicji/ścieżek
+  zapisu. Zmiana `TEXT` na `VARCHAR(n)` nie rozwiązuje problemu. Następny krok:
+  wprowadzić indeks kandydujący o stałym rozmiarze i serializację konfliktów
+  przez PostgreSQL advisory lock, po czym zawsze porównywać pełną ścieżkę;
+  skrót nie może być samodzielnym kluczem unikalności, bo kolizja nie może
+  scalać różnych plików. Sprawdzić również, czy indeks ścieżki w snapshotach
+  jest potrzebny zapytaniom. Nie skracać ścieżek i nie dodawać arbitralnego
+  limitu bez sprawdzenia kontraktu oraz istniejących danych.
 
 - [ ] **Dokończyć audyt rozmiarów identyfikatorów i reprezentacji `mode` w SQL.**
   `docs/SQL_SCHEMA_LIMIT_AUDIT.md` dokumentuje, że klucze `SERIAL` i wiele
