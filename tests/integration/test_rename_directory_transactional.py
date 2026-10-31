@@ -156,6 +156,48 @@ def directory_move_and_replace(mount_a: Path, mount_b: Path) -> None:
     )
 
 
+def replace_open_regular_destination(mount_a: Path, mount_b: Path) -> None:
+    suffix = uuid.uuid4().hex
+    source = mount_a / f"rename-open-destination-source-{suffix}"
+    destination = mount_a / f"rename-open-destination-target-{suffix}"
+    destination_other = mount_b / destination.name
+    old_payload = b"old-open-destination-payload"
+    new_payload = b"replacement-destination-payload"
+
+    source.write_bytes(new_payload)
+    destination.write_bytes(old_payload)
+    wait_for_bytes(destination_other, old_payload)
+    fd = os.open(destination_other, os.O_RDONLY)
+    try:
+        old_inode = os.fstat(fd).st_ino
+        if os.fstat(fd).st_nlink != 1:
+            raise AssertionError("open rename destination should initially have one link")
+
+        os.replace(source, destination)
+        wait_for_bytes(destination, new_payload)
+        wait_for_bytes(destination_other, new_payload)
+
+        observed_old_payload = os.read(fd, len(old_payload) + 1)
+        if observed_old_payload != old_payload:
+            raise AssertionError(
+                f"open descriptor saw replacement data: {observed_old_payload!r}"
+            )
+        old_stat = os.fstat(fd)
+        if old_stat.st_ino != old_inode or old_stat.st_nlink != 0:
+            raise AssertionError(
+                "renamed-away open inode changed identity or retained links: "
+                f"before_ino={old_inode}, after={old_stat}"
+            )
+        if destination.stat().st_ino == old_inode:
+            raise AssertionError("replacement path still identifies the old inode")
+    finally:
+        os.close(fd)
+
+    wait_for_bytes(destination, new_payload)
+    wait_for_bytes(destination_other, new_payload)
+    print("OK rename-open-destination old_fd_preserved=1 old_nlink=0 replacement_visible=1")
+
+
 def cross_directory_move_updates_parent_link_counts(
     mount_a: Path, mount_b: Path
 ) -> None:
@@ -565,6 +607,7 @@ def main() -> None:
             launcher_b.start(str(mount_b), log_prefix="/tmp/fod-rename-dir-b")
 
             directory_move_and_replace(mount_a, mount_b)
+            replace_open_regular_destination(mount_a, mount_b)
             cross_directory_move_updates_parent_link_counts(mount_a, mount_b)
             nonempty_target_is_preserved(mount_a, mount_b)
             missing_source_preserves_destination(mount_a, mount_b)
@@ -574,7 +617,7 @@ def main() -> None:
             descendant_is_rejected(mount_a, mount_b)
             rollback_after_target_removal(mount_a, mount_b, barrier_dir)
 
-            print("OK rename-directory-transactional protected_cases=8")
+            print("OK rename-directory-transactional protected_cases=9")
         except BaseException:
             print("\n=== MOUNT A LOG ===")
             launcher_a._dump_log()

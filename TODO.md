@@ -14,6 +14,20 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Rename replacement must preserve an open destination inode across mounts.**
+  A mounted two-mount regression opened the destination on mount B, replaced its
+  name from mount A, then received `ENOENT` reading the still-open descriptor.
+  Root cause is confirmed in `remove_primary_file_or_promote_hardlink_on_conn()`:
+  the regular-file target branch deletes the `files` row without checking
+  PostgreSQL `file_open_leases`, unlike unlink's deferred-purge path. The
+  replacement transaction now checks active leases under the PostgreSQL
+  inode lifecycle lock and marks the target unlinked instead of deleting it;
+  final handle release purges it after the last lease. The regression verifies
+  the old descriptor's payload and inode, `st_nlink == 0`, and replacement
+  visibility on both mounts. `test_rename_directory_transactional.py` passed
+  on Linux 6.17.0-41-generic/libfuse3 3.18.2/PostgreSQL 16.15 against an
+  isolated database, which was dropped after the run.
+
 - [x] **Nie-UTF-8 w celu symlinka i nazwie xattr nie może aliasować U+FFFD.**
   PostgreSQL `text` nie zachowuje dowolnych bajtów wejścia. Montowane regresje
   sprawdzają, że `symlink()` z celem `target-\xff` oraz

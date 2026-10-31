@@ -10664,6 +10664,40 @@ impl DbRepo {
             return Ok(());
         }
 
+        let sql_has_open_lease = CString::new(
+            "SELECT EXISTS (
+                 SELECT 1 FROM file_open_leases l
+                 JOIN client_sessions s ON s.session_id = l.session_id
+                 WHERE l.file_id = $1
+                   AND l.lease_expires_at > clock_timestamp()
+                   AND s.lease_expires_at > clock_timestamp()
+             )::text",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let sql_defer_open_file = CString::new(
+            "UPDATE files
+             SET name = $1, unlinked = TRUE,
+                 change_date = NOW(), modification_date = NOW()
+             WHERE id_file = $2 AND NOT unlinked",
+        )
+        .map_err(|_| "SQL contains NUL byte".to_string())?;
+        let has_open_lease = {
+            let params = [&file_id_param];
+            let result = exec_params(conn, &sql_has_open_lease, &params)?;
+            matches!(fetch_single_text(result)?.trim(), "true" | "t")
+        };
+        if has_open_lease {
+            // Rename replacement removes a name binding, but an open file
+            // description on any FOD mount must keep referring to this inode.
+            // The open lease and lifecycle advisory lock serialize this with
+            // concurrent opens and deferred-file purging.
+            let hidden_name = CString::new(format!(".fod-unlinked-rename-{file_id}"))
+                .map_err(|_| "deferred rename name contains NUL byte".to_string())?;
+            let params = [&hidden_name, &file_id_param];
+            exec_command_params(conn, &sql_defer_open_file, &params)?;
+            return Ok(());
+        }
+
         let object_value = {
             let params = [&file_id_param];
             let res = exec_params(conn, &sql_lookup_object, &params)?;
