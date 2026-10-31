@@ -240,7 +240,7 @@ The dry run should report:
 - optional inode and device ids when available.
 
 Materialization writes into a per-run root directory inside FOD named `index-source-<source id>-import-<plan id>`, keeps the source tree untouched, and writes each canonical payload once while reusing the canonical data object for duplicate references.
-If a non-dry-run materialize fails after the import root has been created, the command now attempts a best-effort rollback automatically. `fod-indexer cleanup-failed --plan <id>` remains the manual fallback if that rollback cannot finish.
+If a non-dry-run materialize fails after the import root has been created, the command now attempts a best-effort rollback automatically. `fod-indexer cleanup-failed --plan <id>` remains the manual fallback if that rollback cannot finish. Cleanup accepts plans marked `materialize_failed` or `materialize_cleaned`; it refuses a plan still marked `materialize_running`, because the importer may still be creating files while cleanup scans and deletes the tree. Recovery of a process crash that leaves a plan running requires a durable materialization lease and is not automatic yet; see `TODO.md`.
 The rollback contract is pinned by a failure-path smoke that forces a partial materialize failure and verifies that the import root disappears again.
 
 ## Cleanup

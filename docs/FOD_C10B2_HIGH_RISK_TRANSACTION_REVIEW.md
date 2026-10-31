@@ -261,6 +261,23 @@ pełna ocena lock order na namespace/data objects.
 
 ## Reguły przejścia do C10-B3
 
+### TX-03C — odmowa cleanup aktywnego planu
+
+Przegląd kodu 2026-10-31 wykazał, że `cleanup_failed_materialization()`
+dopuszczał status `materialize_running`. Blokada `FOR UPDATE` na wierszu planu
+nie zatrzymuje importera, który tworzy drzewo w osobnych transakcjach; ręczny
+cleanup mógł więc skasować część importu, zanim importer dokończył pracę.
+FOD 3.4.510 odmawia teraz cleanup dla `materialize_running` i zwraca
+`FOD_INDEXER_CLEANUP_ACTIVE_MATERIALIZER`. Automatyczny rollback po błędzie
+nadal działa, bo najpierw zapisuje `materialize_failed`. Odczyt i decyzja o
+statusie pozostają w tej samej transakcji PostgreSQL.
+
+To zamyka wyścig ręcznego cleanup z importerem, który nadal pracuje; nie
+rozwiązuje odzyskiwania po awarii procesu, który pozostawił plan w stanie
+`materialize_running`. Do tego potrzebny jest trwały lease importu i
+kontrolowane przejęcie po jego wygaśnięciu. Regresja bezpośrednio sprawdzająca
+odmowę dla aktywnego planu pozostaje do dodania i uruchomienia.
+
 - Wszystkie mutacje `indexer cleanup` mają udokumentowany porządek blokad,
   spójność ze stanem lease i jedną transakcję na **jednym backendzie PG**.
 - Zdefiniowano, które operacje importu i legacy wymagają zaufanej zdolności,

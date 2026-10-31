@@ -263,8 +263,12 @@ pub fn cleanup_failed_materialization(
     repo.with_transaction(|tx| {
         let plan = load_cleanup_plan(tx, plan_id)?;
         match plan.status.as_str() {
-            "materialize_running" => {}
             "materialize_failed" | "materialize_cleaned" => {}
+            "materialize_running" => {
+                return Err(format!(
+                    "FOD_INDEXER_CLEANUP_ACTIVE_MATERIALIZER plan {plan_id} is still running; cleanup refused"
+                ));
+            }
             "materialize_completed" => {
                 return Err(format!(
                     "plan {plan_id} is already completed and cannot be cleaned"

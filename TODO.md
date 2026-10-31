@@ -14,6 +14,18 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Bezpiecznie odzyskiwać import pozostawiony w `materialize_running`.**
+  `cleanup-failed` odmawia teraz usunięcia drzewa, gdy proces importera może
+  nadal je tworzyć; blokada wiersza planu nie zatrzymuje operacji importu
+  wykonywanych w osobnych transakcjach. Awaria procesu może więc pozostawić
+  częściowe drzewo i plan w stanie `materialize_running`. Zaprojektować trwały
+  lease/właściciela planu z wygaśnięciem i kontrolowanym przejęciem po
+  potwierdzeniu braku aktywnego importera. Do tego czasu nie zmieniać ręcznie
+  statusu planu bez potwierdzenia, że żaden importer go nie wykonuje. Kod:
+  `rust_indexer/src/cleanup.rs`; dodać i uruchomić regresję odmowy cleanup dla
+  aktywnego planu. Szczegóły ryzyka TX-03C w
+  `docs/FOD_C10B2_HIGH_RISK_TRANSACTION_REVIEW.md`.
+
 - [ ] **Uruchomić montowany test dwóch mountów dla wyścigu źródła `link()`.**
   FOD 3.4.475 przekazuje do transakcji PostgreSQL dokładny wpis źródłowy
   `(kind, entry_id, parent_id, name)` i odrzuca go, jeśli inny host usunął lub
