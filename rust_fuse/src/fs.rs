@@ -2621,13 +2621,17 @@ impl FodFuse {
         const NAME_MAX: usize = 255;
         if name.as_bytes().len() > NAME_MAX {
             Err(ENAMETOOLONG)
-        } else if name.to_str().is_none() {
+        } else if Self::os_str_as_utf8(name).is_err() {
             // PostgreSQL text cannot preserve invalid UTF-8 path bytes. Reject
             // them before any lossy conversion could alias another name.
             Err(EILSEQ)
         } else {
             Ok(())
         }
+    }
+
+    fn os_str_as_utf8(value: &OsStr) -> Result<&str, libc::c_int> {
+        value.to_str().ok_or(EILSEQ)
     }
 
     fn copy_dedupe_enabled_for_len(&self, len: u64) -> bool {
@@ -6380,6 +6384,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EINVAL);
             return;
         }
+        let name = match Self::os_str_as_utf8(name) {
+            Ok(name) => name.to_owned(),
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
             Ok(value) => value,
             Err(errno) => {
@@ -6388,7 +6399,6 @@ impl Filesystem for FodFuse {
             }
         };
         let owner = (attrs.xattr_owner_kind, attrs.xattr_owner_id);
-        let name = name.to_string_lossy().to_string();
         debug!(
             "FOD setxattr path={} name={} flags={} size={}",
             path,
@@ -6539,6 +6549,13 @@ impl Filesystem for FodFuse {
         let ino = ino.0;
         let _read_profile = self.start_fuse_read_profile();
         self.profile.record_getxattr();
+        let name = match Self::os_str_as_utf8(name) {
+            Ok(name) => name.to_owned(),
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
             Ok(value) => value,
             Err(errno) => {
@@ -6546,7 +6563,6 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        let name = name.to_string_lossy().to_string();
         debug!("FOD getxattr path={} name={} size={}", path, name, size);
         let subject = self.request_identity(req);
         if name.starts_with("trusted.") && subject.uid != 0 {
@@ -6655,6 +6671,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
+        let name = match Self::os_str_as_utf8(name) {
+            Ok(name) => name.to_owned(),
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let (path, attrs) = match self.authoritative_entry_attrs_for_ino(ino) {
             Ok(value) => value,
             Err(errno) => {
@@ -6663,7 +6686,6 @@ impl Filesystem for FodFuse {
             }
         };
         let owner = (attrs.xattr_owner_kind, attrs.xattr_owner_id);
-        let name = name.to_string_lossy().to_string();
         if name.starts_with("system.posix_acl_")
             && (!self.acl_enabled
                 || (name == "system.posix_acl_default" && owner.0 != "dir")
@@ -10639,6 +10661,13 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, errno);
             return;
         }
+        let target = match Self::os_str_as_utf8(target.as_os_str()) {
+            Ok(target) => target.to_owned(),
+            Err(errno) => {
+                fuse_reply_error!(reply, errno);
+                return;
+            }
+        };
         let parent_path = match self.entry_path_for_ino(parent) {
             Ok(path) => path,
             Err(errno) => {
@@ -10666,7 +10695,7 @@ impl Filesystem for FodFuse {
             self.repo.create_symlink_for_subject_with_acl(
                 parent_id,
                 link_name.to_string_lossy().as_ref(),
-                &target.to_string_lossy(),
+                &target,
                 subject.uid,
                 subject.gid,
                 &inode_seed,
@@ -10676,7 +10705,7 @@ impl Filesystem for FodFuse {
             self.repo.create_symlink_for_subject(
                 parent_id,
                 link_name.to_string_lossy().as_ref(),
-                &target.to_string_lossy(),
+                &target,
                 subject.uid,
                 subject.gid,
                 &inode_seed,

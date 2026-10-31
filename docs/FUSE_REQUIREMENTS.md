@@ -90,6 +90,9 @@ samego numeru protokołu.
 
 ## Otwarte prace w warstwie FUSE
 
+- dodać montowaną regresję `EILSEQ` dla nie-UTF-8 celu `symlink()` i nazw
+  xattr; PostgreSQL `text` nie przechowuje takich bajtów, a callbacki muszą
+  odrzucać je bez aliasowania poprawnych nazw;
 - dodać test błędów `fsync`, gdy będzie dostępny wąski mechanizm wstrzykiwania
   błędów PostgreSQL w teście montowanym;
 - zmierzyć retencję cache inode/ścieżek i rozważyć `forget`/`batch_forget` po

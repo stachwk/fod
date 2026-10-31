@@ -14,6 +14,18 @@ Reading guide:
 
 ## Unresolved findings
 
+- [ ] **Sprawdź brak aliasowania nie-UTF-8 w celach symlinków i nazwach xattr.**
+  PostgreSQL `text` nie zachowuje dowolnych bajtów wejścia. Komponenty ścieżek
+  odrzucają niepoprawny UTF-8 jako `EILSEQ`, ale `symlink()` i callbacki xattr
+  wcześniej konwertowały takie bajty przez `to_string_lossy()`, co mogło
+  wskazać inną nazwę. Callbacki zwracają teraz `EILSEQ` zamiast tworzyć/odczytać
+  alias. Dodać montowaną regresję: przygotować poprawną nazwę z U+FFFD, wysłać
+  odpowiadające jej niepoprawne bajty w `symlink()` oraz `getxattr()`/
+  `setxattr()`/`removexattr()`, sprawdzić `EILSEQ` i niezmieniony poprawny
+  obiekt/atrybut. Linuxowe nazwy i cele ścieżek mogą zawierać nie-UTF-8; do
+  pełnej obsługi potrzebna byłaby reprezentacja bajtowa w schemacie, poza tym
+  zakresem poprawienia aliasowania.
+
 - [x] **Do not treat external `dirfd()` closure as a POSIX `closedir()` test.**
   The directory-stream regression had closed the descriptor returned by
   `dirfd()` and then required `closedir()` to return `EBADF`, incorrectly
