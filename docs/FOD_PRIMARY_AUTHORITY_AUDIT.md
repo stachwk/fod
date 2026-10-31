@@ -970,3 +970,8 @@ symlinks and both hardlink forms; a valid row whose metadata differs still
 returns “not confirmed” and preserves the original uniqueness error. The pure
 positive-ID decoder test passes. PostgreSQL integration remains unverified in
 this environment for the schema and 32 KiB build reasons recorded above.
+FOD 3.4.492 requires the hardlink-promotion decoder to receive exactly the
+three projected columns, and requires endpoint-role probes to return exactly
+one row and one column. The endpoint result-shape regression was added, but
+the FUSE crate test could not compile here: installed libfuse3 is 3.14.0 while
+the project requires at least 3.18.2. No live PostgreSQL integration was run.

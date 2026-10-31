@@ -2407,3 +2407,13 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   and negative values. PostgreSQL integration remains pending because the
   configured database has schema 31 (the client requires 38) and this host
   lacks the FOD 32 KiB PostgreSQL binaries.
+
+## FOD 3.4.492 — enforce exact hardlink and endpoint probe result shapes
+
+- [x] Require the hardlink selection decoder's exact three-column projection
+  and make PostgreSQL endpoint-role probing reject zero/multiple rows or
+  columns. Added a pure endpoint-result shape regression. Formatting passes
+  and the hotpath crate compiles. The FUSE test target could not compile because
+  local libfuse3 is 3.14.0, below the project's 3.18.2 minimum. Live PostgreSQL
+  integration is also unverified because the local server/build and schema do
+  not meet the FOD integration requirements.

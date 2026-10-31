@@ -3137,7 +3137,7 @@ unsafe fn decode_primary_hardlink_row(
     if row >= PQntuples(res) {
         return Ok(None);
     }
-    if PQnfields(res) < 3 {
+    if PQnfields(res) != 3 {
         return Err("invalid hardlink row returned by PostgreSQL".to_string());
     }
 

@@ -1297,10 +1297,11 @@ fn postgres_endpoint_probe(conninfo: &str) -> Result<PgEndpointProbe, String> {
             PQfinish(conn);
             return Err(error);
         }
-        if PQresultStatus(result) != PGRES_TUPLES_OK
-            || PQntuples(result) < 1
-            || PQnfields(result) < 1
-        {
+        if !is_valid_endpoint_probe_result(
+            PQresultStatus(result),
+            PQntuples(result),
+            PQnfields(result),
+        ) {
             PQclear(result);
             let error = connection_error(conn);
             PQfinish(conn);
@@ -1317,6 +1318,10 @@ fn postgres_endpoint_probe(conninfo: &str) -> Result<PgEndpointProbe, String> {
         PQfinish(conn);
         parsed
     }
+}
+
+fn is_valid_endpoint_probe_result(status: c_int, rows: c_int, columns: c_int) -> bool {
+    status == PGRES_TUPLES_OK && rows == 1 && columns == 1
 }
 
 fn connection_error(conn: *const PGconn) -> String {
@@ -1343,6 +1348,15 @@ mod tests {
         let mut values = HashMap::new();
         values.insert("pool_max_connections".to_string(), limit.to_string());
         RuntimeConfig::from_runtime_map(&values).unwrap()
+    }
+
+    #[test]
+    fn endpoint_probe_requires_one_scalar_result() {
+        assert!(is_valid_endpoint_probe_result(PGRES_TUPLES_OK, 1, 1));
+        assert!(!is_valid_endpoint_probe_result(PGRES_TUPLES_OK, 0, 1));
+        assert!(!is_valid_endpoint_probe_result(PGRES_TUPLES_OK, 2, 1));
+        assert!(!is_valid_endpoint_probe_result(PGRES_TUPLES_OK, 1, 2));
+        assert!(!is_valid_endpoint_probe_result(0, 1, 1));
     }
 
     #[test]
