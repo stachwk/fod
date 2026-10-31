@@ -10,6 +10,10 @@ still in progress and does not claim general POSIX conformance. The enforced
 Linux/libfuse minimums and their validation boundary are in
 [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
 
+FOD 3.4.430 adds passing mounted `rename()` coverage for file/symlink
+replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
+P08 remains open for the remaining POSIX requirements and error cases.
+
 ## Runtime architecture
 
 FOD is Rust-backed end to end:

@@ -51,6 +51,22 @@ def wait_for_bytes(path: Path, expected: bytes) -> None:
     )
 
 
+def wait_for_symlink(path: Path, expected_target: str) -> None:
+    deadline = time.monotonic() + WAIT_SECONDS
+    observed: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            observed = os.readlink(path)
+        except OSError:
+            observed = None
+        if observed == expected_target:
+            return
+        time.sleep(0.05)
+    raise AssertionError(
+        f"{path}: expected symlink target {expected_target!r}, observed={observed!r}"
+    )
+
+
 def expect_replace_errno(
     source: Path,
     destination: Path,
@@ -275,6 +291,102 @@ def type_mismatch_errors(mount_a: Path, mount_b: Path) -> None:
     )
 
 
+def file_and_symlink_type_pairings(mount_a: Path, mount_b: Path) -> None:
+    suffix = uuid.uuid4().hex
+
+    file_source = mount_a / f"rename-file-symlink-source-{suffix}"
+    file_source_other = mount_b / file_source.name
+    file_target = mount_b / f"rename-file-symlink-target-{suffix}"
+    preserved_target = mount_b / f"rename-file-symlink-data-{suffix}"
+    file_source.write_bytes(b"replacement-file")
+    preserved_target.write_bytes(b"symlink-target-stays")
+    file_target.symlink_to(preserved_target.name)
+    wait_for_bytes(file_source_other, b"replacement-file")
+    wait_for_bytes(file_target, b"symlink-target-stays")
+    os.replace(file_source_other, file_target)
+    wait_for_absent(file_source)
+    wait_for_bytes(file_target, b"replacement-file")
+    wait_for_bytes(preserved_target, b"symlink-target-stays")
+    if file_target.is_symlink():
+        raise AssertionError("file-over-symlink rename did not replace the link")
+
+    symlink_data = mount_a / f"rename-symlink-data-{suffix}"
+    symlink_data.write_bytes(b"symlink-source-target")
+    symlink_source = mount_a / f"rename-symlink-source-{suffix}"
+    symlink_source_other = mount_b / symlink_source.name
+    regular_target = mount_b / f"rename-symlink-regular-target-{suffix}"
+    symlink_source.symlink_to(symlink_data.name)
+    regular_target.write_bytes(b"regular-target-before")
+    wait_for_symlink(symlink_source_other, symlink_data.name)
+    wait_for_bytes(regular_target, b"regular-target-before")
+    os.replace(symlink_source_other, regular_target)
+    wait_for_absent(symlink_source)
+    wait_for_symlink(regular_target, symlink_data.name)
+    wait_for_bytes(symlink_data, b"symlink-source-target")
+
+    first_link_data = mount_a / f"rename-link-data-a-{suffix}"
+    second_link_data = mount_b / f"rename-link-data-b-{suffix}"
+    first_link_data.write_bytes(b"link-a")
+    second_link_data.write_bytes(b"link-b")
+    link_source = mount_a / f"rename-symlink-over-symlink-source-{suffix}"
+    link_source_other = mount_b / link_source.name
+    link_target = mount_b / f"rename-symlink-over-symlink-target-{suffix}"
+    link_source.symlink_to(first_link_data.name)
+    link_target.symlink_to(second_link_data.name)
+    wait_for_symlink(link_source_other, first_link_data.name)
+    wait_for_symlink(link_target, second_link_data.name)
+    os.replace(link_source_other, link_target)
+    wait_for_absent(link_source)
+    wait_for_symlink(link_target, first_link_data.name)
+    wait_for_bytes(first_link_data, b"link-a")
+    wait_for_bytes(second_link_data, b"link-b")
+
+    source_link_to_dir = mount_a / f"rename-link-to-dir-source-{suffix}"
+    source_link_to_dir_other = mount_b / source_link_to_dir.name
+    source_link_data_dir = mount_a / f"rename-link-to-dir-data-{suffix}"
+    empty_dir_target = mount_b / f"rename-link-to-dir-target-{suffix}"
+    source_link_data_dir.mkdir()
+    source_link_to_dir.symlink_to(source_link_data_dir.name, target_is_directory=True)
+    empty_dir_target.mkdir()
+    wait_for_symlink(source_link_to_dir_other, source_link_data_dir.name)
+    wait_for_dir(empty_dir_target)
+    expect_replace_errno(
+        source_link_to_dir_other,
+        empty_dir_target,
+        errno.EISDIR,
+        "symlink-to-directory over directory",
+    )
+    wait_for_symlink(source_link_to_dir, source_link_data_dir.name)
+    wait_for_dir(empty_dir_target)
+    if list(empty_dir_target.iterdir()):
+        raise AssertionError("failed symlink-to-directory rename changed target")
+
+    source_dir = mount_a / f"rename-dir-over-symlink-source-{suffix}"
+    source_dir_other = mount_b / source_dir.name
+    target_link = mount_b / f"rename-dir-over-symlink-target-{suffix}"
+    target_data_dir = mount_b / f"rename-dir-over-symlink-data-{suffix}"
+    source_dir.mkdir()
+    target_data_dir.mkdir()
+    target_link.symlink_to(target_data_dir.name, target_is_directory=True)
+    wait_for_dir(source_dir_other)
+    wait_for_symlink(target_link, target_data_dir.name)
+    expect_replace_errno(
+        source_dir_other,
+        target_link,
+        errno.ENOTDIR,
+        "directory over symlink",
+    )
+    wait_for_dir(source_dir)
+    wait_for_symlink(target_link, target_data_dir.name)
+    wait_for_dir(target_data_dir)
+
+    print(
+        "OK rename-file-symlink-pairings file_over_symlink=success "
+        "symlink_over_file=success symlink_over_symlink=success "
+        f"symlink_dir_over_dir={errno.EISDIR} dir_over_symlink={errno.ENOTDIR}"
+    )
+
+
 def descendant_is_rejected(mount_a: Path, mount_b: Path) -> None:
     suffix = uuid.uuid4().hex
     root = mount_a / f"rename-dir-cycle-{suffix}"
@@ -379,10 +491,11 @@ def main() -> None:
             nonempty_target_is_preserved(mount_a, mount_b)
             missing_source_preserves_destination(mount_a, mount_b)
             type_mismatch_errors(mount_a, mount_b)
+            file_and_symlink_type_pairings(mount_a, mount_b)
             descendant_is_rejected(mount_a, mount_b)
             rollback_after_target_removal(mount_a, mount_b, barrier_dir)
 
-            print("OK rename-directory-transactional protected_cases=7")
+            print("OK rename-directory-transactional protected_cases=8")
         except BaseException:
             print("\n=== MOUNT A LOG ===")
             launcher_a._dump_log()

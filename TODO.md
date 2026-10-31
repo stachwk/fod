@@ -1862,3 +1862,14 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   record the `open()`/`opendir()` `EMFILE` evidence in the POSIX audit and errno
   matrix. This closes the unrun-test gap only; P02 remains Pending for
   system-wide `ENFILE` and remaining directory errors.
+
+## FOD 3.4.430 — cover file/symlink rename pairings
+
+- [x] Extend `test_rename_directory_transactional.py` with successful file
+  over symlink, symlink over file, symlink over symlink, and rejected
+  symlink-to-directory over directory (`EISDIR`) and directory over symlink
+  (`ENOTDIR`) cases. Verify source, target, and symlink target preservation.
+  The full test passed on Linux 6.17.0-41-generic, libfuse3 3.18.2 and
+  PostgreSQL 16.15; the fault-injected target-removal rollback also passed.
+- [ ] P08 remains Pending: map remaining rename error precedence, permissions,
+  limits and cross-mount observation after committed namespace mutations.
