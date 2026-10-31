@@ -1882,14 +1882,51 @@ pub fn apply_runtime_env_from_map(runtime: &HashMap<String, String>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_runtime_env_from_map, parse_bool, parse_size_bytes, resolve_max_fs_size_bytes,
-        runtime_env_var_name, validate_runtime_tuning, BootstrapOverrides, LockBackend, MountRole,
-        RuntimeConfig, FOD_SCHEMA_NAME, FOD_SEARCH_PATH,
+        apply_runtime_env_from_map, expand_user, parse_bool, parse_size_bytes,
+        resolve_max_fs_size_bytes, runtime_env_var_name, validate_runtime_tuning,
+        BootstrapOverrides, LockBackend, MountRole, RuntimeConfig, FOD_SCHEMA_NAME,
+        FOD_SEARCH_PATH,
     };
     use std::collections::HashMap;
     use std::env;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
+
+    #[cfg(unix)]
+    #[test]
+    fn expand_user_only_replaces_tilde_prefix_and_preserves_path_bytes() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let home = env::var_os("HOME").map(PathBuf::from);
+        let tilde = Path::new("~");
+        let tilde_slash = Path::new("~/");
+        let nested = Path::new("~/config/fod.ini");
+        let relative = Path::new("relative/config-");
+        let absolute = Path::new("/tmp/fod-config-");
+
+        assert_eq!(expand_user(tilde), tilde);
+        assert_eq!(expand_user(relative), relative);
+        assert_eq!(expand_user(absolute), absolute);
+
+        if let Some(home) = &home {
+            assert_eq!(expand_user(tilde_slash), home.clone());
+            assert_eq!(expand_user(nested), home.join("config/fod.ini"));
+        } else {
+            assert_eq!(expand_user(tilde_slash), tilde_slash);
+            assert_eq!(expand_user(nested), nested);
+        }
+
+        let byte_suffix = OsString::from_vec(b"config-\xff/fod.ini".to_vec());
+        let non_utf8_tilde_path = PathBuf::from("~").join(&byte_suffix);
+        let expected = home
+            .map(|home| home.join(byte_suffix))
+            .unwrap_or_else(|| non_utf8_tilde_path.clone());
+        assert_eq!(expand_user(&non_utf8_tilde_path), expected);
+
+        let non_utf8_relative = PathBuf::from(OsString::from_vec(b"relative-\xff".to_vec()));
+        assert_eq!(expand_user(&non_utf8_relative), non_utf8_relative);
+    }
 
     #[test]
     fn maps_runtime_keys_to_fod_env_names() {

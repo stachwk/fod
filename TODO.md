@@ -25,12 +25,13 @@ Reading guide:
   zapewnia pełnej obsługi dowolnych bajtów ścieżek; do tego potrzebna byłaby
   reprezentacja bajtowa w schemacie.
 
-- [ ] **Dodaj regresję dla nie-UTF-8 ścieżki pliku konfiguracyjnego.**
-  `expand_user()` rozwija teraz prefiks `~/` operując na komponentach `Path`,
-  więc nie rekonstruuje ścieżki z `to_string_lossy()` i zachowuje bajty
-  nie-UTF-8 w sufiksie. Dodać test jednostkowy dla suffixu z nie-UTF-8 oraz
-  przypadków `~`, zwykłej ścieżki względnej i absolutnej, sprawdzając że
-  rozwijany jest wyłącznie prefiks tyldy ukośnika.
+- [x] **`expand_user()` zachowuje bajty ścieżki i rozwija tylko `~/`.**
+  Test `expand_user_only_replaces_tilde_prefix_and_preserves_path_bytes`
+  sprawdza ścieżki `~`, `~/`, względną, bezwzględną i sufiks zawierający
+  nie-UTF-8 zarówno pod `~/`, jak i w zwykłej ścieżce. Test jednostkowy
+  `cargo test --offline -p fod-rust-runtime
+  expand_user_only_replaces_tilde_prefix_and_preserves_path_bytes` przeszedł
+  2026-10-31. Nie rekonstruujemy ścieżki przez konwersję tekstową.
 
 - [ ] **Dodaj regresję dla nazw ścieżek zakończonych białymi znakami.**
   `normalize_path()` używało `trim()`, które usuwało końcowe spacje i inne
