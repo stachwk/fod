@@ -18,6 +18,7 @@ BARRIER_TIMEOUT_SECONDS = 10.0
 LEASE_TIMEOUT_SECONDS = 10.0
 BARRIER_ENV = "FOD_TEST_CREATE_BEFORE_OWNERSHIP_BARRIER_DIR"
 POST_CREATE_BARRIER_ENV = "FOD_TEST_CREATE_AFTER_COMMIT_BARRIER_DIR"
+OPEN_INODE_BARRIER_ENV = "FOD_TEST_OPEN_AFTER_INODE_VALIDATION_BARRIER_DIR"
 
 
 def sql_quote(value: str) -> str:
@@ -200,9 +201,13 @@ def main() -> None:
             barrier_dir.mkdir()
             post_create_barrier_dir = temp / "post-create-barrier"
             post_create_barrier_dir.mkdir()
+            open_inode_barrier_dir = temp / "open-inode-barrier"
+            open_inode_barrier_dir.mkdir()
 
             previous_post_create_barrier = os.environ.get(POST_CREATE_BARRIER_ENV)
+            previous_open_inode_barrier = os.environ.get(OPEN_INODE_BARRIER_ENV)
             os.environ[POST_CREATE_BARRIER_ENV] = str(post_create_barrier_dir)
+            os.environ[OPEN_INODE_BARRIER_ENV] = str(open_inode_barrier_dir)
             try:
                 launcher_a.start(str(mount_a_dir), log_prefix="/tmp/fod-create-own-a")
             finally:
@@ -210,6 +215,10 @@ def main() -> None:
                     os.environ.pop(POST_CREATE_BARRIER_ENV, None)
                 else:
                     os.environ[POST_CREATE_BARRIER_ENV] = previous_post_create_barrier
+                if previous_open_inode_barrier is None:
+                    os.environ.pop(OPEN_INODE_BARRIER_ENV, None)
+                else:
+                    os.environ[OPEN_INODE_BARRIER_ENV] = previous_open_inode_barrier
 
             previous_barrier = os.environ.get(BARRIER_ENV)
             os.environ[BARRIER_ENV] = str(barrier_dir)
@@ -431,6 +440,50 @@ def main() -> None:
             )
             alias_path_b.unlink()
             source_path_a.unlink()
+
+            # An OPEN request carrying the old kernel inode must not resolve
+            # its backing file by pathname after another mount replaces it.
+            open_race_name = f"open-inode-replacement-{uuid.uuid4().hex}.bin"
+            open_race_a = mount_a_dir / open_race_name
+            open_race_b = mount_b_dir / open_race_name
+            open_race_a.write_bytes(b"original")
+            open_race_a.stat()
+            arm_barrier(open_inode_barrier_dir, f"/{open_race_name}")
+            open_thread, open_result = start_open(open_race_a, os.O_RDONLY)
+            wait_barrier_ready(open_inode_barrier_dir)
+            replacement_fd = None
+            try:
+                open_race_b.unlink()
+                replacement_fd = os.open(
+                    open_race_b,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o644,
+                )
+                os.write(replacement_fd, b"replacement")
+                os.fsync(replacement_fd)
+            finally:
+                release_barrier(open_inode_barrier_dir)
+            open_fd, open_errno = finish_open(
+                open_thread,
+                open_result,
+                "open inode path replacement",
+            )
+            if replacement_fd is not None:
+                os.close(replacement_fd)
+            if open_fd is not None:
+                os.close(open_fd)
+                raise AssertionError(
+                    "OPEN bound the validated old inode to the replacement path"
+                )
+            if open_errno != errno.ENOENT:
+                raise AssertionError(
+                    "OPEN did not fail for the removed validated inode: "
+                    f"errno={open_errno}, expected={errno.ENOENT}"
+                )
+            if open_race_b.read_bytes() != b"replacement":
+                raise AssertionError("OPEN race altered replacement contents")
+            open_race_b.unlink()
+            print("OK open-inode-path-replacement errno=ENOENT")
 
             if fd_a is not None:
                 os.close(fd_a)

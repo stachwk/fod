@@ -747,3 +747,19 @@ uses the source inode even after the other mount replaces the alias. The full
 test passed on FOD 3.4.452 in `release-lto` against disposable PostgreSQL 16.15
 with `BLCKSZ=32KiB`, Linux 6.17.0-41-generic and libfuse3 3.18.3; the temporary
 database was dropped after the run.
+
+### `open()` after concurrent unlink and path replacement
+
+`open()` first resolved the requested inode and checked its access, then
+resolved the path again to obtain a backing `file_id`. A second mount could
+unlink that inode and create a replacement between those steps. The callback
+could then attach a handle and open lease for the replacement while the FUSE
+request still named the old inode. `open()` now takes the backing ID from the
+already validated attributes. PostgreSQL lease registration serializes with
+unlink/purge and returns `ENOENT` when that exact file ID has been removed.
+
+`test_create_write_ownership.py` pauses `open()` after inode validation, replaces
+the name from a second mount, then resumes the request. It verifies `ENOENT`
+and unchanged replacement bytes. The full test passed on FOD 3.4.453 in
+`release-lto`, Linux 6.17.0-41-generic, libfuse3 3.18.3 and PostgreSQL 16.15
+with `BLCKSZ=32KiB`; the temporary test database was dropped afterward.

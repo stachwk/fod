@@ -40,6 +40,28 @@ Reading guide:
   3.4.452, Linux 6.17.0-41, libfuse3 3.18.3 i PostgreSQL 16.15 z
   `BLCKSZ=32KiB`; test używał i usunął tymczasową bazę.
 
+- [x] **`open()` musi zachować tożsamość zweryfikowanego inode przy równoległej podmianie ścieżki.**
+  Callback sprawdzał inode i uprawnienia, a następnie ponownie rozwiązywał
+  ścieżkę, by znaleźć `file_id`. Drugi mount mógł w tym oknie usunąć plik i
+  utworzyć zastępcę; żądanie starego inode otwierało wtedy nowy plik. `open()`
+  bierze teraz ID właściciela z tych samych atrybutów, które zweryfikowały
+  inode, a lease w PostgreSQL odrzuca ID już usunięte z `ENOENT`. Test dwóch
+  mountów zatrzymuje callback po walidacji inode, podmienia nazwę i sprawdza,
+  że `open()` zwraca `ENOENT`, a bajty zastępcy pozostają niezmienione. Pełny
+  `test_create_write_ownership.py` przeszedł na FOD 3.4.453, Linux 6.17.0-41,
+  libfuse3 3.18.3 i PostgreSQL 16.15. Bieżący serwer sprawdzono przez
+  `/opt/postgresql-custom/bin/pg_config` (`--with-blocksize=32`) i `SHOW
+  block_size=32768`; test użył tymczasowej bazy usuniętej po zakończeniu.
+
+- [x] **Weryfikacja `BLCKSZ` nie może polegać na `PATH` z powłoki logowania.**
+  `sh -lc` resetowało `PATH` i uruchamiało standardowe binaria PostgreSQL z
+  `/usr/local/bin`, przez co `pg_config` raportował wariant 8 KiB mimo obrazu
+  i serwera FOD 32 KiB. Sprawdzenie przez `/opt/postgresql-custom/bin/pg_config`
+  oraz `SHOW block_size` wykonane rolą skonfigurowaną w kontenerze potwierdziło
+  `--with-blocksize=32` i `32768`. `AGENTS.md` wymaga teraz jawnego używania
+  niestandardowych binariów lub powłoki bez trybu logowania oraz sprawdzenia
+  działającego serwera.
+
 - [x] **Obsłużyć i zweryfikować długie ścieżki w indeksach indeksatora.**
   Źródło problemu było potwierdzone w kodzie: `WalkDir` zapisuje ścieżkę
   względną bez limitu aplikacyjnego, podczas gdy B-tree pełnego tekstu może

@@ -90,6 +90,13 @@ cover root-inode parsing for ID-based metadata and reverse path selection for
 hardlinked inodes. The full test passed against PostgreSQL 16.15 with
 `BLCKSZ=32KiB` on Linux 6.17.0-41/libfuse3 3.18.3. The active primary-authority
 audit remains open for other mutation preconditions.
+
+FOD 3.4.453 binds `open()` to the file ID from the inode attributes already
+validated for that request. A deterministic two-mount regression confirms a
+concurrent unlink/recreate returns `ENOENT` for the stale inode instead of
+opening the replacement. The full create/write ownership test passed on Linux
+6.17.0-41/libfuse3 3.18.3 against PostgreSQL 16.15 with `BLCKSZ=32KiB`; see the
+[primary-authority audit](../FOD_PRIMARY_AUTHORITY_AUDIT.md).
 Create/open rollback cleanup also stopped choosing promotion versus purge from
 replica-routed link counts: primary promotion is attempted first, then primary
 purge rechecks links and leases under the lifecycle lock.

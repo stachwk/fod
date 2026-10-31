@@ -5039,6 +5039,52 @@ impl FodFuse {
         Ok(())
     }
 
+    #[cfg(feature = "integration-test-hooks")]
+    fn test_open_after_inode_validation_barrier(path: &str) -> Result<(), libc::c_int> {
+        let Ok(barrier_dir) = std::env::var("FOD_TEST_OPEN_AFTER_INODE_VALIDATION_BARRIER_DIR")
+        else {
+            return Ok(());
+        };
+        if barrier_dir.trim().is_empty() {
+            return Ok(());
+        }
+
+        let barrier_dir = PathBuf::from(barrier_dir);
+        let target_path = barrier_dir.join("target");
+        let target = match fs::read_to_string(&target_path) {
+            Ok(value) => value,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                warn!(
+                    "FOD test open barrier target read failed path={} err={}",
+                    path, err
+                );
+                return Err(EIO);
+            }
+        };
+        if target != path {
+            return Ok(());
+        }
+
+        if let Err(err) = fs::write(barrier_dir.join("ready"), path.as_bytes()) {
+            warn!(
+                "FOD test open barrier ready write failed path={} err={}",
+                path, err
+            );
+            return Err(EIO);
+        }
+        let release_path = barrier_dir.join("release");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !release_path.exists() {
+            if Instant::now() >= deadline {
+                warn!("FOD test open barrier timeout path={}", path);
+                return Err(EIO);
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+    }
+
     // Integration-test-only deterministic rename race hook.
     // This code is absent from normal production builds.
     #[cfg(feature = "integration-test-hooks")]
@@ -7164,26 +7210,17 @@ impl Filesystem for FodFuse {
             "open",
             format!("path={} ino={} flags={:#x}", path, ino, flags),
         );
-        let file_id = match self.file_id_for_path(&path) {
-            Ok(Some(value)) => value,
-            Ok(None) => {
-                fuse_reply_error!(reply, ENOENT);
-                return;
-            }
-            Err(errno) => {
-                fuse_reply_error!(reply, errno);
-                return;
-            }
-        };
-        let attrs = attrs.file_attr;
         let access_mode = match flags & libc::O_ACCMODE {
             libc::O_WRONLY => libc::W_OK,
             libc::O_RDWR => libc::R_OK | libc::W_OK,
             _ => libc::R_OK,
         };
-        if let Err(errno) =
-            Self::require_acl_access(self.acl_allows(&path, &attrs, access_mode, &subject))
-        {
+        if let Err(errno) = Self::require_acl_access(self.acl_allows(
+            &path,
+            &attrs.file_attr,
+            access_mode,
+            &subject,
+        )) {
             self.log_request_error(
                 req_id,
                 "open",
@@ -7205,6 +7242,22 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, EROFS);
             return;
         }
+
+        #[cfg(feature = "integration-test-hooks")]
+        if let Err(errno) = Self::test_open_after_inode_validation_barrier(&path) {
+            fuse_reply_error!(reply, errno);
+            return;
+        }
+
+        // `entry_attrs_for_ino` resolved and verified this inode in the
+        // configured repository view. Resolve the backing ID from those same
+        // attributes; looking up the pathname again could bind this stale
+        // kernel inode to a replacement created by another mount.
+        if attrs.xattr_owner_kind != "file" {
+            fuse_reply_error!(reply, ENOENT);
+            return;
+        }
+        let file_id = attrs.xattr_owner_id;
         let writable = (flags & libc::O_ACCMODE) != libc::O_RDONLY;
         let fh = if writable {
             match self.create_writable_handle_with_ownership(path.clone(), file_id, flags) {

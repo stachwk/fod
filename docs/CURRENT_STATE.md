@@ -27,6 +27,12 @@ directory inheritance, nested files, and umask application for files,
 directories and FIFOs when no default ACL exists. P07 remains open for other
 POSIX permission and identity requirements.
 
+FOD 3.4.453 keeps `open()` bound to the inode validated for the FUSE request.
+A two-mount barrier regression replaces the pathname after inode validation;
+the stale open now returns `ENOENT` instead of opening the replacement. The
+full create/write ownership test passed against PostgreSQL 16.15 built with
+`BLCKSZ=32KiB`, Linux 6.17.0-41 and libfuse3 3.18.3.
+
 FOD 3.4.452 binds `mkdir`, `mknod`, `symlink` and `link` replies to the
 PostgreSQL-committed entry or source file ID. A two-mount regression replaces
 the path between commit and reply; deleted originals return `EIO`, and hardlink

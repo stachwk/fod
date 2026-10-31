@@ -66,6 +66,15 @@ verify the selected image and build argument, the compiled
 where the 8KiB compatibility variant is in scope; do not report an 8KiB limit
 as the default FOD deployment limit.
 
+The 32KiB build compiles PostgreSQL source in the builder stage with
+`--with-blocksize=32`, then verifies the configured `pg_config` and a fresh
+`initdb` cluster's `block_size` before publishing. For in-container checks, use
+the custom binaries under `/opt/postgresql-custom/bin` (or a non-login shell):
+a login shell may reset `PATH` to `/usr/local/bin` and inspect the upstream
+8KiB binaries instead of the running FOD build. Verify the live server with
+`SHOW block_size` using the configured PostgreSQL role; an image tag or label
+alone is not evidence of the running server's page size.
+
 ## Supported build architectures
 
 Build and package FOD only for 64-bit and wider userspace architectures. Do not
