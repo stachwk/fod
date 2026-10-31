@@ -105,7 +105,10 @@ fn parse_kernel_version(release: &str) -> Option<(u32, u32, u32)> {
         None => (remaining, None),
     };
     let (minor_text, minor_suffix) = split_numeric_component(minor_with_suffix)?;
-    if !valid_kernel_version_suffix(minor_suffix) || minor_text.is_empty() {
+    if minor_text.is_empty()
+        || !valid_kernel_version_suffix(minor_suffix)
+        || (patch_with_suffix.is_some() && !minor_suffix.is_empty())
+    {
         return None;
     }
     let minor = minor_text.parse::<u32>().ok()?;
@@ -177,6 +180,7 @@ mod tests {
         );
         assert_eq!(parse_kernel_version("6.17.0+custom"), Some((6, 17, 0)));
         assert_eq!(parse_kernel_version("6.17malformed.0"), None);
+        assert_eq!(parse_kernel_version("6.17-malformed.0"), None);
         assert_eq!(parse_kernel_version("6.17.0malformed"), None);
         assert_eq!(parse_kernel_version("6.17."), None);
         assert!(validate_versions("6.17.0", 318, "3.18.2").is_ok());

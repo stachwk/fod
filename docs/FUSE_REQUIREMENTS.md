@@ -1,8 +1,8 @@
 # Linux i FUSE: wymagania oraz stan walidacji FOD
 
-Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.423. Najnowsze
+Stan dokumentu: 2026-10-31, przegląd kodu do FOD 3.4.424. Najnowsze
 przywołane testy funkcjonalne pochodzą z wersji wskazanych przy konkretnych
-przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.423. Zmiana w
+przypadkach; nie oznacza to pełnego testu stosu dla FOD 3.4.424. Zmiana w
 3.4.415 podniosła wymagane minimum jądra do Linux 6.17.0; nie dostarczyła
 nowego zamontowanego przebiegu POSIX.
 
@@ -43,7 +43,8 @@ Linux 6.16 i starsze wydania są poza deklarowanym zakresem i preflight odrzuca
 je przed uruchomieniem mounta. Minimalna deklarowana wersja to Linux 6.17.0;
 wartość 4.18 w historycznym raporcie strojenia FUSE opisuje wyłącznie ówczesne
 wymaganie i nie jest aktualną deklaracją. Parser akceptuje numeryczne pola
-major/minor/patch oraz typowe sufiksy dystrybucji po `-` lub `+`; odrzuca
+major/minor/patch oraz typowe sufiksy dystrybucji po ostatnim polu numerycznym
+(`-` lub `+`); odrzuca też sufiks wstawiony przed polem patch. Odrzuca
 uszkodzone pola takie jak `6.17malformed.0` zamiast interpretować ich prefiks
 numeryczny jako prawidłową wersję.
 
@@ -146,7 +147,8 @@ userspace może odpowiedzieć `EINTR` na pierwotne żądanie po `FUSE_INTERRUPT`
 Test jednostkowy preflight sprawdza granicę wersji 6.17.0 i 3.18.2, odrzucenie
 starszego/nieparsowalnego jądra i libfuse, w tym 3.18.1 oraz nieparsowalnych
 lub niespójnych metadanych wersji. Dla kernela sprawdza również zachowanie
-dystrybucyjnych sufiksów i odrzucenie wadliwych pól numerycznych.
+dystrybucyjnych sufiksów, odrzucenie wadliwych pól numerycznych i sufiksu
+wstawionego przed polem patch.
 Montowane regresje `test-symlink.sh` i `test_xattr.py` sprawdzają także, że
 niepoprawny UTF-8 w celu symlinka i nazwie xattr kończy się `EILSEQ` bez
 aliasowania poprawnego wejścia z U+FFFD.
