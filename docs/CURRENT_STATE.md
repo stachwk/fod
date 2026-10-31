@@ -41,6 +41,13 @@ verified PostgreSQL directory ID and name, then fetches its attributes by
 object ID. The full ownership test passed on PostgreSQL 16.15 with
 `BLCKSZ=32KiB`, Linux 6.17.0-41 and libfuse3 3.18.3.
 
+FOD 3.4.456 records `unlink` journal identity from the committed operation
+result instead of resolving the pathname after commit. A two-mount barrier
+test recreates the name before journal insertion and verifies the single
+`unlink` event has no file ID rather than referencing the replacement. The
+full create/write ownership test passed against PostgreSQL 16.15
+`BLCKSZ=32KiB`, Linux 6.17.0-41 and libfuse3 3.18.3.
+
 FOD 3.4.454 binds `poll()` metadata to the open handle's `file_id`, preserving
 read readiness after a remote unlink. Regular files also report read readiness
 at EOF. Mounted coverage for an empty file, an open-unlinked descriptor, and a

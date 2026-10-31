@@ -20,6 +20,7 @@ BARRIER_ENV = "FOD_TEST_CREATE_BEFORE_OWNERSHIP_BARRIER_DIR"
 POST_CREATE_BARRIER_ENV = "FOD_TEST_CREATE_AFTER_COMMIT_BARRIER_DIR"
 OPEN_INODE_BARRIER_ENV = "FOD_TEST_OPEN_AFTER_INODE_VALIDATION_BARRIER_DIR"
 PARENT_ID_BARRIER_ENV = "FOD_TEST_PARENT_ID_AFTER_VALIDATION_BARRIER_DIR"
+UNLINK_JOURNAL_BARRIER_ENV = "FOD_TEST_UNLINK_BEFORE_JOURNAL_BARRIER_DIR"
 
 
 def sql_quote(value: str) -> str:
@@ -206,13 +207,17 @@ def main() -> None:
             open_inode_barrier_dir.mkdir()
             parent_id_barrier_dir = temp / "parent-id-barrier"
             parent_id_barrier_dir.mkdir()
+            unlink_journal_barrier_dir = temp / "unlink-journal-barrier"
+            unlink_journal_barrier_dir.mkdir()
 
             previous_post_create_barrier = os.environ.get(POST_CREATE_BARRIER_ENV)
             previous_open_inode_barrier = os.environ.get(OPEN_INODE_BARRIER_ENV)
             previous_parent_id_barrier = os.environ.get(PARENT_ID_BARRIER_ENV)
+            previous_unlink_journal_barrier = os.environ.get(UNLINK_JOURNAL_BARRIER_ENV)
             os.environ[POST_CREATE_BARRIER_ENV] = str(post_create_barrier_dir)
             os.environ[OPEN_INODE_BARRIER_ENV] = str(open_inode_barrier_dir)
             os.environ[PARENT_ID_BARRIER_ENV] = str(parent_id_barrier_dir)
+            os.environ[UNLINK_JOURNAL_BARRIER_ENV] = str(unlink_journal_barrier_dir)
             try:
                 launcher_a.start(str(mount_a_dir), log_prefix="/tmp/fod-create-own-a")
             finally:
@@ -228,6 +233,10 @@ def main() -> None:
                     os.environ.pop(PARENT_ID_BARRIER_ENV, None)
                 else:
                     os.environ[PARENT_ID_BARRIER_ENV] = previous_parent_id_barrier
+                if previous_unlink_journal_barrier is None:
+                    os.environ.pop(UNLINK_JOURNAL_BARRIER_ENV, None)
+                else:
+                    os.environ[UNLINK_JOURNAL_BARRIER_ENV] = previous_unlink_journal_barrier
 
             previous_barrier = os.environ.get(BARRIER_ENV)
             os.environ[BARRIER_ENV] = str(barrier_dir)
@@ -339,6 +348,58 @@ def main() -> None:
             (lookup_parent_b / "visible").unlink()
             lookup_parent_b.rmdir()
             print("OK stale-parent-lookup-replacement errno=ENOENT")
+
+            unlink_race_name = f"unlink-journal-replacement-{uuid.uuid4().hex}.bin"
+            unlink_path_a = mount_a_dir / unlink_race_name
+            unlink_path_b = mount_b_dir / unlink_race_name
+            unlink_path_a.write_bytes(b"original")
+            original_file_id = int(
+                psql_scalar(
+                    launcher_a,
+                    f"SELECT id_file FROM fod.files WHERE name = {sql_quote(unlink_race_name)} AND NOT unlinked",
+                )
+            )
+            arm_barrier(unlink_journal_barrier_dir, f"/{unlink_race_name}")
+            unlink_thread, unlink_result = start_operation(unlink_path_a.unlink)
+            wait_barrier_ready(unlink_journal_barrier_dir)
+            try:
+                unlink_path_b.write_bytes(b"replacement")
+            finally:
+                release_barrier(unlink_journal_barrier_dir)
+            unlink_errno = finish_operation(
+                unlink_thread,
+                unlink_result,
+                "unlink journal path replacement",
+            )
+            if unlink_errno is not None:
+                raise AssertionError(f"unlink failed during journal race: errno={unlink_errno}")
+            replacement_file_id = int(
+                psql_scalar(
+                    launcher_b,
+                    f"SELECT id_file FROM fod.files WHERE name = {sql_quote(unlink_race_name)} AND NOT unlinked",
+                )
+            )
+            journal_result = psql_scalar(
+                launcher_a,
+                f"SELECT COUNT(*)::text || '|' || COALESCE(MAX(id_file)::text, '') FROM fod.journal WHERE action = {sql_quote('unlink:/' + unlink_race_name)}",
+            )
+            journal_count, journal_file_id = journal_result.split("|", 1)
+            if int(journal_count) != 1:
+                raise AssertionError(
+                    "unlink journal event was not recorded exactly once: "
+                    f"count={journal_count}"
+                )
+            if replacement_file_id == original_file_id:
+                raise AssertionError("unlink replacement reused the original database file ID")
+            if journal_file_id:
+                raise AssertionError(
+                    "unlink journal was incorrectly attached to the replacement file: "
+                    f"journal_file_id={journal_file_id} replacement_file_id={replacement_file_id}"
+                )
+            print(
+                "OK unlink-journal-path-replacement "
+                f"original_file_id={original_file_id} replacement_file_id={replacement_file_id}"
+            )
 
             # Pause CREATE after its PostgreSQL commit but before its FUSE
             # reply. A second mount removes and replaces the name in that

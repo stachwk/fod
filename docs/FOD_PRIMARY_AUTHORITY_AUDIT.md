@@ -799,3 +799,19 @@ child only to the replacement before resuming. Both stale requests return
 `ENOENT`; the mkdir case leaves the replacement empty. The full test passed on
 FOD 3.4.455 in `release-lto`, PostgreSQL 16.15
 `BLCKSZ=32KiB`, Linux 6.17.0-41-generic and libfuse3 3.18.3.
+
+### `unlink` journal identity after path replacement
+
+After the unlink transaction committed, the callback looked up `file_id` again
+through the old pathname for its journal event. Another mount could create a
+replacement first, causing the old unlink event to point at the new file. The
+callback now uses the committed `FileUnlinkOutcome` and the prevalidated parent
+ID. It records the file ID only when the original row remains (hardlink
+promotion/removal or deferred unlink); a purged file is recorded with
+`id_file=NULL`.
+
+`test_create_write_ownership.py` pauses the callback between the unlink commit
+and journal insertion, creates a replacement through another mount, and
+verifies exactly one journal row records the unlink with no replacement file
+ID. The full test passed on FOD 3.4.456, PostgreSQL 16.15 `BLCKSZ=32KiB`, Linux
+6.17.0-41-generic and libfuse3 3.18.3.

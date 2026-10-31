@@ -5141,6 +5141,51 @@ impl FodFuse {
         Ok(())
     }
 
+    #[cfg(feature = "integration-test-hooks")]
+    fn test_unlink_before_journal_barrier(path: &str) -> Result<(), libc::c_int> {
+        let Ok(barrier_dir) = std::env::var("FOD_TEST_UNLINK_BEFORE_JOURNAL_BARRIER_DIR") else {
+            return Ok(());
+        };
+        if barrier_dir.trim().is_empty() {
+            return Ok(());
+        }
+
+        let barrier_dir = PathBuf::from(barrier_dir);
+        let target_path = barrier_dir.join("target");
+        let target = match fs::read_to_string(&target_path) {
+            Ok(value) => value,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                warn!(
+                    "FOD test unlink-journal barrier target read failed path={} err={}",
+                    path, err
+                );
+                return Err(EIO);
+            }
+        };
+        if target != path {
+            return Ok(());
+        }
+
+        if let Err(err) = fs::write(barrier_dir.join("ready"), path.as_bytes()) {
+            warn!(
+                "FOD test unlink-journal barrier ready write failed path={} err={}",
+                path, err
+            );
+            return Err(EIO);
+        }
+        let release_path = barrier_dir.join("release");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !release_path.exists() {
+            if Instant::now() >= deadline {
+                warn!("FOD test unlink-journal barrier timeout path={}", path);
+                return Err(EIO);
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+    }
+
     // Integration-test-only deterministic rename race hook.
     // This code is absent from normal production builds.
     #[cfg(feature = "integration-test-hooks")]
@@ -5610,7 +5655,7 @@ impl FodFuse {
         old_name: &str,
         req_id: u64,
         subject: &SubjectIdentity,
-    ) -> Result<(), String> {
+    ) -> Result<FileUnlinkOutcome, String> {
         let session_id = self.session_id.unwrap_or(0);
         let hidden_name = format!("{DEFERRED_UNLINK_NAME_PREFIX}{session_id}-{file_id}-{req_id}");
         let outcome = self.repo.unlink_file_entry_for_subject_acl(
@@ -5645,7 +5690,7 @@ impl FodFuse {
             "FOD authoritative unlink file_id={} path={} outcome={:?}",
             file_id, old_path, outcome
         );
-        Ok(())
+        Ok(outcome)
     }
 
     fn finalize_deferred_unlink_after_handle_removal(
@@ -8932,6 +8977,7 @@ impl Filesystem for FodFuse {
             fuse_reply_error!(reply, ENOENT);
             return;
         }
+        let mut journal_file_id = None;
         let result = match kind.as_deref() {
             Some("file") | Some("hardlink") => {
                 let file_id_result = authority.get_file_id(&child_path).map_err(|_| EIO);
@@ -8958,7 +9004,7 @@ impl Filesystem for FodFuse {
                         return;
                     }
                 };
-                self.unlink_file_with_primary_authority(
+                match self.unlink_file_with_primary_authority(
                     file_id,
                     parent_id,
                     &parent_path,
@@ -8966,7 +9012,15 @@ impl Filesystem for FodFuse {
                     name.to_string_lossy().as_ref(),
                     req_id,
                     &subject,
-                )
+                ) {
+                    Ok(outcome) => {
+                        if outcome != FileUnlinkOutcome::Purged {
+                            journal_file_id = Some(file_id);
+                        }
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
             }
             Some("symlink") => match entry_id {
                 Some(symlink_id) => self.repo.unlink_symlink_entry_for_subject_acl(
@@ -9003,14 +9057,18 @@ impl Filesystem for FodFuse {
         };
         match result {
             Ok(_) => {
-                let file_id = self.file_id_for_path(&child_path).ok().flatten();
-                let dir_id = if parent == ROOT_INO {
-                    None
-                } else {
-                    self.parent_entry_id_for_inode(parent).ok().flatten()
-                };
-                let _ =
-                    self.append_journal_event(subject.uid, "unlink", &child_path, file_id, dir_id);
+                #[cfg(feature = "integration-test-hooks")]
+                if let Err(errno) = Self::test_unlink_before_journal_barrier(&child_path) {
+                    fuse_reply_error!(reply, errno);
+                    return;
+                }
+                let _ = self.append_journal_event(
+                    subject.uid,
+                    "unlink",
+                    &child_path,
+                    journal_file_id,
+                    parent_id,
+                );
                 self.remove_cached_path(&child_path);
                 self.invalidate_statfs_cache();
                 debug!("FOD req={} op=unlink completed path={}", req_id, child_path);

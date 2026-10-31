@@ -14,6 +14,17 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **`unlink` nie może przypisać wpisu dziennika do zastępczego pliku.**
+  Po commicie `unlink` callback ponownie rozwiązywał ścieżkę, aby pobrać
+  `file_id`; inny mount mógł wcześniej utworzyć pod tą nazwą nowy plik. Test
+  dwóch mountów zatrzymuje callback po transakcji usunięcia i przed zapisem
+  dziennika, tworzy zastępcę, a następnie sprawdza, że dokładnie jeden wpis
+  `unlink` ma `id_file=NULL`, zamiast ID zastępcy. Callback używa teraz wyniku
+  transakcji: zachowuje ID tylko gdy oryginalny wiersz nadal istnieje, a nie
+  rozwiązuje ponownie ścieżki. `test_create_write_ownership.py` przeszedł na
+  FOD 3.4.456, PostgreSQL 16.15 z `BLCKSZ=32KiB`, Linux 6.17.0-41 i libfuse3
+  3.18.3; baza testowa została usunięta.
+
 - [x] **Udokumentować precyzję znaczników czasu przechowywanych przez PostgreSQL.**
   `TIMESTAMP` w PostgreSQL zapisuje ułamki sekund z rozdzielczością 1 µs.
   Test symlinku podaje `tv_nsec=123456789` i sprawdza po zapisie oraz `stat()`
