@@ -10,14 +10,20 @@ still in progress and does not claim general POSIX conformance. The enforced
 Linux/libfuse minimums and their validation boundary are in
 [`FUSE_REQUIREMENTS.md`](FUSE_REQUIREMENTS.md).
 
-FOD 3.4.462 requires schema version 38 and introduces
-`symlink_hardlinks`, directory-entry aliases for shared symlink inodes. Link,
+FOD 3.4.462 introduced schema version 38 and `symlink_hardlinks`,
+directory-entry aliases for shared symlink inodes. The current FOD 3.4.463
+continues to require schema version 38. Link,
 lookup/readdir, shared metadata and xattrs, `st_nlink`, unlink promotion and
 rename promotion are implemented in progress. A mounted regression is now
 available as `make test-symlink-hardlink`. It was attempted with local libfuse
 3.18.3 and Linux 6.17.0-41, but the environment denied the mount with `EPERM`
 (`CapEff=0`); cross-mount race verification remains open. See
 [`SYMLINK_HARDLINK_DESIGN.md`](SYMLINK_HARDLINK_DESIGN.md).
+
+FOD 3.4.463 also makes shared PostgreSQL scalar decoders reject missing, NULL,
+or malformed result rows rather than silently producing empty values; optional
+scalar reads preserve the distinct zero-row case. Focused database regression
+coverage is in `scalar_text_decoders_distinguish_absent_null_and_malformed_results`.
 
 FOD 3.4.430 adds passing mounted `rename()` coverage for file/symlink
 replacement pairings, including `EISDIR`, `ENOTDIR` and rollback preservation;
@@ -508,7 +514,7 @@ operator runs the schema command with that release.
 See the [versioning ADR](adr/storage-format-versioning.md).
 
 The schema-admission gate first shipped in FOD 3.4.443 with schema version 34;
-FOD 3.4.462 currently requires schema version 38. Migrations 36 and 37
+FOD 3.4.463 currently requires schema version 38. Migrations 36 and 37
 normalize legacy POSIX modes and widen the entity-ID graph; migration 38 adds
 the shared-symlink alias table. Migration 37 changes column and index types,
 so run production upgrades only in a maintenance window.

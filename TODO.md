@@ -822,7 +822,12 @@ Reading guide:
   an empty lock list, which could hide conflicts; it now returns the PostgreSQL
   error instead. The affected read paths now check result status, and shared
   helpers and block-read decoders capture `result_error()` (including SQLSTATE)
-  before clearing the result. Namespace ID lookups and path resolution now
+  before clearing the result. FOD 3.4.463 also hardens the common scalar decoders:
+  required scalar reads reject no rows, NULL, multiple rows or columns; optional
+  reads accept zero rows only and reject malformed result shapes. The
+  `scalar_text_decoders_distinguish_absent_null_and_malformed_results`
+  PostgreSQL regression covers valid, empty, NULL, multirow and multicolumn
+  results. Namespace ID lookups and path resolution now
   return an error for NULL or malformed IDs rather than treating them as a
   missing entry; xattr path lookup no longer substitutes ID 0 for a missing
   directory ID. Special-file metadata decoding now rejects NULL/malformed rows
@@ -834,6 +839,15 @@ Reading guide:
   copy-on-write reference-count parse fallback was removed: malformed counts
   now fail the transaction instead of defaulting to zero and deleting a data
   object.
+  On 2026-10-31 the focused scalar-decoder PostgreSQL test passed on the
+  configured PostgreSQL 16.15 build (`--with-blocksize=32`, runtime
+  `SHOW block_size=32768`). The broader `pg_query` suite could not be evaluated:
+  64 tests failed during repository setup because the configured `foddbname`
+  lacks the `symlink_hardlinks` relation (`SQLSTATE 42P01`), while one
+  environment-only test passed. This points to a stale/incompletely migrated
+  test database, not yet to a decoder regression. Re-run the suite against a
+  fresh schema or apply the missing migration, without modifying production
+  data.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a

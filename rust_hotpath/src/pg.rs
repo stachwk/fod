@@ -2843,7 +2843,9 @@ unsafe fn schema_is_initialized_on_conn(conn: *mut PGconn) -> Result<bool, Strin
 }
 
 unsafe fn fetch_single_text(res: *mut PGresult) -> Result<String, String> {
-    Ok(fetch_single_optional_text(res)?.unwrap_or_default())
+    fetch_single_optional_text(res)?.ok_or_else(|| {
+        "PostgreSQL scalar query returned no rows where one value was required".to_string()
+    })
 }
 
 unsafe fn fetch_single_optional_text(res: *mut PGresult) -> Result<Option<String>, String> {
@@ -2851,14 +2853,22 @@ unsafe fn fetch_single_optional_text(res: *mut PGresult) -> Result<Option<String
         PGRES_TUPLES_OK => {
             let rows = PQntuples(res);
             let cols = PQnfields(res);
-            if rows < 1 || cols < 1 {
+            if cols != 1 {
+                Err(format!(
+                    "invalid PostgreSQL scalar result: expected 1 column, got {cols}"
+                ))
+            } else if rows == 0 {
                 Ok(None)
+            } else if rows != 1 {
+                Err(format!(
+                    "invalid PostgreSQL scalar result: expected at most 1 row, got {rows}"
+                ))
             } else if PQgetisnull(res, 0, 0) != 0 {
-                Ok(None)
+                Err("PostgreSQL scalar result is NULL".to_string())
             } else {
                 let value_ptr = PQgetvalue(res, 0, 0);
                 if value_ptr.is_null() {
-                    Ok(None)
+                    Err("PostgreSQL scalar result has a null value pointer".to_string())
                 } else {
                     Ok(Some(
                         CStr::from_ptr(value_ptr).to_string_lossy().to_string(),
@@ -2873,12 +2883,16 @@ unsafe fn fetch_single_optional_text(res: *mut PGresult) -> Result<Option<String
 }
 
 unsafe fn fetch_single_text_option(res: *mut PGresult) -> Result<Option<String>, String> {
-    let value = fetch_single_text(res)?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(trimmed.to_string()))
+    match fetch_single_optional_text(res)? {
+        None => Ok(None),
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
     }
 }
 
@@ -15255,6 +15269,80 @@ mod tests {
     use fod_rust_monitor::DbRepoPayloadObservabilitySnapshot;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn scalar_text_decoders_distinguish_absent_null_and_malformed_results() -> Result<(), String> {
+        let conninfo = CString::new(conninfo())
+            .map_err(|_| "test PostgreSQL connection string contains NUL".to_string())?;
+        let conn = unsafe { PQconnectdb(conninfo.as_ptr()) };
+        if conn.is_null() {
+            return Err("libpq returned a null test connection".to_string());
+        }
+        if unsafe { PQstatus(conn) } != CONNECTION_OK {
+            let error = conn_error(conn);
+            unsafe { PQfinish(conn) };
+            return Err(error);
+        }
+
+        let checks = unsafe {
+            let query_required = |sql: &str| -> Result<String, String> {
+                let sql =
+                    CString::new(sql).map_err(|_| "test scalar SQL contains NUL".to_string())?;
+                let res = PQexec(conn, sql.as_ptr());
+                if res.is_null() {
+                    return Err(conn_error(conn));
+                }
+                fetch_single_text(res)
+            };
+            let query_optional = |sql: &str| -> Result<Option<String>, String> {
+                let sql = CString::new(sql)
+                    .map_err(|_| "test optional scalar SQL contains NUL".to_string())?;
+                let res = PQexec(conn, sql.as_ptr());
+                if res.is_null() {
+                    return Err(conn_error(conn));
+                }
+                fetch_single_text_option(res)
+            };
+
+            let result = (|| {
+                if query_required("SELECT 'value'::text")? != "value" {
+                    return Err("required scalar decoder changed a valid value".to_string());
+                }
+                if query_optional("SELECT 'value'::text WHERE FALSE")? != None {
+                    return Err("optional scalar decoder did not preserve no-row state".to_string());
+                }
+                if query_optional("SELECT ''::text")? != None {
+                    return Err(
+                        "optional scalar decoder did not treat empty text as absent".to_string()
+                    );
+                }
+                for sql in [
+                    "SELECT NULL::text",
+                    "SELECT 'first'::text UNION ALL SELECT 'second'::text",
+                    "SELECT 'value'::text, 'extra'::text",
+                ] {
+                    if query_required(sql).is_ok() {
+                        return Err(format!(
+                            "required scalar decoder accepted malformed result: {sql}"
+                        ));
+                    }
+                    if query_optional(sql).is_ok() {
+                        return Err(format!(
+                            "optional scalar decoder accepted malformed result: {sql}"
+                        ));
+                    }
+                }
+                if query_required("SELECT 'value'::text WHERE FALSE").is_ok() {
+                    return Err("required scalar decoder accepted an empty result".to_string());
+                }
+                Ok(())
+            })();
+            PQfinish(conn);
+            result
+        };
+
+        checks
+    }
 
     #[test]
     fn persisted_posix_mode_parser_enforces_permission_bit_range() {
