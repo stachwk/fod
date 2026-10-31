@@ -109,7 +109,7 @@ Reading guide:
   połączenie błędem `42P01` podczas przygotowania statementów; FOD 3.4.470
   sprawdza wersję przed tym krokiem i zwraca instrukcję `mkfs.fod upgrade`.
   Obraz PostgreSQL jest poprawnie zbudowany z `--with-blocksize=32` i zwraca
-  `block_size=32768`. Endpointy nadal wymagają uaktualnienia do schematu 38,
+  `block_size=32768`. Endpointy nadal wymagają uaktualnienia do schematu 39,
   zanim będą mogły obsłużyć bieżące testy. Do testów na odizolowanej bazie
   wskazuj pustą bazę administracyjną, z której harness tworzy tymczasową bazę;
   przed pełnym uruchomieniem `fod-rust-hotpath` potwierdź schemat endpointu.
