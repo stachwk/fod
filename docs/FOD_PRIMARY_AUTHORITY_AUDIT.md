@@ -283,7 +283,7 @@ parent ACL checks for creation and namespace removal/movement.
 | `fallocate` hole punching, clone/copy adoption | Primary persistence APIs with a write fence | Hole-punch fencing regression passed; adoption also validates its destination fence in the primary transaction |
 | Open/client sessions, ownership and heartbeat | `with_control_connection` -> the same primary targets; normal read-only mounts use a writable control repo | Remote open/unlink/recreate test passed with distinct inode generations and old-handle writes isolated from the replacement |
 | `rename` / replace | Primary transaction with destination/file locks and source/target revalidation | Source inspection confirms transaction guards; test details are recorded below |
-| `lookup`/`opendir` and namespace parent identity | Current parent inode is verified against primary metadata before resolving children or opening a directory snapshot | `lookup` rejects a cached parent path whose current directory inode differs; `opendir` checks the requested inode against primary before snapshot creation. The handle retains its PostgreSQL directory ID, used for initial/rewind snapshots, names-mode child metadata and atime writes, so path reuse cannot redirect an old handle. Snapshot reads remain routed by the configured read repository. `unlink`/`rmdir` also compare the resolved entry's parent ID. Two-mount stale-inode `opendir`, open-handle remove/recreate and rewind regressions pass in `test_stale_inode_directory.py` and `test_unlink_primary_authority_docker.py`; the standalone stale-inode regression passed on 2026-10-30. |
+| `lookup`/`opendir` and namespace parent identity | Current parent inode is verified against primary metadata before resolving children or opening a directory snapshot | `lookup` gets the directory ID from the same primary row that validates the parent inode, queries the child by `(directory_id, name)`, and loads attributes by the returned entry ID; parent ACL checks use ID-bound attributes. `opendir` checks the requested inode against primary before snapshot creation. The handle retains its PostgreSQL directory ID, used for initial/rewind snapshots, names-mode child metadata and atime writes, so path reuse cannot redirect an old handle. Snapshot reads remain routed by the configured read repository. `unlink`/`rmdir` also compare the resolved entry's parent ID. Two-mount stale-inode `opendir`, open-handle remove/recreate and rewind regressions pass in `test_stale_inode_directory.py` and `test_unlink_primary_authority_docker.py`; the standalone stale-inode regression passed on 2026-10-30. |
 | `create`, mkdir, mknod, link, symlink | Shared destination advisory lock, cross-table vacancy check and parent write/search authorization in the primary insertion transaction | All 40 root/nested cross-type conflicts, concurrent creators and directory/FIFO ID separation passed; parent authorization and inode identity are checked against primary metadata |
 | `rmdir` | Primary namespace/row locks, sticky-bit check and delete in one transaction | Lagged replica, stale binding, concurrent child commit and remote open-unlinked writer regressions passed |
 | Sticky bit on unlink/rmdir/rename | Parent/victim owner row locks inside the primary mutation transaction | Concurrent parent permission commit and nine stale-replica cases passed |
@@ -777,3 +777,25 @@ zero bytes.
 mounted checks now cover empty-file EOF readiness, the open-unlinked descriptor
 and the read-only mount; the full test passed on FOD 3.4.454 with PostgreSQL
 16.15 `BLCKSZ=32KiB` and libfuse3 3.18.3.
+
+### Parent inode and directory ID resolution
+
+`parent_entry_id_for_inode()` fetched attributes, checked their FUSE inode,
+then issued a second `resolve_path()` to obtain the directory ID. A second
+mount could replace the path between those queries; the second query would
+return the replacement's ID even though the request referred to the old parent
+inode. The helper now uses the directory ID carried by the same primary-resolved
+attributes row that passed the inode check. `lookup()` had a related race: after
+validating a parent it resolved the child by a reconstructed path, which could
+select a child in a replacement directory. It now queries the directory entry
+by the verified PostgreSQL directory ID and name, then loads attributes using
+the returned entry kind and ID. Parent ACL checks use the verified attributes.
+Later PostgreSQL mutation transactions still validate and serialize against
+that exact directory ID.
+
+`test_create_write_ownership.py` pauses `mkdir()` and `lookup()` after parent
+validation, removes and recreates the parent through another mount, and adds a
+child only to the replacement before resuming. Both stale requests return
+`ENOENT`; the mkdir case leaves the replacement empty. The full test passed on
+FOD 3.4.455 in `release-lto`, PostgreSQL 16.15
+`BLCKSZ=32KiB`, Linux 6.17.0-41-generic and libfuse3 3.18.3.

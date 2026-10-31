@@ -103,6 +103,14 @@ read readiness true at EOF. The mounted `test_poll.py` reproduced `POLLERR`
 after remote unlink before the fix and now passes for empty files, open-unlinked
 descriptors, and a read-only mount on PostgreSQL 16.15 `BLCKSZ=32KiB`/libfuse3
 3.18.3.
+
+FOD 3.4.455 makes parent inode validation and parent `directory_id` selection
+use the same PostgreSQL metadata result. `lookup()` also resolves the child by
+the verified directory ID and name, then reads attributes by object ID. The
+two-mount barrier regressions replace the parent during `mkdir()` and
+`lookup()`; stale requests return `ENOENT` and leave the replacement
+unchanged. The full ownership test passed on PostgreSQL 16.15 `BLCKSZ=32KiB`,
+Linux 6.17.0-41/libfuse3 3.18.3.
 Create/open rollback cleanup also stopped choosing promotion versus purge from
 replica-routed link counts: primary promotion is attempted first, then primary
 purge rechecks links and leases under the lifecycle lock.

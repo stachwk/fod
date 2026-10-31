@@ -33,6 +33,14 @@ the stale open now returns `ENOENT` instead of opening the replacement. The
 full create/write ownership test passed against PostgreSQL 16.15 built with
 `BLCKSZ=32KiB`, Linux 6.17.0-41 and libfuse3 3.18.3.
 
+FOD 3.4.455 derives a parent directory's database ID from the same PostgreSQL
+metadata row that validates its FUSE inode. A two-mount regression replaces
+the directory while `mkdir()` or `lookup()` is paused after validation; both
+stale requests now return `ENOENT`. `lookup()` resolves a child from the
+verified PostgreSQL directory ID and name, then fetches its attributes by
+object ID. The full ownership test passed on PostgreSQL 16.15 with
+`BLCKSZ=32KiB`, Linux 6.17.0-41 and libfuse3 3.18.3.
+
 FOD 3.4.454 binds `poll()` metadata to the open handle's `file_id`, preserving
 read readiness after a remote unlink. Regular files also report read readiness
 at EOF. Mounted coverage for an empty file, an open-unlinked descriptor, and a

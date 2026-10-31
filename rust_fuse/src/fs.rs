@@ -3845,11 +3845,21 @@ impl FodFuse {
         if attrs.file_attr.ino.0 != ino {
             return Err(ENOENT);
         }
-        let resolved = authority.resolve_path(&path).map_err(|_| EIO)?;
-        match (resolved.kind.as_deref(), resolved.entry_id) {
-            (Some("dir"), entry_id) => Ok(entry_id),
-            _ => Err(ENOENT),
+        if attrs.file_attr.kind != FileType::Directory || attrs.xattr_owner_kind != "dir" {
+            return Err(ENOENT);
         }
+        let directory_id = attrs.xattr_owner_id;
+        if directory_id == 0 {
+            return Err(EIO);
+        }
+
+        // The inode and database ID must come from the same primary-resolved
+        // row. A second path resolution could observe a replacement directory
+        // after the inode check and redirect a mutation into that directory.
+        #[cfg(feature = "integration-test-hooks")]
+        Self::test_parent_id_after_validation_barrier(&path)?;
+
+        Ok(Some(directory_id))
     }
 
     fn remove_cached_path(&self, path: &str) {
@@ -5085,6 +5095,52 @@ impl FodFuse {
         Ok(())
     }
 
+    #[cfg(feature = "integration-test-hooks")]
+    fn test_parent_id_after_validation_barrier(path: &str) -> Result<(), libc::c_int> {
+        let Ok(barrier_dir) = std::env::var("FOD_TEST_PARENT_ID_AFTER_VALIDATION_BARRIER_DIR")
+        else {
+            return Ok(());
+        };
+        if barrier_dir.trim().is_empty() {
+            return Ok(());
+        }
+
+        let barrier_dir = PathBuf::from(barrier_dir);
+        let target_path = barrier_dir.join("target");
+        let target = match fs::read_to_string(&target_path) {
+            Ok(value) => value,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                warn!(
+                    "FOD test parent-ID barrier target read failed path={} err={}",
+                    path, err
+                );
+                return Err(EIO);
+            }
+        };
+        if target != path {
+            return Ok(());
+        }
+
+        if let Err(err) = fs::write(barrier_dir.join("ready"), path.as_bytes()) {
+            warn!(
+                "FOD test parent-ID barrier ready write failed path={} err={}",
+                path, err
+            );
+            return Err(EIO);
+        }
+        let release_path = barrier_dir.join("release");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !release_path.exists() {
+            if Instant::now() >= deadline {
+                warn!("FOD test parent-ID barrier timeout path={}", path);
+                return Err(EIO);
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+    }
+
     // Integration-test-only deterministic rename race hook.
     // This code is absent from normal production builds.
     #[cfg(feature = "integration-test-hooks")]
@@ -5989,23 +6045,48 @@ impl Filesystem for FodFuse {
                 return;
             }
         };
-        if let Err(errno) = self.parent_entry_id_for_inode(parent) {
-            fuse_reply_error!(reply, errno);
-            return;
-        }
-        let subject = self.request_identity(req);
-        let parent_attrs = match self.attrs_for_path(&parent_path) {
-            Ok(Some(attrs)) => attrs,
-            Ok(None) => {
-                fuse_reply_error!(reply, ENOENT);
-                return;
-            }
+        let parent_id = match self.parent_entry_id_for_inode(parent) {
+            Ok(parent_id) => parent_id,
             Err(errno) => {
                 fuse_reply_error!(reply, errno);
                 return;
             }
         };
-        match self.acl_allows(&parent_path, &parent_attrs.file_attr, libc::X_OK, &subject) {
+        let subject = self.request_identity(req);
+        let authority = self.repo.authoritative_view();
+        let parent_attrs = match parent_id {
+            Some(directory_id) => {
+                match self.attrs_for_entry_id_from_repo(&authority, "dir", directory_id) {
+                    Ok(Some(attrs)) if attrs.file_attr.ino.0 == parent => attrs,
+                    Ok(Some(_)) | Ok(None) => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                }
+            }
+            None if parent == INodeNo::ROOT.0 => {
+                match self.attrs_for_path_from_repo(&authority, "/") {
+                    Ok(Some(attrs)) if attrs.file_attr.ino.0 == parent => attrs,
+                    Ok(Some(_)) | Ok(None) => {
+                        fuse_reply_error!(reply, ENOENT);
+                        return;
+                    }
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                }
+            }
+            None => {
+                fuse_reply_error!(reply, ENOENT);
+                return;
+            }
+        };
+        match self.acl_allows_for_attrs(&parent_attrs, libc::X_OK, &subject) {
             Ok(true) => {}
             Ok(false) => {
                 fuse_reply_error!(reply, EACCES);
@@ -6022,8 +6103,35 @@ impl Filesystem for FodFuse {
             "lookup",
             format!("parent={} child={}", parent_path, child_path),
         );
-        match self.lookup_path(&child_path) {
-            Ok(Some(attrs)) => {
+        let entry = match authority
+            .directory_entry_metadata_for_id_and_name(parent_id, &name.to_string_lossy())
+        {
+            Ok(entry) => entry,
+            Err(err) => {
+                warn!(
+                    "FOD lookup by parent ID failed parent_id={:?} name={} err={}",
+                    parent_id,
+                    name.to_string_lossy(),
+                    err
+                );
+                fuse_reply_error!(reply, EIO);
+                return;
+            }
+        };
+        let child_attrs = match entry {
+            Some(entry) => {
+                match self.attrs_for_entry_id_from_repo(&authority, &entry.kind, entry.entry_id) {
+                    Ok(attrs) => attrs,
+                    Err(errno) => {
+                        fuse_reply_error!(reply, errno);
+                        return;
+                    }
+                }
+            }
+            None => None,
+        };
+        match child_attrs {
+            Some(attrs) => {
                 self.register_lookup_path(&child_path, attrs.file_attr.ino.0);
                 reply.entry_with_ttls(
                     &self.attr_cache_ttl_live(),
@@ -6032,7 +6140,7 @@ impl Filesystem for FodFuse {
                     Generation(0),
                 );
             }
-            Ok(None) => {
+            None => {
                 let ttl = self.negative_cache_ttl_live();
                 if ttl.is_zero() {
                     fuse_reply_error!(reply, ENOENT);
@@ -6040,7 +6148,6 @@ impl Filesystem for FodFuse {
                     reply.negative(&ttl);
                 }
             }
-            Err(errno) => fuse_reply_error!(reply, errno),
         }
     }
 

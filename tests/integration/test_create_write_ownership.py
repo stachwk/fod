@@ -19,6 +19,7 @@ LEASE_TIMEOUT_SECONDS = 10.0
 BARRIER_ENV = "FOD_TEST_CREATE_BEFORE_OWNERSHIP_BARRIER_DIR"
 POST_CREATE_BARRIER_ENV = "FOD_TEST_CREATE_AFTER_COMMIT_BARRIER_DIR"
 OPEN_INODE_BARRIER_ENV = "FOD_TEST_OPEN_AFTER_INODE_VALIDATION_BARRIER_DIR"
+PARENT_ID_BARRIER_ENV = "FOD_TEST_PARENT_ID_AFTER_VALIDATION_BARRIER_DIR"
 
 
 def sql_quote(value: str) -> str:
@@ -203,11 +204,15 @@ def main() -> None:
             post_create_barrier_dir.mkdir()
             open_inode_barrier_dir = temp / "open-inode-barrier"
             open_inode_barrier_dir.mkdir()
+            parent_id_barrier_dir = temp / "parent-id-barrier"
+            parent_id_barrier_dir.mkdir()
 
             previous_post_create_barrier = os.environ.get(POST_CREATE_BARRIER_ENV)
             previous_open_inode_barrier = os.environ.get(OPEN_INODE_BARRIER_ENV)
+            previous_parent_id_barrier = os.environ.get(PARENT_ID_BARRIER_ENV)
             os.environ[POST_CREATE_BARRIER_ENV] = str(post_create_barrier_dir)
             os.environ[OPEN_INODE_BARRIER_ENV] = str(open_inode_barrier_dir)
+            os.environ[PARENT_ID_BARRIER_ENV] = str(parent_id_barrier_dir)
             try:
                 launcher_a.start(str(mount_a_dir), log_prefix="/tmp/fod-create-own-a")
             finally:
@@ -219,6 +224,10 @@ def main() -> None:
                     os.environ.pop(OPEN_INODE_BARRIER_ENV, None)
                 else:
                     os.environ[OPEN_INODE_BARRIER_ENV] = previous_open_inode_barrier
+                if previous_parent_id_barrier is None:
+                    os.environ.pop(PARENT_ID_BARRIER_ENV, None)
+                else:
+                    os.environ[PARENT_ID_BARRIER_ENV] = previous_parent_id_barrier
 
             previous_barrier = os.environ.get(BARRIER_ENV)
             os.environ[BARRIER_ENV] = str(barrier_dir)
@@ -267,6 +276,69 @@ def main() -> None:
                 f"loser_errno={loser_errno} "
                 f"loser_elapsed_ms={elapsed * 1000.0:.3f}"
             )
+
+            # Parent metadata and its PostgreSQL directory ID must come from
+            # one resolved row. Replacing the directory after validation must
+            # not redirect a stale-parent mkdir into its replacement.
+            parent_race_name = f"parent-inode-replacement-{uuid.uuid4().hex}"
+            parent_a = mount_a_dir / parent_race_name
+            parent_b = mount_b_dir / parent_race_name
+            parent_a.mkdir()
+            parent_a.stat()
+            arm_barrier(parent_id_barrier_dir, f"/{parent_race_name}")
+            child_thread, child_result = start_operation(
+                lambda: os.mkdir(parent_a / "child", 0o755)
+            )
+            wait_barrier_ready(parent_id_barrier_dir)
+            try:
+                parent_b.rmdir()
+                parent_b.mkdir()
+            finally:
+                release_barrier(parent_id_barrier_dir)
+            parent_errno = finish_operation(
+                child_thread,
+                child_result,
+                "mkdir after parent replacement",
+            )
+            if parent_errno != errno.ENOENT:
+                raise AssertionError(
+                    "mkdir using a stale parent inode was not rejected: "
+                    f"errno={parent_errno}, expected={errno.ENOENT}"
+                )
+            if (parent_b / "child").exists():
+                raise AssertionError("stale-parent mkdir modified the replacement")
+            parent_b.rmdir()
+            print("OK stale-parent-mkdir-replacement errno=ENOENT")
+
+            lookup_parent_name = f"parent-lookup-replacement-{uuid.uuid4().hex}"
+            lookup_parent_a = mount_a_dir / lookup_parent_name
+            lookup_parent_b = mount_b_dir / lookup_parent_name
+            lookup_parent_a.mkdir()
+            lookup_parent_a.stat()
+            arm_barrier(parent_id_barrier_dir, f"/{lookup_parent_name}")
+            lookup_thread, lookup_result = start_operation(
+                lambda: (lookup_parent_a / "visible").stat()
+            )
+            wait_barrier_ready(parent_id_barrier_dir)
+            try:
+                lookup_parent_b.rmdir()
+                lookup_parent_b.mkdir()
+                (lookup_parent_b / "visible").write_bytes(b"replacement")
+            finally:
+                release_barrier(parent_id_barrier_dir)
+            lookup_errno = finish_operation(
+                lookup_thread,
+                lookup_result,
+                "lookup after parent replacement",
+            )
+            if lookup_errno != errno.ENOENT:
+                raise AssertionError(
+                    "lookup using a stale parent inode was not rejected: "
+                    f"errno={lookup_errno}, expected={errno.ENOENT}"
+                )
+            (lookup_parent_b / "visible").unlink()
+            lookup_parent_b.rmdir()
+            print("OK stale-parent-lookup-replacement errno=ENOENT")
 
             # Pause CREATE after its PostgreSQL commit but before its FUSE
             # reply. A second mount removes and replaces the name in that

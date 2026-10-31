@@ -14,6 +14,21 @@ Reading guide:
 
 ## Unresolved findings
 
+- [x] **Walidacja inode rodzica i wybór jego ID korzystają z tego samego odczytu PostgreSQL.**
+  `parent_entry_id_for_inode()` pobierało atrybuty i potwierdzało inode, po
+  czym osobnym `resolve_path()` odczytywało ID katalogu. Podmiana katalogu
+  pomiędzy zapytaniami mogła skierować `mkdir()`/inne mutacje do katalogu
+  zastępczego pod tą samą ścieżką. `lookup()` również pobierało dziecko po
+  ścieżce, więc żądanie ze starym inode rodzica mogło zwrócić wpis z nowego
+  katalogu. Walidacja bierze teraz ID z tego samego wiersza co inode, a
+  `lookup()` odczytuje wpis po `directory_id + name` i atrybuty po ID obiektu.
+  Barierowe testy dwóch mountów podmieniają katalog podczas `mkdir()` i
+  `lookup()`; oba żądania starego inode zwracają `ENOENT`, a katalog zastępczy
+  pozostaje niezmieniony. Pełny
+  `test_create_write_ownership.py` przeszedł na FOD 3.4.455, PostgreSQL 16.15
+  `BLCKSZ=32KiB`, Linux 6.17.0-41 i libfuse3 3.18.3; baza testowa została
+  usunięta.
+
 - [x] **`poll()` zachowuje tożsamość deskryptora i zgłasza EOF jako gotowość do odczytu.**
   Callback używał `ino`/ścieżki mimo otrzymania `fh`; po zdalnym `unlink`
   otwartego pliku regresja `test_poll.py` dostała `POLLERR` (mask `8`) zamiast

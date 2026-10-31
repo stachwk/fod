@@ -66,6 +66,14 @@ verify the selected image and build argument, the compiled
 where the 8KiB compatibility variant is in scope; do not report an 8KiB limit
 as the default FOD deployment limit.
 
+Before each PostgreSQL-backed integration run or page-size-sensitive analysis,
+check which image/build the target service actually uses; do not infer it from
+the repository default or an image tag. Confirm the running endpoint's custom
+`pg_config --configure` and `SHOW block_size` using the configured PostgreSQL
+role, and record the observed value in the test or audit result. Use the
+32KiB FOD build unless the task explicitly targets the 8KiB compatibility
+variant.
+
 The 32KiB build compiles PostgreSQL source in the builder stage with
 `--with-blocksize=32`, then verifies the configured `pg_config` and a fresh
 `initdb` cluster's `block_size` before publishing. For in-container checks, use
