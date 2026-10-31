@@ -49,6 +49,11 @@ columns and rejects malformed NULLs while preserving nullable `range_end` as
 the empty-field representation. All 10 lock-manager tests passed against an
 isolated, initialized database on the verified 32 KiB PostgreSQL build.
 Continue the broader database fault-injection audit.
+FOD 3.4.483 makes all namespace insert `RETURNING` readers require a single
+positive ID and rejects malformed result cardinality or shape. The focused
+decoder regression and all 72 `pg_query` tests passed on the verified isolated
+32 KiB PostgreSQL database. Continue the broader database fault-injection
+audit.
 
 The normal SELinux/ACL and HA-chain Docker test stacks now use the FOD 32 KiB
 PostgreSQL image and verify the live page size in their healthchecks; both

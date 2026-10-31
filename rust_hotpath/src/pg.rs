@@ -2862,6 +2862,18 @@ unsafe fn fetch_single_text(res: *mut PGresult) -> Result<String, String> {
     })
 }
 
+unsafe fn fetch_single_positive_id(res: *mut PGresult, description: &str) -> Result<u64, String> {
+    let value = fetch_single_text(res)?;
+    let id = value
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| format!("{description} returned an invalid id: {err}"))?;
+    if id == 0 {
+        return Err(format!("{description} returned a non-positive id"));
+    }
+    Ok(id)
+}
+
 unsafe fn fetch_single_optional_text(res: *mut PGresult) -> Result<Option<String>, String> {
     let value = match PQresultStatus(res) {
         PGRES_TUPLES_OK => {
@@ -12422,33 +12434,7 @@ impl DbRepo {
                     let params = [&source_file_id, &target_name, &uid, &gid];
                     exec_params(conn, &sql_null_parent, &params)?
                 };
-                let value = match PQresultStatus(res) {
-                    PGRES_TUPLES_OK => {
-                        let rows = PQntuples(res);
-                        let cols = PQnfields(res);
-                        let value = if rows < 1 || cols < 1 {
-                            None
-                        } else {
-                            let value_ptr = PQgetvalue(res, 0, 0);
-                            if value_ptr.is_null() {
-                                None
-                            } else {
-                                CStr::from_ptr(value_ptr)
-                                    .to_string_lossy()
-                                    .trim()
-                                    .parse::<u64>()
-                                    .ok()
-                            }
-                        };
-                        PQclear(res);
-                        value.ok_or_else(|| "failed to create hardlink".to_string())
-                    }
-                    _ => {
-                        let error = result_error(res);
-                        PQclear(res);
-                        Err(error)
-                    }
-                }?;
+                let value = fetch_single_positive_id(res, "hardlink insert RETURNING")?;
                 if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -12687,33 +12673,7 @@ impl DbRepo {
                 } else {
                     exec_params(conn, &sql_root, &[&symlink_id, &target_name])?
                 };
-                let value = match PQresultStatus(res) {
-                    PGRES_TUPLES_OK => {
-                        let rows = PQntuples(res);
-                        let cols = PQnfields(res);
-                        let value = if rows < 1 || cols < 1 || PQgetisnull(res, 0, 0) != 0 {
-                            None
-                        } else {
-                            let value_ptr = PQgetvalue(res, 0, 0);
-                            (!value_ptr.is_null())
-                                .then(|| {
-                                    CStr::from_ptr(value_ptr)
-                                        .to_string_lossy()
-                                        .trim()
-                                        .parse::<u64>()
-                                        .ok()
-                                })
-                                .flatten()
-                        };
-                        PQclear(res);
-                        value.ok_or_else(|| "failed to create symlink hardlink".to_string())
-                    }
-                    _ => {
-                        let error = result_error(res);
-                        PQclear(res);
-                        Err(error)
-                    }
-                }?;
+                let value = fetch_single_positive_id(res, "symlink hardlink insert RETURNING")?;
                 Ok(value)
             })
         });
@@ -12861,33 +12821,7 @@ impl DbRepo {
                     let params = [&target_name, &target, &uid, &gid, &inode_seed];
                     exec_params(conn, &sql_null_parent, &params)?
                 };
-                let value = match PQresultStatus(res) {
-                    PGRES_TUPLES_OK => {
-                        let rows = PQntuples(res);
-                        let cols = PQnfields(res);
-                        let value = if rows < 1 || cols < 1 {
-                            None
-                        } else {
-                            let value_ptr = PQgetvalue(res, 0, 0);
-                            if value_ptr.is_null() {
-                                None
-                            } else {
-                                CStr::from_ptr(value_ptr)
-                                    .to_string_lossy()
-                                    .trim()
-                                    .parse::<u64>()
-                                    .ok()
-                            }
-                        };
-                        PQclear(res);
-                        value.ok_or_else(|| "failed to create symlink".to_string())
-                    }
-                    _ => {
-                        let error = result_error(res);
-                        PQclear(res);
-                        Err(error)
-                    }
-                }?;
+                let value = fetch_single_positive_id(res, "symlink insert RETURNING")?;
                 if let Some(parent_id) = target_parent_id {
                     let parent_id = CString::new(parent_id.to_string())
                         .map_err(|_| "parent id contains NUL byte".to_string())?;
@@ -13084,33 +13018,7 @@ impl DbRepo {
                     let params = [&target_name, &mode, &uid, &gid, &inode_seed];
                     exec_params(conn, &sql_null_parent, &params)?
                 };
-                let value = match PQresultStatus(res) {
-                    PGRES_TUPLES_OK => {
-                        let rows = PQntuples(res);
-                        let cols = PQnfields(res);
-                        let value = if rows < 1 || cols < 1 {
-                            None
-                        } else {
-                            let value_ptr = PQgetvalue(res, 0, 0);
-                            if value_ptr.is_null() {
-                                None
-                            } else {
-                                CStr::from_ptr(value_ptr)
-                                    .to_string_lossy()
-                                    .trim()
-                                    .parse::<u64>()
-                                    .ok()
-                            }
-                        };
-                        PQclear(res);
-                        value.ok_or_else(|| "failed to create directory".to_string())
-                    }
-                    _ => {
-                        let error = result_error(res);
-                        PQclear(res);
-                        Err(error)
-                    }
-                }?;
+                let value = fetch_single_positive_id(res, "directory insert RETURNING")?;
                 if let Some(inherited_acl) = inherited_acl.as_ref() {
                     xattrs::store_inherited_default_acl_on_conn(conn, "dir", value, inherited_acl)?;
                 }
@@ -13343,33 +13251,7 @@ impl DbRepo {
                     ];
                     exec_params(conn, &sql_null_parent, &params)?
                 };
-                let value = match PQresultStatus(res) {
-                    PGRES_TUPLES_OK => {
-                        let rows = PQntuples(res);
-                        let cols = PQnfields(res);
-                        let value = if rows < 1 || cols < 1 {
-                            None
-                        } else {
-                            let value_ptr = PQgetvalue(res, 0, 0);
-                            if value_ptr.is_null() {
-                                None
-                            } else {
-                                CStr::from_ptr(value_ptr)
-                                    .to_string_lossy()
-                                    .trim()
-                                    .parse::<u64>()
-                                    .ok()
-                            }
-                        };
-                        PQclear(res);
-                        value.ok_or_else(|| "failed to create file".to_string())
-                    }
-                    _ => {
-                        let error = result_error(res);
-                        PQclear(res);
-                        Err(error)
-                    }
-                }?;
+                let value = fetch_single_positive_id(res, "file insert RETURNING")?;
                 if let Some(inherited_acl) = inherited_acl.as_ref() {
                     xattrs::store_inherited_default_acl_on_conn(
                         conn,
@@ -13648,33 +13530,7 @@ impl DbRepo {
                     ];
                     exec_params(conn, &sql_null_parent, &params)?
                 };
-                let id_file = match PQresultStatus(res) {
-                    PGRES_TUPLES_OK => {
-                        let rows = PQntuples(res);
-                        let cols = PQnfields(res);
-                        let value = if rows < 1 || cols < 1 {
-                            None
-                        } else {
-                            let value_ptr = PQgetvalue(res, 0, 0);
-                            if value_ptr.is_null() {
-                                None
-                            } else {
-                                CStr::from_ptr(value_ptr)
-                                    .to_string_lossy()
-                                    .trim()
-                                    .parse::<u64>()
-                                    .ok()
-                            }
-                        };
-                        PQclear(res);
-                        value.ok_or_else(|| "failed to create special file".to_string())?
-                    }
-                    _ => {
-                        let error = result_error(res);
-                        PQclear(res);
-                        return Err(error);
-                    }
-                };
+                let id_file = fetch_single_positive_id(res, "special file insert RETURNING")?;
 
                 let id_file_text = CString::new(id_file.to_string())
                     .map_err(|_| "file id contains NUL byte".to_string())?;
@@ -15810,6 +15666,15 @@ mod tests {
                 }
                 fetch_rows_text_exact(res, 5, "test lock range")
             };
+            let query_positive_id = |sql: &str| -> Result<u64, String> {
+                let sql = CString::new(sql)
+                    .map_err(|_| "test positive ID SQL contains NUL".to_string())?;
+                let res = PQexec(conn, sql.as_ptr());
+                if res.is_null() {
+                    return Err(conn_error(conn));
+                }
+                fetch_single_positive_id(res, "test namespace insert")
+            };
 
             let result = (|| {
                 if query_row("SELECT 'first'::text, 'second'::text")?
@@ -15904,6 +15769,20 @@ mod tests {
                     if query_exact_rows(sql).is_ok() {
                         return Err(format!(
                             "exact multirow decoder accepted malformed result: {sql}"
+                        ));
+                    }
+                }
+                if query_positive_id("SELECT '42'::text")? != 42 {
+                    return Err("positive ID decoder changed a valid ID".to_string());
+                }
+                for sql in [
+                    "SELECT '0'::text",
+                    "SELECT '1'::text UNION ALL SELECT '2'::text",
+                    "SELECT '1'::text, 'extra'::text",
+                ] {
+                    if query_positive_id(sql).is_ok() {
+                        return Err(format!(
+                            "positive ID decoder accepted malformed result: {sql}"
                         ));
                     }
                 }

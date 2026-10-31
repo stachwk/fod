@@ -910,3 +910,8 @@ coalesces nullable `range_end`, preserving the empty-field encoding for an
 open-ended lock. The row-decoder regression and all 10 `lock_manager` tests
 passed on the verified 32 KiB PostgreSQL build; the disposable database was
 dropped.
+FOD 3.4.483 consolidates six namespace insert `RETURNING` decoders. They now
+require one row, one non-NULL column, and a positive ID, rather than accepting
+the first cell from a malformed or duplicate result. The decoder regression
+and all 72 `pg_query` tests passed on the verified PostgreSQL 16.15
+`BLCKSZ=32KiB` build using an isolated schema-38 database.

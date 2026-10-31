@@ -970,6 +970,10 @@ Reading guide:
   nullable `range_end` field to preserve the open-ended-lock encoding. The
   decoder regression and all 10 `lock_manager` tests passed on verified
   PostgreSQL 16.15 `BLCKSZ=32KiB`; the isolated test database was dropped.
+  FOD 3.4.483 replaces six namespace-insert `RETURNING` decoders that read
+  only the first cell with a required single-row/single-column positive-ID
+  decoder. The PostgreSQL regression rejects zero, multiple rows and extra
+  columns; all 72 `pg_query` tests passed on the verified 32 KiB build.
   Names-only directory snapshots now return `EIO` when a child metadata query
   fails instead of silently omitting that name. On 2026-10-30, the two-mount
   `test_unlink_primary_authority_docker.py` paused-replica suite opened a
