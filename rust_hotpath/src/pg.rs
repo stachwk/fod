@@ -10886,10 +10886,10 @@ impl DbRepo {
         if state.len() != 2 {
             return Err("file purge state returned incomplete row".to_string());
         }
-        if state[0] == "true" || state[0] == "t" {
+        if parse_postgres_bool(&state[0], "file purge hardlink state")? {
             return Err("file has surviving hardlinks".to_string());
         }
-        if state[1] == "true" || state[1] == "t" {
+        if parse_postgres_bool(&state[1], "file purge active open-lease state")? {
             return Err("file has active open leases".to_string());
         }
         self.remove_primary_file_or_promote_hardlink_on_conn(conn, file_id)
@@ -10995,7 +10995,10 @@ impl DbRepo {
         let has_open_lease = {
             let params = [&file_id_param];
             let result = exec_params(conn, &sql_has_open_lease, &params)?;
-            matches!(fetch_single_text(result)?.trim(), "true" | "t")
+            parse_postgres_bool(
+                &fetch_single_text(result)?,
+                "rename replacement active open-lease state",
+            )?
         };
         if has_open_lease {
             // Rename replacement removes a name binding, but an open file

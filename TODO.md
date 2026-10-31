@@ -2503,3 +2503,12 @@ Detailed acceptance criteria are in `docs/fod-roadmap-3.2.62-plus.md`.
   formatting pass; no PostgreSQL operation was run.
   PostgreSQL-backed operation coverage still requires the verified FOD 32 KiB
   server and a disposable schema-38 database.
+
+## FOD 3.4.501 — fail closed on malformed file-lifecycle booleans
+
+- [x] Decode the file-purge hardlink/open-lease flags and rename-replacement
+  open-lease result through `parse_postgres_bool()`. Previously, unexpected
+  result text was treated as `false`, which could bypass the hardlink-state
+  guard or deferred unlink preservation. Hotpath compilation and formatting
+  pass; no PostgreSQL operation was run. Integration coverage requires the
+  verified FOD 32 KiB server and a disposable schema-38 database.

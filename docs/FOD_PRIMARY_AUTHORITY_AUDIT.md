@@ -1028,3 +1028,7 @@ FOD 3.4.500 extends the same positive-ID validation to newly inserted,
 copied and request-token-resolved data objects, including file and special-file
 creation, and to the data-object ID read during rename replacement. A malformed
 zero ID can no longer be propagated as a valid backing object by these paths.
+FOD 3.4.501 routes the remaining file purge and rename-replacement open-lease
+booleans through the strict PostgreSQL boolean decoder. Unknown values now fail
+the transaction instead of being interpreted as “no hardlink” or “no open
+lease”.
